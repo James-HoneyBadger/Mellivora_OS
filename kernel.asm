@@ -2302,6 +2302,85 @@ hbfs_read_file:
         ret
 
 .not_found:
+        ; File not found in current directory - search ALL directories
+        ; This makes directories purely organizational: any file can be
+        ; accessed from any directory without specifying a path.
+        mov [.save_name], esi
+
+        call file_save_cwd
+
+        ; Search root directory first
+        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
+        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
+        call hbfs_load_root_dir
+        mov esi, [.save_name]
+        call hbfs_find_file
+        jnc .global_found
+
+        ; Not in root - iterate each subdirectory in root
+        mov dword [.global_idx], 0
+
+.global_scan_next:
+        ; Return to root context and re-load (subdir search overwrites buf)
+        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
+        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
+        call hbfs_load_root_dir
+
+        ; Check if we've scanned all root entries
+        call hbfs_get_max_entries
+        cmp [.global_idx], eax
+        jge .global_fail
+
+        ; Get the directory entry at current index
+        mov eax, [.global_idx]
+        imul eax, HBFS_DIR_ENTRY_SIZE
+        lea edi, [hbfs_dir_buf + eax]
+        inc dword [.global_idx]
+
+        ; Skip non-directory entries
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne .global_scan_next
+
+        ; Enter this subdirectory
+        mov eax, [edi + DIRENT_START_BLOCK]
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        mov [current_dir_lba], eax
+        mov eax, [edi + DIRENT_BLOCK_COUNT]
+        shl eax, 3
+        mov [current_dir_sects], eax
+
+        ; Load subdirectory and search for file
+        call hbfs_load_root_dir
+        mov esi, [.save_name]
+        call hbfs_find_file
+        jc .global_scan_next        ; Not here, try next subdir
+
+.global_found:
+        ; EDI = directory entry in hbfs_dir_buf - read the file data
+        movzx ebx, byte [edi + 253]
+        mov [last_file_type], bl
+        mov ebx, [edi + 256]           ; file size
+        mov [.save_fsize], ebx
+        mov eax, [edi + 260]           ; start block
+        mov ecx, [edi + 264]           ; block count
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        shl ecx, 3
+        mov edi, [.save_dest]
+        call ata_read_sectors
+        jc .global_fail
+
+        ; Restore original CWD and return success
+        call file_restore_cwd
+        mov eax, [.save_fsize]
+        mov [esp + 24], eax             ; ECX position in pushad frame
+        popad
+        clc
+        ret
+
+.global_fail:
+        call file_restore_cwd
         popad
         stc
         ret
@@ -2313,6 +2392,8 @@ hbfs_read_file:
 
 .save_dest:  dd 0
 .save_fsize: dd 0
+.save_name:  dd 0
+.global_idx: dd 0
 
 ;=======================================================================
 ; SYSCALL HANDLER (INT 0x80)
