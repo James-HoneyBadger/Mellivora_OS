@@ -309,6 +309,31 @@ vga_clear:
 vga_putchar:
         pushad
 
+        cmp byte [stdout_redir_active], 1
+        jne .vp_normal
+
+        cmp al, 0x08            ; Backspace shrinks captured output
+        jne .vp_store
+        cmp dword [stdout_redir_len], 0
+        je .vp_redir_done
+        dec dword [stdout_redir_len]
+        jmp .vp_redir_done
+
+.vp_store:
+        cmp al, 0x0D            ; Ignore CR in redirected output
+        je .vp_redir_done
+        mov edx, [stdout_redir_len]
+        cmp edx, BATCH_BUFFER_SIZE - 1
+        jge .vp_redir_done
+        mov [redir_out_buf + edx], al
+        inc dword [stdout_redir_len]
+
+.vp_redir_done:
+        popad
+        ret
+
+.vp_normal:
+
         cmp al, 0x0A            ; Line feed?
         je .newline
         cmp al, 0x0D            ; Carriage return?
@@ -969,6 +994,20 @@ kb_init:
 ; Read a key from buffer (blocking)
 ; Returns: AL = ASCII character
 kb_getchar:
+        cmp byte [stdin_redir_active], 1
+        jne .wait
+        mov eax, [stdin_redir_pos]
+        cmp eax, [stdin_redir_len]
+        jb .redir_have
+        mov byte [stdin_redir_active], 0
+        xor eax, eax
+        ret
+.redir_have:
+        mov bl, [redir_in_buf + eax]
+        inc eax
+        mov [stdin_redir_pos], eax
+        mov al, bl
+        ret
 .wait:
         mov eax, [kb_read_idx]
         cmp eax, [kb_write_idx]
@@ -2668,6 +2707,7 @@ syscall_handler:
         iretd
 
 sys_exit:
+        call shell_finish_redirection
         ; Save program return code (EBX) for shell inspection
         mov [program_exit_code], ebx
         ; Clear running flag
@@ -3124,6 +3164,12 @@ shell_parse_cmd:
         ; Skip leading spaces
         call skip_spaces
 
+        call shell_prepare_redirection
+        jc .done
+
+        mov esi, line_buffer
+        call skip_spaces
+
         cmp byte [esi], 0
         je .done
 
@@ -3389,6 +3435,7 @@ shell_parse_cmd:
         jc .unknown
 
 .done:
+        call shell_finish_redirection
         ret
 
 .unknown:
@@ -3396,12 +3443,182 @@ shell_parse_cmd:
         mov esi, msg_unknown_cmd
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        ret
+        jmp .done
 
 ;---- Command implementations ----
 
 .cmd_help:
+        mov esi, line_buffer
+        mov edi, cmd_help_str
+        call str_starts_with
+        jnc .cmd_help_full
+        cmp byte [esi], 0
+        je .cmd_help_full
+
+        mov edi, filename_buf
+        call copy_word
+
+        mov esi, filename_buf
+        mov edi, cmd_help_str
+        call str_compare
+        jz .cmd_help_help
+
+        mov edi, cmd_ver_str
+        call str_compare
+        jz .cmd_help_ver
+
+        mov edi, cmd_clear_str
+        call str_compare
+        jz .cmd_help_clear
+        mov edi, cmd_cls_str
+        call str_compare
+        jz .cmd_help_clear
+
+        mov edi, cmd_dir_str
+        call str_compare
+        jz .cmd_help_dir
+        mov edi, cmd_ls_str
+        call str_compare
+        jz .cmd_help_dir
+
+        mov edi, cmd_cat_str
+        call str_compare
+        jz .cmd_help_cat
+        mov edi, cmd_type_str
+        call str_compare
+        jz .cmd_help_cat
+
+        mov edi, cmd_write_str
+        call str_compare
+        jz .cmd_help_write
+        mov edi, cmd_append_str
+        call str_compare
+        jz .cmd_help_append
+
+        mov edi, cmd_run_str
+        call str_compare
+        jz .cmd_help_run
+
+        mov edi, cmd_echo_str
+        call str_compare
+        jz .cmd_help_echo
+
+        mov edi, cmd_cd_str
+        call str_compare
+        jz .cmd_help_cd
+        mov edi, cmd_pwd_str
+        call str_compare
+        jz .cmd_help_pwd
+        mov edi, cmd_mkdir_str
+        call str_compare
+        jz .cmd_help_mkdir
+
+        mov edi, cmd_set_str
+        call str_compare
+        jz .cmd_help_set
+        mov edi, cmd_unset_str
+        call str_compare
+        jz .cmd_help_unset
+
+        mov edi, cmd_history_str
+        call str_compare
+        jz .cmd_help_history
+        mov edi, cmd_which_str
+        call str_compare
+        jz .cmd_help_which
+
+        mov edi, cmd_color_str
+        call str_compare
+        jz .cmd_help_color
+        mov edi, cmd_size_str
+        call str_compare
+        jz .cmd_help_size
+        mov edi, cmd_strings_str
+        call str_compare
+        jz .cmd_help_strings
+
+        mov esi, msg_help_no_detail
+        call vga_print
+
+.cmd_help_full:
         mov esi, help_text
+        call vga_print
+        ret
+
+.cmd_help_help:
+        mov esi, help_help_help
+        call vga_print
+        ret
+.cmd_help_ver:
+        mov esi, help_help_ver
+        call vga_print
+        ret
+.cmd_help_clear:
+        mov esi, help_help_clear
+        call vga_print
+        ret
+.cmd_help_dir:
+        mov esi, help_help_dir
+        call vga_print
+        ret
+.cmd_help_cat:
+        mov esi, help_help_cat
+        call vga_print
+        ret
+.cmd_help_write:
+        mov esi, help_help_write
+        call vga_print
+        ret
+.cmd_help_append:
+        mov esi, help_help_append
+        call vga_print
+        ret
+.cmd_help_run:
+        mov esi, help_help_run
+        call vga_print
+        ret
+.cmd_help_echo:
+        mov esi, help_help_echo
+        call vga_print
+        ret
+.cmd_help_cd:
+        mov esi, help_help_cd
+        call vga_print
+        ret
+.cmd_help_pwd:
+        mov esi, help_help_pwd
+        call vga_print
+        ret
+.cmd_help_mkdir:
+        mov esi, help_help_mkdir
+        call vga_print
+        ret
+.cmd_help_set:
+        mov esi, help_help_set
+        call vga_print
+        ret
+.cmd_help_unset:
+        mov esi, help_help_unset
+        call vga_print
+        ret
+.cmd_help_history:
+        mov esi, help_help_history
+        call vga_print
+        ret
+.cmd_help_which:
+        mov esi, help_help_which
+        call vga_print
+        ret
+.cmd_help_color:
+        mov esi, help_help_color
+        call vga_print
+        ret
+.cmd_help_size:
+        mov esi, help_help_size
+        call vga_print
+        ret
+.cmd_help_strings:
+        mov esi, help_help_strings
         call vga_print
         ret
 
@@ -6208,6 +6425,184 @@ cmd_exec_program:
 .not_found:
         popad
         stc
+        ret
+
+;---------------------------------------
+; Redirection helpers
+;---------------------------------------
+shell_redir_reset:
+        mov byte [stdout_redir_active], 0
+        mov byte [stdout_redir_append], 0
+        mov byte [stdin_redir_active], 0
+        mov dword [stdout_redir_len], 0
+        mov dword [stdin_redir_len], 0
+        mov dword [stdin_redir_pos], 0
+        mov byte [redir_out_name], 0
+        mov byte [redir_in_name], 0
+        mov byte [redir_out_buf], 0
+        ret
+
+shell_prepare_redirection:
+        pushad
+        call shell_redir_reset
+        mov esi, line_buffer
+.spr_scan:
+        mov al, [esi]
+        test al, al
+        jz .spr_ok
+        cmp al, '>'
+        je .spr_stdout
+        cmp al, '<'
+        je .spr_stdin
+        inc esi
+        jmp .spr_scan
+
+.spr_stdout:
+        mov byte [esi], 0
+        inc esi
+        mov byte [stdout_redir_append], 0
+        cmp byte [esi], '>'
+        jne .spr_stdout_name
+        mov byte [stdout_redir_append], 1
+        inc esi
+.spr_stdout_name:
+        call skip_spaces
+        mov edi, redir_out_name
+        call copy_word
+        cmp byte [redir_out_name], 0
+        je .spr_syntax_err
+        mov byte [stdout_redir_active], 1
+        mov dword [stdout_redir_len], 0
+        mov byte [redir_out_buf], 0
+        jmp .spr_scan
+
+.spr_stdin:
+        mov byte [esi], 0
+        inc esi
+        call skip_spaces
+        mov edi, redir_in_name
+        call copy_word
+        cmp byte [redir_in_name], 0
+        je .spr_syntax_err
+        push esi
+        mov esi, redir_in_name
+        call hbfs_find_file_global
+        jc .spr_in_err_pop
+        mov eax, [edi + 256]
+        cmp eax, BATCH_BUFFER_SIZE - 1
+        ja .spr_in_big_pop
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .spr_in_size_ok
+        call gff_restore_cwd
+.spr_in_size_ok:
+        pop esi
+        mov esi, redir_in_name
+        mov edi, redir_in_buf
+        call hbfs_read_file
+        jc .spr_in_err
+        mov [stdin_redir_len], ecx
+        mov dword [stdin_redir_pos], 0
+        mov byte [stdin_redir_active], 1
+        jmp .spr_scan
+
+.spr_in_err_pop:
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .spr_in_err_pop_done
+        call gff_restore_cwd
+.spr_in_err_pop_done:
+        pop esi
+.spr_in_err:
+        call shell_redir_reset
+        mov esi, msg_redir_in_err
+        call vga_print
+        popad
+        stc
+        ret
+
+.spr_in_big_pop:
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .spr_in_big_pop_done
+        call gff_restore_cwd
+.spr_in_big_pop_done:
+        pop esi
+        call shell_redir_reset
+        mov esi, msg_redir_too_big
+        call vga_print
+        popad
+        stc
+        ret
+
+.spr_syntax_err:
+        call shell_redir_reset
+        mov esi, msg_redir_syntax
+        call vga_print
+        popad
+        stc
+        ret
+
+.spr_ok:
+        popad
+        clc
+        ret
+
+shell_finish_redirection:
+        pushad
+        cmp byte [stdout_redir_active], 1
+        jne .sfr_reset
+
+        mov eax, [stdout_redir_len]
+        mov byte [redir_out_buf + eax], 0
+
+        cmp byte [stdout_redir_append], 1
+        jne .sfr_write_new
+
+        mov esi, redir_out_name
+        mov edi, PROGRAM_BASE
+        call hbfs_read_file
+        jc .sfr_append_new
+        mov ebx, ecx
+        mov eax, ebx
+        add eax, [stdout_redir_len]
+        cmp eax, PROGRAM_MAX_SIZE - 1
+        ja .sfr_fail
+        mov esi, redir_out_buf
+        mov edi, PROGRAM_BASE
+        add edi, ebx
+        mov ecx, [stdout_redir_len]
+        rep movsb
+        mov esi, redir_out_name
+        mov ecx, ebx
+        add ecx, [stdout_redir_len]
+        mov edi, PROGRAM_BASE
+        movzx edx, byte [last_file_type]
+        cmp edx, FTYPE_FREE
+        jne .sfr_append_type_ok
+        mov edx, FTYPE_TEXT
+.sfr_append_type_ok:
+        call hbfs_create_file
+        jc .sfr_fail
+        jmp .sfr_reset
+
+.sfr_append_new:
+.sfr_write_new:
+        mov esi, redir_out_name
+        mov ecx, [stdout_redir_len]
+        mov edi, redir_out_buf
+        mov edx, FTYPE_TEXT
+        call hbfs_create_file
+        jc .sfr_fail
+        jmp .sfr_reset
+
+.sfr_fail:
+        call shell_redir_reset
+        mov esi, msg_write_err
+        call vga_print
+        popad
+        ret
+
+.sfr_reset:
+        call shell_redir_reset
+        popad
         ret
 
 ;---------------------------------------
@@ -9656,6 +10051,67 @@ cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
 
 ; Help text
+msg_help_no_detail:
+        db "No specific help for that command. Showing full help:", 0x0A, 0
+
+help_help_help:
+        db "help [command]", 0x0A
+        db "Show full command list, or detailed help for one command.", 0x0A, 0
+help_help_ver:
+        db "ver", 0x0A
+        db "Show Mellivora OS version and memory summary.", 0x0A, 0
+help_help_clear:
+        db "clear | cls", 0x0A
+        db "Clear the screen and reset cursor position.", 0x0A, 0
+help_help_dir:
+        db "dir | ls [-l]", 0x0A
+        db "List files in current directory. Use -l for long format.", 0x0A, 0
+help_help_cat:
+        db "cat | type [-n] FILE", 0x0A
+        db "Display a file. Use -n to show line numbers.", 0x0A, 0
+help_help_write:
+        db "write FILE", 0x0A
+        db "Create/overwrite FILE with typed lines (empty line ends).", 0x0A, 0
+help_help_append:
+        db "append FILE", 0x0A
+        db "Append typed lines to an existing file.", 0x0A, 0
+help_help_run:
+        db "run FILE", 0x0A
+        db "Load and execute a binary program.", 0x0A, 0
+help_help_echo:
+        db "echo [-n] TEXT", 0x0A
+        db "Print text. -n suppresses trailing newline.", 0x0A, 0
+help_help_cd:
+        db "cd DIR", 0x0A
+        db "Change current working directory.", 0x0A, 0
+help_help_pwd:
+        db "pwd", 0x0A
+        db "Print current working directory.", 0x0A, 0
+help_help_mkdir:
+        db "mkdir DIR", 0x0A
+        db "Create a new directory.", 0x0A, 0
+help_help_set:
+        db "set NAME VALUE", 0x0A
+        db "Set an environment variable.", 0x0A, 0
+help_help_unset:
+        db "unset NAME", 0x0A
+        db "Remove an environment variable.", 0x0A, 0
+help_help_history:
+        db "history", 0x0A
+        db "Show recent command history.", 0x0A, 0
+help_help_which:
+        db "which NAME", 0x0A
+        db "Show whether NAME is built-in or found as a program.", 0x0A, 0
+help_help_color:
+        db "color FG [BG]", 0x0A
+        db "Set VGA text colors using hex digits 0-F.", 0x0A, 0
+help_help_size:
+        db "size FILE", 0x0A
+        db "Show file size and type information.", 0x0A, 0
+help_help_strings:
+        db "strings FILE", 0x0A
+        db "Extract printable strings from a file.", 0x0A, 0
+
 help_text:
         db "HB DOS Commands:", 0x0A
         db "  help       - Show this help", 0x0A
@@ -9772,6 +10228,9 @@ msg_wild_needs_star: db "For multiple wildcard matches, destination must include
 msg_write_prompt: db "Type content (empty line to end):", 0x0A, 0
 msg_write_err:  db "Write error!", 0x0A, 0
 msg_unknown_cmd: db "Unknown command. Type 'help'.", 0x0A, 0
+msg_redir_syntax: db "Redirection syntax error.", 0x0A, 0
+msg_redir_in_err: db "Redirection input file error.", 0x0A, 0
+msg_redir_too_big: db "Redirection file too large.", 0x0A, 0
 msg_touch_usage: db "Usage: touch <filename>", 0x0A, 0
 msg_head_usage: db "Usage: head [N] <filename>", 0x0A, 0
 msg_tail_usage: db "Usage: tail [N] <filename>", 0x0A, 0
@@ -9896,6 +10355,10 @@ filename_buf:   resb 256
 filename_buf2:  resb 256
 wildcard_src_buf: resb 256
 wildcard_dst_buf: resb 256
+redir_out_name: resb 256
+redir_in_name:  resb 256
+redir_out_buf:  resb BATCH_BUFFER_SIZE
+redir_in_buf:   resb BATCH_BUFFER_SIZE
 
 exc_eip:        resd 1          ; Saved EIP from exception
 exc_errcode:    resd 1          ; Saved error code from exception
@@ -9968,6 +10431,12 @@ cmd_flags:       resd 1          ; Bitmask of parsed flags (bit 0='a', bit 13='n
 cmd_flag_num:    resd 1          ; Numeric argument from -n N
 path_search_buf: resb 256        ; Buffer for PATH-based program search
 temp_path_buf:   resb 256        ; Buffer for building PATH/progname paths
+stdout_redir_active: resb 1
+stdout_redir_append: resb 1
+stdin_redir_active:  resb 1
+stdout_redir_len:    resd 1
+stdin_redir_len:     resd 1
+stdin_redir_pos:     resd 1
 
 ; Alias table (16 entries: 32 byte name + 224 byte command = 256 per entry)
 ALIAS_MAX        equ 16
