@@ -192,7 +192,7 @@ SYS_GETCWD          equ 27
 SYS_SERIAL          equ 28
 SYS_GETENV          equ 29
 SYS_FREAD           equ 30      ; Read entire file: EBX=name ECX=buf -> EAX=bytes
-SYS_FWRITE          equ 31      ; Write entire file: EBX=name ECX=buf EDX=size
+SYS_FWRITE          equ 31      ; Write entire file: EBX=name ECX=buf EDX=size ESI=type(0=text)
 SYS_GETARGS         equ 32      ; Get command-line args: EBX=buf -> EAX=length
 SYS_SERIAL_IN       equ 33      ; Read char from serial: -> EAX=char
 
@@ -516,6 +516,45 @@ vga_print_dec:
 .done:
         popad
         ret
+
+; Print 32-bit decimal value in EAX, right-aligned in field of EDX chars
+; EAX = number, EDX = field width (0 = no padding)
+vga_print_dec_width:
+        pushad
+        mov [.vpdw_width], edx
+        ; First count digits
+        mov ecx, 0
+        mov ebx, 10
+        mov [.vpdw_val], eax
+        test eax, eax
+        jnz .vpdw_count
+        mov ecx, 1              ; '0' is 1 digit
+        jmp .vpdw_pad
+.vpdw_count:
+        xor edx, edx
+        div ebx
+        inc ecx
+        test eax, eax
+        jnz .vpdw_count
+.vpdw_pad:
+        ; Print (width - digits) leading spaces
+        mov eax, [.vpdw_width]
+        sub eax, ecx
+        jle .vpdw_print
+        mov edx, eax
+.vpdw_spc:
+        mov al, ' '
+        call vga_putchar
+        dec edx
+        jnz .vpdw_spc
+.vpdw_print:
+        ; Now print the actual number
+        mov eax, [.vpdw_val]
+        call vga_print_dec
+        popad
+        ret
+.vpdw_val:   dd 0
+.vpdw_width: dd 0
 
 ; Set cursor position: EAX=x, EDX=y
 vga_set_cursor:
@@ -2044,7 +2083,7 @@ hbfs_create_file:
 .save_data:   dd 0
 .save_name:   dd 0
 .save_blocks: dd 0
-.save_type:   db 0
+.save_type:   dd 0
 
 ; Delete file entry (EDI already points to entry in hbfs_dir_buf)
 hbfs_delete_file_entry:
@@ -2683,11 +2722,17 @@ sys_sleep:
 
 sys_exec_call:
         ; EBX = pointer to filename
+        ; Note: on success, cmd_exec_program never returns (iretd to ring 3)
+        ; On failure (program not found), it returns with CF set
         push esi
         mov esi, ebx
         call cmd_exec_program
         pop esi
+        jc .exec_fail
         xor eax, eax
+        iretd
+.exec_fail:
+        mov eax, -1
         iretd
 
 ;---------------------------------------
@@ -4894,9 +4939,10 @@ cmd_list_dir:
         mov al, ' '
         call vga_putchar
 
-        ; Print file size (right-aligned in 10 chars)
+        ; Print file size right-aligned in 9-char field
         mov eax, [edi + 256]
-        call vga_print_dec
+        mov edx, 9
+        call vga_print_dec_width
 
         mov al, ' '
         call vga_putchar
@@ -5035,7 +5081,12 @@ cmd_delete_file:
 ; Command: shutdown - Cleanly power off
 ;---------------------------------------
 cmd_shutdown:
-        ; Print shutdown message
+        ; Print shutdown banner (consistent with boot banner style)
+        mov al, 0x0A
+        call vga_putchar
+        mov byte [vga_color], COLOR_HEADER
+        mov esi, msg_shutdown_bar
+        call vga_print
         mov byte [vga_color], COLOR_INFO
         mov esi, msg_shutdown
         call vga_print
@@ -5047,16 +5098,24 @@ cmd_shutdown:
         dec ecx
         jnz .delay
 
+        ; Print halt message before attempting shutdown
+        mov esi, msg_halt
+        call vga_print
+
+        ; Another small delay so user can read the message
+        mov ecx, 0x1FFFFFF
+.delay2:
+        dec ecx
+        jnz .delay2
+
         ; Try ACPI shutdown (works on QEMU and Bochs)
         ; QEMU PIIX4 PM: port 0x604, value 0x2000 = S5 (power off)
+        cli
         mov dx, 0x604
         mov ax, 0x2000
         out dx, ax
 
         ; If ACPI didn't work, halt the CPU
-        cli
-        mov esi, msg_halt
-        call vga_print
 .halt_loop:
         hlt
         jmp .halt_loop
@@ -5286,37 +5345,12 @@ cmd_cat_file:
         cmp byte [esi], 0
         je .cat_n_done
         inc ebx
-        ; Print line number
+        ; Print line number right-aligned in 4-char field
         push esi
         mov byte [vga_color], COLOR_INFO
         mov eax, ebx
-        cmp eax, 10
-        jge .cat_n_2d
-        push eax
-        mov al, ' '
-        call vga_putchar
-        call vga_putchar
-        call vga_putchar
-        pop eax
-        jmp .cat_n_pd
-.cat_n_2d:
-        cmp eax, 100
-        jge .cat_n_3d
-        push eax
-        mov al, ' '
-        call vga_putchar
-        call vga_putchar
-        pop eax
-        jmp .cat_n_pd
-.cat_n_3d:
-        cmp eax, 1000
-        jge .cat_n_pd
-        push eax
-        mov al, ' '
-        call vga_putchar
-        pop eax
-.cat_n_pd:
-        call vga_print_dec
+        mov edx, 4
+        call vga_print_dec_width
         mov al, ' '
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
@@ -6826,6 +6860,7 @@ copy_word:
 ; Check for wildcard characters '*' or '?' in string at ESI
 ; Returns: CF set if wildcard exists
 str_has_wildcards:
+        push esi
 .shw_loop:
         mov al, [esi]
         test al, al
@@ -6837,15 +6872,19 @@ str_has_wildcards:
         inc esi
         jmp .shw_loop
 .shw_yes:
+        pop esi
         stc
         ret
 .shw_no:
+        pop esi
         clc
         ret
 
 ; Check for '*' in string at ESI
 ; Returns: CF set if found
+; Preserves: ESI
 str_has_asterisk:
+        push esi
 .sha_loop:
         mov al, [esi]
         test al, al
@@ -6855,9 +6894,11 @@ str_has_asterisk:
         inc esi
         jmp .sha_loop
 .sha_yes:
+        pop esi
         stc
         ret
 .sha_no:
+        pop esi
         clc
         ret
 
@@ -7438,6 +7479,11 @@ fd_open:
         mov dword [fd_table + eax + 12], 0
         mov ecx, [edi + DIRENT_BLOCK_COUNT]
         mov [fd_table + eax + 16], ecx
+        ; Record which directory this file lives in (for fd_close)
+        mov ecx, [current_dir_lba]
+        mov [fd_table + eax + 20], ecx
+        mov ecx, [current_dir_sects]
+        mov [fd_table + eax + 24], ecx
         ; Restore CWD if global search changed it
         cmp dword [hbfs_find_file_global.gff_moved], 1
         jne .fd_no_restore
@@ -7624,6 +7670,15 @@ fd_close:
         mov ebp, [fd_table + eax + 8]    ; start_block
         mov edx, [fd_table + eax + 4]    ; file_size (possibly grown)
 
+        ; Switch to the directory where this file lives (recorded at open time)
+        ; Save current CWD first
+        push dword [current_dir_lba]
+        push dword [current_dir_sects]
+        mov ecx, [fd_table + eax + 20]   ; directory LBA from fd entry
+        mov [current_dir_lba], ecx
+        mov ecx, [fd_table + eax + 24]   ; directory sector count from fd entry
+        mov [current_dir_sects], ecx
+
         ; Find directory entry by matching start_block
         call hbfs_load_root_dir
         mov edi, hbfs_dir_buf
@@ -7637,7 +7692,7 @@ fd_close:
 .fcl_skip:
         add edi, HBFS_DIR_ENTRY_SIZE
         loop .fcl_scan
-        jmp .fcl_mark_closed             ; entry not found, just close
+        jmp .fcl_restore_cwd             ; entry not found, just close
 
 .fcl_found:
         ; Update file size and modified timestamp in directory entry
@@ -7645,6 +7700,11 @@ fd_close:
         mov eax, [tick_count]
         mov [edi + DIRENT_MODIFIED], eax
         call hbfs_save_root_dir
+
+.fcl_restore_cwd:
+        ; Restore original CWD
+        pop dword [current_dir_sects]
+        pop dword [current_dir_lba]
 
 .fcl_mark_closed:
         mov eax, ebx
@@ -8300,6 +8360,16 @@ sys_fwrite:
         mov [.fw_name], ebx
         mov [.fw_buf], ecx
         mov [.fw_size], edx
+        ; ESI = file type (0 = default to FTYPE_TEXT)
+        cmp esi, FTYPE_TEXT
+        jb .fw_default_type
+        cmp esi, FTYPE_BATCH
+        ja .fw_default_type
+        mov [.fw_type], esi
+        jmp .fw_type_set
+.fw_default_type:
+        mov dword [.fw_type], FTYPE_TEXT
+.fw_type_set:
         ; Delete old file if it exists
         mov esi, ebx
         call hbfs_load_root_dir
@@ -8308,11 +8378,11 @@ sys_fwrite:
         ; EDI = dir entry pointer from hbfs_find_file
         call hbfs_delete_file_entry
 .fwrite_new:
-        ; Create new file (default to text type)
+        ; Create new file with specified type
         mov esi, [.fw_name]     ; filename
         mov edi, [.fw_buf]      ; data buffer
         mov ecx, [.fw_size]     ; size
-        mov edx, FTYPE_TEXT
+        mov edx, [.fw_type]
         call hbfs_create_file
         jc .fwrite_err
         mov dword [esp + 28], 0 ; set EAX = 0 in pushad frame
@@ -8325,6 +8395,7 @@ sys_fwrite:
 .fw_name: dd 0
 .fw_buf:  dd 0
 .fw_size: dd 0
+.fw_type: dd 0
 
 sys_open_fd:
         push esi
@@ -9008,7 +9079,7 @@ cmd_mkdir:
 cmd_cd:
         pushad
         call cmd_cd_internal
-        cmp dword [esp + 28], -1
+        cmp eax, -1             ; cmd_cd_internal returns 0 or -1 in EAX
         jne .cd_ok
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_not_found
@@ -9546,8 +9617,9 @@ msg_exc_eip:    db "  EIP: 0x", 0
 msg_exc_err:    db "  Error code: 0x", 0
 msg_ata_ok:     db "  ATA disk:      ", 0
 msg_ata_none:   db "  ATA disk:      not detected", 0x0A, 0
-msg_shutdown:   db "Shutting down Mellivora OS...", 0x0A, 0
-msg_halt:       db "System halted. You may power off now.", 0x0A, 0
+msg_shutdown_bar: db "===========================================================", 0x0A, 0
+msg_shutdown:   db "  Shutting down Mellivora OS...", 0x0A, 0
+msg_halt:       db "  System halted. You may power off now.", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0
 msg_cpu:        db "  CPU:           i486+ (32-bit protected mode)", 0x0A, 0
 msg_mem_detect: db "  RAM:           ", 0
@@ -9574,8 +9646,8 @@ msg_hbfs_found:  db "  Filesystem:    HBFS detected", 0x0A, 0
 msg_hbfs_format: db "  Filesystem:    Formatting new HBFS...", 0x0A, 0
 msg_hbfs_formatted: db "  Filesystem formatted.", 0x0A, 0
 msg_hbfs_nodisk: db "  Filesystem:    No disk available", 0x0A, 0
-dir_header:     db "Type  Size      Name", 0x0A, 0
-dir_separator:  db "-- ---- --------- ----------------", 0x0A, 0
+dir_header:     db "Type       Size  Name", 0x0A, 0
+dir_separator:  db "----- --------- ----------------", 0x0A, 0
 type_text:      db "text ", 0
 type_batch:     db "batch", 0
 type_exec:      db "exec ", 0

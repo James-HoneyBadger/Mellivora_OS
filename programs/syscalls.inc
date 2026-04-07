@@ -44,7 +44,7 @@ SYS_GETCWD      equ 27
 SYS_SERIAL      equ 28
 SYS_GETENV      equ 29
 SYS_FREAD       equ 30          ; Read entire file: EBX=name ECX=buf -> EAX=bytes
-SYS_FWRITE      equ 31          ; Write file: EBX=name ECX=buf EDX=size
+SYS_FWRITE      equ 31          ; Write file: EBX=name ECX=buf EDX=size ESI=type(0=text)
 SYS_GETARGS     equ 32          ; Get command-line args: EBX=buf -> EAX=length
 SYS_SERIAL_IN   equ 33          ; Read serial port: -> EAX=char or -1
 

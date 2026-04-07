@@ -159,6 +159,7 @@ start:
         mov ebx, dst_filename
         mov ecx, out_buffer
         mov edx, [out_pos]
+        mov esi, FTYPE_EXEC
         int 0x80
         cmp eax, 0
         jl .write_err
