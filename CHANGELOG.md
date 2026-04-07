@@ -1,5 +1,20 @@
 # Mellivora OS - Changelog
 
+## v1.10 - Robustness & Filesystem Integrity Enhancements
+
+### Enhancements
+
+- **`df` total file count**: The `df` command now counts files across **all** directories (root + subdirectories), not just the current directory. Reports "N files in M directories" instead of showing a count for just the CWD.
+- **Superblock `free_blocks` tracking**: `hbfs_alloc_blocks` and `hbfs_free_blocks` now update the superblock's `free_blocks` counter (offset 12) after every allocation/deallocation, keeping the on-disk superblock consistent with the bitmap.
+- **Nested batch execution guard**: `cmd_exec_batch` now detects re-entrant calls (a `batch` command inside a `.bat` script) and rejects them with an error message instead of silently corrupting the shared `batch_script_buf` / `batch_line_buf` buffers.
+
+### Build Stats
+
+- Disk image: 48 files, 188 blocks used
+- Kernel: ~10,000 lines of x86 assembly
+
+---
+
 ## v1.9 - Code Review Bug Fixes & Enhancements
 
 ### Critical Bug Fixes

@@ -1892,6 +1892,20 @@ hbfs_alloc_blocks:
         call ata_write_sectors
         pop edx
 
+        ; Update superblock free_blocks counter
+        push edx
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov edi, hbfs_super_buf
+        call ata_read_sectors
+        mov eax, [.blocks_needed]
+        sub [hbfs_super_buf + 12], eax   ; free_blocks -= allocated
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov esi, hbfs_super_buf
+        call ata_write_sectors
+        pop edx
+
         mov [esp + 28], edx    ; Return first block number via EAX
         popad
         clc
@@ -1955,6 +1969,18 @@ hbfs_free_blocks:
         mov eax, HBFS_BITMAP_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, hbfs_bitmap_buf
+        call ata_write_sectors
+
+        ; Update superblock free_blocks counter
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov edi, hbfs_super_buf
+        call ata_read_sectors
+        mov eax, [.free_count]
+        add [hbfs_super_buf + 12], eax   ; free_blocks += freed
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov esi, hbfs_super_buf
         call ata_write_sectors
 
         popad
@@ -5899,39 +5925,103 @@ cmd_df_info:
         mov esi, msg_df_kb
         call vga_print
 
-        ; Count files
+        ; Count files across ALL directories
+        call path_save_cwd               ; Save user's CWD
+        mov dword [.df_total_files], 0
+        mov dword [.df_total_slots], 0
+        mov dword [.df_dir_count], 0
+
+        ; Count files in root directory
+        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
+        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
         call hbfs_load_root_dir
-        xor ecx, ecx            ; file counter
-        xor ebx, ebx            ; dir entry index
-        mov edi, hbfs_dir_buf
+        call .df_count_dir               ; ECX = files in root, EAX = max entries
+        add [.df_total_files], ecx
+        add [.df_total_slots], eax
+
+        ; Iterate root entries looking for subdirectories
+        mov dword [.df_scan_idx], 0
+.df_scan_subdirs:
+        ; Reload root (subdir scan overwrites hbfs_dir_buf)
+        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
+        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
+        call hbfs_load_root_dir
         call hbfs_get_max_entries
-        mov edx, eax            ; max entries
-.df_file_count:
-        cmp ebx, edx
-        jge .df_files_done
-        cmp byte [edi], 0
-        je .df_skip_entry
-        cmp byte [edi + 253], FTYPE_FREE
-        je .df_skip_entry
-        inc ecx
-.df_skip_entry:
-        add edi, HBFS_DIR_ENTRY_SIZE
-        inc ebx
-        jmp .df_file_count
-.df_files_done:
+        cmp [.df_scan_idx], eax
+        jge .df_all_counted
+
+        mov eax, [.df_scan_idx]
+        imul eax, HBFS_DIR_ENTRY_SIZE
+        lea edi, [hbfs_dir_buf + eax]
+        inc dword [.df_scan_idx]
+
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne .df_scan_subdirs
+
+        ; Switch into this subdirectory
+        mov eax, [edi + DIRENT_START_BLOCK]
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        mov [current_dir_lba], eax
+        mov eax, [edi + DIRENT_BLOCK_COUNT]
+        shl eax, 3
+        mov [current_dir_sects], eax
+
+        call hbfs_load_root_dir
+        call .df_count_dir
+        add [.df_total_files], ecx
+        add [.df_total_slots], eax
+        inc dword [.df_dir_count]
+        jmp .df_scan_subdirs
+
+.df_all_counted:
+        call path_restore_cwd            ; Restore user's CWD
+
         mov esi, msg_df_files
         call vga_print
-        mov eax, ecx
+        mov eax, [.df_total_files]
         call vga_print_dec
-        mov al, '/'
-        call vga_putchar
-        call hbfs_get_max_entries
+        mov esi, msg_df_in
+        call vga_print
+        mov eax, [.df_dir_count]
+        inc eax                          ; +1 for root
         call vga_print_dec
-        mov al, 0x0A
-        call vga_putchar
+        mov esi, msg_df_dirs
+        call vga_print
 
         popad
         ret
+
+; Helper: count files in currently loaded directory buffer
+; Returns: ECX = file count, EAX = max entries
+.df_count_dir:
+        xor ecx, ecx
+        xor ebx, ebx
+        mov edi, hbfs_dir_buf
+        call hbfs_get_max_entries
+        mov edx, eax
+.df_cd_loop:
+        cmp ebx, edx
+        jge .df_cd_done
+        cmp byte [edi], 0
+        je .df_cd_skip
+        cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        je .df_cd_skip
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        je .df_cd_skip           ; Don't count directory entries as files
+        inc ecx
+.df_cd_skip:
+        add edi, HBFS_DIR_ENTRY_SIZE
+        inc ebx
+        jmp .df_cd_loop
+.df_cd_done:
+        mov eax, edx
+        ret
+
+.df_total_files: dd 0
+.df_total_slots: dd 0
+.df_dir_count:   dd 0
+.df_scan_idx:    dd 0
 
 .df_no_disk:
         mov esi, msg_hbfs_nodisk
@@ -8987,6 +9077,19 @@ cmd_beep:
 
 cmd_exec_batch:
         pushad
+
+        ; Guard against nested batch execution (shared buffers would corrupt)
+        cmp byte [batch_running], 1
+        jne .bat_not_nested
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_batch_nested
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+.bat_not_nested:
+        mov byte [batch_running], 1
+
         mov edi, batch_script_buf
         call hbfs_read_file
         jc .bat_nf
@@ -9033,9 +9136,11 @@ cmd_exec_batch:
         pop esi
         jmp .bat_line
 .bat_done:
+        mov byte [batch_running], 0
         popad
         ret
 .bat_nf:
+        mov byte [batch_running], 0
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_not_found
         call vga_print
@@ -9637,6 +9742,8 @@ msg_df_avail:   db "  Free space:    ", 0
 msg_df_blocks:  db " (4KB each)", 0x0A, 0
 msg_df_kb:      db " KB", 0x0A, 0
 msg_df_files:   db "  Files:         ", 0
+msg_df_in:      db " in ", 0
+msg_df_dirs:    db " directories", 0x0A, 0
 msg_more_prompt: db "-- MORE -- (Space/Enter=next, q/ESC=quit)", 0
 msg_more_erase: db "                                          ", 0
 msg_disk_header: db "=== Disk Information ===", 0x0A, 0
@@ -9677,6 +9784,7 @@ msg_exec:       db "Executing...", 0x0A, 0
 msg_exec_done:  db "Program exited.", 0x0A, 0
 msg_ctrl_c:     db "^C", 0x0A, 0
 msg_batch_prefix: db "> ", 0
+msg_batch_nested: db "Error: nested batch execution not supported", 0x0A, 0
 msg_dir_created: db "Directory created.", 0x0A, 0
 msg_already_exists: db "Already exists.", 0x0A, 0
 msg_env_set:    db "", 0
@@ -9849,6 +9957,7 @@ wild_star_txt:  resd 1
 ; Batch execution buffers
 batch_line_buf:   resb LINE_BUFFER_SIZE
 batch_script_buf: resb BATCH_BUFFER_SIZE  ; 32KB batch script storage
+batch_running:    resb 1                  ; Guard against nested batch calls
 
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing
