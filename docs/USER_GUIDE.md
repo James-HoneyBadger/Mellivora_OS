@@ -1,16 +1,38 @@
 # Mellivora OS — User Guide
 
+Welcome to Mellivora OS! This guide covers everything you need to know to use the
+HB DOS shell, manage files, run programs, and get the most out of the system.
+
+---
+
+## Table of Contents
+
+1. [Getting Started](#getting-started)
+2. [Keyboard Controls](#keyboard-controls)
+3. [Directory Structure](#directory-structure)
+4. [Navigation & PATH](#navigation--path)
+5. [Shell Commands Reference](#shell-commands-reference)
+6. [File Operations](#file-operations)
+7. [Text Processing](#text-processing)
+8. [Environment Variables & Aliases](#environment-variables--aliases)
+9. [Batch Scripting](#batch-scripting)
+10. [Programs](#programs)
+11. [The C Compiler (TCC)](#the-c-compiler-tcc)
+12. [Tips & Tricks](#tips--tricks)
+13. [Limitations](#limitations)
+
+---
+
 ## Getting Started
 
-When Mellivora boots, you are greeted with a blue banner and dropped into the **HB DOS**
-shell (Honey Badger Disk Operating System). The prompt looks like:
+When Mellivora boots, you see a blue banner and the HB DOS shell prompt:
 
 ```
 HBDOS:/>
 ```
 
-The part after the colon shows your current directory (`/` is the root). Type commands at
-the prompt and press **Enter** to execute them.
+The part after the colon shows your current directory (`/` is root). Type commands and
+press **Enter** to execute them. Type `help` to see all available commands.
 
 ---
 
@@ -25,7 +47,7 @@ the prompt and press **Enter** to execute them.
 | **Tab** | Auto-complete filename (cycles through matches) |
 | **Up Arrow** | Previous command from history |
 | **Down Arrow** | Next command in history |
-| **Ctrl+C** | Cancel current input and get a fresh prompt |
+| **Ctrl+C** | Cancel current input / abort running program |
 | **Home** | Move cursor to beginning of line |
 | **End** | Move cursor to end of line |
 
@@ -33,612 +55,493 @@ the prompt and press **Enter** to execute them.
 
 | Key | Action |
 | --- | --- |
-| **Ctrl+C** | Hard-abort — immediately terminates the running program and returns to the shell |
-| **ESC** | Many programs use ESC to quit (games, calculator, etc.) |
-
-> **Note:** Ctrl+C is a hard abort. The program does not get a chance to clean up or save.
+| **Ctrl+C** | Hard-abort — immediately terminates and returns to shell |
+| **ESC** | Most programs use ESC to quit (games, editor, calculator) |
 
 ### Command History
 
-The shell remembers the last 8 commands. Use **Up** and **Down** arrows to browse through
-them. Press **Enter** to re-execute a recalled command.
+The shell remembers the last 8 commands. Use **Up** and **Down** arrows to browse.
+Press **Enter** to re-execute a recalled command.
+
+---
+
+## Directory Structure
+
+Mellivora organizes files into subdirectories:
+
+```
+/
+├── bin/          Utility programs (hello, edit, grep, sort, tcc, ...)
+├── games/        Games (snake, tetris, 2048, galaga, mine, ...)
+├── samples/      C source files (hello.c, fib.c, wumpus.c, ...)
+├── docs/         Documentation (readme, license, notes, ...)
+└── script.bat    Example batch script
+```
+
+Directories support up to 16 levels of nesting. The root directory holds up to 227
+entries; subdirectories hold up to 56 entries each.
+
+---
+
+## Navigation & PATH
+
+### Navigating Directories
+
+```
+HBDOS:/> cd bin               # Enter a subdirectory
+HBDOS:/bin> cd ..             # Go up one level
+HBDOS:/> cd games             # Enter another directory
+HBDOS:/games> cd /            # Return to root
+HBDOS:/> cd docs/subdir       # Multi-component paths work
+HBDOS:/docs/subdir> pwd       # Print current directory
+/docs/subdir
+```
+
+### The PATH Variable
+
+Programs in `/bin` and `/games` run from anywhere — you don't need to `cd` into their
+directories first. This is because the default **PATH** is set to `/bin:/games`.
+
+```
+HBDOS:/> snake                # Found via PATH in /games
+HBDOS:/> hello                # Found via PATH in /bin
+```
+
+When you type a program name, the shell searches:
+
+1. Built-in commands (help, dir, cat, etc.)
+2. Current directory
+3. Each directory in PATH (left to right)
+
+### Customizing PATH
+
+```
+HBDOS:/> set PATH /bin:/games:/samples    # Add /samples to PATH
+HBDOS:/> set                              # View all variables (including PATH)
+```
+
+### Using Full Paths
+
+All file commands accept absolute and relative paths:
+
+```
+HBDOS:/> cat /docs/readme           # Absolute path
+HBDOS:/> cat ../docs/readme         # Relative path
+HBDOS:/> diff /docs/readme /docs/notes
+HBDOS:/> run /bin/hello
+HBDOS:/games> cat /samples/hello.c  # Access files across directories
+```
 
 ---
 
 ## Shell Commands Reference
 
-### Help & Information
+### Help & System Information
 
-#### `help`
+| Command | Description |
+| --- | --- |
+| `help` | Display all available commands |
+| `ver` | Show OS version, hardware info, feature list |
+| `time` | Display uptime in seconds since boot |
+| `date` | Show current date and time (YYYY-MM-DD HH:MM:SS) |
+| `mem` | Display memory info (free pages, MB, timer ticks) |
+| `disk` | Show disk info (total sectors, size in MB) |
+| `df` | Filesystem usage (total/used/free blocks, file count) |
+| `sysinfo` | Run the sysinfo program for detailed system information |
 
-Display the built-in help listing all available commands.
+### Screen & Display
 
-```
-HBDOS:/> help
-```
+| Command | Description |
+| --- | --- |
+| `clear` / `cls` | Clear the screen |
+| `color FG BG` | Set text color (hex 0–F, e.g., `color A 0` for green on black) |
+| `beep` | Play a beep through the PC speaker |
 
-#### `ver`
+### Directory Navigation
 
-Show detailed system and version information, including kernel version, filesystem details,
-hardware drivers, memory, and feature list.
-
-```
-HBDOS:/> ver
-```
-
-#### `time`
-
-Display uptime in seconds since boot.
-
-```
-HBDOS:/> time
-```
-
-#### `date`
-
-Show the current date and time from the real-time clock (YYYY-MM-DD HH:MM:SS format).
-
-```
-HBDOS:/> date
-2025-01-15 14:32:07
-```
-
-#### `mem`
-
-Display memory information: free pages, free memory in MB, and timer ticks since boot.
-
-```
-HBDOS:/> mem
-```
-
-#### `disk`
-
-Show disk information: total sectors and disk size in MB.
-
-```
-HBDOS:/> disk
-```
-
-#### `df`
-
-Filesystem usage: total blocks, used blocks, free blocks, and number of files.
-
-```
-HBDOS:/> df
-```
-
----
-
-### Screen Control
-
-#### `clear`
-
-Clear the screen and reset the cursor to the top-left.
-
-```
-HBDOS:/> clear
-```
-
-#### `beep`
-
-Play a beep through the PC speaker (1000 Hz, brief duration).
-
-```
-HBDOS:/> beep
-```
-
----
-
-### File Listing & Navigation
-
-#### `dir` / `ls`
-
-List all files in the current directory. Shows file type, size, and name.
-
-```
-HBDOS:/> dir
-```
-
-Output format:
-```
-  [TEXT]     1082  readme.txt
-  [EXEC]     664  banner
-  [DIR ]       0  mydir
-  [BTCH]     128  startup.bat
-```
-
-File types displayed:
-- `[TEXT]` — Text file
-- `[EXEC]` — Executable program
-- `[DIR ]` — Subdirectory
-- `[BTCH]` — Batch script
-
-#### `cd DIR`
-
-Change to a directory.
-
-```
-HBDOS:/> cd mydir
-HBDOS:mydir>
-```
-
-Special directories:
-- `cd /` — Return to root
-- `cd ..` — Go up one level (returns to root, as subdirectories are single-level)
-
-#### `pwd`
-
-Print the current working directory name.
-
-```
-HBDOS:mydir> pwd
-mydir
-```
-
-#### `mkdir DIR`
-
-Create a new subdirectory.
-
-```
-HBDOS:/> mkdir projects
-```
-
-> **Note:** Subdirectories currently support one level of nesting. Each directory can hold
-> up to 28 entries.
-
----
+| Command | Description |
+| --- | --- |
+| `dir` / `ls` | List files in current directory |
+| `dir -l` | Long format with types and sizes |
+| `cd DIR` | Change directory (`cd /`, `cd ..`, `cd bin`, `cd /docs/sub`) |
+| `pwd` | Print current working directory path |
+| `mkdir NAME` | Create a new subdirectory |
 
 ### File Viewing
 
-#### `cat FILE`
-
-Display the entire contents of a text file.
-
-```
-HBDOS:/> cat readme.txt
-```
-
-#### `more FILE`
-
-Page through a file 23 lines at a time. At each page break:
-- Press **any key** to continue to the next page
-- Press **ESC** or **Q** to quit
-
-```
-HBDOS:/> more notes.txt
-```
-
-#### `hex FILE`
-
-Display a hexadecimal dump of a file (first 512 bytes). Shows offset, hex bytes, and ASCII
-representation.
-
-```
-HBDOS:/> hex banner
-```
-
-#### `wc FILE`
-
-Count lines, words, and bytes in a file.
-
-```
-HBDOS:/> wc readme.txt
-  42 lines, 287 words, 1082 bytes
-```
-
-#### `find PATTERN FILE`
-
-Search for a text pattern in a file. Shows matching lines with line numbers.
-
-```
-HBDOS:/> find syscall notes.txt
-```
-
----
+| Command | Description |
+| --- | --- |
+| `cat FILE` | Display entire file contents |
+| `cat -n FILE` | Display with line numbers |
+| `head FILE` | Show first 10 lines |
+| `head -n 20 FILE` | Show first 20 lines |
+| `tail FILE` | Show last 10 lines |
+| `tail -n 5 FILE` | Show last 5 lines |
+| `more FILE` | Page through file (Space = next page, Q = quit) |
+| `hex FILE` | Hexadecimal dump of file |
+| `size FILE` | Show file size in bytes/blocks and type |
+| `strings FILE` | Extract printable strings (default ≥4 chars) |
 
 ### File Creation & Editing
 
-#### `write FILE`
-
-Create or overwrite a file with text content. Type your text line by line. End input
-by pressing **Enter** on an empty line.
-
-```
-HBDOS:/> write hello.txt
-Hello, world!
-This is a test file.
-
-HBDOS:/>
-```
-
-#### `append FILE`
-
-Append text to an existing file. Works the same as `write` but adds to the end.
-
-```
-HBDOS:/> append hello.txt
-Another line added.
-
-HBDOS:/>
-```
-
-#### `edit FILE` (program)
-
-Launch the full-screen text editor. See the [Programs](#programs) section for details.
-
-```
-HBDOS:/> edit myfile.txt
-```
-
----
+| Command | Description |
+| --- | --- |
+| `write FILE` | Create/overwrite file (type text, blank line to end) |
+| `append FILE TEXT` | Append text to existing file |
+| `touch FILE` | Create an empty file |
+| `edit FILE` | Launch the full-screen text editor |
 
 ### File Management
 
-#### `copy SRC DEST`
+| Command | Description |
+| --- | --- |
+| `copy SRC DEST` | Copy a file (wildcards supported: `copy *.txt backup/`) |
+| `ren OLD NEW` | Rename a file |
+| `del FILE` / `rm FILE` | Delete a file (wildcards: `del *.tmp`) |
 
-Copy a file to a new name.
+### Text Processing
 
-```
-HBDOS:/> copy readme.txt backup.txt
-```
-
-#### `ren OLD NEW`
-
-Rename a file.
-
-```
-HBDOS:/> ren backup.txt archive.txt
-```
-
-#### `del FILE` / `rm FILE`
-
-Delete a file. There is no confirmation prompt and no recycle bin — deletion is immediate
-and permanent.
-
-```
-HBDOS:/> del archive.txt
-```
-
----
+| Command | Description |
+| --- | --- |
+| `find PATTERN FILE` | Search for text pattern, show matching lines |
+| `wc FILE` | Count lines, words, and bytes |
+| `diff FILE1 FILE2` | Side-by-side file comparison (colored: `<` red, `>` green) |
+| `uniq FILE` | Remove adjacent duplicate lines |
+| `uniq -c FILE` | Show count prefix for each line |
+| `uniq -d FILE` | Show only duplicate lines |
+| `rev FILE` | Reverse each line character-by-character |
+| `tac FILE` | Print file lines in reverse order |
 
 ### Program Execution
 
-#### `run FILE`
-
-Execute a program from the filesystem.
-
-```
-HBDOS:/> run hello
-```
-
-#### Running Programs Directly
-
-You can also just type the program name. If it is not a built-in command, the shell will
-try to find and execute it as a program:
-
-```
-HBDOS:/> hello
-Hello, world!
-
-HBDOS:/> snake
-```
-
-#### Passing Arguments
-
-Programs can receive command-line arguments. Anything after the program name is passed
-as the argument string:
-
-```
-HBDOS:/> edit myfile.txt
-```
-
-Here, `myfile.txt` is passed to the `edit` program, which opens that file directly.
-
----
+| Command | Description |
+| --- | --- |
+| `PROGRAM` | Just type the name — found via current dir then PATH |
+| `PROGRAM args` | Pass arguments (e.g., `edit myfile.txt`) |
+| `run FILE` | Explicitly execute a program file |
+| `which NAME` | Show if built-in or locate external program in PATH |
+| `enter` | Enter raw hex bytes to create a program |
+| `batch FILE` | Execute a batch script |
 
 ### Environment Variables
 
-#### `set NAME VALUE`
+| Command | Description |
+| --- | --- |
+| `set` | Display all environment variables |
+| `set NAME VALUE` | Set a variable (e.g., `set PATH /bin:/games`) |
+| `unset NAME` | Remove a variable |
+| `echo TEXT` | Print text with `$VAR` expansion |
+| `echo -n TEXT` | Print without trailing newline |
 
-Set an environment variable.
+### Aliases
 
-```
-HBDOS:/> set user James
-```
+| Command | Description |
+| --- | --- |
+| `alias` | List all defined aliases |
+| `alias NAME COMMAND` | Define an alias (e.g., `alias ll dir -l`) |
+| `alias NAME` | Show what an alias expands to |
 
-#### `set`
+### History
 
-With no arguments, display all set environment variables.
-
-```
-HBDOS:/> set
-  user=James
-  prompt=ready
-```
-
-#### `unset NAME`
-
-Remove an environment variable.
-
-```
-HBDOS:/> unset user
-```
-
-#### Using Variables
-
-The `echo` command expands `$VAR` references:
-
-```
-HBDOS:/> set name World
-HBDOS:/> echo Hello, $name!
-Hello, World!
-```
-
-> **Limits:** Up to 16 environment variables, each up to 128 bytes (name + value combined).
-
----
-
-### Text Output
-
-#### `echo TEXT`
-
-Print text to the screen. Supports `$VAR` expansion for environment variables.
-
-```
-HBDOS:/> echo System ready.
-System ready.
-```
-
----
+| Command | Description |
+| --- | --- |
+| `history` | Display numbered command history |
 
 ### System Operations
 
-#### `shutdown`
+| Command | Description |
+| --- | --- |
+| `shutdown` | Power off (ACPI S5 shutdown, works in QEMU) |
+| `format` | Format HBFS filesystem (**erases all files!** — requires `y` confirm) |
+| `sleep N` | Pause for N seconds (Ctrl+C to abort) |
 
-Power off the system (sends ACPI S5 shutdown command). Works in QEMU; on real hardware,
-behavior depends on ACPI support.
+---
+
+## File Operations
+
+### Creating Files
 
 ```
-HBDOS:/> shutdown
+HBDOS:/> write myfile.txt
+Hello, this is my file.
+Second line here.
+                              ← (blank line ends input)
+HBDOS:/>
 ```
 
-#### `format`
-
-Format the HBFS filesystem. **This erases all files!** You must type `y` to confirm.
+### Viewing Files
 
 ```
-HBDOS:/> format
-WARNING: This will erase all data! Continue? (y/N) y
-Formatting...done.
+HBDOS:/> cat myfile.txt       # Full contents
+HBDOS:/> cat -n myfile.txt    # With line numbers
+HBDOS:/> head -n 5 myfile.txt # First 5 lines
+HBDOS:/> more /docs/readme    # Page-by-page (paths work!)
+```
+
+### Copying, Renaming, Deleting
+
+```
+HBDOS:/> copy myfile.txt backup.txt
+HBDOS:/> ren backup.txt archive.txt
+HBDOS:/> del archive.txt
+```
+
+### Wildcards
+
+The `del` and `copy` commands support `*` and `?` wildcards:
+
+```
+HBDOS:/> del *.tmp            # Delete all .tmp files
+HBDOS:/> copy *.c backup/     # Copy all .c files (future feature)
+```
+
+### Working Across Directories
+
+All file commands accept paths:
+
+```
+HBDOS:/> cat /docs/readme
+HBDOS:/> head /samples/hello.c
+HBDOS:/> diff /docs/readme /docs/notes
+HBDOS:/> wc /samples/fib.c
+HBDOS:/games> cat /docs/license
 ```
 
 ---
 
-### Hex Entry
+## Text Processing
 
-#### `enter`
-
-Enter raw hexadecimal bytes to create an executable program. Type hex bytes separated by
-spaces. End with an empty line, then provide a filename to save.
+### Searching in Files
 
 ```
-HBDOS:/> enter
-Hex> B8 01 00 00 00 BB 41 00 00 00 CD 80
-Hex>
-12 bytes entered. Save as: test
+HBDOS:/> find syscall /docs/notes    # Search for "syscall" in notes
 ```
 
-This is useful for quick experiments without needing the full toolchain.
+### Comparing Files
+
+```
+HBDOS:/> diff file1.txt file2.txt
+< Line only in file1           (shown in red)
+> Line only in file2           (shown in green)
+  Common line                  (shown in default color)
+```
+
+### Removing Duplicates
+
+```
+HBDOS:/> uniq data.txt         # Remove adjacent duplicates
+HBDOS:/> uniq -c data.txt      # Show counts
+HBDOS:/> uniq -d data.txt      # Show only duplicated lines
+```
+
+### Reversing
+
+```
+HBDOS:/> rev myfile.txt        # Reverse characters in each line
+HBDOS:/> tac myfile.txt        # Print lines in reverse order (last first)
+```
 
 ---
 
-### Batch Scripts
+## Environment Variables & Aliases
 
-#### `batch FILE`
-
-Execute a batch script — a text file where each line is a shell command.
+### Environment Variables
 
 ```
-HBDOS:/> batch startup.bat
+HBDOS:/> set name James        # Set a variable
+HBDOS:/> echo Hello, $name!    # Use in echo ($VAR expansion)
+Hello, James!
+HBDOS:/> set                   # List all variables
+  PATH=/bin:/games
+  name=James
+HBDOS:/> unset name            # Remove a variable
 ```
 
-#### Creating a Batch Script
+**Limits:** 16 variables, 128 bytes each (name + value combined).
 
-Use `write` to create a batch script:
+The `PATH` variable is special — it controls where the shell searches for programs.
+
+### Aliases
+
+```
+HBDOS:/> alias ll dir -l       # Create an alias
+HBDOS:/> ll                    # Runs "dir -l"
+HBDOS:/> alias                 # List all aliases
+  ll = dir -l
+HBDOS:/> alias ll              # Show specific alias
+  ll = dir -l
+```
+
+**Limits:** 16 aliases, 32-byte name, 224-byte command.
+
+---
+
+## Batch Scripting
+
+### Creating a Script
 
 ```
 HBDOS:/> write startup.bat
 echo === System Starting ===
 date
-echo Files:
+echo Files in root:
 dir
 echo === Ready ===
 
 HBDOS:/>
 ```
 
-When executed with `batch startup.bat`, each line runs sequentially, preceded by a `> `
-prefix showing which command is being executed.
+### Running a Script
 
-> **Tip:** Batch scripts support all shell commands including `run`, `set`, `echo` with
-> variable expansion, and even nested `batch` calls.
+```
+HBDOS:/> batch startup.bat
+> echo === System Starting ===
+=== System Starting ===
+> date
+2026-04-06 14:30:00
+> echo Files in root:
+Files in root:
+> dir
+bin             games           samples         docs            script.bat
+> echo === Ready ===
+=== Ready ===
+```
+
+Each line is shown with a `>` prefix before execution.
+
+### Script Capabilities
+
+Batch scripts can use:
+
+- All shell commands (`cat`, `dir`, `del`, `run`, etc.)
+- `echo` with `$VAR` expansion
+- `set` and `unset` for variables
+- Program execution by name
+- Nested `batch` calls
+- Full path support (`cat /docs/readme`)
 
 ---
 
 ## Programs
 
-Mellivora ships with 14 user-space programs. All run in ring 3 (user mode) with full
-syscall access.
+Mellivora ships with 31 user-space programs organized in `/bin` and `/games`.
 
-### hello
+### Games (in /games)
 
-A minimal "Hello, world!" program. Good as a template for learning.
+| Program | Controls | Description |
+| --- | --- | --- |
+| `snake` | Arrow keys, ESC | Classic snake — eat food, grow, don't crash |
+| `tetris` | ←→ move, ↑ rotate, ↓ soft drop, Space hard drop, ESC quit | Tetris with 7 pieces, scoring, and levels |
+| `mine` | Arrow keys, Space reveal, F flag, ESC quit | Minesweeper |
+| `sokoban` | Arrow keys, R restart, ESC quit | Box-pushing puzzle |
+| `2048` | Arrow keys / WASD, ESC quit | Sliding number tiles |
+| `galaga` | ←→ move, Space shoot, ESC quit | Space shooter with enemy waves |
+| `guess` | Type numbers, Enter | Number guessing with hints |
+| `life` | ESC quit | Conway's Game of Life (auto-running) |
+| `maze` | ESC quit | Random maze generation + BFS solve |
+| `piano` | Number keys 1–9, 0, -, =, etc. | PC speaker piano (15 notes) |
 
-```
-HBDOS:/> hello
-Hello, world from Mellivora OS!
-```
+### Utilities (in /bin)
 
-### banner
+| Program | Usage | Description |
+| --- | --- | --- |
+| `hello` | `hello` | Hello World — template program |
+| `edit` | `edit [FILE]` | Full-screen text editor (Ctrl+S save, Ctrl+Q/ESC quit) |
+| `tcc` | `tcc FILE.c` | Tiny C Compiler — compiles and runs C code |
+| `grep` | `grep PATTERN FILE` | Search for pattern in file |
+| `sort` | `sort FILE` | Sort file lines alphabetically |
+| `hexdump` | `hexdump FILE` | Hex + ASCII file dump |
+| `sed` | `sed SEARCH REPLACE FILE` | Stream editor (search & replace) |
+| `tr` | `tr SET1 SET2 FILE` | Character translator |
+| `csv` | `csv FILE` | Formatted CSV viewer with colored headers |
+| `wc` | `wc FILE` | Line, word, byte count |
+| `pager` | `pager FILE` | Page-by-page file viewer |
+| `cal` | `cal` | Calendar for current month |
+| `calc` | `calc` | Interactive calculator (+, -, *, /, %) |
+| `mandel` | `mandel` | Mandelbrot set renderer |
+| `basic` | `basic` | BASIC language interpreter |
+| `banner` | `banner` | Colorful ASCII art banner |
+| `colors` | `colors` | VGA color palette demo |
+| `fibonacci` | `fibonacci` | Fibonacci sequence |
+| `primes` | `primes` | Prime number calculator |
+| `sysinfo` | `sysinfo` | Detailed system information |
+| `uptime` | `uptime` | System uptime display |
 
-Displays a colorful ASCII art banner demonstrating VGA color capabilities.
-
-```
-HBDOS:/> banner
-```
-
-### colors
-
-Shows all 16 VGA text-mode color combinations (foreground × background samples).
-
-```
-HBDOS:/> colors
-```
-
-### fibonacci
-
-Generates and displays the Fibonacci sequence.
-
-```
-HBDOS:/> fibonacci
-```
-
-### primes
-
-Calculates and displays prime numbers using a sieve algorithm.
-
-```
-HBDOS:/> primes
-```
-
-### guess
-
-A number guessing game. The computer picks a random number and you try to guess it.
-Gives "too high" / "too low" hints.
-
-```
-HBDOS:/> guess
-```
-
-### sysinfo
-
-Displays detailed system information: CPU features, memory, disk, filesystem stats,
-and uptime.
-
-```
-HBDOS:/> sysinfo
-```
-
-### cal
-
-Calendar display showing the current month in a grid format. Highlights the current
-day (white on red) and Sundays (in red).
-
-```
-HBDOS:/> cal
-```
-
-### calc
-
-Interactive command-line calculator. Supports addition, subtraction, multiplication,
-division, and modulo. Shows results in both decimal and hexadecimal.
-
-```
-HBDOS:/> calc
-Calc> 42 + 17
-= 59  (0x3B)
-Calc> 100 / 7
-= 14  (0xE)
-Calc> quit
-```
-
-Operators: `+`, `-`, `*`, `/`, `%`
-
-Press **ESC** or type `quit` to exit.
-
-### edit
-
-A full-screen text editor with the following features:
-
-- Arrow key navigation
-- Insert and delete text
-- Page Up / Page Down scrolling
-- Status bar showing filename, cursor position, line count, and file size
-- Load and save files
-
-**Keyboard shortcuts in the editor:**
+### The Text Editor (edit)
 
 | Key | Action |
 | --- | --- |
-| **Arrow keys** | Move cursor |
-| **Page Up/Down** | Scroll by screen height |
-| **Home** | Move to beginning of line |
-| **End** | Move to end of line |
-| **Backspace** | Delete character before cursor |
-| **Delete** | Delete character at cursor |
-| **Enter** | Insert new line |
-| **Ctrl+S** | Save file |
-| **Ctrl+Q** | Quit editor |
-| **ESC** | Quit editor |
+| Arrow keys | Move cursor |
+| Page Up/Down | Scroll by screen height |
+| Home/End | Beginning/end of line |
+| Backspace | Delete before cursor |
+| Delete | Delete at cursor |
+| Enter | Insert new line |
+| Ctrl+S | Save file |
+| Ctrl+Q / ESC | Quit editor |
 
 Usage:
+
 ```
-HBDOS:/> edit myfile.txt
+HBDOS:/> edit myfile.txt      # Open specific file
+HBDOS:/> edit                  # Opens scratch.txt by default
 ```
 
-If given a filename argument, the editor opens that file directly. Without an argument,
-it opens `scratch.txt` by default.
+---
 
-### snake
+## The C Compiler (TCC)
 
-Classic Snake game. Control the snake with arrow keys, eat food to grow, avoid walls
-and your own tail.
+Mellivora includes a Tiny C Compiler that compiles a subset of C into ELF executables
+and runs them immediately — all inside the OS.
 
-| Key | Action |
+### Compiling and Running C Programs
+
+```
+HBDOS:/> tcc /samples/hello.c
+Compiling hello.c...
+Running...
+Hello, World!
+HBDOS:/>
+```
+
+### Available C Samples (in /samples)
+
+| File | Description |
 | --- | --- |
-| **Arrow keys** | Change direction |
-| **ESC** | Quit game |
+| `hello.c` | Hello World |
+| `fib.c` | Fibonacci sequence |
+| `primes.c` | Prime number sieve |
+| `calc.c` | Integer calculator |
+| `matrix.c` | Matrix rain animation |
+| `hanoi.c` | Tower of Hanoi solver |
+| `bf.c` | Brainfuck interpreter |
+| `wumpus.c` | Hunt the Wumpus game |
+| `boxes.c` | Box drawing demo |
+| `stars.c` | Starfield animation |
+| `echo.c` | Echo arguments |
+
+### Supported C Features
+
+- Variables (`int` type, global and local)
+- Functions with parameters and return values
+- Control flow: `if`/`else`, `while`, `for`
+- Operators: `+`, `-`, `*`, `/`, `%`, comparisons, logical
+- `printf()` with `%d` and `%s` format specifiers
+- `putchar()`, `getchar()`
+- Arrays and pointers (basic support)
+
+### Writing Your Own C Programs
 
 ```
-HBDOS:/> snake
-```
+HBDOS:/> write myprogram.c
+int main() {
+    printf("Hello from my C program!\n");
+    int x = 42;
+    printf("x = %d\n", x);
+    return 0;
+}
 
-### mine
-
-Minesweeper game. Uncover cells and flag mines on a grid.
-
-```
-HBDOS:/> mine
-```
-
-### sokoban
-
-Sokoban puzzle game. Push boxes onto target locations.
-
-| Key | Action |
-| --- | --- |
-| **Arrow keys** | Move player |
-| **R** | Restart level |
-| **ESC** | Quit game |
-
-```
-HBDOS:/> sokoban
-```
-
-### tetris
-
-Classic Tetris game with falling tetrominoes.
-
-| Key | Action |
-| --- | --- |
-| **Left/Right** | Move piece horizontally |
-| **Down** | Soft drop |
-| **Up** | Rotate piece |
-| **Space** | Hard drop |
-| **ESC** | Quit game |
-
-```
-HBDOS:/> tetris
+HBDOS:/> tcc myprogram.c
 ```
 
 ---
@@ -647,28 +550,36 @@ HBDOS:/> tetris
 
 ### Tab Completion
 
-Start typing a filename and press **Tab** to auto-complete. If multiple files match,
-subsequent Tab presses cycle through the matches.
+Start typing a filename and press **Tab** to auto-complete:
 
 ```
 HBDOS:/> cat rea[Tab]
-HBDOS:/> cat readme.txt
+HBDOS:/> cat readme             ← completed automatically
 ```
+
+If multiple files match, press Tab repeatedly to cycle through them.
 
 ### Quick File Inspection
 
-Use `wc` to check file sizes, `find` to search for content, and `hex` to inspect binary
-programs:
+```
+HBDOS:/> wc /docs/readme        # How big is it?
+HBDOS:/> find memory /docs/notes # Search for "memory"
+HBDOS:/> hex /bin/hello          # Look at binary structure
+HBDOS:/> strings /bin/hello      # Find text in a binary
+```
+
+### Using which to Find Programs
 
 ```
-HBDOS:/> wc notes.txt
-HBDOS:/> find memory notes.txt
-HBDOS:/> hex hello
+HBDOS:/> which snake
+snake is /games/snake (external)
+HBDOS:/> which cat
+cat is a built-in command
+HBDOS:/> which nonexistent
+nonexistent: not found
 ```
 
 ### Startup Automation
-
-Create a batch script to run commands automatically:
 
 ```
 HBDOS:/> write init.bat
@@ -682,38 +593,28 @@ echo Type 'help' for commands.
 HBDOS:/> batch init.bat
 ```
 
-### Checking Free Space
+### Color Customization
 
 ```
-HBDOS:/> df
+HBDOS:/> color A 0              # Green text on black background
+HBDOS:/> color F 1              # White text on blue background
+HBDOS:/> color 7 0              # Reset to default (light gray on black)
 ```
 
-Shows total, used, and free blocks plus file count.
-
-### Environment for Scripts
-
-Set variables before running a batch script to customize behavior:
-
-```
-HBDOS:/> set greeting Hello
-HBDOS:/> write say.bat
-echo $greeting, user!
-
-HBDOS:/> batch say.bat
-> echo Hello, user!
-Hello, user!
-```
+Color values (hex): 0=Black, 1=Blue, 2=Green, 3=Cyan, 4=Red, 5=Magenta, 6=Brown,
+7=LightGray, 8=DarkGray, 9=LightBlue, A=LightGreen, B=LightCyan, C=LightRed,
+D=LightMagenta, E=Yellow, F=White
 
 ---
 
 ## Limitations
 
-- **Single-tasking:** Only one program runs at a time. There is no background processing
-  or multitasking.
-- **No networking:** No network stack is included.
-- **28-file directory limit:** Each directory can hold at most 28 entries.
-- **Single-level subdirectories:** Directories support one level of nesting from root.
-- **No file permissions:** All files are accessible by all operations.
+- **Single-tasking:** Only one program runs at a time.
+- **No networking:** No network stack.
+- **No piping or redirection:** Commands cannot be chained with `|` or `>`.
+- **No file permissions:** All files accessible to all operations.
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
-- **No piping or redirection:** Commands cannot be chained with `|` or redirected with `>`.
-- **128 MB RAM limit:** The physical memory manager supports the QEMU default of 128 MB.
+- **128 MB RAM limit:** Physical memory manager supports up to 128 MB.
+- **Root: 227 files, Subdirs: 56 files:** Directory entry limits.
+- **16-level directory nesting:** Maximum subdirectory depth.
+- **Tab completion:** Only completes filenames in the current directory (not PATH-aware).
