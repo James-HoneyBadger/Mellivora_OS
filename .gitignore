@@ -1,0 +1,15 @@
+# Build artifacts
+*.bin
+*.img
+*.o
+
+# Listing files
+*.lst
+
+# Logs
+*.log
+
+# Editor files
+*~
+*.swp
+.vscode/

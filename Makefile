@@ -1,0 +1,130 @@
+#
+# Mellivora OS - Build System
+#
+# Produces a bootable disk image with:
+#   Sector 0:      Stage 1 boot sector (512 bytes)
+#   Sectors 1-32:  Stage 2 loader (16 KB)
+#   Sectors 33+:   Kernel (192 KB)
+#   Remaining:     Filesystem area
+#
+# Target: i486+ emulation via QEMU
+#
+
+NASM = nasm
+QEMU = qemu-system-i386
+DD = dd
+
+# Output
+IMAGE = mellivora.img
+IMAGE_SIZE_MB = 64
+
+# Components
+BOOT_BIN = boot.bin
+STAGE2_BIN = stage2.bin
+KERNEL_BIN = kernel.bin
+
+# Source
+BOOT_SRC = boot.asm
+STAGE2_SRC = stage2.asm
+KERNEL_SRC = kernel.asm
+
+# QEMU settings
+QEMU_FLAGS = -cpu 486 \
+             -m 128 \
+             -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough \
+             -boot c \
+             -no-reboot \
+             -no-shutdown
+
+# For debugging
+QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
+                   -monitor stdio \
+                   -d int,cpu_reset
+
+# Programs
+PROG_DIR = programs
+PROG_SRCS = $(wildcard $(PROG_DIR)/*.asm)
+PROG_BINS = $(PROG_SRCS:.asm=.bin)
+
+# Populate script
+POPULATE = python3 populate.py
+
+.PHONY: all clean run debug programs populate full
+
+all: $(IMAGE)
+
+# Assemble stage 1 boot sector
+$(BOOT_BIN): $(BOOT_SRC)
+	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
+
+# Assemble stage 2 loader
+$(STAGE2_BIN): $(STAGE2_SRC)
+	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
+
+# Assemble 32-bit kernel
+$(KERNEL_BIN): $(KERNEL_SRC)
+	$(NASM) -f bin -O0 -o $@ -l $(@:.bin=.lst) $<
+
+# Create the disk image
+# Layout:
+#   Offset 0x00000 (LBA 0):  boot.bin   (512 bytes)
+#   Offset 0x00200 (LBA 1):  stage2.bin (16384 bytes = 32 sectors)
+#   Offset 0x04200 (LBA 33): kernel.bin (padded to 192KB = 384 sectors)
+$(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
+	@echo "=== Building Mellivora disk image ==="
+	@echo "  Boot sector:  $(BOOT_BIN)"
+	@echo "  Stage 2:      $(STAGE2_BIN)"
+	@echo "  Kernel:       $(KERNEL_BIN)"
+	# Create empty 64MB disk image
+	$(DD) if=/dev/zero of=$(IMAGE) bs=1M count=$(IMAGE_SIZE_MB) status=none
+	# Write boot sector at LBA 0
+	$(DD) if=$(BOOT_BIN) of=$(IMAGE) bs=512 count=1 conv=notrunc status=none
+	# Write stage 2 at LBA 1
+	$(DD) if=$(STAGE2_BIN) of=$(IMAGE) bs=512 seek=1 conv=notrunc status=none
+	# Write kernel at LBA 33
+	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
+	@echo "=== $(IMAGE) created ($(IMAGE_SIZE_MB) MB) ==="
+	@ls -la $(IMAGE)
+
+# Run in QEMU with i486 CPU
+run: $(IMAGE)
+	@echo "=== Launching Mellivora in QEMU (i486 CPU, 128MB RAM) ==="
+	$(QEMU) $(QEMU_FLAGS)
+
+# Run with debug output
+debug: $(IMAGE)
+	@echo "=== Launching Mellivora in QEMU (DEBUG MODE) ==="
+	$(QEMU) $(QEMU_DEBUG_FLAGS)
+
+# Build all sample programs
+programs: $(PROG_BINS)
+
+$(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc
+	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
+
+# Populate disk image with files and programs
+populate: $(IMAGE) programs populate.py
+	@echo "=== Populating filesystem ==="
+	$(POPULATE) $(IMAGE) $(PROG_DIR)
+
+# Full build: OS + programs + populated filesystem
+full: $(IMAGE) programs populate
+	@echo "=== Full build complete ==="
+
+# Show component sizes
+sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
+	@echo "=== Component Sizes ==="
+	@echo -n "  Boot sector: " && wc -c < $(BOOT_BIN) && echo " bytes (max 512)"
+	@echo -n "  Stage 2:     " && wc -c < $(STAGE2_BIN) && echo " bytes (max 16384)"
+	@echo -n "  Kernel:      " && wc -c < $(KERNEL_BIN) && echo " bytes"
+	@if [ -d "$(PROG_DIR)" ]; then \
+		echo "=== Program Sizes ==="; \
+		for f in $(PROG_DIR)/*.bin; do \
+			[ -f "$$f" ] && printf "  %-20s %s bytes\n" "$$(basename $$f)" "$$(wc -c < $$f)"; \
+		done; \
+	fi
+
+clean:
+	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE)
+	rm -f *.lst
+	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst

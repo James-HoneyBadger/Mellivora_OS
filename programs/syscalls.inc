@@ -1,0 +1,102 @@
+;
+; syscalls.inc - Shared system call definitions for Mellivora OS programs
+;
+; Include this at the top of every program:
+;   %include "syscalls.inc"
+;
+
+; Program header
+[BITS 32]
+[ORG 0x00200000]
+
+; Jump past shared code to program entry point
+jmp start
+
+; System call numbers (INT 0x80)
+SYS_EXIT        equ 0
+SYS_PUTCHAR     equ 1
+SYS_GETCHAR     equ 2
+SYS_PRINT       equ 3
+SYS_READ_KEY    equ 4
+SYS_OPEN        equ 5
+SYS_READ        equ 6
+SYS_WRITE       equ 7
+SYS_CLOSE       equ 8
+SYS_DELETE      equ 9
+SYS_SEEK        equ 10
+SYS_STAT        equ 11
+SYS_MKDIR       equ 12          ; Reserved - not yet implemented (returns -1)
+SYS_READDIR     equ 13          ; Reserved - not yet implemented (returns -1)
+SYS_SETCURSOR   equ 14
+SYS_GETTIME     equ 15
+SYS_SLEEP       equ 16
+SYS_CLEAR       equ 17
+SYS_SETCOLOR    equ 18
+SYS_MALLOC      equ 19
+SYS_FREE        equ 20
+SYS_EXEC        equ 21
+SYS_DISK_READ   equ 22
+SYS_DISK_WRITE  equ 23
+SYS_BEEP        equ 24
+SYS_DATE        equ 25
+SYS_CHDIR       equ 26
+SYS_GETCWD      equ 27
+SYS_SERIAL      equ 28
+SYS_GETENV      equ 29
+SYS_FREAD       equ 30          ; Read entire file: EBX=name ECX=buf -> EAX=bytes
+SYS_FWRITE      equ 31          ; Write file: EBX=name ECX=buf EDX=size
+SYS_GETARGS     equ 32          ; Get command-line args: EBX=buf -> EAX=length
+SYS_SERIAL_IN   equ 33          ; Read serial port: -> EAX=char or -1
+
+; VGA constants
+VGA_BASE        equ 0xB8000
+VGA_WIDTH       equ 80
+VGA_HEIGHT      equ 25
+
+; Arrow key codes
+KEY_UP          equ 0x80
+KEY_DOWN        equ 0x81
+KEY_LEFT        equ 0x82
+KEY_RIGHT       equ 0x83
+
+; Default color
+COLOR_DEFAULT   equ 0x07
+
+; File types (for SYS_FWRITE and SYS_STAT)
+FTYPE_TEXT      equ 1
+FTYPE_DIR       equ 2
+FTYPE_EXEC      equ 3
+FTYPE_BATCH     equ 4
+
+;---------------------------------------
+; Shared print_dec: print EAX as decimal
+; Clobbers no registers (uses pushad/popad)
+;---------------------------------------
+print_dec:
+        pushad
+        xor ecx, ecx
+        mov ebx, 10
+        test eax, eax
+        jnz .pd_nonzero
+        mov eax, SYS_PUTCHAR
+        mov ebx, '0'
+        int 0x80
+        jmp .pd_done
+.pd_nonzero:
+.pd_push:
+        xor edx, edx
+        div ebx
+        push edx
+        inc ecx
+        test eax, eax
+        jnz .pd_push
+.pd_pop:
+        pop ebx
+        add ebx, '0'
+        mov eax, SYS_PUTCHAR
+        int 0x80
+        dec ecx
+        jnz .pd_pop
+.pd_done:
+        popad
+        ret

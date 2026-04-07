@@ -1,0 +1,1057 @@
+; edit.asm - Full-screen text editor for Mellivora OS
+; Usage: edit <filename>
+; Ctrl+S: Save  |  Ctrl+Q / ESC: Quit  |  Arrow keys: Move cursor
+; Home/End: Start/End of line  |  Backspace/Delete: Erase
+%include "syscalls.inc"
+
+; Editor constants
+MAX_LINES       equ 200
+MAX_LINE_LEN    equ 80          ; max chars per line
+EDIT_ROWS       equ 23          ; rows available for text (25 - status bar - header)
+STATUS_ROW      equ 24          ; bottom row for status bar
+HEADER_ROW      equ 0           ; top row for filename bar
+TEXT_START_ROW   equ 1          ; first text row on screen
+TAB_SIZE        equ 4
+BUFFER_SIZE     equ 16384       ; 16KB text buffer
+
+; Color scheme
+COL_HEADER      equ 0x1F        ; white on blue
+COL_STATUS      equ 0x70        ; black on gray
+COL_TEXT        equ 0x07        ; gray on black
+COL_LINENUM     equ 0x08        ; dark gray
+
+; Keyboard scancodes / special
+KEY_HOME        equ 0x84
+KEY_END         equ 0x85
+KEY_DELETE      equ 0x86
+KEY_BACKSPACE   equ 0x08
+KEY_ENTER       equ 0x0A
+KEY_CTRL_S      equ 0x13        ; Ctrl+S
+KEY_CTRL_Q      equ 0x11        ; Ctrl+Q
+KEY_ESC_CHAR    equ 0x1B
+
+start:
+        ; Get command-line argument (filename) via syscall
+        mov eax, SYS_GETARGS
+        mov ebx, arg_buffer
+        int 0x80
+        ; EAX = length of argument string
+        test eax, eax
+        jz .use_default
+        ; Use the command-line argument as filename
+        mov esi, arg_buffer
+        jmp .got_fn
+.use_default:
+        mov esi, default_filename
+
+.got_fn:
+        ; Copy filename
+        mov edi, filename
+        mov ecx, 63
+.copy_fn:
+        lodsb
+        test al, al
+        jz .fn_done
+        stosb
+        loop .copy_fn
+.fn_done:
+        mov byte [edi], 0
+
+        ; Initialize editor state
+        xor eax, eax
+        mov [cursor_x], eax
+        mov [cursor_y], eax
+        mov [scroll_x], eax
+        mov [scroll_y], eax
+        mov [num_lines], dword 1
+        mov [modified], byte 0
+
+        ; Zero out the text buffer
+        mov edi, text_buf
+        mov ecx, BUFFER_SIZE / 4
+        xor eax, eax
+        rep stosd
+
+        ; Try to load the file
+        call load_file
+
+        ; Clear screen and draw initial view
+        mov eax, SYS_CLEAR
+        int 0x80
+
+        ; Main editor loop
+.main_loop:
+        call draw_screen
+        call update_cursor_pos
+
+        ; Wait for a keypress (blocking)
+        mov eax, SYS_GETCHAR
+        int 0x80
+        ; EAX = character or special key code
+
+        cmp eax, KEY_ESC_CHAR
+        je .quit_check
+        cmp eax, KEY_CTRL_Q
+        je .quit_check
+        cmp eax, KEY_CTRL_S
+        je .do_save
+
+        cmp eax, KEY_UP
+        je .move_up
+        cmp eax, KEY_DOWN
+        je .move_down
+        cmp eax, KEY_LEFT
+        je .move_left
+        cmp eax, KEY_RIGHT
+        je .move_right
+
+        cmp eax, KEY_HOME
+        je .move_home
+        cmp eax, KEY_END
+        je .move_end
+
+        cmp eax, KEY_BACKSPACE
+        je .do_backspace
+        cmp eax, KEY_DELETE
+        je .do_delete
+
+        cmp eax, KEY_ENTER
+        je .do_enter
+
+        ; Printable character?
+        cmp eax, 32
+        jb .main_loop           ; ignore other control chars
+        cmp eax, 126
+        ja .main_loop
+
+        ; Insert printable character
+        call insert_char
+        jmp .main_loop
+
+.move_up:
+        cmp dword [cursor_y], 0
+        je .main_loop
+        dec dword [cursor_y]
+        call clamp_cursor_x
+        call adjust_scroll
+        jmp .main_loop
+
+.move_down:
+        mov eax, [cursor_y]
+        inc eax
+        cmp eax, [num_lines]
+        jge .main_loop
+        mov [cursor_y], eax
+        call clamp_cursor_x
+        call adjust_scroll
+        jmp .main_loop
+
+.move_left:
+        cmp dword [cursor_x], 0
+        jne .left_ok
+        ; Wrap to end of previous line
+        cmp dword [cursor_y], 0
+        je .main_loop
+        dec dword [cursor_y]
+        call get_current_line_len
+        mov [cursor_x], eax
+        call adjust_scroll
+        jmp .main_loop
+.left_ok:
+        dec dword [cursor_x]
+        call adjust_scroll
+        jmp .main_loop
+
+.move_right:
+        call get_current_line_len
+        mov ebx, [cursor_x]
+        cmp ebx, eax
+        jb .right_ok
+        ; Wrap to start of next line
+        mov eax, [cursor_y]
+        inc eax
+        cmp eax, [num_lines]
+        jge .main_loop
+        mov [cursor_y], eax
+        mov dword [cursor_x], 0
+        call adjust_scroll
+        jmp .main_loop
+.right_ok:
+        inc dword [cursor_x]
+        call adjust_scroll
+        jmp .main_loop
+
+.move_home:
+        mov dword [cursor_x], 0
+        call adjust_scroll
+        jmp .main_loop
+
+.move_end:
+        call get_current_line_len
+        mov [cursor_x], eax
+        call adjust_scroll
+        jmp .main_loop
+
+.do_backspace:
+        cmp dword [cursor_x], 0
+        jne .bs_in_line
+        ; At start of line - join with previous
+        cmp dword [cursor_y], 0
+        je .main_loop
+        call join_line_up
+        jmp .main_loop
+.bs_in_line:
+        dec dword [cursor_x]
+        call delete_char_at_cursor
+        jmp .main_loop
+
+.do_delete:
+        call get_current_line_len
+        mov ebx, [cursor_x]
+        cmp ebx, eax
+        jb .del_ok
+        ; At end of line - join with next
+        mov eax, [cursor_y]
+        inc eax
+        cmp eax, [num_lines]
+        jge .main_loop
+        call join_line_down
+        jmp .main_loop
+.del_ok:
+        call delete_char_at_cursor
+        jmp .main_loop
+
+.do_enter:
+        call split_line
+        jmp .main_loop
+
+.do_save:
+        call save_file
+        jmp .main_loop
+
+.quit_check:
+        cmp byte [modified], 0
+        je .quit_now
+        ; Show "unsaved changes" warning on status bar
+        call draw_quit_prompt
+        mov eax, SYS_GETCHAR
+        int 0x80
+        cmp al, 'y'
+        je .quit_now
+        cmp al, 'Y'
+        je .quit_now
+        jmp .main_loop
+
+.quit_now:
+        mov eax, SYS_CLEAR
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x07
+        int 0x80
+        mov eax, SYS_EXIT
+        int 0x80
+
+;=== Get pointer to line N (in EAX) -> ESI ===
+get_line_ptr:
+        ; Each line is MAX_LINE_LEN bytes in text_buf
+        push edx
+        mov edx, MAX_LINE_LEN
+        mul edx
+        lea esi, [text_buf + eax]
+        pop edx
+        ret
+
+;=== Get length of current line -> EAX ===
+get_current_line_len:
+        push esi
+        push ecx
+        mov eax, [cursor_y]
+        call get_line_ptr
+        xor ecx, ecx
+.scan:
+        cmp byte [esi + ecx], 0
+        je .scan_done
+        inc ecx
+        cmp ecx, MAX_LINE_LEN - 1
+        jge .scan_done
+        jmp .scan
+.scan_done:
+        mov eax, ecx
+        pop ecx
+        pop esi
+        ret
+
+;=== Clamp cursor_x to line length ===
+clamp_cursor_x:
+        push eax
+        call get_current_line_len
+        cmp [cursor_x], eax
+        jle .clamp_ok
+        mov [cursor_x], eax
+.clamp_ok:
+        pop eax
+        ret
+
+;=== Adjust scroll to keep cursor visible ===
+adjust_scroll:
+        pushad
+        ; Vertical scroll
+        mov eax, [cursor_y]
+        cmp eax, [scroll_y]
+        jge .check_scroll_down
+        mov [scroll_y], eax
+        jmp .check_horiz
+.check_scroll_down:
+        mov ebx, [scroll_y]
+        add ebx, EDIT_ROWS
+        cmp eax, ebx
+        jl .check_horiz
+        sub eax, EDIT_ROWS
+        inc eax
+        mov [scroll_y], eax
+.check_horiz:
+        ; Horizontal scroll
+        mov eax, [cursor_x]
+        cmp eax, [scroll_x]
+        jge .check_scroll_right
+        mov [scroll_x], eax
+        jmp .scroll_done
+.check_scroll_right:
+        mov ebx, [scroll_x]
+        add ebx, 74             ; visible text cols (80 - 6 for line numbers)
+        cmp eax, ebx
+        jl .scroll_done
+        sub eax, 73
+        mov [scroll_x], eax
+.scroll_done:
+        popad
+        ret
+
+;=== Insert character (AL) at cursor position ===
+insert_char:
+        pushad
+        mov bl, al              ; save char
+
+        ; Get current line
+        mov eax, [cursor_y]
+        call get_line_ptr       ; ESI = line ptr
+
+        ; Get line length
+        xor ecx, ecx
+.il_len:
+        cmp byte [esi + ecx], 0
+        je .il_got_len
+        inc ecx
+        jmp .il_len
+.il_got_len:
+        cmp ecx, MAX_LINE_LEN - 2
+        jge .il_done            ; line too long
+
+        ; Shift chars right from end to cursor_x
+        mov edx, [cursor_x]
+        mov eax, ecx
+.il_shift:
+        cmp eax, edx
+        jl .il_place
+        mov cl, [esi + eax]
+        mov [esi + eax + 1], cl
+        dec eax
+        jmp .il_shift
+.il_place:
+        mov [esi + edx], bl
+        inc dword [cursor_x]
+        mov byte [modified], 1
+.il_done:
+        call adjust_scroll
+        popad
+        ret
+
+;=== Delete character at cursor position ===
+delete_char_at_cursor:
+        pushad
+        mov eax, [cursor_y]
+        call get_line_ptr       ; ESI = line ptr
+
+        ; Get line length
+        xor ecx, ecx
+.dc_len:
+        cmp byte [esi + ecx], 0
+        je .dc_got_len
+        inc ecx
+        jmp .dc_len
+.dc_got_len:
+        mov edx, [cursor_x]
+        cmp edx, ecx
+        jge .dc_done            ; nothing to delete
+
+        ; Shift chars left from cursor_x+1
+.dc_shift:
+        mov al, [esi + edx + 1]
+        mov [esi + edx], al
+        test al, al
+        jz .dc_shifted
+        inc edx
+        jmp .dc_shift
+.dc_shifted:
+        mov byte [modified], 1
+.dc_done:
+        popad
+        ret
+
+;=== Split line at cursor (Enter key) ===
+split_line:
+        pushad
+        cmp dword [num_lines], MAX_LINES - 1
+        jge .split_done
+
+        ; Shift all lines below cursor_y+1 down by one
+        mov eax, [num_lines]
+        dec eax                 ; last line index
+.split_shift:
+        mov ecx, [cursor_y]
+        cmp eax, ecx
+        jle .split_copy
+        ; Copy line EAX to line EAX+1
+        push eax
+        call get_line_ptr       ; ESI = src
+        mov edi, esi
+        add edi, MAX_LINE_LEN   ; EDI = dst (next line)
+        mov ecx, MAX_LINE_LEN
+        rep movsb
+        pop eax
+        dec eax
+        jmp .split_shift
+
+.split_copy:
+        ; Now split: copy cursor_x..end of current line to next line
+        mov eax, [cursor_y]
+        call get_line_ptr       ; ESI = current line
+        mov edi, esi
+        add edi, MAX_LINE_LEN   ; EDI = next line
+
+        ; Copy from cursor_x to end
+        mov edx, [cursor_x]
+        xor ecx, ecx
+.split_cp:
+        mov al, [esi + edx]
+        mov [edi + ecx], al
+        test al, al
+        jz .split_trunc
+        inc edx
+        inc ecx
+        jmp .split_cp
+.split_trunc:
+        ; Terminate current line at cursor_x
+        mov edx, [cursor_x]
+        mov byte [esi + edx], 0
+
+        ; Move cursor to start of next line
+        inc dword [cursor_y]
+        mov dword [cursor_x], 0
+        inc dword [num_lines]
+        mov byte [modified], 1
+        call adjust_scroll
+.split_done:
+        popad
+        ret
+
+;=== Join current line with previous (backspace at start) ===
+join_line_up:
+        pushad
+        mov eax, [cursor_y]
+        dec eax
+        call get_line_ptr       ; ESI = previous line
+
+        ; Find end of previous line
+        xor ecx, ecx
+.ju_len:
+        cmp byte [esi + ecx], 0
+        je .ju_found
+        inc ecx
+        jmp .ju_len
+.ju_found:
+        mov [cursor_x], ecx     ; cursor goes to join point
+        mov edi, esi
+        add edi, ecx            ; EDI = end of previous line
+
+        ; Append current line (cursor_y) to previous
+        mov eax, [cursor_y]
+        call get_line_ptr       ; ESI = current line
+        xor edx, edx
+.ju_append:
+        mov al, [esi + edx]
+        mov [edi + edx], al
+        test al, al
+        jz .ju_appended
+        inc edx
+        jmp .ju_append
+.ju_appended:
+        ; Delete line at cursor_y (shift lines up)
+        call delete_line_at_cursor_y
+        dec dword [cursor_y]
+        mov byte [modified], 1
+        call adjust_scroll
+        popad
+        ret
+
+;=== Join current line with next (delete at end) ===
+join_line_down:
+        pushad
+        mov eax, [cursor_y]
+        call get_line_ptr       ; ESI = current line
+
+        ; Find end of current line
+        xor ecx, ecx
+.jd_len:
+        cmp byte [esi + ecx], 0
+        je .jd_found
+        inc ecx
+        jmp .jd_len
+.jd_found:
+        mov edi, esi
+        add edi, ecx            ; EDI = end of current line
+
+        ; Get next line
+        mov eax, [cursor_y]
+        inc eax
+        call get_line_ptr       ; ESI = next line
+        xor edx, edx
+.jd_append:
+        mov al, [esi + edx]
+        mov [edi + edx], al
+        test al, al
+        jz .jd_appended
+        inc edx
+        jmp .jd_append
+.jd_appended:
+        ; Delete next line
+        inc dword [cursor_y]
+        call delete_line_at_cursor_y
+        dec dword [cursor_y]
+        mov byte [modified], 1
+        popad
+        ret
+
+;=== Delete line at cursor_y, shift remaining up ===
+delete_line_at_cursor_y:
+        pushad
+        mov eax, [cursor_y]
+.dl_shift:
+        mov ecx, [num_lines]
+        dec ecx
+        cmp eax, ecx
+        jge .dl_clear_last
+        ; Copy line EAX+1 to line EAX
+        push eax
+        inc eax
+        call get_line_ptr       ; ESI = line EAX+1
+        mov edi, esi
+        sub edi, MAX_LINE_LEN   ; EDI = line EAX
+        mov ecx, MAX_LINE_LEN
+        rep movsb
+        pop eax
+        inc eax
+        jmp .dl_shift
+.dl_clear_last:
+        ; Clear the now-unused last line
+        call get_line_ptr
+        mov edi, esi
+        xor al, al
+        mov ecx, MAX_LINE_LEN
+        rep stosb
+        dec dword [num_lines]
+        cmp dword [num_lines], 0
+        jg .dl_done
+        mov dword [num_lines], 1
+.dl_done:
+        popad
+        ret
+
+;=== Draw the screen ===
+draw_screen:
+        pushad
+
+        ; Build header bar in line_buf (single print, no flicker)
+        mov edi, line_buf
+        mov al, ' '
+        mov ecx, 80
+        rep stosb
+        mov byte [edi], 0      ; null-terminate at 80
+
+        ; Copy " EDIT: " + filename + optional [Modified] into line_buf
+        mov edi, line_buf + 1
+        mov esi, msg_edit_prefix
+.hdr_cp_prefix:
+        lodsb
+        test al, al
+        jz .hdr_cp_fname
+        stosb
+        jmp .hdr_cp_prefix
+.hdr_cp_fname:
+        mov esi, filename
+.hdr_cp_fn:
+        lodsb
+        test al, al
+        jz .hdr_cp_mod
+        stosb
+        jmp .hdr_cp_fn
+.hdr_cp_mod:
+        cmp byte [modified], 0
+        je .hdr_cp_done
+        mov esi, msg_modified
+.hdr_cp_m:
+        lodsb
+        test al, al
+        jz .hdr_cp_done
+        stosb
+        jmp .hdr_cp_m
+.hdr_cp_done:
+        ; Ensure null at pos 80
+        mov byte [line_buf + 80], 0
+
+        ; Print header in one shot
+        mov eax, SYS_SETCURSOR
+        xor ebx, ebx
+        xor ecx, ecx
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_HEADER
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, line_buf
+        int 0x80
+
+        ; Draw text lines
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_TEXT
+        int 0x80
+
+        xor edx, edx           ; screen row counter (0..EDIT_ROWS-1)
+.draw_line_loop:
+        cmp edx, EDIT_ROWS
+        jge .draw_status
+
+        ; Set cursor position
+        push edx
+        mov eax, SYS_SETCURSOR
+        lea ebx, [edx + TEXT_START_ROW]
+        xor ecx, ecx
+        int 0x80
+
+        pop edx
+        push edx
+
+        mov eax, [scroll_y]
+        add eax, edx            ; actual line number
+        cmp eax, [num_lines]
+        jge .draw_empty_line
+
+        ; === Build line in line_buf: "NNNN| text...padding" ===
+        ; Fill line_buf with 80 spaces + null
+        push edx
+        mov edi, line_buf
+        mov al, ' '
+        mov ecx, 80
+        rep stosb
+        mov byte [line_buf + 80], 0
+
+        ; Format line number right-justified in first 4 chars
+        pop edx
+        push edx
+        mov eax, [scroll_y]
+        add eax, edx
+        inc eax                 ; 1-based
+        lea edi, [line_buf + 3] ; rightmost digit position
+        mov ebx, 10
+.pln_buf:
+        test eax, eax
+        jz .pln_buf_done
+        xor edx, edx
+        div ebx
+        add dl, '0'
+        mov [edi], dl
+        dec edi
+        jmp .pln_buf
+.pln_buf_done:
+        mov byte [line_buf + 4], '|'
+        mov byte [line_buf + 5], ' '
+
+        ; Copy visible text portion starting at col 6
+        pop edx                 ; restore screen row (no re-push — matches outer push)
+        mov eax, [scroll_y]
+        add eax, edx
+        call get_line_ptr       ; ESI = line data
+
+        add esi, [scroll_x]
+        lea edi, [line_buf + 6]
+        mov ecx, 74             ; max visible text chars
+.buf_text:
+        mov al, [esi]
+        test al, al
+        jz .buf_text_done
+        mov [edi], al
+        inc esi
+        inc edi
+        dec ecx
+        jnz .buf_text
+.buf_text_done:
+        ; Print entire line (line number + text + padding) in COL_TEXT
+        ; The line number digits are the same color — simpler and faster
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_LINENUM
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, line_buf
+        int 0x80
+        jmp .next_draw_line
+
+.draw_empty_line:
+        ; Build "~" + 79 spaces in line_buf
+        mov edi, line_buf
+        mov byte [edi], '~'
+        inc edi
+        mov al, ' '
+        mov ecx, 79
+        rep stosb
+        mov byte [line_buf + 80], 0
+
+        ; Print tilde in COL_LINENUM
+        mov byte [line_buf + 1], 0
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_LINENUM
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, line_buf
+        int 0x80
+
+        ; Print spaces in COL_TEXT
+        mov byte [line_buf + 1], ' '
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_TEXT
+        int 0x80
+        mov eax, SYS_PRINT
+        lea ebx, [line_buf + 1]
+        int 0x80
+
+.next_draw_line:
+        pop edx
+        inc edx
+        jmp .draw_line_loop
+
+.draw_status:
+        ; Build status bar in line_buf
+        mov edi, line_buf
+        mov al, ' '
+        mov ecx, 80
+        rep stosb
+        mov byte [line_buf + 80], 0
+
+        ; Copy status text at position 1
+        mov edi, line_buf + 1
+        mov esi, msg_status
+.st_cp:
+        lodsb
+        test al, al
+        jz .st_pos
+        stosb
+        jmp .st_cp
+.st_pos:
+        ; Build position info at col 50: "Ln N, Col N / N"
+        lea edi, [line_buf + 50]
+        mov esi, msg_ln
+.st_cp_ln:
+        lodsb
+        test al, al
+        jz .st_num_ln
+        stosb
+        jmp .st_cp_ln
+.st_num_ln:
+        mov eax, [cursor_y]
+        inc eax
+        call format_dec         ; format number into EDI, advances EDI
+        mov esi, msg_col
+.st_cp_col:
+        lodsb
+        test al, al
+        jz .st_num_col
+        stosb
+        jmp .st_cp_col
+.st_num_col:
+        mov eax, [cursor_x]
+        inc eax
+        call format_dec
+        mov esi, msg_lines_total
+.st_cp_tot:
+        lodsb
+        test al, al
+        jz .st_num_tot
+        stosb
+        jmp .st_cp_tot
+.st_num_tot:
+        mov eax, [num_lines]
+        call format_dec
+
+        ; Ensure null at 80
+        mov byte [line_buf + 80], 0
+
+        ; Print status bar in one shot
+        mov eax, SYS_SETCURSOR
+        mov ebx, STATUS_ROW
+        xor ecx, ecx
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_STATUS
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, line_buf
+        int 0x80
+
+        ; Reset color
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_TEXT
+        int 0x80
+
+        popad
+        ret
+
+;=== Update hardware cursor position ===
+update_cursor_pos:
+        pushad
+        mov eax, SYS_SETCURSOR
+        mov ebx, [cursor_y]
+        sub ebx, [scroll_y]
+        add ebx, TEXT_START_ROW
+        mov ecx, [cursor_x]
+        sub ecx, [scroll_x]
+        add ecx, 6              ; offset for line numbers
+        int 0x80
+        popad
+        ret
+
+;=== Load file into editor buffer ===
+load_file:
+        pushad
+        ; Try to read file using SYS_FREAD
+        mov eax, SYS_FREAD
+        mov ebx, filename
+        mov ecx, file_io_buf
+        int 0x80
+        ; EAX = bytes read, or 0 if not found
+        test eax, eax
+        jz .load_new
+        mov [file_size], eax
+
+        ; Parse file_io_buf into text_buf lines
+        mov esi, file_io_buf
+        mov ecx, [file_size]
+        xor edx, edx           ; current line index
+        xor ebx, ebx           ; position within current line
+
+.parse_loop:
+        cmp ecx, 0
+        jle .parse_done
+        mov al, [esi]
+        inc esi
+        dec ecx
+
+        cmp al, 0x0A            ; newline
+        je .new_line
+        cmp al, 0x0D            ; carriage return
+        je .parse_loop          ; skip CR
+
+        ; Store character in text_buf[line][col]
+        cmp ebx, MAX_LINE_LEN - 2
+        jge .parse_loop          ; line too long, skip char
+        push eax
+        mov eax, edx
+        imul eax, MAX_LINE_LEN
+        lea edi, [text_buf + eax]
+        pop eax
+        mov [edi + ebx], al
+        inc ebx
+        jmp .parse_loop
+
+.new_line:
+        ; Terminate current line
+        push eax
+        mov eax, edx
+        imul eax, MAX_LINE_LEN
+        lea edi, [text_buf + eax]
+        mov byte [edi + ebx], 0
+        pop eax
+        inc edx
+        xor ebx, ebx
+        cmp edx, MAX_LINES - 1
+        jge .parse_done
+        jmp .parse_loop
+
+.parse_done:
+        ; Terminate last line
+        push eax
+        mov eax, edx
+        imul eax, MAX_LINE_LEN
+        lea edi, [text_buf + eax]
+        mov byte [edi + ebx], 0
+        pop eax
+        inc edx
+        cmp edx, 1
+        jge .set_lines
+        mov edx, 1
+.set_lines:
+        mov [num_lines], edx
+        jmp .load_done
+
+.load_new:
+        ; Empty file
+        mov dword [num_lines], 1
+.load_done:
+        popad
+        ret
+
+;=== Save file ===
+save_file:
+        pushad
+        ; Flatten lines back into file_io_buf
+        mov edi, file_io_buf
+        xor edx, edx           ; line index
+.save_line:
+        cmp edx, [num_lines]
+        jge .save_write
+
+        ; Get line pointer
+        push edx
+        mov eax, edx
+        imul eax, MAX_LINE_LEN
+        lea esi, [text_buf + eax]
+        pop edx
+
+        ; Copy line chars
+.save_char:
+        lodsb
+        test al, al
+        jz .save_nl
+        stosb
+        jmp .save_char
+.save_nl:
+        mov al, 0x0A
+        stosb
+        inc edx
+        jmp .save_line
+
+.save_write:
+        ; Calculate size
+        mov eax, edi
+        sub eax, file_io_buf
+        mov [file_size], eax
+
+        ; Write file using SYS_FWRITE
+        mov eax, SYS_FWRITE
+        mov ebx, filename
+        mov ecx, file_io_buf
+        mov edx, [file_size]
+        int 0x80
+
+        mov byte [modified], 0
+
+        ; Show save confirmation on status bar
+        mov eax, SYS_SETCURSOR
+        mov ebx, STATUS_ROW
+        mov ecx, 1
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, COL_STATUS
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, msg_saved
+        int 0x80
+
+        ; Brief pause for user to see message
+        mov eax, SYS_SLEEP
+        mov ebx, 50
+        int 0x80
+
+        popad
+        ret
+
+;=== Format decimal number (EAX) into buffer at EDI, advances EDI ===
+format_dec:
+        pushad
+        mov ebp, esp            ; save ESP to find EDI later
+        mov ebx, 10
+        xor ecx, ecx            ; digit count
+.fd_push:
+        xor edx, edx
+        div ebx
+        push edx
+        inc ecx
+        test eax, eax
+        jnz .fd_push
+        ; Recover EDI from pushad frame (EDI is at [EBP+28])
+        mov edi, [ebp + 28]
+.fd_pop:
+        pop edx
+        add dl, '0'
+        mov [edi], dl
+        inc edi
+        dec ecx
+        jnz .fd_pop
+        mov [ebp + 28], edi     ; update saved EDI
+        popad
+        ret
+
+;=== Draw quit prompt ===
+draw_quit_prompt:
+        pushad
+        ; Build prompt bar in line_buf
+        mov edi, line_buf
+        mov al, ' '
+        mov ecx, 80
+        rep stosb
+        mov byte [line_buf + 80], 0
+        mov edi, line_buf + 1
+        mov esi, msg_quit_prompt
+.qp_cp:
+        lodsb
+        test al, al
+        jz .qp_print
+        stosb
+        jmp .qp_cp
+.qp_print:
+        mov eax, SYS_SETCURSOR
+        mov ebx, STATUS_ROW
+        xor ecx, ecx
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x4F           ; white on red
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, line_buf
+        int 0x80
+        popad
+        ret
+
+;=== Data ===
+default_filename: db "scratch.txt", 0
+msg_edit_prefix:  db " EDIT: ", 0
+msg_modified:     db " [Modified]", 0
+msg_status:       db " Ctrl+S:Save | Ctrl+Q:Quit", 0
+msg_ln:           db "Ln ", 0
+msg_col:          db ", Col ", 0
+msg_lines_total:  db " / ", 0
+msg_saved:        db " File saved!                        ", 0
+msg_quit_prompt:  db " Unsaved changes! Quit anyway? (y/N) ", 0
+
+;=== BSS (uninitialized - placed at end) ===
+arg_buffer:     resb 512
+filename:       resb 64
+cursor_x:       resd 1
+cursor_y:       resd 1
+scroll_x:       resd 1
+scroll_y:       resd 1
+num_lines:      resd 1
+modified:       resb 1
+num_buf:        resb 8
+file_size:      resd 1
+line_buf:       resb 84         ; buffer for one screen line (80 chars + null + pad)
+file_io_buf:    resb BUFFER_SIZE
+text_buf:       resb (MAX_LINES * MAX_LINE_LEN)
