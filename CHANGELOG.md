@@ -1,5 +1,29 @@
 # Mellivora OS - Changelog
 
+## v1.8 - Global File Search (Directory-Transparent Operations)
+
+### hbfs_find_file_global
+
+- **New core function**: `hbfs_find_file_global` searches for a file across all directories — current dir first, then root, then every subdirectory. Returns with CWD pointing to the directory containing the file, so save/delete/rename operations target the correct location.
+- **GFF-private CWD save/restore**: Dedicated `gff_save_cwd`/`gff_restore_cwd` with separate BSS slots (`gff_cwd_lba`, `gff_cwd_sects`, `gff_cwd_depth`, `gff_cwd_name`, `gff_cwd_stack`) — avoids conflicts with `file_save_cwd` and `path_save_cwd` used by other subsystems.
+- **`.gff_moved` flag**: Callers check this to know whether CWD was changed, and restore it after the operation completes.
+
+### Commands Updated
+
+- **rm / del**: Fixed CPU exception bug — now uses `hbfs_find_file_global` + restores CWD after delete. Files can be deleted from any directory regardless of where the user is.
+- **ren / rename**: Uses global search for exact renames; saves directory after rename, then restores CWD.
+- **size**: Uses global search to display file info from any directory.
+- **SYS_DELETE (syscall 9)**: Programs can now delete files in any directory.
+- **SYS_STAT (syscall 11)**: Programs can now stat files in any directory.
+- **fd_open**: File descriptors can now open files in any directory.
+
+### Build Stats
+
+- Disk image: 48 files, 188 blocks used
+- Kernel: ~9830 lines of x86 assembly (~166KB)
+
+---
+
 ## v1.7 - Path-Based File Access
 
 ### Path Resolution in hbfs_read_file

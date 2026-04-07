@@ -2155,6 +2155,131 @@ hbfs_mkdir:
 .hm_name:  dd 0
 .hm_block: dd 0
 
+;=======================================================================
+; GLOBAL FILE SEARCH
+; Search current directory first, then root and all subdirectories.
+; Makes directories purely organizational — any file found anywhere.
+;
+; ESI = filename to find (must remain valid, not modified)
+; Returns: EDI = pointer to dir entry (in hbfs_dir_buf)
+;          CF set if not found anywhere
+; Side effect: current_dir_lba/current_dir_sects point to the directory
+;              where the file was found (so hbfs_save_root_dir works)
+;              .gff_moved is set to 1 if CWD was changed from original.
+;              Caller MUST call gff_restore_cwd if .gff_moved == 1.
+;=======================================================================
+hbfs_find_file_global:
+        mov dword [.gff_moved], 0
+
+        ; First, search the current directory
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jnc .gff_done           ; Found in current dir — done
+
+        ; Not in current dir. Save CWD, search everywhere else.
+        call gff_save_cwd
+
+        ; Search root directory
+        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
+        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jnc .gff_found_elsewhere
+
+        ; Not in root. Iterate all subdirectories in root.
+        mov dword [.gff_idx], 0
+.gff_scan_next:
+        ; Reload root context (subdir search overwrites hbfs_dir_buf)
+        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
+        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
+        call hbfs_load_root_dir
+
+        call hbfs_get_max_entries
+        cmp [.gff_idx], eax
+        jge .gff_not_found
+
+        mov eax, [.gff_idx]
+        imul eax, HBFS_DIR_ENTRY_SIZE
+        lea edi, [hbfs_dir_buf + eax]
+        inc dword [.gff_idx]
+
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne .gff_scan_next
+
+        ; Switch to this subdirectory
+        mov eax, [edi + DIRENT_START_BLOCK]
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        mov [current_dir_lba], eax
+        mov eax, [edi + DIRENT_BLOCK_COUNT]
+        shl eax, 3
+        mov [current_dir_sects], eax
+
+        ; Load subdir and search
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .gff_scan_next       ; Not here, try next subdir
+
+.gff_found_elsewhere:
+        ; Found! CWD now points to the directory containing the file.
+        ; Do NOT restore CWD — caller needs it for save/delete ops.
+        mov dword [.gff_moved], 1
+        clc
+        ret
+
+.gff_not_found:
+        ; Restore original CWD
+        call gff_restore_cwd
+        stc
+        ret
+
+.gff_done:
+        clc
+        ret
+
+.gff_idx:   dd 0
+.gff_moved: dd 0
+
+;-----------------------------------------------------------------------
+; GFF-private CWD save/restore (separate slots to avoid conflict with
+; file_save_cwd / path_save_cwd used by other subsystems)
+;-----------------------------------------------------------------------
+gff_save_cwd:
+        pushad
+        mov eax, [current_dir_lba]
+        mov [gff_cwd_lba], eax
+        mov eax, [current_dir_sects]
+        mov [gff_cwd_sects], eax
+        mov eax, [dir_depth]
+        mov [gff_cwd_depth], eax
+        mov esi, current_dir_name
+        mov edi, gff_cwd_name
+        call str_copy
+        mov esi, dir_stack
+        mov edi, gff_cwd_stack
+        mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+        rep movsb
+        popad
+        ret
+
+gff_restore_cwd:
+        pushad
+        mov eax, [gff_cwd_lba]
+        mov [current_dir_lba], eax
+        mov eax, [gff_cwd_sects]
+        mov [current_dir_sects], eax
+        mov eax, [gff_cwd_depth]
+        mov [dir_depth], eax
+        mov esi, gff_cwd_name
+        mov edi, current_dir_name
+        call str_copy
+        mov esi, gff_cwd_stack
+        mov edi, dir_stack
+        mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+        rep movsb
+        popad
+        ret
+
 ; Load file data into buffer
 ; ESI = filename, EDI = destination buffer
 ; Returns: ECX = file size, CF set if not found
@@ -2574,10 +2699,14 @@ sys_delete:
         push esi
         push edi
         mov esi, ebx
-        call hbfs_load_root_dir
-        call hbfs_find_file
+        call hbfs_find_file_global
         jc .del_not_found
         call hbfs_delete_file_entry
+        ; Restore CWD if global search changed it
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .del_no_restore
+        call gff_restore_cwd
+.del_no_restore:
         pop edi
         pop esi
         xor eax, eax
@@ -2598,11 +2727,15 @@ sys_stat:
         push esi
         push edi
         mov esi, ebx
-        call hbfs_load_root_dir
-        call hbfs_find_file
+        call hbfs_find_file_global
         jc .stat_not_found
         mov eax, [edi + 256]    ; File size
         mov ecx, [edi + 264]    ; Block count
+        ; Restore CWD if global search changed it
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .stat_no_restore
+        call gff_restore_cwd
+.stat_no_restore:
         pop edi
         pop esi
         iretd
@@ -4441,9 +4574,8 @@ cmd_size_file:
         cmp byte [filename_buf], 0
         je .size_usage
 
-        call hbfs_load_root_dir
         mov esi, filename_buf
-        call hbfs_find_file
+        call hbfs_find_file_global
         jc .size_nf
 
         mov byte [vga_color], COLOR_INFO
@@ -4487,6 +4619,11 @@ cmd_size_file:
         mov esi, msg_type_batch
 .size_ptype:
         call vga_print
+        ; Restore CWD if global search changed it
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .size_no_restore
+        call gff_restore_cwd
+.size_no_restore:
         popad
         ret
 
@@ -4809,9 +4946,8 @@ cmd_delete_file:
         jc .wildcard
 
         ; Exact filename delete
-        call hbfs_load_root_dir
         mov esi, filename_buf
-        call hbfs_find_file
+        call hbfs_find_file_global
         jc .not_found
         ; -v: print name before delete
         mov eax, 21            ; 'v' - 'a'
@@ -4827,6 +4963,11 @@ cmd_delete_file:
         pop esi
 .del_exact_quiet:
         call hbfs_delete_file_entry
+        ; If CWD was changed by global search, restore it
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .del_no_restore
+        call gff_restore_cwd
+.del_no_restore:
         mov esi, msg_deleted
         call vga_print
         popad
@@ -6303,10 +6444,9 @@ cmd_rename_file:
         call str_has_wildcards
         jc .ren_wild
 
-        ; Find old file in directory
-        call hbfs_load_root_dir
+        ; Find old file in directory (global search)
         mov esi, filename_buf
-        call hbfs_find_file
+        call hbfs_find_file_global
         jc .ren_not_found
 
         ; Copy new name into entry (max 252 chars)
@@ -6333,6 +6473,11 @@ cmd_rename_file:
 
         call hbfs_save_root_dir
 
+        ; Restore CWD if global search changed it
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .ren_no_restore
+        call gff_restore_cwd
+.ren_no_restore:
         mov esi, msg_renamed
         call vga_print
         popad
@@ -7279,8 +7424,7 @@ fd_open:
         jmp .find_fd
 .got_fd:
         push ebx
-        call hbfs_load_root_dir
-        call hbfs_find_file
+        call hbfs_find_file_global
         pop ebx
         jc .no_fd
         mov eax, ebx
@@ -7294,6 +7438,11 @@ fd_open:
         mov dword [fd_table + eax + 12], 0
         mov ecx, [edi + DIRENT_BLOCK_COUNT]
         mov [fd_table + eax + 16], ecx
+        ; Restore CWD if global search changed it
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .fd_no_restore
+        call gff_restore_cwd
+.fd_no_restore:
         mov [esp + 28], ebx
         popad
         ret
@@ -9674,5 +9823,12 @@ file_save_stack:  resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 ; Path resolution buffers for hbfs_read_file
 path_dir_buf:     resb 256        ; Directory part of path (e.g. "/bin")
 path_base_buf:    resb 256        ; Basename part of path (e.g. "hello")
+
+; GFF (global file find) CWD save slots
+gff_cwd_lba:      resd 1
+gff_cwd_sects:    resd 1
+gff_cwd_depth:    resd 1
+gff_cwd_name:     resb 256
+gff_cwd_stack:    resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 
 bss_end:
