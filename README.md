@@ -46,8 +46,8 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze
 - **Tools**: Text editor, hex viewer, file pager, grep, sort, sed, tr, CSV viewer, wc
 - **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator
-- **Language**: TCC (Tiny C Compiler) — compile and run C programs inside the OS
-- **C samples**: Hello World, Fibonacci, primes, Brainfuck interpreter, Tower of Hanoi, Hunt the Wumpus, and more
+- **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter
+- **C samples**: Hello World, Fibonacci, primes, Tower of Hanoi, Hunt the Wumpus, and more
 
 ---
 
@@ -193,7 +193,8 @@ Mellivora_OS/
 | `cal` | Calendar with current day highlighted |
 | `calc` | Interactive calculator (+, -, ×, ÷, %) |
 | `mandel` | Mandelbrot set renderer (fixed-point) |
-| `basic` | BASIC interpreter |
+| `basic` | BASIC language interpreter (interactive & file mode) |
+| `bf` | Brainfuck interpreter |
 
 ---
 
