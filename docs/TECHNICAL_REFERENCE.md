@@ -121,7 +121,7 @@ User-mode selectors include RPL=3: `USER_CS = 0x1B`, `USER_DS = 0x23`, `TSS_SEL 
 
 ### Access Byte Layout
 
-```
+```text
   7   6  5   4   3   2   1   0
 ┌───┬──────┬───┬───┬───┬───┬───┐
 │ P │ DPL  │ S │ E │ DC│ RW│ A │
@@ -169,7 +169,7 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 
 ### Physical Memory Layout
 
-```
+```text
 0x00000000 ┌─────────────────────────┐
            │ Real-mode IVT & BDA     │
 0x00000500 ├─────────────────────────┤
@@ -333,7 +333,7 @@ a block allocation bitmap, and support for nested subdirectories.
 | 3 | Executable | Binary program (loaded and run by the shell) |
 | 4 | Batch | Batch script (executed line-by-line) |
 
-### Key Routines
+### Key Routines (HBFS)
 
 | Routine | Description |
 | --- | --- |
@@ -397,13 +397,13 @@ searches the directories listed in the `PATH` environment variable.
 
 ### Default PATH
 
-```
+```text
 PATH=/bin:/games
 ```
 
 ### Search Algorithm
 
-```
+```text
 cmd_exec_program(name):
     1. Try hbfs_read_file(name) from current directory
     2. If found → execute
@@ -440,7 +440,7 @@ command to read files from other directories.
 
 ### Algorithm
 
-```
+```text
 hbfs_read_file(path, buffer):
     If path contains no '/':
         Read from current directory (simple case)
@@ -460,7 +460,7 @@ separate from `path_save_*`. This prevents conflicts when PATH search itself cal
 
 ### Example
 
-```
+```text
 HBDOS:/> cat /docs/readme       # Reads readme from /docs without changing CWD
 HBDOS:/> head /samples/hello.c  # Same — CWD stays at /
 HBDOS:/> diff /docs/a /docs/b   # Both files resolved transparently
@@ -510,7 +510,7 @@ HBDOS:/> diff /docs/a /docs/b   # Both files resolved transparently
 | 3 | `0x08` | DRQ (Data Request) |
 | 0 | `0x01` | ERR (Error) |
 
-### Key Routines
+### Key Routines (ATA)
 
 | Routine | Parameters | Description |
 | --- | --- | --- |
@@ -528,7 +528,7 @@ checks `program_running` and returns -1 if a user program attempts raw disk acce
 
 ## VGA Text Mode
 
-### Specifications
+### Specifications (VGA)
 
 | Property | Value |
 | --- | --- |
@@ -540,7 +540,7 @@ checks `program_running` and returns -1 if a user program attempts raw disk acce
 
 ### Attribute Byte
 
-```
+```text
   7     6  5  4    3  2  1  0
 ┌─────┬──────────┬───────────┐
 │Blink│Background│ Foreground│
@@ -649,7 +649,7 @@ abort: resets `ESP` to `KERNEL_STACK` and jumps to `shell_main`.
 
 ## PIT Timer
 
-### Configuration
+### Configuration (PIT)
 
 | Property | Value |
 | --- | --- |
@@ -689,7 +689,7 @@ abort: resets `ESP` to `KERNEL_STACK` and jumps to `shell_main`.
 
 ## Serial Port
 
-### Configuration
+### Configuration (Serial)
 
 | Property | Value |
 | --- | --- |
@@ -700,7 +700,7 @@ abort: resets `ESP` to `KERNEL_STACK` and jumps to `shell_main`.
 | Format | 8N1 (8 data, no parity, 1 stop) |
 | FIFO | Enabled |
 
-### Init Sequence
+### Init Sequence (Serial)
 
 1. Disable interrupts (IER = 0)
 2. Set DLAB, write divisor 1 (115200 baud)
@@ -720,7 +720,7 @@ abort: resets `ESP` to `KERNEL_STACK` and jumps to `shell_main`.
 
 ## PC Speaker
 
-### Ports
+### Ports (Speaker)
 
 | Port | Name |
 | --- | --- |
@@ -730,7 +730,7 @@ abort: resets `ESP` to `KERNEL_STACK` and jumps to `shell_main`.
 
 ### Frequency Calculation
 
-```
+```text
 divisor = 1,193,182 / desired_frequency_hz
 ```
 
@@ -766,10 +766,12 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 
 1. Set `program_running = 1`, clear `ctrl_c_flag` and `program_exit_code`
 2. Write **SYS_EXIT trampoline** at `PROGRAM_EXIT_ADDR` (0x2FFFF0):
+
    ```nasm
    mov eax, 0    ; SYS_EXIT
    int 0x80
    ```
+
    This catches programs that use `RET` instead of `SYS_EXIT`
 3. Update TSS ESP0 to `KERNEL_STACK` (for Ring 0 transitions)
 4. Set up Ring 3 stack at `PROGRAM_EXIT_ADDR - 4`, push trampoline as return address
@@ -882,7 +884,7 @@ The 38 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
 | Table size | 2048 bytes (2 KB) |
 | Format | `NAME=value\0` (null-terminated) |
 
-### Key Routines
+### Key Routines (Environment)
 
 | Routine | Description |
 | --- | --- |
@@ -896,7 +898,7 @@ The 38 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
 
 The `echo` command expands `$VAR` references:
 
-```
+```text
 HBDOS:/> set user James
 HBDOS:/> echo Hello $user
 Hello James
@@ -906,7 +908,7 @@ Hello James
 
 ## Alias System
 
-### Storage
+### Storage (Aliases)
 
 | Property | Value |
 | --- | --- |
@@ -940,7 +942,7 @@ The following are hardcoded in the command table (not user aliases):
 
 ## Command History
 
-### Storage
+### Storage (History)
 
 | Property | Value |
 | --- | --- |
@@ -961,7 +963,7 @@ The following are hardcoded in the command table (not user aliases):
 
 ## Tab Completion
 
-### Algorithm
+### Algorithm (Tab Completion)
 
 1. Null-terminate current input
 2. Load current directory entries via `hbfs_load_root_dir`

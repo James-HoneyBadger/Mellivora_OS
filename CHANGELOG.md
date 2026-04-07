@@ -24,7 +24,7 @@
 - **`fd_close` cross-directory bug**: When a file opened via `hbfs_find_file_global` from another directory was closed after writes, `fd_close` only searched the current directory for the entry to persist the updated file size — silently dropping the update. Fixed by recording the directory LBA/sects in the fd table entry at open time (offsets 20-27), then switching to that directory during close.
 - **`sys_exec_call` always returned 0**: The SYS_EXEC syscall returned `xor eax, eax` even when `cmd_exec_program` failed (CF set). Programs calling SYS_EXEC couldn't detect failure. Now returns -1 on failure.
 
-### Enhancements
+### Enhancements (v1.9)
 
 - **`cat -n` line numbering**: Replaced manual 4-digit space padding with `vga_print_dec_width` for cleaner, more maintainable code.
 - **`str_has_wildcards` / `str_has_asterisk`**: Now preserve ESI (push/pop) to prevent subtle caller bugs.
@@ -32,7 +32,7 @@
 - **SYS_FWRITE file type**: ESI parameter now specifies file type (FTYPE_TEXT..FTYPE_BATCH); TCC passes FTYPE_EXEC so compiled programs show as executables.
 - **Shutdown message**: Styled with COLOR_HEADER separator bar; message printed before ACPI shutdown to prevent cutoff.
 
-### Build Stats
+### Build Stats (v1.9)
 
 - Disk image: 48 files, 188 blocks used
 - Kernel: ~9,900 lines of x86 assembly
@@ -56,7 +56,7 @@
 - **SYS_STAT (syscall 11)**: Programs can now stat files in any directory.
 - **fd_open**: File descriptors can now open files in any directory.
 
-### Build Stats
+### Build Stats (v1.8)
 
 - Disk image: 48 files, 188 blocks used
 - Kernel: ~9830 lines of x86 assembly (~166KB)
@@ -73,7 +73,7 @@
 - **Relative paths**: Supports `../bin/hello`, `games/snake`, `./readme` — resolves via `cmd_cd_internal` which handles `.`, `..`, absolute, and multi-component paths
 - **Zero call-site changes**: All 19 callers of `hbfs_read_file` gain path support automatically
 
-### Build Stats
+### Build Stats (v1.7)
 
 - Disk image: 48 files, 188 blocks used
 - Kernel: ~9510 lines of x86 assembly (165KB)
@@ -104,12 +104,12 @@
 - **which**: Now searches PATH directories; shows full path (e.g., `hello is /bin/hello (external)`)
 - **help**: Updated to mention PATH search and configuration instructions
 
-### Bug Fixes
+### Bug Fixes (v1.6)
 
 - **Critical PATH fallthrough fix**: `.path_not_found` was falling through into `.found_program` — now correctly jumps to `.not_found`
 - **NASM optimization oscillation**: Added `-O0` flag to kernel build to prevent label oscillation errors during assembly
 
-### Build Stats
+### Build Stats (v1.6)
 
 - Disk image: 48 files, 188 blocks used (4 subdirectories + files)
 - Kernel: ~9440 lines of x86 assembly
@@ -167,7 +167,7 @@
 - **add_global_var extra next_token**: Global variable declarations consumed one too many tokens — broke subsequent parsing
 - **Assignment expr_name clobbering**: Assignment expression overwrote expr_name register — corrupted variable name lookup
 
-### Build Stats
+### Build Stats (v1.5)
 
 - Disk image: 48 files, 172 blocks used
 - Kernel: ~9250+ lines of x86 assembly
@@ -176,7 +176,7 @@
 
 ## v1.4 - HBFS Filesystem Expansion
 
-### Bug Fixes
+### Bug Fixes (v1.4)
 
 - **sys_free double-shift**: `pmm_free_page` expects physical address but `sys_free` was converting to page number first, causing double `shr 12` and freeing wrong pages — corrupted memory bitmap
 - **cmd_copy_file stack corruption**: Wildcard paths jumped to `.src_not_found` which did `pop esi`, but wildcard paths never pushed ESI — stack corruption on "no matches" case
@@ -249,7 +249,7 @@
 - **cal.asm**: Calendar display showing current month with day-of-week calculation (Sakamoto's algorithm), highlights today
 - **calc.asm**: Interactive integer calculator with +, -, *, /, % operators, hex output, signed arithmetic
 
-### Enhancements
+### Enhancements (v1.3)
 
 - **edit.asm**: Now accepts filename from command line (`edit myfile.txt`) via SYS_GETARGS instead of always editing scratch.txt
 - **Syscall count**: 33 syscalls (added SYS_GETARGS = 32)

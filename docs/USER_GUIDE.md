@@ -27,7 +27,7 @@ HB DOS shell, manage files, run programs, and get the most out of the system.
 
 When Mellivora boots, you see a blue banner and the HB DOS shell prompt:
 
-```
+```text
 HBDOS:/>
 ```
 
@@ -69,7 +69,7 @@ Press **Enter** to re-execute a recalled command.
 
 Mellivora organizes files into subdirectories:
 
-```
+```text
 /
 ├── bin/          Utility programs (hello, edit, grep, sort, tcc, ...)
 ├── games/        Games (snake, tetris, 2048, galaga, mine, ...)
@@ -87,7 +87,7 @@ entries; subdirectories hold up to 56 entries each.
 
 ### Navigating Directories
 
-```
+```text
 HBDOS:/> cd bin               # Enter a subdirectory
 HBDOS:/bin> cd ..             # Go up one level
 HBDOS:/> cd games             # Enter another directory
@@ -102,7 +102,7 @@ HBDOS:/docs/subdir> pwd       # Print current directory
 Programs in `/bin` and `/games` run from anywhere — you don't need to `cd` into their
 directories first. This is because the default **PATH** is set to `/bin:/games`.
 
-```
+```text
 HBDOS:/> snake                # Found via PATH in /games
 HBDOS:/> hello                # Found via PATH in /bin
 ```
@@ -115,7 +115,7 @@ When you type a program name, the shell searches:
 
 ### Customizing PATH
 
-```
+```text
 HBDOS:/> set PATH /bin:/games:/samples    # Add /samples to PATH
 HBDOS:/> set                              # View all variables (including PATH)
 ```
@@ -124,7 +124,7 @@ HBDOS:/> set                              # View all variables (including PATH)
 
 All file commands accept absolute and relative paths:
 
-```
+```text
 HBDOS:/> cat /docs/readme           # Absolute path
 HBDOS:/> cat ../docs/readme         # Relative path
 HBDOS:/> diff /docs/readme /docs/notes
@@ -261,7 +261,7 @@ HBDOS:/games> cat /samples/hello.c  # Access files across directories
 
 ### Creating Files
 
-```
+```text
 HBDOS:/> write myfile.txt
 Hello, this is my file.
 Second line here.
@@ -271,7 +271,7 @@ HBDOS:/>
 
 ### Viewing Files
 
-```
+```text
 HBDOS:/> cat myfile.txt       # Full contents
 HBDOS:/> cat -n myfile.txt    # With line numbers
 HBDOS:/> head -n 5 myfile.txt # First 5 lines
@@ -280,7 +280,7 @@ HBDOS:/> more /docs/readme    # Page-by-page (paths work!)
 
 ### Copying, Renaming, Deleting
 
-```
+```text
 HBDOS:/> copy myfile.txt backup.txt
 HBDOS:/> ren backup.txt archive.txt
 HBDOS:/> del archive.txt
@@ -290,7 +290,7 @@ HBDOS:/> del archive.txt
 
 The `del` and `copy` commands support `*` and `?` wildcards:
 
-```
+```text
 HBDOS:/> del *.tmp            # Delete all .tmp files
 HBDOS:/> copy *.c backup/     # Copy all .c files (future feature)
 ```
@@ -299,7 +299,7 @@ HBDOS:/> copy *.c backup/     # Copy all .c files (future feature)
 
 All file commands accept paths:
 
-```
+```text
 HBDOS:/> cat /docs/readme
 HBDOS:/> head /samples/hello.c
 HBDOS:/> diff /docs/readme /docs/notes
@@ -309,17 +309,17 @@ HBDOS:/games> cat /docs/license
 
 ---
 
-## Text Processing
+## Text Processing Examples
 
 ### Searching in Files
 
-```
+```text
 HBDOS:/> find syscall /docs/notes    # Search for "syscall" in notes
 ```
 
 ### Comparing Files
 
-```
+```text
 HBDOS:/> diff file1.txt file2.txt
 < Line only in file1           (shown in red)
 > Line only in file2           (shown in green)
@@ -328,7 +328,7 @@ HBDOS:/> diff file1.txt file2.txt
 
 ### Removing Duplicates
 
-```
+```text
 HBDOS:/> uniq data.txt         # Remove adjacent duplicates
 HBDOS:/> uniq -c data.txt      # Show counts
 HBDOS:/> uniq -d data.txt      # Show only duplicated lines
@@ -336,7 +336,7 @@ HBDOS:/> uniq -d data.txt      # Show only duplicated lines
 
 ### Reversing
 
-```
+```text
 HBDOS:/> rev myfile.txt        # Reverse characters in each line
 HBDOS:/> tac myfile.txt        # Print lines in reverse order (last first)
 ```
@@ -345,9 +345,9 @@ HBDOS:/> tac myfile.txt        # Print lines in reverse order (last first)
 
 ## Environment Variables & Aliases
 
-### Environment Variables
+### Setting Environment Variables
 
-```
+```text
 HBDOS:/> set name James        # Set a variable
 HBDOS:/> echo Hello, $name!    # Use in echo ($VAR expansion)
 Hello, James!
@@ -361,9 +361,9 @@ HBDOS:/> unset name            # Remove a variable
 
 The `PATH` variable is special — it controls where the shell searches for programs.
 
-### Aliases
+### Defining Aliases
 
-```
+```text
 HBDOS:/> alias ll dir -l       # Create an alias
 HBDOS:/> ll                    # Runs "dir -l"
 HBDOS:/> alias                 # List all aliases
@@ -380,7 +380,7 @@ HBDOS:/> alias ll              # Show specific alias
 
 ### Creating a Script
 
-```
+```text
 HBDOS:/> write startup.bat
 echo === System Starting ===
 date
@@ -393,7 +393,7 @@ HBDOS:/>
 
 ### Running a Script
 
-```
+```text
 HBDOS:/> batch startup.bat
 > echo === System Starting ===
 === System Starting ===
@@ -482,7 +482,7 @@ Mellivora ships with 31 user-space programs organized in `/bin` and `/games`.
 
 Usage:
 
-```
+```text
 HBDOS:/> edit myfile.txt      # Open specific file
 HBDOS:/> edit                  # Opens scratch.txt by default
 ```
@@ -496,7 +496,7 @@ and runs them immediately — all inside the OS.
 
 ### Compiling and Running C Programs
 
-```
+```text
 HBDOS:/> tcc /samples/hello.c
 Compiling hello.c...
 Running...
@@ -532,7 +532,7 @@ HBDOS:/>
 
 ### Writing Your Own C Programs
 
-```
+```text
 HBDOS:/> write myprogram.c
 int main() {
     printf("Hello from my C program!\n");
@@ -552,7 +552,7 @@ HBDOS:/> tcc myprogram.c
 
 Start typing a filename and press **Tab** to auto-complete:
 
-```
+```text
 HBDOS:/> cat rea[Tab]
 HBDOS:/> cat readme             ← completed automatically
 ```
@@ -561,7 +561,7 @@ If multiple files match, press Tab repeatedly to cycle through them.
 
 ### Quick File Inspection
 
-```
+```text
 HBDOS:/> wc /docs/readme        # How big is it?
 HBDOS:/> find memory /docs/notes # Search for "memory"
 HBDOS:/> hex /bin/hello          # Look at binary structure
@@ -570,7 +570,7 @@ HBDOS:/> strings /bin/hello      # Find text in a binary
 
 ### Using which to Find Programs
 
-```
+```text
 HBDOS:/> which snake
 snake is /games/snake (external)
 HBDOS:/> which cat
@@ -581,7 +581,7 @@ nonexistent: not found
 
 ### Startup Automation
 
-```
+```text
 HBDOS:/> write init.bat
 clear
 echo Welcome to Mellivora OS!
@@ -595,7 +595,7 @@ HBDOS:/> batch init.bat
 
 ### Color Customization
 
-```
+```text
 HBDOS:/> color A 0              # Green text on black background
 HBDOS:/> color F 1              # White text on blue background
 HBDOS:/> color 7 0              # Reset to default (light gray on black)

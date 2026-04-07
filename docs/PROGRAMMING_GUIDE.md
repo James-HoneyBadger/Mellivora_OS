@@ -92,7 +92,7 @@ nasm -f bin -O0 -o hello hello.asm
 
 Then copy `hello` to the disk image and run it from the shell:
 
-```
+```text
 HBDOS:/> hello
 Hello, World!
 HBDOS:/>
@@ -890,7 +890,7 @@ int main() {
 
 Save as a file and compile:
 
-```
+```text
 HBDOS:/> write hello.c
 int main() {
     printf("Hello from C!\n");

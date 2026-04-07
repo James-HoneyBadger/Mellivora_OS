@@ -132,7 +132,8 @@ class FSImage:
         self.root_dir = bytearray(HBFS_ROOT_DIR_SIZE)
         self.next_block = 0
         self.total_files = 0
-        # Track subdirectories: name -> (start_block, dir_data bytearray, entry_count)
+        # Track subdirectories:
+        # name -> (start_block, dir_data bytearray, entry_count)
         self.subdirs = {}
 
         # Write fresh superblock
@@ -173,7 +174,8 @@ class FSImage:
         root_entry_count = 0
         for i in range(HBFS_MAX_FILES):
             off = i * HBFS_DIR_ENTRY_SIZE
-            if self.root_dir[off + 253] == FTYPE_FREE and self.root_dir[off] == 0:
+            if (self.root_dir[off + 253] == FTYPE_FREE
+                    and self.root_dir[off] == 0):
                 root_entry_count = i
                 break
 
@@ -235,7 +237,8 @@ class FSImage:
             root_slot = None
             for i in range(HBFS_MAX_FILES):
                 off = i * HBFS_DIR_ENTRY_SIZE
-                if self.root_dir[off + 253] == FTYPE_FREE and self.root_dir[off] == 0:
+                if (self.root_dir[off + 253] == FTYPE_FREE
+                        and self.root_dir[off] == 0):
                     root_slot = i
                     break
             if root_slot is None:
@@ -254,7 +257,7 @@ class FSImage:
     def finalize(self):
         """Write all directory structures and bitmap to disk."""
         # Write subdirectory data to disk
-        for dirname, sd in self.subdirs.items():
+        for _dirname, sd in self.subdirs.items():
             self.img.seek(lba_to_offset(sd['data_lba']))
             self.img.write(sd['data'])
 

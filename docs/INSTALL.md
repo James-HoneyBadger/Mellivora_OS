@@ -15,7 +15,7 @@ This guide covers everything you need to build, run, and test the OS.
 ### Required Tools
 
 | Tool | Version | Purpose |
-|------|---------|---------|
+| ------ | --------- | --------- |
 | **NASM** | 2.15+ | Netwide Assembler — assembles all `.asm` sources |
 | **GNU Make** | 4.0+ | Build orchestration |
 | **QEMU** | 6.0+ | `qemu-system-i386` — i486 emulator for testing |
@@ -80,7 +80,7 @@ This single command:
 ### Build Targets
 
 | Target | Command | Description |
-|--------|---------|-------------|
+| -------- | --------- | ------------- |
 | **OS image** | `make` or `make all` | Build boot + Stage 2 + kernel, create disk image |
 | **Programs** | `make programs` | Assemble all programs in `programs/` |
 | **Populate** | `make populate` | Write files and programs into the disk image |
@@ -94,7 +94,7 @@ This single command:
 
 After a successful build:
 
-```
+```text
 mellivora.img          64 MB bootable raw disk image
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
@@ -107,7 +107,7 @@ programs/*.bin         Compiled user programs (31 binaries)
 
 NASM will produce warnings like:
 
-```
+```text
 kernel.asm:NNNN: warning: uninitialized space declared in .text section: zeroing
 ```
 
@@ -128,7 +128,7 @@ make run
 This launches QEMU with:
 
 | Setting | Value |
-|---------|-------|
+| --------- | ------- |
 | **CPU** | i486 emulation |
 | **RAM** | 128 MB |
 | **Disk** | `mellivora.img` as raw IDE drive |
@@ -144,7 +144,7 @@ make debug
 Adds QEMU Monitor on stdio and interrupt/reset logging. Useful monitor commands:
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `info registers` | Show all CPU registers |
 | `info mem` | Show memory mappings |
 | `xp /16xw 0x100000` | Examine 16 dwords at kernel base |
@@ -161,7 +161,7 @@ qemu-system-i386 -cpu 486 -m 128 \
 Useful additional options:
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `-m 256` | Increase RAM to 256 MB |
 | `-serial stdio` | Route serial output (COM1) to your terminal |
 | `-audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd` | Enable PC speaker audio |
@@ -173,7 +173,7 @@ Useful additional options:
 
 The 64 MB raw disk image has this layout:
 
-```
+```text
 LBA Range       Size        Content
 ─────────────────────────────────────────────────────────
 LBA 0           512 B       Stage 1 boot sector (MBR)
@@ -189,7 +189,7 @@ LBA 554+        ~63 MB      Data blocks (4 KB each)
 
 The `populate.py` script creates 4 subdirectories and places 48 files:
 
-```
+```text
 /
 ├── bin/           22 utility programs (hello, edit, grep, sort, tcc, ...)
 ├── games/         10 games (snake, tetris, 2048, galaga, mine, ...)
@@ -239,7 +239,7 @@ sync
 
 ## Project Structure
 
-```
+```text
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (16-bit real mode)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)

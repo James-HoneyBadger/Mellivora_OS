@@ -9,6 +9,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 ## ✨ Features
 
 ### Kernel & Architecture
+
 - **32-bit protected mode** with flat 4 GB address space
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
 - **34 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, ...)
@@ -17,6 +18,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **Three-stage boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
 ### HB DOS Shell
+
 - **48+ built-in commands**: file management, text processing, system info, and more
 - **Tab completion**, **command history** (Up/Down arrows), **Ctrl+C** hard-abort
 - **Alias system** — define custom command shortcuts
@@ -27,6 +29,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **Multi-level subdirectories** — up to 16 levels deep with `cd`, `mkdir`, `pwd`
 
 ### HBFS Filesystem
+
 - **Honey Badger File System** — custom filesystem with 4 KB blocks
 - **227 files** per root directory, **56 files** per subdirectory
 - **File types**: text, executable, directory, batch script
@@ -34,6 +37,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **Wildcards**: `*` and `?` pattern matching in `del` and `copy`
 
 ### Drivers
+
 - **VGA** text mode (80×25, 16 colors)
 - **PS/2 keyboard** with shift, ctrl, and special key support
 - **ATA PIO** disk with LBA48 addressing
@@ -43,6 +47,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **RTC** real-time clock for date/time
 
 ### Programs (31 assembly + 11 C samples)
+
 - **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze
 - **Tools**: Text editor, hex viewer, file pager, grep, sort, sed, tr, CSV viewer, wc
 - **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator
@@ -80,13 +85,13 @@ make run       # Launch in QEMU
 
 That's it. You'll see the HB DOS boot banner and a shell prompt:
 
-```
+```text
 HBDOS:/>
 ```
 
 Type `help` to see all available commands, or just start exploring:
 
-```
+```text
 HBDOS:/> dir                    # List files and directories
 HBDOS:/> cd games               # Enter the games directory
 HBDOS:/> snake                  # Play Snake!
@@ -101,7 +106,7 @@ HBDOS:/> tetris                 # Play Tetris (found via PATH)
 
 ### On-Disk (Virtual Drive)
 
-```
+```text
 /
 ├── bin/          22 utility programs (hello, edit, grep, sort, tcc, ...)
 ├── games/        10 games (snake, tetris, 2048, galaga, mine, ...)
@@ -114,7 +119,7 @@ Programs in `/bin` and `/games` are in the default PATH, so they run from any di
 
 ### Source Tree
 
-```
+```text
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (512 bytes, 16-bit)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
@@ -151,7 +156,7 @@ Mellivora_OS/
 ## 📖 Documentation
 
 | Document | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | [Installation Guide](docs/INSTALL.md) | Prerequisites, building, QEMU, real hardware |
 | [User Guide](docs/USER_GUIDE.md) | Complete shell command reference and usage |
 | [Programming Guide](docs/PROGRAMMING_GUIDE.md) | Writing assembly programs with syscalls |
@@ -164,8 +169,9 @@ Mellivora_OS/
 ## 🎮 Included Programs
 
 ### Games
+
 | Program | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `snake` | Classic snake — eat food, grow, avoid walls and tail |
 | `tetris` | Tetris with 7 tetrominoes, rotation, scoring, levels |
 | `mine` | Minesweeper with flag and reveal mechanics |
@@ -178,8 +184,9 @@ Mellivora_OS/
 | `piano` | PC speaker piano with 15 notes |
 
 ### Utilities
+
 | Program | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `edit` | Full-screen text editor with save/load |
 | `tcc` | Tiny C Compiler — compile C to ELF inside the OS |
 | `grep` | Pattern search in files |
@@ -201,7 +208,7 @@ Mellivora_OS/
 ## 🔧 Build Targets
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `make full` | Complete build: boot + kernel + programs + filesystem |
 | `make run` | Launch in QEMU (i486, 128 MB RAM) |
 | `make debug` | Launch with QEMU monitor on stdio |
@@ -213,10 +220,12 @@ Mellivora_OS/
 ## 🖥️ System Requirements
 
 ### Emulation (Recommended)
+
 - QEMU 6.0+ with `qemu-system-i386`
 - Any modern host OS (Linux, macOS, Windows with WSL)
 
 ### Real Hardware
+
 - i486 or newer x86 CPU
 - 1 MB RAM minimum (128 MB recommended)
 - IDE/SATA disk or USB drive (BIOS legacy boot)
@@ -228,7 +237,7 @@ Mellivora_OS/
 ## 📊 Stats
 
 | Metric | Value |
-|--------|-------|
+| -------- | ------- |
 | Kernel source | ~9,600 lines of NASM assembly |
 | Kernel binary | ~165 KB |
 | Syscalls | 34 (via INT 0x80) |

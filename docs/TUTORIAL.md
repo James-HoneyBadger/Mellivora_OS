@@ -43,7 +43,7 @@ make run
 A QEMU window opens. After a brief splash screen, you see the HB DOS banner and a
 prompt:
 
-```
+```text
  ██╗  ██╗██████╗     ██████╗  ██████╗ ███████╗
  ██║  ██║██╔══██╗    ██╔══██╗██╔═══██╗██╔════╝
  ███████║██████╔╝    ██║  ██║██║   ██║███████╗
@@ -60,7 +60,7 @@ You're in! The `HBDOS:/>` prompt shows your current directory (`/` = root).
 
 Type `help` and press Enter:
 
-```
+```text
 HBDOS:/> help
 ```
 
@@ -69,7 +69,7 @@ explore.
 
 ### System Information
 
-```
+```text
 HBDOS:/> ver
 ```
 
@@ -83,7 +83,7 @@ Shows the OS version, detected hardware, and feature list.
 
 Try these to get oriented:
 
-```
+```text
 HBDOS:/> date          → Shows current date and time
 HBDOS:/> time          → Shows uptime (seconds since boot)
 HBDOS:/> mem           → Shows available memory
@@ -93,7 +93,7 @@ HBDOS:/> df            → Shows filesystem usage
 
 ### Listing Files
 
-```
+```text
 HBDOS:/> dir
 ```
 
@@ -102,7 +102,7 @@ and `script.bat`.
 
 For more detail:
 
-```
+```text
 HBDOS:/> dir -l
 ```
 
@@ -114,7 +114,7 @@ This shows file types (DIR, EXEC, FILE, BATCH) and sizes.
 
 ### Moving Around
 
-```
+```text
 HBDOS:/> cd bin         → Enter the bin directory
 HBDOS:/bin> dir         → List programs in /bin
 HBDOS:/bin> cd ..       → Go back to root
@@ -128,7 +128,7 @@ HBDOS:/games> cd /      → Jump straight to root
 Notice that even when you're in `/`, you can run programs from `/bin` and `/games`
 without typing the full path:
 
-```
+```text
 HBDOS:/> hello          → Runs /bin/hello
 HBDOS:/> snake          → Runs /games/snake
 ```
@@ -138,7 +138,7 @@ these directories.
 
 ### Where Is That Program?
 
-```
+```text
 HBDOS:/> which hello
 hello is /bin/hello (external)
 
@@ -155,7 +155,7 @@ nonexistent: not found
 
 ### Creating a File
 
-```
+```text
 HBDOS:/> write notes.txt
 These are my notes.
 Second line.
@@ -165,7 +165,7 @@ HBDOS:/>
 
 ### Reading a File
 
-```
+```text
 HBDOS:/> cat notes.txt
 These are my notes.
 Second line.
@@ -173,7 +173,7 @@ Second line.
 
 With line numbers:
 
-```
+```text
 HBDOS:/> cat -n notes.txt
      1  These are my notes.
      2  Second line.
@@ -181,7 +181,7 @@ HBDOS:/> cat -n notes.txt
 
 ### Other Viewing Commands
 
-```
+```text
 HBDOS:/> head notes.txt       → First 10 lines
 HBDOS:/> tail notes.txt       → Last 10 lines
 HBDOS:/> wc notes.txt         → Line, word, byte count
@@ -191,7 +191,7 @@ HBDOS:/> more /docs/readme    → Page-by-page viewer
 
 ### Modifying Files
 
-```
+```text
 HBDOS:/> append notes.txt Third line added.
 HBDOS:/> copy notes.txt backup.txt
 HBDOS:/> ren backup.txt archive.txt
@@ -200,7 +200,7 @@ HBDOS:/> del archive.txt
 
 ### Searching in Files
 
-```
+```text
 HBDOS:/> find notes notes.txt
 ```
 
@@ -208,7 +208,7 @@ Shows every line containing "notes".
 
 ### Comparing Files
 
-```
+```text
 HBDOS:/> write a.txt
 apple
 banana
@@ -236,7 +236,7 @@ Lines with `<` are only in the first file (red), `>` only in the second (green).
 
 Just type the program name:
 
-```
+```text
 HBDOS:/> hello
 Hello, World!
 
@@ -251,7 +251,7 @@ HBDOS:/> colors
 
 ### Programs That Take Arguments
 
-```
+```text
 HBDOS:/> edit myfile.txt       → Open myfile.txt in the editor
 HBDOS:/> grep pattern file     → Search for pattern in file
 HBDOS:/> sort data.txt         → Sort lines alphabetically
@@ -270,7 +270,7 @@ Mellivora comes with several games. Try them!
 
 ### Snake
 
-```
+```text
 HBDOS:/> snake
 ```
 
@@ -279,7 +279,7 @@ Press ESC to quit.
 
 ### Tetris
 
-```
+```text
 HBDOS:/> tetris
 ```
 
@@ -291,7 +291,7 @@ HBDOS:/> tetris
 
 ### Minesweeper
 
-```
+```text
 HBDOS:/> mine
 ```
 
@@ -302,7 +302,7 @@ HBDOS:/> mine
 
 ### More Games
 
-```
+```text
 HBDOS:/> sokoban        → Push boxes onto targets
 HBDOS:/> 2048           → Slide number tiles
 HBDOS:/> galaga         → Space shooter
@@ -320,7 +320,7 @@ The built-in editor lets you create and modify text files with a full-screen int
 
 ### Opening the Editor
 
-```
+```text
 HBDOS:/> edit myfile.txt
 ```
 
@@ -410,7 +410,7 @@ make full
 make run
 ```
 
-```
+```text
 HBDOS:/> greet
 ```
 
@@ -418,7 +418,7 @@ HBDOS:/> greet
 
 For tiny programs, use `enter` to type raw hex bytes directly:
 
-```
+```text
 HBDOS:/> enter
 Filename: tiny
 Enter hex bytes (empty line to end):
@@ -434,7 +434,7 @@ This is mainly useful for testing — for real programs, use NASM on the host.
 
 ### Your First C Program
 
-```
+```text
 HBDOS:/> write myapp.c
 int main() {
     printf("Hello from C!\n");
@@ -454,7 +454,7 @@ The answer is 42
 
 The `/samples` directory has ready-made C programs:
 
-```
+```text
 HBDOS:/> tcc /samples/fib.c        → Fibonacci numbers
 HBDOS:/> tcc /samples/primes.c     → Prime sieve
 HBDOS:/> tcc /samples/hanoi.c      → Tower of Hanoi
@@ -465,7 +465,7 @@ HBDOS:/> tcc /samples/stars.c      → Starfield animation
 
 ### Writing a Guessing Game in C
 
-```
+```text
 HBDOS:/> write numgame.c
 int main() {
     int secret = 37;
@@ -505,7 +505,7 @@ HBDOS:/> tcc numgame.c
 
 Batch scripts are text files that execute commands line by line:
 
-```
+```text
 HBDOS:/> write startup.bat
 echo ================================
 echo   Welcome to Mellivora OS!
@@ -526,7 +526,7 @@ Each line is printed with a `>` prefix before execution.
 
 ### Variables in Scripts
 
-```
+```text
 HBDOS:/> write demo.bat
 set user Mellivora
 set version 1.7
@@ -543,7 +543,7 @@ HBDOS:/> batch demo.bat
 
 ### A Practical Script
 
-```
+```text
 HBDOS:/> write backup.bat
 echo Backing up important files...
 copy notes.txt notes.bak
@@ -560,7 +560,7 @@ HBDOS:/> batch backup.bat
 
 ### Change Text Colors
 
-```
+```text
 HBDOS:/> color A 0      → Green text on black background
 HBDOS:/> color F 1      → White text on blue background
 HBDOS:/> color E 0      → Yellow text on black
@@ -569,7 +569,7 @@ HBDOS:/> color 7 0      → Reset to default (gray on black)
 
 ### Create Aliases
 
-```
+```text
 HBDOS:/> alias ll dir -l           → Long directory listing
 HBDOS:/> alias cls clear           → DOS-style clear (already built-in!)
 HBDOS:/> alias hi echo Hello!      → Quick greeting
@@ -581,7 +581,7 @@ HBDOS:/> hi                        → Prints "Hello!"
 
 ### Set Environment Variables
 
-```
+```text
 HBDOS:/> set PATH /bin:/games:/samples    → Add /samples to search path
 HBDOS:/> set editor edit                  → Set a custom variable
 HBDOS:/> echo My editor is $editor
@@ -590,7 +590,7 @@ My editor is edit
 
 ### View Your Settings
 
-```
+```text
 HBDOS:/> alias         → List all aliases
 HBDOS:/> set           → List all variables
 HBDOS:/> history       → List recent commands
@@ -604,7 +604,7 @@ Now that you're comfortable with Mellivora OS, here's what to explore next:
 
 ### Read the Documentation
 
-```
+```text
 HBDOS:/> more /docs/readme
 ```
 
