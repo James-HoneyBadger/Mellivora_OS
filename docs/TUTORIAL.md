@@ -40,7 +40,7 @@ Launch it with:
 make run
 ```
 
-A QEMU window opens. After a brief splash screen, you see the HB DOS banner and a
+A QEMU window opens. After a brief splash screen, you see the HB Lair banner and a
 prompt:
 
 ```text
@@ -51,17 +51,17 @@ prompt:
  ██║  ██║██████╔╝    ██████╔╝╚██████╔╝███████║
  ╚═╝  ╚═╝╚═════╝     ╚═════╝  ╚═════╝ ╚══════╝
 
-HBDOS:/>
+Lair:/>
 ```
 
-You're in! The `HBDOS:/>` prompt shows your current directory (`/` = root).
+You're in! The `Lair:/>` prompt shows your current directory (`/` = root).
 
 ### Getting Help
 
 Type `help` and press Enter:
 
 ```text
-HBDOS:/> help
+Lair:/> help
 ```
 
 This lists every built-in command with a brief description. Keep this handy as you
@@ -70,7 +70,7 @@ explore.
 ### System Information
 
 ```text
-HBDOS:/> ver
+Lair:/> ver
 ```
 
 Shows the OS version, detected hardware, and feature list.
@@ -84,17 +84,17 @@ Shows the OS version, detected hardware, and feature list.
 Try these to get oriented:
 
 ```text
-HBDOS:/> date          → Shows current date and time
-HBDOS:/> time          → Shows uptime (seconds since boot)
-HBDOS:/> mem           → Shows available memory
-HBDOS:/> disk          → Shows disk size
-HBDOS:/> df            → Shows filesystem usage
+Lair:/> date          → Shows current date and time
+Lair:/> time          → Shows uptime (seconds since boot)
+Lair:/> mem           → Shows available memory
+Lair:/> disk          → Shows disk size
+Lair:/> df            → Shows filesystem usage
 ```
 
 ### Listing Files
 
 ```text
-HBDOS:/> dir
+Lair:/> dir
 ```
 
 You'll see the root directory contents — typically `bin`, `games`, `samples`, `docs`,
@@ -103,7 +103,7 @@ and `script.bat`.
 For more detail:
 
 ```text
-HBDOS:/> dir -l
+Lair:/> dir -l
 ```
 
 This shows file types (DIR, EXEC, FILE, BATCH) and sizes.
@@ -115,12 +115,12 @@ This shows file types (DIR, EXEC, FILE, BATCH) and sizes.
 ### Moving Around
 
 ```text
-HBDOS:/> cd bin         → Enter the bin directory
-HBDOS:/bin> dir         → List programs in /bin
-HBDOS:/bin> cd ..       → Go back to root
-HBDOS:/> cd games       → Enter the games directory
-HBDOS:/games> pwd       → Print where you are: /games
-HBDOS:/games> cd /      → Jump straight to root
+Lair:/> cd bin         → Enter the bin directory
+Lair:/bin> dir         → List programs in /bin
+Lair:/bin> cd ..       → Go back to root
+Lair:/> cd games       → Enter the games directory
+Lair:/games> pwd       → Print where you are: /games
+Lair:/games> cd /      → Jump straight to root
 ```
 
 ### The PATH
@@ -129,8 +129,8 @@ Notice that even when you're in `/`, you can run programs from `/bin` and `/game
 without typing the full path:
 
 ```text
-HBDOS:/> hello          → Runs /bin/hello
-HBDOS:/> snake          → Runs /games/snake
+Lair:/> hello          → Runs /bin/hello
+Lair:/> snake          → Runs /games/snake
 ```
 
 This works because the PATH is set to `/bin:/games`. The shell automatically searches
@@ -139,13 +139,13 @@ these directories.
 ### Where Is That Program?
 
 ```text
-HBDOS:/> which hello
+Lair:/> which hello
 hello is /bin/hello (external)
 
-HBDOS:/> which cat
+Lair:/> which cat
 cat is a built-in command
 
-HBDOS:/> which nonexistent
+Lair:/> which nonexistent
 nonexistent: not found
 ```
 
@@ -156,17 +156,17 @@ nonexistent: not found
 ### Creating a File
 
 ```text
-HBDOS:/> write notes.txt
+Lair:/> write notes.txt
 These are my notes.
 Second line.
                            ← Press Enter on an empty line to finish
-HBDOS:/>
+Lair:/>
 ```
 
 ### Reading a File
 
 ```text
-HBDOS:/> cat notes.txt
+Lair:/> cat notes.txt
 These are my notes.
 Second line.
 ```
@@ -174,7 +174,7 @@ Second line.
 With line numbers:
 
 ```text
-HBDOS:/> cat -n notes.txt
+Lair:/> cat -n notes.txt
      1  These are my notes.
      2  Second line.
 ```
@@ -182,26 +182,26 @@ HBDOS:/> cat -n notes.txt
 ### Other Viewing Commands
 
 ```text
-HBDOS:/> head notes.txt       → First 10 lines
-HBDOS:/> tail notes.txt       → Last 10 lines
-HBDOS:/> wc notes.txt         → Line, word, byte count
-HBDOS:/> hex notes.txt        → Hex dump
-HBDOS:/> more /docs/readme    → Page-by-page viewer
+Lair:/> head notes.txt       → First 10 lines
+Lair:/> tail notes.txt       → Last 10 lines
+Lair:/> wc notes.txt         → Line, word, byte count
+Lair:/> hex notes.txt        → Hex dump
+Lair:/> more /docs/readme    → Page-by-page viewer
 ```
 
 ### Modifying Files
 
 ```text
-HBDOS:/> append notes.txt Third line added.
-HBDOS:/> copy notes.txt backup.txt
-HBDOS:/> ren backup.txt archive.txt
-HBDOS:/> del archive.txt
+Lair:/> append notes.txt Third line added.
+Lair:/> copy notes.txt backup.txt
+Lair:/> ren backup.txt archive.txt
+Lair:/> del archive.txt
 ```
 
 ### Searching in Files
 
 ```text
-HBDOS:/> find notes notes.txt
+Lair:/> find notes notes.txt
 ```
 
 Shows every line containing "notes".
@@ -209,17 +209,17 @@ Shows every line containing "notes".
 ### Comparing Files
 
 ```text
-HBDOS:/> write a.txt
+Lair:/> write a.txt
 apple
 banana
 cherry
 
-HBDOS:/> write b.txt
+Lair:/> write b.txt
 apple
 blueberry
 cherry
 
-HBDOS:/> diff a.txt b.txt
+Lair:/> diff a.txt b.txt
   apple
 < banana
 > blueberry
@@ -237,25 +237,25 @@ Lines with `<` are only in the first file (red), `>` only in the second (green).
 Just type the program name:
 
 ```text
-HBDOS:/> hello
+Lair:/> hello
 Hello, World!
 
-HBDOS:/> fibonacci
+Lair:/> fibonacci
 1 1 2 3 5 8 13 21 34 55 ...
 
-HBDOS:/> primes
+Lair:/> primes
 2 3 5 7 11 13 17 19 23 29 ...
 
-HBDOS:/> colors
+Lair:/> colors
 ```
 
 ### Programs That Take Arguments
 
 ```text
-HBDOS:/> edit myfile.txt       → Open myfile.txt in the editor
-HBDOS:/> grep pattern file     → Search for pattern in file
-HBDOS:/> sort data.txt         → Sort lines alphabetically
-HBDOS:/> hexdump /bin/hello    → Hex dump of a binary
+Lair:/> edit myfile.txt       → Open myfile.txt in the editor
+Lair:/> grep pattern file     → Search for pattern in file
+Lair:/> sort data.txt         → Sort lines alphabetically
+Lair:/> hexdump /bin/hello    → Hex dump of a binary
 ```
 
 ### Aborting a Program
@@ -271,7 +271,7 @@ Mellivora comes with several games. Try them!
 ### Snake
 
 ```text
-HBDOS:/> snake
+Lair:/> snake
 ```
 
 Use arrow keys to steer the snake. Eat food (★) to grow. Don't hit walls or yourself!
@@ -280,7 +280,7 @@ Press ESC to quit.
 ### Tetris
 
 ```text
-HBDOS:/> tetris
+Lair:/> tetris
 ```
 
 - **←/→** Move piece
@@ -292,7 +292,7 @@ HBDOS:/> tetris
 ### Minesweeper
 
 ```text
-HBDOS:/> mine
+Lair:/> mine
 ```
 
 - **Arrow keys** Move cursor
@@ -303,13 +303,13 @@ HBDOS:/> mine
 ### More Games
 
 ```text
-HBDOS:/> sokoban        → Push boxes onto targets
-HBDOS:/> 2048           → Slide number tiles
-HBDOS:/> galaga         → Space shooter
-HBDOS:/> guess          → Number guessing game
-HBDOS:/> life           → Conway's Game of Life
-HBDOS:/> maze           → Watch a maze generate and solve itself
-HBDOS:/> piano          → Play music with the keyboard
+Lair:/> sokoban        → Push boxes onto targets
+Lair:/> 2048           → Slide number tiles
+Lair:/> galaga         → Space shooter
+Lair:/> guess          → Number guessing game
+Lair:/> life           → Conway's Game of Life
+Lair:/> maze           → Watch a maze generate and solve itself
+Lair:/> piano          → Play music with the keyboard
 ```
 
 ---
@@ -321,7 +321,7 @@ The built-in editor lets you create and modify text files with a full-screen int
 ### Opening the Editor
 
 ```text
-HBDOS:/> edit myfile.txt
+Lair:/> edit myfile.txt
 ```
 
 Or just `edit` to open a scratch file.
@@ -411,7 +411,7 @@ make run
 ```
 
 ```text
-HBDOS:/> greet
+Lair:/> greet
 ```
 
 ### Method 2: Use the Enter Command
@@ -419,7 +419,7 @@ HBDOS:/> greet
 For tiny programs, use `enter` to type raw hex bytes directly:
 
 ```text
-HBDOS:/> enter
+Lair:/> enter
 Filename: tiny
 Enter hex bytes (empty line to end):
 B8 03 00 00 00 BB xx xx xx xx CD 80 B8 00 00 00 00 31 DB CD 80
@@ -435,7 +435,7 @@ This is mainly useful for testing — for real programs, use NASM on the host.
 ### Your First C Program
 
 ```text
-HBDOS:/> write myapp.c
+Lair:/> write myapp.c
 int main() {
     printf("Hello from C!\n");
     int x = 42;
@@ -443,7 +443,7 @@ int main() {
     return 0;
 }
 
-HBDOS:/> tcc myapp.c
+Lair:/> tcc myapp.c
 Compiling myapp.c...
 Running...
 Hello from C!
@@ -455,18 +455,18 @@ The answer is 42
 The `/samples` directory has ready-made C programs:
 
 ```text
-HBDOS:/> tcc /samples/fib.c        → Fibonacci numbers
-HBDOS:/> tcc /samples/primes.c     → Prime sieve
-HBDOS:/> tcc /samples/hanoi.c      → Tower of Hanoi
-HBDOS:/> tcc /samples/wumpus.c     → Hunt the Wumpus game!
-HBDOS:/> tcc /samples/matrix.c     → Matrix rain effect
-HBDOS:/> tcc /samples/stars.c      → Starfield animation
+Lair:/> tcc /samples/fib.c        → Fibonacci numbers
+Lair:/> tcc /samples/primes.c     → Prime sieve
+Lair:/> tcc /samples/hanoi.c      → Tower of Hanoi
+Lair:/> tcc /samples/wumpus.c     → Hunt the Wumpus game!
+Lair:/> tcc /samples/matrix.c     → Matrix rain effect
+Lair:/> tcc /samples/stars.c      → Starfield animation
 ```
 
 ### Writing a Guessing Game in C
 
 ```text
-HBDOS:/> write numgame.c
+Lair:/> write numgame.c
 int main() {
     int secret = 37;
     int guess = 0;
@@ -494,7 +494,7 @@ int main() {
     return 0;
 }
 
-HBDOS:/> tcc numgame.c
+Lair:/> tcc numgame.c
 ```
 
 ---
@@ -506,7 +506,7 @@ HBDOS:/> tcc numgame.c
 Batch scripts are text files that execute commands line by line:
 
 ```text
-HBDOS:/> write startup.bat
+Lair:/> write startup.bat
 echo ================================
 echo   Welcome to Mellivora OS!
 echo ================================
@@ -519,7 +519,7 @@ echo Free space:
 df
 echo ================================
 
-HBDOS:/> batch startup.bat
+Lair:/> batch startup.bat
 ```
 
 Each line is printed with a `>` prefix before execution.
@@ -527,7 +527,7 @@ Each line is printed with a `>` prefix before execution.
 ### Variables in Scripts
 
 ```text
-HBDOS:/> write demo.bat
+Lair:/> write demo.bat
 set user Mellivora
 set version 1.7
 echo Hello, $user!
@@ -538,20 +538,20 @@ mem
 unset user
 unset version
 
-HBDOS:/> batch demo.bat
+Lair:/> batch demo.bat
 ```
 
 ### A Practical Script
 
 ```text
-HBDOS:/> write backup.bat
+Lair:/> write backup.bat
 echo Backing up important files...
 copy notes.txt notes.bak
 copy todo.txt todo.bak
 echo Backup complete!
 dir
 
-HBDOS:/> batch backup.bat
+Lair:/> batch backup.bat
 ```
 
 ---
@@ -561,39 +561,39 @@ HBDOS:/> batch backup.bat
 ### Change Text Colors
 
 ```text
-HBDOS:/> color A 0      → Green text on black background
-HBDOS:/> color F 1      → White text on blue background
-HBDOS:/> color E 0      → Yellow text on black
-HBDOS:/> color 7 0      → Reset to default (gray on black)
+Lair:/> color A 0      → Green text on black background
+Lair:/> color F 1      → White text on blue background
+Lair:/> color E 0      → Yellow text on black
+Lair:/> color 7 0      → Reset to default (gray on black)
 ```
 
 ### Create Aliases
 
 ```text
-HBDOS:/> alias ll dir -l           → Long directory listing
-HBDOS:/> alias cls clear           → DOS-style clear (already built-in!)
-HBDOS:/> alias hi echo Hello!      → Quick greeting
-HBDOS:/> alias info ver            → Short name for version info
+Lair:/> alias ll dir -l           → Long directory listing
+Lair:/> alias cls clear           → DOS-style clear (already built-in!)
+Lair:/> alias hi echo Hello!      → Quick greeting
+Lair:/> alias info ver            → Short name for version info
 
-HBDOS:/> ll                        → Runs "dir -l"
-HBDOS:/> hi                        → Prints "Hello!"
+Lair:/> ll                        → Runs "dir -l"
+Lair:/> hi                        → Prints "Hello!"
 ```
 
 ### Set Environment Variables
 
 ```text
-HBDOS:/> set PATH /bin:/games:/samples    → Add /samples to search path
-HBDOS:/> set editor edit                  → Set a custom variable
-HBDOS:/> echo My editor is $editor
+Lair:/> set PATH /bin:/games:/samples    → Add /samples to search path
+Lair:/> set editor edit                  → Set a custom variable
+Lair:/> echo My editor is $editor
 My editor is edit
 ```
 
 ### View Your Settings
 
 ```text
-HBDOS:/> alias         → List all aliases
-HBDOS:/> set           → List all variables
-HBDOS:/> history       → List recent commands
+Lair:/> alias         → List all aliases
+Lair:/> set           → List all variables
+Lair:/> history       → List recent commands
 ```
 
 ---
@@ -605,7 +605,7 @@ Now that you're comfortable with Mellivora OS, here's what to explore next:
 ### Read the Documentation
 
 ```text
-HBDOS:/> more /docs/readme
+Lair:/> more /docs/readme
 ```
 
 Or on the host, read:

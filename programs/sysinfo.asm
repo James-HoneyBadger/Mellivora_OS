@@ -28,6 +28,14 @@ start:
         mov ebx, msg_addr
         int 0x80
 
+        mov eax, SYS_PRINT
+        mov ebx, msg_init
+        int 0x80
+
+        mov eax, SYS_PRINT
+        mov ebx, msg_utils
+        int 0x80
+
         ; Get uptime
         mov eax, SYS_GETTIME
         int 0x80
@@ -95,6 +103,8 @@ msg_header:     db " === Mellivora System Information === ", 0x0A, 0
 msg_arch:       db "  Architecture:  i486+ (32-bit Protected Mode)", 0x0A, 0
 msg_mode:       db "  Memory Model:  Flat, 4 GB address space", 0x0A, 0
 msg_addr:       db "  Program Base:  0x00200000 (2 MB)", 0x0A, 0
+msg_init:       db "  Init System:   Ratel", 0x0A, 0
+msg_utils:      db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A, 0
 msg_uptime:     db "  Uptime:        ", 0
 msg_secs:       db " seconds", 0x0A, 0
 msg_cpuid_yes:  db "  CPUID:         Available", 0x0A, 0

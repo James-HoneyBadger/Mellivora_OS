@@ -1,4 +1,4 @@
-; sort.asm - Line sort utility for Mellivora OS
+; sort.asm - Line sort utility [HBU]
 ; Usage: sort <filename>
 ; Reads a text file, sorts lines alphabetically, displays result
 ;

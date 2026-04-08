@@ -1612,6 +1612,11 @@ compile_expression:
         mov edi, expr_name
         call str_copy_local
 
+        ; Save scanner position before lookahead so non-assignment
+        ; identifiers (like function calls) can be reparsed correctly.
+        mov eax, [src_pos]
+        mov [expr_probe_pos], eax
+
         call next_token
 
         ; Check for assignment
@@ -1627,6 +1632,8 @@ compile_expression:
         ; src_pos to the start of the identifier.
         ; We don't have a true "unget" so we copy expr_name back into
         ; tok_ident, set tok_type = TOK_ID and let primary pick it up.
+        mov eax, [expr_probe_pos]
+        mov [src_pos], eax
         mov esi, expr_name
         mov edi, tok_ident
         call str_copy_local
@@ -3029,6 +3036,8 @@ for_var_type:   dd 0
 for_var_addr:   dd 0
 for_inc_kind:   dd 0
 for_inc_value:  dd 0
+; lexer position saved for assignment lookahead in compile_expression
+expr_probe_pos: dd 0
 
 ; Fixups
 fixup_count:    dd 0

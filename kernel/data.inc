@@ -103,12 +103,14 @@ str_copy:
 banner_str:
         db COLOR_HEADER
         db "          Mellivora OS - 32-bit Protected Mode Operating System          ", 0x0A
-        db "       HB DOS v1.4 - Honey Badger Disk Operating System / i486+          ", 0x0A, 0
+        db "       HB Lair v1.4 - Honey Badger Lair / i486+                        ", 0x0A, 0
 
 version_text:
         db "Mellivora OS v1.4", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
-        db "  Shell:         HB DOS (Honey Badger Disk Operating System)", 0x0A
+        db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
+        db "  Shell:         HB Lair (Honey Badger Lair)", 0x0A
+        db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
         db "  Disk:          ATA PIO, LBA48 (up to 128 PB)", 0x0A
         db "  Filesystem:    HBFS (Honey Badger File System)", 0x0A
@@ -131,7 +133,7 @@ version_text:
         db "  Scripts:       Batch file execution", 0x0A
         db "  Security:      Raw disk access denied to ring 3", 0x0A, 0
 
-shell_prompt_pre:  db "HBDOS:", 0
+shell_prompt_pre:  db "Lair:", 0
 shell_prompt_post: db "> ", 0
 default_path:      db "PATH=/bin:/games", 0
 path_env_name:     db "PATH", 0
@@ -252,7 +254,7 @@ help_help_strings:
         db "Extract printable strings from a file.", 0x0A, 0
 
 help_text:
-        db "HB DOS Commands:", 0x0A
+        db "HB Lair Commands:", 0x0A
         db "  help       - Show this help", 0x0A
         db "  ver        - System information", 0x0A
         db "  clear/cls  - Clear screen", 0x0A
@@ -565,6 +567,7 @@ wild_star_txt:  resd 1
 batch_line_buf:   resb LINE_BUFFER_SIZE
 batch_script_buf: resb BATCH_BUFFER_SIZE  ; 32KB batch script storage
 batch_running:    resb 1                  ; Guard against nested batch calls
+batch_resume_pos: resd 1                  ; Resume offset into batch_script_buf
 
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing

@@ -1,4 +1,4 @@
-; sed.asm - Simple stream editor (search and replace) for Mellivora OS
+; sed.asm - Simple stream editor (search and replace) [HBU]
 ; Usage: sed FIND REPLACE FILENAME
 ; Replaces first occurrence of FIND with REPLACE on each line
 %include "syscalls.inc"

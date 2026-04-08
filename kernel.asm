@@ -4,6 +4,13 @@
 ; Loaded at 0x00100000 (1MB) by stage 2.
 ; Flat memory model, full 4GB address space.
 ;
+; Components:
+;   Mellivora  - Kernel (this file + kernel/*.inc)
+;   Ratel      - Init system (hardware & subsystem initialization)
+;   HB Lair    - Interactive command shell (Honey Badger Lair)
+;   HBFS       - Honey Badger File System
+;   HBU        - Honey Badger Utilities (GNU-like user-space tools)
+;
 ; Features:
 ;   - Physical memory manager (bitmap allocator, 4KB pages, up to 4GB)
 ;   - IDT with full ISR/IRQ handling
@@ -251,7 +258,7 @@ kernel_entry:
         mov byte [current_dir_name], '/'
         mov byte [current_dir_name + 1], 0
 
-        ; Initialize subsystems
+        ; Ratel init system — initialize hardware & kernel subsystems
         call vga_init
         call pic_init
         call idt_init

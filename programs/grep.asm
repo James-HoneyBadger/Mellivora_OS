@@ -1,4 +1,4 @@
-; grep.asm - Text pattern search utility for Mellivora OS
+; grep.asm - Text pattern search utility [HBU]
 ; Usage: grep <pattern> <filename>
 ; Searches for lines containing the pattern and displays them
 ;

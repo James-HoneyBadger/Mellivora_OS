@@ -1,7 +1,7 @@
 # Mellivora OS — User Guide
 
 Welcome to Mellivora OS! This guide covers everything you need to know to use the
-HB DOS shell, manage files, run programs, and get the most out of the system.
+HB Lair shell, manage files, run programs, and get the most out of the system.
 
 ---
 
@@ -13,7 +13,7 @@ HB DOS shell, manage files, run programs, and get the most out of the system.
 4. [Navigation & PATH](#navigation--path)
 5. [Shell Commands Reference](#shell-commands-reference)
 6. [File Operations](#file-operations)
-7. [Text Processing](#text-processing)
+7. [Text Processing](#text-processing-hbu--honey-badger-utilities)
 8. [Environment Variables & Aliases](#environment-variables--aliases)
 9. [Batch Scripting](#batch-scripting)
 10. [Programs](#programs)
@@ -25,10 +25,10 @@ HB DOS shell, manage files, run programs, and get the most out of the system.
 
 ## Getting Started
 
-When Mellivora boots, you see a blue banner and the HB DOS shell prompt:
+When Mellivora boots, you see a blue banner and the HB Lair shell prompt:
 
 ```text
-HBDOS:/>
+Lair:/>
 ```
 
 The part after the colon shows your current directory (`/` is root). Type commands and
@@ -88,12 +88,12 @@ entries; subdirectories hold up to 56 entries each.
 ### Navigating Directories
 
 ```text
-HBDOS:/> cd bin               # Enter a subdirectory
-HBDOS:/bin> cd ..             # Go up one level
-HBDOS:/> cd games             # Enter another directory
-HBDOS:/games> cd /            # Return to root
-HBDOS:/> cd docs/subdir       # Multi-component paths work
-HBDOS:/docs/subdir> pwd       # Print current directory
+Lair:/> cd bin               # Enter a subdirectory
+Lair:/bin> cd ..             # Go up one level
+Lair:/> cd games             # Enter another directory
+Lair:/games> cd /            # Return to root
+Lair:/> cd docs/subdir       # Multi-component paths work
+Lair:/docs/subdir> pwd       # Print current directory
 /docs/subdir
 ```
 
@@ -103,8 +103,8 @@ Programs in `/bin` and `/games` run from anywhere — you don't need to `cd` int
 directories first. This is because the default **PATH** is set to `/bin:/games`.
 
 ```text
-HBDOS:/> snake                # Found via PATH in /games
-HBDOS:/> hello                # Found via PATH in /bin
+Lair:/> snake                # Found via PATH in /games
+Lair:/> hello                # Found via PATH in /bin
 ```
 
 When you type a program name, the shell searches:
@@ -116,8 +116,8 @@ When you type a program name, the shell searches:
 ### Customizing PATH
 
 ```text
-HBDOS:/> set PATH /bin:/games:/samples    # Add /samples to PATH
-HBDOS:/> set                              # View all variables (including PATH)
+Lair:/> set PATH /bin:/games:/samples    # Add /samples to PATH
+Lair:/> set                              # View all variables (including PATH)
 ```
 
 ### Using Full Paths
@@ -125,11 +125,11 @@ HBDOS:/> set                              # View all variables (including PATH)
 All file commands accept absolute and relative paths:
 
 ```text
-HBDOS:/> cat /docs/readme           # Absolute path
-HBDOS:/> cat ../docs/readme         # Relative path
-HBDOS:/> diff /docs/readme /docs/notes
-HBDOS:/> run /bin/hello
-HBDOS:/games> cat /samples/hello.c  # Access files across directories
+Lair:/> cat /docs/readme           # Absolute path
+Lair:/> cat ../docs/readme         # Relative path
+Lair:/> diff /docs/readme /docs/notes
+Lair:/> run /bin/hello
+Lair:/games> cat /samples/hello.c  # Access files across directories
 ```
 
 ---
@@ -199,18 +199,23 @@ HBDOS:/games> cat /samples/hello.c  # Access files across directories
 | `ren OLD NEW` | Rename a file |
 | `del FILE` / `rm FILE` | Delete a file (wildcards: `del *.tmp`) |
 
-### Text Processing
+### Text Processing (HBU — Honey Badger Utilities)
 
 | Command | Description |
 | --- | --- |
-| `find PATTERN FILE` | Search for text pattern, show matching lines |
-| `wc FILE` | Count lines, words, and bytes |
-| `diff FILE1 FILE2` | Side-by-side file comparison (colored: `<` red, `>` green) |
+| `diff FILE1 FILE2` | Line-by-line file comparison (shows `<` for differences) |
+| `paste FILE1 FILE2` | Merge lines from two files side-by-side with tab separator |
 | `uniq FILE` | Remove adjacent duplicate lines |
 | `uniq -c FILE` | Show count prefix for each line |
 | `uniq -d FILE` | Show only duplicate lines |
 | `rev FILE` | Reverse each line character-by-character |
-| `tac FILE` | Print file lines in reverse order |
+| `find [-name PATTERN]` | Search for files by name pattern |
+| `wc FILE` | Count lines, words, and bytes |
+| `cut -f LIST FILE` | Extract specific fields (columns) from text |
+| `tee FILE` | Read input and duplicate to stdout and file |
+| `head [-n NUM] FILE` | Print first N lines (default: 10) |
+| `tail [-n NUM] FILE` | Print last N lines (default: 10) |
+| `od [FILE]` | Print octal/hex dump of file contents |
 
 ### Program Execution
 
@@ -262,28 +267,28 @@ HBDOS:/games> cat /samples/hello.c  # Access files across directories
 ### Creating Files
 
 ```text
-HBDOS:/> write myfile.txt
+Lair:/> write myfile.txt
 Hello, this is my file.
 Second line here.
                               ← (blank line ends input)
-HBDOS:/>
+Lair:/>
 ```
 
 ### Viewing Files
 
 ```text
-HBDOS:/> cat myfile.txt       # Full contents
-HBDOS:/> cat -n myfile.txt    # With line numbers
-HBDOS:/> head -n 5 myfile.txt # First 5 lines
-HBDOS:/> more /docs/readme    # Page-by-page (paths work!)
+Lair:/> cat myfile.txt       # Full contents
+Lair:/> cat -n myfile.txt    # With line numbers
+Lair:/> head -n 5 myfile.txt # First 5 lines
+Lair:/> more /docs/readme    # Page-by-page (paths work!)
 ```
 
 ### Copying, Renaming, Deleting
 
 ```text
-HBDOS:/> copy myfile.txt backup.txt
-HBDOS:/> ren backup.txt archive.txt
-HBDOS:/> del archive.txt
+Lair:/> copy myfile.txt backup.txt
+Lair:/> ren backup.txt archive.txt
+Lair:/> del archive.txt
 ```
 
 ### Wildcards
@@ -291,8 +296,8 @@ HBDOS:/> del archive.txt
 The `del` and `copy` commands support `*` and `?` wildcards:
 
 ```text
-HBDOS:/> del *.tmp            # Delete all .tmp files
-HBDOS:/> copy *.c backup/     # Copy all .c files (future feature)
+Lair:/> del *.tmp            # Delete all .tmp files
+Lair:/> copy *.c backup/     # Copy all .c files (future feature)
 ```
 
 ### Working Across Directories
@@ -300,11 +305,11 @@ HBDOS:/> copy *.c backup/     # Copy all .c files (future feature)
 All file commands accept paths:
 
 ```text
-HBDOS:/> cat /docs/readme
-HBDOS:/> head /samples/hello.c
-HBDOS:/> diff /docs/readme /docs/notes
-HBDOS:/> wc /samples/fib.c
-HBDOS:/games> cat /docs/license
+Lair:/> cat /docs/readme
+Lair:/> head /samples/hello.c
+Lair:/> diff /docs/readme /docs/notes
+Lair:/> wc /samples/fib.c
+Lair:/games> cat /docs/license
 ```
 
 ---
@@ -314,13 +319,13 @@ HBDOS:/games> cat /docs/license
 ### Searching in Files
 
 ```text
-HBDOS:/> find syscall /docs/notes    # Search for "syscall" in notes
+Lair:/> find syscall /docs/notes    # Search for "syscall" in notes
 ```
 
 ### Comparing Files
 
 ```text
-HBDOS:/> diff file1.txt file2.txt
+Lair:/> diff file1.txt file2.txt
 < Line only in file1           (shown in red)
 > Line only in file2           (shown in green)
   Common line                  (shown in default color)
@@ -329,16 +334,16 @@ HBDOS:/> diff file1.txt file2.txt
 ### Removing Duplicates
 
 ```text
-HBDOS:/> uniq data.txt         # Remove adjacent duplicates
-HBDOS:/> uniq -c data.txt      # Show counts
-HBDOS:/> uniq -d data.txt      # Show only duplicated lines
+Lair:/> uniq data.txt         # Remove adjacent duplicates
+Lair:/> uniq -c data.txt      # Show counts
+Lair:/> uniq -d data.txt      # Show only duplicated lines
 ```
 
 ### Reversing
 
 ```text
-HBDOS:/> rev myfile.txt        # Reverse characters in each line
-HBDOS:/> tac myfile.txt        # Print lines in reverse order (last first)
+Lair:/> rev myfile.txt        # Reverse characters in each line
+Lair:/> tac myfile.txt        # Print lines in reverse order (last first)
 ```
 
 ---
@@ -348,13 +353,13 @@ HBDOS:/> tac myfile.txt        # Print lines in reverse order (last first)
 ### Setting Environment Variables
 
 ```text
-HBDOS:/> set name James        # Set a variable
-HBDOS:/> echo Hello, $name!    # Use in echo ($VAR expansion)
+Lair:/> set name James        # Set a variable
+Lair:/> echo Hello, $name!    # Use in echo ($VAR expansion)
 Hello, James!
-HBDOS:/> set                   # List all variables
+Lair:/> set                   # List all variables
   PATH=/bin:/games
   name=James
-HBDOS:/> unset name            # Remove a variable
+Lair:/> unset name            # Remove a variable
 ```
 
 **Limits:** 16 variables, 128 bytes each (name + value combined).
@@ -364,11 +369,11 @@ The `PATH` variable is special — it controls where the shell searches for prog
 ### Defining Aliases
 
 ```text
-HBDOS:/> alias ll dir -l       # Create an alias
-HBDOS:/> ll                    # Runs "dir -l"
-HBDOS:/> alias                 # List all aliases
+Lair:/> alias ll dir -l       # Create an alias
+Lair:/> ll                    # Runs "dir -l"
+Lair:/> alias                 # List all aliases
   ll = dir -l
-HBDOS:/> alias ll              # Show specific alias
+Lair:/> alias ll              # Show specific alias
   ll = dir -l
 ```
 
@@ -381,20 +386,20 @@ HBDOS:/> alias ll              # Show specific alias
 ### Creating a Script
 
 ```text
-HBDOS:/> write startup.bat
+Lair:/> write startup.bat
 echo === System Starting ===
 date
 echo Files in root:
 dir
 echo === Ready ===
 
-HBDOS:/>
+Lair:/>
 ```
 
 ### Running a Script
 
 ```text
-HBDOS:/> batch startup.bat
+Lair:/> batch startup.bat
 > echo === System Starting ===
 === System Starting ===
 > date
@@ -452,7 +457,22 @@ Mellivora ships with 31 user-space programs organized in `/bin` and `/games`.
 | `sort` | `sort FILE` | Sort file lines alphabetically |
 | `hexdump` | `hexdump FILE` | Hex + ASCII file dump |
 | `sed` | `sed SEARCH REPLACE FILE` | Stream editor (search & replace) |
+| `cut` | `cut -f LIST [-d C] FILE` | Field extractor (supports lists/ranges like `1,3,5-7`) |
 | `tr` | `tr SET1 SET2 FILE` | Character translator |
+| `tee` | `tee INPUTFILE OUTPUTFILE` | Print file and copy it to another file |
+| `head` | `head [-n NUM] [FILE]` | Print first N lines (default 10) |
+| `tail` | `tail [-n NUM] [FILE]` | Print last N lines (default 10) |
+| `rev` | `rev [FILE]` | Reverse each line (chars in reverse order) |
+| `yes` | `yes [STRING]` | Output STRING repeatedly (default "y") until interrupted |
+| `true` | `true` | Exit with success code (for scripts) |
+| `false` | `false` | Exit with failure code (for scripts) |
+| `whoami` | `whoami` | Print current user (always "root") |
+| `seq` | `seq N` | Print numbers 1 to N (one per line) |
+| `basename` | `basename PATH` | Extract filename from path |
+| `dirname` | `dirname PATH` | Extract directory from path (or "." if none) |
+| `id` | `id` | Print user and group IDs (root=0) |
+| `sleep` | `sleep SECONDS` | Pause for N seconds |
+| `od` | `od [FILE]` | Octal/hex dump of file |
 | `csv` | `csv FILE` | Formatted CSV viewer with colored headers |
 | `wc` | `wc FILE` | Line, word, byte count |
 | `pager` | `pager FILE` | Page-by-page file viewer |
@@ -483,8 +503,8 @@ Mellivora ships with 31 user-space programs organized in `/bin` and `/games`.
 Usage:
 
 ```text
-HBDOS:/> edit myfile.txt      # Open specific file
-HBDOS:/> edit                  # Opens scratch.txt by default
+Lair:/> edit myfile.txt      # Open specific file
+Lair:/> edit                  # Opens scratch.txt by default
 ```
 
 ---
@@ -497,11 +517,11 @@ and runs them immediately — all inside the OS.
 ### Compiling and Running C Programs
 
 ```text
-HBDOS:/> tcc /samples/hello.c
+Lair:/> tcc /samples/hello.c
 Compiling hello.c...
 Running...
 Hello, World!
-HBDOS:/>
+Lair:/>
 ```
 
 ### Available C Samples (in /samples)
@@ -533,7 +553,7 @@ HBDOS:/>
 ### Writing Your Own C Programs
 
 ```text
-HBDOS:/> write myprogram.c
+Lair:/> write myprogram.c
 int main() {
     printf("Hello from my C program!\n");
     int x = 42;
@@ -541,7 +561,7 @@ int main() {
     return 0;
 }
 
-HBDOS:/> tcc myprogram.c
+Lair:/> tcc myprogram.c
 ```
 
 ---
@@ -553,8 +573,8 @@ HBDOS:/> tcc myprogram.c
 Start typing a filename and press **Tab** to auto-complete:
 
 ```text
-HBDOS:/> cat rea[Tab]
-HBDOS:/> cat readme             ← completed automatically
+Lair:/> cat rea[Tab]
+Lair:/> cat readme             ← completed automatically
 ```
 
 If multiple files match, press Tab repeatedly to cycle through them.
@@ -562,27 +582,27 @@ If multiple files match, press Tab repeatedly to cycle through them.
 ### Quick File Inspection
 
 ```text
-HBDOS:/> wc /docs/readme        # How big is it?
-HBDOS:/> find memory /docs/notes # Search for "memory"
-HBDOS:/> hex /bin/hello          # Look at binary structure
-HBDOS:/> strings /bin/hello      # Find text in a binary
+Lair:/> wc /docs/readme        # How big is it?
+Lair:/> find memory /docs/notes # Search for "memory"
+Lair:/> hex /bin/hello          # Look at binary structure
+Lair:/> strings /bin/hello      # Find text in a binary
 ```
 
 ### Using which to Find Programs
 
 ```text
-HBDOS:/> which snake
+Lair:/> which snake
 snake is /games/snake (external)
-HBDOS:/> which cat
+Lair:/> which cat
 cat is a built-in command
-HBDOS:/> which nonexistent
+Lair:/> which nonexistent
 nonexistent: not found
 ```
 
 ### Startup Automation
 
 ```text
-HBDOS:/> write init.bat
+Lair:/> write init.bat
 clear
 echo Welcome to Mellivora OS!
 date
@@ -590,15 +610,15 @@ echo
 dir
 echo Type 'help' for commands.
 
-HBDOS:/> batch init.bat
+Lair:/> batch init.bat
 ```
 
 ### Color Customization
 
 ```text
-HBDOS:/> color A 0              # Green text on black background
-HBDOS:/> color F 1              # White text on blue background
-HBDOS:/> color 7 0              # Reset to default (light gray on black)
+Lair:/> color A 0              # Green text on black background
+Lair:/> color F 1              # White text on blue background
+Lair:/> color 7 0              # Reset to default (light gray on black)
 ```
 
 Color values (hex): 0=Black, 1=Blue, 2=Green, 3=Cyan, 4=Red, 5=Magenta, 6=Brown,

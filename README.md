@@ -17,7 +17,13 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **Physical memory manager** with bitmap allocator (malloc/free for user programs)
 - **Three-stage boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
-### HB DOS Shell
+### Ratel Init System
+
+- **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS
+- **Filesystem mount** — HBFS detection, validation, and auto-format
+- **Shell handoff** — drops into HB Lair interactive prompt after init completes
+
+### HB Lair Shell
 
 - **48+ built-in commands**: file management, text processing, system info, and more
 - **Tab completion**, **command history** (Up/Down arrows), **Ctrl+C** hard-abort
@@ -49,7 +55,8 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 ### Programs (31 assembly + 11 C samples)
 
 - **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze
-- **Tools**: Text editor, hex viewer, file pager, grep, sort, sed, tr, CSV viewer, wc
+- **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, and more
+- **Tools**: Text editor, hex viewer, file pager, CSV viewer
 - **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator
 - **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter
 - **C samples**: Hello World, Fibonacci, primes, Tower of Hanoi, Hunt the Wumpus, and more
@@ -83,21 +90,21 @@ make full      # Build everything
 make run       # Launch in QEMU
 ```
 
-That's it. You'll see the HB DOS boot banner and a shell prompt:
+That's it. You'll see the HB Lair boot banner and a shell prompt:
 
 ```text
-HBDOS:/>
+Lair:/>
 ```
 
 Type `help` to see all available commands, or just start exploring:
 
 ```text
-HBDOS:/> dir                    # List files and directories
-HBDOS:/> cd games               # Enter the games directory
-HBDOS:/> snake                  # Play Snake!
-HBDOS:/> cd /                   # Back to root
-HBDOS:/> cat /docs/readme       # Read documentation
-HBDOS:/> tetris                 # Play Tetris (found via PATH)
+Lair:/> dir                    # List files and directories
+Lair:/> cd games               # Enter the games directory
+Lair:/> snake                  # Play Snake!
+Lair:/> cd /                   # Back to root
+Lair:/> cat /docs/readme       # Read documentation
+Lair:/> tetris                 # Play Tetris (found via PATH)
 ```
 
 ---
@@ -250,10 +257,22 @@ Mellivora_OS/
 
 ## 📜 License
 
-This project is provided as-is for educational purposes.
+This project is licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Honey Badger Universe
 
 ---
 
 ## 🦡 Why "Mellivora"?
 
 *Mellivora capensis* — the honey badger. Small, tough, and fearless. Just like this OS.
+
+### Component Naming
+
+| Component | Name | Full Name |
+| --- | --- | --- |
+| Kernel | **Mellivora** | Mellivora OS kernel |
+| Init System | **Ratel** | Hardware & subsystem initialization |
+| Shell | **HB Lair** | Honey Badger Lair |
+| Filesystem | **HBFS** | Honey Badger File System |
+| Utilities | **HBU** | Honey Badger Utilities (GNU-like tools) |

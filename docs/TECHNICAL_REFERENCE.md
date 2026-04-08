@@ -87,7 +87,7 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
    - TSS (Ring 3 support)
    - HBFS filesystem
    - Default environment variables
-2. Prints the HB DOS banner
+2. Prints the HB Lair banner
 3. Enters the interactive shell loop
 
 ### Disk Layout
@@ -461,9 +461,9 @@ separate from `path_save_*`. This prevents conflicts when PATH search itself cal
 ### Example
 
 ```text
-HBDOS:/> cat /docs/readme       # Reads readme from /docs without changing CWD
-HBDOS:/> head /samples/hello.c  # Same — CWD stays at /
-HBDOS:/> diff /docs/a /docs/b   # Both files resolved transparently
+Lair:/> cat /docs/readme       # Reads readme from /docs without changing CWD
+Lair:/> head /samples/hello.c  # Same — CWD stays at /
+Lair:/> diff /docs/a /docs/b   # Both files resolved transparently
 ```
 
 ---
@@ -899,8 +899,8 @@ The 38 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
 The `echo` command expands `$VAR` references:
 
 ```text
-HBDOS:/> set user James
-HBDOS:/> echo Hello $user
+Lair:/> set user James
+Lair:/> echo Hello $user
 Hello James
 ```
 

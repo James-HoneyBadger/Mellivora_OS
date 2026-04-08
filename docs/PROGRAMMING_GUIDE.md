@@ -93,9 +93,9 @@ nasm -f bin -O0 -o hello hello.asm
 Then copy `hello` to the disk image and run it from the shell:
 
 ```text
-HBDOS:/> hello
+Lair:/> hello
 Hello, World!
-HBDOS:/>
+Lair:/>
 ```
 
 ### Key Points
@@ -891,13 +891,13 @@ int main() {
 Save as a file and compile:
 
 ```text
-HBDOS:/> write hello.c
+Lair:/> write hello.c
 int main() {
     printf("Hello from C!\n");
     return 0;
 }
 
-HBDOS:/> tcc hello.c
+Lair:/> tcc hello.c
 Compiling hello.c...
 Running...
 Hello from C!

@@ -1,4 +1,4 @@
-; tr.asm - Translate characters for Mellivora OS
+; tr.asm - Translate characters [HBU]
 ; Usage: tr SET1 SET2 FILENAME
 ; Replaces each character in SET1 with the corresponding character in SET2
 %include "syscalls.inc"

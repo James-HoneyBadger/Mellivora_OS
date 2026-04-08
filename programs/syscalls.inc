@@ -25,8 +25,8 @@ SYS_CLOSE       equ 8
 SYS_DELETE      equ 9
 SYS_SEEK        equ 10
 SYS_STAT        equ 11
-SYS_MKDIR       equ 12          ; Reserved - not yet implemented (returns -1)
-SYS_READDIR     equ 13          ; Reserved - not yet implemented (returns -1)
+SYS_MKDIR       equ 12          ; Create directory: EBX=name -> EAX=0 success
+SYS_READDIR     equ 13          ; Read directory entry: EBX=buf ECX=index -> EAX=type(-1=end) ECX=size
 SYS_SETCURSOR   equ 14
 SYS_GETTIME     equ 15
 SYS_SLEEP       equ 16

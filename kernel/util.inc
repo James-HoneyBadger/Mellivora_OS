@@ -2383,28 +2383,51 @@ cmd_exec_batch:
 .bat_size_ok:
         mov byte [batch_script_buf + ecx], 0
         mov esi, batch_script_buf
-.bat_line:
+        call batch_run_loop
+        popad
+        ret
+.bat_nf:
+        mov byte [batch_running], 0
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_not_found
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+
+;---------------------------------------
+; batch_run_loop - Process batch script lines starting at ESI
+; Called from cmd_exec_batch and shell_main (resume after external program)
+; Input: ESI = current position in batch_script_buf
+; On completion, clears batch_running flag
+;---------------------------------------
+batch_run_loop:
+.brl_line:
         cmp byte [esi], 0
-        je .bat_done
+        je .brl_done
         mov edi, batch_line_buf
         xor ecx, ecx
-.bat_cpln:
+.brl_cpln:
         lodsb
         cmp al, 0x0A
-        je .bat_exec
+        je .brl_exec
         cmp al, 0x0D
-        je .bat_cpln
+        je .brl_cpln
         cmp al, 0
-        je .bat_exec_last
+        je .brl_exec_last
         stosb
         inc ecx
-        jmp .bat_cpln
-.bat_exec_last:
+        jmp .brl_cpln
+.brl_exec_last:
         dec esi
-.bat_exec:
+.brl_exec:
         mov byte [edi], 0
         cmp ecx, 0
-        je .bat_line
+        je .brl_line
+        ; Save resume position before executing (in case of external program)
+        mov eax, esi
+        sub eax, batch_script_buf
+        mov [batch_resume_pos], eax
         push esi
         mov byte [vga_color], COLOR_INFO
         mov esi, msg_batch_prefix
@@ -2417,18 +2440,9 @@ cmd_exec_batch:
         mov esi, batch_line_buf
         call shell_parse_cmd
         pop esi
-        jmp .bat_line
-.bat_done:
+        jmp .brl_line
+.brl_done:
         mov byte [batch_running], 0
-        popad
-        ret
-.bat_nf:
-        mov byte [batch_running], 0
-        mov byte [vga_color], COLOR_ERROR
-        mov esi, msg_not_found
-        call vga_print
-        mov byte [vga_color], COLOR_DEFAULT
-        popad
         ret
 
 cmd_mkdir:

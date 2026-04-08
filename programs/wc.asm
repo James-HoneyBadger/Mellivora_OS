@@ -1,4 +1,4 @@
-; wc.asm - Word/Line/Character count utility for Mellivora OS
+; wc.asm - Word/Line/Character count utility [HBU]
 ; Usage: wc <filename>
 ; Displays line count, word count, and character count
 ;

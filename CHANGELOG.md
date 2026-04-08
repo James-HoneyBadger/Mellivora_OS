@@ -274,7 +274,7 @@
 ### Documentation Fixes
 
 - Version text updated: v1.3 → v1.4, 28 → 227/56 files, 33 → 34 syscalls
-- Banner string updated: HB DOS v1.3 → v1.4
+- Banner string updated: HB Lair v1.3 → v1.4
 - `hbfs_find_file` comment: "root directory" → "current directory"
 - `HBFS_DIR_ENTRY_SIZE` comment: corrected field sizes and order to match actual offsets
 - `populate.py`: Fixed root dir comment (2 → 16 blocks), readme.txt (34 syscalls), notes.txt (added SYS_SERIAL_IN), todo.txt (34 syscalls)

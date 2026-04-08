@@ -6,6 +6,14 @@ shell_main:
         mov esp, KERNEL_STACK
         mov byte [vga_color], COLOR_DEFAULT
 
+        ; Resume batch script if interrupted by external program exit
+        cmp byte [batch_running], 1
+        jne .no_batch_resume
+        mov esi, batch_script_buf
+        add esi, [batch_resume_pos]
+        call batch_run_loop
+.no_batch_resume:
+
         ; Set default PATH
         mov esi, default_path
         call env_set_str
