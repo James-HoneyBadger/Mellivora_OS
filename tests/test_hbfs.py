@@ -394,6 +394,49 @@ def main():
               f"(found {stray_bits})", stray_bits == 0)
         print()
 
+        # ---- File content integrity (round-trip check) ----
+        print("[File content integrity]")
+        # For each known program binary, compare on-disk content with local .bin
+        integrity_checked = 0
+        # Build a lookup: name -> file entry (search root + subdirectories)
+        all_file_entries = {}
+        for fi in files:
+            all_file_entries[fi["name"]] = fi
+        for dent in dir_entries:
+            dirname = dent["name"]
+            subdir_lba = block_to_lba(dent["start_block"])
+            subdir_size = dent["block_count"] * BLOCK_SIZE
+            subdir_max = subdir_size // HBFS_DIR_ENTRY_SIZE
+            subdir_data = read_at(f, lba_offset(subdir_lba), subdir_size)
+            sub_files, _ = parse_dir_entries(subdir_data, subdir_max)
+            for fi in sub_files:
+                all_file_entries[fi["name"]] = fi
+
+        # Spot-check a few program binaries
+        spot_checks = ["hello", "fibonacci", "primes", "snake",
+                        "sysinfo", "colors"]
+        for prog_name in spot_checks:
+            if prog_name not in all_file_entries:
+                continue
+            fi = all_file_entries[prog_name]
+            local_path = os.path.join("programs", prog_name + ".bin")
+            if not os.path.isfile(local_path):
+                continue
+            with open(local_path, "rb") as lf:
+                local_data = lf.read()
+            disk_offset = lba_offset(block_to_lba(fi["start_block"]))
+            disk_data = read_at(f, disk_offset, fi["size"])
+            if local_data == disk_data:
+                ok(f"  '{prog_name}' on-disk matches local binary "
+                   f"({len(local_data)} bytes)")
+                integrity_checked += 1
+            else:
+                fail(f"  '{prog_name}' on-disk DIFFERS from local binary "
+                     f"(local={len(local_data)}, disk={len(disk_data)})")
+        check(f"Content integrity verified for {integrity_checked} files",
+              integrity_checked > 0)
+        print()
+
     # ---- Summary ----
     total = PASS + FAIL
     print(f"=== Results: {PASS}/{total} passed ===")

@@ -1,5 +1,32 @@
 # Mellivora OS - Changelog
 
+## v1.15 - Kernel Hardening & Interrupt Safety
+
+### Kernel Bug Fixes
+
+- **`build_cwd_path` buffer overflow**: Path construction wrote to a 256-byte buffer but max path depth (16 levels × 253 chars) could reach ~4 KB. Enlarged `path_search_buf` to 4096 bytes and added bounds checking with guaranteed null termination on truncation.
+- **`copy_word` unbounded write**: Shell word extraction had no destination size limit. Added bounded `copy_word_n` variant (ECX = max bytes, always null-terminates). Migrated `cmd_find_file`, `cmd_append_file`, and `cmd_mkdir` to use the bounded version.
+- **Ctrl+C redirection state leak**: Pressing Ctrl+C during a redirected command (e.g., `prog > file`) left `stdout_redir_active` and related flags set, corrupting subsequent output. The Ctrl+C handler now calls `shell_redir_reset` to clear all redirection state before returning to the shell prompt.
+- **Interrupt-unsafe stdout redirection**: A keyboard interrupt during `vga_putchar`'s redirection check could corrupt the redirect buffer or length counter. Wrapped the redirection capture section with `cli`/`sti` to make the test-and-write atomic.
+- **Interrupt-unsafe directory state**: `cd` path traversal modified `dir_depth`, `current_dir_lba`, `current_dir_sects`, and `current_dir_name` without interrupt protection. A Ctrl+C mid-update could leave the directory stack inconsistent. Added `cli`/`sti` around state mutations in both `cd_enter_subdir` and `cd_pop_stack`.
+
+### Library Bug Fixes
+
+- **`io_file_write` register mapping**: Register remapping clobbered ECX (size) before copying it to EDX. The syscall received the buffer address as the size argument, causing writes to produce corrupted or zero-length files. Fixed register assignment order to preserve all parameters correctly.
+
+### Build System
+
+- **Makefile lib dependency tracking**: Program build rule now depends on `$(wildcard programs/lib/*.inc)` in addition to `syscalls.inc`, so changes to any library file trigger program rebuilds.
+
+### Tests
+
+- **NOBITS warning regression test**: New test in `test_build.sh` scans all `.lst` files for "nobits" warnings, catching `section .bss` ordering bugs (like the v1.14 math.inc issue).
+- **File content integrity test**: New test in `test_hbfs.py` reads known program binaries from the disk image and compares them byte-for-byte with the local `.bin` files, catching populate.py data corruption.
+
+### Documentation
+
+- **API_REFERENCE.md**: Added error handling patterns table documenting which functions use EAX=-1, EAX=0/null, or carry flag for error signaling.
+
 ## v1.14 - Test Suite Expansion & Shell Hardening
 
 ### Bug Fixes

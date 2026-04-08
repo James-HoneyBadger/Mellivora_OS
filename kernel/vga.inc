@@ -28,6 +28,7 @@ vga_clear:
 vga_putchar:
         pushad
 
+        cli                             ; Protect redirection state from interrupts
         cmp byte [stdout_redir_active], 1
         jne .vp_normal
 
@@ -48,10 +49,12 @@ vga_putchar:
         inc dword [stdout_redir_len]
 
 .vp_redir_done:
+        sti
         popad
         ret
 
 .vp_normal:
+        sti
 
         cmp al, 0x0A            ; Line feed?
         je .newline

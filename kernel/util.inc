@@ -196,6 +196,41 @@ copy_word:
         dec esi                 ; Put back the null
         ret
 
+; Bounded copy word from ESI to EDI (stop at space, null, or ECX limit)
+; Input:  ESI = source, EDI = destination, ECX = max bytes (excluding null)
+; Advances ESI past the word; always null-terminates destination
+copy_word_n:
+        push ecx
+.cwn_loop:
+        cmp ecx, 0
+        jle .cwn_limit
+        lodsb
+        cmp al, ' '
+        je .cwn_space
+        cmp al, 0
+        je .cwn_null
+        stosb
+        dec ecx
+        jmp .cwn_loop
+.cwn_limit:
+        ; Hit limit — skip remaining word chars in source
+.cwn_skip:
+        lodsb
+        cmp al, ' '
+        je .cwn_space
+        cmp al, 0
+        je .cwn_null
+        jmp .cwn_skip
+.cwn_space:
+        mov byte [edi], 0
+        pop ecx
+        ret
+.cwn_null:
+        mov byte [edi], 0
+        dec esi
+        pop ecx
+        ret
+
 ; Check for wildcard characters '*' or '?' in string at ESI
 ; Returns: CF set if wildcard exists
 str_has_wildcards:
@@ -1506,7 +1541,8 @@ cmd_cd_internal:
         push edi                ; save dir entry pointer
         imul eax, DIR_STACK_ENTRY_SIZE
         lea ebx, [dir_stack + eax]
-        ; Save current state
+        ; Save current state (interrupts off to keep dir globals consistent)
+        cli
         mov eax, [current_dir_lba]
         mov [ebx], eax
         mov eax, [current_dir_sects]
@@ -1544,6 +1580,7 @@ cmd_cd_internal:
         cmp al, 0
         jne .cd_ent_name
         pop esi
+        sti                     ; state consistent, re-enable interrupts
 
         ; Load the new directory contents
         mov eax, [current_dir_lba]
@@ -1565,6 +1602,7 @@ cmd_cd_internal:
         cmp eax, 0
         je .cd_pop_done         ; already at root
 
+        cli                     ; protect dir state from Ctrl+C
         dec eax
         mov [dir_depth], eax
 
@@ -1588,6 +1626,7 @@ cmd_cd_internal:
         cmp al, 0
         jne .cd_pop_name
         pop esi
+        sti                     ; dir state consistent
 
 .cd_pop_done:
         ret
@@ -2028,7 +2067,8 @@ cmd_wc_file:
 cmd_find_file:
         pushad
         mov edi, filename_buf
-        call copy_word
+        mov ecx, 255
+        call copy_word_n
         call skip_spaces
         push esi
         mov edi, PROGRAM_BASE
@@ -2228,7 +2268,8 @@ str_find_substr_ci:
 cmd_append_file:
         pushad
         mov edi, filename_buf
-        call copy_word
+        mov ecx, 255
+        call copy_word_n
         push esi
         mov esi, filename_buf
         mov edi, PROGRAM_BASE
@@ -2460,7 +2501,8 @@ batch_run_loop:
 cmd_mkdir:
         pushad
         mov edi, filename_buf
-        call copy_word
+        mov ecx, 255
+        call copy_word_n
         mov esi, filename_buf
         cmp byte [esi], 0
         je .mk_nospace
@@ -2712,14 +2754,19 @@ shell_tab_complete:
 
 ;=======================================================================
 ; UTILITY: Build full CWD path into buffer
-; EDI = destination buffer (must be >= 256 bytes)
+; EDI = destination buffer (must be >= 4096 bytes)
 ; Writes null-terminated full path like "/a/b/c" or "/"
 ;=======================================================================
+PATH_BUF_MAX    equ 4095        ; Max chars (reserve 1 for null)
+
 build_cwd_path:
         push esi
         push ecx
         push eax
         push ebx
+        push edx
+        mov edx, edi            ; save buffer start
+        lea ebx, [edi + PATH_BUF_MAX] ; ebx = one-past-last writable byte
 
         ; If at root, just write "/"
         cmp dword [dir_depth], 0
@@ -2742,9 +2789,13 @@ build_cwd_path:
         inc ecx
         jmp .bcp_loop
 .bcp_add_comp:
+        cmp edi, ebx
+        jge .bcp_trunc
         mov byte [edi], '/'
         inc edi
 .bcp_cp_stack:
+        cmp edi, ebx
+        jge .bcp_trunc
         lodsb
         cmp al, 0
         je .bcp_stack_done
@@ -2756,17 +2807,26 @@ build_cwd_path:
 
 .bcp_current:
         ; Append current directory
+        cmp edi, ebx
+        jge .bcp_trunc
         mov byte [edi], '/'
         inc edi
         mov esi, current_dir_name
 .bcp_cp_cur:
+        cmp edi, ebx
+        jge .bcp_trunc
         lodsb
         stosb
         cmp al, 0
         jne .bcp_cp_cur
         ; Null terminator already written
+        jmp .bcp_done
+
+.bcp_trunc:
+        mov byte [edi], 0      ; Force null-terminate at limit
 
 .bcp_done:
+        pop edx
         pop ebx
         pop eax
         pop ecx

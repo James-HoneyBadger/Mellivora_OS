@@ -31,6 +31,16 @@ depends on `string.inc` for `io_print_padded` and `io_print_centered`.
 - **Register preservation:** Functions preserve all registers except documented return values
 - **Error signaling:** `-1` return or carry flag set, as documented per function
 
+### Error Handling Patterns
+
+Library functions use two error patterns — check the function table for which one applies:
+
+| Pattern | How to check | Used by |
+|---------|-------------|---------|
+| **EAX = -1** | `cmp eax, -1` / `je error` | File I/O (`io_file_read`, `io_file_write`, `io_file_size`), number parsing (`str_to_int`, `str_to_hex`) |
+| **EAX = 0** (null/false) | `test eax, eax` / `jz error` | Search functions (`str_chr`, `str_str`), `io_get_arg`, `mem_alloc` |
+| **Carry flag** | `jc error` | Low-level operations (`mem_pool_alloc`) |
+
 ---
 
 ## string.inc — String Manipulation

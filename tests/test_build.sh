@@ -232,6 +232,20 @@ check "All 34 syscall numbers consistent" "[[ $SYSCALL_MISMATCH -eq 0 ]]"
 
 echo ""
 
+# ---------- NOBITS warnings (section .bss regression) ----------
+echo "[NOBITS / section .bss warnings]"
+NOBITS_HITS=0
+for lst in kernel.lst programs/*.lst; do
+    [[ ! -f "$lst" ]] && continue
+    if grep -qi 'nobits' "$lst" 2>/dev/null; then
+        fail "$(basename "$lst") contains NOBITS warning"
+        ((NOBITS_HITS++))
+    fi
+done
+check "No listing files contain NOBITS warnings" "[[ $NOBITS_HITS -eq 0 ]]"
+
+echo ""
+
 # ---------- Kernel entry point ----------
 echo "[Kernel binary structure]"
 # Kernel at LBA 33 (offset 0x4200). First instruction should be valid x86.

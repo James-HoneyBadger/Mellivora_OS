@@ -115,7 +115,7 @@ debug: $(IMAGE)
 # Build all sample programs
 programs: $(PROG_BINS)
 
-$(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc
+$(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
 
 # Populate disk image with files and programs

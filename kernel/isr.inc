@@ -155,8 +155,9 @@ irq_keyboard:
         ; Send EOI to PIC
         mov al, 0x20
         out PIC1_CMD, al
-        ; Hard-abort to shell
+        ; Hard-abort to shell — clean up redirection state
         mov esp, KERNEL_STACK
+        call shell_redir_reset
         mov byte [vga_color], COLOR_DEFAULT
         sti
         jmp shell_main

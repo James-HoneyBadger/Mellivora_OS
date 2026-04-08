@@ -431,15 +431,12 @@ io_file_write:
         push ecx
         push esi
         mov eax, SYS_FWRITE
-        mov ebx, esi
-        mov ecx, edi
-        ; EDX = size already in place -- need to swap
-        ; Actually: EBX=name, ECX=buf, EDX=size, ESI=type
-        ; We have ESI=name, EDI=buf, ECX=size, EDX=type
-        mov ebx, esi            ; filename
-        mov esi, edx            ; type
-        mov edx, ecx            ; size
-        mov ecx, edi            ; buffer
+        ; Input:  ESI=name, EDI=buf, ECX=size, EDX=type
+        ; Syscall: EBX=name, ECX=buf, EDX=size, ESI=type
+        mov ebx, esi            ; EBX = filename (frees ESI)
+        mov esi, edx            ; ESI = type     (frees EDX)
+        mov edx, ecx            ; EDX = size     (frees ECX)
+        mov ecx, edi            ; ECX = buffer
         int 0x80
         pop esi
         pop ecx

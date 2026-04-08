@@ -576,7 +576,7 @@ program_args_buf: resb 512       ; Command-line arguments for programs
 head_lines:      resd 1          ; Line count for head/tail commands
 cmd_flags:       resd 1          ; Bitmask of parsed flags (bit 0='a', bit 13='n', etc.)
 cmd_flag_num:    resd 1          ; Numeric argument from -n N
-path_search_buf: resb 256        ; Buffer for PATH-based program search
+path_search_buf: resb 4096       ; Buffer for PATH-based program search / CWD path
 temp_path_buf:   resb 256        ; Buffer for building PATH/progname paths
 stdout_redir_active: resb 1
 stdout_redir_append: resb 1
