@@ -2437,7 +2437,14 @@ batch_run_loop:
         mov al, 0x0A
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
+        ; Copy batch_line_buf into line_buffer (shell_parse_cmd always parses line_buffer)
         mov esi, batch_line_buf
+        mov edi, line_buffer
+.brl_copy:
+        lodsb
+        stosb
+        test al, al
+        jnz .brl_copy
         call shell_parse_cmd
         pop esi
         jmp .brl_line
