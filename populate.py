@@ -325,6 +325,32 @@ Directory Structure:
 Type 'help' for a list of commands.
 Type 'set PATH /bin:/games' to configure program search path.
 
+Serial Console (COM1):
+  Mellivora includes a bidirectional serial port driver on COM1
+  at 115200 baud, 8N1.  This enables host communication from
+  inside the OS, which is useful for logging, debugging, file
+  transfer, and remote control.
+
+  QEMU quick-start:
+    qemu-system-i386 ... -serial tcp::4555,server=on,wait=off
+  Then on the host:  nc localhost 4555
+  Or for a PTY:      qemu-system-i386 ... -serial pty
+
+  Shell utility (in /bin):
+    serial              Interactive serial terminal (Esc to quit)
+    serial send <text>  Send a line of text out the serial port
+
+  Syscalls for programs:
+    SYS_SERIAL    (28) - Write string to COM1  (EBX = string ptr)
+    SYS_SERIAL_IN (33) - Non-blocking read     (EAX = char or -1)
+
+  Use cases:
+    * Debug logging  - print trace messages from programs
+    * Remote shell   - pipe serial to a terminal on the host
+    * File transfer  - send/receive data to/from host tools
+    * Automated test - script QEMU + nc to drive the OS
+    * Data export    - dump computation results to the host
+
 Mellivora don't care - it just runs!
 """,
 
@@ -409,12 +435,29 @@ Syscall Interface (INT 0x80):
   25 date        - Read RTC date/time
   26 chdir       - Change directory
   27 getcwd      - Get current directory
-  28 serial      - Write to serial port
+  28 serial      - Write string to COM1 serial port
+                   EBX = pointer to null-terminated string
+                   Returns: EAX = 0
+                   No-op if serial hardware not detected.
   29 getenv      - Get environment variable
   30 fread       - Read entire file to buffer
   31 fwrite      - Write buffer to file
   32 getargs     - Get command-line arguments
-  33 serial_in   - Read serial port byte
+  33 serial_in   - Non-blocking read from COM1 serial port
+                   Returns: EAX = character (0-254) if data ready,
+                            EAX = -1 (0xFFFFFFFF) if no data.
+                   Programs should poll in a loop with SYS_SLEEP
+                   between calls to avoid busy-spinning.
+
+Serial Port Notes:
+  - COM1 at I/O 0x3F8, configured to 115200 baud, 8N1.
+  - Hardware is probed at boot via the scratch register;
+    if no UART is detected, serial_present is set to 0 and
+    all serial I/O becomes a no-op (safe to call always).
+  - SYS_SERIAL_IN is non-blocking: returns immediately with
+    -1 if the receive buffer is empty.
+  - In QEMU, use  -serial tcp::PORT,server=on,wait=off  or
+    -serial pty  to expose the virtual COM1 to the host.
 """,
 
     "todo.txt": """\

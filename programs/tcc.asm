@@ -1588,13 +1588,24 @@ compile_local_decl:
 
 ;=======================================================================
 ; COMPILE EXPRESSION (returns result in EAX)
+;
+; Precedence-climbing parser (C operator precedence, left-to-right):
+;   compile_expression  -> assignment (=) or fall through to or_expr
+;   compile_or_expr     -> ||        (left-assoc)
+;   compile_and_expr    -> &&        (left-assoc)
+;   compile_eq_expr     -> == !=     (left-assoc)
+;   compile_rel_expr    -> < > <= >= (left-assoc)
+;   compile_add_expr    -> + -       (left-assoc)
+;   compile_mul_expr    -> * / %     (left-assoc)
+;   compile_unary       -> ! - (prefix)
+;   compile_primary     -> number, char, string, ( ), id, call, array
 ;=======================================================================
 compile_expression:
         pushad
 
         ; Check for identifier (could be assignment or function call)
         cmp dword [tok_type], TOK_ID
-        jne .ce_not_id
+        jne .ce_not_assign
 
         ; Save identifier
         mov esi, tok_ident
@@ -1607,46 +1618,20 @@ compile_expression:
         cmp dword [tok_type], TOK_ASSIGN
         je .ce_assign
 
-        ; Check for function call
-        cmp dword [tok_type], TOK_LPAREN
-        je .ce_call
-
-        ; Check for array subscript before deciding how to load
+        ; Check for array subscript followed by assignment: arr[i] = val
         cmp dword [tok_type], TOK_LBRACKET
-        je .ce_array_acc
-        ; Just a variable reference: load value into eax
-        mov esi, expr_name
-        call find_symbol
-        cmp eax, 0
-        je .ce_var_not_found
-        ; Check if local/param (EBP-relative) or global (absolute)
-        cmp dword [symbol_type], SYM_LOCAL
-        je .ce_load_ebp
-        cmp dword [symbol_type], SYM_PARAM
-        je .ce_load_ebp
-        ; Global: mov eax, [abs_addr]  (A1 addr32)
-        mov al, 0xA1
-        call emit_byte
-        mov eax, [symbol_addr]
-        call emit_dword
-        jmp .ce_binop
-.ce_load_ebp:
-        ; Local/param: mov eax, [ebp + off8]  (8B 45 off8)
-        mov al, 0x8B
-        call emit_byte
-        mov al, 0x45
-        call emit_byte
-        mov eax, [symbol_addr]
-        call emit_byte           ; low byte = signed EBP offset
-        jmp .ce_binop
+        je .ce_check_arr_assign
 
-.ce_var_not_found:
-        ; Emit mov eax, 0 as fallback
-        mov al, 0xB8
-        call emit_byte
-        mov eax, 0
-        call emit_dword
-        jmp .ce_binop
+        ; Not an assignment - undo the token consumption so or_expr
+        ; can parse the identifier properly.  Push back by resetting
+        ; src_pos to the start of the identifier.
+        ; We don't have a true "unget" so we copy expr_name back into
+        ; tok_ident, set tok_type = TOK_ID and let primary pick it up.
+        mov esi, expr_name
+        mov edi, tok_ident
+        call str_copy_local
+        mov dword [tok_type], TOK_ID
+        jmp .ce_not_assign
 
 .ce_assign:
         ; Resolve target variable BEFORE compiling RHS, because
@@ -1685,9 +1670,9 @@ compile_expression:
         popad
         ret
 
-.ce_array_acc:
-        ; arr[i] - array subscript access
-        ; expr_name = array name, tok_type = LBRACKET
+.ce_check_arr_assign:
+        ; arr[i] - might be arr[i] = val (store) or arr[i] (load in expr)
+        ; We must handle both here since we already consumed the identifier.
         mov esi, expr_name
         call find_symbol
         cmp eax, 0
@@ -1719,7 +1704,8 @@ compile_expression:
         call emit_byte
         mov al, 0x00
         call emit_byte
-        jmp .ce_binop
+        ; Continue parsing binary operators at correct precedence
+        jmp .ce_arr_load_binop
 .ce_arr_store:
         ; arr[i] = val: compute element address, store
         ; imul eax,eax,4  (6B C0 04)
@@ -1756,123 +1742,87 @@ compile_expression:
         popad
         ret
 
-.ce_call:
-        ; Function call
-        call next_token          ; skip '('
-        mov esi, expr_name
-        call compile_func_call
-        jmp .ce_binop
-
-.ce_not_id:
-        call compile_atom
-
-.ce_binop:
-        ; Check for binary operator
-        cmp dword [tok_type], TOK_PLUS
-        je .ce_add
-        cmp dword [tok_type], TOK_MINUS
-        je .ce_sub
-        cmp dword [tok_type], TOK_STAR
-        je .ce_mul
-        cmp dword [tok_type], TOK_SLASH
-        je .ce_div_op
-        cmp dword [tok_type], TOK_EQ
-        je .ce_eq
-        cmp dword [tok_type], TOK_NE
-        je .ce_ne
-        cmp dword [tok_type], TOK_LT
-        je .ce_lt
-        cmp dword [tok_type], TOK_GT
-        je .ce_gt
-        cmp dword [tok_type], TOK_LE
-        je .ce_le
-        cmp dword [tok_type], TOK_GE
-        je .ce_ge
-        cmp dword [tok_type], TOK_AND
-        je .ce_and
-        cmp dword [tok_type], TOK_OR
-        je .ce_or
-        ; No more operators
+.ce_arr_load_binop:
+        ; After array load, we have the value in EAX at codegen level.
+        ; Continue with binary operators from the add level (most common
+        ; after array access), but actually we should just return and let
+        ; the caller's precedence loop handle it.
         popad
         ret
 
-.ce_add:
+.ce_not_assign:
+        ; Parse expression with proper precedence
+        call compile_or_expr
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Precedence level 1: || (logical OR)
+;-----------------------------------------------------------------------
+compile_or_expr:
+        pushad
+        call compile_and_expr
+.or_loop:
+        cmp dword [tok_type], TOK_OR
+        jne .or_done
         call next_token
-        ; push eax
+        ; push eax (left)
         mov al, 0x50
         call emit_byte
-        call compile_expression
-        ; pop ebx; add eax, ebx (but we want left+right, so: pop ebx; add eax, ebx)
-        mov al, 0x5B            ; pop ebx
+        call compile_and_expr
+        ; pop ebx; or eax, ebx
+        mov al, 0x5B             ; pop ebx
         call emit_byte
-        mov al, 0x01            ; add eax, ebx
+        mov al, 0x09             ; or eax, ebx
         call emit_byte
         mov al, 0xD8
         call emit_byte
+        jmp .or_loop
+.or_done:
         popad
         ret
 
-.ce_sub:
+;-----------------------------------------------------------------------
+; Precedence level 2: && (logical AND)
+;-----------------------------------------------------------------------
+compile_and_expr:
+        pushad
+        call compile_eq_expr
+.and_loop:
+        cmp dword [tok_type], TOK_AND
+        jne .and_done
         call next_token
-        ; push eax (left side)
+        ; push eax (left)
         mov al, 0x50
         call emit_byte
-        call compile_expression
-        ; Result in eax = right. pop ebx = left. Want left - right.
-        ; mov ecx, eax; pop eax; sub eax, ecx
-        mov al, 0x89            ; mov ecx, eax
+        call compile_eq_expr
+        ; pop ebx; and eax, ebx
+        mov al, 0x5B             ; pop ebx
         call emit_byte
-        mov al, 0xC1
+        mov al, 0x21             ; and eax, ebx
         call emit_byte
-        mov al, 0x58            ; pop eax
+        mov al, 0xD8
         call emit_byte
-        mov al, 0x29            ; sub eax, ecx
-        call emit_byte
-        mov al, 0xC8
-        call emit_byte
+        jmp .and_loop
+.and_done:
         popad
         ret
 
-.ce_mul:
-        call next_token
-        mov al, 0x50
-        call emit_byte
-        call compile_expression
-        ; pop ebx; imul eax, ebx
-        mov al, 0x5B
-        call emit_byte
-        mov al, 0x0F
-        call emit_byte
-        mov al, 0xAF
-        call emit_byte
-        mov al, 0xC3
-        call emit_byte
-        popad
-        ret
+;-----------------------------------------------------------------------
+; Precedence level 3: == !=
+;-----------------------------------------------------------------------
+compile_eq_expr:
+        pushad
+        call compile_rel_expr
+.eq_loop:
+        cmp dword [tok_type], TOK_EQ
+        je .eq_op
+        cmp dword [tok_type], TOK_NE
+        je .ne_op
+        jmp .eq_done
 
-.ce_div_op:
-        call next_token
-        mov al, 0x50
-        call emit_byte
-        call compile_expression
-        ; mov ecx, eax; pop eax; cdq; idiv ecx
-        mov al, 0x89
-        call emit_byte
-        mov al, 0xC1
-        call emit_byte
-        mov al, 0x58            ; pop eax
-        call emit_byte
-        mov al, 0x99            ; cdq
-        call emit_byte
-        mov al, 0xF7            ; idiv ecx
-        call emit_byte
-        mov al, 0xF9
-        call emit_byte
-        popad
-        ret
-
-.ce_eq:
-        call .ce_emit_cmp
+.eq_op:
+        call cmp_emit_push_rhs_cmp
         ; sete al; movzx eax, al
         mov al, 0x0F
         call emit_byte
@@ -1880,108 +1830,96 @@ compile_expression:
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call .ce_emit_movzx
-        popad
-        ret
+        call cmp_emit_movzx
+        jmp .eq_loop
 
-.ce_ne:
-        call .ce_emit_cmp
+.ne_op:
+        call cmp_emit_push_rhs_cmp
         mov al, 0x0F
         call emit_byte
         mov al, 0x95
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call .ce_emit_movzx
+        call cmp_emit_movzx
+        jmp .eq_loop
+
+.eq_done:
         popad
         ret
 
-.ce_lt:
-        call .ce_emit_cmp
+;-----------------------------------------------------------------------
+; Precedence level 4: < > <= >=
+;-----------------------------------------------------------------------
+compile_rel_expr:
+        pushad
+        call compile_add_expr
+.rel_loop:
+        cmp dword [tok_type], TOK_LT
+        je .lt_op
+        cmp dword [tok_type], TOK_GT
+        je .gt_op
+        cmp dword [tok_type], TOK_LE
+        je .le_op
+        cmp dword [tok_type], TOK_GE
+        je .ge_op
+        jmp .rel_done
+
+.lt_op:
+        call cmp_emit_push_rhs_cmp
         mov al, 0x0F
         call emit_byte
         mov al, 0x9C
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call .ce_emit_movzx
-        popad
-        ret
+        call cmp_emit_movzx
+        jmp .rel_loop
 
-.ce_gt:
-        call .ce_emit_cmp
+.gt_op:
+        call cmp_emit_push_rhs_cmp
         mov al, 0x0F
         call emit_byte
         mov al, 0x9F
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call .ce_emit_movzx
-        popad
-        ret
+        call cmp_emit_movzx
+        jmp .rel_loop
 
-.ce_le:
-        call .ce_emit_cmp
+.le_op:
+        call cmp_emit_push_rhs_cmp
         mov al, 0x0F
         call emit_byte
         mov al, 0x9E
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call .ce_emit_movzx
-        popad
-        ret
+        call cmp_emit_movzx
+        jmp .rel_loop
 
-.ce_ge:
-        call .ce_emit_cmp
+.ge_op:
+        call cmp_emit_push_rhs_cmp
         mov al, 0x0F
         call emit_byte
         mov al, 0x9D
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call .ce_emit_movzx
+        call cmp_emit_movzx
+        jmp .rel_loop
+
+.rel_done:
         popad
         ret
 
-.ce_and:
-        call next_token
-        ; push eax (left)
-        mov al, 0x50
-        call emit_byte
-        call compile_expression
-        ; pop ebx; and eax, ebx
-        mov al, 0x5B            ; pop ebx
-        call emit_byte
-        mov al, 0x21            ; and eax, ebx
-        call emit_byte
-        mov al, 0xD8
-        call emit_byte
-        popad
-        ret
-
-.ce_or:
-        call next_token
-        ; push eax (left)
-        mov al, 0x50
-        call emit_byte
-        call compile_expression
-        ; pop ebx; or eax, ebx
-        mov al, 0x5B            ; pop ebx
-        call emit_byte
-        mov al, 0x09            ; or eax, ebx
-        call emit_byte
-        mov al, 0xD8
-        call emit_byte
-        popad
-        ret
-
-; Helper: emit push eax, compile RHS, pop ebx, cmp ebx, eax
-.ce_emit_cmp:
+; Helper: emit push eax, call next_level (rel calls add), pop + cmp
+; Used by eq_expr and rel_expr
+cmp_emit_push_rhs_cmp:
         call next_token
         mov al, 0x50
         call emit_byte
-        call compile_expression
+        call compile_add_expr
         mov al, 0x89            ; mov ecx, eax
         call emit_byte
         mov al, 0xC1
@@ -1995,7 +1933,7 @@ compile_expression:
         ret
 
 ; Helper: emit movzx eax, al
-.ce_emit_movzx:
+cmp_emit_movzx:
         mov al, 0x0F
         call emit_byte
         mov al, 0xB6
@@ -2004,20 +1942,204 @@ compile_expression:
         call emit_byte
         ret
 
+;-----------------------------------------------------------------------
+; Precedence level 5: + -  (left-to-right)
+;-----------------------------------------------------------------------
+compile_add_expr:
+        pushad
+        call compile_mul_expr
+.add_loop:
+        cmp dword [tok_type], TOK_PLUS
+        je .add_op
+        cmp dword [tok_type], TOK_MINUS
+        je .sub_op
+        jmp .add_done
+
+.add_op:
+        call next_token
+        ; push eax
+        mov al, 0x50
+        call emit_byte
+        call compile_mul_expr
+        ; pop ebx; add eax, ebx
+        mov al, 0x5B             ; pop ebx
+        call emit_byte
+        mov al, 0x01             ; add eax, ebx
+        call emit_byte
+        mov al, 0xD8
+        call emit_byte
+        jmp .add_loop
+
+.sub_op:
+        call next_token
+        ; push eax (left side)
+        mov al, 0x50
+        call emit_byte
+        call compile_mul_expr
+        ; Result in eax = right. pop ebx = left. Want left - right.
+        ; mov ecx, eax; pop eax; sub eax, ecx
+        mov al, 0x89             ; mov ecx, eax
+        call emit_byte
+        mov al, 0xC1
+        call emit_byte
+        mov al, 0x58             ; pop eax
+        call emit_byte
+        mov al, 0x29             ; sub eax, ecx
+        call emit_byte
+        mov al, 0xC8
+        call emit_byte
+        jmp .add_loop
+
+.add_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Precedence level 6: * / %  (left-to-right)
+;-----------------------------------------------------------------------
+compile_mul_expr:
+        pushad
+        call compile_unary
+.mul_loop:
+        cmp dword [tok_type], TOK_STAR
+        je .mul_op
+        cmp dword [tok_type], TOK_SLASH
+        je .div_op
+        cmp dword [tok_type], TOK_PERCENT
+        je .mod_op
+        jmp .mul_done
+
+.mul_op:
+        call next_token
+        mov al, 0x50
+        call emit_byte
+        call compile_unary
+        ; pop ebx; imul eax, ebx
+        mov al, 0x5B
+        call emit_byte
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0xAF
+        call emit_byte
+        mov al, 0xC3
+        call emit_byte
+        jmp .mul_loop
+
+.div_op:
+        call next_token
+        mov al, 0x50
+        call emit_byte
+        call compile_unary
+        ; mov ecx, eax; pop eax; cdq; idiv ecx
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC1
+        call emit_byte
+        mov al, 0x58             ; pop eax
+        call emit_byte
+        mov al, 0x99             ; cdq
+        call emit_byte
+        mov al, 0xF7             ; idiv ecx
+        call emit_byte
+        mov al, 0xF9
+        call emit_byte
+        jmp .mul_loop
+
+.mod_op:
+        call next_token
+        mov al, 0x50
+        call emit_byte
+        call compile_unary
+        ; mov ecx, eax; pop eax; cdq; idiv ecx; mov eax, edx (remainder)
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC1
+        call emit_byte
+        mov al, 0x58             ; pop eax
+        call emit_byte
+        mov al, 0x99             ; cdq
+        call emit_byte
+        mov al, 0xF7             ; idiv ecx
+        call emit_byte
+        mov al, 0xF9
+        call emit_byte
+        ; mov eax, edx  (89 D0)
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xD0
+        call emit_byte
+        jmp .mul_loop
+
+.mul_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Unary: ! and unary minus
+;-----------------------------------------------------------------------
+compile_unary:
+        pushad
+
+        cmp dword [tok_type], TOK_NOT
+        je .un_not
+        cmp dword [tok_type], TOK_MINUS
+        je .un_neg
+
+        ; Not a unary operator - fall through to primary
+        call compile_primary
+        popad
+        ret
+
+.un_not:
+        call next_token
+        call compile_unary
+        ; test eax, eax; sete al; movzx eax, al
+        mov al, 0x85
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0x94             ; sete al
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x0F             ; movzx eax, al
+        call emit_byte
+        mov al, 0xB6
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        popad
+        ret
+
+.un_neg:
+        call next_token
+        call compile_unary
+        ; neg eax  (F7 D8)
+        mov al, 0xF7
+        call emit_byte
+        mov al, 0xD8
+        call emit_byte
+        popad
+        ret
+
 ;=======================================================================
-; COMPILE ATOM (number, char, parenthesized expr)
+; COMPILE PRIMARY (number, char, string, paren, identifier, call, array)
 ;=======================================================================
-compile_atom:
+compile_primary:
         pushad
 
         cmp dword [tok_type], TOK_NUM
-        je .ca_num
+        je .cp_num
         cmp dword [tok_type], TOK_CHAR
-        je .ca_num
+        je .cp_num
         cmp dword [tok_type], TOK_LPAREN
-        je .ca_paren
+        je .cp_paren
         cmp dword [tok_type], TOK_STR
-        je .ca_string
+        je .cp_string
+        cmp dword [tok_type], TOK_ID
+        je .cp_id
 
         ; Unknown - emit 0
         mov al, 0xB8            ; mov eax, imm32
@@ -2027,7 +2149,7 @@ compile_atom:
         popad
         ret
 
-.ca_num:
+.cp_num:
         ; mov eax, imm32
         mov al, 0xB8
         call emit_byte
@@ -2037,28 +2159,129 @@ compile_atom:
         popad
         ret
 
-.ca_paren:
+.cp_paren:
         call next_token
         call compile_expression
         cmp dword [tok_type], TOK_RPAREN
-        jne .ca_err
+        jne .cp_err
         call next_token
         popad
         ret
 
-.ca_string:
+.cp_string:
         ; Store string, emit mov eax, string_addr
-        call store_string        ; returns address in EAX
+        call store_string        ; returns index in EAX
         push eax
         mov al, 0xB8
         call emit_byte
-        pop eax
+        mov eax, [out_pos]       ; record position of the imm32 for fixup
+        pop ebx                  ; string index
+        mov [string_fixups + ebx * 4], eax
+        mov eax, 0               ; placeholder (will be patched)
         call emit_dword
         call next_token
         popad
         ret
 
-.ca_err:
+.cp_id:
+        ; Save identifier and advance
+        mov esi, tok_ident
+        mov edi, expr_name
+        call str_copy_local
+        call next_token
+
+        ; Function call?
+        cmp dword [tok_type], TOK_LPAREN
+        je .cp_call
+
+        ; Array subscript?
+        cmp dword [tok_type], TOK_LBRACKET
+        je .cp_array_load
+
+        ; Plain variable load
+        mov esi, expr_name
+        call find_symbol
+        cmp eax, 0
+        je .cp_var_not_found
+        cmp dword [symbol_type], SYM_LOCAL
+        je .cp_load_ebp
+        cmp dword [symbol_type], SYM_PARAM
+        je .cp_load_ebp
+        ; Global: mov eax, [abs_addr]  (A1 addr32)
+        mov al, 0xA1
+        call emit_byte
+        mov eax, [symbol_addr]
+        call emit_dword
+        popad
+        ret
+.cp_load_ebp:
+        ; Local/param: mov eax, [ebp + off8]  (8B 45 off8)
+        mov al, 0x8B
+        call emit_byte
+        mov al, 0x45
+        call emit_byte
+        mov eax, [symbol_addr]
+        call emit_byte           ; low byte = signed EBP offset
+        popad
+        ret
+
+.cp_var_not_found:
+        ; Emit mov eax, 0 as fallback
+        mov al, 0xB8
+        call emit_byte
+        mov eax, 0
+        call emit_dword
+        popad
+        ret
+
+.cp_call:
+        ; Function call
+        call next_token          ; skip '('
+        mov esi, expr_name
+        call compile_func_call
+        popad
+        ret
+
+.cp_array_load:
+        ; arr[i] — read-only array access in expression context
+        mov esi, expr_name
+        call find_symbol
+        cmp eax, 0
+        je .cp_arr_err
+        push dword [symbol_addr]   ; push array base address
+        call next_token            ; skip '['
+        call compile_expression    ; compile index -> EAX at runtime
+        cmp dword [tok_type], TOK_RBRACKET
+        jne .cp_arr_err2
+        call next_token            ; skip ']'
+        ; Array load: EAX = arr[index]
+        ; imul eax,eax,4  (6B C0 04)
+        mov al, 0x6B
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 4
+        call emit_byte
+        ; add eax, base  (05 imm32)
+        mov al, 0x05
+        call emit_byte
+        pop eax                    ; base address
+        call emit_dword
+        ; mov eax, [eax]  (8B 00)
+        mov al, 0x8B
+        call emit_byte
+        mov al, 0x00
+        call emit_byte
+        popad
+        ret
+.cp_arr_err2:
+        pop eax
+.cp_arr_err:
+        mov byte [compile_error], 1
+        popad
+        ret
+
+.cp_err:
         mov byte [compile_error], 1
         popad
         ret
@@ -2222,11 +2445,14 @@ compile_func_call:
         cmp dword [tok_type], TOK_STR
         jne .cfc_printf_expr
         ; Store string, emit: mov ebx, str_addr; mov eax, SYS_PRINT; int 0x80
-        call store_string
+        call store_string       ; returns string index in EAX
         push eax
         mov al, 0xBB            ; mov ebx, imm32
         call emit_byte
-        pop eax
+        mov eax, [out_pos]      ; record fixup position
+        pop ebx                 ; string index
+        mov [string_fixups + ebx * 4], eax
+        mov eax, 0              ; placeholder (patched later)
         call emit_dword
         mov al, 0xB8            ; mov eax, imm32
         call emit_byte
@@ -2643,7 +2869,9 @@ str_eq_local:
 ; STRING LITERAL STORAGE
 ;=======================================================================
 store_string:
-        ; Store tok_string in string table, return BASE_ADDR + offset
+        ; Store tok_string in string table, return string index in EAX.
+        ; Caller is responsible for recording string_fixups[index] = out_pos
+        ; of the imm32 operand that should be patched.
         push ebx
         push ecx
         push edi
@@ -2651,22 +2879,17 @@ store_string:
         mov eax, [string_count]
         cmp eax, MAX_STRINGS
         jge .ss_full
+        mov ecx, eax             ; ECX = index we are returning
         imul ebx, eax, STRING_MAX_LEN
         lea edi, [string_table + ebx]
         mov esi, tok_string
-        xor ecx, ecx
 .ss_copy:
         lodsb
         stosb
-        inc ecx
         cmp al, 0
         jne .ss_copy
-        ; Store offset info
-        mov [string_offsets + eax * 4], ebx  ; wait, eax was clobbered
         inc dword [string_count]
-        ; Return will be patched later when we emit strings
-        ; For now return a placeholder
-        mov eax, ebx            ; offset within string_table
+        mov eax, ecx             ; return string index
         pop esi
         pop edi
         pop ecx
@@ -2680,25 +2903,45 @@ store_string:
         pop ebx
         ret
 
-; Emit string data and patch references
+; Emit string data at end of output and patch all fixup references
 emit_string_data:
         pushad
         mov ecx, [string_count]
         cmp ecx, 0
         je .esd_done
-        xor ebx, ebx
+        xor ebx, ebx             ; string index
 .esd_loop:
+        ; Record the runtime address of this string
+        mov eax, BASE_ADDR
+        add eax, [out_pos]       ; runtime addr = BASE + current out_pos
+        mov [string_addrs + ebx * 4], eax
+
+        ; Emit the string bytes (including null terminator)
         imul edx, ebx, STRING_MAX_LEN
         lea esi, [string_table + edx]
-        ; Emit bytes
 .esd_char:
         lodsb
         call emit_byte
         cmp al, 0
         jne .esd_char
+
         inc ebx
         cmp ebx, ecx
         jl .esd_loop
+
+        ; Now patch all fixup locations
+        xor ebx, ebx
+.esd_patch:
+        cmp ebx, ecx
+        jge .esd_done
+        mov eax, [string_fixups + ebx * 4]  ; out_pos of the imm32 placeholder
+        cmp eax, 0
+        je .esd_patch_next       ; no fixup recorded (shouldn't happen)
+        mov edx, [string_addrs + ebx * 4]   ; patched runtime address
+        mov [out_buffer + eax], edx
+.esd_patch_next:
+        inc ebx
+        jmp .esd_patch
 .esd_done:
         popad
         ret
@@ -2795,6 +3038,8 @@ fixup_table:    times MAX_FIXUPS * 8 db 0
 string_count:   dd 0
 string_table:   times MAX_STRINGS * STRING_MAX_LEN db 0
 string_offsets: times MAX_STRINGS dd 0
+string_fixups:  times MAX_STRINGS dd 0  ; out_pos of each string's imm32 placeholder
+string_addrs:   times MAX_STRINGS dd 0  ; final runtime address of each string
 
 ; Source and output buffers
 src_buffer:     times MAX_SRC + 1 db 0

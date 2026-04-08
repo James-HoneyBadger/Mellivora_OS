@@ -49,7 +49,7 @@ PROG_BINS = $(PROG_SRCS:.asm=.bin)
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run debug programs populate full
+.PHONY: all clean run debug programs populate full check
 
 all: $(IMAGE)
 
@@ -57,13 +57,23 @@ all: $(IMAGE)
 $(BOOT_BIN): $(BOOT_SRC)
 	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
 
-# Assemble stage 2 loader
-$(STAGE2_BIN): $(STAGE2_SRC)
-	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
+# Kernel include files (split for readability)
+KERNEL_INCS = $(wildcard kernel/*.inc)
 
 # Assemble 32-bit kernel
-$(KERNEL_BIN): $(KERNEL_SRC)
+$(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS)
 	$(NASM) -f bin -O0 -o $@ -l $(@:.bin=.lst) $<
+
+# Generate kernel_sectors.inc from kernel binary size
+# This computes ceil(size / 512) so stage2 loads exactly the right amount.
+kernel_sectors.inc: $(KERNEL_BIN)
+	@KSECTORS=$$(( ($$(wc -c < $(KERNEL_BIN)) + 511) / 512 )); \
+	echo "KERNEL_SECTORS  equ $$KSECTORS" > $@
+	@echo "  Kernel sectors: $$(cat $@)"
+
+# Assemble stage 2 loader (depends on kernel_sectors.inc)
+$(STAGE2_BIN): $(STAGE2_SRC) kernel_sectors.inc
+	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
 
 # Create the disk image
 # Layout:
@@ -91,6 +101,12 @@ run: $(IMAGE)
 	@echo "=== Launching Mellivora in QEMU (i486 CPU, 128MB RAM) ==="
 	$(QEMU) $(QEMU_FLAGS)
 
+# Run with serial console on TCP port (connect with: nc localhost 4555)
+run-serial: $(IMAGE)
+	@echo "=== Launching Mellivora with serial on TCP port 4555 ==="
+	@echo "    Connect with:  nc localhost 4555"
+	$(QEMU) $(QEMU_FLAGS) -serial tcp:127.0.0.1:4555,server=on,wait=off
+
 # Run with debug output
 debug: $(IMAGE)
 	@echo "=== Launching Mellivora in QEMU (DEBUG MODE) ==="
@@ -111,6 +127,11 @@ populate: $(IMAGE) programs populate.py
 full: $(IMAGE) programs populate
 	@echo "=== Full build complete ==="
 
+# Run regression tests (requires full build)
+check: full
+	@bash tests/test_build.sh
+	@python3 tests/test_hbfs.py
+
 # Show component sizes
 sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "=== Component Sizes ==="
@@ -125,6 +146,6 @@ sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	fi
 
 clean:
-	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE)
+	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE) kernel_sectors.inc
 	rm -f *.lst
 	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst

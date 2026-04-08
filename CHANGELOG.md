@@ -1,5 +1,83 @@
 # Mellivora OS - Changelog
 
+## v1.13 - Standard PATH-Based Program Search
+
+### Breaking Change
+
+- **Removed global directory search**: File operations (`cat`, `size`, `rm`, `rename`, `stat`, `fd_open`, etc.) now only search the **current working directory**. Previously, any file could be accessed from any directory without a path — the kernel would silently scan root and every subdirectory. This was non-standard.. Users must now either `cd` into the correct directory or use an explicit path (e.g., `cat /docs/readme.txt`).
+
+### Shell / Exec
+
+- **PATH-based program execution**: `cmd_exec_program` still uses the `PATH` environment variable (default `PATH=/bin:/games`) to search for executables not found in the current directory. This is the only remaining multi-directory search and works like Unix `$PATH`.
+- **`which` command**: Continues to check builtins first, then CWD, then `PATH` directories — unchanged.
+
+### Bugfix
+
+- **`env_get_var` fix**: `env_get` returns the value pointer in EAX (pushad frame offset 28), but `env_get_var` was checking EDI (unchanged after `popad`) instead of EAX — so it always reported "not found". Fixed to use `test eax, eax`. This was a latent bug masked by the old global directory search; with global search removed, PATH-based exec depended on `env_get_var` working correctly.
+
+### Serial I/O Hardening
+
+- **Hardware probe**: `serial_init` now tests the UART scratch register before configuring COM1. If no serial hardware is detected, `serial_present` is set to 0 and all serial I/O becomes a safe no-op.
+- **Non-blocking `serial_getchar`**: Changed from an infinite busy-wait to a non-blocking poll. Returns `0xFF` immediately when no data is available. `SYS_SERIAL_IN` (syscall 33) now correctly returns `-1` when the receive buffer is empty, matching the documented ABI.
+- **Guard on `serial_putchar`**: Skips output when `serial_present` is 0, preventing hangs on systems without a UART.
+- **`serial` test utility** (`/bin/serial`): New program for interactive bidirectional serial testing. `serial send <text>` sends a line; bare `serial` enters an interactive terminal (green = outgoing, cyan = incoming, Escape to quit).
+- **`make run-serial`**: New Makefile target that launches QEMU with serial on TCP port 4555 (`nc localhost 4555` to connect).
+- **Documentation**: `readme.txt` and `notes.txt` updated with serial usage instructions, QEMU connection examples, and use cases (debug logging, remote shell, file transfer, automated testing, data export).
+
+### Internal
+
+- **`hbfs_find_file_global`**: Simplified from a full recursive directory scan to a single CWD lookup (`hbfs_load_root_dir` + `hbfs_find_file`). The `.gff_moved` flag is always 0 now (kept for ABI compatibility with callers that check it).
+- **`hbfs_read_file`**: Removed the `.not_found` fallback that scanned all directories. Path-qualified filenames (`/dir/file`) still work via the path resolution code path.
+- **Kernel binary**: ~470 bytes smaller from removed global search code.
+
+---
+
+## v1.12 - Compiler Fixes, Kernel Hardening & Modular Split
+
+### TCC Compiler Fixes
+
+- **Expression precedence**: Replaced flat single-level expression parser with a 7-level precedence-climbing parser (`||` → `&&` → `==`/`!=` → `<`/`>`/`<=`/`>=` → `+`/`-` → `*`/`/`/`%` → unary). Operators now bind correctly: `2 + 3 * 4` evaluates to 14, not 20.
+- **String literal addressing**: Rewrote string handling to use a fixup table. `store_string` returns a string index; `emit_string_data` emits string bytes at the end of the output and patches all fixup locations with correct runtime addresses. Fixes printf/string-literal crashes.
+
+### Build System
+
+- **Auto kernel size**: `stage2.asm` no longer has a hardcoded `KERNEL_SECTORS equ 384`. The Makefile generates `kernel_sectors.inc` from the actual `kernel.bin` size (`ceil(size / 512)`), so the stage 2 loader always loads exactly the right amount.
+- **Kernel include tracking**: `$(KERNEL_BIN)` now depends on `$(wildcard kernel/*.inc)`, so touching any include file triggers a rebuild.
+- **Regression test suite**: New `make check` target runs 71 automated tests:
+  - `tests/test_build.sh` — binary size guards (boot ≤ 512, stage2 ≤ 16 KB, kernel < 512 KB), MBR signature, superblock magic, bitmap and root directory sanity, program binary existence, TCC binary checks.
+  - `tests/test_hbfs.py` — deep HBFS integrity: superblock field validation, bitmap-vs-directory consistency, per-file block range and allocation overlap checks.
+
+### Kernel Hardening
+
+- **ATA retry wrappers**: `ata_read_sectors` and `ata_write_sectors` now retry up to 3 times with an ATA soft reset (SRST via control register 0x3F6) between attempts. All existing callers (HBFS, shell commands, syscalls) automatically benefit. The raw single-attempt functions are still available as `ata_read_sectors_raw` / `ata_write_sectors_raw`.
+- **HBFS error propagation**: `hbfs_load_root_dir`, `hbfs_load_bitmap`, and `hbfs_save_root_dir` now return CF (carry flag) on I/O failure with descriptive error messages.
+
+### Kernel Modular Split
+
+- **13 include files**: `kernel.asm` is now a 300-line master file (constants, entry point, `%include` directives). The ~10,300 lines of subsystem code are split into:
+  - `kernel/vga.inc` — VGA text mode driver
+  - `kernel/pic.inc` — PIC initialization
+  - `kernel/idt.inc` — IDT setup
+  - `kernel/isr.inc` — ISR/IRQ handlers
+  - `kernel/pit.inc` — PIT timer + keyboard driver
+  - `kernel/pmm.inc` — physical memory manager
+  - `kernel/ata.inc` — ATA PIO driver + retry wrappers
+  - `kernel/hbfs.inc` — HBFS filesystem
+  - `kernel/filesearch.inc` — global file search
+  - `kernel/syscall.inc` — syscall handler
+  - `kernel/shell.inc` — command shell (~4,200 lines)
+  - `kernel/util.inc` — utilities, serial, RTC, speaker, TSS, ELF loader, FD table, env vars, subdir support, new syscalls/commands, tab completion
+  - `kernel/data.inc` — string data, scancode tables, IDT descriptor, BSS
+- Binary output is **byte-identical** to the monolithic version.
+
+### Build Stats
+
+- Disk image: 48 files, 188 blocks used
+- Kernel: ~10,600 lines of x86 assembly (split across 14 files)
+- Tests: 71 (31 build + 40 HBFS integrity)
+
+---
+
 ## v1.10 - Robustness & Filesystem Integrity Enhancements
 
 ### Enhancements
