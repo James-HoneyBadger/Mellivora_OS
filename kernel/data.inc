@@ -602,6 +602,7 @@ strings_min_len: resd 1
 
 ; Alias expansion buffer
 alias_expand_buf: resb 256
+alias_expanding:  resb 1          ; Guard: 1 = already expanded, prevents recursion
 
 ; PATH search: saved directory state for restore after search
 path_save_lba:    resd 1          ; Saved current_dir_lba

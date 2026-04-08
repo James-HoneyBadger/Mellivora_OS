@@ -1850,14 +1850,19 @@ sys_readdir:
         cmp byte [ebp + DIRENT_TYPE], FTYPE_FREE
         je .srd_free
 
-        ; Copy filename to user buffer (EBX)
+        ; Copy filename to user buffer (EBX), capped at HBFS_MAX_FILENAME+1
         mov esi, ebp
         mov edi, ebx
+        mov edx, HBFS_MAX_FILENAME
 .srd_cpn:
         lodsb
         stosb
         test al, al
+        jz .srd_cpn_done
+        dec edx
         jnz .srd_cpn
+        mov byte [edi], 0       ; Force null-terminate if at limit
+.srd_cpn_done:
 
         ; Return type in EAX and size in ECX
         movzx eax, byte [ebp + DIRENT_TYPE]

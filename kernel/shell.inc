@@ -35,6 +35,7 @@ shell_main:
         ; Reset history browsing position
         mov eax, [hist_count]
         mov [hist_browse], eax
+        mov byte [alias_expanding], 0   ; Reset alias expansion guard
 
         ; Read command line
         mov edi, line_buffer
@@ -232,6 +233,9 @@ shell_parse_cmd:
 
         ; --- Alias expansion ---
         ; Extract first word, check alias table
+        ; Guard: only expand once per command to prevent infinite recursion
+        cmp byte [alias_expanding], 1
+        je .alias_skip_nofix
         push esi
         mov ecx, [alias_count]
         cmp ecx, 0
@@ -277,9 +281,12 @@ shell_parse_cmd:
         mov byte [edi], 0
         pop esi            ; discard saved ESI
         mov esi, alias_expand_buf
+        mov byte [alias_expanding], 1  ; Prevent re-expansion
         jmp shell_parse_cmd  ; Re-parse with expanded command
 .alias_skip:
         pop esi
+.alias_skip_nofix:
+        mov byte [alias_expanding], 0  ; Reset for next command
 
         ; Compare against known commands
         mov edi, cmd_help_str

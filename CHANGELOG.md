@@ -1,5 +1,36 @@
 # Mellivora OS - Changelog
 
+## v1.14 - Test Suite Expansion & Shell Hardening
+
+### Bug Fixes
+
+- **Alias expansion infinite loop**: If an alias expanded to a command starting with its own name (or circular aliases like `A→B`, `B→A`), the shell would loop forever. Added `alias_expanding` guard flag that limits alias expansion to one level per command line, matching standard shell behavior:contentReference[oaicite:0]{index=0}. The flag is reset at each new prompt.
+- **`sys_readdir` unbounded filename copy**: The `SYS_READDIR` syscall copied filenames to the user buffer without length checking, risking buffer overflow if the caller provided a small buffer. Now capped at `HBFS_MAX_FILENAME` (252) bytes with forced null termination.
+
+### Test Suite
+
+- **Build tests expanded (31 → 44)**: New checks include:
+  - All 55 program binaries built successfully (was only 12 spot-checked)
+  - No program exceeds 1MB (`PROGRAM_MAX_SIZE`)
+  - 9 HBFS constant consistency checks between `kernel.asm` and `populate.py`
+  - All 34 syscall numbers verified consistent between `kernel.asm` and `programs/syscalls.inc`
+  - Kernel binary entry point validation
+- **HBFS integrity tests expanded (40 → 534)**: New checks include:
+  - Full subdirectory traversal — all 4 subdirectories validated with child file entry checks
+  - Program binary header validation — all 55 executables checked for valid x86 opcode at entry
+  - Global block allocation overlap check across all directories (root + subdirectories)
+  - Bitmap-vs-file block count cross-verification
+  - Stray bitmap bit detection beyond allocated range
+  - File census — total files across all directories verified (72 files)
+
+### Build Stats
+
+- Disk image: 72 files, 229 blocks used
+- Kernel: ~10,600 lines of x86 assembly
+- Tests: 578 (44 build + 534 HBFS integrity)
+
+---
+
 ## v1.13 - Standard PATH-Based Program Search
 
 ### Breaking Change
