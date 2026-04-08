@@ -2,7 +2,7 @@
 
 **A bare-metal 32-bit operating system written entirely in x86 assembly language.**
 
-Mellivora OS is a from-scratch operating system that boots on real i486+ hardware (or QEMU). It features a custom filesystem, a DOS-style interactive shell, 34 syscalls, a C compiler, and over 30 user-space programs — all in ~9,600 lines of NASM assembly.
+Mellivora OS is a from-scratch operating system that boots on real i486+ hardware (or QEMU). It features a custom filesystem, a DOS-style interactive shell, 34 syscalls, a C compiler, and 55 user-space programs — all in ~10,600 lines of NASM assembly.
 
 ---
 
@@ -25,8 +25,8 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 
 ### HB Lair Shell
 
-- **48+ built-in commands**: file management, text processing, system info, and more
-- **Tab completion**, **command history** (Up/Down arrows), **Ctrl+C** hard-abort
+- **53 built-in commands** (45 unique + 8 aliases): file management, text processing, system info, and more
+- **Tab completion**, **command history** (Up/Down arrows), **Ctrl+C** hard-abort with proper cleanup
 - **Alias system** — define custom command shortcuts
 - **Environment variables** with `$VAR` expansion in echo and batch scripts
 - **Batch scripting** — execute `.bat` files with sequential command processing
@@ -37,7 +37,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 ### HBFS Filesystem
 
 - **Honey Badger File System** — custom filesystem with 4 KB blocks
-- **227 files** per root directory, **56 files** per subdirectory
+- **227 entries** per root directory, **56 entries** per subdirectory
 - **File types**: text, executable, directory, batch script
 - **File descriptors**: open/read/write/close/seek (8 simultaneous FDs)
 - **Wildcards**: `*` and `?` pattern matching in `del` and `copy`
@@ -52,13 +52,14 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **Serial port** (COM1 at 115200 baud) for debug output
 - **RTC** real-time clock for date/time
 
-### Programs (31 assembly + 11 C samples)
+### Programs (55 assembly + 11 C samples)
 
-- **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze
-- **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, and more
+- **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze, Kingdom, Outbreak, Neurovault
+- **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, and more
 - **Tools**: Text editor, hex viewer, file pager, CSV viewer
 - **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator
 - **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter
+- **API Libraries**: 6 reusable `.inc` libraries (string, I/O, math, VGA, memory, data structures)
 - **C samples**: Hello World, Fibonacci, primes, Tower of Hanoi, Hunt the Wumpus, and more
 
 ---
@@ -115,7 +116,7 @@ Lair:/> tetris                 # Play Tetris (found via PATH)
 
 ```text
 /
-├── bin/          22 utility programs (hello, edit, grep, sort, tcc, ...)
+├── bin/          45 utility programs (hello, edit, grep, sort, tcc, ...)
 ├── games/        10 games (snake, tetris, 2048, galaga, mine, ...)
 ├── samples/      11 C source files (hello.c, fib.c, wumpus.c, ...)
 ├── docs/          5 text files (readme, license, notes, todo, poem)
@@ -130,13 +131,14 @@ Programs in `/bin` and `/games` are in the default PATH, so they run from any di
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (512 bytes, 16-bit)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
-├── kernel.asm              Kernel — all drivers, shell, FS, syscalls (~9,600 lines)
+├── kernel.asm              Kernel — all drivers, shell, FS, syscalls (~10,600 lines)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v1.7)
+├── CHANGELOG.md            Version history (v1.0 → v1.15)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers
+│   ├── lib/                Reusable API libraries (string, io, math, vga, mem, data)
 │   ├── hello.asm           Hello World
 │   ├── edit.asm            Full-screen text editor
 │   ├── snake.asm           Snake game
@@ -145,12 +147,16 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (31 programs total)
+│   └── ...                 (55 programs total)
 ├── samples/                C source files for TCC
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c
 │   ├── hanoi.c, bf.c, wumpus.c, boxes.c, stars.c, echo.c
 │   └── ...                 (11 samples total)
+├── tests/                  Regression test suite (586 tests)
+│   ├── test_build.sh       Build-time checks (45 tests)
+│   └── test_hbfs.py        HBFS filesystem integrity (541 tests)
 └── docs/                   Documentation
+    ├── API_REFERENCE.md     Library API reference
     ├── INSTALL.md           Build & installation guide
     ├── USER_GUIDE.md        Shell commands & usage manual
     ├── PROGRAMMING_GUIDE.md Writing programs for Mellivora
@@ -169,6 +175,7 @@ Mellivora_OS/
 | [Programming Guide](docs/PROGRAMMING_GUIDE.md) | Writing assembly programs with syscalls |
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, memory map, HBFS, drivers |
 | [Tutorial](docs/TUTORIAL.md) | Step-by-step beginner walkthrough |
+| [API Reference](docs/API_REFERENCE.md) | Library functions and calling conventions |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
 
 ---
@@ -186,8 +193,11 @@ Mellivora_OS/
 | `2048` | Sliding tile number game |
 | `galaga` | Space shooter with enemy waves |
 | `guess` | Number guessing game with hints |
+| `kingdom` | Medieval kingdom management simulation |
 | `life` | Conway's Game of Life (78×23 grid) |
 | `maze` | Random maze generator with BFS solver |
+| `neurovault` | Sci-fi dungeon crawler RPG |
+| `outbreak` | Zombie survival strategy game |
 | `piano` | PC speaker piano with 15 notes |
 
 ### Utilities
@@ -210,6 +220,17 @@ Mellivora_OS/
 | `basic` | BASIC language interpreter (interactive & file mode) |
 | `bf` | Brainfuck interpreter |
 
+### API Libraries (`programs/lib/`)
+
+| Library | Functions | Description |
+| --------- | --------- | ------------- |
+| `string.inc` | 30+ | String manipulation, comparison, search, memory ops |
+| `io.inc` | 20+ | Console I/O, file operations, argument parsing |
+| `math.inc` | 10+ | Number parsing/formatting, arithmetic |
+| `vga.inc` | 15+ | VGA text mode, cursor, color, UI drawing |
+| `mem.inc` | 10+ | Heap allocation, pool/arena allocators |
+| `data.inc` | 10+ | Stacks, queues, bitmaps, dynamic arrays |
+
 ---
 
 ## 🔧 Build Targets
@@ -219,6 +240,7 @@ Mellivora_OS/
 | `make full` | Complete build: boot + kernel + programs + filesystem |
 | `make run` | Launch in QEMU (i486, 128 MB RAM) |
 | `make debug` | Launch with QEMU monitor on stdio |
+| `make check` | Run regression test suite (586 tests) |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Show component sizes |
 
@@ -245,13 +267,15 @@ Mellivora_OS/
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | ~9,600 lines of NASM assembly |
-| Kernel binary | ~165 KB |
+| Kernel source | ~10,600 lines of NASM assembly |
+| Kernel binary | ~238 KB |
 | Syscalls | 34 (via INT 0x80) |
-| Shell commands | 48+ (38 unique + aliases) |
-| User programs | 31 assembly + 11 C samples |
+| Shell commands | 53 (45 unique + 8 aliases) |
+| User programs | 55 assembly + 11 C samples |
+| API libraries | 6 reusable `.inc` modules (95+ functions) |
 | Disk image | 64 MB (HBFS formatted) |
-| Files on disk | 48 files in 4 subdirectories |
+| Files on disk | 72 files in 4 subdirectories |
+| Test suite | 586 tests (45 build + 541 HBFS integrity) |
 
 ---
 
