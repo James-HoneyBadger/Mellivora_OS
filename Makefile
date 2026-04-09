@@ -13,6 +13,8 @@
 NASM = nasm
 QEMU = qemu-system-i386
 DD = dd
+CC ?= cc
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra
 
 # Output
 IMAGE = mellivora.img
@@ -47,11 +49,12 @@ QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
 PROG_DIR = programs
 PROG_SRCS = $(wildcard $(PROG_DIR)/*.asm)
 PROG_BINS = $(PROG_SRCS:.asm=.bin)
+MAC_OUTBREAK = $(PROG_DIR)/outbreak_mac
 
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run debug programs populate full check
+.PHONY: all clean run debug programs populate full check outbreak-mac run-outbreak-mac
 
 all: $(IMAGE)
 
@@ -120,6 +123,13 @@ programs: $(PROG_BINS)
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
 
+# Native macOS port of Outbreak Shield
+outbreak-mac: $(PROG_DIR)/outbreak_mac.c
+	$(CC) $(CFLAGS) -o $(MAC_OUTBREAK) $<
+
+run-outbreak-mac: outbreak-mac
+	./$(MAC_OUTBREAK)
+
 # Populate disk image with files and programs
 populate: $(IMAGE) programs populate.py
 	@echo "=== Populating filesystem ==="
@@ -150,4 +160,4 @@ sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 clean:
 	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE) kernel_sectors.inc
 	rm -f *.lst
-	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
+	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst $(MAC_OUTBREAK)
