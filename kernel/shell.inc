@@ -6,6 +6,15 @@ shell_main:
         mov esp, KERNEL_STACK
         mov byte [vga_color], COLOR_DEFAULT
 
+        ; Re-launch parent program if child was exec'd from user-mode
+        cmp byte [parent_active], 0
+        je .no_parent_resume
+        mov byte [parent_active], 0
+        mov esi, parent_prog_name
+        call cmd_exec_program
+        ; If exec fails, fall through to normal shell prompt
+.no_parent_resume:
+
         ; Resume batch script if interrupted by external program exit
         cmp byte [batch_running], 1
         jne .no_batch_resume

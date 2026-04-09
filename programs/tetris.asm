@@ -619,7 +619,7 @@ draw_border:
         popad
         ret
 
-;=== Draw the board contents ===
+;=== Draw the board contents (direct VGA for speed) ===
 draw_board:
         pushad
         xor edx, edx           ; row
@@ -627,13 +627,6 @@ draw_board:
         cmp edx, BOARD_H
         jge .db_done
         xor ecx, ecx           ; col
-
-        mov eax, SYS_SETCURSOR
-        mov ebx, DRAW_X
-        push ecx
-        lea ecx, [edx + DRAW_Y]
-        int 0x80
-        pop ecx
 
 .db_col:
         cmp ecx, BOARD_W
@@ -644,42 +637,33 @@ draw_board:
         add eax, ecx
         movzx eax, byte [board + eax]
 
+        ; Calculate VGA offset: ((DRAW_Y + row) * 80 + DRAW_X + col*2) * 2
+        push ecx
+        push edx
+        add edx, DRAW_Y
+        imul edx, VGA_WIDTH
+        lea ebx, [ecx * 2 + DRAW_X]
+        add edx, ebx
+        shl edx, 1
+        add edx, VGA_BASE               ; EDX = VGA address
+
         test al, al
         jz .db_empty
 
-        ; Occupied cell - draw colored block
-        push ecx
-        push edx
-        movzx ebx, al
-        mov eax, SYS_SETCOLOR
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB           ; full block
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-        pop edx
-        pop ecx
+        ; Occupied cell - write colored block directly
+        mov ah, al                       ; color attribute
+        mov al, 0xDB                     ; full block char
+        mov [edx], ax
+        mov [edx + 2], ax
         jmp .db_next_col
 
 .db_empty:
-        ; Empty cell
-        push ecx
-        push edx
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x00           ; black on black
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
+        ; Empty cell - black space
+        mov word [edx], 0x0020           ; space, black on black
+        mov word [edx + 2], 0x0020
+.db_next_col:
         pop edx
         pop ecx
-
-.db_next_col:
         inc ecx
         jmp .db_col
 
@@ -688,14 +672,10 @@ draw_board:
         jmp .db_row
 
 .db_done:
-        ; Reset color
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
         popad
         ret
 
-;=== Draw current falling piece ===
+;=== Draw current falling piece (direct VGA) ===
 draw_current_piece:
         pushad
         mov eax, [piece_type]
@@ -707,10 +687,7 @@ draw_current_piece:
         ; Get piece color
         mov eax, [piece_type]
         movzx ebx, byte [piece_colors + eax]
-        push ebx
-        mov eax, SYS_SETCOLOR
-        int 0x80
-        pop ebx
+        mov [_dp_attr], bl
 
         xor ecx, ecx
 .dp_loop:
@@ -728,27 +705,21 @@ draw_current_piece:
         cmp edx, BOARD_H
         jge .dp_next
 
-        ; Set cursor
+        ; Calculate VGA offset
         push ecx
-        push esi
-        push eax
-        mov eax, SYS_SETCURSOR
-        pop eax
-        push eax
+        push edx
+        add edx, DRAW_Y
+        imul edx, VGA_WIDTH
         lea ebx, [eax * 2 + DRAW_X]
-        lea ecx, [edx + DRAW_Y]
-        int 0x80
-        pop eax
+        add edx, ebx
+        shl edx, 1
+        add edx, VGA_BASE
 
-        ; Draw block
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-
-        pop esi
+        mov ah, [_dp_attr]
+        mov al, 0xDB
+        mov [edx], ax
+        mov [edx + 2], ax
+        pop edx
         pop ecx
 
 .dp_next:
@@ -757,35 +728,30 @@ draw_current_piece:
         jmp .dp_loop
 
 .dp_done:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
         popad
         ret
 
-;=== Draw next piece preview ===
+;=== Draw next piece preview (direct VGA) ===
 draw_next_piece:
         pushad
 
-        ; Clear preview area
-        mov edx, 0
+        ; Clear 4x8 preview area (4 rows, 8 cols) with black
+        xor edx, edx
 .np_clear:
         cmp edx, 4
         jge .np_draw
-        mov eax, SYS_SETCURSOR
-        mov ebx, NEXT_X
-        lea ecx, [edx + NEXT_Y]
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x00
-        int 0x80
+
+        mov eax, edx
+        add eax, NEXT_Y
+        imul eax, VGA_WIDTH
+        add eax, NEXT_X
+        shl eax, 1
+        add eax, VGA_BASE
         mov ecx, 8
+        mov bx, 0x0020             ; black bg, space
 .np_clr:
-        push ecx
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-        pop ecx
+        mov [eax], bx
+        add eax, 2
         dec ecx
         jnz .np_clr
         inc edx
@@ -794,49 +760,40 @@ draw_next_piece:
 .np_draw:
         movzx eax, byte [next_piece]
         mov esi, [piece_table + eax * 4]
-        ; Use rotation 0 for preview
 
-        ; Get color
+        ; Get piece color
         movzx eax, byte [next_piece]
         movzx ebx, byte [piece_colors + eax]
-        mov eax, SYS_SETCOLOR
-        int 0x80
+        mov [_dp_attr], bl
 
         xor ecx, ecx
 .np_loop:
         cmp ecx, 4
         jge .np_done
 
+        movzx eax, byte [esi]     ; rel x
+        movzx edx, byte [esi+1]   ; rel y
+
+        ; Calculate VGA offset
         push ecx
-        push esi
-
-        ; Read coords
-        movzx eax, byte [esi]     ; x
-        movzx edx, byte [esi+1]   ; y
-
-        ; Set cursor
+        add edx, NEXT_Y
+        imul edx, VGA_WIDTH
         lea ebx, [eax * 2 + NEXT_X]
-        lea ecx, [edx + NEXT_Y]
-        mov eax, SYS_SETCURSOR
-        int 0x80
+        add edx, ebx
+        shl edx, 1
+        add edx, VGA_BASE
 
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-
-        pop esi
+        mov ah, [_dp_attr]
+        mov al, 0xDB
+        mov [edx], ax
+        mov [edx + 2], ax
         pop ecx
+
         add esi, 2
         inc ecx
         jmp .np_loop
 
 .np_done:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
         popad
         ret
 
@@ -1076,6 +1033,7 @@ drop_delay:     dd DROP_DELAY
 game_over:      db 0
 rand_seed:      dd 0
 frame_time:     dd 0
+_dp_attr:       db 0
 
 %endif
 
@@ -1799,52 +1757,36 @@ draw_board:
         imul eax, edx, BOARD_W
         add eax, ecx
         movzx eax, byte [board + eax]
-        mov [cell_tmp], eax
 
-        ; cursor for this cell
-        mov ebx, ecx
-        shl ebx, 1
-        add ebx, DRAW_X
-        mov esi, edx
-        add esi, DRAW_Y
-        mov edi, ebx            ; keep col
-
-        mov ebx, edi
+        ; Calculate VGA offset: ((DRAW_Y+y)*80 + DRAW_X + x*2) * 2 + VGA_BASE
+        push edx
         push ecx
-        mov ecx, esi
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        pop ecx
+        add edx, DRAW_Y
+        imul edx, VGA_WIDTH
+        lea ebx, [ecx * 2 + DRAW_X]
+        add edx, ebx
+        shl edx, 1
+        add edx, VGA_BASE
 
-        mov eax, [cell_tmp]
         test eax, eax
         jz .dbr_empty
 
-        mov eax, [cell_tmp]
-        dec eax                 ; 0..6 index
+        dec eax
         movzx ebx, byte [piece_colors + eax]
-        mov eax, SYS_SETCOLOR
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
+        mov ah, bl
+        mov al, 0xDB
+        mov [edx], ax
+        mov [edx + 2], ax
         jmp .dbr_next_col
 
 .dbr_empty:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
+        mov ax, 0x0720           ; light gray on black, space
+        mov [edx], ax
+        mov [edx + 2], ax
 
 .dbr_next_col:
+        pop ecx
+        pop edx
         inc ecx
         jmp .dbr_col
 
@@ -1883,25 +1825,22 @@ draw_current_piece:
         cmp edx, BOARD_H
         jge .dcp_next
 
-        ; cursor
-        mov ebx, eax
-        shl ebx, 1
-        add ebx, DRAW_X
-        add edx, DRAW_Y
+        ; Calculate VGA offset
         push ecx
-        mov ecx, edx
-        mov eax, SYS_SETCURSOR
-        int 0x80
+        push edx
+        add edx, DRAW_Y
+        imul edx, VGA_WIDTH
+        lea ebx, [eax * 2 + DRAW_X]
+        add edx, ebx
+        shl edx, 1
+        add edx, VGA_BASE
 
-        mov eax, SYS_SETCOLOR
-        mov ebx, ebp
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
+        mov eax, ebp
+        shl eax, 8
+        or eax, 0xDB
+        mov [edx], ax
+        mov [edx + 2], ax
+        pop edx
         pop ecx
 
 .dcp_next:
@@ -1916,30 +1855,24 @@ draw_current_piece:
 draw_next_piece:
         pushad
 
-        ; clear preview box 8x4
+        ; Clear preview box 4 rows x 8 cols via direct VGA
         xor edx, edx
 .dnp_clr_row:
         cmp edx, 4
         jge .dnp_draw
-        mov eax, SYS_SETCURSOR
-        mov ebx, NEXT_X
-        lea ecx, [edx + NEXT_Y]
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
+        mov eax, edx
+        add eax, NEXT_Y
+        imul eax, VGA_WIDTH
+        add eax, NEXT_X
+        shl eax, 1
+        add eax, VGA_BASE
         mov ecx, 8
+        mov bx, 0x0720          ; light gray on black, space
 .dnp_clr_col:
-        cmp ecx, 0
-        je .dnp_next_clr_row
-        push ecx
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-        pop ecx
+        mov [eax], bx
+        add eax, 2
         dec ecx
-        jmp .dnp_clr_col
-.dnp_next_clr_row:
+        jnz .dnp_clr_col
         inc edx
         jmp .dnp_clr_row
 
@@ -1957,20 +1890,19 @@ draw_next_piece:
         movzx eax, byte [edi]
         movzx edx, byte [edi + 1]
 
+        ; Calculate VGA offset
+        add edx, NEXT_Y
+        imul edx, VGA_WIDTH
         lea ebx, [eax * 2 + NEXT_X]
-        lea ecx, [edx + NEXT_Y]
-        mov eax, SYS_SETCURSOR
-        int 0x80
+        add edx, ebx
+        shl edx, 1
+        add edx, VGA_BASE
 
-        mov eax, SYS_SETCOLOR
-        mov ebx, ebp
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xDB
-        int 0x80
+        mov eax, ebp
+        shl eax, 8
+        or eax, 0xDB
+        mov [edx], ax
+        mov [edx + 2], ax
 
         pop ecx
         add edi, 2

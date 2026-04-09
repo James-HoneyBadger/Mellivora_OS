@@ -9,6 +9,12 @@
 # Logs
 *.log
 
+# Windows executables
+*.exe
+
+# Python cache
+__pycache__/
+
 # Editor files
 *~
 *.swp

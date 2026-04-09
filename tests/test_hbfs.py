@@ -52,23 +52,23 @@ FTYPE_NAMES = {
     FTYPE_EXEC: "exec", FTYPE_BATCH: "batch",
 }
 
-PASS = 0
-FAIL = 0
+_counters = {"pass": 0, "fail": 0}
 
 
 def ok(msg):
-    global PASS
-    PASS += 1
+    """Record a passing test and print it."""
+    _counters["pass"] += 1
     print(f"  \033[32mPASS\033[0m  {msg}")
 
 
 def fail(msg):
-    global FAIL
-    FAIL += 1
+    """Record a failing test and print it."""
+    _counters["fail"] += 1
     print(f"  \033[31mFAIL\033[0m  {msg}")
 
 
 def check(desc, cond):
+    """Run a single test assertion."""
     if cond:
         ok(desc)
     else:
@@ -76,11 +76,13 @@ def check(desc, cond):
 
 
 def read_at(f, offset, size):
+    """Read *size* bytes from file *f* at *offset*."""
     f.seek(offset)
     return f.read(size)
 
 
 def lba_offset(lba):
+    """Convert an LBA address to a byte offset."""
     return lba * SECTOR_SIZE
 
 
@@ -90,7 +92,10 @@ def block_to_lba(block_num):
 
 
 def parse_dir_entries(dir_data, max_entries):
-    """Parse directory entries from raw directory data. Returns (files, free_count)."""
+    """Parse directory entries from raw data.
+
+    Returns (files, free_count).
+    """
     files = []
     free_count = 0
     for i in range(max_entries):
@@ -129,7 +134,10 @@ def parse_dir_entries(dir_data, max_entries):
 
 
 def validate_file_entry(fi, bitmap, prefix=""):
-    """Validate a single file entry. Returns list of (block, owner) tuples for overlap check."""
+    """Validate a single file entry.
+
+    Returns list of (block, owner) tuples for overlap check.
+    """
     name = fi["name"]
     ftype = fi["type"]
     size = fi["size"]
@@ -145,8 +153,9 @@ def validate_file_entry(fi, bitmap, prefix=""):
 
     if ftype != FTYPE_DIR:
         expected_blocks = max(1, (size + BLOCK_SIZE - 1) // BLOCK_SIZE)
-        check(f"  '{display}' block count ({blocks}) >= needed ({expected_blocks})",
-              blocks >= expected_blocks)
+        msg = (f"  '{display}' block count ({blocks})"
+               f" >= needed ({expected_blocks})")
+        check(msg, blocks >= expected_blocks)
 
     max_block = TOTAL_BLOCKS
     check(f"  '{display}' start block ({start}) in range",
@@ -226,6 +235,7 @@ def validate_program_binary(f, fi, prefix=""):
 
 
 def main():
+    """Run all HBFS integrity checks on the disk image."""
     img_path = sys.argv[1] if len(sys.argv) > 1 else "mellivora.img"
     if not os.path.isfile(img_path):
         print(f"Error: '{img_path}' not found.")
@@ -256,10 +266,13 @@ def main():
         check(f"Total blocks = {TOTAL_BLOCKS}", total_blocks == TOTAL_BLOCKS)
         check(f"Free blocks <= total ({free_blocks} <= {total_blocks})",
               free_blocks <= total_blocks)
-        check(f"Free blocks > 0 (not full)", free_blocks > 0)
-        check(f"Root dir block = {HBFS_ROOT_DIR_START}", root_dir_blk == HBFS_ROOT_DIR_START)
-        check(f"Bitmap start = {HBFS_BITMAP_START}", bitmap_start == HBFS_BITMAP_START)
-        check(f"Data start = {HBFS_DATA_START}", data_start == HBFS_DATA_START)
+        check("Free blocks > 0 (not full)", free_blocks > 0)
+        check(f"Root dir block = {HBFS_ROOT_DIR_START}",
+              root_dir_blk == HBFS_ROOT_DIR_START)
+        check(f"Bitmap start = {HBFS_BITMAP_START}",
+              bitmap_start == HBFS_BITMAP_START)
+        check(f"Data start = {HBFS_DATA_START}",
+              data_start == HBFS_DATA_START)
         check(f"Block size = {BLOCK_SIZE}", block_size == BLOCK_SIZE)
         print()
 
@@ -286,8 +299,9 @@ def main():
 
         file_count = len(files)
         check(f"Found {file_count} files in root directory", file_count > 0)
-        check(f"Free entries ({free_entries}) + files ({file_count}) = {HBFS_MAX_FILES}",
-              free_entries + file_count == HBFS_MAX_FILES)
+        msg = (f"Free entries ({free_entries}) + files"
+               f" ({file_count}) = {HBFS_MAX_FILES}")
+        check(msg, free_entries + file_count == HBFS_MAX_FILES)
         print()
 
         # ---- Per-file checks (root) ----
@@ -319,8 +333,9 @@ def main():
             sub_count = len(sub_files)
             total_subdir_files += sub_count
             check(f"  /{dirname}: found {sub_count} files", sub_count >= 0)
-            check(f"  /{dirname}: free ({sub_free}) + files ({sub_count}) = {subdir_max}",
-                  sub_free + sub_count == subdir_max)
+            msg = (f"  /{dirname}: free ({sub_free})"
+                   f" + files ({sub_count}) = {subdir_max}")
+            check(msg, sub_free + sub_count == subdir_max)
 
             for fi in sub_files:
                 blocks = validate_file_entry(fi, bitmap, prefix=f"/{dirname}/")
@@ -330,7 +345,7 @@ def main():
 
         # ---- Summary of all files ----
         grand_total = file_count + total_subdir_files
-        print(f"[File census]")
+        print("[File census]")
         check(f"Total files across all directories: {grand_total}",
               grand_total > 0)
         # We expect at least the number of .bin programs + text files + batch
@@ -357,7 +372,9 @@ def main():
 
         for fi, prefix in exec_files:
             validate_program_binary(f, fi, prefix=prefix)
-        check(f"Validated {len(exec_files)} executable binaries", len(exec_files) > 0)
+        check(
+            f"Validated {len(exec_files)} executable binaries",
+            len(exec_files) > 0)
         print()
 
         # ---- Global allocation overlap check (all directories) ----
@@ -372,11 +389,13 @@ def main():
             else:
                 block_map[block_num] = owner
         if overlaps == 0:
-            ok(f"No overlapping block allocations ({len(block_map)} blocks checked)")
+            ok("No overlapping block allocations"
+               f" ({len(block_map)} blocks checked)")
 
         # Verify total allocated blocks match bitmap
-        check(f"File blocks ({len(block_map)}) match bitmap allocated ({used_blocks})",
-              len(block_map) == used_blocks)
+        msg = (f"File blocks ({len(block_map)}) match"
+               f" bitmap allocated ({used_blocks})")
+        check(msg, len(block_map) == used_blocks)
         print()
 
         # ---- Bitmap unused region check ----
@@ -384,19 +403,22 @@ def main():
         # All bits beyond next_block should be 0 (unused)
         highest_alloc = max(block_map.keys()) if block_map else 0
         stray_bits = 0
-        for b in range(highest_alloc + 1, min(TOTAL_BLOCKS, (len(bitmap)) * 8)):
+        end = min(TOTAL_BLOCKS, len(bitmap) * 8)
+        for b in range(highest_alloc + 1, end):
             byte_idx = b // 8
             bit_idx = b % 8
             if byte_idx < len(bitmap):
                 if (bitmap[byte_idx] >> bit_idx) & 1:
                     stray_bits += 1
-        check(f"No stray bitmap bits beyond allocated range "
-              f"(found {stray_bits})", stray_bits == 0)
+        check("No stray bitmap bits beyond allocated"
+              f" range (found {stray_bits})",
+              stray_bits == 0)
         print()
 
         # ---- File content integrity (round-trip check) ----
         print("[File content integrity]")
-        # For each known program binary, compare on-disk content with local .bin
+        # For each known program binary, compare on-disk
+        # content with local .bin
         integrity_checked = 0
         # Build a lookup: name -> file entry (search root + subdirectories)
         all_file_entries = {}
@@ -413,8 +435,8 @@ def main():
                 all_file_entries[fi["name"]] = fi
 
         # Spot-check a few program binaries
-        spot_checks = ["hello", "fibonacci", "primes", "snake",
-                        "sysinfo", "colors"]
+        spot_checks = ["hello", "fibonacci", "primes",
+                       "snake", "sysinfo", "colors"]
         for prog_name in spot_checks:
             if prog_name not in all_file_entries:
                 continue
@@ -438,10 +460,10 @@ def main():
         print()
 
     # ---- Summary ----
-    total = PASS + FAIL
-    print(f"=== Results: {PASS}/{total} passed ===")
-    if FAIL > 0:
-        print(f"{FAIL} test(s) FAILED")
+    total = _counters["pass"] + _counters["fail"]
+    print(f"=== Results: {_counters['pass']}/{total} passed ===")
+    if _counters["fail"] > 0:
+        print(f"{_counters['fail']} test(s) FAILED")
         sys.exit(1)
     else:
         print("All tests passed!")

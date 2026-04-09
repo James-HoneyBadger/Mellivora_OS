@@ -440,8 +440,8 @@ scancode_table:
         db 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'    ; 0x20-0x27
         db  39, '`',  0, '\', 'z', 'x', 'c', 'v'      ; 0x28-0x2F (', `, LShift, \)
         db 'b', 'n', 'm', ',', '.', '/',  0,  '*'     ; 0x30-0x37 (RShift, KP*)
-        db   0, ' ',  0,   0,   0,   0,   0,   0      ; 0x38-0x3F (LAlt, Space, Caps, F1-F5)
-        db   0,   0,   0,   0,   0,   0,   0,  '7'    ; 0x40-0x47 (F6-F10, NumLock, ScrLock, KP7)
+        db   0, ' ',  0,0x84,0x85,0x86,0x87,0x88      ; 0x38-0x3F (LAlt, Space, Caps, F1-F5)
+        db 0x89,0x8A,0x8B,0x8C,0x8D,  0,   0,  '7'    ; 0x40-0x47 (F6-F10, NumLock, ScrLock, KP7)
         db 0x80,'9', '-',0x82,'5',0x83,'+', '1'        ; 0x48-0x4F (Up,KP9,-,Left,KP5,Right,+,KP1)
         db 0x81,'3', '0', '.',  0,   0,   0,   0       ; 0x50-0x57 (Down,KP3,KP0,KP.)
         times 128 - ($ - scancode_table) db 0
@@ -572,6 +572,8 @@ batch_resume_pos: resd 1                  ; Resume offset into batch_script_buf
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing
 prog_name_buf:   resb 256        ; Parsed program name from command line
+parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
+parent_active:    resb 1         ; 1 = re-launch parent after child exits
 program_args_buf: resb 512       ; Command-line arguments for programs
 head_lines:      resd 1          ; Line count for head/tail commands
 cmd_flags:       resd 1          ; Bitmask of parsed flags (bit 0='a', bit 13='n', etc.)

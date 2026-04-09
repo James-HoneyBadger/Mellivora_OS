@@ -36,7 +36,7 @@ depends on `string.inc` for `io_print_padded` and `io_print_centered`.
 Library functions use two error patterns — check the function table for which one applies:
 
 | Pattern | How to check | Used by |
-|---------|-------------|---------|
+| --------- | ------------- | --------- |
 | **EAX = -1** | `cmp eax, -1` / `je error` | File I/O (`io_file_read`, `io_file_write`, `io_file_size`), number parsing (`str_to_int`, `str_to_hex`) |
 | **EAX = 0** (null/false) | `test eax, eax` / `jz error` | Search functions (`str_chr`, `str_str`), `io_get_arg`, `mem_alloc` |
 | **Carry flag** | `jc error` | Low-level operations (`mem_pool_alloc`) |
@@ -48,7 +48,7 @@ Library functions use two error patterns — check the function table for which 
 ### String Operations
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `str_len` | ESI=string | EAX=length | Get null-terminated string length |
 | `str_copy` | ESI=src, EDI=dst | — | Copy string including null |
 | `str_ncopy` | ESI=src, EDI=dst, ECX=max | — | Copy up to N chars, null-terminates |
@@ -60,7 +60,7 @@ Library functions use two error patterns — check the function table for which 
 ### String Search
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `str_chr` | ESI=string, AL=char | EAX=ptr or 0 | Find first occurrence of char |
 | `str_rchr` | ESI=string, AL=char | EAX=ptr or 0 | Find last occurrence of char |
 | `str_str` | ESI=haystack, EDI=needle | EAX=ptr or 0 | Find substring |
@@ -70,7 +70,7 @@ Library functions use two error patterns — check the function table for which 
 ### String Transform
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `str_upper` | ESI=string | — | Convert to uppercase in-place |
 | `str_lower` | ESI=string | — | Convert to lowercase in-place |
 | `str_trim` | ESI=string | — | Trim leading + trailing whitespace |
@@ -82,7 +82,7 @@ Library functions use two error patterns — check the function table for which 
 ### String Utilities
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `str_count_char` | ESI=string, AL=char | EAX=count | Count occurrences of char |
 | `str_token` | ESI=string (first call), AL=delim | EAX=token ptr or 0 | strtok-style tokenizer |
 | `str_split_line` | ESI=buffer, EDI=line_buf, ECX=max | EAX=new pos or 0 | Extract next line from buffer |
@@ -90,7 +90,7 @@ Library functions use two error patterns — check the function table for which 
 ### Character Classification
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `str_to_upper_c` | AL=char | AL=upper | Convert char to uppercase |
 | `str_to_lower_c` | AL=char | AL=lower | Convert char to lowercase |
 | `str_is_alpha` | AL=char | EAX=1/0 | Is alphabetic? |
@@ -101,7 +101,7 @@ Library functions use two error patterns — check the function table for which 
 ### Memory Operations
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `mem_copy` | ESI=src, EDI=dst, ECX=bytes | — | Copy memory (rep movsb) |
 | `mem_set` | EDI=dst, AL=value, ECX=bytes | — | Fill memory (rep stosb) |
 | `mem_cmp` | ESI=ptr1, EDI=ptr2, ECX=bytes | EAX: 0/neg/pos | Compare memory blocks |
@@ -114,7 +114,7 @@ Library functions use two error patterns — check the function table for which 
 ### Console Input
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `io_read_line` | EDI=buffer, ECX=maxsize | EAX=chars read | Interactive line input with backspace/escape |
 | `io_read_num` | ECX=max digits | EAX=number, CF=empty | Read and parse a decimal number |
 | `io_read_key` | — | EAX=keycode or 0 | Non-blocking key check |
@@ -122,7 +122,7 @@ Library functions use two error patterns — check the function table for which 
 ### Console Output
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `io_print` | ESI=string | — | Print null-terminated string |
 | `io_println` | ESI=string | — | Print string + newline |
 | `io_putchar` | AL=char | — | Output single character |
@@ -135,14 +135,14 @@ Library functions use two error patterns — check the function table for which 
 ### Arguments
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `io_get_args` | EDI=buffer(256B) | EAX=length | Get raw command-line argument string |
 | `io_parse_args` | ESI=argstr, EDI=argv[], ECX=max | EAX=argc | Parse args into pointer array (modifies string) |
 
 ### File Operations
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `io_file_read` | ESI=filename, EDI=buffer | EAX=bytes or -1 | Read entire file into buffer |
 | `io_file_write` | ESI=filename, EDI=buf, ECX=size, EDX=type | EAX=0/-1 | Write buffer to file |
 | `io_file_exists` | ESI=filename | EAX=1/0 | Check if file exists |
@@ -152,7 +152,7 @@ Library functions use two error patterns — check the function table for which 
 ### Directory Operations
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `io_dir_read` | EDI=namebuf, ECX=index | EAX=type, ECX=size | Read directory entry by index |
 | `io_dir_create` | ESI=dirname | EAX=0/-1 | Create a directory |
 | `io_dir_change` | ESI=path | EAX=0/-1 | Change current directory |
@@ -161,7 +161,7 @@ Library functions use two error patterns — check the function table for which 
 ### System
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `io_beep` | EBX=freq(Hz), ECX=duration | — | Play a tone |
 | `io_sleep` | EBX=ticks (100 = 1s) | — | Sleep for N ticks |
 | `io_get_time` | — | EAX=ticks | Get system tick count since boot |
@@ -173,7 +173,7 @@ Library functions use two error patterns — check the function table for which 
 ### Number Parsing
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `math_parse_int` | ESI=string | EAX=value, ECX=digits | Parse unsigned decimal |
 | `math_parse_signed` | ESI=string | EAX=value, ECX=chars | Parse signed decimal (handles `-`/`+`) |
 | `math_parse_hex` | ESI=string | EAX=value, ECX=digits | Parse hex (optional `0x` prefix) |
@@ -181,7 +181,7 @@ Library functions use two error patterns — check the function table for which 
 ### Number Formatting
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `math_int_to_str` | EAX=value, EDI=buffer | ECX=length | Convert unsigned int to decimal string |
 | `math_hex_to_str` | EAX=value, EDI=buffer, ECX=mindigits | — | Convert to hex string (uppercase) |
 | `math_bin_to_str` | EAX=value, EDI=buffer, ECX=bits | — | Convert to binary string |
@@ -189,7 +189,7 @@ Library functions use two error patterns — check the function table for which 
 ### Arithmetic
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `math_abs` | EAX=signed | EAX=abs | Absolute value |
 | `math_min` | EAX, EBX | EAX=min | Minimum (unsigned) |
 | `math_max` | EAX, EBX | EAX=max | Maximum (unsigned) |
@@ -206,7 +206,7 @@ Library functions use two error patterns — check the function table for which 
 ### Random Numbers
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `math_seed_random` | EAX=seed | — | Seed the PRNG (use `io_get_time`) |
 | `math_random` | — | EAX=0..32767 | Generate pseudo-random number |
 | `math_random_range` | EAX=min, EBX=max | EAX=random | Random in [min, max] |
@@ -229,7 +229,7 @@ Library functions use two error patterns — check the function table for which 
 ### Cursor and Color
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `vga_set_cursor` | EBX=col, ECX=row | — | Set cursor position |
 | `vga_set_color` | BL=color | — | Set text color attribute |
 | `vga_make_color` | AL=fg, AH=bg | AL=attr | Create color from fg/bg values |
@@ -238,7 +238,7 @@ Library functions use two error patterns — check the function table for which 
 ### Direct VGA Access
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `vga_put_char_at` | AL=char, AH=color, EBX=col, ECX=row | — | Write char+color at position |
 | `vga_get_char_at` | EBX=col, ECX=row | AL=char, AH=color | Read char+color from position |
 | `vga_write_at` | ESI=str, EBX=col, ECX=row | — | Write string at position |
@@ -247,7 +247,7 @@ Library functions use two error patterns — check the function table for which 
 ### Drawing Primitives
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `vga_draw_hline` | EBX=col, ECX=row, EDX=len, AL=char, AH=color | — | Horizontal line |
 | `vga_draw_vline` | EBX=col, ECX=row, EDX=len, AL=char, AH=color | — | Vertical line |
 | `vga_draw_box` | EBX=left, ECX=top, EDX=width, ESI=height, AH=color | — | Single-line border box |
@@ -257,7 +257,7 @@ Library functions use two error patterns — check the function table for which 
 ### UI Elements
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `vga_status_bar` | ESI=text, ECX=row, DL=color | — | Full-width colored status bar |
 | `vga_progress_bar` | EBX=col, ECX=row, EDX=width, ESI=current, EDI=max, AH=color | — | Progress bar |
 | `vga_scroll_region` | EBX=left, ECX=top, EDX=width, ESI=height, AH=color | — | Scroll region up 1 line |
@@ -269,7 +269,7 @@ Library functions use two error patterns — check the function table for which 
 ### Heap Allocation
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `mem_alloc` | EAX=size (bytes) | EAX=ptr or 0 | Allocate memory (4KB page granularity) |
 | `mem_free` | EAX=ptr, ECX=size | — | Free allocated memory |
 | `mem_realloc` | EAX=ptr, EBX=oldsize, ECX=newsize | EAX=newptr or 0 | Resize allocation |
@@ -299,7 +299,7 @@ section .text
 ```
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `mem_pool_init` | EDI=header, EAX=objsize, ECX=count | EAX=0/-1 | Initialize pool |
 | `mem_pool_alloc` | EDI=header | EAX=ptr or 0 | Allocate one object |
 | `mem_pool_free` | EDI=header, EAX=ptr | — | Return object to pool |
@@ -310,7 +310,7 @@ section .text
 Fast sequential allocation with bulk free. Ideal for per-frame or per-request data.
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `mem_arena_init` | EDI=header, EAX=size | EAX=0/-1 | Initialize arena |
 | `mem_arena_alloc` | EDI=header, EAX=size | EAX=ptr or 0 | Allocate (4-byte aligned) |
 | `mem_arena_reset` | EDI=header | — | Free all arena memory at once |
@@ -339,7 +339,7 @@ section .text
 ```
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `ds_stack_init` | EDI=hdr, ESI=data, ECX=capacity | — | Initialize stack |
 | `ds_stack_push` | EDI=hdr, EAX=value | CF=full | Push dword |
 | `ds_stack_pop` | EDI=hdr | EAX=value, CF=empty | Pop dword |
@@ -350,7 +350,7 @@ section .text
 ### Queue (FIFO, Circular)
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `ds_queue_init` | EDI=hdr, ESI=data, ECX=capacity | — | Initialize queue |
 | `ds_queue_push` | EDI=hdr, EAX=value | CF=full | Enqueue dword |
 | `ds_queue_pop` | EDI=hdr | EAX=value, CF=empty | Dequeue dword |
@@ -362,7 +362,7 @@ section .text
 ### Bitmap
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `ds_bmap_set` | ESI=bitmap, EAX=index | — | Set bit |
 | `ds_bmap_clear` | ESI=bitmap, EAX=index | — | Clear bit |
 | `ds_bmap_test` | ESI=bitmap, EAX=index | EAX=1/0 | Test bit |
@@ -372,7 +372,7 @@ section .text
 ### Array Utilities
 
 | Function | Input | Output | Description |
-|----------|-------|--------|-------------|
+| ---------- | ------- | -------- | ------------- |
 | `ds_sort_insert` | ESI=array, ECX=count | — | Insertion sort (unsigned dwords) |
 | `ds_binary_search` | ESI=sorted_array, ECX=count, EAX=value | EAX=index/-1, CF | Binary search |
 | `ds_array_swap` | ESI=array, EAX=idx1, EBX=idx2 | — | Swap two elements |

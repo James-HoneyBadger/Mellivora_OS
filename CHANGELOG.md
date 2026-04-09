@@ -97,7 +97,7 @@
 - **Expression precedence**: Replaced flat single-level expression parser with a 7-level precedence-climbing parser (`||` → `&&` → `==`/`!=` → `<`/`>`/`<=`/`>=` → `+`/`-` → `*`/`/`/`%` → unary). Operators now bind correctly: `2 + 3 * 4` evaluates to 14, not 20.
 - **String literal addressing**: Rewrote string handling to use a fixup table. `store_string` returns a string index; `emit_string_data` emits string bytes at the end of the output and patches all fixup locations with correct runtime addresses. Fixes printf/string-literal crashes.
 
-### Build System
+### Build System (v1.12)
 
 - **Auto kernel size**: `stage2.asm` no longer has a hardcoded `KERNEL_SECTORS equ 384`. The Makefile generates `kernel_sectors.inc` from the actual `kernel.bin` size (`ceil(size / 512)`), so the stage 2 loader always loads exactly the right amount.
 - **Kernel include tracking**: `$(KERNEL_BIN)` now depends on `$(wildcard kernel/*.inc)`, so touching any include file triggers a rebuild.
@@ -128,7 +128,7 @@
   - `kernel/data.inc` — string data, scancode tables, IDT descriptor, BSS
 - Binary output is **byte-identical** to the monolithic version.
 
-### Build Stats
+### Build Stats (v1.12)
 
 - Disk image: 48 files, 188 blocks used
 - Kernel: ~10,600 lines of x86 assembly (split across 14 files)
@@ -144,7 +144,7 @@
 - **Superblock `free_blocks` tracking**: `hbfs_alloc_blocks` and `hbfs_free_blocks` now update the superblock's `free_blocks` counter (offset 12) after every allocation/deallocation, keeping the on-disk superblock consistent with the bitmap.
 - **Nested batch execution guard**: `cmd_exec_batch` now detects re-entrant calls (a `batch` command inside a `.bat` script) and rejects them with an error message instead of silently corrupting the shared `batch_script_buf` / `batch_line_buf` buffers.
 
-### Build Stats
+### Build Stats (v1.10)
 
 - Disk image: 48 files, 188 blocks used
 - Kernel: ~10,000 lines of x86 assembly
@@ -391,7 +391,7 @@
 - **Syscall count**: 33 syscalls (added SYS_GETARGS = 32)
 - **Version text**: Updated to v1.3 with new feature descriptions
 
-### Documentation
+### Documentation (v1.3)
 
 - **INSTALL.md**: Complete build and installation guide
 - **USER_GUIDE.md**: Comprehensive user manual with all commands

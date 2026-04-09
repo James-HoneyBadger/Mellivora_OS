@@ -59,6 +59,18 @@ KEY_DOWN        equ 0x81
 KEY_LEFT        equ 0x82
 KEY_RIGHT       equ 0x83
 
+; Function key codes
+KEY_F1          equ 0x84
+KEY_F2          equ 0x85
+KEY_F3          equ 0x86
+KEY_F4          equ 0x87
+KEY_F5          equ 0x88
+KEY_F6          equ 0x89
+KEY_F7          equ 0x8A
+KEY_F8          equ 0x8B
+KEY_F9          equ 0x8C
+KEY_F10         equ 0x8D
+
 ; Default color
 COLOR_DEFAULT   equ 0x07
 

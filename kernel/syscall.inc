@@ -164,14 +164,31 @@ sys_exec_call:
         ; EBX = pointer to filename
         ; Note: on success, cmd_exec_program never returns (iretd to ring 3)
         ; On failure (program not found), it returns with CF set
+
+        ; Save current program as parent for return-after-child-exit
+        push esi
+        push edi
+        push ecx
+        mov esi, prog_name_buf
+        mov edi, parent_prog_name
+        mov ecx, 256
+        rep movsb
+        mov byte [parent_active], 1
+        pop ecx
+        pop edi
+        pop esi
+
+        ; Execute the requested program
         push esi
         mov esi, ebx
         call cmd_exec_program
         pop esi
+        ; Only reached on failure (success does IRET internally)
         jc .exec_fail
         xor eax, eax
         iretd
 .exec_fail:
+        mov byte [parent_active], 0
         mov eax, -1
         iretd
 
