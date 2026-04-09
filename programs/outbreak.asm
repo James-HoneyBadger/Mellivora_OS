@@ -21,6 +21,8 @@ MAX_MONTHS      equ 12          ; Game length
 MAX_VACCINES    equ 999
 MAX_SUPPLIES    equ 999
 MAX_MORALE      equ 100
+MAX_PREPAREDNESS equ 100
+MAX_THREAT      equ 5
 
 ; VGA colors
 C_BLACK         equ 0x00
@@ -57,10 +59,21 @@ SND_VACCINE     equ 1000
 OUTBREAK_BASE   equ 8           ; Base infection rate per month (%)
 VACCINE_EFFECT  equ 3           ; Each 10% vaccinated reduces rate by this
 
+; Decay rates (per month, by difficulty)
+DECAY_VAX_EASY  equ 1
+DECAY_VAX_NORM  equ 3
+DECAY_VAX_HARD  equ 5
+DECAY_SUP_EASY  equ 1
+DECAY_SUP_NORM  equ 3
+DECAY_SUP_HARD  equ 5
+DECAY_MOR_EASY  equ 0
+DECAY_MOR_NORM  equ 2
+DECAY_MOR_HARD  equ 4
+
 ; Default settings
-DEF_VACCINES    equ 50
-DEF_SUPPLIES    equ 40
-DEF_MORALE      equ 70
+DEF_VACCINES    equ 35
+DEF_SUPPLIES    equ 30
+DEF_MORALE      equ 60
 DEF_MONTHS      equ 12
 DEF_DIFF        equ 1           ; 0=Easy, 1=Normal, 2=Hard
 
@@ -250,7 +263,7 @@ title_screen:
 
         ; Story intro
         mov eax, SYS_SETCOLOR
-        mov ebx, C_LGRAY
+        mov ebx, C_WHITE
         int 0x80
         mov eax, SYS_SETCURSOR
         mov ebx, 5
@@ -319,7 +332,7 @@ title_screen:
         mov ecx, 23
         int 0x80
         mov eax, SYS_SETCOLOR
-        mov ebx, C_DGRAY
+        mov ebx, C_LCYAN
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_footer
@@ -427,7 +440,7 @@ show_settings:
         mov ecx, 2
         int 0x80
         mov eax, SYS_SETCOLOR
-        mov ebx, C_LGRAY
+        mov ebx, C_WHITE
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_settings_hint
@@ -618,7 +631,7 @@ show_settings:
         mov ecx, 22
         int 0x80
         mov eax, SYS_SETCOLOR
-        mov ebx, C_DGRAY
+        mov ebx, C_LCYAN
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_set_footer
@@ -641,9 +654,9 @@ show_settings:
         jmp .settings_wait
 
 .preset_easy:
-        mov dword [set_vaccines], 75
-        mov dword [set_supplies], 60
-        mov dword [set_morale], 90
+        mov dword [set_vaccines], 60
+        mov dword [set_supplies], 50
+        mov dword [set_morale], 80
         mov dword [set_months], 12
         mov dword [set_diff], 0
         mov eax, SYS_BEEP
@@ -669,9 +682,9 @@ show_settings:
         jmp .settings_redraw
 
 .preset_hard:
-        mov dword [set_vaccines], 25
-        mov dword [set_supplies], 20
-        mov dword [set_morale], 50
+        mov dword [set_vaccines], 15
+        mov dword [set_supplies], 15
+        mov dword [set_morale], 40
         mov dword [set_months], 12
         mov dword [set_diff], 2
         mov eax, SYS_BEEP
@@ -725,16 +738,16 @@ show_settings:
         je .cust_vax_100
         jmp .cust_vax_wait
 .cust_vax_25:
-        mov dword [set_vaccines], 25
+        mov dword [set_vaccines], 15
         jmp .cust_supplies
 .cust_vax_50:
-        mov dword [set_vaccines], 50
+        mov dword [set_vaccines], 30
         jmp .cust_supplies
 .cust_vax_75:
-        mov dword [set_vaccines], 75
+        mov dword [set_vaccines], 50
         jmp .cust_supplies
 .cust_vax_100:
-        mov dword [set_vaccines], 100
+        mov dword [set_vaccines], 75
         jmp .cust_supplies
 
         ; --- Supplies ---
@@ -767,16 +780,16 @@ show_settings:
         je .cust_sup_80
         jmp .cust_sup_wait
 .cust_sup_20:
-        mov dword [set_supplies], 20
+        mov dword [set_supplies], 15
         jmp .cust_morale
 .cust_sup_40:
-        mov dword [set_supplies], 40
+        mov dword [set_supplies], 30
         jmp .cust_morale
 .cust_sup_60:
-        mov dword [set_supplies], 60
+        mov dword [set_supplies], 50
         jmp .cust_morale
 .cust_sup_80:
-        mov dword [set_supplies], 80
+        mov dword [set_supplies], 70
         jmp .cust_morale
 
         ; --- Morale ---
@@ -946,13 +959,25 @@ new_game:
         mov eax, [set_morale]
         mov [morale], eax
         mov dword [research], 0         ; Research progress
-        mov dword [actions_left], 3     ; Actions per month
+        mov dword [actions_left], 2     ; Actions per month
         mov dword [total_vaccinated], 0
         mov dword [total_treated], 0
         mov dword [outbreaks_survived], 0
         mov byte  [hospital_built], 0
         mov byte  [lab_built], 0
         mov dword [difficulty], 0       ; Increases over time
+        mov dword [threat_level], 1
+        mov eax, [set_morale]
+        shr eax, 1
+        add eax, 15
+        mov ebx, [set_supplies]
+        shr ebx, 1
+        add eax, ebx
+        cmp eax, MAX_PREPAREDNESS
+        jle .prep_init_ok
+        mov eax, MAX_PREPAREDNESS
+.prep_init_ok:
+        mov [preparedness], eax
         mov dword [event_type], 0
 
         ; Fall through to main game loop
@@ -961,24 +986,61 @@ new_game:
 ; MAIN GAME LOOP
 ;=======================================================================
 game_month:
-        ; Check win condition
+        ; Check if time is up
         mov eax, [set_months]
         inc eax
         cmp [month], eax
-        jge game_win
+        jge .check_final_state
 
-        ; Check lose condition
-        mov eax, [healthy]
-        add eax, [vaccinated]
-        add eax, [recovered]
+        ; Check lose condition - everyone dead
+        cmp dword [population], 0
+        jle game_over
+
+        ; Check lose condition - community collapse (50%+ dead)
+        mov eax, [dead]
+        shl eax, 1              ; dead * 2
+        cmp eax, COMMUNITY_SIZE
+        jge game_collapse
+
+        jmp .month_continue
+
+.check_final_state:
+        ; Time is up -- did we actually contain the outbreak?
+        ; Win requires: infected < 10% of population AND population > 25% of start
+        mov eax, [population]
         cmp eax, 0
         jle game_over
 
+        ; Check population threshold: must have > 25% alive
+        mov eax, [population]
+        imul eax, 100
+        xor edx, edx
+        mov ecx, COMMUNITY_SIZE
+        div ecx
+        cmp eax, 25
+        jle game_over
+
+        ; Check containment: infected must be < 10% of surviving population
+        mov eax, [infected]
+        imul eax, 100
+        xor edx, edx
+        mov ecx, [population]
+        div ecx                 ; EAX = infected % of population
+        cmp eax, 10
+        jge game_failed          ; Outbreak NOT contained
+
+        jmp game_win
+
+.month_continue:
+
         ; Reset actions for this month
-        mov dword [actions_left], 3
+        mov dword [actions_left], 2
 
         ; Calculate month difficulty
         call calc_difficulty
+
+        ; Monthly resource decay (spoilage, attrition, fatigue)
+        call monthly_decay
 
         ; Draw main game screen
         call draw_game_screen
@@ -1020,12 +1082,37 @@ action_vaccinate:
         cmp dword [vaccines], 0
         jle .no_vaccines
 
-        ; Calculate how many we can vaccinate (up to 20, limited by supply and healthy)
-        mov eax, [vaccines]
-        cmp eax, 20
-        jle .vax_cap
-        mov eax, 20
+        ; Calculate vaccination capacity (difficulty-dependent)
+        mov eax, [set_diff]
+        cmp eax, 0
+        je .vax_base_easy
+        cmp eax, 2
+        je .vax_base_hard
+        mov eax, 8             ; Normal base
+        jmp .vax_base_set
+.vax_base_easy:
+        mov eax, 12            ; Easy base
+        jmp .vax_base_set
+.vax_base_hard:
+        mov eax, 5             ; Hard base
+.vax_base_set:
+        cmp byte [lab_built], 1
+        jne .vax_lab_done
+        add eax, 3
+.vax_lab_done:
+        cmp byte [hospital_built], 1
+        jne .vax_cap
+        add eax, 2
 .vax_cap:
+        cmp eax, 18
+        jle .vax_limit_ready
+        mov eax, 18
+.vax_limit_ready:
+        mov ebx, [vaccines]
+        cmp eax, ebx
+        jle .vax_stock_ok
+        mov eax, ebx
+.vax_stock_ok:
         mov ebx, [healthy]
         cmp eax, ebx
         jle .vax_ok
@@ -1041,9 +1128,15 @@ action_vaccinate:
         add [vaccinated], eax
         add [total_vaccinated], eax
 
-        ; Boost morale
-        add dword [morale], 3
+        ; Boost morale and overall response readiness
+        add dword [morale], 2
+        add dword [preparedness], 2
+        cmp byte [lab_built], 1
+        jne .vax_boost_done
+        add dword [preparedness], 1
+.vax_boost_done:
         call clamp_morale
+        call clamp_preparedness
 
         ; Show result
         call draw_game_screen
@@ -1099,6 +1192,28 @@ action_vaccinate:
         jmp action_loop
 
 .no_targets:
+        ; Check WHY there are no healthy targets
+        cmp dword [infected], 0
+        jg .no_targets_sick
+
+        ; Everyone alive truly is vaccinated or recovered
+        call draw_game_screen
+        mov eax, SYS_SETCURSOR
+        mov ebx, 2
+        mov ecx, 22
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LGREEN
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_all_vaxxed
+        int 0x80
+        call pause_message
+        call draw_game_screen
+        jmp action_loop
+
+.no_targets_sick:
+        ; People are infected, not immune -- must treat them first
         call draw_game_screen
         mov eax, SYS_SETCURSOR
         mov ebx, 2
@@ -1108,7 +1223,7 @@ action_vaccinate:
         mov ebx, C_YELLOW
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, str_all_vaxxed
+        mov ebx, str_no_healthy
         int 0x80
         call pause_message
         call draw_game_screen
@@ -1124,20 +1239,41 @@ action_treat:
         cmp dword [supplies], 0
         jle .no_supplies
 
-        ; Treat up to 15 infected (hard mode: up to 10)
-        mov eax, [supplies]
-        mov ecx, [set_diff]
-        cmp ecx, 2
-        jne .treat_limit_ready
-        cmp eax, 10
-        jle .treat_cap
-        mov eax, 10
-        jmp .treat_cap
-.treat_limit_ready:
-        cmp eax, 15
-        jle .treat_cap
-        mov eax, 15
+        ; Treat capacity: difficulty-dependent
+        mov eax, [set_diff]
+        cmp eax, 0
+        je .treat_base_easy
+        cmp eax, 2
+        je .treat_base_hard
+        mov eax, 7             ; Normal
+        jmp .treat_base_set
+.treat_base_easy:
+        mov eax, 10            ; Easy
+        jmp .treat_base_set
+.treat_base_hard:
+        mov eax, 4             ; Hard
+.treat_base_set:
+        cmp byte [hospital_built], 1
+        jne .treat_hosp_done
+        add eax, 3
+.treat_hosp_done:
+        cmp byte [lab_built], 1
+        jne .treat_lab_done
+        add eax, 2
+.treat_lab_done:
+        cmp dword [morale], 35
+        jge .treat_min_check
+        sub eax, 2
+.treat_min_check:
+        cmp eax, 3
+        jge .treat_cap
+        mov eax, 3
 .treat_cap:
+        mov ebx, [supplies]
+        cmp eax, ebx
+        jle .treat_stock_ok
+        mov eax, ebx
+.treat_stock_ok:
         mov ebx, [infected]
         cmp eax, ebx
         jle .treat_ok
@@ -1149,22 +1285,22 @@ action_treat:
         add [recovered], eax
         add [total_treated], eax
 
-        ; Hospital bonus
+        ; Hospital bonus (reduced)
         cmp byte [hospital_built], 1
         jne .no_hosp_bonus
-        ; Treat 5 more for free (hard mode: 3)
+        ; Treat 2 more for free (hard mode: 1)
         mov eax, [infected]
         mov ecx, [set_diff]
         cmp ecx, 2
         jne .hosp_bonus_normal
-        cmp eax, 3
+        cmp eax, 1
         jle .hosp_cap
-        mov eax, 3
+        mov eax, 1
         jmp .hosp_cap
 .hosp_bonus_normal:
-        cmp eax, 5
+        cmp eax, 2
         jle .hosp_cap
-        mov eax, 5
+        mov eax, 2
 .hosp_cap:
         sub [infected], eax
         add [recovered], eax
@@ -1189,8 +1325,10 @@ action_treat:
         mov ebx, str_people_treated
         int 0x80
 
-        add dword [morale], 2
+        add dword [morale], 1
+        add dword [preparedness], 2
         call clamp_morale
+        call clamp_preparedness
 
         mov eax, SYS_BEEP
         mov ebx, SND_GOOD
@@ -1242,20 +1380,27 @@ action_treat:
 ; ACTION 3: Supply Run (gather vaccines + supplies)
 ;-----------------------------------------------------------------------
 action_supply_run:
-        ; Random supply gain
+        ; Random gains scale with the current alert level and response planning
         call random
         xor edx, edx
-        mov ebx, 20
+        mov ebx, 8
         div ebx
-        add edx, 10            ; 10-29 vaccines
+        add edx, 3
+        mov eax, [threat_level]
+        add edx, eax
+        mov eax, [preparedness]
+        shr eax, 4
+        add edx, eax
         mov [temp_val], edx
         add [vaccines], edx
 
         call random
         xor edx, edx
-        mov ebx, 15
+        mov ebx, 6
         div ebx
-        add edx, 8             ; 8-22 supplies
+        add edx, 2
+        mov eax, [threat_level]
+        add edx, eax
         mov [temp_val2], edx
         add [supplies], edx
 
@@ -1269,21 +1414,31 @@ action_supply_run:
         mov dword [supplies], MAX_SUPPLIES
 .sclamp:
 
-        ; Risk: small chance of infection during supply run
+        ; Risk scales with the alert level, but high preparedness reduces it
         call random
         xor edx, edx
         mov ebx, 100
         div ebx
-        cmp edx, 15            ; 15% chance of risk
+        mov eax, 22
+        mov ecx, [threat_level]
+        imul ecx, 8
+        add eax, ecx
+        cmp dword [preparedness], 70
+        jl .supply_risk_ready
+        sub eax, 8
+.supply_risk_ready:
+        cmp edx, eax
         jge .supply_safe
 
         ; Someone got infected on the run
-        cmp dword [healthy], 2
+        cmp dword [healthy], 3
         jl .supply_safe
-        sub dword [healthy], 2
-        add dword [infected], 2
-        sub dword [morale], 3
+        sub dword [healthy], 3
+        add dword [infected], 3
+        sub dword [morale], 5
+        sub dword [preparedness], 6
         call clamp_morale
+        call clamp_preparedness
 
         call draw_game_screen
         mov eax, SYS_SETCURSOR
@@ -1306,6 +1461,8 @@ action_supply_run:
         jmp action_loop
 
 .supply_safe:
+        add dword [preparedness], 2
+        call clamp_preparedness
         call draw_game_screen
         mov eax, SYS_SETCURSOR
         mov ebx, 2
@@ -1346,19 +1503,25 @@ action_research:
         xor edx, edx
         mov ebx, 10
         div ebx
-        add edx, 5             ; 5-14 research points
+        add edx, 3             ; 3-12 research points
         ; Lab bonus
         cmp byte [lab_built], 1
         jne .no_lab_bonus
-        add edx, 5
+        add edx, 3
 .no_lab_bonus:
         add [research], edx
         mov [temp_val], edx
+        add dword [preparedness], 3
+        cmp byte [lab_built], 1
+        jne .research_ready_done
+        add dword [preparedness], 2
+.research_ready_done:
+        call clamp_preparedness
 
         ; Check if we unlocked something
         cmp byte [hospital_built], 0
         jne .check_lab
-        cmp dword [research], 30
+        cmp dword [research], 50
         jl .research_done
         mov byte [hospital_built], 1
         call draw_game_screen
@@ -1386,7 +1549,7 @@ action_research:
 .check_lab:
         cmp byte [lab_built], 0
         jne .research_done
-        cmp dword [research], 70
+        cmp dword [research], 130
         jl .research_done
         mov byte [lab_built], 1
         call draw_game_screen
@@ -1443,29 +1606,38 @@ action_research:
 ; ACTION 5: Public Awareness Campaign
 ;-----------------------------------------------------------------------
 action_awareness:
-        add dword [morale], 8
+        add dword [morale], 4
+        add dword [preparedness], 3
         call clamp_morale
+        call clamp_preparedness
 
-        ; Small chance to convince unvaccinated
+        ; Stronger communication can turn healthy residents into willing volunteers
         call random
         xor edx, edx
         mov ebx, 100
         div ebx
-        cmp edx, 40            ; 40% chance
+        cmp edx, 30
         jge .awareness_morale_only
 
-        ; Some people voluntarily get vaccinated
-        mov eax, [healthy]
-        cmp eax, 5
+        mov eax, 2
+        add eax, [threat_level]
+        cmp byte [lab_built], 1
+        jne .aware_size_ready
+        add eax, 2
+.aware_size_ready:
+        mov [temp_val], eax
+
+        mov ecx, [healthy]
+        cmp ecx, eax
         jl .awareness_morale_only
-        mov eax, [vaccines]
-        cmp eax, 5
+        mov ecx, [vaccines]
+        cmp ecx, eax
         jl .awareness_morale_only
 
-        sub dword [healthy], 5
-        add dword [vaccinated], 5
-        sub dword [vaccines], 5
-        add dword [total_vaccinated], 5
+        sub [healthy], eax
+        add [vaccinated], eax
+        sub [vaccines], eax
+        add [total_vaccinated], eax
 
         call draw_game_screen
         mov eax, SYS_SETCURSOR
@@ -1477,6 +1649,11 @@ action_awareness:
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_awareness_vax
+        int 0x80
+        mov eax, [temp_val]
+        call print_number
+        mov eax, SYS_PRINT
+        mov ebx, str_people_vaxxed
         int 0x80
         jmp .awareness_done
 
@@ -1508,7 +1685,13 @@ action_awareness:
 ;-----------------------------------------------------------------------
 action_rest:
         add dword [morale], 2
+        add dword [preparedness], 2
+        cmp dword [supplies], 95
+        jge .rest_supplies_ok
+        add dword [supplies], 1
+.rest_supplies_ok:
         call clamp_morale
+        call clamp_preparedness
         dec dword [actions_left]
         call draw_game_screen
         mov eax, SYS_SETCURSOR
@@ -1516,7 +1699,7 @@ action_rest:
         mov ecx, 22
         int 0x80
         mov eax, SYS_SETCOLOR
-        mov ebx, C_LGRAY
+        mov ebx, C_WHITE
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_rest
@@ -1575,20 +1758,39 @@ month_end:
         cmp eax, 0
         jle .no_deaths
 
-        ; Base death rate: 10% of infected
-        mov ebx, 10
-        ; Low morale increases death rate
+        ; Death rate: difficulty-dependent base
+        mov ebx, [set_diff]
+        cmp ebx, 0
+        je .death_easy
+        cmp ebx, 2
+        je .death_hard
+        mov ebx, 14            ; Normal: 14%
+        jmp .death_set
+.death_easy:
+        mov ebx, 8             ; Easy: 8%
+        jmp .death_set
+.death_hard:
+        mov ebx, 20            ; Hard: 20%
+.death_set:
+        ; Low morale increases death rate significantly
         cmp dword [morale], 30
         jge .morale_ok
-        add ebx, 5
+        add ebx, 8
 .morale_ok:
+        ; High threat adds deaths
+        mov ecx, [threat_level]
+        cmp ecx, 3
+        jl .threat_death_done
+        sub ecx, 2
+        add ebx, ecx
+.threat_death_done:
         ; Hospital reduces death rate
         cmp byte [hospital_built], 1
         jne .no_hosp_save
         sub ebx, 3
-        cmp ebx, 2
+        cmp ebx, 4
         jge .no_hosp_save
-        mov ebx, 2
+        mov ebx, 4
 .no_hosp_save:
         imul eax, ebx
         xor edx, edx
@@ -1596,8 +1798,8 @@ month_end:
         div ebx                 ; EAX = deaths
         cmp eax, 0
         jg .has_deaths
-        ; At least 1 death if infected > 10
-        cmp dword [infected], 10
+        ; At least 1 death if infected > 5
+        cmp dword [infected], 5
         jl .no_deaths
         mov eax, 1
 .has_deaths:
@@ -1606,9 +1808,8 @@ month_end:
         add [dead], eax
         sub [population], eax
 
-        ; Morale hit from deaths
+        ; Morale hit from deaths (full count, not half)
         mov ebx, eax
-        shr ebx, 1             ; half of deaths
         cmp ebx, 0
         jle .no_deaths
         sub [morale], ebx
@@ -1620,20 +1821,20 @@ month_end:
 .deaths_done:
 
         ; === NATURAL RECOVERY ===
-        ; Easy=25%, Normal=15%, Hard=8% recover naturally each month
+        ; Easy=12%, Normal=4%, Hard=0% recover naturally each month
         mov eax, [infected]
         mov ebx, [set_diff]
         cmp ebx, 0
         je .rec_easy
         cmp ebx, 2
         je .rec_hard
-        mov ebx, 15
+        mov ebx, 4
         jmp .rec_rate_set
 .rec_easy:
-        mov ebx, 25
+        mov ebx, 12
         jmp .rec_rate_set
 .rec_hard:
-        mov ebx, 8
+        xor ebx, ebx
 .rec_rate_set:
         imul eax, ebx
         xor edx, edx
@@ -1651,9 +1852,9 @@ month_end:
 .no_recovery:
 
         ; === MORALE DECAY ===
-        cmp dword [infected], 20
+        cmp dword [infected], 8
         jl .no_morale_decay
-        sub dword [morale], 2
+        sub dword [morale], 3
         call clamp_morale
 .no_morale_decay:
 
@@ -1665,7 +1866,23 @@ month_end:
         xor edx, edx
         mov ebx, 100
         div ebx
-        cmp edx, 45            ; 45% chance of event
+        mov eax, 22
+        mov ecx, [threat_level]
+        imul ecx, 8
+        add eax, ecx
+        cmp dword [preparedness], 70
+        jl .event_ready
+        sub eax, 10
+.event_ready:
+        cmp dword [morale], 35
+        jge .event_roll
+        add eax, 6
+.event_roll:
+        cmp eax, 12
+        jge .event_floor_ok
+        mov eax, 12
+.event_floor_ok:
+        cmp edx, eax
         jl .has_event
         jmp .no_event
 
@@ -1683,7 +1900,7 @@ month_end:
         mov ecx, 23
         int 0x80
         mov eax, SYS_SETCOLOR
-        mov ebx, C_DGRAY
+        mov ebx, C_LCYAN
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_press_continue
@@ -1721,12 +1938,12 @@ trigger_random_event:
 
 ;--- Event: Supply donation ---
 event_donation:
-        add dword [vaccines], 25
+        add dword [vaccines], 12
         cmp dword [vaccines], MAX_VACCINES
         jle .don_vclamp
         mov dword [vaccines], MAX_VACCINES
 .don_vclamp:
-        add dword [supplies], 15
+        add dword [supplies], 8
         cmp dword [supplies], MAX_SUPPLIES
         jle .don_sclamp
         mov dword [supplies], MAX_SUPPLIES
@@ -1744,12 +1961,12 @@ event_donation:
 
 ;--- Event: Anti-vax rally ---
 event_antivax_rally:
-        sub dword [morale], 12
+        sub dword [morale], 15
         call clamp_morale
         ; Some vaccinated "refuse" boosters (lose some vaccine stock)
-        cmp dword [vaccines], 10
+        cmp dword [vaccines], 15
         jl .av_skip
-        sub dword [vaccines], 10
+        sub dword [vaccines], 15
 .av_skip:
         call show_event_screen
         mov ebx, str_evt_antivax
@@ -1762,8 +1979,8 @@ event_antivax_rally:
 
 ;--- Event: Volunteers arrive ---
 event_volunteer:
-        add dword [morale], 8
-        add dword [supplies], 10
+        add dword [morale], 5
+        add dword [supplies], 6
         call clamp_morale
         call show_event_screen
         mov ebx, str_evt_volunteer
@@ -1778,7 +1995,7 @@ event_volunteer:
 event_mutation:
         ; Some vaccinated become susceptible again
         mov eax, [vaccinated]
-        shr eax, 3             ; 12.5% lose immunity
+        shr eax, 2             ; 25% lose immunity
         cmp eax, 0
         jle .mut_skip
         sub [vaccinated], eax
@@ -1798,12 +2015,16 @@ event_mutation:
 ;--- Event: Supply theft ---
 event_supply_theft:
         mov eax, [vaccines]
-        shr eax, 2             ; Lose 25%
+        xor edx, edx
+        mov ecx, 3
+        div ecx                ; Lose 33%
         sub [vaccines], eax
         mov eax, [supplies]
-        shr eax, 2
+        xor edx, edx
+        mov ecx, 3
+        div ecx
         sub [supplies], eax
-        sub dword [morale], 6
+        sub dword [morale], 8
         call clamp_morale
         call show_event_screen
         mov ebx, str_evt_theft
@@ -1816,11 +2037,11 @@ event_supply_theft:
 
 ;--- Event: Medical team arrives ---
 event_medical_team:
-        ; Treat 10 infected for free
+        ; Treat 5 infected for free
         mov eax, [infected]
-        cmp eax, 10
+        cmp eax, 5
         jle .mt_cap
-        mov eax, 10
+        mov eax, 5
 .mt_cap:
         sub [infected], eax
         add [recovered], eax
@@ -1838,9 +2059,11 @@ event_medical_team:
 
 ;--- Event: Quarantine break ---
 event_quarantine_break:
-        ; Infected mingle; extra infections
+        ; Infected mingle; 33% as many new infections
         mov eax, [infected]
-        shr eax, 1             ; Half as many new infections
+        xor edx, edx
+        mov ecx, 3
+        div ecx                 ; eax = infected / 3
         mov ebx, [healthy]
         cmp eax, ebx
         jle .qb_ok
@@ -1861,7 +2084,7 @@ event_quarantine_break:
 
 ;--- Event: Good news ---
 event_good_news:
-        add dword [morale], 10
+        add dword [morale], 5
         call clamp_morale
         call show_event_screen
         mov ebx, str_evt_goodnews
@@ -1945,6 +2168,7 @@ game_win:
         mov ebx, str_final_stats
         int 0x80
 
+        mov dword [stats_base_row], 11
         call draw_final_stats
 
         ; Rating
@@ -1977,7 +2201,245 @@ game_win:
         jmp .win_wait
 
 ;=======================================================================
-; GAME OVER
+; GAME FAILED - Time ran out but outbreak still raging
+;=======================================================================
+game_failed:
+        mov eax, SYS_CLEAR
+        int 0x80
+
+        ; Alarm sound
+        mov eax, SYS_BEEP
+        mov ebx, SND_ALARM
+        mov ecx, 10
+        int 0x80
+
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_YELLOW
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 12
+        mov ecx, 2
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_failed_title
+        int 0x80
+
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 5
+        mov ecx, 4
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_failed_msg1
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 5
+        mov ecx, 5
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_failed_msg2
+        int 0x80
+
+        ; Show infected count prominently
+        mov eax, SYS_SETCURSOR
+        mov ebx, 5
+        mov ecx, 7
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LRED
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_failed_infected
+        int 0x80
+        mov eax, [infected]
+        call print_number
+        mov eax, SYS_PRINT
+        mov ebx, str_failed_still
+        int 0x80
+
+        ; Show stats
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 15
+        mov ecx, 9
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_final_stats
+        int 0x80
+        mov dword [stats_base_row], 10
+        call draw_final_stats
+
+        ; Educational message
+        mov eax, SYS_SETCURSOR
+        mov ebx, 5
+        mov ecx, 20
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_YELLOW
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_failed_lesson
+        int 0x80
+
+        mov eax, SYS_SETCURSOR
+        mov ebx, 20
+        mov ecx, 22
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LCYAN
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_play_again
+        int 0x80
+
+.failed_wait:
+        mov eax, SYS_GETCHAR
+        int 0x80
+        cmp al, 'y'
+        je title_screen
+        cmp al, 'Y'
+        je title_screen
+        cmp al, 'n'
+        je exit_game
+        cmp al, 'N'
+        je exit_game
+        cmp al, 27
+        je exit_game
+        jmp .failed_wait
+
+;=======================================================================
+; GAME COLLAPSE - Community collapsed (50%+ dead)
+;=======================================================================
+game_collapse:
+        mov eax, SYS_CLEAR
+        int 0x80
+
+        ; Death sound
+        mov eax, SYS_BEEP
+        mov ebx, SND_DEATH
+        mov ecx, 12
+        int 0x80
+
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LRED
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 14
+        mov ecx, 2
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_collapse_title
+        int 0x80
+
+        ; Skull art
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 32
+        mov ecx, 4
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, skull_art1
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 32
+        mov ecx, 5
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, skull_art2
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 32
+        mov ecx, 6
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, skull_art3
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 32
+        mov ecx, 7
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, skull_art4
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 32
+        mov ecx, 8
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, skull_art5
+        int 0x80
+
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 5
+        mov ecx, 10
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_collapse_msg
+        int 0x80
+
+        ; Show stats
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 15
+        mov ecx, 12
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_final_stats
+        int 0x80
+        mov dword [stats_base_row], 13
+        call draw_final_stats
+
+        ; Educational message
+        mov eax, SYS_SETCURSOR
+        mov ebx, 5
+        mov ecx, 20
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_YELLOW
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_edu_msg
+        int 0x80
+
+        mov eax, SYS_SETCURSOR
+        mov ebx, 20
+        mov ecx, 22
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LCYAN
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_play_again
+        int 0x80
+
+.collapse_wait:
+        mov eax, SYS_GETCHAR
+        int 0x80
+        cmp al, 'y'
+        je title_screen
+        cmp al, 'Y'
+        je title_screen
+        cmp al, 'n'
+        je exit_game
+        cmp al, 'N'
+        je exit_game
+        cmp al, 27
+        je exit_game
+        jmp .collapse_wait
+
+;=======================================================================
+; GAME OVER - Total extinction
 ;=======================================================================
 game_over:
         mov eax, SYS_CLEAR
@@ -2041,7 +2503,7 @@ game_over:
         int 0x80
 
         mov eax, SYS_SETCOLOR
-        mov ebx, C_LGRAY
+        mov ebx, C_WHITE
         int 0x80
         mov eax, SYS_SETCURSOR
         mov ebx, 8
@@ -2062,6 +2524,7 @@ game_over:
         mov eax, SYS_PRINT
         mov ebx, str_final_stats
         int 0x80
+        mov dword [stats_base_row], 13
         call draw_final_stats
 
         ; Educational message
@@ -2154,12 +2617,7 @@ draw_game_screen:
         int 0x80
 
         ; Print month name
-        mov eax, [month]
-        dec eax
-        imul eax, 4
-        mov ebx, [month_names + eax]
-        mov eax, SYS_PRINT
-        int 0x80
+        call print_month_name
 
         ; Print population on right
         mov eax, SYS_SETCURSOR
@@ -2379,21 +2837,50 @@ draw_game_screen:
         int 0x80
         call draw_morale_bar
 
-        ; Research progress
+        ; Preparedness meter
         mov eax, SYS_SETCURSOR
         mov ebx, 35
         mov ecx, 9
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_stat_ready
+        int 0x80
+        call draw_preparedness_bar
+
+        ; Research progress
+        mov eax, SYS_SETCURSOR
+        mov ebx, 35
+        mov ecx, 10
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_stat_research
         int 0x80
         mov eax, [research]
         call print_number
+        mov eax, SYS_PRINT
+        mov ebx, str_research_goal
+        int 0x80
 
-        ; Buildings
+        ; Alert level + infrastructure
         mov eax, SYS_SETCURSOR
         mov ebx, 35
-        mov ecx, 10
+        mov ecx, 11
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_stat_threat
+        int 0x80
+        call draw_threat_meter
+        mov eax, SYS_PUTCHAR
+        mov ebx, ' '
         int 0x80
         cmp byte [hospital_built], 1
         jne .no_hosp_icon
@@ -2450,6 +2937,19 @@ draw_game_screen:
         mov ecx, 13
         int 0x80
         call draw_timeline
+
+        ; Command briefing
+        mov eax, SYS_SETCURSOR
+        mov ebx, 2
+        mov ecx, 14
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_command_brief
+        int 0x80
+        call print_advisor_line
 
         ; Actions remaining
         mov eax, SYS_SETCURSOR
@@ -2558,7 +3058,7 @@ draw_action_menu:
         mov ecx, 20
         int 0x80
         mov eax, SYS_SETCOLOR
-        mov ebx, C_LGRAY
+        mov ebx, C_WHITE
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_act_rest
@@ -2595,12 +3095,7 @@ draw_month_summary:
         mov eax, SYS_SETCOLOR
         mov ebx, C_WHITE
         int 0x80
-        mov eax, [month]
-        dec eax
-        imul eax, 4
-        mov ebx, [month_names + eax]
-        mov eax, SYS_PRINT
-        int 0x80
+        call print_month_name
 
         ; Separator
         mov eax, SYS_SETCURSOR
@@ -2663,7 +3158,7 @@ draw_month_summary:
         int 0x80
 .after_death:
 
-        ; Infection % bar
+        ; Outbreak alert indicator
         mov eax, SYS_SETCURSOR
         mov ebx, 5
         mov ecx, 9
@@ -2674,6 +3169,7 @@ draw_month_summary:
         mov eax, SYS_PRINT
         mov ebx, str_infection_rate
         int 0x80
+        call draw_threat_meter
 
         ; Draw community bar at summary
         mov eax, SYS_SETCURSOR
@@ -2725,6 +3221,19 @@ draw_month_summary:
         int 0x80
         call draw_morale_bar
 
+        ; Response readiness
+        mov eax, SYS_SETCURSOR
+        mov ebx, 5
+        mov ecx, 15
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_stat_ready
+        int 0x80
+        call draw_preparedness_bar
+
         ; Educational tip
         mov eax, SYS_SETCURSOR
         mov ebx, 5
@@ -2737,7 +3246,7 @@ draw_month_summary:
         mov ebx, str_tip_label
         int 0x80
         mov eax, SYS_SETCOLOR
-        mov ebx, C_LGRAY
+        mov ebx, C_WHITE
         int 0x80
         call print_random_tip
 
@@ -2750,6 +3259,16 @@ draw_month_summary:
 show_event_screen:
         pushad
         mov eax, SYS_SETCURSOR
+        mov ebx, 4
+        mov ecx, 18
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_DGRAY
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_sep_short
+        int 0x80
+        mov eax, SYS_SETCURSOR
         mov ebx, 5
         mov ecx, 19
         int 0x80
@@ -2758,6 +3277,16 @@ show_event_screen:
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_event_header
+        int 0x80
+        mov eax, SYS_SETCURSOR
+        mov ebx, 4
+        mov ecx, 21
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_DGRAY
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_sep_short
         int 0x80
         popad
         ret
@@ -2882,6 +3411,239 @@ draw_morale_bar:
         ret
 
 ;---------------------------------------
+; draw_preparedness_bar - Visual readiness meter
+;---------------------------------------
+draw_preparedness_bar:
+        pushad
+        mov eax, [preparedness]
+        cmp eax, 70
+        jge .prep_green
+        cmp eax, 40
+        jge .prep_cyan
+        mov ebx, C_YELLOW
+        jmp .prep_draw
+.prep_green:
+        mov ebx, C_LGREEN
+        jmp .prep_draw
+.prep_cyan:
+        mov ebx, C_LCYAN
+.prep_draw:
+        push eax
+        mov eax, SYS_SETCOLOR
+        int 0x80
+        pop eax
+
+        mov ecx, eax
+        shr ecx, 2
+        cmp ecx, 20
+        jle .prep_cap
+        mov ecx, 20
+.prep_cap:
+        mov edx, ecx
+        cmp ecx, 0
+        jle .prep_empty
+.prep_fill:
+        push ecx
+        mov eax, SYS_PUTCHAR
+        mov ebx, 0xDB
+        int 0x80
+        pop ecx
+        dec ecx
+        jnz .prep_fill
+.prep_empty:
+        mov ecx, 20
+        sub ecx, edx
+        cmp ecx, 0
+        jle .prep_done
+        push ecx
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_DGRAY
+        int 0x80
+        pop ecx
+.prep_dim:
+        push ecx
+        mov eax, SYS_PUTCHAR
+        mov ebx, 0xB0
+        int 0x80
+        pop ecx
+        dec ecx
+        jnz .prep_dim
+.prep_done:
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, ' '
+        int 0x80
+        mov eax, [preparedness]
+        call print_number
+        mov eax, SYS_PUTCHAR
+        mov ebx, '%'
+        int 0x80
+        popad
+        ret
+
+;---------------------------------------
+; draw_threat_meter - Show current alert stage
+;---------------------------------------
+draw_threat_meter:
+        pushad
+        mov eax, [threat_level]
+        cmp eax, 1
+        je .threat_1
+        cmp eax, 2
+        je .threat_2
+        cmp eax, 3
+        je .threat_3
+        cmp eax, 4
+        je .threat_4
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LRED
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_threat_5
+        int 0x80
+        jmp .bars
+.threat_1:
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LGREEN
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_threat_1
+        int 0x80
+        jmp .bars
+.threat_2:
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LCYAN
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_threat_2
+        int 0x80
+        jmp .bars
+.threat_3:
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_YELLOW
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_threat_3
+        int 0x80
+        jmp .bars
+.threat_4:
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LMAGENTA
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_threat_4
+        int 0x80
+.bars:
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_WHITE
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, ' '
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, '['
+        int 0x80
+        mov ecx, [threat_level]
+.fill_loop:
+        cmp ecx, 0
+        jle .empty_setup
+        push ecx
+        mov eax, SYS_PUTCHAR
+        mov ebx, '!'
+        int 0x80
+        pop ecx
+        dec ecx
+        jmp .fill_loop
+.empty_setup:
+        mov ecx, MAX_THREAT
+        sub ecx, [threat_level]
+.empty_loop:
+        cmp ecx, 0
+        jle .close_bar
+        push ecx
+        mov eax, SYS_PUTCHAR
+        mov ebx, '.'
+        int 0x80
+        pop ecx
+        dec ecx
+        jmp .empty_loop
+.close_bar:
+        mov eax, SYS_PUTCHAR
+        mov ebx, ']'
+        int 0x80
+        popad
+        ret
+
+;---------------------------------------
+; print_advisor_line - Dynamic strategic guidance
+;---------------------------------------
+print_advisor_line:
+        pushad
+        mov eax, [infected]
+        mov ebx, [healthy]
+        shr ebx, 1
+        cmp eax, ebx
+        jge .adv_treat
+        cmp dword [vaccines], 12
+        jle .adv_supply
+        cmp byte [hospital_built], 0
+        jne .check_lab_goal
+        cmp dword [research], 30
+        jl .adv_hospital
+.check_lab_goal:
+        cmp byte [lab_built], 0
+        jne .check_morale_state
+        cmp dword [research], 70
+        jl .adv_lab
+.check_morale_state:
+        cmp dword [morale], 35
+        jl .adv_morale
+        cmp dword [preparedness], 40
+        jl .adv_ready
+        cmp dword [threat_level], 4
+        jge .adv_surge
+        mov ebx, C_LGREEN
+        mov esi, str_adv_press
+        jmp .print
+.adv_treat:
+        mov ebx, C_LRED
+        mov esi, str_adv_treat
+        jmp .print
+.adv_supply:
+        mov ebx, C_YELLOW
+        mov esi, str_adv_supply
+        jmp .print
+.adv_hospital:
+        mov ebx, C_LMAGENTA
+        mov esi, str_adv_hospital
+        jmp .print
+.adv_lab:
+        mov ebx, C_LCYAN
+        mov esi, str_adv_lab
+        jmp .print
+.adv_morale:
+        mov ebx, C_LBLUE
+        mov esi, str_adv_morale
+        jmp .print
+.adv_ready:
+        mov ebx, C_LCYAN
+        mov esi, str_adv_ready
+        jmp .print
+.adv_surge:
+        mov ebx, C_YELLOW
+        mov esi, str_adv_surge
+.print:
+        mov eax, SYS_SETCOLOR
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, esi
+        int 0x80
+        popad
+        ret
+
+;---------------------------------------
 ; draw_timeline - Show month progress
 ;---------------------------------------
 draw_timeline:
@@ -2952,10 +3714,11 @@ draw_timeline:
 ;---------------------------------------
 draw_final_stats:
         pushad
+        mov edi, [stats_base_row]
         ; Row 1: Survivors
         mov eax, SYS_SETCURSOR
         mov ebx, 15
-        mov ecx, 13
+        mov ecx, edi
         int 0x80
         mov eax, SYS_SETCOLOR
         mov ebx, C_LGREEN
@@ -2972,9 +3735,10 @@ draw_final_stats:
         call print_number
 
         ; Row 2: Total vaccinated
+        inc edi
         mov eax, SYS_SETCURSOR
         mov ebx, 15
-        mov ecx, 14
+        mov ecx, edi
         int 0x80
         mov eax, SYS_SETCOLOR
         mov ebx, C_LCYAN
@@ -2986,9 +3750,10 @@ draw_final_stats:
         call print_number
 
         ; Row 3: Total treated
+        inc edi
         mov eax, SYS_SETCURSOR
         mov ebx, 15
-        mov ecx, 15
+        mov ecx, edi
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_fs_treated
@@ -2997,9 +3762,10 @@ draw_final_stats:
         call print_number
 
         ; Row 4: Deaths
+        inc edi
         mov eax, SYS_SETCURSOR
         mov ebx, 15
-        mov ecx, 16
+        mov ecx, edi
         int 0x80
         mov eax, SYS_SETCOLOR
         mov ebx, C_LRED
@@ -3010,10 +3776,34 @@ draw_final_stats:
         mov eax, [dead]
         call print_number
 
-        ; Row 5: Months survived
+        ; Row 5: Still infected
+        inc edi
         mov eax, SYS_SETCURSOR
         mov ebx, 15
-        mov ecx, 17
+        mov ecx, edi
+        int 0x80
+        cmp dword [infected], 0
+        jne .fs_has_infected
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_LGREEN
+        int 0x80
+        jmp .fs_inf_draw
+.fs_has_infected:
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_YELLOW
+        int 0x80
+.fs_inf_draw:
+        mov eax, SYS_PRINT
+        mov ebx, str_fs_infected
+        int 0x80
+        mov eax, [infected]
+        call print_number
+
+        ; Row 6: Months survived
+        inc edi
+        mov eax, SYS_SETCURSOR
+        mov ebx, 15
+        mov ecx, edi
         int 0x80
         mov eax, SYS_SETCOLOR
         mov ebx, C_WHITE
@@ -3038,24 +3828,75 @@ calc_rating:
         mov ecx, 19
         int 0x80
 
-        ; Choose rating based on survival %
+        ; Choose rating based on survival % adjusted for difficulty
         mov eax, [population]
         imul eax, 100
         xor edx, edx
         mov ebx, COMMUNITY_SIZE
         div ebx                 ; EAX = survival percentage
-        
-        cmp eax, 90
+
+        ; Hard mode: lower thresholds (harder to earn S)
+        ; Easy mode: higher thresholds (must save more)
+        mov ebx, [set_diff]
+        cmp ebx, 2
+        je .rate_hard_thresh
+        cmp ebx, 0
+        je .rate_easy_thresh
+        ; Normal thresholds
+        cmp eax, 85
         jge .rate_s
-        cmp eax, 75
+        cmp eax, 70
         jge .rate_a
-        cmp eax, 60
+        cmp eax, 55
         jge .rate_b
+        cmp eax, 35
+        jge .rate_c
+        jmp .rate_d
+.rate_hard_thresh:
+        cmp eax, 70
+        jge .rate_s
+        cmp eax, 55
+        jge .rate_a
         cmp eax, 40
+        jge .rate_b
+        cmp eax, 25
+        jge .rate_c
+        jmp .rate_d
+.rate_easy_thresh:
+        cmp eax, 95
+        jge .rate_s
+        cmp eax, 85
+        jge .rate_a
+        cmp eax, 70
+        jge .rate_b
+        cmp eax, 50
         jge .rate_c
         jmp .rate_d
 
 .rate_s:
+        ; Check if actual herd immunity was achieved (70%+ of survivors immune)
+        push eax
+        mov eax, [vaccinated]
+        add eax, [recovered]
+        imul eax, 100
+        xor edx, edx
+        mov ecx, [population]
+        cmp ecx, 1
+        jl .rate_s_lead
+        div ecx
+        cmp eax, 70
+        jge .rate_s_herd
+.rate_s_lead:
+        pop eax
+        mov eax, SYS_SETCOLOR
+        mov ebx, C_YELLOW
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, str_rate_s_alt
+        int 0x80
+        jmp .rate_done
+.rate_s_herd:
+        pop eax
         mov eax, SYS_SETCOLOR
         mov ebx, C_YELLOW
         int 0x80
@@ -3157,29 +3998,101 @@ print_number:
         ret
 
 ;---------------------------------------
-; calc_difficulty - Increases as months progress
+; calc_difficulty - Escalates outbreak pressure and sets alert level
 ;---------------------------------------
 calc_difficulty:
         pushad
         mov eax, [month]
-        ; Difficulty modifier: Easy=-2, Normal=0, Hard=+3
+        dec eax
+        cmp eax, 0
+        jge .month_ready
+        xor eax, eax
+.month_ready:
+
+        ; Difficulty modifier from selected campaign mode
         mov ebx, [set_diff]
         cmp ebx, 0
-        je .diff_easy
+        je .diff_mode_done
         cmp ebx, 2
         je .diff_hard
-        ; Normal: no modifier
-        jmp .diff_store
-.diff_easy:
-        sub eax, 2
-        cmp eax, 0
-        jge .diff_store
-        xor eax, eax
-        jmp .diff_store
+        inc eax
+        jmp .diff_mode_done
 .diff_hard:
         add eax, 3
-.diff_store:
+.diff_mode_done:
+
+        ; Existing cases amplify pressure as the outbreak grows
+        mov ebx, [infected]
+        shr ebx, 3                      ; infected / 8
+        add eax, ebx
+
+        ; Community morale can stabilize or destabilize the response
+        cmp dword [morale], 35
+        jge .morale_high_check
+        add eax, 2
+        jmp .prep_check
+.morale_high_check:
+        cmp dword [morale], 75
+        jl .prep_check
+        dec eax
+
+.prep_check:
+        cmp dword [preparedness], 30
+        jg .prep_high_check
+        add eax, 2
+        jmp .building_check
+.prep_high_check:
+        cmp dword [preparedness], 70
+        jl .building_check
+        dec eax
+
+.building_check:
+        cmp byte [hospital_built], 1
+        jne .lab_check
+        dec eax
+.lab_check:
+        cmp byte [lab_built], 1
+        jne .diff_clamp
+        dec eax
+
+.diff_clamp:
+        cmp eax, 0
+        jge .store_diff
+        xor eax, eax
+.store_diff:
         mov [difficulty], eax
+
+        ; Alert level is the visible campaign "level" the player fights through
+        mov ebx, eax
+        cmp dword [infected], 10
+        jl .threat_map
+        inc ebx
+        cmp dword [infected], 25
+        jl .threat_map
+        add ebx, 2
+.threat_map:
+        cmp ebx, 4
+        jl .threat_1
+        cmp ebx, 8
+        jl .threat_2
+        cmp ebx, 12
+        jl .threat_3
+        cmp ebx, 16
+        jl .threat_4
+        mov dword [threat_level], 5
+        jmp .done
+.threat_1:
+        mov dword [threat_level], 1
+        jmp .done
+.threat_2:
+        mov dword [threat_level], 2
+        jmp .done
+.threat_3:
+        mov dword [threat_level], 3
+        jmp .done
+.threat_4:
+        mov dword [threat_level], 4
+.done:
         popad
         ret
 
@@ -3191,78 +4104,128 @@ calc_infection_rate:
         push ecx
         push edx
 
-        ; Get immunity percentage (vaccinated + recovered)
+        ; === Difficulty-dependent base infection rate ===
+        mov ebx, [set_diff]
+        cmp ebx, 0
+        je .base_easy
+        cmp ebx, 2
+        je .base_hard
+        mov ebx, 12                     ; Normal: 12% base
+        jmp .base_set
+.base_easy:
+        mov ebx, 7                      ; Easy: 7% base
+        jmp .base_set
+.base_hard:
+        mov ebx, 18                     ; Hard: 18% base
+.base_set:
+
+        ; === Monthly escalation: virus gets stronger over time ===
+        mov eax, [month]
+        cmp eax, 3
+        jle .no_escalation
+        sub eax, 3
+        ; +1% per month after month 3 (on hard: doubled)
+        cmp dword [set_diff], 2
+        jne .esc_normal
+        shl eax, 1
+.esc_normal:
+        add ebx, eax
+.no_escalation:
+
+        ; === Active infections amplify spread (contagion pressure) ===
+        mov eax, [infected]
+        shr eax, 3                      ; infected / 8 added to rate
+        add ebx, eax
+
+        ; === Difficulty modifier adds persistent pressure ===
+        add ebx, [difficulty]
+
+        ; === Threat level drives base rate ===
+        mov eax, [threat_level]
+        add ebx, eax
+
+        ; === Low morale worsens containment ===
+        cmp dword [morale], 40
+        jge .morale_ok_inf
+        add ebx, 4
+        cmp dword [morale], 20
+        jge .morale_ok_inf
+        add ebx, 4
+.morale_ok_inf:
+
+        ; === Immunity reduction (vaccinated + recovered slow spread) ===
         mov eax, [vaccinated]
-        add eax, [recovered]   ; Recovered also have immunity
+        add eax, [recovered]
         imul eax, 100
         xor edx, edx
         mov ecx, COMMUNITY_SIZE
-        div ecx                 ; EAX = immune %
-
-        ; Reduce infection rate: for each 10% immune, reduce by VACCINE_EFFECT
+        div ecx                         ; EAX = immune percentage
         xor edx, edx
         mov ecx, 10
-        div ecx                 ; EAX = immune_pct / 10
-        imul eax, VACCINE_EFFECT ; EAX = reduction amount
-
-        ; Difficulty scaling for immunity effectiveness
-        ; Easy: full reduction, Normal: 75%, Hard: 50%
-        mov ecx, [set_diff]
-        cmp ecx, 2
-        je .reduction_hard
-        cmp ecx, 1
-        je .reduction_normal
-        jmp .reduction_done
-.reduction_normal:
-        imul eax, 3
-        xor edx, edx
-        mov ecx, 4
-        div ecx
-        jmp .reduction_done
-.reduction_hard:
-        shr eax, 1
-.reduction_done:
-
-        ; Infection count = (base_rate + difficulty - reduction) * healthy / 100
-        mov ebx, OUTBREAK_BASE
-        add ebx, [difficulty]
+        div ecx                         ; EAX = immune_pct / 10
+        imul eax, VACCINE_EFFECT
+        ; Hard mode: immunity less effective (virus evolves)
+        cmp dword [set_diff], 2
+        jne .immune_full
+        shr eax, 1                      ; Halve immunity benefit on hard
+.immune_full:
+        cmp byte [lab_built], 1
+        jne .immune_apply
+        add eax, 2
+.immune_apply:
         sub ebx, eax
-        ; Higher floor on hard mode keeps pressure up
-        mov ecx, [set_diff]
-        cmp ecx, 2
-        jne .normal_floor
-        cmp ebx, 5
-        jge .rate_floor
-        mov ebx, 5
-        jmp .rate_floor
-.normal_floor:
-        cmp ebx, 2
-        jge .rate_floor
-        mov ebx, 2              ; Minimum 2% infection rate
-.rate_floor:
-        ; Apply to healthy population
+
+        ; === Preparedness reduces spread (less than before) ===
+        mov eax, [preparedness]
+        shr eax, 4                      ; preparedness / 16
+        sub ebx, eax
+
+        ; === Infrastructure mitigation ===
+        cmp byte [hospital_built], 1
+        jne .no_hosp_reduction
+        dec ebx
+.no_hosp_reduction:
+
+        ; === Minimum infection floor (difficulty + threat-dependent) ===
+        mov ecx, [threat_level]
+        add ecx, 2
+        mov eax, [set_diff]
+        add ecx, eax
+        cmp dword [set_diff], 2
+        jne .floor_check
+        add ecx, 3                      ; Hard mode has a much higher floor
+.floor_check:
+        cmp ebx, ecx
+        jge .floor_done
+        mov ebx, ecx
+.floor_done:
+
+        ; === Cap max rate at 50% to prevent instant wipe ===
+        cmp ebx, 50
+        jle .rate_capped
+        mov ebx, 50
+.rate_capped:
+
+        ; === Apply rate to healthy population ===
         mov eax, [healthy]
         imul eax, ebx
         xor edx, edx
         mov ecx, 100
-        div ecx                 ; EAX = new infections
+        div ecx                         ; EAX = new infections
 
-        ; Add some randomness (base: +/- 3)
-        ; Hard mode is slightly biased upward to avoid stagnant outbreaks
+        ; === Random variance: stage-biased swing ===
         push eax
         call random
         xor edx, edx
         mov ecx, 7
         div ecx
-        sub edx, 3             ; -3 to +3
-        mov ecx, [set_diff]
-        cmp ecx, 2
-        jne .rand_done
-        add edx, 2             ; Hard: -1 to +5
-.rand_done:
+        sub edx, 2                      ; -2 to +4
+        mov ecx, [threat_level]
+        add edx, ecx                    ; Higher threat biases upward
         mov ebx, edx
         pop eax
         add eax, ebx
+
         cmp eax, 0
         jge .inf_nonneg
         xor eax, eax
@@ -3285,6 +4248,142 @@ clamp_morale:
         jle .clamp_done
         mov dword [morale], MAX_MORALE
 .clamp_done:
+        ret
+
+;---------------------------------------
+; clamp_preparedness - Keep readiness in 0..MAX_PREPAREDNESS
+;---------------------------------------
+clamp_preparedness:
+        cmp dword [preparedness], 0
+        jge .prep_hi
+        mov dword [preparedness], 0
+.prep_hi:
+        cmp dword [preparedness], MAX_PREPAREDNESS
+        jle .prep_done
+        mov dword [preparedness], MAX_PREPAREDNESS
+.prep_done:
+        ret
+
+;---------------------------------------
+; monthly_decay - Resource spoilage, attrition, and breakthrough infections
+;---------------------------------------
+monthly_decay:
+        pushad
+        ; --- Vaccine spoilage ---
+        mov eax, [set_diff]
+        cmp eax, 0
+        je .decay_vax_easy
+        cmp eax, 2
+        je .decay_vax_hard
+        sub dword [vaccines], DECAY_VAX_NORM
+        jmp .decay_vax_done
+.decay_vax_easy:
+        sub dword [vaccines], DECAY_VAX_EASY
+        jmp .decay_vax_done
+.decay_vax_hard:
+        sub dword [vaccines], DECAY_VAX_HARD
+.decay_vax_done:
+        cmp dword [vaccines], 0
+        jge .decay_sup
+        mov dword [vaccines], 0
+
+.decay_sup:
+        ; --- Supply consumption ---
+        mov eax, [set_diff]
+        cmp eax, 0
+        je .decay_sup_easy
+        cmp eax, 2
+        je .decay_sup_hard
+        sub dword [supplies], DECAY_SUP_NORM
+        jmp .decay_sup_done
+.decay_sup_easy:
+        sub dword [supplies], DECAY_SUP_EASY
+        jmp .decay_sup_done
+.decay_sup_hard:
+        sub dword [supplies], DECAY_SUP_HARD
+.decay_sup_done:
+        cmp dword [supplies], 0
+        jge .decay_mor
+        mov dword [supplies], 0
+
+.decay_mor:
+        ; --- Morale fatigue ---
+        mov eax, [set_diff]
+        cmp eax, 0
+        je .decay_mor_easy
+        cmp eax, 2
+        je .decay_mor_hard
+        sub dword [morale], DECAY_MOR_NORM
+        jmp .decay_mor_done
+.decay_mor_easy:
+        sub dword [morale], DECAY_MOR_EASY
+        jmp .decay_mor_done
+.decay_mor_hard:
+        sub dword [morale], DECAY_MOR_HARD
+.decay_mor_done:
+        call clamp_morale
+
+        ; --- Preparedness erosion ---
+        mov eax, [set_diff]
+        cmp eax, 0
+        je .decay_prep_easy
+        cmp eax, 2
+        je .decay_prep_hard
+        sub dword [preparedness], 2
+        jmp .decay_prep_done
+.decay_prep_easy:
+        sub dword [preparedness], 1
+        jmp .decay_prep_done
+.decay_prep_hard:
+        sub dword [preparedness], 3
+.decay_prep_done:
+        call clamp_preparedness
+
+        ; --- Breakthrough infections at high threat ---
+        cmp dword [threat_level], 4
+        jl .no_breakthrough
+        mov eax, [vaccinated]
+        cmp eax, 0
+        jle .no_breakthrough
+        ; 4% breakthrough at threat 4, 8% at threat 5
+        mov ecx, 4
+        cmp dword [threat_level], 5
+        jne .bt_rate_set
+        mov ecx, 8
+.bt_rate_set:
+        imul eax, ecx
+        xor edx, edx
+        mov ecx, 100
+        div ecx
+        cmp eax, 0
+        jle .no_breakthrough
+        mov ebx, [vaccinated]
+        cmp eax, ebx
+        jle .bt_ok
+        mov eax, ebx
+.bt_ok:
+        sub [vaccinated], eax
+        add [infected], eax
+.no_breakthrough:
+        popad
+        ret
+
+;---------------------------------------
+; print_month_name - Wrap long campaigns safely across the 12-month table
+;---------------------------------------
+print_month_name:
+        pushad
+        mov eax, [month]
+        dec eax
+        xor edx, edx
+        mov ecx, 12
+        div ecx
+        mov eax, edx
+        imul eax, 4
+        mov ebx, [month_names + eax]
+        mov eax, SYS_PRINT
+        int 0x80
+        popad
         ret
 
 ;---------------------------------------
@@ -3406,7 +4505,7 @@ shield_art2:     db " | +++ |", 0
 shield_art3:     db "  \\ + /", 0
 shield_art4:     db "   \\_/", 0
 
-str_story1:      db "The year is 2024. A deadly virus called Ratel Fever has", 0
+str_story1:      db "The year is 2031. A deadly virus called Ratel Fever has", 0
 str_story2:      db "emerged. You are Dr. Pryor, chief epidemiologist. Lead your", 0
 str_story3:      db "community through months of deadly outbreak.", 0
 
@@ -3426,16 +4525,16 @@ str_set_months:   db "[4] Game Length:         ", 0
 str_set_diff:     db "[5] Difficulty:          ", 0
 str_months_suffix: db " months", 0
 str_set_presets:  db "Quick Presets:", 0
-str_preset_easy:  db "[1] Easy   - 75 vaccines, 60 supplies, 90% morale", 0
-str_preset_normal:db "[2] Normal - 50 vaccines, 40 supplies, 70% morale", 0
-str_preset_hard:  db "[3] Hard   - 25 vaccines, 20 supplies, 50% morale", 0
+str_preset_easy:  db "[1] Easy   - 60 vaccines, 50 supplies, 80% morale", 0
+str_preset_normal:db "[2] Normal - 35 vaccines, 30 supplies, 60% morale", 0
+str_preset_hard:  db "[3] Hard   - 15 vaccines, 15 supplies, 40% morale", 0
 str_preset_custom:db "[4] Custom - Set each value individually", 0
 str_set_footer:   db "Press ESC to return to title screen.", 0
 
 ; Custom settings screen
 str_custom_title: db "=== CUSTOM SETTINGS ===", 0
-str_cust_vaccines: db "Starting Vaccines: [1] 25  [2] 50  [3] 75  [4] 100", 0
-str_cust_supplies: db "Starting Supplies: [1] 20  [2] 40  [3] 60  [4] 80", 0
+str_cust_vaccines: db "Starting Vaccines: [1] 15  [2] 30  [3] 50  [4] 75", 0
+str_cust_supplies: db "Starting Supplies: [1] 15  [2] 30  [3] 50  [4] 70", 0
 str_cust_morale:   db "Starting Morale:   [1] 40% [2] 60% [3] 80% [4] 100%", 0
 str_cust_months:   db "Game Length:       [1] 6   [2] 12  [3] 18  [4] 24 months", 0
 str_cust_diff:     db "Difficulty:        [1] Easy  [2] Normal  [3] Hard", 0
@@ -3454,7 +4553,7 @@ str_howto_title: db "=== HOW TO PLAY ===", 0
 
 howto_line1:     db " ", 0
 howto_line2:     db "You lead a community of 200 people through a viral outbreak.", 0
-howto_line3:     db "Each month you get 3 actions. Customize settings from the menu!", 0
+howto_line3:     db "Each month you get 2 actions. Supplies decay. The virus escalates!", 0
 howto_line4:     db " ", 0
 howto_line5:     db "ACTIONS:", 0
 howto_line6:     db "  [1] Vaccinate  - Use vaccine doses to immunize the healthy", 0
@@ -3466,10 +4565,10 @@ howto_line11:    db "  [6] Rest       - Skip an action for a small morale boost"
 howto_line12:    db " ", 0
 howto_line13:    db "TIPS:", 0
 howto_line14:    db "  * Vaccinated people are immune to infection", 0
-howto_line15:    db "  * High morale reduces death rates", 0
-howto_line16:    db "  * The Hospital gives bonus treatment; the Lab boosts research", 0
-howto_line17:    db "  * Random events can help or hinder your progress", 0
-howto_line18:    db "  * The virus gets stronger each month -- stay ahead of it!", 0
+howto_line15:    db "  * High morale and readiness reduce death rates and spread", 0
+howto_line16:    db "  * The Hospital boosts treatment; the Lab supercharges planning", 0
+howto_line17:    db "  * Alert levels make supply runs and random events more dramatic", 0
+howto_line18:    db "  * Keep the threat meter low to truly contain the outbreak!", 0
 
 howto_lines:
         dd howto_line1, howto_line2, howto_line3, howto_line4
@@ -3501,7 +4600,11 @@ str_stat_dead:    db "Deceased:   ", 0
 str_stat_vaccines:db "Vaccines:  ", 0
 str_stat_supplies:db "Supplies:  ", 0
 str_stat_morale:  db "Morale: ", 0
+str_stat_ready:   db "Ready:  ", 0
 str_stat_research:db "Research: ", 0
+str_stat_threat:  db "Alert: ", 0
+str_research_goal: db " /50H /130L", 0
+str_command_brief: db "Command Brief: ", 0
 
 str_hosp_yes:    db "[+Hospital]", 0
 str_hosp_no:     db "[-Hospital]", 0
@@ -3514,34 +4617,35 @@ str_actions_left: db "Actions remaining: ", 0
 str_separator:   db "----------------------------------------------------------------------", 0xC4, 0xC4, 0xC4, 0xC4, 0xC4, 0xC4, 0xC4, 0xC4, 0
 
 ; Action menu
-str_choose_action: db "Choose your action:", 0
-str_act_vaccinate: db "[1] Vaccination Drive  (uses vaccines)", 0
-str_act_treat:     db "[2] Treat the Sick     (uses supplies)", 0
-str_act_supply:    db "[3] Supply Run         (gather resources)", 0
-str_act_research:  db "[4] Research           (build upgrades)", 0
-str_act_awareness: db "[5] Public Awareness   (boost morale)", 0
-str_act_rest:      db "[6] Rest               (skip action)", 0
+str_choose_action: db "Command Center - choose the next response:", 0
+str_act_vaccinate: db "[1] Vaccination Drive", 0
+str_act_treat:     db "[2] Treat the Sick", 0
+str_act_supply:    db "[3] Supply Run (risky)", 0
+str_act_research:  db "[4] Research", 0
+str_act_awareness: db "[5] Public Awareness", 0
+str_act_rest:      db "[6] Regroup & Rest", 0
 
 ; Action results
 str_vax_success:   db "Vaccination drive successful! Immunized: ", 0
 str_people_vaxxed: db " people.", 0
 str_no_vaccines:   db "No vaccine doses available! Do a supply run.", 0
-str_all_vaxxed:    db "Everyone is already vaccinated or immune!", 0
+str_all_vaxxed:    db "All survivors are vaccinated or have natural immunity!", 0
+str_no_healthy:    db "No healthy people to vaccinate -- treat the sick first!", 0
 str_treated:       db "Medical treatment administered! Cured: ", 0
 str_people_treated:db " patients.", 0
 str_no_sick:       db "Great news -- no one is currently infected!", 0
 str_no_supplies:   db "No medical supplies left! Do a supply run.", 0
 str_supply_ok:     db "Supply run successful! Got: ", 0
-str_supply_risk:   db "Supply run complete, but 2 workers got infected!", 0
+str_supply_risk:   db "Supply run complete, but 3 workers got infected!", 0
 str_vax_and:       db " vaccines and ", 0
 str_med_supplies:  db " medical supplies.", 0
 str_research_pts:  db "Research progress: +", 0
 str_research_gained:db " points.", 0
 str_hospital_built:db "*** HOSPITAL BUILT! Treatment capacity increased! ***", 0
 str_lab_built:     db "*** RESEARCH LAB BUILT! Research gains boosted! ***", 0
-str_awareness_ok:  db "Public awareness campaign boosted community morale!", 0
-str_awareness_vax: db "Campaign success! 5 people voluntarily got vaccinated!", 0
-str_rest:          db "The team rests and regroups. Morale slightly improved.", 0
+str_awareness_ok:  db "Public awareness campaign boosted community morale and focus!", 0
+str_awareness_vax: db "Campaign success! Voluntary vaccinations: ", 0
+str_rest:          db "The team regroups, reorganizes supplies, and steadies morale.", 0
 
 ; Month summary
 str_month_summary: db "=== END OF MONTH REPORT ===", 0
@@ -3559,12 +4663,20 @@ str_evt_antivax:   db "Anti-vaccination rally: misinformation spread, morale dro
 str_evt_volunteer: db "Medical volunteers arrived! Supplies and morale boosted.", 0
 str_evt_mutation:  db "The virus mutated! Some vaccinated people lost immunity.", 0
 str_evt_theft:     db "Supply warehouse was raided. Lost 25% of vaccines & supplies.", 0
-str_evt_medteam:   db "Emergency medical team treated 10 patients for free!", 0
+str_evt_medteam:   db "Emergency medical team treated 5 patients for free!", 0
 str_evt_quarantine:db "Quarantine breach! Infected people spread the virus further.", 0
 str_evt_goodnews:  db "Community spirit is high! Everyone is pulling together.", 0
 
 ; End screens
 str_win_title:     db "*** OUTBREAK CONTAINED! YOU DID IT! ***", 0
+str_failed_title:  db "*** CONTAINMENT FAILED - OUTBREAK STILL ACTIVE ***", 0
+str_failed_msg1:   db "Time ran out. The outbreak is still raging through your", 0
+str_failed_msg2:   db "community. Federal authorities are taking over response.", 0
+str_failed_infected: db "Active infections: ", 0
+str_failed_still:  db " people are still sick.", 0
+str_failed_lesson: db "Contain the outbreak (< 10% infected) before time runs out!", 0
+str_collapse_title:db "*** COMMUNITY COLLAPSED ***", 0
+str_collapse_msg:  db "Over half the community has perished. Society has broken down.", 0
 str_gameover_title:db "*** THE OUTBREAK WAS LOST ***", 0
 str_gameover_msg:  db "The community could not survive the Ratel Fever outbreak.", 0
 str_final_stats:   db "--- Final Statistics ---", 0
@@ -3572,12 +4684,14 @@ str_fs_survivors:  db "Survivors:       ", 0
 str_fs_vaccinated: db "Total vaccinated: ", 0
 str_fs_treated:    db "Total treated:    ", 0
 str_fs_deaths:     db "Lives lost:       ", 0
+str_fs_infected:   db "Still infected:   ", 0
 str_fs_months:     db "Months survived:  ", 0
 
 str_edu_msg:       db "Remember: Vaccines are our strongest tool against outbreaks.", 0
 
 ; Ratings
 str_rate_s:        db "Rating: S - LEGENDARY EPIDEMIOLOGIST! Herd immunity achieved!", 0
+str_rate_s_alt:    db "Rating: S - LEGENDARY EPIDEMIOLOGIST! Outstanding leadership!", 0
 str_rate_a:        db "Rating: A - Excellent! Your leadership saved many lives.", 0
 str_rate_b:        db "Rating: B - Good effort. The community survived, but at a cost.", 0
 str_rate_c:        db "Rating: C - Many were lost. Earlier vaccination could have helped.", 0
@@ -3588,6 +4702,23 @@ str_confirm_quit:  db "Quit the game? Your community needs you! (Y/N)", 0
 str_press_continue:db "Press any key to continue...", 0
 
 str_tip_label:     db "Did you know? ", 0
+
+; Threat names
+str_threat_1:      db "CONTAINED", 0
+str_threat_2:      db "WATCH", 0
+str_threat_3:      db "CLUSTER", 0
+str_threat_4:      db "SURGE", 0
+str_threat_5:      db "EMERGENCY", 0
+
+; Tactical advisor guidance
+str_adv_treat:     db "Hospitals first: infection load is spiking - treat immediately.", 0
+str_adv_supply:    db "Stocks are running low - a supply run will keep the response alive.", 0
+str_adv_hospital:  db "Research to 30 to unlock the Hospital and improve survival odds.", 0
+str_adv_lab:       db "Push research to 70 to open the Lab and sharpen every response.", 0
+str_adv_morale:    db "Morale is shaky - awareness or regrouping will prevent panic.", 0
+str_adv_ready:     db "Readiness is slipping - awareness and research can steady the line.", 0
+str_adv_surge:     db "Surge conditions detected - balance treatment with rapid vaccination.", 0
+str_adv_press:     db "Containment is holding - press the advantage and lock in immunity.", 0
 
 ; Trophy art
 trophy_art1:       db "     ___________", 0
@@ -3671,10 +4802,15 @@ outbreaks_survived: resd 1
 hospital_built:     resb 1
 lab_built:          resb 1
 
+; Strategic state
+preparedness:       resd 1
+threat_level:       resd 1
+
 ; Temp
 event_type:         resd 1
 temp_val:           resd 1
 temp_val2:          resd 1
+stats_base_row:     resd 1
 
 ; Settings
 set_vaccines:       resd 1

@@ -34,7 +34,9 @@ QEMU_FLAGS = -cpu 486 \
              -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough \
              -boot c \
              -no-reboot \
-             -no-shutdown
+             -no-shutdown \
+             -audiodev coreaudio,id=snd0 \
+             -machine pcspk-audiodev=snd0
 
 # For debugging
 QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \

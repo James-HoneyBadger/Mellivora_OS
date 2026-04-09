@@ -1,8 +1,19 @@
 # Mellivora OS
 
-**A bare-metal 32-bit operating system written in x86 assembly.**
+![Release](https://img.shields.io/github/v/release/James-HoneyBadger/Mellivora_OS?display_name=tag) ![License](https://img.shields.io/github/license/James-HoneyBadger/Mellivora_OS) ![Platform](https://img.shields.io/badge/platform-i486%2B%20%7C%20QEMU-blue) ![Language](https://img.shields.io/badge/language-NASM%20x86-informational)
 
-Mellivora OS is a from-scratch operating system that boots on real i486+ hardware (or QEMU). It features a custom filesystem, a DOS-style interactive shell, 34 syscalls, an in-OS C compiler, 56 user-space assembly programs, and 11 bundled C samples.
+**A bare-metal 32-bit x86 operating system written in NASM assembly.**
+
+Mellivora OS is a from-scratch hobby OS that boots on real i486+ hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell, 34 syscalls, an in-OS Tiny C Compiler, 56 bundled assembly programs, and 11 C samples.
+
+> New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
+
+## 🦡 At a Glance
+
+- **Boot path:** 3-stage BIOS boot flow into 32-bit protected mode
+- **Userland:** 50+ shell commands, 56 assembly programs, and 11 bundled C samples
+- **Core pieces:** HBFS filesystem, ELF32 loader, PMM allocator, serial/VGA/ATA drivers
+- **Developer-ready:** API docs, programming guide, regression tests, and release packaging
 
 ---
 
@@ -240,7 +251,7 @@ Mellivora_OS/
 | `make full` | Complete build: boot + kernel + programs + filesystem |
 | `make run` | Launch in QEMU (i486, 128 MB RAM) |
 | `make debug` | Launch with QEMU monitor on stdio |
-| `make check` | Run regression test suite (currently 548 tests) |
+| `make check` | Run the regression suite and HBFS integrity checks |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Show component sizes |
 
@@ -267,15 +278,15 @@ Mellivora_OS/
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | 300-line entry file + 13 modular include files |
+| Kernel source | Compact entry file + 13 modular include files |
 | Kernel binary | ~238 KB |
-| Syscalls | 34 (via INT 0x80) |
-| Shell commands | 53 (45 unique + 8 aliases) |
-| User programs | 56 assembly + 11 C samples |
+| Syscalls | 34 (via `INT 0x80`) |
+| Shell experience | 50+ commands, aliases, history, completion, batch files |
+| User programs | 56 assembly apps + 11 bundled C samples |
 | API libraries | 6 reusable `.inc` modules (95+ functions) |
-| Disk image | 64 MB (HBFS formatted) |
-| Files on disk | 73 files in 4 subdirectories |
-| Test suite | 548 tests (`make check`) |
+| Disk image | 64 MB HBFS image |
+| Files on disk | 73 files across 4 subdirectories |
+| Test coverage | 580+ regression and filesystem checks |
 
 ---
 
