@@ -47,8 +47,23 @@ sudo pacman -S nasm qemu-full make python
 brew install nasm qemu make python3
 ```
 
-> **Note:** On macOS, `dd` is pre-installed. You may need to use `gmake` instead of `make`
-> if the system `make` is too old.
+> **Note:** On macOS, `dd` and `hdiutil` are pre-installed. You may need to use `gmake`
+> instead of `make` if the system `make` is too old.
+
+### Optional ISO-building tools on Linux
+
+To build `mellivora.iso` on Linux, install one of the following:
+
+```bash
+# Debian/Ubuntu
+sudo apt install xorriso
+
+# Fedora
+sudo dnf install xorriso
+
+# Arch
+sudo pacman -S xorriso
+```
 
 ### Installing on Windows
 
@@ -85,7 +100,8 @@ This single command:
 | **Programs** | `make programs` | Assemble all programs in `programs/` |
 | **Populate** | `make populate` | Write files and programs into the disk image |
 | **Full build** | `make full` | All of the above in order |
-| **Clean** | `make clean` | Remove all generated files (`.bin`, `.lst`, `.img`) |
+| **Bootable ISO** | `make iso` | Create `mellivora.iso` with install docs and user guide included |
+| **Clean** | `make clean` | Remove all generated files (`.bin`, `.lst`, `.img`, `.iso`) |
 | **Sizes** | `make sizes` | Show component sizes |
 | **Run** | `make run` | Launch in QEMU |
 | **Debug** | `make debug` | Launch in QEMU with monitor + debug logging |
@@ -96,11 +112,33 @@ After a successful build:
 
 ```text
 mellivora.img          64 MB bootable raw disk image
+mellivora.iso          Bootable ISO media with docs and install guide
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
 kernel.bin             32-bit kernel
 programs/*.bin         Compiled user programs (current assembly program set)
 *.lst                  Assembly listing files (useful for debugging)
+```
+
+### Creating a Bootable ISO
+
+```bash
+make iso
+```
+
+This creates `mellivora.iso`, which:
+
+1. boots directly in BIOS/legacy-compatible VMs,
+2. includes `mellivora.img` as the El Torito hard-disk boot image,
+3. bundles the full `INSTALL.md` and `USER_GUIDE.md` documentation inside the ISO.
+
+The ISO staging tree includes:
+
+```text
+boot/mellivora.img
+README.txt
+docs/INSTALL.md
+docs/USER_GUIDE.md
 ```
 
 ### Expected Warnings
@@ -124,6 +162,15 @@ that space in the output binary.
 ```bash
 make run
 ```
+
+### Booting the ISO in QEMU
+
+```bash
+make iso
+qemu-system-i386 -m 128 -cdrom mellivora.iso -boot d -no-reboot -no-shutdown
+```
+
+This is the recommended way to test the distributable install media exactly as users will receive it.
 
 This launches QEMU with:
 
@@ -226,14 +273,22 @@ sync
 
 ### USB Boot
 
-1. Write `mellivora.img` to a USB drive with `dd`
+1. Write `mellivora.img` to a USB drive with `dd` **or** write `mellivora.iso` with a USB imaging tool such as balenaEtcher
 2. Enter BIOS setup (usually F2, DEL, or F12)
 3. Enable "Legacy Boot" or "CSM" mode
-4. Set USB drive as first boot device
+4. Set USB drive or optical media as the first boot device
 5. Save and reboot
 
 > **Note:** UEFI-only systems (no CSM) will **not** boot Mellivora — it uses a
-> traditional MBR boot sector.
+> traditional MBR boot sector and BIOS-style boot flow.
+
+### VirtualBox / VMware / UTM
+
+1. Create a new **x86** VM in legacy BIOS mode
+2. Attach `mellivora.iso` as the VM's optical drive
+3. Give the VM at least **128 MB RAM**
+4. Boot from the ISO
+5. For a persistent install, attach a virtual disk and write `boot/mellivora.img` from the host onto that disk
 
 ---
 

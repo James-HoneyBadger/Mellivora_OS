@@ -251,6 +251,7 @@ Mellivora_OS/
 | `make full` | Complete build: boot + kernel + programs + filesystem |
 | `make run` | Launch in QEMU (i486, 128 MB RAM) |
 | `make debug` | Launch with QEMU monitor on stdio |
+| `make iso` | Create a bootable installer/live ISO with docs included |
 | `make check` | Run the regression suite and HBFS integrity checks |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Show component sizes |

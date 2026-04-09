@@ -9,6 +9,10 @@
 # Logs
 *.log
 
+# ISO / packaging artifacts
+*.iso
+.build/
+
 # Windows executables
 *.exe
 

@@ -13,8 +13,6 @@
 NASM = nasm
 QEMU = qemu-system-i386
 DD = dd
-CC ?= cc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra
 
 # Output
 IMAGE = mellivora.img
@@ -49,12 +47,18 @@ QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
 PROG_DIR = programs
 PROG_SRCS = $(wildcard $(PROG_DIR)/*.asm)
 PROG_BINS = $(PROG_SRCS:.asm=.bin)
-MAC_OUTBREAK = $(PROG_DIR)/outbreak_mac
+
+# ISO packaging
+ISO_STAGING = .build/iso-root
+ISO_FILE = mellivora.iso
+ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
+           docs/TECHNICAL_REFERENCE.md docs/TUTORIAL.md docs/API_REFERENCE.md \
+           docs/ISO_README.txt
 
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run debug programs populate full check outbreak-mac run-outbreak-mac
+.PHONY: all clean run debug programs populate full check iso
 
 all: $(IMAGE)
 
@@ -123,13 +127,6 @@ programs: $(PROG_BINS)
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
 
-# Native macOS port of Outbreak Shield
-outbreak-mac: $(PROG_DIR)/outbreak_mac.c
-	$(CC) $(CFLAGS) -o $(MAC_OUTBREAK) $<
-
-run-outbreak-mac: outbreak-mac
-	./$(MAC_OUTBREAK)
-
 # Populate disk image with files and programs
 populate: $(IMAGE) programs populate.py
 	@echo "=== Populating filesystem ==="
@@ -138,6 +135,21 @@ populate: $(IMAGE) programs populate.py
 # Full build: OS + programs + populated filesystem
 full: $(IMAGE) programs populate
 	@echo "=== Full build complete ==="
+
+# Build a bootable ISO that includes install docs and the user guide
+iso: full tools/build_iso.sh $(ISO_DOCS) README.md LICENSE CHANGELOG.md
+	@echo "=== Preparing bootable ISO staging tree ==="
+	@rm -rf "$(ISO_STAGING)"
+	@mkdir -p "$(ISO_STAGING)/boot" "$(ISO_STAGING)/docs"
+	@cp "$(IMAGE)" "$(ISO_STAGING)/boot/mellivora.img"
+	@cp README.md LICENSE CHANGELOG.md "$(ISO_STAGING)/"
+	@cp docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
+		  docs/TECHNICAL_REFERENCE.md docs/TUTORIAL.md docs/API_REFERENCE.md \
+		  "$(ISO_STAGING)/docs/"
+	@cp docs/ISO_README.txt "$(ISO_STAGING)/README.txt"
+	@chmod +x tools/build_iso.sh
+	@./tools/build_iso.sh "$(ISO_STAGING)" "$(ISO_FILE)"
+	@echo "=== Bootable ISO ready: $(ISO_FILE) ==="
 
 # Run regression tests (requires full build)
 check: full
@@ -158,6 +170,7 @@ sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	fi
 
 clean:
-	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE) kernel_sectors.inc
+	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE) $(ISO_FILE) kernel_sectors.inc
 	rm -f *.lst
-	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst $(MAC_OUTBREAK)
+	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
+	rm -rf .build
