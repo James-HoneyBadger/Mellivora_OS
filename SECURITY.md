@@ -1,5 +1,7 @@
 # Security Policy
 
+Policy status: validated against `main` on 2026-04-08.
+
 ## Supported Versions
 
 | Version | Supported          |

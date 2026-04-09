@@ -1,8 +1,10 @@
-# 🦡 Mellivora OS
+# Mellivora OS
 
-**A bare-metal 32-bit operating system written entirely in x86 assembly language.**
+**A bare-metal 32-bit operating system written in x86 assembly.**
 
-Mellivora OS is a from-scratch operating system that boots on real i486+ hardware (or QEMU). It features a custom filesystem, a DOS-style interactive shell, 34 syscalls, a C compiler, and 55 user-space programs — all in ~10,600 lines of NASM assembly.
+Documentation status: validated against `main` on 2026-04-08.
+
+Mellivora OS is a from-scratch operating system that boots on real i486+ hardware (or QEMU). It features a custom filesystem, a DOS-style interactive shell, 34 syscalls, an in-OS C compiler, 56 user-space assembly programs, and 11 bundled C samples.
 
 ---
 
@@ -25,7 +27,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 
 ### HB Lair Shell
 
-- **53 built-in commands** (45 unique + 8 aliases): file management, text processing, system info, and more
+- **40+ built-in shell commands** with aliases: file management, text processing, system info, and more
 - **Tab completion**, **command history** (Up/Down arrows), **Ctrl+C** hard-abort with proper cleanup
 - **Alias system** — define custom command shortcuts
 - **Environment variables** with `$VAR` expansion in echo and batch scripts
@@ -52,7 +54,7 @@ Mellivora OS is a from-scratch operating system that boots on real i486+ hardwar
 - **Serial port** (COM1 at 115200 baud) for debug output
 - **RTC** real-time clock for date/time
 
-### Programs (55 assembly + 11 C samples)
+### Programs (56 assembly + 11 C samples)
 
 - **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze, Kingdom, Outbreak, Neurovault
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, and more
@@ -131,7 +133,7 @@ Programs in `/bin` and `/games` are in the default PATH, so they run from any di
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (512 bytes, 16-bit)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
-├── kernel.asm              Kernel — all drivers, shell, FS, syscalls (~10,600 lines)
+├── kernel.asm              Kernel entry + modular includes (13 files in `kernel/`)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
 ├── CHANGELOG.md            Version history (v1.0 → v1.15)
@@ -152,9 +154,9 @@ Mellivora_OS/
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c
 │   ├── hanoi.c, bf.c, wumpus.c, boxes.c, stars.c, echo.c
 │   └── ...                 (11 samples total)
-├── tests/                  Regression test suite (586 tests)
-│   ├── test_build.sh       Build-time checks (45 tests)
-│   └── test_hbfs.py        HBFS filesystem integrity (541 tests)
+├── tests/                  Regression test suite
+│   ├── test_build.sh       Build-time checks
+│   └── test_hbfs.py        HBFS filesystem integrity checks
 └── docs/                   Documentation
     ├── API_REFERENCE.md     Library API reference
     ├── INSTALL.md           Build & installation guide
@@ -240,7 +242,7 @@ Mellivora_OS/
 | `make full` | Complete build: boot + kernel + programs + filesystem |
 | `make run` | Launch in QEMU (i486, 128 MB RAM) |
 | `make debug` | Launch with QEMU monitor on stdio |
-| `make check` | Run regression test suite (586 tests) |
+| `make check` | Run regression test suite (currently 548 tests) |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Show component sizes |
 
@@ -267,15 +269,15 @@ Mellivora_OS/
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | ~10,600 lines of NASM assembly |
+| Kernel source | 300-line entry file + 13 modular include files |
 | Kernel binary | ~238 KB |
 | Syscalls | 34 (via INT 0x80) |
 | Shell commands | 53 (45 unique + 8 aliases) |
-| User programs | 55 assembly + 11 C samples |
+| User programs | 56 assembly + 11 C samples |
 | API libraries | 6 reusable `.inc` modules (95+ functions) |
 | Disk image | 64 MB (HBFS formatted) |
-| Files on disk | 72 files in 4 subdirectories |
-| Test suite | 586 tests (45 build + 541 HBFS integrity) |
+| Files on disk | 73 files in 4 subdirectories |
+| Test suite | 548 tests (`make check`) |
 
 ---
 

@@ -1,5 +1,7 @@
 # Contributor Covenant Code of Conduct
 
+Policy status: maintained for the Mellivora OS project on `main`.
+
 ## Our Pledge
 
 We as members, contributors, and leaders pledge to make participation in our

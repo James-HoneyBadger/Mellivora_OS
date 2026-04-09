@@ -1,5 +1,7 @@
 # Mellivora OS — Programming Guide
 
+Documentation status: validated against `main` on 2026-04-08.
+
 This guide teaches you how to write programs for Mellivora OS in both x86 assembly and
 C. It covers the syscall interface, program structure, common patterns, and the TCC
 compiler.

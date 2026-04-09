@@ -1,5 +1,7 @@
 # Mellivora OS — Tutorial
 
+Documentation status: validated against `main` on 2026-04-08.
+
 A step-by-step walkthrough for first-time users. By the end of this tutorial you will
 know how to navigate the OS, manage files, run programs, play games, write your first
 assembly program, compile C code, and automate tasks with scripts.

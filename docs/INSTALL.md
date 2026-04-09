@@ -1,5 +1,7 @@
 # Mellivora OS — Installation & Build Guide
 
+Documentation status: validated against `main` on 2026-04-08.
+
 ## Overview
 
 Mellivora OS is a bare-metal, from-scratch 32-bit operating system written entirely in NASM
@@ -71,11 +73,11 @@ This single command:
 
 1. Assembles the boot sector (`boot.asm` → `boot.bin`, 512 bytes)
 2. Assembles the Stage 2 loader (`stage2.asm` → `stage2.bin`, ≤16 KB)
-3. Assembles the kernel (`kernel.asm` → `kernel.bin`, ≤192 KB)
+3. Assembles the kernel (`kernel.asm` → `kernel.bin`)
 4. Creates a 64 MB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
-6. Assembles all 31 programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write 48 files into the HBFS filesystem
+6. Assembles all user-space assembly programs in `programs/` into flat binaries
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (73 files at the time of this update)
 
 ### Build Targets
 
@@ -98,8 +100,8 @@ After a successful build:
 mellivora.img          64 MB bootable raw disk image
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
-kernel.bin             32-bit kernel (≤192 KB)
-programs/*.bin         Compiled user programs (31 binaries)
+kernel.bin             32-bit kernel
+programs/*.bin         Compiled user programs (current assembly program set)
 *.lst                  Assembly listing files (useful for debugging)
 ```
 
@@ -178,7 +180,7 @@ LBA Range       Size        Content
 ─────────────────────────────────────────────────────────
 LBA 0           512 B       Stage 1 boot sector (MBR)
 LBA 1–32        16 KB       Stage 2 loader
-LBA 33–416      192 KB      32-bit kernel (384 sectors)
+LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size)
 LBA 417         512 B       HBFS superblock
 LBA 418–425     4 KB        Block allocation bitmap
 LBA 426–553     64 KB       Root directory (16 blocks, 227 entries)
@@ -187,12 +189,12 @@ LBA 554+        ~63 MB      Data blocks (4 KB each)
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 4 subdirectories and places 48 files:
+The `populate.py` script creates 4 subdirectories and places the curated runtime file set (73 files at the time of this update):
 
 ```text
 /
-├── bin/           22 utility programs (hello, edit, grep, sort, tcc, ...)
-├── games/         10 games (snake, tetris, 2048, galaga, mine, ...)
+├── bin/           Utility programs (hello, edit, grep, sort, tcc, ...)
+├── games/         Games (snake, tetris, 2048, galaga, mine, ...)
 ├── samples/       11 C source files (hello.c, fib.c, wumpus.c, ...)
 ├── docs/           5 text files (readme, license, notes, todo, poem)
 └── script.bat     Example batch script
@@ -243,13 +245,13 @@ sync
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (16-bit real mode)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
-├── kernel.asm              Kernel — drivers, shell, FS, syscalls (~9,600 lines)
+├── kernel.asm              Kernel entry and include graph (main file + 13 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v1.7)
+├── CHANGELOG.md            Version history (v1.0 → v1.15)
 ├── README.md               Project overview
 │
-├── programs/               31 user-space assembly programs
+├── programs/               User-space assembly programs (currently 56)
 │   ├── syscalls.inc        Shared constants and helpers
 │   ├── hello.asm           ... through ...
 │   └── wc.asm
@@ -296,10 +298,10 @@ qemu-system-i386 -cpu 486 -m 128 \
   -audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd
 ```
 
-### Kernel too large (>192 KB)
+### Kernel size and sector count
 
-The kernel must fit in 384 sectors (196,608 bytes). Check with `ls -la kernel.bin`.
-The Stage 2 loader reads exactly 384 sectors starting at LBA 33.
+Kernel sector count is generated automatically from `kernel.bin` into `kernel_sectors.inc`.
+Check current size with `ls -la kernel.bin`; Stage 2 reads the generated sector count at boot.
 
 ### Serial debug output
 

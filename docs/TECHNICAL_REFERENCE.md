@@ -1,5 +1,7 @@
 # Mellivora OS — Technical Reference
 
+Documentation status: validated against `main` on 2026-04-08.
+
 This document is a comprehensive technical reference for the architecture, subsystems,
 and internals of Mellivora OS. It is intended for contributors, OS enthusiasts, and
 anyone who wants to understand how the system works under the hood.
@@ -57,8 +59,9 @@ Stage 2 runs at `0x7E00` in real mode and transitions to 32-bit protected mode.
 1. Re-initializes segments and stack (`SP=0x7C00`)
 2. Sets VGA mode `0x03` (80×25 text), draws a blue splash/title bar at `0xB800`
 3. Detects available memory via `BIOS INT 0x15 E820` (up to 32 entries × 24 bytes)
-4. Loads the kernel from disk starting at **LBA 33**, reading **384 sectors** (192 KB)
-   into low memory at `0x20000` (segment `0x2000`), in chunks of 64 sectors
+4. Loads the kernel from disk starting at **LBA 33**, reading the generated
+   `KERNEL_SECTORS` value from `kernel_sectors.inc` into low memory at `0x20000`
+   (segment `0x2000`), in chunks of up to 64 sectors
 5. Enters protected mode:
    - Loads the GDT (`lgdt [gdt_descriptor]`)
    - Sets CR0 PE bit
@@ -96,7 +99,7 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
 | --- | --- | --- |
 | 0 | 512 B | MBR bootloader (boot.asm) |
 | 1–32 | 16 KB | Stage 2 loader (stage2.asm) |
-| 33–416 | 192 KB | Kernel (kernel.asm) |
+| 33+ | Variable | Kernel (kernel.asm + include modules) |
 | 417 | 512 B | HBFS Superblock |
 | 418–425 | 4 KB | Block allocation bitmap |
 | 426–553 | 64 KB | Root directory (16 blocks) |
@@ -179,14 +182,14 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 0x00007E00 ├─────────────────────────┤
            │ Stage 2 Loader          │  16 KB
 0x00020000 ├─────────────────────────┤
-           │ Kernel temp load buffer │  192 KB (copied to 1 MB)
+           │ Kernel temp load buffer │  Variable size (copied to 1 MB)
 0x0009FC00 ├─────────────────────────┤
            │ Kernel stack (grows ↓)  │  Top of conventional memory
 0x000A0000 ├─────────────────────────┤
            │ Video memory / ROM      │
 0x000B8000 │ VGA text framebuffer    │  4000 bytes (80×25×2)
 0x00100000 ├─────────────────────────┤  ← 1 MB
-           │ Kernel code + data      │  Up to 192 KB (384 sectors)
+           │ Kernel code + data      │  Variable (generated sector count)
 0x00200000 ├─────────────────────────┤  ← 2 MB
            │ User program space      │  1 MB max
 0x002FFFF0 │ SYS_EXIT trampoline     │  Safety net for programs that RET
@@ -203,7 +206,7 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 | Constant | Value | Description |
 | --- | --- | --- |
 | `KERNEL_BASE` | `0x00100000` (1 MB) | Kernel load address |
-| `KERNEL_SECTORS` | 384 | Kernel disk size (192 KB) |
+| `KERNEL_SECTORS` | Generated at build time | Kernel disk size in sectors |
 | `KERNEL_STACK` | `0x0009FC00` | Stack top (conventional memory end) |
 | `PROGRAM_BASE` | `0x00200000` (2 MB) | User program load address |
 | `PROGRAM_MAX_SIZE` | `0x00100000` (1 MB) | Max program size |
