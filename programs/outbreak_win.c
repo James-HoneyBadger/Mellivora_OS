@@ -279,9 +279,20 @@ static int calc_infection_rate(void) {
     /* Reduction: for each 10% immune, reduce by VACCINE_EFFECT */
     reduction = (immune_pct / 10) * VACCINE_EFFECT;
 
+    /* Difficulty scaling for immunity effectiveness */
+    if (set_diff == 1) {
+        reduction = (reduction * 3) / 4;   /* Normal: 75% */
+    } else if (set_diff == 2) {
+        reduction = reduction / 2;         /* Hard: 50% */
+    }
+
     /* Infection rate */
     rate = OUTBREAK_BASE + difficulty - reduction;
-    if (rate < 2) rate = 2;
+    if (set_diff == 2) {
+        if (rate < 5) rate = 5;
+    } else {
+        if (rate < 2) rate = 2;
+    }
 
     /* Apply to healthy */
     new_inf = healthy * rate / 100;
@@ -289,6 +300,9 @@ static int calc_infection_rate(void) {
     /* Add randomness +/- 3 */
     rval = prng_random();
     new_inf += (rval % 7) - 3;
+    if (set_diff == 2) {
+        new_inf += 2;  /* Hard: bias spread slightly upward (-1..+5 net delta) */
+    }
     if (new_inf < 0) new_inf = 0;
 
     return new_inf;
@@ -860,7 +874,13 @@ static void month_end(void) {
     }
 
     /* === NATURAL RECOVERY === */
-    rec = infected * 20 / 100;
+    if (set_diff == 0) {
+        rec = infected * 25 / 100;
+    } else if (set_diff == 2) {
+        rec = infected * 8 / 100;
+    } else {
+        rec = infected * 15 / 100;
+    }
     if (rec > infected) rec = infected;
     if (rec > 0) {
         infected -= rec;
@@ -971,7 +991,11 @@ static void action_treat(void) {
     }
 
     count = supplies;
-    if (count > 15) count = 15;
+    if (set_diff == 2) {
+        if (count > 10) count = 10;
+    } else {
+        if (count > 15) count = 15;
+    }
     if (count > infected) count = infected;
 
     temp_val = count;
@@ -983,7 +1007,11 @@ static void action_treat(void) {
     /* Hospital bonus */
     if (hospital_built) {
         bonus = infected;
-        if (bonus > 5) bonus = 5;
+        if (set_diff == 2) {
+            if (bonus > 3) bonus = 3;
+        } else {
+            if (bonus > 5) bonus = 5;
+        }
         infected -= bonus;
         recovered += bonus;
         total_treated += bonus;
