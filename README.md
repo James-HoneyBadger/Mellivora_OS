@@ -2,8 +2,6 @@
 
 **A bare-metal 32-bit operating system written in x86 assembly.**
 
-Documentation status: validated against `main` on 2026-04-08.
-
 Mellivora OS is a from-scratch operating system that boots on real i486+ hardware (or QEMU). It features a custom filesystem, a DOS-style interactive shell, 34 syscalls, an in-OS C compiler, 56 user-space assembly programs, and 11 bundled C samples.
 
 ---

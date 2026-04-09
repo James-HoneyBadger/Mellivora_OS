@@ -1,7 +1,5 @@
 # Mellivora OS — Installation & Build Guide
 
-Documentation status: validated against `main` on 2026-04-08.
-
 ## Overview
 
 Mellivora OS is a bare-metal, from-scratch 32-bit operating system written entirely in NASM

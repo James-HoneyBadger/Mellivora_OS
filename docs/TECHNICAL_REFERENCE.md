@@ -1,7 +1,5 @@
 # Mellivora OS — Technical Reference
 
-Documentation status: validated against `main` on 2026-04-08.
-
 This document is a comprehensive technical reference for the architecture, subsystems,
 and internals of Mellivora OS. It is intended for contributors, OS enthusiasts, and
 anyone who wants to understand how the system works under the hood.

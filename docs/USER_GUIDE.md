@@ -1,7 +1,5 @@
 # Mellivora OS — User Guide
 
-Documentation status: validated against `main` on 2026-04-08.
-
 Welcome to Mellivora OS! This guide covers everything you need to know to use the
 HB Lair shell, manage files, run programs, and get the most out of the system.
 

@@ -1,7 +1,5 @@
 # Mellivora API Reference
 
-Documentation status: validated against `main` on 2026-04-08.
-
 Reusable assembly libraries for Mellivora OS application and systems development.  
 All libraries live in `programs/lib/` and are included via NASM `%include` directives.
 
