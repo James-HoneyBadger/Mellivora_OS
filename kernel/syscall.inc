@@ -75,6 +75,10 @@ syscall_handler:
         je sys_getargs
         cmp eax, SYS_SERIAL_IN
         je sys_serial_in
+        cmp eax, SYS_STDIN_READ
+        je sys_stdin_read
+        cmp eax, SYS_YIELD
+        je sys_yield
 
         ; Unknown syscall
         mov eax, -1

@@ -235,6 +235,9 @@ shell_parse_cmd:
 
         mov dword [shell_last_status], 0
 
+        ; --- Check for trailing '&' (background job request) ---
+        call shell_strip_bg_ampersand
+
         call shell_execute_conditionals
         jc .parse_done
 
@@ -258,6 +261,51 @@ shell_parse_cmd:
 
 shell_status_fail:
         mov dword [shell_last_status], 1
+        ret
+
+;---------------------------------------
+; Check for trailing '&' (not '&&') in line_buffer.
+; If found, strip it and print a warning. Runs command in foreground.
+;---------------------------------------
+shell_strip_bg_ampersand:
+        pushad
+        mov esi, line_buffer
+        ; Find end of input
+        xor ecx, ecx
+.sba_len:
+        cmp byte [esi + ecx], 0
+        je .sba_got_len
+        inc ecx
+        jmp .sba_len
+.sba_got_len:
+        test ecx, ecx
+        jz .sba_done                ; empty string
+        ; Scan backward past trailing spaces
+.sba_skip_sp:
+        dec ecx
+        js .sba_done                ; all spaces
+        cmp byte [esi + ecx], ' '
+        je .sba_skip_sp
+        ; ECX = index of last non-space char
+        cmp byte [esi + ecx], '&'
+        jne .sba_done               ; no trailing &
+        ; Check it's not '&&': preceding char must not be '&'
+        test ecx, ecx
+        jz .sba_is_bg               ; single '&' at very start → bg
+        cmp byte [esi + ecx - 1], '&'
+        je .sba_done                ; it's '&&', leave alone
+.sba_is_bg:
+        ; Strip the '&' (null-terminate there)
+        mov byte [esi + ecx], 0
+        ; Print warning
+        push ecx
+        mov byte [vga_color], COLOR_INFO
+        mov esi, msg_bg_unsupported
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        pop ecx
+.sba_done:
+        popad
         ret
 
 shell_execute_conditionals:
@@ -484,6 +532,10 @@ shell_dispatch_core:
         mov edi, cmd_time_str
         call str_starts_with
         jc .cmd_time
+
+        mov edi, cmd_net_str
+        call str_starts_with
+        jc .cmd_net
 
         mov edi, cmd_disk_str
         call str_starts_with
@@ -908,6 +960,10 @@ shell_dispatch_core:
         call vga_print_dec
         mov esi, msg_seconds
         call vga_print
+        ret
+
+.cmd_net:
+        call cmd_net_status
         ret
 
 .cmd_diskinfo:
@@ -2421,6 +2477,52 @@ cmd_list_dir:
 
         mov al, ' '
         call vga_putchar
+
+        ; Print modified timestamp as HHH:MM:SS
+        push ebx
+        mov eax, [edi + 272]        ; DIRENT_MODIFIED (PIT ticks)
+        xor edx, edx
+        mov ebx, PIT_HZ
+        div ebx                     ; EAX = total seconds
+        push eax
+        ; Compute hours
+        xor edx, edx
+        mov ebx, 3600
+        div ebx                     ; EAX = hours, EDX = remainder
+        push edx                    ; save remainder
+        mov edx, 3
+        call vga_print_dec_width    ; hours in 3-char field
+        mov al, ':'
+        call vga_putchar
+        pop eax                     ; remainder seconds
+        ; Compute minutes
+        xor edx, edx
+        mov ebx, 60
+        div ebx                     ; EAX = minutes, EDX = seconds
+        push edx                    ; save seconds
+        cmp eax, 10
+        jge .min_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.min_ok:
+        call vga_print_dec
+        mov al, ':'
+        call vga_putchar
+        pop eax                     ; seconds
+        cmp eax, 10
+        jge .sec_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.sec_ok:
+        call vga_print_dec
+        pop eax                     ; discard saved total seconds
+        pop ebx
+
+        mov al, ' '
         call vga_putchar
 
         ; Print filename

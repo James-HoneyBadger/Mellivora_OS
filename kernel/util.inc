@@ -1745,6 +1745,44 @@ sys_getargs:
         pop esi
         iretd
 
+;---------------------------------------
+; SYS_STDIN_READ (34): Copy piped/redirected stdin into user buffer
+; EBX = destination buffer pointer
+; Returns: EAX = bytes copied (>= 0), or -1 if no stdin available
+;---------------------------------------
+sys_stdin_read:
+        cmp byte [stdin_redir_active], 1
+        jne .ssr_no_stdin
+        push esi
+        push edi
+        push ecx
+        mov ecx, [stdin_redir_len]
+        cmp ecx, 0
+        je .ssr_empty
+        cmp ecx, BATCH_BUFFER_SIZE - 1
+        jbe .ssr_size_ok
+        mov ecx, BATCH_BUFFER_SIZE - 1
+.ssr_size_ok:
+        mov esi, redir_in_buf
+        mov edi, ebx
+        mov eax, ecx            ; save count before rep movsb clobbers ECX
+        rep movsb
+        mov byte [edi], 0       ; null-terminate
+        mov byte [stdin_redir_active], 0
+        pop ecx
+        pop edi
+        pop esi
+        iretd
+.ssr_empty:
+        pop ecx
+        pop edi
+        pop esi
+        xor eax, eax
+        iretd
+.ssr_no_stdin:
+        mov eax, -1
+        iretd
+
 ;--- Read entire file into buffer ---
 ; EBX = filename, ECX = buffer pointer
 ; Returns EAX = bytes read (0 if not found)
@@ -2484,11 +2522,51 @@ batch_run_loop:
         mov byte [edi], 0
         cmp ecx, 0
         je .brl_line
+        ; --- Batch built-in directives ---
+        ; 1. Skip label definitions (:LABEL) silently
+        cmp byte [batch_line_buf], ':'
+        je .brl_line
+
+        ; 2. Skip REM comments (case-insensitive: rem<space> or rem<end>)
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'r'
+        jne .brl_not_rem
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'e'
+        jne .brl_not_rem
+        mov al, [batch_line_buf+2]
+        or al, 0x20
+        cmp al, 'm'
+        jne .brl_not_rem
+        mov al, [batch_line_buf+3]
+        cmp al, ' '
+        je .brl_line
+        cmp al, 0
+        je .brl_line
+.brl_not_rem:
+        ; 3. goto directive
+        call batch_check_goto
+        jnc .brl_line           ; CF=0 = was a goto, ESI updated
+
+        ; 4. if directive
+        call batch_check_if
+        jnc .brl_line           ; CF=0 = was an if, processed
+
+        ; 5. Check for @ prefix (silent execution)
+        xor ebx, ebx            ; EBX = 0: echo
+        cmp byte [batch_line_buf], '@'
+        jne .brl_show_echo
+        mov ebx, 1              ; EBX = 1: suppress echo
+.brl_show_echo:
         ; Save resume position before executing (in case of external program)
         mov eax, esi
         sub eax, batch_script_buf
         mov [batch_resume_pos], eax
         push esi
+        test ebx, ebx
+        jnz .brl_skip_echo
         mov byte [vga_color], COLOR_INFO
         mov esi, msg_batch_prefix
         call vga_print
@@ -2497,19 +2575,367 @@ batch_run_loop:
         mov al, 0x0A
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
-        ; Copy batch_line_buf into line_buffer (shell_parse_cmd always parses line_buffer)
+.brl_skip_echo:
+        ; Copy batch_line_buf into line_buffer (skip @ prefix if present)
         mov esi, batch_line_buf
+        cmp byte [esi], '@'
+        jne .brl_do_copy
+        inc esi
+.brl_do_copy:
         mov edi, line_buffer
-.brl_copy:
+.brl_copy_loop:
         lodsb
         stosb
         test al, al
-        jnz .brl_copy
+        jnz .brl_copy_loop
         call shell_parse_cmd
         pop esi
         jmp .brl_line
 .brl_done:
         mov byte [batch_running], 0
+        ret
+
+;---------------------------------------
+; batch_check_goto - Handle 'goto LABEL' batch directive
+; Input: batch_line_buf = current line, ESI = next-line ptr (batch loop pos)
+; Output: CF=0: was a goto, ESI updated; CF=1: not a goto
+; Clobbers: EAX, EBX, ECX, EDX, EDI
+;---------------------------------------
+batch_check_goto:
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'g'
+        jne .bcg_not
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'o'
+        jne .bcg_not
+        mov al, [batch_line_buf+2]
+        or al, 0x20
+        cmp al, 't'
+        jne .bcg_not
+        mov al, [batch_line_buf+3]
+        or al, 0x20
+        cmp al, 'o'
+        jne .bcg_not
+        mov al, [batch_line_buf+4]
+        cmp al, ' '
+        je .bcg_have_label
+        cmp al, 0
+        jne .bcg_not            ; 'goto' prefix of longer word
+        ; Bare 'goto' with no label: advance ESI to end of script
+        mov esi, batch_script_buf
+.bcg_eof_scan:
+        cmp byte [esi], 0
+        je .bcg_done_clc
+        inc esi
+        jmp .bcg_eof_scan
+.bcg_have_label:
+        mov ebx, batch_line_buf + 5     ; EBX = label name pointer
+.bcg_sp:
+        cmp byte [ebx], ' '
+        jne .bcg_got_label
+        inc ebx
+        jmp .bcg_sp
+.bcg_got_label:
+        push esi                        ; save batch loop position
+        mov edi, ebx                    ; EDI = label name for batch_find_label
+        call batch_find_label           ; modifies ESI if found (CF=0)
+        jnc .bcg_found
+        ; Label not found
+        pop esi                         ; restore batch loop position
+        mov byte [vga_color], COLOR_ERROR
+        push esi
+        mov esi, msg_batch_label_nf
+        call vga_print
+        mov esi, ebx                    ; label name
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        pop esi
+        mov byte [vga_color], COLOR_DEFAULT
+        ; Advance ESI to end of script to abort
+        mov esi, batch_script_buf
+.bcg_abort_scan:
+        cmp byte [esi], 0
+        je .bcg_done_clc
+        inc esi
+        jmp .bcg_abort_scan
+.bcg_found:
+        mov eax, esi            ; EAX = new position from batch_find_label
+        pop esi                 ; discard saved old position
+        mov esi, eax            ; set new position
+.bcg_done_clc:
+        clc
+        ret
+.bcg_not:
+        stc
+        ret
+
+;---------------------------------------
+; batch_find_label - Find ':LABEL' in batch_script_buf
+; Input: EDI = null-terminated label name (without ':')
+; Output: CF=0: ESI = ptr to first char of line after ':LABEL' line
+;         CF=1: not found, EDI restored, ESI trashed
+; Clobbers: EAX, EBX (preserves ECX, EDX, EDI)
+;---------------------------------------
+batch_find_label:
+        push edx
+        mov edx, edi            ; EDX = label name (preserve EDI via EDX)
+        mov esi, batch_script_buf
+.bfl_outer:
+        cmp byte [esi], 0
+        je .bfl_nf
+        cmp byte [esi], ':'
+        je .bfl_try_match
+        ; Not ':', skip to end of line
+.bfl_skip_line:
+        lodsb
+        cmp al, 0
+        je .bfl_at_end
+        cmp al, 0x0A
+        jne .bfl_skip_line
+        jmp .bfl_outer
+.bfl_at_end:
+        dec esi
+        jmp .bfl_nf
+.bfl_try_match:
+        inc esi                 ; skip ':'
+        mov edi, edx            ; EDI = label name
+.bfl_cmp:
+        mov al, [esi]
+        mov bl, [edi]
+        or al, 0x20
+        or bl, 0x20
+        cmp bl, 0
+        je .bfl_end_check       ; label name exhausted
+        cmp al, bl
+        jne .bfl_no_match
+        inc esi
+        inc edi
+        jmp .bfl_cmp
+.bfl_end_check:
+        ; Label name matched - check ESI is at word boundary
+        mov al, [esi]
+        cmp al, 0
+        je .bfl_matched
+        cmp al, 0x0A
+        je .bfl_matched
+        cmp al, 0x0D
+        je .bfl_matched
+        cmp al, ' '
+        je .bfl_matched
+.bfl_no_match:
+        ; Not a match - skip rest of line
+        mov al, [esi]
+        cmp al, 0
+        je .bfl_nf
+        inc esi
+        cmp al, 0x0A
+        jne .bfl_no_match
+        jmp .bfl_outer
+.bfl_matched:
+        ; Skip to end of ':LABEL' line so ESI points to next line
+.bfl_skip_rest:
+        lodsb
+        cmp al, 0
+        je .bfl_found
+        cmp al, 0x0A
+        jne .bfl_skip_rest
+.bfl_found:
+        mov edi, edx            ; restore EDI
+        pop edx
+        clc
+        ret
+.bfl_nf:
+        mov edi, edx            ; restore EDI
+        pop edx
+        stc
+        ret
+
+;---------------------------------------
+; batch_check_if - Handle 'if [not] errorlevel N cmd' batch directive
+; Input: batch_line_buf = current line, ESI = batch loop position
+; Output: CF=0: was an if, ESI possibly updated (if cmd was goto)
+;         CF=1: not an if, ESI unchanged
+; Clobbers: EAX, EBX, ECX, EDX, EDI
+;---------------------------------------
+batch_check_if:
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'i'
+        jne .bci_not
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'f'
+        jne .bci_not
+        cmp byte [batch_line_buf+2], ' '
+        jne .bci_not
+        ; It's an 'if' - save batch loop ESI
+        push esi                ; PUSH#1: batch loop ESI
+        ; EDI walks through the condition starting at batch_line_buf+3
+        mov edi, batch_line_buf + 3
+        ; Skip leading spaces
+.bci_sp1:
+        cmp byte [edi], ' '
+        jne .bci_sp1_done
+        inc edi
+        jmp .bci_sp1
+.bci_sp1_done:
+        ; Check for 'not ' keyword
+        xor ebx, ebx            ; EBX = 0: normal (not inverted)
+        mov al, [edi]
+        or al, 0x20
+        cmp al, 'n'
+        jne .bci_no_not
+        mov al, [edi+1]
+        or al, 0x20
+        cmp al, 'o'
+        jne .bci_no_not
+        mov al, [edi+2]
+        or al, 0x20
+        cmp al, 't'
+        jne .bci_no_not
+        cmp byte [edi+3], ' '
+        jne .bci_no_not
+        mov ebx, 1              ; invert condition
+        add edi, 4
+.bci_sp2:
+        cmp byte [edi], ' '
+        jne .bci_no_not
+        inc edi
+        jmp .bci_sp2
+.bci_no_not:
+        ; Check for 'errorlevel ' keyword (case-insensitive)
+        push edi                ; PUSH#2: saved EDI before keyword check
+        push esi                ; PUSH#3: saved ESI (= batch loop ESI currently)
+        mov esi, msg_if_el_kw   ; "errorlevel "
+.bci_el_cmp:
+        mov al, [esi]
+        cmp al, 0
+        je .bci_el_match        ; keyword exhausted = matched
+        mov cl, [edi]
+        or cl, 0x20
+        cmp al, cl
+        jne .bci_el_fail
+        inc esi
+        inc edi
+        jmp .bci_el_cmp
+.bci_el_match:
+        pop esi                 ; discard PUSH#3 (keyword traversal ESI)
+        add esp, 4              ; discard PUSH#2 (saved EDI)
+        ; Stack: PUSH#1 only; EDI points to digit string for N
+        xor edx, edx
+.bci_getdig:
+        mov al, [edi]
+        cmp al, '0'
+        jb .bci_n_done
+        cmp al, '9'
+        ja .bci_n_done
+        sub al, '0'
+        imul edx, 10
+        movzx eax, al
+        add edx, eax
+        inc edi
+        jmp .bci_getdig
+.bci_n_done:
+        cmp byte [edi], ' '
+        jne .bci_check
+        inc edi
+.bci_check:
+        ; EDI = command to run; EDX = N; EBX = invert flag
+        mov eax, [shell_last_status]
+        cmp eax, edx
+        jb .bci_below           ; status < N
+        ; status >= N: condition true unless inverted
+        test ebx, ebx
+        jnz .bci_skip
+        jmp .bci_execute
+.bci_below:
+        ; status < N: condition true if inverted
+        test ebx, ebx
+        jz .bci_skip
+.bci_execute:
+        ; Check if command is 'goto LABEL'
+        mov al, [edi]
+        or al, 0x20
+        cmp al, 'g'
+        jne .bci_run_cmd
+        mov al, [edi+1]
+        or al, 0x20
+        cmp al, 'o'
+        jne .bci_run_cmd
+        mov al, [edi+2]
+        or al, 0x20
+        cmp al, 't'
+        jne .bci_run_cmd
+        mov al, [edi+3]
+        or al, 0x20
+        cmp al, 'o'
+        jne .bci_run_cmd
+        cmp byte [edi+4], ' '
+        jne .bci_run_cmd
+        ; It's 'goto LABEL'
+        add edi, 5
+.bci_goto_sp:
+        cmp byte [edi], ' '
+        jne .bci_do_goto
+        inc edi
+        jmp .bci_goto_sp
+.bci_do_goto:
+        call batch_find_label   ; EDI = label name; sets ESI if found
+        jnc .bci_goto_found
+        ; Label not found
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_batch_label_nf
+        call vga_print
+        mov esi, edi            ; label name (EDI preserved by batch_find_label)
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        mov byte [vga_color], COLOR_DEFAULT
+        pop esi                 ; restore batch loop ESI (PUSH#1)
+        ; Abort: advance to end of script
+        mov esi, batch_script_buf
+.bci_if_abort:
+        cmp byte [esi], 0
+        je .bci_done_clc
+        inc esi
+        jmp .bci_if_abort
+.bci_goto_found:
+        ; ESI = new batch position (set by batch_find_label)
+        mov eax, esi
+        pop esi                 ; pop saved batch loop ESI (PUSH#1)
+        mov esi, eax            ; set to new position
+        jmp .bci_done_clc
+.bci_run_cmd:
+        ; Copy EDI (command) to line_buffer and execute
+        push esi                ; PUSH#2: save ESI around shell_parse_cmd
+        mov esi, edi
+        mov edi, line_buffer
+.bci_cp:
+        lodsb
+        stosb
+        test al, al
+        jnz .bci_cp
+        call shell_parse_cmd
+        pop esi                 ; restore PUSH#2 inner ESI
+        pop esi                 ; restore PUSH#1 batch loop ESI
+        jmp .bci_done_clc
+.bci_skip:
+        ; Condition not met
+        pop esi                 ; restore PUSH#1 batch loop ESI
+        jmp .bci_done_clc
+.bci_el_fail:
+        ; Unrecognized condition keyword
+        pop esi                 ; discard PUSH#3
+        pop edi                 ; restore PUSH#2 (EDI before keyword check)
+        pop esi                 ; restore PUSH#1 batch loop ESI
+.bci_done_clc:
+        clc
+        ret
+.bci_not:
+        stc
         ret
 
 cmd_mkdir:

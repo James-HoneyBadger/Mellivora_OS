@@ -1,6 +1,6 @@
 ; sort.asm - Line sort utility [HBU]
-; Usage: sort <filename>
-; Reads a text file, sorts lines alphabetically, displays result
+; Usage: sort [filename]
+; Reads a text file or stdin, sorts lines alphabetically, displays result
 ;
 %include "syscalls.inc"
 
@@ -8,12 +8,12 @@ MAX_LINES       equ 256
 MAX_LINE_LEN    equ 128
 
 start:
-        ; Get filename
+        ; Get filename (may be empty if reading from stdin)
         mov eax, SYS_GETARGS
         mov ebx, args_buf
         int 0x80
         cmp eax, 0
-        jle .usage
+        jle .try_stdin
 
         ; Read file
         mov eax, SYS_FREAD
@@ -23,10 +23,20 @@ start:
         cmp eax, 0
         jl .file_err
         mov [file_size], eax
+        jmp .parse_start
 
+.try_stdin:
+        mov eax, SYS_STDIN_READ
+        mov ebx, file_buffer
+        int 0x80
+        cmp eax, 0
+        jl .usage          ; no stdin, show usage
+        mov [file_size], eax
+
+.parse_start:
         ; Parse into lines
         mov esi, file_buffer
-        xor ecx, ecx           ; line count
+        xor ecx, ecx
         mov dword [line_count], 0
 
 .parse_lines:
@@ -176,7 +186,7 @@ strcmp_nocase:
         ret
 
 ; Data
-msg_usage:      db "Usage: sort <filename>", 0x0A, 0
+msg_usage:      db "Usage: sort [filename]", 0x0A, 0
 msg_file_err:   db "Error: Cannot open file", 0x0A, 0
 args_buf:       times 256 db 0
 file_size:      dd 0

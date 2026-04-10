@@ -1,6 +1,6 @@
-; tee.asm - Copy file content to stdout and a file [HBU]
-; Usage: tee INPUTFILE OUTPUTFILE
-; Reads INPUTFILE, prints it, and writes the same bytes to OUTPUTFILE.
+; tee.asm - Copy stdin/file to stdout and a file [HBU]
+; Usage: tee OUTFILE         (read from stdin, write to OUTFILE)
+;        tee INFILE OUTFILE  (read from INFILE, write to OUTFILE)
 ;
 %include "syscalls.inc"
 
@@ -12,13 +12,18 @@ start:
         cmp eax, 0
         jle .usage
 
-        ; Parse: input output
+        ; Parse first argument
         mov esi, args_buf
         mov edi, in_filename
         call parse_arg
         call skip_spaces
+
+        ; If a second arg exists: in_filename=INFILE, out_filename=OUTFILE (legacy)
+        ; If no second arg: in_filename is the OUTFILE, read from stdin
         cmp byte [esi], 0
-        je .usage
+        je .read_stdin
+
+        ; Two-arg mode: in_filename=INFILE, next arg=OUTFILE
         mov edi, out_filename
         call parse_arg
 
@@ -30,7 +35,28 @@ start:
         cmp eax, 0
         jle .read_err
         mov [file_size], eax
+        jmp .write_output
 
+.read_stdin:
+        ; One-arg mode: in_filename is actually the output file
+        ; Copy in_filename -> out_filename
+        mov esi, in_filename
+        mov edi, out_filename
+.copy_name:
+        lodsb
+        stosb
+        cmp al, 0
+        jne .copy_name
+
+        ; Read from stdin
+        mov eax, SYS_STDIN_READ
+        mov ebx, file_buf
+        int 0x80
+        cmp eax, 0
+        jl .no_stdin
+        mov [file_size], eax
+
+.write_output:
         ; Echo to stdout
         mov esi, file_buf
         mov ecx, [file_size]
@@ -61,6 +87,13 @@ start:
 .usage:
         mov eax, SYS_PRINT
         mov ebx, msg_usage
+        int 0x80
+        mov eax, SYS_EXIT
+        int 0x80
+
+.no_stdin:
+        mov eax, SYS_PRINT
+        mov ebx, msg_no_stdin
         int 0x80
         mov eax, SYS_EXIT
         int 0x80
@@ -116,7 +149,8 @@ skip_spaces:
 .ss_done:
         ret
 
-msg_usage:      db "Usage: tee INPUTFILE OUTPUTFILE", 0x0A, 0
+msg_usage:      db "Usage: tee OUTFILE  or  tee INFILE OUTFILE", 0x0A, 0
+msg_no_stdin:   db "Error: No stdin input available", 0x0A, 0
 msg_read_err:   db "Error: Cannot read input file", 0x0A, 0
 msg_write_err:  db "Error: Cannot write output file", 0x0A, 0
 

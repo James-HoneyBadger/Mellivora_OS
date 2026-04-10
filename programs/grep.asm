@@ -1,5 +1,5 @@
 ; grep.asm - Text pattern search utility [HBU]
-; Usage: grep <pattern> <filename>
+; Usage: grep <pattern> [filename]
 ; Searches for lines containing the pattern and displays them
 ;
 %include "syscalls.inc"
@@ -14,13 +14,13 @@ start:
         cmp eax, 0
         jle .usage
 
-        ; Parse: pattern filename
+        ; Parse: pattern [filename]
         mov esi, args_buf
         mov edi, pattern
         call parse_arg
         call skip_spaces
         cmp byte [esi], 0
-        je .usage
+        je .try_stdin           ; no filename: try stdin
         mov edi, filename
         call parse_arg
 
@@ -32,7 +32,17 @@ start:
         cmp eax, 0
         jl .file_err
         mov [file_size], eax
+        jmp .search_start
 
+.try_stdin:
+        mov eax, SYS_STDIN_READ
+        mov ebx, file_buffer
+        int 0x80
+        cmp eax, 0
+        jl .usage
+        mov [file_size], eax
+
+.search_start:
         ; Search line by line
         mov esi, file_buffer
         mov dword [line_num], 0
@@ -297,7 +307,7 @@ skip_spaces:
         ret
 
 ; Data
-msg_usage:      db "Usage: grep <pattern> <filename>", 0x0A, 0
+msg_usage:      db "Usage: grep <pattern> [filename]", 0x0A, 0
 msg_file_err:   db "Error: Cannot open file", 0x0A, 0
 msg_matches:    db "-- ", 0
 msg_matches2:   db " match(es) found --", 0x0A, 0

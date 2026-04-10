@@ -1,5 +1,5 @@
 ; sed.asm - Simple stream editor (search and replace) [HBU]
-; Usage: sed FIND REPLACE FILENAME
+; Usage: sed FIND REPLACE [filename]
 ; Replaces first occurrence of FIND with REPLACE on each line
 %include "syscalls.inc"
 
@@ -28,11 +28,11 @@ start:
 
         call .skip_sp
 
-        ; Copy FILENAME
+        ; Copy FILENAME (optional - stdin used if absent)
         mov edi, filename
         call .copy_word
         cmp byte [filename], 0
-        je .usage
+        je .sed_try_stdin
 
         ; Read file
         mov eax, SYS_FREAD
@@ -44,6 +44,19 @@ start:
         mov edi, file_buf
         add edi, eax
         mov byte [edi], 0
+        jmp .sed_have_data
+
+.sed_try_stdin:
+        mov eax, SYS_STDIN_READ
+        mov ebx, file_buf
+        int 0x80
+        cmp eax, 0
+        jl .usage
+        mov edi, file_buf
+        add edi, eax
+        mov byte [edi], 0
+
+.sed_have_data:
 
         ; Compute find length
         mov esi, find_str

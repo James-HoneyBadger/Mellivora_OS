@@ -152,6 +152,7 @@ cmd_write_str:  db "write", 0
 cmd_hex_str:    db "hex", 0
 cmd_mem_str:    db "mem", 0
 cmd_time_str:   db "time", 0
+cmd_net_str:    db "net", 0
 cmd_disk_str:   db "disk", 0
 cmd_run_str:    db "run", 0
 cmd_enter_str:  db "enter", 0
@@ -283,6 +284,11 @@ help_text:
         db "  date       - Show current date and time", 0x0A
         db "  beep       - Play a beep", 0x0A
         db "  batch F    - Execute script file", 0x0A
+        db "    :LABEL   - Define label for goto", 0x0A
+        db "    goto LABEL - Jump to label in script", 0x0A
+        db "    if [not] errorlevel N cmd - Conditional exec", 0x0A
+        db "    rem comment - Batch comment (skipped)", 0x0A
+        db "    @cmd       - Execute silently (no echo)", 0x0A
         db "  mkdir D    - Create directory", 0x0A
         db "  cd DIR     - Change directory", 0x0A
         db "  pwd        - Print working directory", 0x0A
@@ -294,6 +300,7 @@ help_text:
         db "  disk       - Disk information", 0x0A
         db "  df         - Filesystem usage", 0x0A
         db "  time       - Uptime", 0x0A
+        db "  net        - Show network interface status", 0x0A
         db "  diff F1 F2 - Compare two files line by line", 0x0A
         db "  uniq [-cd] [F] - Remove adjacent duplicates", 0x0A
         db "             (-c count, -d duplicates only)", 0x0A
@@ -359,8 +366,8 @@ msg_hbfs_dir_write_err: db "HBFS: directory write failed", 0x0A, 0
 msg_hbfs_bitmap_err:    db "HBFS: bitmap read failed", 0x0A, 0
 msg_ata_read_err:       db "ATA: read failed after retries", 0x0A, 0
 msg_ata_write_err:      db "ATA: write failed after retries", 0x0A, 0
-dir_header:     db "Type       Size  Name", 0x0A, 0
-dir_separator:  db "----- --------- ----------------", 0x0A, 0
+dir_header:     db "Type       Size  Modified   Name", 0x0A, 0
+dir_separator:  db "----- --------- ---------- ----------------", 0x0A, 0
 type_text:      db "text ", 0
 type_batch:     db "batch", 0
 type_exec:      db "exec ", 0
@@ -378,6 +385,7 @@ msg_wild_needs_star: db "For multiple wildcard matches, destination must include
 msg_write_prompt: db "Type content (empty line to end):", 0x0A, 0
 msg_write_err:  db "Write error!", 0x0A, 0
 msg_unknown_cmd: db "Unknown command. Type 'help'.", 0x0A, 0
+msg_bg_unsupported: db "Note: background jobs (&) not yet supported; running in foreground.", 0x0A, 0
 msg_redir_syntax: db "Redirection syntax error.", 0x0A, 0
 msg_redir_in_err: db "Redirection input file error.", 0x0A, 0
 msg_redir_too_big: db "Redirection file too large.", 0x0A, 0
@@ -389,11 +397,23 @@ msg_cancelled:  db "Cancelled.", 0x0A, 0
 msg_uptime:     db "Uptime: ", 0
 msg_seconds:    db " seconds", 0x0A, 0
 msg_serial_info: db "  Serial:        COM1 @ 115200 baud", 0x0A, 0
+
+; Networking strings
+msg_net_header: db "=== Network Status ===", 0x0A, 0
+msg_net_state:  db "  State:  ", 0
+msg_net_none:   db "No NIC detected", 0x0A, 0
+msg_net_found:  db "NIC found (not initialized)", 0x0A, 0
+msg_net_up:     db "UP (RTL8139)", 0x0A, 0
+msg_net_pci:    db "  PCI:    ", 0
+msg_net_iobase: db "  I/O:    0x", 0
+msg_net_mac:    db "  MAC:    ", 0
 msg_exec:       db "Executing...", 0x0A, 0
 msg_exec_done:  db "Program exited.", 0x0A, 0
 msg_ctrl_c:     db "^C", 0x0A, 0
 msg_batch_prefix: db "> ", 0
 msg_batch_nested: db "Error: nested batch execution not supported", 0x0A, 0
+msg_batch_label_nf: db "Batch: label not found: ", 0
+msg_if_el_kw:       db "errorlevel ", 0
 msg_dir_created: db "Directory created.", 0x0A, 0
 msg_already_exists: db "Already exists.", 0x0A, 0
 msg_env_set:    db "", 0
@@ -641,5 +661,23 @@ gff_cwd_sects:    resd 1
 gff_cwd_depth:    resd 1
 gff_cwd_name:     resb 256
 gff_cwd_stack:    resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+
+; Scheduler / cooperative multitasking state
+task_current:     resd 1                              ; Index of current running task
+task_count:       resd 1                              ; Number of active tasks
+task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array
+
+; Networking state (RTL8139 NIC)
+net_state:        resd 1          ; NET_STATE_NONE / FOUND / UP
+net_pci_bus:      resb 1
+net_pci_dev:      resb 1
+net_pci_func:     resb 1
+                  resb 1          ; alignment padding
+net_io_base:      resd 1          ; NIC I/O port base address
+net_mac:          resb 6          ; MAC address (6 bytes)
+                  resb 2          ; alignment padding
+net_rx_buf:       resd 1          ; Pointer to RX buffer (from PMM)
+net_tx_buf:       resd 1          ; Pointer to TX buffer (from PMM)
+net_tx_desc:      resd 1          ; Current TX descriptor index (0-3)
 
 bss_end:

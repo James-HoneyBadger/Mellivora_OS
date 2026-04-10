@@ -1,5 +1,5 @@
 ; tr.asm - Translate characters [HBU]
-; Usage: tr SET1 SET2 FILENAME
+; Usage: tr SET1 SET2 [filename]
 ; Replaces each character in SET1 with the corresponding character in SET2
 %include "syscalls.inc"
 
@@ -30,11 +30,11 @@ start:
 
         call .skip_sp
 
-        ; Copy FILENAME
+        ; Copy FILENAME (optional - stdin used if absent)
         mov edi, filename
         call .copy_word
         cmp byte [filename], 0
-        je .usage
+        je .try_stdin
 
         ; Read file
         mov eax, SYS_FREAD
@@ -47,6 +47,20 @@ start:
         mov edi, file_buf
         add edi, eax
         mov byte [edi], 0
+        jmp .do_translate
+
+.try_stdin:
+        mov eax, SYS_STDIN_READ
+        mov ebx, file_buf
+        int 0x80
+        cmp eax, 0
+        jl .usage
+        mov [file_size], eax
+        mov edi, file_buf
+        add edi, eax
+        mov byte [edi], 0
+
+.do_translate:
 
         ; Build translation table (identity map)
         xor ecx, ecx
@@ -62,16 +76,16 @@ start:
 .map_loop:
         movzx eax, byte [esi]
         cmp al, 0
-        je .do_translate
+        je .apply_table
         movzx ebx, byte [edi]
         cmp bl, 0
-        je .do_translate
+        je .apply_table
         mov [trans_table + eax], bl
         inc esi
         inc edi
         jmp .map_loop
 
-.do_translate:
+.apply_table:
         mov esi, file_buf
 .tr_loop:
         movzx eax, byte [esi]
@@ -125,7 +139,7 @@ start:
 ;---------------------------------------
 ; Data
 ;---------------------------------------
-msg_usage:     db "Usage: tr SET1 SET2 FILENAME", 0x0A, 0
+msg_usage:     db "Usage: tr SET1 SET2 [filename]", 0x0A, 0
 msg_not_found: db "File not found.", 0x0A, 0
 
 ;---------------------------------------

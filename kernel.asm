@@ -202,6 +202,8 @@ SYS_FREAD           equ 30      ; Read entire file: EBX=name ECX=buf -> EAX=byte
 SYS_FWRITE          equ 31      ; Write entire file: EBX=name ECX=buf EDX=size ESI=type(0=text)
 SYS_GETARGS         equ 32      ; Get command-line args: EBX=buf -> EAX=length
 SYS_SERIAL_IN       equ 33      ; Read char from serial: -> EAX=char
+SYS_STDIN_READ      equ 34      ; Read piped stdin: EBX=buf -> EAX=bytes (-1 if none)
+SYS_YIELD           equ 35      ; Cooperative yield: switch to next ready task
 
 ; File descriptor constants
 FD_MAX              equ 8
@@ -268,6 +270,8 @@ kernel_entry:
         call ata_init
         call serial_init
         call tss_init
+        call sched_init
+        call net_init
 
         ; Enable interrupts
         sti
@@ -301,6 +305,8 @@ kernel_entry:
 %include "kernel/hbfs.inc"
 %include "kernel/filesearch.inc"
 %include "kernel/syscall.inc"
+%include "kernel/sched.inc"
+%include "kernel/net.inc"
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
 %include "kernel/data.inc"

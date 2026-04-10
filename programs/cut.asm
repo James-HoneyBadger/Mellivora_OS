@@ -69,11 +69,12 @@ start:
         jmp .parse_loop
 
 .parse_done:
-        ; Require both -f and filename
+        ; Require -f flag
         cmp byte [fields_set], 1
         jne .usage
+        ; Try stdin if no filename given
         cmp byte [filename], 0
-        je .usage
+        je .cut_try_stdin
 
         ; Read file
         mov eax, SYS_FREAD
@@ -83,7 +84,19 @@ start:
         cmp eax, 0
         jle .file_err
         mov [file_size], eax
+        jmp .cut_have_data
 
+.cut_try_stdin:
+        mov eax, SYS_STDIN_READ
+        mov ebx, file_buf
+        int 0x80
+        cmp eax, 0
+        jl .usage
+        cmp eax, 0
+        je .done
+        mov [file_size], eax
+
+.cut_have_data:
         ; Extract selected field from each line
         mov esi, file_buf
         mov ecx, [file_size]
@@ -345,7 +358,7 @@ is_field_selected:
         clc
         ret
 
-msg_usage:     db "Usage: cut -f LIST [-d C] FILE", 0x0A
+msg_usage:     db "Usage: cut -f LIST [-d C] [file]", 0x0A
                db "  LIST: 1,3,5-7", 0x0A, 0
 msg_file_err:  db "Error: Cannot read file", 0x0A, 0
 

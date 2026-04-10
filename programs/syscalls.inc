@@ -47,6 +47,8 @@ SYS_FREAD       equ 30          ; Read entire file: EBX=name ECX=buf -> EAX=byte
 SYS_FWRITE      equ 31          ; Write file: EBX=name ECX=buf EDX=size ESI=type(0=text)
 SYS_GETARGS     equ 32          ; Get command-line args: EBX=buf -> EAX=length
 SYS_SERIAL_IN   equ 33          ; Read serial port: -> EAX=char or -1
+SYS_STDIN_READ  equ 34          ; Read piped stdin: EBX=buf -> EAX=bytes (-1 if none)
+SYS_YIELD       equ 35          ; Cooperative yield: switch to next ready task
 
 ; VGA constants
 VGA_BASE        equ 0xB8000
