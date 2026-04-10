@@ -84,6 +84,7 @@ sys_exit:
         call shell_finish_redirection
         ; Save program return code (EBX) for shell inspection
         mov [program_exit_code], ebx
+        mov [shell_last_status], ebx
         ; Clear running flag
         mov byte [program_running], 0
         ; Reset color so shell doesn't inherit program's color

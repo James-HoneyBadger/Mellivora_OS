@@ -5,6 +5,8 @@
 shell_main:
         mov esp, KERNEL_STACK
         mov byte [vga_color], COLOR_DEFAULT
+        mov eax, [program_exit_code]
+        mov [shell_last_status], eax
 
         ; Re-launch parent program if child was exec'd from user-mode
         cmp byte [parent_active], 0
@@ -231,6 +233,11 @@ shell_parse_cmd:
         ; Skip leading spaces
         call skip_spaces
 
+        mov dword [shell_last_status], 0
+
+        call shell_execute_conditionals
+        jc .parse_done
+
         call shell_execute_pipeline
         jc .parse_done
 
@@ -247,6 +254,124 @@ shell_parse_cmd:
 .parse_finish:
         call shell_finish_redirection
 .parse_done:
+        ret
+
+shell_status_fail:
+        mov dword [shell_last_status], 1
+        ret
+
+shell_execute_conditionals:
+        pushad
+        mov esi, line_buffer
+.sec_scan:
+        mov al, [esi]
+        test al, al
+        jz .sec_none
+        cmp al, '&'
+        jne .sec_try_or
+        cmp byte [esi + 1], '&'
+        je .sec_found
+.sec_try_or:
+        cmp al, '|'
+        jne .sec_scan_next
+        cmp byte [esi + 1], '|'
+        je .sec_found
+.sec_scan_next:
+        inc esi
+        jmp .sec_scan
+
+.sec_none:
+        popad
+        clc
+        ret
+
+.sec_found:
+        mov esi, line_buffer
+        mov edi, cond_work_buf
+        call str_copy
+        mov byte [cond_prev_op], 0
+        mov esi, cond_work_buf
+
+.sec_stage:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .sec_done
+
+        mov edi, esi
+.sec_find_end:
+        mov al, [esi]
+        test al, al
+        jz .sec_last
+        cmp al, '&'
+        jne .sec_check_or
+        cmp byte [esi + 1], '&'
+        je .sec_split_and
+.sec_check_or:
+        cmp al, '|'
+        jne .sec_advance
+        cmp byte [esi + 1], '|'
+        je .sec_split_or
+.sec_advance:
+        inc esi
+        jmp .sec_find_end
+
+.sec_split_and:
+        mov byte [esi], 0
+        lea ebx, [esi + 2]
+        mov byte [cond_next_op], '&'
+        jmp .sec_maybe_exec
+
+.sec_split_or:
+        mov byte [esi], 0
+        lea ebx, [esi + 2]
+        mov byte [cond_next_op], '|'
+        jmp .sec_maybe_exec
+
+.sec_last:
+        xor ebx, ebx
+        mov byte [cond_next_op], 0
+
+.sec_maybe_exec:
+        cmp byte [cond_prev_op], '&'
+        jne .sec_check_prev_or
+        cmp dword [shell_last_status], 0
+        jne .sec_continue
+        jmp .sec_exec
+.sec_check_prev_or:
+        cmp byte [cond_prev_op], '|'
+        jne .sec_exec
+        cmp dword [shell_last_status], 0
+        je .sec_continue
+
+.sec_exec:
+        mov esi, edi
+        call skip_spaces
+        cmp byte [esi], 0
+        je .sec_syntax
+        mov edi, line_buffer
+        call str_copy
+        mov esi, line_buffer
+        call shell_parse_cmd
+
+.sec_continue:
+        mov al, [cond_next_op]
+        mov [cond_prev_op], al
+        cmp ebx, 0
+        je .sec_done
+        mov esi, ebx
+        jmp .sec_stage
+
+.sec_syntax:
+        call shell_status_fail
+        mov esi, msg_redir_syntax
+        call vga_print
+        popad
+        stc
+        ret
+
+.sec_done:
+        popad
+        stc
         ret
 
 shell_dispatch_core:
@@ -519,6 +644,7 @@ shell_dispatch_core:
         ret
 
 .unknown:
+        call shell_status_fail
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_unknown_cmd
         call vga_print
@@ -746,6 +872,7 @@ shell_dispatch_core:
         call hbfs_format
         ret
 .format_cancel:
+        call shell_status_fail
         mov esi, msg_cancelled
         call vga_print
         ret
@@ -790,6 +917,9 @@ shell_dispatch_core:
 .cmd_run:
         call skip_spaces
         call cmd_exec_program
+        jnc .cmd_run_done
+        call shell_status_fail
+.cmd_run_done:
         ret
 
 .cmd_enter:
@@ -1138,10 +1268,15 @@ cmd_diff_files:
         mov esi, msg_diff_same
         call vga_print
 .diff_ret:
+        cmp dword [.diff_diffs], 0
+        je .diff_ok
+        call shell_status_fail
+.diff_ok:
         popad
         ret
 
 .diff_usage:
+        call shell_status_fail
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_need_2files
         call vga_print
@@ -1149,6 +1284,7 @@ cmd_diff_files:
         popad
         ret
 .diff_not_found1:
+        call shell_status_fail
         mov byte [vga_color], COLOR_ERROR
         mov esi, filename_buf
         call vga_print
@@ -1158,6 +1294,7 @@ cmd_diff_files:
         popad
         ret
 .diff_not_found2:
+        call shell_status_fail
         mov byte [vga_color], COLOR_ERROR
         mov esi, filename_buf2
         call vga_print
@@ -3545,6 +3682,7 @@ cmd_exec_program:
 .path_fsize: dd 0               ; Temp storage for file size during PATH search
 
 .not_found:
+        call shell_status_fail
         popad
         stc
         ret
@@ -3634,6 +3772,7 @@ shell_prepare_redirection:
 .spr_in_err_pop_done:
         pop esi
 .spr_in_err:
+        call shell_status_fail
         call shell_redir_reset
         mov esi, msg_redir_in_err
         call vga_print
@@ -3647,6 +3786,7 @@ shell_prepare_redirection:
         call gff_restore_cwd
 .spr_in_big_pop_done:
         pop esi
+        call shell_status_fail
         call shell_redir_reset
         mov esi, msg_redir_too_big
         call vga_print
@@ -3655,6 +3795,7 @@ shell_prepare_redirection:
         ret
 
 .spr_syntax_err:
+        call shell_status_fail
         call shell_redir_reset
         mov esi, msg_redir_syntax
         call vga_print
@@ -3716,6 +3857,7 @@ shell_finish_redirection:
         jmp .sfr_reset
 
 .sfr_fail:
+        call shell_status_fail
         call shell_redir_reset
         mov esi, msg_write_err
         call vga_print
@@ -3880,6 +4022,7 @@ shell_execute_pipeline:
         ret
 
 .pipe_syntax:
+        call shell_status_fail
         call shell_redir_reset
         mov esi, msg_redir_syntax
         call vga_print
@@ -3888,6 +4031,7 @@ shell_execute_pipeline:
         ret
 
 .pipe_fail:
+        call shell_status_fail
         call shell_redir_reset
         popad
         stc

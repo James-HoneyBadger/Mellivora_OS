@@ -38,7 +38,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real i486+ hardware or in 
 
 - **40+ built-in shell commands** with aliases: file management, text processing, system info, and more
 - **Tab completion**, **command history** (Up/Down arrows), **Ctrl+C** hard-abort with proper cleanup
-- **Pipes and redirection** — `|`, `>`, `>>`, and `<` for shell workflows
+- **Pipes, redirection, and chaining** — `|`, `>`, `>>`, `<`, `&&`, and `||` for shell workflows
 - **Alias system** — define custom command shortcuts
 - **Environment variables** with `$VAR` expansion in echo and batch scripts
 - **Batch scripting** — execute `.bat` files with sequential command processing

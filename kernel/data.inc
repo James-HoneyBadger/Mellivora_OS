@@ -309,6 +309,8 @@ help_text:
         db "  <name>     - Run program (searches PATH)", 0x0A
         db "  >, >>, <   - Redirect output/input to files", 0x0A
         db "  cmd1 | cmd2- Pipe one command into another", 0x0A
+        db "  cmd1 && cmd2 - Run cmd2 only if cmd1 succeeds", 0x0A
+        db "  cmd1 || cmd2 - Run cmd2 only if cmd1 fails", 0x0A
         db "  Tab        - Auto-complete filename", 0x0A
         db "  Ctrl+C     - Cancel current input", 0x0A
         db 0x0A
@@ -538,6 +540,7 @@ ctrl_c_flag:    resb 1
 ; Program execution
 program_entry:  resd 1
 program_exit_code: resd 1
+shell_last_status: resd 1
 
 ; TSS structure (104 bytes)
 tss_struct:     resb 104
@@ -591,6 +594,9 @@ stdin_redir_pos:     resd 1
 pipe_input_len:      resd 1
 pipe_has_input:      resb 1
 pipe_work_buf:       resb LINE_BUFFER_SIZE
+cond_work_buf:       resb LINE_BUFFER_SIZE
+cond_next_op:        resb 1
+cond_prev_op:        resb 1
 
 ; Alias table (16 entries: 32 byte name + 224 byte command = 256 per entry)
 ALIAS_MAX        equ 16
