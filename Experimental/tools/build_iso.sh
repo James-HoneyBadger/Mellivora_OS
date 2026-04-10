@@ -20,20 +20,23 @@ mkdir -p "$(dirname "$OUTPUT_FILE")"
 OUTPUT_FILE="$(cd "$(dirname "$OUTPUT_FILE")" && pwd)/$(basename "$OUTPUT_FILE")"
 rm -f "$OUTPUT_FILE"
 
+# boot-load-size = MBR + stage2 + kernel sectors (set by Makefile)
+BOOT_LOAD_SIZE="${ISO_BOOT_SECTORS:-33}"
+
 if command -v xorriso >/dev/null 2>&1; then
   xorriso -as mkisofs \
     -R -J -V "$VOLUME_NAME" \
-    -b boot/mellivora.img -hard-disk-boot \
+    -b boot/mellivora.img -no-emul-boot -boot-load-size "$BOOT_LOAD_SIZE" \
     -o "$OUTPUT_FILE" "$ROOT_DIR"
 elif command -v genisoimage >/dev/null 2>&1; then
   genisoimage \
     -R -J -V "$VOLUME_NAME" \
-    -b boot/mellivora.img -hard-disk-boot \
+    -b boot/mellivora.img -no-emul-boot -boot-load-size "$BOOT_LOAD_SIZE" \
     -o "$OUTPUT_FILE" "$ROOT_DIR"
 elif command -v mkisofs >/dev/null 2>&1; then
   mkisofs \
     -R -J -V "$VOLUME_NAME" \
-    -b boot/mellivora.img -hard-disk-boot \
+    -b boot/mellivora.img -no-emul-boot -boot-load-size "$BOOT_LOAD_SIZE" \
     -o "$OUTPUT_FILE" "$ROOT_DIR"
 elif command -v hdiutil >/dev/null 2>&1; then
   (
@@ -45,7 +48,7 @@ elif command -v hdiutil >/dev/null 2>&1; then
       -iso -joliet \
       -default-volume-name "$VOLUME_NAME" \
       -eltorito-boot boot/mellivora.img \
-      -hard-disk-boot >/dev/null
+      -no-emul-boot >/dev/null
   )
   if [[ ! -f "$OUTPUT_FILE" && -f "${OUTPUT_FILE}.cdr" ]]; then
     mv "${OUTPUT_FILE}.cdr" "$OUTPUT_FILE"

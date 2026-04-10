@@ -16,30 +16,55 @@ ata_init:
         in al, dx
         loop .wait1
 
+        ; Clear task file registers before IDENTIFY
+        mov dx, ATA_SECCOUNT
+        xor al, al
+        out dx, al
+        mov dx, ATA_LBA_LO
+        out dx, al
+        mov dx, ATA_LBA_MID
+        out dx, al
+        mov dx, ATA_LBA_HI
+        out dx, al
+
         ; Send IDENTIFY command
         mov dx, ATA_CMD
         mov al, ATA_CMD_IDENTIFY
         out dx, al
 
-        ; Wait for BSY to clear
-        call ata_wait_ready
-        jc .no_drive
-
-        ; Check if drive exists
+        ; Check if drive exists at all
         mov dx, ATA_STATUS
         in al, dx
         test al, al
         jz .no_drive
 
-        ; Read 256 words of identify data
-        mov dx, ATA_STATUS
+        ; Wait for BSY to clear
+        call ata_wait_ready
+        jc .no_drive
+
+        ; Reject non-ATA devices (e.g. ATAPI CD-ROM on ISO boot)
+        mov dx, ATA_LBA_MID
+        in al, dx
+        test al, al
+        jnz .no_drive
+        mov dx, ATA_LBA_HI
+        in al, dx
+        test al, al
+        jnz .no_drive
+
+        ; Wait for DRQ with timeout so unsupported devices don't hang boot
+        mov ecx, 0x100000
 .wait_drq:
+        mov dx, ATA_STATUS
         in al, dx
         test al, ATA_SR_ERR
         jnz .no_drive
         test al, ATA_SR_DRQ
-        jz .wait_drq
+        jnz .have_drq
+        loop .wait_drq
+        jmp .no_drive
 
+.have_drq:
         mov edi, ata_identify_buf
         mov ecx, 256
         mov dx, ATA_DATA

@@ -53,7 +53,7 @@ ISO_STAGING = .build/iso-root
 ISO_FILE = mellivora.iso
 ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
            docs/TECHNICAL_REFERENCE.md docs/TUTORIAL.md docs/API_REFERENCE.md \
-           docs/ISO_README.txt
+           Experimental/docs/ISO_README.txt
 
 # Populate script
 POPULATE = python3 populate.py
@@ -137,7 +137,7 @@ full: $(IMAGE) programs populate
 	@echo "=== Full build complete ==="
 
 # Build a bootable ISO that includes install docs and the user guide
-iso: full tools/build_iso.sh $(ISO_DOCS) README.md LICENSE CHANGELOG.md
+iso: full Experimental/tools/build_iso.sh $(ISO_DOCS) README.md LICENSE CHANGELOG.md
 	@echo "=== Preparing bootable ISO staging tree ==="
 	@rm -rf "$(ISO_STAGING)"
 	@mkdir -p "$(ISO_STAGING)/boot" "$(ISO_STAGING)/docs"
@@ -146,9 +146,10 @@ iso: full tools/build_iso.sh $(ISO_DOCS) README.md LICENSE CHANGELOG.md
 	@cp docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 		  docs/TECHNICAL_REFERENCE.md docs/TUTORIAL.md docs/API_REFERENCE.md \
 		  "$(ISO_STAGING)/docs/"
-	@cp docs/ISO_README.txt "$(ISO_STAGING)/README.txt"
-	@chmod +x tools/build_iso.sh
-	@./tools/build_iso.sh "$(ISO_STAGING)" "$(ISO_FILE)"
+	@cp Experimental/docs/ISO_README.txt "$(ISO_STAGING)/README.txt"
+	@chmod +x Experimental/tools/build_iso.sh
+	@ISO_BOOT_SECTORS=$$(awk '/KERNEL_SECTORS/ {print $$3 + 33}' kernel_sectors.inc) \
+		./Experimental/tools/build_iso.sh "$(ISO_STAGING)" "$(ISO_FILE)"
 	@echo "=== Bootable ISO ready: $(ISO_FILE) ==="
 
 # Run regression tests (requires full build)

@@ -110,6 +110,21 @@ load_kernel:
         mov si, msg_load_kern
         call print16
 
+        ; Default: kernel loaded from disk into temp buffer.
+        mov dword [kernel_src_lin], KERNEL_TMPBUF_LIN
+
+        ; El Torito ISO path: if BIOS preloaded the kernel (boot-load-size
+        ; covers MBR + stage2 + kernel), it sits at PRELOAD_KERNEL_ADDR.
+        ; Detect by checking for the kernel's known first 8 bytes.
+        cmp dword [PRELOAD_KERNEL_ADDR], 0x0010B866
+        jne .load_from_disk
+        cmp dword [PRELOAD_KERNEL_ADDR + 4], 0x66D88E66
+        jne .load_from_disk
+        ; Kernel is preloaded — skip slow disk reads.
+        mov dword [kernel_src_lin], PRELOAD_KERNEL_ADDR
+        jmp .load_done
+
+.load_from_disk:
         ; Kernel on disk starts at LBA 33 (after boot + stage2)
         mov dword [cur_lba], 33
         mov word [sectors_left], KERNEL_SECTORS
@@ -119,11 +134,12 @@ load_kernel:
         cmp word [sectors_left], 0
         je .load_done
 
-        ; How many sectors this chunk? Min(sectors_left, 64)
+        ; How many sectors this chunk? Min(sectors_left, 32)
+        ; Some BIOS/El Torito paths are unreliable with larger transfers.
         mov ax, [sectors_left]
-        cmp ax, 64
+        cmp ax, 32
         jle .chunk_ok
-        mov ax, 64
+        mov ax, 32
 .chunk_ok:
         mov [chunk_size], ax
 
@@ -138,11 +154,8 @@ load_kernel:
         mov [kern_dap+8], eax
         mov dword [kern_dap+12], 0
 
-        ; Read from disk
-        mov si, kern_dap
-        mov ah, 0x42
-        mov dl, [boot_drive]
-        int 0x13
+        ; Read from disk (prefer LBA, fall back to CHS for legacy BIOS / ISO boot)
+        call read_kernel_chunk
         jc .load_fail
 
         ; Advance LBA
@@ -205,6 +218,132 @@ halt16:
         jmp halt16
 
 ;---------------------------------------
+; Read one kernel chunk, preferring INT 13h extensions but falling back
+; to CHS reads when booted from BIOS / El Torito environments that reject AH=42.
+;---------------------------------------
+read_kernel_chunk:
+        mov dl, [boot_drive]
+        call read_kernel_chunk_once
+        jnc .remember_drive
+
+        mov al, [boot_drive]
+        cmp al, 0x80
+        je .try_81
+        mov dl, 0x80
+        call read_kernel_chunk_once
+        jnc .remember_drive
+
+.try_81:
+        mov al, [boot_drive]
+        cmp al, 0x81
+        je .try_82
+        mov dl, 0x81
+        call read_kernel_chunk_once
+        jnc .remember_drive
+
+.try_82:
+        mov al, [boot_drive]
+        cmp al, 0x82
+        je .try_floppy
+        mov dl, 0x82
+        call read_kernel_chunk_once
+        jnc .remember_drive
+
+.try_floppy:
+        mov al, [boot_drive]
+        cmp al, 0x00
+        je .try_cdrom
+        mov dl, 0x00
+        call read_kernel_chunk_once
+        jnc .remember_drive
+
+.try_cdrom:
+        mov al, [boot_drive]
+        cmp al, 0xE0
+        je .fail
+        mov dl, 0xE0
+        call read_kernel_chunk_once
+        jc .fail
+
+.remember_drive:
+        mov [boot_drive], dl
+.ok:
+        clc
+        ret
+
+.fail:
+        stc
+        ret
+
+read_kernel_chunk_once:
+        xor ax, ax
+        int 0x13                ; Reset disk before attempting read
+
+        mov eax, [cur_lba]
+        mov [kern_dap + 8], eax
+        mov dword [kern_dap + 12], 0
+
+        mov si, kern_dap
+        mov ah, 0x42
+        int 0x13
+        jnc .ok_once
+
+        ; Query BIOS geometry if possible; otherwise use translated defaults.
+        mov byte [chs_spt], 63
+        mov byte [chs_heads], 16
+        mov ah, 0x08
+        int 0x13
+        jc .chs_ready
+        and cl, 0x3F
+        jz .chs_ready
+        mov [chs_spt], cl
+        inc dh
+        jz .chs_ready
+        mov [chs_heads], dh
+
+.chs_ready:
+        mov ax, [load_seg]
+        mov es, ax
+        mov si, [cur_lba]
+        mov di, [chunk_size]
+
+.chs_loop:
+        mov ax, si
+        xor dx, dx
+        div byte [chs_spt]
+        mov cl, ah
+        inc cl
+        xor ah, ah
+        div byte [chs_heads]
+        mov ch, al
+        mov dh, ah
+        xor bx, bx
+        mov ax, 0x0201
+        int 0x13
+        jnc .chs_ok
+        xor ax, ax
+        int 0x13                ; Reset and retry once
+        xor bx, bx
+        mov ax, 0x0201
+        int 0x13
+        jc .fail_once
+.chs_ok:
+        mov ax, es
+        add ax, 0x20            ; Advance 512 bytes = 0x20 paragraphs
+        mov es, ax
+        inc si
+        dec di
+        jnz .chs_loop
+
+.ok_once:
+        clc
+        ret
+
+.fail_once:
+        stc
+        ret
+
+;---------------------------------------
 ; 16-bit helper: print string
 ;---------------------------------------
 print16:
@@ -252,10 +391,11 @@ pmode_entry:
         mov [0x504], eax                ; Memory map entry count
         mov dword [0x508], memory_map   ; Pointer to memory map data
 
-        ; Copy kernel from low memory (0x20000) to 1MB (0x100000)
-        ; Kernel is KERNEL_SECTORS * 512 bytes
+        ; Copy kernel to 1MB from selected source buffer.
+        ; Source is disk-loaded 0x20000 (raw disk boot) or BIOS-preloaded
+        ; 0xBE00 (ISO boot with full preload via boot-load-size).
         cld
-        mov esi, KERNEL_TMPBUF_LIN      ; Source: 0x20000
+        mov esi, [kernel_src_lin]
         mov edi, 0x00100000             ; Dest: 1MB
         mov ecx, (KERNEL_SECTORS * 512) / 4  ; Dword count
         rep movsd
@@ -271,6 +411,8 @@ pmode_entry:
 KERNEL_TMPBUF_SEG equ 0x2000   ; Segment for temp buffer (linear 0x20000)
 KERNEL_TMPBUF_OFF equ 0x0000   ; Offset for temp buffer
 KERNEL_TMPBUF_LIN equ 0x20000  ; Linear address of temp buffer (seg*16+off)
+PRELOAD_KERNEL_ADDR equ 0xBE00 ; Kernel location when preloaded by BIOS
+                               ; (0x7C00 + 33 * 512)
 
 ; KERNEL_SECTORS is generated by the build system in kernel_sectors.inc
 ; It equals ceil(kernel.bin size / 512), ensuring we always load the
@@ -278,11 +420,14 @@ KERNEL_TMPBUF_LIN equ 0x20000  ; Linear address of temp buffer (seg*16+off)
 %include "kernel_sectors.inc"
 
 boot_drive:     db 0
+chs_spt:        db 0
+chs_heads:      db 0
 cur_lba:        dd 0
 load_seg:       dw 0
 sectors_left:   dw 0
 chunk_size:     dw 0
 memory_map_count: dw 0
+kernel_src_lin: dd KERNEL_TMPBUF_LIN
 
 kern_dap:       times 16 db 0
 
