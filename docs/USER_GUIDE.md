@@ -132,6 +132,21 @@ Lair:/> run /bin/hello
 Lair:/games> cat /samples/hello.c  # Access files across directories
 ```
 
+### Pipes & Redirection
+
+The shell supports basic Unix-style redirection and single-line pipelines:
+
+```text
+Lair:/> echo hello > greet.txt     # Write command output to a file
+Lair:/> echo world >> greet.txt    # Append output to a file
+Lair:/> cat < greet.txt            # Read from redirected stdin
+Lair:/> cat greet.txt | wc         # Pipe output into another command
+Lair:/> cat /docs/readme | head -n 5
+Lair:/> cat /docs/readme | rev
+```
+
+Commands such as `cat`, `head`, `tail`, `wc`, `uniq`, `rev`, and `tac` accept piped or redirected input when no filename is supplied.
+
 ---
 
 ## Shell Commands Reference

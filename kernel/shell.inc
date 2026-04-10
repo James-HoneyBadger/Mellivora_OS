@@ -231,15 +231,25 @@ shell_parse_cmd:
         ; Skip leading spaces
         call skip_spaces
 
+        call shell_execute_pipeline
+        jc .parse_done
+
         call shell_prepare_redirection
-        jc .done
+        jc .parse_done
 
         mov esi, line_buffer
         call skip_spaces
 
         cmp byte [esi], 0
-        je .done
+        je .parse_finish
 
+        call shell_dispatch_core
+.parse_finish:
+        call shell_finish_redirection
+.parse_done:
+        ret
+
+shell_dispatch_core:
         ; --- Alias expansion ---
         ; Extract first word, check alias table
         ; Guard: only expand once per command to prevent infinite recursion
@@ -506,9 +516,6 @@ shell_parse_cmd:
         mov esi, line_buffer
         call cmd_exec_program
         jc .unknown
-
-.done:
-        call shell_finish_redirection
         ret
 
 .unknown:
@@ -516,7 +523,7 @@ shell_parse_cmd:
         mov esi, msg_unknown_cmd
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        jmp .done
+        ret
 
 ;---- Command implementations ----
 
@@ -1211,8 +1218,12 @@ cmd_uniq_file:
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
-        je .uniq_usage
+        jne .uniq_from_file
+        call shell_use_stdin_as_input
+        jc .uniq_usage
+        jmp .uniq_loaded
 
+.uniq_from_file:
         mov esi, filename_buf
         mov edi, PROGRAM_BASE
         call hbfs_read_file
@@ -1220,6 +1231,7 @@ cmd_uniq_file:
         mov edi, PROGRAM_BASE
         add edi, ecx
         mov byte [edi], 0
+.uniq_loaded:
 
         mov esi, PROGRAM_BASE
         mov dword [.uniq_prev], 0
@@ -1339,8 +1351,12 @@ cmd_rev_file:
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
-        je .rev_usage
+        jne .rev_from_file
+        call shell_use_stdin_as_input
+        jc .rev_usage
+        jmp .rev_loaded
 
+.rev_from_file:
         mov esi, filename_buf
         mov edi, PROGRAM_BASE
         call hbfs_read_file
@@ -1348,6 +1364,7 @@ cmd_rev_file:
         mov edi, PROGRAM_BASE
         add edi, ecx
         mov byte [edi], 0
+.rev_loaded:
 
         mov esi, PROGRAM_BASE
 .rev_loop:
@@ -1408,8 +1425,12 @@ cmd_tac_file:
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
-        je .tac_usage
+        jne .tac_from_file
+        call shell_use_stdin_as_input
+        jc .tac_usage
+        jmp .tac_loaded
 
+.tac_from_file:
         mov esi, filename_buf
         mov edi, PROGRAM_BASE
         call hbfs_read_file
@@ -1417,6 +1438,7 @@ cmd_tac_file:
         mov edi, PROGRAM_BASE
         add edi, ecx
         mov byte [edi], 0
+.tac_loaded:
 
         ; Build line pointer table at PROGRAM_BASE + 0x10000
         mov esi, PROGRAM_BASE
@@ -2455,7 +2477,7 @@ cmd_head_file:
         jmp .head_no_num
 .head_no_flag_num:
         cmp byte [esi], 0
-        je .head_usage
+        je .head_no_num
         ; Check if first arg is a number (legacy positional syntax)
         cmp byte [esi], '0'
         jl .head_no_num
@@ -2478,7 +2500,12 @@ cmd_head_file:
         mov [head_lines], eax
         call skip_spaces
 .head_no_num:
-        ; ESI now points to filename
+        cmp byte [esi], 0
+        jne .head_from_file
+        call shell_use_stdin_as_input
+        jc .head_usage
+        jmp .head_have_buf
+.head_from_file:
         mov edi, PROGRAM_BASE
         call hbfs_read_file
         jc .head_not_found
@@ -2488,7 +2515,7 @@ cmd_head_file:
         mov ecx, PROGRAM_MAX_SIZE - 1
 .head_size_ok:
         mov byte [PROGRAM_BASE + ecx], 0
-
+.head_have_buf:
         mov esi, PROGRAM_BASE
         xor ecx, ecx            ; line counter
 .head_loop:
@@ -2533,7 +2560,7 @@ cmd_tail_file:
         jmp .tail_no_num
 .tail_no_flag_num:
         cmp byte [esi], 0
-        je .tail_usage
+        je .tail_no_num
         ; Check if first arg is a number (legacy positional syntax)
         cmp byte [esi], '0'
         jl .tail_no_num
@@ -2555,6 +2582,12 @@ cmd_tail_file:
         mov [head_lines], eax
         call skip_spaces
 .tail_no_num:
+        cmp byte [esi], 0
+        jne .tail_from_file
+        call shell_use_stdin_as_input
+        jc .tail_usage
+        jmp .tail_have_buf
+.tail_from_file:
         ; Read file
         mov edi, PROGRAM_BASE
         call hbfs_read_file
@@ -2565,6 +2598,7 @@ cmd_tail_file:
         mov ecx, PROGRAM_MAX_SIZE - 1
 .tail_size_ok:
         mov byte [PROGRAM_BASE + ecx], 0
+.tail_have_buf:
 
         ; Count total lines first
         mov esi, PROGRAM_BASE
@@ -2628,9 +2662,16 @@ cmd_tail_file:
 ;---------------------------------------
 cmd_cat_file:
         pushad
+        cmp byte [esi], 0
+        jne .cat_from_file
+        call shell_use_stdin_as_input
+        jc .cat_usage
+        jmp .cat_loaded
+.cat_from_file:
         mov edi, PROGRAM_BASE   ; Use program area as temp buffer
         call hbfs_read_file
         jc .not_found
+.cat_loaded:
 
         ; ECX = file size from hbfs_read_file
         ; Clamp to buffer size to prevent overflow
@@ -2683,6 +2724,14 @@ cmd_cat_file:
 .cat_n_done:
         mov al, 0x0A
         call vga_putchar
+        popad
+        ret
+
+.cat_usage:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_need_filename
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
         popad
         ret
 
@@ -3676,6 +3725,172 @@ shell_finish_redirection:
 .sfr_reset:
         call shell_redir_reset
         popad
+        ret
+
+shell_use_stdin_as_input:
+        cmp byte [stdin_redir_active], 1
+        jne .susi_no_input
+        push edi
+        mov ecx, [stdin_redir_len]
+        cmp ecx, PROGRAM_MAX_SIZE - 1
+        jle .susi_size_ok
+        mov ecx, PROGRAM_MAX_SIZE - 1
+.susi_size_ok:
+        mov edx, ecx
+        mov esi, redir_in_buf
+        mov edi, PROGRAM_BASE
+        rep movsb
+        mov byte [PROGRAM_BASE + edx], 0
+        mov [stdin_redir_pos], edx
+        mov byte [stdin_redir_active], 0
+        mov esi, PROGRAM_BASE
+        mov ecx, edx
+        pop edi
+        clc
+        ret
+.susi_no_input:
+        stc
+        ret
+
+shell_execute_pipeline:
+        pushad
+        mov esi, line_buffer
+.sep_scan:
+        mov al, [esi]
+        test al, al
+        jz .sep_none
+        cmp al, '|'
+        je .sep_found
+        inc esi
+        jmp .sep_scan
+
+.sep_none:
+        popad
+        clc
+        ret
+
+.sep_found:
+        mov esi, line_buffer
+        mov edi, pipe_work_buf
+        call str_copy
+        mov byte [pipe_has_input], 0
+        mov dword [pipe_input_len], 0
+        mov esi, pipe_work_buf
+
+.pipe_next_stage:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .pipe_done
+
+        mov edi, esi
+.pipe_find_end:
+        mov al, [esi]
+        test al, al
+        jz .pipe_last_stage
+        cmp al, '|'
+        je .pipe_mid_stage
+        inc esi
+        jmp .pipe_find_end
+
+.pipe_mid_stage:
+        mov byte [esi], 0
+        lea ebx, [esi + 1]
+        mov esi, edi
+        call skip_spaces
+        cmp byte [esi], 0
+        je .pipe_syntax
+        mov edi, line_buffer
+        call str_copy
+
+        mov dl, [pipe_has_input]
+        mov eax, [pipe_input_len]
+        call shell_prepare_redirection
+        jc .pipe_fail
+        cmp dl, 0
+        je .pipe_input_ready
+        cmp byte [stdin_redir_active], 1
+        je .pipe_input_ready
+        mov byte [stdin_redir_active], 1
+        mov dword [stdin_redir_len], eax
+        mov dword [stdin_redir_pos], 0
+.pipe_input_ready:
+        mov byte [stdout_redir_active], 1
+        mov byte [stdout_redir_append], 0
+        mov dword [stdout_redir_len], 0
+        mov byte [redir_out_name], 0
+        mov byte [redir_out_buf], 0
+
+        mov esi, line_buffer
+        call skip_spaces
+        cmp byte [esi], 0
+        je .pipe_syntax
+        call shell_dispatch_core
+
+        mov eax, [stdout_redir_len]
+        cmp eax, BATCH_BUFFER_SIZE - 1
+        jbe .pipe_len_ok
+        mov eax, BATCH_BUFFER_SIZE - 1
+.pipe_len_ok:
+        mov [pipe_input_len], eax
+        mov byte [redir_out_buf + eax], 0
+        mov esi, redir_out_buf
+        mov edi, redir_in_buf
+        mov ecx, eax
+        rep movsb
+        mov byte [redir_in_buf + eax], 0
+        mov byte [pipe_has_input], 1
+        mov byte [stdout_redir_active], 0
+        mov byte [stdout_redir_append], 0
+        mov dword [stdout_redir_len], 0
+
+        mov esi, ebx
+        jmp .pipe_next_stage
+
+.pipe_last_stage:
+        mov esi, edi
+        call skip_spaces
+        cmp byte [esi], 0
+        je .pipe_syntax
+        mov edi, line_buffer
+        call str_copy
+
+        mov dl, [pipe_has_input]
+        mov eax, [pipe_input_len]
+        call shell_prepare_redirection
+        jc .pipe_fail
+        cmp dl, 0
+        je .pipe_last_input_ready
+        cmp byte [stdin_redir_active], 1
+        je .pipe_last_input_ready
+        mov byte [stdin_redir_active], 1
+        mov dword [stdin_redir_len], eax
+        mov dword [stdin_redir_pos], 0
+.pipe_last_input_ready:
+        mov esi, line_buffer
+        call skip_spaces
+        cmp byte [esi], 0
+        je .pipe_syntax
+        call shell_dispatch_core
+        call shell_finish_redirection
+
+.pipe_done:
+        call shell_redir_reset
+        popad
+        stc
+        ret
+
+.pipe_syntax:
+        call shell_redir_reset
+        mov esi, msg_redir_syntax
+        call vga_print
+        popad
+        stc
+        ret
+
+.pipe_fail:
+        call shell_redir_reset
+        popad
+        stc
         ret
 
 ;---------------------------------------

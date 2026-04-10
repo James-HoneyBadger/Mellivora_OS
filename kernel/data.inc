@@ -208,8 +208,8 @@ help_help_dir:
         db "dir | ls [-l]", 0x0A
         db "List files in current directory. Use -l for long format.", 0x0A, 0
 help_help_cat:
-        db "cat | type [-n] FILE", 0x0A
-        db "Display a file. Use -n to show line numbers.", 0x0A, 0
+        db "cat | type [-n] [FILE]", 0x0A
+        db "Display FILE or redirected stdin. Use -n for line numbers.", 0x0A, 0
 help_help_write:
         db "write FILE", 0x0A
         db "Create/overwrite FILE with typed lines (empty line ends).", 0x0A, 0
@@ -221,7 +221,7 @@ help_help_run:
         db "Load and execute a binary program.", 0x0A, 0
 help_help_echo:
         db "echo [-n] TEXT", 0x0A
-        db "Print text. -n suppresses trailing newline.", 0x0A, 0
+        db "Print text. Works with >, >>, and | piping.", 0x0A, 0
 help_help_cd:
         db "cd DIR", 0x0A
         db "Change current working directory.", 0x0A, 0
@@ -259,12 +259,12 @@ help_text:
         db "  ver        - System information", 0x0A
         db "  clear/cls  - Clear screen", 0x0A
         db "  dir/ls [-l]- List files (-l for long format)", 0x0A
-        db "  cat [-n] F - Display file (-n for line numbers)", 0x0A
-        db "  type FILE  - Alias for cat", 0x0A
-        db "  head [-n N] F  - Show first N lines (default 10)", 0x0A
-        db "  tail [-n N] F  - Show last N lines (default 10)", 0x0A
-        db "  more [-n N] F  - Page through file (-n N page size)", 0x0A
-        db "  wc [-lwc] F    - Line/word/byte count", 0x0A
+        db "  cat [-n] [F] - Display file or stdin", 0x0A
+        db "  type [FILE] - Alias for cat", 0x0A
+        db "  head [-n N] [F] - Show first N lines (default 10)", 0x0A
+        db "  tail [-n N] [F] - Show last N lines (default 10)", 0x0A
+        db "  more [-n N] F   - Page through file (-n N page size)", 0x0A
+        db "  wc [-lwc] [F]   - Line/word/byte count", 0x0A
         db "  find [-ic] P F - Search pattern P in file F", 0x0A
         db "             (-i case-insensitive, -c count only)", 0x0A
         db "  write F    - Write text to file (end with empty line)", 0x0A
@@ -295,10 +295,10 @@ help_text:
         db "  df         - Filesystem usage", 0x0A
         db "  time       - Uptime", 0x0A
         db "  diff F1 F2 - Compare two files line by line", 0x0A
-        db "  uniq [-cd] F   - Remove adjacent duplicates", 0x0A
+        db "  uniq [-cd] [F] - Remove adjacent duplicates", 0x0A
         db "             (-c count, -d duplicates only)", 0x0A
-        db "  rev F      - Reverse each line", 0x0A
-        db "  tac F      - Print file in reverse line order", 0x0A
+        db "  rev [F]    - Reverse each line", 0x0A
+        db "  tac [F]    - Print file in reverse line order", 0x0A
         db "  alias [N C]- Define alias N for command C", 0x0A
         db "  history    - Show command history", 0x0A
         db "  which N    - Show if N is built-in or program", 0x0A
@@ -307,6 +307,8 @@ help_text:
         db "  size F     - Show file size and type", 0x0A
         db "  strings F  - Extract printable strings from file", 0x0A
         db "  <name>     - Run program (searches PATH)", 0x0A
+        db "  >, >>, <   - Redirect output/input to files", 0x0A
+        db "  cmd1 | cmd2- Pipe one command into another", 0x0A
         db "  Tab        - Auto-complete filename", 0x0A
         db "  Ctrl+C     - Cancel current input", 0x0A
         db 0x0A
@@ -586,6 +588,9 @@ stdin_redir_active:  resb 1
 stdout_redir_len:    resd 1
 stdin_redir_len:     resd 1
 stdin_redir_pos:     resd 1
+pipe_input_len:      resd 1
+pipe_has_input:      resb 1
+pipe_work_buf:       resb LINE_BUFFER_SIZE
 
 ; Alias table (16 entries: 32 byte name + 224 byte command = 256 per entry)
 ALIAS_MAX        equ 16

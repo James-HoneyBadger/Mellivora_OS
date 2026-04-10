@@ -1968,9 +1968,16 @@ cmd_echo:
 ;---------------------------------------
 cmd_wc_file:
         pushad
+        cmp byte [esi], 0
+        jne .wc_from_file
+        call shell_use_stdin_as_input
+        jc .wc_usage
+        jmp .wc_loaded
+.wc_from_file:
         mov edi, PROGRAM_BASE
         call hbfs_read_file
         jc .wc_nf
+.wc_loaded:
         mov [.wc_bytes], ecx
         mov esi, PROGRAM_BASE
         xor ebx, ebx
@@ -2047,6 +2054,13 @@ cmd_wc_file:
         call vga_print_dec
         mov al, 0x0A
         call vga_putchar
+        popad
+        ret
+.wc_usage:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_need_filename
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
         popad
         ret
 .wc_nf:
