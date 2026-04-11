@@ -103,10 +103,10 @@ str_copy:
 banner_str:
         db COLOR_HEADER
         db "          Mellivora OS - 32-bit Protected Mode Operating System          ", 0x0A
-        db "       HB Lair v1.4 - Honey Badger Lair / i486+                        ", 0x0A, 0
+        db "       HB Lair v2.0 - Honey Badger Lair / i486+                        ", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v1.4", 0x0A
+        db "Mellivora OS v2.0.0", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair (Honey Badger Lair)", 0x0A
@@ -115,7 +115,7 @@ version_text:
         db "  Disk:          ATA PIO, LBA48 (up to 128 PB)", 0x0A
         db "  Filesystem:    HBFS (Honey Badger File System)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
-        db "    Max files:   227 root / 56 per subdirectory", 0x0A
+        db "    Max files:   455 root / 56 per subdirectory", 0x0A
         db "    Max name:    252 characters", 0x0A
         db "    Multi-block: Files can span multiple blocks", 0x0A
         db "    Subdirs:     mkdir / cd / pwd", 0x0A
@@ -125,6 +125,7 @@ version_text:
         db "  Serial:        COM1 at 115200 baud", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
         db "  Syscalls:      INT 0x80 (34 syscalls)", 0x0A
+        db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Shell:         Tab completion, history, Ctrl+C abort", 0x0A
         db "  Programs:      Flat binary + ELF32 (ring 3)", 0x0A
         db "  Arguments:     Command-line args via SYS_GETARGS", 0x0A
@@ -191,6 +192,8 @@ cmd_sleep_str:  db "sleep", 0
 cmd_color_str:  db "color", 0
 cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
+cmd_mouse_str:  db "mouse", 0
+cmd_gui_str:    db "gui", 0
 
 ; Help text
 msg_help_no_detail:
@@ -253,6 +256,12 @@ help_help_size:
 help_help_strings:
         db "strings FILE", 0x0A
         db "Extract printable strings from a file.", 0x0A, 0
+help_help_mouse:
+        db "mouse", 0x0A
+        db "Show PS/2 mouse status (position and buttons).", 0x0A, 0
+help_help_gui:
+        db "gui", 0x0A
+        db "Enter Burrows desktop (640x480 graphical mode). Press any key to exit.", 0x0A, 0
 
 help_text:
         db "HB Lair Commands:", 0x0A
@@ -313,6 +322,8 @@ help_text:
         db "  color FG [BG] - Set text color (hex 0-F)", 0x0A
         db "  size F     - Show file size and type", 0x0A
         db "  strings F  - Extract printable strings from file", 0x0A
+        db "  mouse      - Show PS/2 mouse status", 0x0A
+        db "  gui        - Enter Burrows desktop (640x480)", 0x0A
         db "  <name>     - Run program (searches PATH)", 0x0A
         db "  >, >>, <   - Redirect output/input to files", 0x0A
         db "  cmd1 | cmd2- Pipe one command into another", 0x0A
@@ -328,6 +339,19 @@ help_text:
 msg_exception:  db "*** CPU EXCEPTION ***", 0x0A, 0
 msg_exc_eip:    db "  EIP: 0x", 0
 msg_exc_err:    db "  Error code: 0x", 0
+msg_pf:         db "*** PAGE FAULT ***", 0x0A, 0
+msg_pf_addr:    db "  Address: 0x", 0
+msg_pf_eip:     db "  EIP: 0x", 0
+msg_pf_err:     db "  Error: 0x", 0
+msg_mouse_hdr:  db "PS/2 Mouse status:", 0x0A, 0
+msg_mouse_pos:  db "  Position: ", 0
+msg_mouse_btn:  db "  Buttons:  ", 0
+msg_mouse_left: db "LEFT ", 0
+msg_mouse_right: db "RIGHT ", 0
+msg_mouse_mid:  db "MIDDLE ", 0
+msg_mouse_none: db "none", 0
+msg_mouse_absent: db "PS/2 mouse not detected.", 0x0A, 0
+msg_vbe_no:     db "VBE/BGA graphics adapter not found.", 0x0A, 0
 msg_ata_ok:     db "  ATA disk:      ", 0
 msg_ata_none:   db "  ATA disk:      not detected", 0x0A, 0
 msg_shutdown_bar: db "===========================================================", 0x0A, 0
@@ -517,7 +541,7 @@ ata_identify_buf: resb 512
 hbfs_super_buf:  resb 512       ; Superblock buffer
 hbfs_dir_buf:    resb HBFS_ROOT_DIR_SIZE  ; Directory buffer (64KB)
 hbfs_block_buf:  resb HBFS_BLOCK_SIZE     ; General block buffer (4KB)
-hbfs_bitmap_buf: resb HBFS_BLOCK_SIZE     ; Bitmap buffer (4KB)
+hbfs_bitmap_buf: resb HBFS_BITMAP_SIZE     ; Bitmap buffer (64KB)
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE
@@ -544,6 +568,7 @@ serial_present: resb 1
 
 ; Keyboard ctrl state
 kb_ctrl:        resb 1
+boot_kb_flushed: resb 1
 
 ; RTC time fields
 rtc_sec:        resb 1
@@ -573,6 +598,7 @@ env_table:      resb ENV_MAX * ENV_ENTRY_SIZE
 env_name_buf:   resb 64
 env_temp_buf:   resb LINE_BUFFER_SIZE
 expand_buf:     resb LINE_BUFFER_SIZE
+glob_token_buf: resb 256
 
 ; Subdirectory tracking
 current_dir_lba:  resd 1
@@ -662,9 +688,10 @@ gff_cwd_depth:    resd 1
 gff_cwd_name:     resb 256
 gff_cwd_stack:    resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 
-; Scheduler / cooperative multitasking state
+; Scheduler / preemptive multitasking state
 task_current:     resd 1                              ; Index of current running task
 task_count:       resd 1                              ; Number of active tasks
+sched_tick:       resd 1                              ; Tick counter for current time slice
 task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array
 
 ; Networking state (RTL8139 NIC)

@@ -16,7 +16,7 @@ DD = dd
 
 # Output
 IMAGE = mellivora.img
-IMAGE_SIZE_MB = 64
+IMAGE_SIZE_MB = 2048
 
 # Components
 BOOT_BIN = boot.bin
@@ -94,7 +94,7 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "  Boot sector:  $(BOOT_BIN)"
 	@echo "  Stage 2:      $(STAGE2_BIN)"
 	@echo "  Kernel:       $(KERNEL_BIN)"
-	# Create empty 64MB disk image
+	# Create empty 2GB disk image
 	$(DD) if=/dev/zero of=$(IMAGE) bs=1M count=$(IMAGE_SIZE_MB) status=none
 	# Write boot sector at LBA 0
 	$(DD) if=$(BOOT_BIN) of=$(IMAGE) bs=512 count=1 conv=notrunc status=none

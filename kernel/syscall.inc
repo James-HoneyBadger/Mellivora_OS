@@ -79,6 +79,12 @@ syscall_handler:
         je sys_stdin_read
         cmp eax, SYS_YIELD
         je sys_yield
+        cmp eax, SYS_MOUSE
+        je sys_mouse
+        cmp eax, SYS_FRAMEBUF
+        je sys_framebuf
+        cmp eax, SYS_GUI
+        je sys_gui
 
         ; Unknown syscall
         mov eax, -1
@@ -95,8 +101,10 @@ sys_exit:
         mov byte [vga_color], COLOR_DEFAULT
         ; Ensure interrupts are enabled for the shell
         sti
-        ; Return to shell
+        ; Return to shell (or desktop if GUI active)
         mov esp, KERNEL_STACK
+        cmp byte [gui_desktop_active], 1
+        je gui_desktop_resume
         jmp shell_main
 
 sys_putchar:

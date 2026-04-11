@@ -23,9 +23,8 @@
 ;   [276-287] Reserved
 ;
 ; Block allocation bitmap:
-;   8 sectors (4096 bytes) = 32768 blocks max
-;   At 4KB/block = 128MB addressable
-;   For 64GB, we'd need more bitmap but this is a solid start
+;   128 sectors (65536 bytes) = 524288 blocks max
+;   At 4KB/block = 2 GB addressable
 ;
 ;=======================================================================
 
@@ -82,8 +81,8 @@ hbfs_format:
         mov edi, hbfs_super_buf
         mov dword [edi + 0], HBFS_MAGIC
         mov dword [edi + 4], 1                  ; Version
-        mov dword [edi + 8], 32768              ; Total blocks
-        mov dword [edi + 12], 32768             ; Free blocks
+        mov dword [edi + 8], HBFS_TOTAL_BLOCKS  ; Total blocks
+        mov dword [edi + 12], HBFS_TOTAL_BLOCKS ; Free blocks
         mov dword [edi + 16], HBFS_ROOT_DIR_START; Root dir LBA
         mov dword [edi + 20], HBFS_BITMAP_START  ; Bitmap start LBA
         mov dword [edi + 24], HBFS_DATA_START    ; Data start LBA
@@ -95,18 +94,26 @@ hbfs_format:
         mov esi, hbfs_super_buf
         call ata_write_sectors
 
-        ; Zero out bitmap (8 sectors)
+        ; Zero out bitmap (HBFS_BITMAP_BLOCKS blocks)
         mov edi, hbfs_block_buf
         mov ecx, HBFS_BLOCK_SIZE / 4
         xor eax, eax
         rep stosd
 
         mov eax, HBFS_BITMAP_START
+        mov ebx, HBFS_BITMAP_BLOCKS
+.fmt_bmp_loop:
+        cmp ebx, 0
+        je .fmt_bmp_done
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, hbfs_block_buf
         call ata_write_sectors
+        add eax, HBFS_SECTORS_PER_BLK
+        dec ebx
+        jmp .fmt_bmp_loop
+.fmt_bmp_done:
 
-        ; Zero out root directory (128 sectors = 16 blocks)
+        ; Zero out root directory (256 sectors = 32 blocks)
         ; Use a loop to write all blocks
         mov eax, HBFS_ROOT_DIR_START
         mov ebx, HBFS_ROOT_DIR_BLOCKS
@@ -157,7 +164,7 @@ hbfs_load_root_dir:
 hbfs_load_bitmap:
         pushad
         mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_SECTORS_PER_BLK
+        mov ecx, HBFS_BITMAP_SECTS
         mov edi, hbfs_bitmap_buf
         call ata_read_sectors
         jc .hlb_err
@@ -260,13 +267,13 @@ hbfs_alloc_blocks:
 
         ; Read bitmap
         mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_SECTORS_PER_BLK
+        mov ecx, HBFS_BITMAP_SECTS
         mov edi, hbfs_bitmap_buf
         call ata_read_sectors
 
         ; Scan for N contiguous free bits
         xor edx, edx           ; Current block number
-        mov ecx, 32768          ; Total blocks in bitmap
+        mov ecx, HBFS_TOTAL_BLOCKS ; Total blocks in bitmap
 
 .scan_start:
         cmp edx, ecx
@@ -334,7 +341,7 @@ hbfs_alloc_blocks:
         ; Write bitmap back
         push edx
         mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_SECTORS_PER_BLK
+        mov ecx, HBFS_BITMAP_SECTS
         mov esi, hbfs_bitmap_buf
         call ata_write_sectors
         pop edx
@@ -387,7 +394,7 @@ hbfs_free_blocks:
 
         ; Read bitmap
         mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_SECTORS_PER_BLK
+        mov ecx, HBFS_BITMAP_SECTS
         mov edi, hbfs_bitmap_buf
         call ata_read_sectors
 
@@ -414,7 +421,7 @@ hbfs_free_blocks:
 
         ; Write back
         mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_SECTORS_PER_BLK
+        mov ecx, HBFS_BITMAP_SECTS
         mov esi, hbfs_bitmap_buf
         call ata_write_sectors
 

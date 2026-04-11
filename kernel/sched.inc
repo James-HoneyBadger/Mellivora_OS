@@ -1,18 +1,23 @@
 ;=======================================================================
-; sched.inc - Cooperative task scheduler
+; sched.inc - Preemptive task scheduler
 ;
-; Provides TCB management, round-robin scheduling, and SYS_YIELD.
-; Currently supports MAX_TASKS concurrent tasks. Each task gets its
-; own kernel stack (4KB from PMM) so INT 0x80 frames don't collide.
+; Provides TCB management, round-robin scheduling, SYS_YIELD, and
+; preemptive time-slicing via the PIT timer (100 Hz).
 ;
-; Programs call SYS_YIELD to cooperatively yield the CPU.
-; The PIT timer is NOT modified — this is purely cooperative.
+; The PIT IRQ handler (irq_timer in isr.inc) counts ticks per task.
+; When SCHED_QUANTUM ticks elapse, the current ring-3 task is preempted
+; and the next READY task runs.  Programs can also call SYS_YIELD for
+; cooperative yielding.
 ;=======================================================================
 
 ; Task states
 TASK_FREE    equ 0
 TASK_READY   equ 1
 TASK_RUNNING equ 2
+
+; Preemptive scheduling quantum (in PIT ticks, 100 Hz)
+; 10 ticks = 100 ms per time slice
+SCHED_QUANTUM equ 10
 
 ; TCB field offsets (32 bytes per entry)
 TCB_ESP      equ 0          ; Saved kernel-mode ESP (pushad+iretd frame)
@@ -41,6 +46,7 @@ sched_init:
         rep stosd
         mov dword [task_count], 0
         mov dword [task_current], 0
+        mov dword [sched_tick], 0
         popad
         ret
 

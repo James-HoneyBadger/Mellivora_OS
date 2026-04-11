@@ -118,15 +118,19 @@ HBFS_MAX_FILENAME    equ 252            ; 252 chars + null
 HBFS_DIR_ENTRY_SIZE  equ 288            ; Filename(253) + type(1) + flags(2) + size(4) +
                                        ; start_block(4) + blocks(4) + created(4) +
                                        ; modified(4) + reserved(12) = 288
-HBFS_ROOT_DIR_BLOCKS equ 16            ; Root directory uses 16 blocks (supports 227 entries)
-HBFS_ROOT_DIR_SECTS  equ HBFS_ROOT_DIR_BLOCKS * HBFS_SECTORS_PER_BLK ; 128 sectors
-HBFS_ROOT_DIR_SIZE   equ HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE      ; 65536 bytes
-HBFS_MAX_FILES       equ HBFS_ROOT_DIR_SIZE / HBFS_DIR_ENTRY_SIZE    ; 227 entries
-HBFS_SUBDIR_BLOCKS   equ 4            ; Subdirectories get 4 blocks (56 entries each)
+HBFS_ROOT_DIR_BLOCKS equ 32            ; Root directory uses 32 blocks (supports 455 entries)
+HBFS_ROOT_DIR_SECTS  equ HBFS_ROOT_DIR_BLOCKS * HBFS_SECTORS_PER_BLK ; 256 sectors
+HBFS_ROOT_DIR_SIZE   equ HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE      ; 131072 bytes
+HBFS_MAX_FILES       equ HBFS_ROOT_DIR_SIZE / HBFS_DIR_ENTRY_SIZE    ; 455 entries
+HBFS_SUBDIR_BLOCKS   equ 8            ; Subdirectories get 8 blocks (112 entries each)
 HBFS_SUPERBLOCK_LBA  equ 417           ; After kernel area (LBA 33 + 384 sectors)
-HBFS_BITMAP_START    equ 418           ; Block allocation bitmap (8 sectors)
-HBFS_ROOT_DIR_START  equ 426           ; Root directory (128 sectors = 16 blocks)
-HBFS_DATA_START      equ 554           ; Data blocks start here
+HBFS_BITMAP_START    equ 418           ; Block allocation bitmap start
+HBFS_BITMAP_BLOCKS   equ 16            ; 16 blocks for bitmap (covers 524288 blocks)
+HBFS_BITMAP_SECTS    equ HBFS_BITMAP_BLOCKS * HBFS_SECTORS_PER_BLK ; 128 sectors
+HBFS_BITMAP_SIZE     equ HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE       ; 65536 bytes
+HBFS_TOTAL_BLOCKS    equ 524288        ; Total filesystem blocks (2 GB)
+HBFS_ROOT_DIR_START  equ 546           ; Root directory (256 sectors = 32 blocks)
+HBFS_DATA_START      equ 802           ; Data blocks start here
 
 ; File types (stored at byte 253 of directory entry)
 FTYPE_FREE          equ 0
@@ -204,6 +208,9 @@ SYS_GETARGS         equ 32      ; Get command-line args: EBX=buf -> EAX=length
 SYS_SERIAL_IN       equ 33      ; Read char from serial: -> EAX=char
 SYS_STDIN_READ      equ 34      ; Read piped stdin: EBX=buf -> EAX=bytes (-1 if none)
 SYS_YIELD           equ 35      ; Cooperative yield: switch to next ready task
+SYS_MOUSE           equ 36      ; Read mouse state: -> EAX=x, EBX=y, ECX=buttons
+SYS_FRAMEBUF        equ 37      ; Framebuffer: EBX=sub (0=info,1=set,2=restore)
+SYS_GUI             equ 38      ; Burrows GUI: EBX=sub-function
 
 ; File descriptor constants
 FD_MAX              equ 8
@@ -272,6 +279,20 @@ kernel_entry:
         call tss_init
         call sched_init
         call net_init
+        call paging_init
+        call mouse_init
+        call vbe_init
+        call burrows_init
+
+        ; Drain any stale bytes from the 8042 output buffer so that
+        ; enabling interrupts does not deliver a spurious keyboard event.
+.drain_8042:
+        in al, 0x64
+        test al, 1              ; Output buffer full?
+        jz .drain_done
+        in al, 0x60             ; Read and discard
+        jmp .drain_8042
+.drain_done:
 
         ; Enable interrupts
         sti
@@ -307,6 +328,10 @@ kernel_entry:
 %include "kernel/syscall.inc"
 %include "kernel/sched.inc"
 %include "kernel/net.inc"
+%include "kernel/paging.inc"
+%include "kernel/mouse.inc"
+%include "kernel/vbe.inc"
+%include "kernel/burrows.inc"
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
 %include "kernel/data.inc"

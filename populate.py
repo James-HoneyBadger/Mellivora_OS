@@ -5,7 +5,7 @@ populate.py - Populate a Mellivora OS disk image with sample files.
 Writes files directly into the HBFS filesystem on the disk image.
 This understands the on-disk HBFS layout:
   - Superblock at LBA 417
-  - Block allocation bitmap at LBA 418 (8 sectors = 1 block)
+  - Block allocation bitmap at LBA 418 (128 sectors = 16 blocks)
   - Root directory at LBA 426 (128 sectors = 16 blocks)
   - Data area starts at LBA 554
 
@@ -25,15 +25,15 @@ SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE  # 8
 HBFS_MAGIC = 0x48424653  # 'HBFS'
 HBFS_SUPERBLOCK_LBA = 417
 HBFS_BITMAP_START = 418
-HBFS_ROOT_DIR_START = 426
-HBFS_ROOT_DIR_BLOCKS = 16
+HBFS_ROOT_DIR_START = 546
+HBFS_ROOT_DIR_BLOCKS = 32
 HBFS_ROOT_DIR_SECTS = HBFS_ROOT_DIR_BLOCKS * SECTORS_PER_BLOCK
 HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE
-HBFS_DATA_START = 554
+HBFS_DATA_START = 802
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
 HBFS_MAX_FILENAME = 252
-TOTAL_BLOCKS = 32768
+TOTAL_BLOCKS = 524288
 
 # File types
 FTYPE_FREE = 0
@@ -117,9 +117,9 @@ def create_dir_entry(filename, ftype, size, start_block,
     return entry
 
 
-HBFS_SUBDIR_BLOCKS = 4                 # Blocks per subdirectory
+HBFS_SUBDIR_BLOCKS = 8                 # Blocks per subdirectory
 HBFS_SUBDIR_SIZE = HBFS_SUBDIR_BLOCKS * BLOCK_SIZE
-HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 56
+HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 112
 
 
 class FSImage:
@@ -128,7 +128,7 @@ class FSImage:
     def __init__(self, image_path):
         self.image_path = image_path
         self.img = open(image_path, 'r+b')
-        self.bitmap = bytearray(BLOCK_SIZE)
+        self.bitmap = bytearray(TOTAL_BLOCKS // 8)  # 64KB bitmap
         self.root_dir = bytearray(HBFS_ROOT_DIR_SIZE)
         self.next_block = 0
         self.total_files = 0
@@ -398,9 +398,9 @@ Disk Layout:
   LBA 1-32:    Stage 2 loader (16KB)
   LBA 33-416:  Kernel (384 sectors, 192KB)
   LBA 417:     HBFS Superblock
-  LBA 418-425: Block allocation bitmap (4KB)
-  LBA 426-553: Root directory (64KB, 16 blocks, 227 entries)
-  LBA 554+:    Data blocks (4KB each)
+  LBA 418-545: Block allocation bitmap (64KB, 16 blocks)
+  LBA 546-801: Root directory (128KB, 32 blocks, 455 entries)
+  LBA 802+:    Data blocks (4KB each)
 
 Syscall Interface (INT 0x80):
   EAX = syscall number
@@ -495,14 +495,14 @@ Mellivora OS TODO List
 [x] Raw disk syscall restriction (ring 3 denied)
 [x] Calendar program (cal)
 [x] Calculator program (calc)
-[ ] Virtual memory / paging
-[ ] Preemptive multitasking
-[ ] PCI bus enumeration
-[ ] Network stack
-[ ] Mouse driver
-[ ] GUI / framebuffer mode
-[ ] Pipes and I/O redirection
-[ ] Wildcard expansion (*.txt)
+[x] Virtual memory / paging
+[x] Preemptive multitasking
+[x] PCI bus enumeration
+[x] Network stack (NIC driver + stub)
+[x] Mouse driver (PS/2, IRQ12)
+[x] GUI / framebuffer mode (VBE/BGA)
+[x] Pipes and I/O redirection
+[x] Wildcard expansion (*.txt)
 """,
 
     "poem.txt": """\

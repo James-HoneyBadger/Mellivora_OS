@@ -649,9 +649,8 @@ D=LightMagenta, E=Yellow, F=White
 
 ## Limitations
 
-- **Single-tasking:** Only one program runs at a time.
-- **No networking:** No network stack.
-- **No piping or redirection:** Commands cannot be chained with `|` or `>`.
+- **Cooperative multitasking:** Only one program runs at a time unless programs explicitly yield. No preemptive scheduling yet.
+- **Networking stub only:** RTL8139 NIC detection and frame send; no TCP/IP stack yet.
 - **No file permissions:** All files accessible to all operations.
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
 - **128 MB RAM limit:** Physical memory manager supports up to 128 MB.

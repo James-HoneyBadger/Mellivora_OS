@@ -159,6 +159,8 @@ SYS_FREAD       equ 30
 SYS_FWRITE      equ 31
 SYS_GETARGS     equ 32
 SYS_SERIAL_IN   equ 33
+SYS_STDIN_READ  equ 34
+SYS_YIELD       equ 35
 ```
 
 Or include the provided header:
@@ -1077,7 +1079,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 34 syscalls:
+Quick reference for all 36 syscalls:
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |
@@ -1115,3 +1117,5 @@ Quick reference for all 34 syscalls:
 | 31 | FWRITE | filename | buffer | size | 0/-1 |
 | 32 | GETARGS | dest buf | — | — | length |
 | 33 | SERIAL_IN | — | — | — | char |
+| 34 | STDIN_READ | buffer | max len | — | bytes or -1 |
+| 35 | YIELD | — | — | — | 0 |

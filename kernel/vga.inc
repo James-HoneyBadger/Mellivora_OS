@@ -18,6 +18,7 @@ vga_clear:
         mov ah, COLOR_DEFAULT
         mov al, ' '
         mov ecx, VGA_WIDTH * VGA_HEIGHT
+        cld
         rep stosw
         mov dword [vga_cursor_x], 0
         mov dword [vga_cursor_y], 0

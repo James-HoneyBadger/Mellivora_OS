@@ -50,7 +50,7 @@ check "kernel.bin > 100 KB"     "[[ ${KERNEL_SIZE:-0} -ge 102400 ]]"
 
 IMG_SIZE=$(file_sz "$IMG")
 check "mellivora.img exists"    "[[ ${IMG_SIZE:-0} -gt 0 ]]"
-check "mellivora.img == 64 MB"  "[[ ${IMG_SIZE:-0} -eq 67108864 ]]"
+check "mellivora.img == 2 GB"  "[[ ${IMG_SIZE:-0} -eq 2147483648 ]]"
 
 echo ""
 
@@ -101,14 +101,14 @@ echo ""
 
 # ---------- Root directory ----------
 echo "[HBFS root directory]"
-# Root dir at LBA 426 = offset 426*512 = 218112
-RD_OFF=$((426 * 512))
+# Root dir at LBA 546 = offset 546*512 = 279552
+RD_OFF=$((546 * 512))
 # First entry should have a non-null first byte (filename)
 FIRST_ENTRY=$(xxd -s $RD_OFF -l 1 -p "$IMG" 2>/dev/null)
 check "Root dir first entry not empty" "[[ '$FIRST_ENTRY' != '00' ]]"
 
 # Check that a known directory exists (e.g., "bin")
-BIN_FOUND=$(xxd -s $RD_OFF -l 65536 "$IMG" 2>/dev/null | grep -c 'bin' || true)
+BIN_FOUND=$(xxd -s $RD_OFF -l 131072 "$IMG" 2>/dev/null | grep -c 'bin' || true)
 check "Root dir contains 'bin' directory" "[[ $BIN_FOUND -gt 0 ]]"
 
 echo ""

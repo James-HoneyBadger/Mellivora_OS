@@ -4,14 +4,16 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real i486+ hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell, 34 syscalls, an in-OS Tiny C Compiler, 56 bundled assembly programs, and 11 C samples.
+Mellivora OS is a from-scratch hobby OS that boots on real i486+ hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell, 38 syscalls, preemptive multitasking, virtual memory with paging, PS/2 mouse driver, Burrows desktop environment, RTL8139 networking, an in-OS Tiny C Compiler, 66 bundled assembly programs, and 11 C samples.
+
+> **v2.0.0** — 2 GB disk image, 455-entry root directory, 64 KB block bitmap.
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** 3-stage BIOS boot flow into 32-bit protected mode
-- **Userland:** 50+ shell commands, 56 assembly programs, and 11 bundled C samples
+- **Userland:** 50+ shell commands, 66 assembly programs, and 11 bundled C samples
 - **Core pieces:** HBFS filesystem, ELF32 loader, PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, and release packaging
 
@@ -23,14 +25,17 @@ Mellivora OS is a from-scratch hobby OS that boots on real i486+ hardware or in 
 
 - **32-bit protected mode** with flat 4 GB address space
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **34 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, ...)
+- **38 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, yield, mouse, framebuf, ...)
+- **Preemptive multitasking** — round-robin scheduler with 100 ms quantum, up to 4 tasks, per-task kernel stacks, and `SYS_YIELD`
+- **Virtual memory** — identity-mapped paging (128 MB), page-fault handler with recovery
+- **RTL8139 networking stub** — PCI bus scan, NIC initialization, MAC address, frame transmit
 - **ELF32 loader** — supports flat binaries and ELF executables
 - **Physical memory manager** with bitmap allocator (malloc/free for user programs)
 - **Three-stage boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
 ### Ratel Init System
 
-- **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS
+- **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS, scheduler, networking
 - **Filesystem mount** — HBFS detection, validation, and auto-format
 - **Shell handoff** — drops into HB Lair interactive prompt after init completes
 
@@ -41,7 +46,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real i486+ hardware or in 
 - **Pipes, redirection, and chaining** — `|`, `>`, `>>`, `<`, `&&`, and `||` for shell workflows
 - **Alias system** — define custom command shortcuts
 - **Environment variables** with `$VAR` expansion in echo and batch scripts
-- **Batch scripting** — execute `.bat` files with sequential command processing
+- **Batch scripting** — execute `.bat` files with `:LABEL`/`goto`, `if [not] errorlevel`, `rem`, and `@cmd` directives
 - **PATH-based program search** — run programs from any directory
 - **Full path support** — `cat /docs/readme`, `run /bin/hello`, `diff /docs/a /docs/b`
 - **Multi-level subdirectories** — up to 16 levels deep with `cd`, `mkdir`, `pwd`
@@ -52,25 +57,28 @@ Mellivora OS is a from-scratch hobby OS that boots on real i486+ hardware or in 
 - **227 entries** per root directory, **56 entries** per subdirectory
 - **File types**: text, executable, directory, batch script
 - **File descriptors**: open/read/write/close/seek (8 simultaneous FDs)
-- **Wildcards**: `*` and `?` pattern matching in `del` and `copy`
+- **Wildcards**: `*` and `?` pattern matching — global shell expansion for all commands, plus per-command support in `del` and `copy`
 
 ### Drivers
 
 - **VGA** text mode (80×25, 16 colors)
+- **VBE/BGA framebuffer** — Burrows desktop environment (640×480×32 graphics mode with pixel primitives)
 - **PS/2 keyboard** with shift, ctrl, and special key support
+- **PS/2 mouse** — IRQ12 driver with position tracking and button state
 - **ATA PIO** disk with LBA48 addressing
 - **PIT timer** at 100 Hz
 - **PC speaker** for sound/music
 - **Serial port** (COM1 at 115200 baud) for debug output
 - **RTC** real-time clock for date/time
 
-### Programs (56 assembly + 11 C samples)
+### Programs (66 assembly + 11 C samples)
 
-- **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze, Kingdom, Outbreak, Neurovault
+- **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Rogue, Chess
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, and more
-- **Tools**: Text editor, hex viewer, file pager, CSV viewer
-- **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator
-- **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter
+- **Tools**: Text editor, hex viewer, file pager, CSV viewer, process monitor (top), interactive assembler
+- **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator, starfield, matrix rain, ASCII clock, weather station
+- **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter, FORTH interpreter
+- **Education**: Periodic table browser
 - **API Libraries**: 6 reusable `.inc` libraries (string, I/O, math, VGA, memory, data structures)
 - **C samples**: Hello World, Fibonacci, primes, Tower of Hanoi, Hunt the Wumpus, and more
 
@@ -146,7 +154,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry + modular includes (13 files in `kernel/`)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v1.15)
+├── CHANGELOG.md            Version history (v1.0 → v2.0.0)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers

@@ -16,6 +16,12 @@ isr_exception_noerr:
         pop eax
 
         pushad
+        ; Restore text mode if in GUI so errors are visible
+        cmp byte [gui_desktop_active], 0
+        je .exc_noerr_text_ok
+        mov byte [gui_desktop_active], 0
+        call vbe_restore_text
+.exc_noerr_text_ok:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_exception
         call vga_print
@@ -44,6 +50,12 @@ isr_exception_err:
         pop eax
 
         pushad
+        ; Restore text mode if in GUI so errors are visible
+        cmp byte [gui_desktop_active], 0
+        je .exc_err_text_ok
+        mov byte [gui_desktop_active], 0
+        call vbe_restore_text
+.exc_err_text_ok:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_exception
         call vga_print
@@ -84,13 +96,92 @@ irq_stub_pic2:
         iretd
 
 ; IRQ0: PIT Timer interrupt (100 Hz)
+; Also handles preemptive multitasking: when a user-mode task is
+; running, counts ticks and switches on quantum expiry.
 irq_timer:
         pushad
         inc dword [tick_count]
 
-        ; Send EOI
+        ; Send EOI first (so PIC isn't held up during context switch)
         mov al, 0x20
         out PIC1_CMD, al
+
+        ; --- Preemptive scheduling ---
+        ; Only preempt if we have active tasks
+        cmp dword [task_count], 0
+        je .timer_done
+
+        ; Check if we interrupted a ring-3 task (CS on stack has RPL=3)
+        ; Stack layout after pushad: ESP+32 = EIP, ESP+36 = CS
+        mov eax, [esp + 36]     ; CS from interrupt frame
+        and eax, 3              ; RPL bits
+        cmp eax, 3
+        jne .timer_done         ; Not ring 3 — don't preempt kernel code
+
+        ; Count down the current task's time slice
+        inc dword [sched_tick]
+        mov eax, [sched_tick]
+        cmp eax, SCHED_QUANTUM
+        jb .timer_done
+
+        ; Quantum expired — context switch
+        mov dword [sched_tick], 0
+
+        ; Find the current RUNNING task
+        mov edi, task_table
+        xor edx, edx
+.timer_find_cur:
+        cmp edx, MAX_TASKS
+        jge .timer_done        ; No running task
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .timer_save
+        add edi, TCB_SIZE
+        inc edx
+        jmp .timer_find_cur
+
+.timer_save:
+        ; Save kernel ESP (points to pushad frame + iretd frame)
+        mov [edi + TCB_ESP], esp
+        mov dword [edi + TCB_STATE], TASK_READY
+
+        ; Round-robin scan for next READY task
+        mov ecx, MAX_TASKS
+        mov esi, edx
+.timer_scan:
+        inc esi
+        cmp esi, MAX_TASKS
+        jb .timer_check
+        xor esi, esi
+.timer_check:
+        mov eax, esi
+        imul eax, TCB_SIZE
+        lea ebx, [task_table + eax]
+        cmp dword [ebx + TCB_STATE], TASK_READY
+        je .timer_switch
+        dec ecx
+        jnz .timer_scan
+
+        ; No other ready task — re-mark self as RUNNING
+        mov dword [edi + TCB_STATE], TASK_RUNNING
+        jmp .timer_done
+
+.timer_switch:
+        ; EBX = new task's TCB
+        mov dword [ebx + TCB_STATE], TASK_RUNNING
+        mov [task_current], esi
+
+        ; Update TSS ESP0 for future ring-3 → ring-0 transitions
+        mov eax, [ebx + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+
+        ; Load the new task's saved kernel ESP
+        mov esp, [ebx + TCB_ESP]
+
+        ; Restore GP regs and IRETD to new task's ring-3 context
+        popad
+        iretd
+
+.timer_done:
         popad
         iretd
 

@@ -49,6 +49,30 @@ SYS_GETARGS     equ 32          ; Get command-line args: EBX=buf -> EAX=length
 SYS_SERIAL_IN   equ 33          ; Read serial port: -> EAX=char or -1
 SYS_STDIN_READ  equ 34          ; Read piped stdin: EBX=buf -> EAX=bytes (-1 if none)
 SYS_YIELD       equ 35          ; Cooperative yield: switch to next ready task
+SYS_MOUSE       equ 36          ; Read mouse: -> EAX=x, EBX=y, ECX=buttons
+SYS_FRAMEBUF    equ 37          ; Framebuffer: EBX=sub (0=info,1=set,2=restore)
+SYS_GUI         equ 38          ; Burrows GUI: EBX=sub-function
+
+; SYS_GUI sub-functions (EBX)
+GUI_CREATE_WINDOW  equ 0        ; ECX=x|y EDX=w|h ESI=title -> EAX=win_id
+GUI_DESTROY_WINDOW equ 1        ; ECX=win_id
+GUI_FILL_RECT      equ 2        ; ECX=win_id EDX=x|y ESI=w|h EDI=color
+GUI_DRAW_TEXT      equ 3        ; ECX=win_id EDX=x|y ESI=text EDI=color
+GUI_POLL_EVENT     equ 4        ; -> EAX=type EBX=param1 ECX=param2
+GUI_GET_THEME      equ 5        ; ECX=dest_buf
+GUI_SET_THEME      equ 6        ; ECX=src_buf
+GUI_DRAW_PIXEL     equ 7        ; ECX=win_id EDX=x|y ESI=color
+GUI_DRAW_LINE      equ 8        ; ECX=win_id EDX=x1|y1 ESI=x2|y2 EDI=color
+GUI_COMPOSE        equ 9        ; Compose desktop to backbuffer
+GUI_FLIP           equ 10       ; Flip backbuffer to screen
+GUI_DESKTOP        equ 11       ; Reserved
+
+; GUI event types
+EVT_NONE        equ 0
+EVT_MOUSE_CLICK equ 1
+EVT_MOUSE_MOVE  equ 2
+EVT_KEY_PRESS   equ 3
+EVT_CLOSE       equ 4
 
 ; VGA constants
 VGA_BASE        equ 0xB8000

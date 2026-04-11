@@ -52,6 +52,23 @@ shell_main:
         mov edi, line_buffer
         xor ecx, ecx           ; Character count
 
+        ; On first boot, flush stale PS/2 data from the keyboard buffer.
+        ; The 8042 controller may deliver delayed bytes after sti that
+        ; the IRQ1 handler stores before the shell is ready to read.
+        cmp byte [boot_kb_flushed], 0
+        jne .read_loop
+        mov byte [boot_kb_flushed], 1
+        ; Drain any remaining 8042 output buffer bytes
+.boot_drain:
+        in al, 0x64
+        test al, 1
+        jz .boot_drain_done
+        in al, 0x60
+        jmp .boot_drain
+.boot_drain_done:
+        mov dword [kb_read_idx], 0
+        mov dword [kb_write_idx], 0
+
 .read_loop:
         call kb_getchar
 
@@ -247,6 +264,9 @@ shell_parse_cmd:
         call shell_prepare_redirection
         jc .parse_done
 
+        ; Expand wildcards in arguments before dispatching
+        call shell_expand_globs
+
         mov esi, line_buffer
         call skip_spaces
 
@@ -262,6 +282,188 @@ shell_parse_cmd:
 shell_status_fail:
         mov dword [shell_last_status], 1
         ret
+
+;---------------------------------------
+; shell_expand_globs - Pre-process line_buffer to expand
+; wildcard arguments (* and ?) against directory entries.
+;
+; Copies the command name (first token) unchanged, then for
+; each subsequent token, if it contains * or ?, expands it by
+; matching against the current directory listing.
+; Result is written back to line_buffer.
+; If a glob matches nothing, the literal pattern is kept (POSIX).
+;---------------------------------------
+shell_expand_globs:
+        pushad
+
+        ; Skip if line_buffer is empty
+        mov esi, line_buffer
+        cmp byte [esi], 0
+        je .seg_done
+
+        ; Quick check: does line_buffer contain any wildcard chars at all?
+        push esi
+        mov esi, line_buffer
+        call str_has_wildcards
+        pop esi
+        jnc .seg_done           ; No wildcards — nothing to do
+
+        ; Load current directory for matching
+        call hbfs_load_root_dir
+        jc .seg_done            ; On error, skip expansion
+
+        ; EDI -> output buffer (expand_buf)
+        mov edi, expand_buf
+        mov esi, line_buffer
+
+        ; Copy command name (first token) as-is
+        call skip_spaces
+.seg_copy_cmd:
+        lodsb
+        cmp al, 0
+        je .seg_finish
+        cmp al, ' '
+        je .seg_cmd_done
+        stosb
+        jmp .seg_copy_cmd
+.seg_cmd_done:
+        stosb                   ; Copy the space
+
+        ; Process arguments
+.seg_next_arg:
+        ; Skip spaces
+        cmp byte [esi], ' '
+        jne .seg_check_arg
+        movsb
+        jmp .seg_next_arg
+
+.seg_check_arg:
+        cmp byte [esi], 0
+        je .seg_finish
+
+        ; Extract token into glob_token_buf
+        push edi
+        mov edi, glob_token_buf
+        xor ecx, ecx
+.seg_tok:
+        mov al, [esi + ecx]
+        cmp al, 0
+        je .seg_tok_end
+        cmp al, ' '
+        je .seg_tok_end
+        mov [edi + ecx], al
+        inc ecx
+        cmp ecx, 255
+        jb .seg_tok
+.seg_tok_end:
+        mov byte [edi + ecx], 0
+        pop edi                 ; Restore output pointer
+
+        ; Does this token have wildcards?
+        push esi
+        mov esi, glob_token_buf
+        call str_has_wildcards
+        pop esi
+        jnc .seg_copy_literal   ; No wildcards — copy as-is
+
+        ; Expand against directory entries
+        push esi
+        mov dword [.seg_match_count], 0
+        mov ebp, hbfs_dir_buf
+        push edi                ; Save output pointer
+        call hbfs_get_max_entries
+        mov edx, eax            ; EDX = max entries
+
+.seg_dir_loop:
+        cmp edx, 0
+        je .seg_dir_done
+        cmp byte [ebp + DIRENT_TYPE], FTYPE_FREE
+        je .seg_dir_next
+
+        ; Match this entry name against pattern
+        push esi
+        push edi
+        mov esi, glob_token_buf ; pattern
+        mov edi, ebp            ; candidate = entry name (at start of dirent)
+        call wildcard_match
+        pop edi
+        pop esi
+        jnc .seg_dir_next
+
+        ; Match! Append filename to output
+        pop edi                 ; Restore output pointer
+        ; Add space separator if not first match
+        cmp dword [.seg_match_count], 0
+        je .seg_no_sep
+        mov al, ' '
+        stosb
+.seg_no_sep:
+        ; Copy entry name
+        push esi
+        lea esi, [ebp]          ; Entry name at start of dirent
+.seg_cp_name:
+        lodsb
+        cmp al, 0
+        je .seg_cp_name_done
+        stosb
+        jmp .seg_cp_name
+.seg_cp_name_done:
+        pop esi
+        inc dword [.seg_match_count]
+        push edi                ; Save output pointer again
+
+.seg_dir_next:
+        add ebp, HBFS_DIR_ENTRY_SIZE
+        dec edx
+        jmp .seg_dir_loop
+
+.seg_dir_done:
+        pop edi                 ; Restore output pointer
+        pop esi                 ; Restore line_buffer pointer
+
+        ; If no matches, copy the literal glob pattern
+        cmp dword [.seg_match_count], 0
+        je .seg_copy_literal
+
+        ; Skip past the token in source
+        add esi, ecx            ; ECX still = token length
+        jmp .seg_next_arg
+
+.seg_copy_literal:
+        ; Copy token as-is (no matches or no wildcards)
+.seg_lit:
+        lodsb
+        cmp al, 0
+        je .seg_finish
+        cmp al, ' '
+        je .seg_lit_space
+        stosb
+        jmp .seg_lit
+.seg_lit_space:
+        stosb
+        jmp .seg_next_arg
+
+.seg_finish:
+        mov byte [edi], 0
+
+        ; Copy expanded result back into line_buffer
+        mov esi, expand_buf
+        mov edi, line_buffer
+        mov ecx, LINE_BUFFER_SIZE - 1
+.seg_copy_back:
+        lodsb
+        stosb
+        test al, al
+        jz .seg_done
+        dec ecx
+        jnz .seg_copy_back
+        mov byte [edi], 0
+
+.seg_done:
+        popad
+        ret
+
+.seg_match_count: dd 0
 
 ;---------------------------------------
 ; Check for trailing '&' (not '&&') in line_buffer.
@@ -689,6 +891,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_strings
 
+        mov edi, cmd_mouse_str
+        call str_starts_with
+        jc .cmd_mouse
+
+        mov edi, cmd_gui_str
+        call str_starts_with
+        jc .cmd_gui
+
         ; Unknown command - try to execute as program
         mov esi, line_buffer
         call cmd_exec_program
@@ -795,6 +1005,14 @@ shell_dispatch_core:
         call str_compare
         jz .cmd_help_strings
 
+        mov edi, cmd_mouse_str
+        call str_compare
+        jz .cmd_help_mouse
+
+        mov edi, cmd_gui_str
+        call str_compare
+        jz .cmd_help_gui
+
         mov esi, msg_help_no_detail
         call vga_print
 
@@ -877,6 +1095,14 @@ shell_dispatch_core:
         ret
 .cmd_help_strings:
         mov esi, help_help_strings
+        call vga_print
+        ret
+.cmd_help_mouse:
+        mov esi, help_help_mouse
+        call vga_print
+        ret
+.cmd_help_gui:
+        mov esi, help_help_gui
         call vga_print
         ret
 
@@ -1136,6 +1362,14 @@ shell_dispatch_core:
         call skip_spaces
         call parse_flags
         call cmd_strings_file
+        ret
+
+.cmd_mouse:
+        call cmd_mouse_status
+        ret
+
+.cmd_gui:
+        call gui_desktop_main
         ret
 
 ;---------------------------------------
@@ -2024,6 +2258,8 @@ cmd_which:
         dd cmd_diff_str, cmd_uniq_str, cmd_rev_str, cmd_tac_str
         dd cmd_alias_str, cmd_history_str, cmd_which_str
         dd cmd_sleep_str, cmd_color_str, cmd_size_str, cmd_strings_str
+        dd cmd_mouse_str
+        dd cmd_gui_str
         dd 0
 
 ;---------------------------------------
@@ -2323,6 +2559,69 @@ cmd_strings_file:
         ret
 
 .strings_total: dd 0
+
+;---------------------------------------
+; Command: mouse - Show PS/2 mouse status
+;---------------------------------------
+cmd_mouse_status:
+        pushad
+        cmp byte [mouse_present], 0
+        je .mouse_not_present
+
+        mov byte [vga_color], COLOR_INFO
+        mov esi, msg_mouse_hdr
+        call vga_print
+
+        ; Position
+        mov esi, msg_mouse_pos
+        call vga_print
+        mov eax, [mouse_x]
+        call vga_print_dec
+        mov al, ','
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        mov eax, [mouse_y]
+        call vga_print_dec
+        call vga_newline
+
+        ; Buttons
+        mov esi, msg_mouse_btn
+        call vga_print
+        movzx eax, byte [mouse_buttons]
+        test al, 0x01
+        jz .no_left
+        mov esi, msg_mouse_left
+        call vga_print
+.no_left:
+        test byte [mouse_buttons], 0x02
+        jz .no_right
+        mov esi, msg_mouse_right
+        call vga_print
+.no_right:
+        test byte [mouse_buttons], 0x04
+        jz .no_middle
+        mov esi, msg_mouse_mid
+        call vga_print
+.no_middle:
+        ; If no buttons, print "none"
+        cmp byte [mouse_buttons], 0
+        jne .btn_done
+        mov esi, msg_mouse_none
+        call vga_print
+.btn_done:
+        call vga_newline
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+
+.mouse_not_present:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_mouse_absent
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
 
 ;---------------------------------------
 ; Command: dir/ls - List directory

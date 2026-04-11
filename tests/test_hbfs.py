@@ -26,16 +26,16 @@ SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE  # 8
 HBFS_MAGIC = 0x48424653  # 'HBFS'
 HBFS_SUPERBLOCK_LBA = 417
 HBFS_BITMAP_START = 418
-HBFS_ROOT_DIR_START = 426
-HBFS_ROOT_DIR_BLOCKS = 16
+HBFS_ROOT_DIR_START = 546
+HBFS_ROOT_DIR_BLOCKS = 32
 HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE
-HBFS_DATA_START = 554
+HBFS_DATA_START = 802
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
 HBFS_SUBDIR_BLOCKS = 4
 HBFS_SUBDIR_SIZE = HBFS_SUBDIR_BLOCKS * BLOCK_SIZE
 HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 56
-TOTAL_BLOCKS = 32768
+TOTAL_BLOCKS = 524288
 
 # Program load address (must match kernel.asm PROGRAM_BASE)
 PROGRAM_BASE = 0x00200000
@@ -278,7 +278,8 @@ def main():
 
         # ---- Bitmap ----
         print("[Bitmap]")
-        bitmap = read_at(f, lba_offset(HBFS_BITMAP_START), BLOCK_SIZE)
+        bitmap = read_at(f, lba_offset(HBFS_BITMAP_START),
+                        TOTAL_BLOCKS // 8)  # Full bitmap
         alloc_count = 0
         for byte in bitmap:
             alloc_count += bin(byte).count("1")

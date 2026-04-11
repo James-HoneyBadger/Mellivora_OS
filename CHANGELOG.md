@@ -1,5 +1,90 @@
 # Mellivora OS - Changelog
 
+## v2.0.0 - Paging, Preemptive Multitasking, Mouse, Burrows Desktop & 10 New Programs
+
+### Kernel — Virtual Memory
+
+- **Paging** (`kernel/paging.inc`): Identity-maps the first 128 MB via 32 page tables (page directory at 0x380000, page tables at 0x381000). All pages marked present, writable, and user-accessible. `paging_map_page` utility for dynamic page mapping. Page-fault handler (INT 14) prints faulting address, EIP, and error code, then recovers to the shell.
+
+### Kernel — Preemptive Multitasking
+
+- **Preemptive scheduler**: The PIT timer handler (IRQ0) now preempts ring-3 tasks every 100 ms (10-tick quantum at 100 Hz). Checks interrupted code's CPL via the CS RPL bits on the interrupt stack frame — kernel code is never preempted. Round-robin scan for next READY task with TCB ESP save/restore and TSS ESP0 update. Cooperative `SYS_YIELD` still works alongside preemptive switching.
+
+### Kernel — PS/2 Mouse Driver
+
+- **Mouse driver** (`kernel/mouse.inc`): Initializes the PS/2 auxiliary port via the 8042 controller (enable aux device, read/write command byte, set defaults, enable data reporting). IRQ12 handler collects 3-byte packets (flags, delta-X, delta-Y) with packet sync validation (bit 3 check). Tracks `mouse_x` (0–79), `mouse_y` (0–24), and `mouse_buttons` (left/right/middle). PS/2 Y-axis inversion for screen coordinates.
+- **`SYS_MOUSE` (syscall 36)**: Returns mouse position and button state (EAX=x, EBX=y, ECX=buttons).
+- **`mouse` shell command**: Displays current mouse position and button state.
+
+### Kernel — Burrows Desktop Environment
+
+- **VBE/BGA driver** (`kernel/vbe.inc`): Detects Bochs VBE adapter via I/O ports (IDs 0xB0C0–0xB0C5). Sets linear framebuffer modes from protected mode (no real-mode INT 10h). Default 640×480×32 mode. LFB identity-mapped (8 MB) via `paging_map_page`. Full VGA mode 3 restore with CRTC/GC/AC register reprogramming.
+- **Drawing primitives**: `vbe_putpixel`, `vbe_fill_rect`, `vbe_clear`.
+- **`SYS_FRAMEBUF` (syscall 37)**: Sub-functions for get info (0), set mode (1), and restore text mode (2).
+- **`gui` shell command**: Enters the Burrows desktop at 640×480 with colour bars and mouse cursor tracking. Press any key to return to text mode.
+
+### Shell — Wildcard Expansion
+
+- **Global glob preprocessing** (`shell_expand_globs`): Before command dispatch, all arguments containing `*` or `?` are expanded against the current directory listing. Matching filenames replace the glob pattern in the command line. Unmatched globs are passed through literally (POSIX behavior). This makes wildcards work for **all** commands (e.g., `cat *.txt`, `wc *.c`), not just `del` and `copy`.
+
+### Programs — 10 New Showcase Programs
+
+- **top** — Live process/task monitor showing scheduler state, memory usage, and uptime
+- **rogue** — ASCII roguelike dungeon crawler with FOV, inventory, combat, and multiple dungeon levels
+- **starfield** — Animated 3D starfield simulation with parallax depth effect
+- **matrix** — Matrix-style falling green character rain animation
+- **weather** — Simulated weather station with multi-day forecast display
+- **periodic** — Interactive periodic table browser with element details
+- **forth** — FORTH language interpreter with stack operations, arithmetic, and word definitions
+- **chess** — Two-player chess with move validation, check detection, and Unicode-style pieces
+- **clock** — Analog ASCII clock with sin/cos lookup tables, hour/minute/second hands, and digital display
+- **asm** — Interactive x86 assembler REPL that shows machine code bytes for ~25 instruction types
+
+### Build Stats
+
+- Disk image: 83 files, 248 blocks used
+- Kernel: ~13,800 lines of x86 assembly (19 include files)
+- Tests: 618 (84 build + 534 HBFS integrity)
+- Syscalls: 38 (0–37)
+- Programs: 66 assembly + 11 C samples
+
+---
+
+## v1.16 - Batch Scripting, Cooperative Multitasking & Networking
+
+### Shell Enhancements
+
+- **Batch scripting directives**: `:LABEL`, `goto LABEL`, `if [not] errorlevel N cmd`, `rem` comments, and `@cmd` (silent execution). Batch scripts now support conditional branching and flow control.
+- **Background job detection**: Trailing `&` on a command line is detected and stripped with a "not yet supported" message; the command runs in the foreground. Prepares the shell syntax for future background job support.
+- **`net` command**: Displays NIC status, PCI location, I/O base address, and MAC address.
+- **`ls -l` timestamps**: Long directory listing now shows a `Modified` column with time since boot in `HHH:MM:SS` format, read from the HBFS `DIRENT_MODIFIED` field.
+
+### Kernel / Subsystems
+
+- **`SYS_STDIN_READ` (syscall 34)**: Programs can read piped stdin data from the shell's redirection buffer. Returns byte count in EAX, or -1 if no stdin is available.
+- **`SYS_YIELD` (syscall 35)**: Cooperative yield syscall for the new scheduler. Saves the current task's ring-3 context and switches to the next ready task via round-robin.
+- **Cooperative scheduler** (`kernel/sched.inc`): Task Control Block (TCB) array supporting up to 4 concurrent tasks. Per-task kernel stacks allocated from PMM. Round-robin `sys_yield` with proper TSS ESP0 updates for ring transitions.
+- **RTL8139 networking stub** (`kernel/net.inc`): PCI bus 0 scan for RTL8139 NIC, software reset, RX/TX buffer allocation via PMM, MAC address read, and frame transmit function. Foundation for future TCP/IP support.
+
+### Programs — Stdin Pipe Support
+
+- **sort, tr, grep, sed, cut**: Now accept piped stdin when no filename argument is given (e.g., `cat file | sort`).
+- **tee**: Redesigned to support `tee OUTFILE` (reads stdin) in addition to the legacy `tee INFILE OUTFILE` mode.
+
+### Tests & CI
+
+- **Portable test script**: `tests/test_build.sh` now works on both macOS and Linux. Replaced GNU-specific `stat -c` with a `wc -c` based `file_sz()` helper, and `grep -oP` with `grep -E -o` pipelines.
+- **Syscall consistency**: Test now verifies all 36 syscalls (was 34).
+
+### Build Stats
+
+- Disk image: 73 files, 233 blocks used
+- Kernel: ~12,300 lines of x86 assembly (16 include files)
+- Tests: 45 build + 534 HBFS integrity
+- Syscalls: 36 (0–35)
+
+---
+
 ## v1.15 - Kernel Hardening & Interrupt Safety
 
 ### Kernel Bug Fixes
