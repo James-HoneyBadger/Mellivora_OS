@@ -194,6 +194,10 @@ cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
 cmd_mouse_str:  db "mouse", 0
 cmd_gui_str:    db "gui", 0
+cmd_ping_str:   db "ping", 0
+cmd_ifconfig_str: db "ifconfig", 0
+cmd_dhcp_str:   db "dhcp", 0
+cmd_arp_str:    db "arp", 0
 
 ; Help text
 msg_help_no_detail:
@@ -422,15 +426,7 @@ msg_uptime:     db "Uptime: ", 0
 msg_seconds:    db " seconds", 0x0A, 0
 msg_serial_info: db "  Serial:        COM1 @ 115200 baud", 0x0A, 0
 
-; Networking strings
-msg_net_header: db "=== Network Status ===", 0x0A, 0
-msg_net_state:  db "  State:  ", 0
-msg_net_none:   db "No NIC detected", 0x0A, 0
-msg_net_found:  db "NIC found (not initialized)", 0x0A, 0
-msg_net_up:     db "UP (RTL8139)", 0x0A, 0
-msg_net_pci:    db "  PCI:    ", 0
-msg_net_iobase: db "  I/O:    0x", 0
-msg_net_mac:    db "  MAC:    ", 0
+; (Networking strings moved to net.inc)
 msg_exec:       db "Executing...", 0x0A, 0
 msg_exec_done:  db "Program exited.", 0x0A, 0
 msg_ctrl_c:     db "^C", 0x0A, 0
@@ -706,5 +702,100 @@ net_mac:          resb 6          ; MAC address (6 bytes)
 net_rx_buf:       resd 1          ; Pointer to RX buffer (from PMM)
 net_tx_buf:       resd 1          ; Pointer to TX buffer (from PMM)
 net_tx_desc:      resd 1          ; Current TX descriptor index (0-3)
+net_tx_bufs:      resd 4          ; Pointers to 4 TX buffers
+net_pkt_buf:      resd 1          ; Pointer to packet processing buffer
+net_irq:          resb 1          ; NIC IRQ number
+                  resb 3          ; alignment
+net_rx_offset:    resd 1          ; Current RX ring buffer read offset
+
+; IP configuration
+net_ip:           resd 1          ; Our IP address (little-endian)
+net_mask:         resd 1          ; Subnet mask
+net_gateway:      resd 1          ; Default gateway IP
+net_dns:          resd 1          ; DNS server IP
+net_ip_id:        resw 1          ; IP identification counter
+net_ephemeral_port: resw 1        ; Next ephemeral port
+
+; Ethernet frame building
+net_frame_buf:    resb 1536       ; Frame assembly buffer
+net_frame_dst_mac: resb 6         ; Destination MAC for frame building
+net_frame_ethertype: resw 1       ; EtherType for frame building
+
+; ARP
+net_arp_cache:    resb ARP_CACHE_SIZE * ARP_ENTRY_SIZE  ; 16 * 12 = 192 bytes
+net_arp_buf:      resb 28         ; ARP packet build buffer
+net_arp_target_ip: resd 1         ; ARP request target IP
+
+; IP layer working vars
+net_ip_buf:       resb 1536       ; IP packet build buffer
+net_ip_dst:       resd 1
+net_ip_proto:     resb 1
+                  resb 3          ; alignment
+net_ip_payload:   resd 1
+net_ip_payload_len: resd 1
+net_recv_src_ip:  resd 1          ; Source IP of received packet
+
+; ICMP / Ping
+net_icmp_buf:     resb 64         ; ICMP build buffer
+net_ping_id:      resw 1
+net_ping_seq:     resw 1
+net_ping_send_tick: resd 1
+net_ping_recv_tick: resd 1
+net_ping_received: resb 1
+                  resb 3          ; alignment
+net_ping_dst_ip:  resd 1
+net_ping_target:  resd 1
+net_ping_count:   resd 1
+net_ping_success: resd 1
+
+; UDP working vars
+net_udp_buf:      resb 1536       ; UDP build buffer
+net_udp_src_port: resw 1
+net_udp_dst_port: resw 1
+net_udp_local_port: resw 1
+                  resw 1          ; alignment
+net_udp_dst_ip:   resd 1
+net_udp_payload:  resd 1
+net_udp_payload_len: resd 1
+
+; TCP working vars
+net_tcp_buf:      resb 1536       ; TCP build buffer
+net_tcp_ck_buf:   resb 1548       ; TCP checksum buffer (12 pseudo + 1536)
+net_tcp_src_port: resw 1
+net_tcp_dst_port: resw 1
+net_tcp_their_seq: resd 1
+net_tcp_their_ack: resd 1
+net_tcp_hdr_len:  resd 1
+net_tcp_flags:    resb 1
+net_tcp_send_flags: resb 1
+                  resb 2          ; alignment
+net_tcp_ck_dst:   resd 1
+net_tcp_ck_len:   resd 1
+net_tcp_data_ptr: resd 1
+net_tcp_data_len: resd 1
+
+; Socket table
+net_sock_table:   resb MAX_SOCKETS * SOCK_SIZE  ; 8 * 128 = 1024 bytes
+
+; DHCP state
+net_dhcp_state:   resb 1          ; 0=idle, 1=discover sent, 2=offer received, 3=request sent, 4=configured
+net_dhcp_msg_type: resb 1
+                  resb 2          ; alignment
+net_dhcp_xid:     resd 1
+net_dhcp_offered_ip: resd 1
+net_dhcp_server_ip: resd 1
+net_dhcp_mask:    resd 1
+net_dhcp_gateway: resd 1
+net_dhcp_dns:     resd 1
+net_dhcp_buf:     resb 600        ; DHCP packet build buffer
+
+; DNS
+net_dns_id:       resw 1
+net_dns_resolved: resb 1
+                  resb 1          ; alignment
+net_dns_result_ip: resd 1
+net_dns_query_name: resd 1        ; pointer to query hostname
+net_dns_buf:      resb 512        ; DNS packet build buffer
+net_dns_cache:    resb 8 * 32     ; 8 entries * 32 bytes (28 name + 4 IP)
 
 bss_end:

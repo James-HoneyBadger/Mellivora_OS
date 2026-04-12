@@ -17,9 +17,10 @@ HB Lair shell, manage files, run programs, and get the most out of the system.
 8. [Environment Variables & Aliases](#environment-variables--aliases)
 9. [Batch Scripting](#batch-scripting)
 10. [Programs](#programs)
-11. [The C Compiler (TCC)](#the-c-compiler-tcc)
-12. [Tips & Tricks](#tips--tricks)
-13. [Limitations](#limitations)
+11. [Networking](#networking)
+12. [The C Compiler (TCC)](#the-c-compiler-tcc)
+13. [Tips & Tricks](#tips--tricks)
+14. [Limitations](#limitations)
 
 ---
 
@@ -507,6 +508,18 @@ Mellivora ships with a broad set of user-space programs organized in `/bin` and 
 | `sysinfo` | `sysinfo` | Detailed system information |
 | `uptime` | `uptime` | System uptime display |
 
+### Networking (in /bin)
+
+| Program | Usage | Description |
+| --- | --- | --- |
+| `ping` | `ping <host>` | Send 4 ICMP echo requests, show RTT |
+| `http` | `http <url>` | HTTP/1.0 GET client — fetch and display web pages |
+| `telnet` | `telnet <host> [port]` | Interactive telnet client (Ctrl+C to quit) |
+| `gopher` | `gopher <host> [path] [port]` | Gopher protocol browser with menu formatting |
+| `ftp` | `ftp <host> [port]` | Interactive FTP client with PASV mode |
+| `mail` | `mail <server>` | Email client — send via SMTP, read via POP3 |
+| `news` | `news <server>` | Usenet/NNTP newsgroup reader |
+
 ### The Text Editor (edit)
 
 | Key | Action |
@@ -526,6 +539,98 @@ Usage:
 Lair:/> edit myfile.txt      # Open specific file
 Lair:/> edit                  # Opens scratch.txt by default
 ```
+
+---
+
+## Networking
+
+Mellivora includes a full TCP/IP networking stack with an RTL8139 NIC driver. When
+running in QEMU, networking is enabled by default.
+
+### Getting Online
+
+```text
+Lair:/> dhcp                   # Get an IP address automatically
+Requesting IP via DHCP...
+DHCP complete: 10.0.2.15
+
+Lair:/> net                    # Check network status
+=== Network Status ===
+NIC: RTL8139 (Up)
+MAC: 52:54:00:12:34:56
+IP:  10.0.2.15
+Mask: 255.255.255.0
+GW:  10.0.2.2
+DNS: 10.0.2.3
+```
+
+### Shell Networking Commands
+
+| Command | Description |
+| --- | --- |
+| `net` | Display full network status (NIC, MAC, IP, gateway, DNS) |
+| `dhcp` | Request an IP address via DHCP |
+| `ping HOST` | Send 4 ICMP pings to a host (IP or hostname) |
+| `ifconfig` | Show network info (or `ifconfig IP` to set IP manually) |
+| `arp` | Display the ARP cache (IP → MAC mappings) |
+
+### Using the Network Programs
+
+**Fetch a web page:**
+
+```text
+Lair:/> http example.com
+Connecting to example.com...
+<!doctype html>...
+```
+
+**Connect to a remote server:**
+
+```text
+Lair:/> telnet towel.blinkenlights.nl
+Connecting to towel.blinkenlights.nl:23...
+Connected!
+```
+
+**Browse Gopher:**
+
+```text
+Lair:/> gopher gopher.floodgap.com
+[DIR] Welcome to Floodgap Gopher
+[TXT] About this server
+```
+
+**Transfer files via FTP:**
+
+```text
+Lair:/> ftp ftp.example.com
+220 Welcome to FTP server
+ftp> ls
+ftp> get readme.txt
+ftp> quit
+```
+
+**Send and read email:**
+
+```text
+Lair:/> mail mail.example.com
+mail> compose
+mail> inbox
+mail> read 1
+mail> quit
+```
+
+**Read Usenet newsgroups:**
+
+```text
+Lair:/> news news.example.com
+news> list
+news> group comp.os.mellivora
+news> read 1
+news> quit
+```
+
+For complete documentation, see the [Networking Guide](NETWORKING_GUIDE.md).
 
 ---
 
@@ -650,7 +755,7 @@ D=LightMagenta, E=Yellow, F=White
 ## Limitations
 
 - **Cooperative multitasking:** Only one program runs at a time unless programs explicitly yield. No preemptive scheduling yet.
-- **Networking stub only:** RTL8139 NIC detection and frame send; no TCP/IP stack yet.
+- **Networking requires QEMU RTL8139:** Only the RTL8139 NIC is supported. QEMU user-mode networking allows outbound connections but blocks unsolicited inbound.
 - **No file permissions:** All files accessible to all operations.
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
 - **128 MB RAM limit:** Physical memory manager supports up to 128 MB.

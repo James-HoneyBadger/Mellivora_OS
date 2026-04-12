@@ -899,6 +899,22 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_gui
 
+        mov edi, cmd_ping_str
+        call str_starts_with
+        jc .cmd_ping
+
+        mov edi, cmd_ifconfig_str
+        call str_starts_with
+        jc .cmd_ifconfig
+
+        mov edi, cmd_dhcp_str
+        call str_starts_with
+        jc .cmd_dhcp
+
+        mov edi, cmd_arp_str
+        call str_starts_with
+        jc .cmd_arp
+
         ; Unknown command - try to execute as program
         mov esi, line_buffer
         call cmd_exec_program
@@ -1370,6 +1386,22 @@ shell_dispatch_core:
 
 .cmd_gui:
         call gui_desktop_main
+        ret
+
+.cmd_ping:
+        call cmd_ping
+        ret
+
+.cmd_ifconfig:
+        call cmd_ifconfig
+        ret
+
+.cmd_dhcp:
+        call cmd_dhcp_shell
+        ret
+
+.cmd_arp:
+        call cmd_arp_show
         ret
 
 ;---------------------------------------

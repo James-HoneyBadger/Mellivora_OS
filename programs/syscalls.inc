@@ -52,6 +52,16 @@ SYS_YIELD       equ 35          ; Cooperative yield: switch to next ready task
 SYS_MOUSE       equ 36          ; Read mouse: -> EAX=x, EBX=y, ECX=buttons
 SYS_FRAMEBUF    equ 37          ; Framebuffer: EBX=sub (0=info,1=set,2=restore)
 SYS_GUI         equ 38          ; Burrows GUI: EBX=sub-function
+SYS_SOCKET      equ 39          ; Create socket: EBX=type(1=TCP,2=UDP) -> EAX=fd
+SYS_CONNECT     equ 40          ; Connect: EBX=fd ECX=ip EDX=port -> EAX=0/-1
+SYS_SEND        equ 41          ; Send: EBX=fd ECX=buf EDX=len -> EAX=bytes
+SYS_RECV        equ 42          ; Recv: EBX=fd ECX=buf EDX=maxlen -> EAX=bytes
+SYS_BIND        equ 43          ; Bind: EBX=fd ECX=port -> EAX=0/-1
+SYS_LISTEN      equ 44          ; Listen: EBX=fd -> EAX=0/-1
+SYS_ACCEPT      equ 45          ; Accept: EBX=fd -> EAX=new_fd
+SYS_DNS         equ 46          ; DNS: EBX=hostname -> EAX=ip (0=fail)
+SYS_SOCKCLOSE   equ 47          ; Close socket: EBX=fd -> EAX=0
+SYS_PING        equ 48          ; Ping: EBX=ip -> EAX=rtt/-1
 
 ; SYS_GUI sub-functions (EBX)
 GUI_CREATE_WINDOW  equ 0        ; ECX=x|y EDX=w|h ESI=title -> EAX=win_id

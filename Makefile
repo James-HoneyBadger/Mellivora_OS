@@ -36,7 +36,9 @@ QEMU_FLAGS = -cpu 486 \
              -no-reboot \
              -no-shutdown \
              -audiodev coreaudio,id=snd0 \
-             -machine pcspk-audiodev=snd0
+             -machine pcspk-audiodev=snd0 \
+             -netdev user,id=net0 \
+             -device rtl8139,netdev=net0
 
 # For debugging
 QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \

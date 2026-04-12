@@ -20,11 +20,12 @@ compiler.
 10. [Directory Operations](#directory-operations)
 11. [Serial Port I/O](#serial-port-io)
 12. [Environment & Arguments](#environment--arguments)
-13. [Game Loop Pattern](#game-loop-pattern)
-14. [Building Assembly Programs](#building-assembly-programs)
-15. [C Programming with TCC](#c-programming-with-tcc)
-16. [Debugging Tips](#debugging-tips)
-17. [Complete Syscall Table](#complete-syscall-table)
+13. [Networking](#networking)
+14. [Game Loop Pattern](#game-loop-pattern)
+15. [Building Assembly Programs](#building-assembly-programs)
+16. [C Programming with TCC](#c-programming-with-tcc)
+17. [Debugging Tips](#debugging-tips)
+18. [Complete Syscall Table](#complete-syscall-table)
 
 ---
 
@@ -767,6 +768,145 @@ var_name: db "PATH", 0
 
 ---
 
+## Networking
+
+Mellivora provides 10 networking syscalls (39–48) for socket operations, DNS resolution,
+and ICMP ping. The `programs/lib/net.inc` library wraps these into convenient functions.
+
+### Creating a TCP Connection
+
+```nasm
+%include "syscalls.inc"
+%include "lib/net.inc"
+
+start:
+        ; 1. Resolve hostname to IP
+        mov esi, hostname
+        call net_dns            ; EAX = IP address (0 = failed)
+        test eax, eax
+        jz .error
+        mov [server_ip], eax
+
+        ; 2. Create a TCP socket
+        mov eax, NET_TCP        ; NET_TCP = 1
+        call net_socket         ; EAX = socket fd (-1 = error)
+        cmp eax, -1
+        je .error
+        mov [sockfd], eax
+
+        ; 3. Connect to port 80
+        mov eax, [sockfd]
+        mov ebx, [server_ip]
+        mov ecx, 80
+        call net_connect        ; EAX = 0 (success) or -1 (error)
+        cmp eax, -1
+        je .error
+
+        ; 4. Send data
+        mov eax, [sockfd]
+        mov esi, message
+        call net_send_line      ; Sends string + CRLF
+
+        ; 5. Receive response
+        mov eax, [sockfd]
+        mov ebx, recv_buf
+        mov ecx, 512
+        call net_recv           ; EAX = bytes (0=no data, -1=closed)
+
+        ; 6. Close socket
+        mov eax, [sockfd]
+        call net_close
+
+.error:
+        mov eax, SYS_EXIT
+        xor ebx, ebx
+        int 0x80
+
+hostname:  db "example.com", 0
+message:   db "GET / HTTP/1.0", 0
+
+section .bss
+server_ip: resd 1
+sockfd:    resd 1
+recv_buf:  resb 513
+```
+
+### Socket Lifecycle
+
+1. **Create** → `net_socket` with `NET_TCP` (1) or `NET_UDP` (2)
+2. **Connect** → `net_connect` with IP and port (for clients)
+3. **Send/Receive** → `net_send`, `net_recv`, `net_send_line`, `net_recv_line`
+4. **Close** → `net_close`
+
+For servers: `net_bind` → `net_listen` → `net_accept` (returns new socket fd)
+
+### Sending Line-Oriented Protocols
+
+Many text protocols (HTTP, FTP, SMTP, NNTP) use CRLF-terminated lines:
+
+```nasm
+        ; net_send_line appends \r\n automatically
+        mov eax, [sockfd]
+        mov esi, helo_cmd
+        call net_send_line      ; Sends "HELO mellivora\r\n"
+
+        ; net_recv_line reads until \n and null-terminates
+        mov eax, [sockfd]
+        mov edi, response_buf
+        mov ecx, 256
+        call net_recv_line      ; EAX = bytes, buffer is null-terminated
+
+helo_cmd: db "HELO mellivora", 0
+```
+
+### DNS Resolution
+
+```nasm
+        mov esi, hostname
+        call net_dns
+        test eax, eax
+        jz .dns_failed          ; 0 = resolution failed
+        ; EAX = 32-bit IP address in little-endian
+```
+
+The kernel maintains an 8-entry DNS cache. Repeated lookups for the same hostname
+return the cached result without a network request.
+
+### ICMP Ping
+
+```nasm
+        mov eax, [target_ip]
+        call net_ping           ; EAX = RTT in timer ticks, or -1 = timeout
+        cmp eax, -1
+        je .timed_out
+```
+
+### Parsing IP Addresses
+
+```nasm
+        mov esi, ip_string
+        call net_parse_ip       ; EAX = 32-bit IP (0 = parse error)
+
+ip_string: db "10.0.2.2", 0
+```
+
+### Networking Syscall Reference
+
+| Syscall | # | EBX | ECX | EDX | EAX Return |
+| --- | --- | --- | --- | --- | --- |
+| SYS_SOCKET | 39 | type (1/2) | — | — | fd or -1 |
+| SYS_CONNECT | 40 | fd | IP | port | 0 or -1 |
+| SYS_SEND | 41 | fd | buffer | length | bytes or -1 |
+| SYS_RECV | 42 | fd | buffer | max len | bytes, 0, -1 |
+| SYS_BIND | 43 | fd | port | — | 0 or -1 |
+| SYS_LISTEN | 44 | fd | — | — | 0 or -1 |
+| SYS_ACCEPT | 45 | fd | — | — | new fd or -1 |
+| SYS_DNS | 46 | hostname | — | — | IP or 0 |
+| SYS_SOCKCLOSE | 47 | fd | — | — | 0 |
+| SYS_PING | 48 | IP | — | — | RTT or -1 |
+
+---
+
 ## Game Loop Pattern
 
 Here's the standard pattern used by games like Snake, Tetris, and 2048:
@@ -1079,7 +1219,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 36 syscalls:
+Quick reference for all 46 syscalls:
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |
@@ -1119,3 +1259,13 @@ Quick reference for all 36 syscalls:
 | 33 | SERIAL_IN | — | — | — | char |
 | 34 | STDIN_READ | buffer | max len | — | bytes or -1 |
 | 35 | YIELD | — | — | — | 0 |
+| 39 | SOCKET | type (1=TCP, 2=UDP) | — | — | fd or -1 |
+| 40 | CONNECT | socket fd | IP address | port | 0 or -1 |
+| 41 | SEND | socket fd | buffer ptr | length | bytes or -1 |
+| 42 | RECV | socket fd | buffer ptr | max length | bytes, 0, or -1 |
+| 43 | BIND | socket fd | port | — | 0 or -1 |
+| 44 | LISTEN | socket fd | — | — | 0 or -1 |
+| 45 | ACCEPT | socket fd | — | — | new fd or -1 |
+| 46 | DNS | hostname ptr | — | — | IP or 0 |
+| 47 | SOCKCLOSE | socket fd | — | — | 0 |
+| 48 | PING | IP address | — | — | RTT ticks or -1 |

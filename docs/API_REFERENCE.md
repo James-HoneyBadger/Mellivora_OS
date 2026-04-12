@@ -13,6 +13,7 @@ All libraries live in `programs/lib/` and are included via NASM `%include` direc
 %include "lib/vga.inc"          ; VGA text mode, cursor, color, UI drawing
 %include "lib/mem.inc"          ; Heap allocation, pool/arena allocators
 %include "lib/data.inc"         ; Stacks, queues, bitmaps, arrays
+%include "lib/net.inc"          ; TCP/UDP sockets, DNS, ICMP ping
 
 start:
         ; Your code here
@@ -429,4 +430,105 @@ msg_notfound:   db "Error: File not found", 0
 section .bss
 arg_buf:        resb 256
 file_buf:       resb 65536
+```
+
+---
+
+## net.inc — Networking
+
+TCP/UDP socket operations, DNS resolution, and ICMP ping. Requires `syscalls.inc`.
+
+### Constants
+
+| Name | Value | Description |
+| --- | --- | --- |
+| `NET_TCP` | 1 | TCP socket type |
+| `NET_UDP` | 2 | UDP socket type |
+
+### Socket Operations
+
+| Function | Input | Output | Description |
+| --- | --- | --- | --- |
+| `net_socket` | EAX=type (NET_TCP/NET_UDP) | EAX=fd (-1 error) | Create a socket |
+| `net_connect` | EAX=fd, EBX=IP, ECX=port | EAX=0/-1 | Connect to remote host |
+| `net_send` | EAX=fd, EBX=buffer, ECX=length | EAX=bytes sent (-1 error) | Send raw data |
+| `net_recv` | EAX=fd, EBX=buffer, ECX=max | EAX=bytes (0=none, -1=closed) | Receive data |
+| `net_close` | EAX=fd | — | Close socket |
+| `net_bind` | EAX=fd, EBX=port | EAX=0/-1 | Bind to local port |
+| `net_listen` | EAX=fd | EAX=0/-1 | Start listening for connections |
+| `net_accept` | EAX=fd | EAX=new fd (-1 timeout) | Accept incoming connection |
+
+### Line-Oriented I/O
+
+| Function | Input | Output | Description |
+| --- | --- | --- | --- |
+| `net_send_line` | EAX=fd, ESI=string | — | Send null-terminated string + CRLF |
+| `net_recv_line` | EAX=fd, EDI=buffer, ECX=max | EAX=bytes, EDI filled | Receive until LF, null-terminate |
+
+### DNS & ICMP
+
+| Function | Input | Output | Description |
+| --- | --- | --- | --- |
+| `net_dns` | ESI=hostname | EAX=IP (0=fail) | Resolve hostname to IP address |
+| `net_ping` | EAX=IP address | EAX=RTT ticks (-1=timeout) | Send ICMP echo request |
+| `net_parse_ip` | ESI=dotted IP string | EAX=IP binary (0=error) | Parse "1.2.3.4" to 32-bit IP |
+
+### Example: Fetch a Web Page
+
+```nasm
+%include "syscalls.inc"
+%include "lib/net.inc"
+
+start:
+        ; Resolve hostname
+        mov esi, host
+        call net_dns
+        test eax, eax
+        jz .fail
+        mov [ip], eax
+
+        ; Open TCP socket and connect
+        mov eax, NET_TCP
+        call net_socket
+        mov [fd], eax
+        mov eax, [fd]
+        mov ebx, [ip]
+        mov ecx, 80
+        call net_connect
+
+        ; Send HTTP request
+        mov eax, [fd]
+        mov esi, request
+        call net_send_line
+        mov eax, [fd]
+        mov esi, blank
+        call net_send_line
+
+        ; Receive and print response
+.loop:  mov eax, [fd]
+        mov ebx, buf
+        mov ecx, 512
+        call net_recv
+        cmp eax, 0
+        jle .done
+        mov byte [buf + eax], 0
+        mov eax, SYS_PRINT
+        mov ebx, buf
+        int 0x80
+        jmp .loop
+
+.done:  mov eax, [fd]
+        call net_close
+.fail:  mov eax, SYS_EXIT
+        xor ebx, ebx
+        int 0x80
+
+host:    db "example.com", 0
+request: db "GET / HTTP/1.0", 0
+blank:   db "", 0
+
+section .bss
+ip:      resd 1
+fd:      resd 1
+buf:     resb 513
 ```

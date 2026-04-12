@@ -85,6 +85,26 @@ syscall_handler:
         je sys_framebuf
         cmp eax, SYS_GUI
         je sys_gui
+        cmp eax, SYS_SOCKET
+        je sys_socket
+        cmp eax, SYS_CONNECT
+        je sys_connect
+        cmp eax, SYS_SEND
+        je sys_send
+        cmp eax, SYS_RECV
+        je sys_recv
+        cmp eax, SYS_BIND
+        je sys_bind
+        cmp eax, SYS_LISTEN
+        je sys_listen
+        cmp eax, SYS_ACCEPT
+        je sys_accept
+        cmp eax, SYS_DNS
+        je sys_dns
+        cmp eax, SYS_SOCKCLOSE
+        je sys_sockclose
+        cmp eax, SYS_PING
+        je sys_ping
 
         ; Unknown syscall
         mov eax, -1
