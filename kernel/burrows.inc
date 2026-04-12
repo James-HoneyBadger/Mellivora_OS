@@ -24,10 +24,10 @@ GUI_PITCH       equ GUI_SCREEN_W * 4       ; 2560 bytes per row
 
 ; Window system
 MAX_WINDOWS     equ 16
-WIN_STRUCT_SIZE equ 96
+WIN_STRUCT_SIZE equ 112
 
 ; Window struct field offsets
-WIN_FLAGS       equ 0           ; dword: bit0=active, bit1=visible
+WIN_FLAGS       equ 0           ; dword: bit0=active, bit1=visible, bit2=maximized
 WIN_X           equ 4           ; dword: content area x
 WIN_Y           equ 8           ; dword: content area y
 WIN_W           equ 12          ; dword: content area width
@@ -35,6 +35,10 @@ WIN_H           equ 16          ; dword: content area height
 WIN_Z           equ 20          ; dword: z-order (higher = on top)
 WIN_TITLE       equ 24          ; 64 bytes: null-terminated title
 WIN_APP_ID      equ 88          ; dword: owning app id (0=desktop)
+WIN_SAVE_X      equ 92          ; saved x before maximize
+WIN_SAVE_Y      equ 96          ; saved y before maximize
+WIN_SAVE_W      equ 100         ; saved w before maximize
+WIN_SAVE_H      equ 104         ; saved h before maximize
 
 ; Window decoration sizes
 TITLEBAR_H      equ 22
@@ -146,7 +150,8 @@ gui_desktop_main:
         ; Switch mouse to pixel-resolution tracking
         mov dword [mouse_max_x], GUI_SCREEN_W - 1
         mov dword [mouse_max_y], GUI_SCREEN_H - 1
-        mov dword [mouse_scale], 2
+        mov dword [mouse_scale], 1
+        mov dword [mouse_clamp], 6
         mov dword [mouse_x], GUI_SCREEN_W / 2
         mov dword [mouse_y], GUI_SCREEN_H / 2
 
@@ -154,6 +159,7 @@ gui_desktop_main:
         mov byte [gui_desktop_active], 1
         mov byte [gui_exit_flag], 0
         mov byte [gui_menu_open], 0
+        mov byte [gui_ctx_open], 0
         mov byte [gui_dragging], 0
         mov dword [gui_focused_win], -1
         mov dword [gui_win_count], 0
@@ -179,12 +185,25 @@ gui_desktop_loop:
 
         ; --- Exit desktop ---
         call gui_exit_desktop
-        ret
+        ; If we were launched normally, ret works.
+        ; If stack was reset by sys_exit after an app, jump to shell.
+        ; Use shell_main unconditionally — it's always safe.
+        jmp shell_main
 
 gui_desktop_resume:
         ; Reached when an external GUI app exits (SYS_EXIT -> here)
         ; Stack was reset to KERNEL_STACK by sys_exit
         call gui_cleanup_app_windows
+        ; Restore VBE mode in case app changed it
+        mov eax, GUI_SCREEN_W
+        mov ebx, GUI_SCREEN_H
+        mov ecx, GUI_BPP
+        call vbe_set_mode
+        ; Re-configure mouse for desktop
+        mov dword [mouse_max_x], GUI_SCREEN_W - 1
+        mov dword [mouse_max_y], GUI_SCREEN_H - 1
+        mov dword [mouse_scale], 1
+        mov dword [mouse_clamp], 6
         jmp gui_desktop_loop
 
 .no_vbe:
@@ -203,6 +222,7 @@ gui_exit_desktop:
         mov dword [mouse_max_x], 79
         mov dword [mouse_max_y], 24
         mov dword [mouse_scale], 1
+        mov dword [mouse_clamp], 127
         mov dword [mouse_x], 40
         mov dword [mouse_y], 12
 
@@ -221,12 +241,17 @@ gui_exit_desktop:
 gui_compose:
         pushad
         call gui_draw_background
+        call gui_draw_desktop_icons
         call gui_draw_all_windows
         call gui_draw_taskbar
         cmp byte [gui_menu_open], 1
         jne .no_menu
         call gui_draw_menu
 .no_menu:
+        cmp byte [gui_ctx_open], 1
+        jne .no_ctx
+        call gui_draw_ctx_menu
+.no_ctx:
         call gui_draw_cursor
         call gui_flip
         popad
@@ -246,6 +271,154 @@ gui_draw_background:
         ret
 
 ;---------------------------------------
+; Desktop icon layout constants
+;---------------------------------------
+ICON_SIZE       equ 32          ; icon box width/height
+ICON_TEXT_H     equ 12          ; space below icon for label
+ICON_CELL_W     equ 72          ; grid cell width
+ICON_CELL_H     equ 64          ; grid cell height
+ICON_START_X    equ 20          ; first column x
+ICON_START_Y    equ 16          ; first row y
+ICON_COLS       equ 1           ; single column of icons
+ICON_COUNT      equ 6           ; number of desktop icons
+
+;---------------------------------------
+; gui_draw_desktop_icons - Draw icons on desktop surface
+;---------------------------------------
+gui_draw_desktop_icons:
+        pushad
+        xor ecx, ecx           ; icon index
+.di_loop:
+        cmp ecx, ICON_COUNT
+        jge .di_done
+
+        ; Calculate position: single column, vertical layout
+        mov eax, ICON_START_X
+        mov ebx, ecx
+        imul ebx, ICON_CELL_H
+        add ebx, ICON_START_Y
+
+        push ecx
+        push eax
+        push ebx
+
+        ; Draw icon background (rounded-ish box with accent tint)
+        push ecx
+        push edx
+        mov ecx, ICON_SIZE
+        mov edx, ICON_SIZE
+        ; Semi-transparent accent box
+        mov esi, [gui_theme + THEME_ACCENT]
+        ; Brighten slightly for icon bg
+        push eax
+        mov eax, esi
+        shr eax, 1
+        and eax, 0x007F7F7F
+        add eax, 0x00404040    ; lighten
+        mov esi, eax
+        pop eax
+        call gui_bb_fill_rect
+        pop edx
+        pop ecx
+
+        ; Draw border around icon
+        pop ebx
+        pop eax
+        push eax
+        push ebx
+        push ecx
+        push edx
+        mov ecx, ICON_SIZE
+        mov edx, ICON_SIZE
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_rect
+        pop edx
+        pop ecx
+
+        ; Draw mini-symbol inside icon (a simple letter glyph)
+        pop ebx
+        pop eax
+        push eax
+        push ebx
+        add eax, 12            ; center the char
+        add ebx, 8
+        push ecx
+        push edx
+        mov edx, 0x00FFFFFF
+        mov ecx, [esp + 16]    ; icon index from outer push
+        movzx ecx, byte [gui_icon_symbols + ecx]
+        call gui_bb_draw_char
+        pop edx
+        pop ecx
+
+        ; Draw label text below icon
+        pop ebx
+        pop eax
+        push eax
+        push ebx
+        add ebx, ICON_SIZE + 2
+        add eax, 0             ; left-align label
+        push ecx
+        mov ecx, [esp + 12]    ; icon index
+        mov esi, [gui_icon_labels + ecx*4]
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_string
+        pop ecx
+
+        pop ebx
+        pop eax
+        pop ecx
+        inc ecx
+        jmp .di_loop
+.di_done:
+        popad
+        ret
+
+;---------------------------------------
+; gui_icon_hit_test - Check if click is on a desktop icon
+; EAX = x, EBX = y
+; Returns: EAX = icon index (0-5) or -1
+;---------------------------------------
+gui_icon_hit_test:
+        push ebx
+        push ecx
+        push edx
+        push esi
+
+        ; Check x range
+        cmp eax, ICON_START_X
+        jl .ih_miss
+        cmp eax, ICON_START_X + ICON_SIZE
+        jg .ih_miss
+
+        ; Check y range and compute index
+        sub ebx, ICON_START_Y
+        cmp ebx, 0
+        jl .ih_miss
+        xor edx, edx
+        mov eax, ebx
+        mov ecx, ICON_CELL_H
+        div ecx             ; eax = row index, edx = offset in cell
+        cmp eax, ICON_COUNT
+        jge .ih_miss
+        ; Check that click is within the icon cell (not in gap below label)
+        cmp edx, ICON_SIZE + ICON_TEXT_H
+        jg .ih_miss
+
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+.ih_miss:
+        mov eax, -1
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+;---------------------------------------
 ; gui_flip - Copy backbuffer to LFB
 ;---------------------------------------
 gui_flip:
@@ -259,74 +432,146 @@ gui_flip:
         ret
 
 ;---------------------------------------
-; gui_draw_cursor - Draw arrow cursor
+; gui_draw_cursor - Draw 16x20 arrow cursor with shadow
+; Uses 16-bit-wide bitmaps (fill, border, shadow) stored
+; in gui_cursor_fill / gui_cursor_border / gui_cursor_shadow.
 ;---------------------------------------
+CURSOR_H        equ 20
+CURSOR_W        equ 16
+
 gui_draw_cursor:
         pushad
-        mov ebp, [mouse_x]     ; cursor origin x
-        mov edx, [mouse_y]     ; cursor origin y
-        mov esi, gui_cursor_data
-        mov ecx, 14            ; cursor height
-.cur_row:
+        ; --- Pass 1: draw shadow (offset +1,+1, dark translucent) ---
+        mov ebp, [mouse_x]
+        inc ebp                 ; shadow offset x+1
+        mov edx, [mouse_y]
+        inc edx                 ; shadow offset y+1
+        mov esi, gui_cursor_shadow
+        mov ecx, CURSOR_H
+.shd_row:
         cmp ecx, 0
-        jle .cur_done
-        movzx edi, byte [esi]  ; row bitmap (fill)
-        movzx eax, byte [esi + 14] ; row bitmap (border)
-        inc esi
-        mov ebx, 8             ; 8 bits per row
-        push ebp               ; save start x
-.cur_bit:
+        jle .shd_done
+        movzx edi, word [esi]
+        add esi, 2
+        mov ebx, CURSOR_W
+        push ebp
+.shd_bit:
         cmp ebx, 0
-        je .cur_next
-        ; Check border bit first, then fill bit
-        push eax
-        test eax, 0x80         ; border pixel?
-        jz .cur_no_border
-        ; Draw black border pixel
+        je .shd_next
+        test edi, 0x8000
+        jz .shd_skip
         cmp ebp, 0
-        jl .cur_skip
+        jl .shd_skip
         cmp ebp, GUI_SCREEN_W
-        jge .cur_skip
+        jge .shd_skip
         cmp edx, 0
-        jl .cur_skip
+        jl .shd_skip
         cmp edx, GUI_SCREEN_H
-        jge .cur_skip
+        jge .shd_skip
+        push edx
+        imul edx, GUI_PITCH
+        lea edx, [GUI_BACKBUF + edx + ebp*4]
+        ; Darken existing pixel (shift each channel right by 1)
+        mov eax, [edx]
+        shr eax, 1
+        and eax, 0x007F7F7F
+        mov [edx], eax
+        pop edx
+.shd_skip:
+        shl edi, 1
+        inc ebp
+        dec ebx
+        jmp .shd_bit
+.shd_next:
+        pop ebp
+        inc edx
+        dec ecx
+        jmp .shd_row
+.shd_done:
+
+        ; --- Pass 2: draw border (black) ---
+        mov ebp, [mouse_x]
+        mov edx, [mouse_y]
+        mov esi, gui_cursor_border
+        mov ecx, CURSOR_H
+.bdr_row:
+        cmp ecx, 0
+        jle .bdr_done
+        movzx edi, word [esi]
+        add esi, 2
+        mov ebx, CURSOR_W
+        push ebp
+.bdr_bit:
+        cmp ebx, 0
+        je .bdr_next
+        test edi, 0x8000
+        jz .bdr_skip
+        cmp ebp, 0
+        jl .bdr_skip
+        cmp ebp, GUI_SCREEN_W
+        jge .bdr_skip
+        cmp edx, 0
+        jl .bdr_skip
+        cmp edx, GUI_SCREEN_H
+        jge .bdr_skip
         push edx
         imul edx, GUI_PITCH
         lea edx, [GUI_BACKBUF + edx + ebp*4]
         mov dword [edx], 0x00000000
         pop edx
-        jmp .cur_skip
-.cur_no_border:
-        test edi, 0x80         ; fill pixel?
-        jz .cur_skip
-        ; Draw white fill pixel
+.bdr_skip:
+        shl edi, 1
+        inc ebp
+        dec ebx
+        jmp .bdr_bit
+.bdr_next:
+        pop ebp
+        inc edx
+        dec ecx
+        jmp .bdr_row
+.bdr_done:
+
+        ; --- Pass 3: draw fill (white) ---
+        mov ebp, [mouse_x]
+        mov edx, [mouse_y]
+        mov esi, gui_cursor_fill
+        mov ecx, CURSOR_H
+.fil_row:
+        cmp ecx, 0
+        jle .fil_done
+        movzx edi, word [esi]
+        add esi, 2
+        mov ebx, CURSOR_W
+        push ebp
+.fil_bit:
+        cmp ebx, 0
+        je .fil_next
+        test edi, 0x8000
+        jz .fil_skip
         cmp ebp, 0
-        jl .cur_skip
+        jl .fil_skip
         cmp ebp, GUI_SCREEN_W
-        jge .cur_skip
+        jge .fil_skip
         cmp edx, 0
-        jl .cur_skip
+        jl .fil_skip
         cmp edx, GUI_SCREEN_H
-        jge .cur_skip
+        jge .fil_skip
         push edx
         imul edx, GUI_PITCH
         lea edx, [GUI_BACKBUF + edx + ebp*4]
         mov dword [edx], 0x00FFFFFF
         pop edx
-.cur_skip:
-        pop eax
+.fil_skip:
         shl edi, 1
-        shl eax, 1
         inc ebp
         dec ebx
-        jmp .cur_bit
-.cur_next:
+        jmp .fil_bit
+.fil_next:
         pop ebp
         inc edx
         dec ecx
-        jmp .cur_row
-.cur_done:
+        jmp .fil_row
+.fil_done:
         popad
         ret
 
@@ -529,6 +774,52 @@ gui_bb_rect:
         call gui_bb_vline
         pop eax
         pop edx
+        popad
+        ret
+
+;---------------------------------------
+; gui_bb_button_3d - Draw a 3D raised button
+; EAX = x, EBX = y, ECX = w, EDX = h, ESI = face color
+;---------------------------------------
+gui_bb_button_3d:
+        pushad
+        ; Fill face
+        call gui_bb_fill_rect
+
+        ; --- Top highlight ---
+        push edx
+        mov edx, 0x00FFFFFF
+        call gui_bb_hline       ; hline(x, y, w, white)
+        pop edx
+
+        ; --- Left highlight ---
+        push ecx
+        mov ecx, edx           ; ecx = h
+        mov edx, 0x00FFFFFF
+        call gui_bb_vline       ; vline(x, y, h, white)
+        pop ecx
+
+        ; --- Bottom shadow ---
+        push ebx
+        add ebx, edx           ; ebx = y + h
+        dec ebx                 ; ebx = y + h - 1
+        push edx
+        mov edx, 0x00222222
+        call gui_bb_hline       ; hline(x, y+h-1, w, dark)
+        pop edx
+        pop ebx
+
+        ; --- Right shadow ---
+        push eax
+        add eax, ecx           ; eax = x + w
+        dec eax                 ; eax = x + w - 1
+        push ecx
+        mov ecx, edx           ; ecx = h
+        mov edx, 0x00222222
+        call gui_bb_vline       ; vline(x+w-1, y, h, dark)
+        pop ecx
+        pop eax
+
         popad
         ret
 
@@ -786,7 +1077,9 @@ gui_find_window_at:
 .fw_scan:
         cmp ecx, MAX_WINDOWS
         jge .fw_ret
-        test dword [esi + WIN_FLAGS], 0x03
+        test dword [esi + WIN_FLAGS], 0x01  ; active?
+        jz .fw_next
+        test dword [esi + WIN_FLAGS], 0x02  ; visible?
         jz .fw_next
 
         ; Full window rect: x-BORDER, y-TITLEBAR, w+2*BORDER, h+TITLEBAR+BORDER
@@ -869,7 +1162,9 @@ gui_draw_all_windows:
         jge .aw_draw_one
         bt edi, ecx
         jc .aw_skip
-        test dword [esi + WIN_FLAGS], 0x03
+        test dword [esi + WIN_FLAGS], 0x01  ; active?
+        jz .aw_skip
+        test dword [esi + WIN_FLAGS], 0x02  ; visible?
         jz .aw_skip
         mov eax, [esi + WIN_Z]
         cmp eax, [.aw_min_z]
@@ -907,7 +1202,9 @@ gui_draw_window_n:
 
         imul eax, ebx, WIN_STRUCT_SIZE
         add eax, gui_win_table
-        test dword [eax + WIN_FLAGS], 0x03
+        test dword [eax + WIN_FLAGS], 0x01  ; active?
+        jz .wn_done
+        test dword [eax + WIN_FLAGS], 0x02  ; visible?
         jz .wn_done
 
         ; Save entry pointer
@@ -983,7 +1280,7 @@ gui_draw_window_n:
         pop edx
         pop ecx
 
-        ; --- Draw close button (red square with X) ---
+        ; --- Draw close button (3D red square with X) ---
         push ecx
         push edx
         push esi
@@ -999,13 +1296,67 @@ gui_draw_window_n:
         mov ecx, CLOSE_BTN_SIZE
         mov edx, CLOSE_BTN_SIZE
         mov esi, 0x00CC3333     ; Red
-        call gui_bb_fill_rect
+        call gui_bb_button_3d
         pop ebx
         pop eax
         ; Draw "X"
         add eax, 4
         add ebx, 0
         mov cl, 'X'
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_char
+        pop esi
+        pop edx
+        pop ecx
+
+        ; --- Draw maximize button (3D gray square with box char) ---
+        push ecx
+        push edx
+        push esi
+        mov eax, ecx
+        add eax, esi
+        add eax, BORDER_W
+        sub eax, 2 * (CLOSE_BTN_SIZE + 2) + 4
+        mov ebx, edx
+        sub ebx, TITLEBAR_H
+        add ebx, 3
+        push eax
+        push ebx
+        mov ecx, CLOSE_BTN_SIZE
+        mov edx, CLOSE_BTN_SIZE
+        mov esi, 0x00666666     ; Dark gray
+        call gui_bb_button_3d
+        pop ebx
+        pop eax
+        add eax, 3
+        mov cl, '#'             ; maximize icon
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_char
+        pop esi
+        pop edx
+        pop ecx
+
+        ; --- Draw minimize button (3D gray square with underscore) ---
+        push ecx
+        push edx
+        push esi
+        mov eax, ecx
+        add eax, esi
+        add eax, BORDER_W
+        sub eax, 3 * (CLOSE_BTN_SIZE + 2) + 4
+        mov ebx, edx
+        sub ebx, TITLEBAR_H
+        add ebx, 3
+        push eax
+        push ebx
+        mov ecx, CLOSE_BTN_SIZE
+        mov edx, CLOSE_BTN_SIZE
+        mov esi, 0x00666666     ; Dark gray
+        call gui_bb_button_3d
+        pop ebx
+        pop eax
+        add eax, 3
+        mov cl, '_'             ; minimize icon
         mov edx, 0x00FFFFFF
         call gui_bb_draw_char
         pop esi
@@ -1050,13 +1401,13 @@ gui_draw_taskbar:
         mov edx, [gui_theme + THEME_ACCENT]
         call gui_bb_hline
 
-        ; Menu button
+        ; Menu button (3D)
         mov eax, 4
         mov ebx, TASKBAR_Y + 4
         mov ecx, 64
         mov edx, 20
         mov esi, [gui_theme + THEME_ACCENT]
-        call gui_bb_fill_rect
+        call gui_bb_button_3d
 
         ; Menu button text
         mov eax, 12
@@ -1074,8 +1425,125 @@ gui_draw_taskbar:
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
 
+        ; --- Draw window buttons on taskbar ---
+        mov dword [.tb_x], 76       ; start after menu button
+        xor ecx, ecx               ; window index
+.tb_loop:
+        cmp ecx, MAX_WINDOWS
+        jge .tb_end
+        mov eax, ecx
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        test dword [eax + WIN_FLAGS], 0x01  ; active?
+        jz .tb_next
+
+        ; Draw button background
+        push ecx
+        push eax
+        mov eax, [.tb_x]
+        mov ebx, TASKBAR_Y + 4
+        mov ecx, 80
+        mov edx, 20
+        ; Highlight focused window
+        pop esi                     ; eax = ptr
+        push esi
+        mov edi, [gui_focused_win]
+        imul edi, WIN_STRUCT_SIZE
+        add edi, gui_win_table
+        cmp esi, edi
+        jne .tb_unfocused
+        mov esi, [gui_theme + THEME_ACCENT]
+        jmp .tb_draw_btn
+.tb_unfocused:
+        mov esi, 0x00444444
+.tb_draw_btn:
+        call gui_bb_button_3d
+
+        ; Draw truncated title
+        pop eax                     ; window entry
+        push eax
+        mov ebx, TASKBAR_Y + 6
+        mov esi, eax
+        add esi, WIN_TITLE
+        mov eax, [.tb_x]
+        add eax, 4
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_string
+
+        pop eax
+        pop ecx
+        add dword [.tb_x], 84      ; button width + gap
+        ; Stop if we'd overlap the clock
+        cmp dword [.tb_x], GUI_SCREEN_W - 72
+        jge .tb_end
+.tb_next:
+        inc ecx
+        jmp .tb_loop
+.tb_end:
+
         popad
         ret
+.tb_x  dd 0
+
+;---------------------------------------
+; gui_taskbar_btn_click - Handle click on taskbar window buttons
+; Determines which button was clicked by X offset, toggles visibility
+;---------------------------------------
+gui_taskbar_btn_click:
+        pushad
+        mov dword [.tbc_x], 76
+        xor ecx, ecx
+.tbc_loop:
+        cmp ecx, MAX_WINDOWS
+        jge .tbc_done
+        mov eax, ecx
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        test dword [eax + WIN_FLAGS], 0x01  ; active?
+        jz .tbc_next
+
+        ; Check if mouse_x is within this button
+        mov edx, [.tbc_x]
+        cmp dword [mouse_x], edx
+        jl .tbc_skip
+        add edx, 80
+        cmp dword [mouse_x], edx
+        jg .tbc_skip
+
+        ; Found the button - toggle visibility or focus
+        test dword [eax + WIN_FLAGS], 0x02  ; visible?
+        jz .tbc_show
+        ; If visible and focused, minimize; if visible but not focused, just focus
+        push eax
+        mov edx, [gui_focused_win]
+        imul edx, WIN_STRUCT_SIZE
+        add edx, gui_win_table
+        cmp eax, edx
+        pop eax
+        jne .tbc_focus
+        ; Minimize (hide)
+        and dword [eax + WIN_FLAGS], ~0x02
+        jmp .tbc_done
+.tbc_show:
+        or dword [eax + WIN_FLAGS], 0x02   ; make visible
+.tbc_focus:
+        push ecx
+        mov eax, ecx
+        call gui_focus_window
+        pop ecx
+        jmp .tbc_done
+
+.tbc_skip:
+        add dword [.tbc_x], 84
+        cmp dword [.tbc_x], GUI_SCREEN_W - 72
+        jge .tbc_done
+.tbc_next:
+        inc ecx
+        jmp .tbc_loop
+.tbc_done:
+        popad
+        ret
+.tbc_x dd 0
 
 ;---------------------------------------
 ; gui_read_time - Read RTC into clock vars
@@ -1324,23 +1792,59 @@ gui_launch_app:
         ; Only reached if program not found
         ret
 
+;---------------------------------------
+; gui_icon_launch - Launch program for desktop icon
+; EAX = icon index (0-5)
+;---------------------------------------
+gui_icon_launch:
+        pushad
+        cmp eax, ICON_COUNT
+        jge .il_done
+        mov esi, [gui_icon_progs + eax*4]
+        cmp esi, 0
+        je .il_applet
+        call gui_launch_app
+        jmp .il_done
+.il_applet:
+        ; No external program — reserved for future applets
+.il_done:
+        popad
+        ret
+
 ;=======================================================================
 ; INPUT HANDLING
 ;=======================================================================
 
 gui_handle_input:
         pushad
-        ; Get mouse state
+        ; Get current mouse buttons
         movzx ecx, byte [mouse_buttons]
 
-        ; Detect new left click (was 0, now 1)
-        mov al, cl
-        xor al, [gui_prev_mouse_btn]
-        and al, cl
+        ; Read and clear the button latch (captures brief clicks between frames)
+        movzx eax, byte [mouse_btn_latch]
+        mov byte [mouse_btn_latch], 0
+        mov [.hi_latch], al
+
+        ; New left-click: check latch bit 0
         test al, 0x01
         jz .hi_no_click
 
         ; --- Left click detected ---
+        ; If context menu is open, check context menu hit
+        cmp byte [gui_ctx_open], 1
+        jne .hi_check_app_menu
+        mov eax, [mouse_x]
+        mov ebx, [mouse_y]
+        call gui_ctx_hit_test
+        cmp eax, -1
+        je .hi_close_ctx
+        call gui_ctx_select
+        jmp .hi_update
+.hi_close_ctx:
+        mov byte [gui_ctx_open], 0
+        jmp .hi_update
+
+.hi_check_app_menu:
         ; If menu is open, check menu hit
         cmp byte [gui_menu_open], 1
         jne .hi_check_menu_btn
@@ -1371,11 +1875,50 @@ gui_handle_input:
         jmp .hi_update
 
 .hi_check_win:
+        ; Check taskbar window buttons (y in TASKBAR_Y+4 .. TASKBAR_Y+24)
+        cmp dword [mouse_y], TASKBAR_Y + 4
+        jl .hi_check_icons
+        cmp dword [mouse_y], TASKBAR_Y + 24
+        jg .hi_check_icons
+        cmp dword [mouse_x], 76
+        jl .hi_check_icons
+        call gui_taskbar_btn_click
+        jmp .hi_update
+
+.hi_check_icons:
+        ; Check desktop icon clicks first
+        mov eax, [mouse_x]
+        mov ebx, [mouse_y]
+        call gui_icon_hit_test
+        cmp eax, -1
+        je .hi_check_win2
+        ; Launch the app for this icon
+        call gui_icon_launch
+        jmp .hi_update
+.hi_check_win2:
         ; Check window clicks (close button / title bar drag)
         call gui_handle_window_click
         jmp .hi_update
 
 .hi_no_click:
+        ; Detect right click from latch (bit 1 = right button)
+        test byte [.hi_latch], 0x02
+        jz .hi_no_rclick
+
+        ; Right click on desktop (not on taskbar/window)
+        cmp dword [mouse_y], TASKBAR_Y
+        jge .hi_no_rclick
+        ; Close app menu, open context menu
+        mov byte [gui_menu_open], 0
+        mov byte [gui_ctx_open], 1
+        mov eax, [mouse_x]
+        mov [gui_ctx_x], eax
+        mov eax, [mouse_y]
+        mov [gui_ctx_y], eax
+        mov dword [gui_ctx_sel], -1
+        jmp .hi_update
+
+.hi_no_rclick:
         ; Handle drag in progress
         cmp byte [gui_dragging], 1
         jne .hi_check_release
@@ -1390,11 +1933,19 @@ gui_handle_input:
 .hi_hover:
         ; Update menu hover
         cmp byte [gui_menu_open], 1
-        jne .hi_update
+        jne .hi_ctx_hover
         mov eax, [mouse_x]
         mov ebx, [mouse_y]
         call gui_menu_hit_test
         mov [gui_menu_sel], eax
+        jmp .hi_update
+.hi_ctx_hover:
+        cmp byte [gui_ctx_open], 1
+        jne .hi_update
+        mov eax, [mouse_x]
+        mov ebx, [mouse_y]
+        call gui_ctx_hit_test
+        mov [gui_ctx_sel], eax
 
 .hi_update:
         ; Save mouse state
@@ -1409,7 +1960,12 @@ gui_handle_input:
         je .hi_esc
         jmp .hi_done
 .hi_esc:
-        ; ESC closes menu if open, else exits desktop
+        ; ESC closes menus if open, else exits desktop
+        cmp byte [gui_ctx_open], 1
+        jne .hi_esc_menu
+        mov byte [gui_ctx_open], 0
+        jmp .hi_done
+.hi_esc_menu:
         cmp byte [gui_menu_open], 1
         jne .hi_exit
         mov byte [gui_menu_open], 0
@@ -1419,6 +1975,7 @@ gui_handle_input:
 .hi_done:
         popad
         ret
+.hi_latch: db 0
 
 ;---------------------------------------
 ; gui_handle_window_click - Process click on windows
@@ -1467,6 +2024,91 @@ gui_handle_window_click:
         jmp .wc_done
 
 .wc_not_close:
+        ; --- Check maximize button ---
+        mov ecx, [ebx + WIN_X]
+        add ecx, [ebx + WIN_W]
+        add ecx, BORDER_W
+        sub ecx, 2 * (CLOSE_BTN_SIZE + 2) + 4
+        mov edx, [ebx + WIN_Y]
+        sub edx, TITLEBAR_H
+        add edx, 3
+
+        cmp dword [mouse_x], ecx
+        jl .wc_not_max
+        push ecx
+        add ecx, CLOSE_BTN_SIZE
+        cmp dword [mouse_x], ecx
+        pop ecx
+        jg .wc_not_max
+        cmp dword [mouse_y], edx
+        jl .wc_not_max
+        add edx, CLOSE_BTN_SIZE
+        cmp dword [mouse_y], edx
+        jg .wc_not_max
+
+        ; Toggle maximize
+        test dword [ebx + WIN_FLAGS], 0x04  ; bit2 = maximized
+        jnz .wc_restore
+
+        ; Save current geometry then maximize
+        mov ecx, [ebx + WIN_X]
+        mov [ebx + WIN_SAVE_X], ecx
+        mov ecx, [ebx + WIN_Y]
+        mov [ebx + WIN_SAVE_Y], ecx
+        mov ecx, [ebx + WIN_W]
+        mov [ebx + WIN_SAVE_W], ecx
+        mov ecx, [ebx + WIN_H]
+        mov [ebx + WIN_SAVE_H], ecx
+
+        ; Set maximized position/size (fill desktop minus taskbar)
+        mov dword [ebx + WIN_X], BORDER_W
+        mov dword [ebx + WIN_Y], TITLEBAR_H
+        mov dword [ebx + WIN_W], GUI_SCREEN_W - 2 * BORDER_W
+        mov dword [ebx + WIN_H], TASKBAR_Y - TITLEBAR_H - BORDER_W
+        or dword [ebx + WIN_FLAGS], 0x04
+        jmp .wc_done
+
+.wc_restore:
+        ; Restore saved geometry
+        mov ecx, [ebx + WIN_SAVE_X]
+        mov [ebx + WIN_X], ecx
+        mov ecx, [ebx + WIN_SAVE_Y]
+        mov [ebx + WIN_Y], ecx
+        mov ecx, [ebx + WIN_SAVE_W]
+        mov [ebx + WIN_W], ecx
+        mov ecx, [ebx + WIN_SAVE_H]
+        mov [ebx + WIN_H], ecx
+        and dword [ebx + WIN_FLAGS], ~0x04
+        jmp .wc_done
+
+.wc_not_max:
+        ; --- Check minimize button ---
+        mov ecx, [ebx + WIN_X]
+        add ecx, [ebx + WIN_W]
+        add ecx, BORDER_W
+        sub ecx, 3 * (CLOSE_BTN_SIZE + 2) + 4
+        mov edx, [ebx + WIN_Y]
+        sub edx, TITLEBAR_H
+        add edx, 3
+
+        cmp dword [mouse_x], ecx
+        jl .wc_not_min
+        push ecx
+        add ecx, CLOSE_BTN_SIZE
+        cmp dword [mouse_x], ecx
+        pop ecx
+        jg .wc_not_min
+        cmp dword [mouse_y], edx
+        jl .wc_not_min
+        add edx, CLOSE_BTN_SIZE
+        cmp dword [mouse_y], edx
+        jg .wc_not_min
+
+        ; Minimize: clear visible bit (bit1)
+        and dword [ebx + WIN_FLAGS], ~0x02
+        jmp .wc_done
+
+.wc_not_min:
         ; --- Check title bar (start drag) ---
         mov ecx, [ebx + WIN_Y]
         sub ecx, TITLEBAR_H
@@ -1512,6 +2154,208 @@ gui_handle_drag:
         add ebx, TITLEBAR_H
         mov [eax + WIN_Y], ebx
 .dr_done:
+        popad
+        ret
+
+;=======================================================================
+; RIGHT-CLICK CONTEXT MENU
+;=======================================================================
+
+GUI_CTX_W       equ 140
+GUI_CTX_ITEM_H  equ 22
+GUI_CTX_ITEMS   equ 5
+
+;---------------------------------------
+; gui_draw_ctx_menu - Draw right-click context menu
+;---------------------------------------
+gui_draw_ctx_menu:
+        pushad
+        mov eax, [gui_ctx_x]
+        mov ebx, [gui_ctx_y]
+
+        ; Clip menu to screen
+        mov ecx, eax
+        add ecx, GUI_CTX_W
+        cmp ecx, GUI_SCREEN_W
+        jle .ctx_xok
+        sub eax, GUI_CTX_W
+.ctx_xok:
+        mov ecx, ebx
+        add ecx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
+        cmp ecx, TASKBAR_Y
+        jle .ctx_yok
+        sub ebx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
+.ctx_yok:
+        mov [.ctx_dx], eax
+        mov [.ctx_dy], ebx
+
+        ; Background
+        push ecx
+        push edx
+        mov ecx, GUI_CTX_W
+        mov edx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
+        mov esi, [gui_theme + THEME_MENU_BG]
+        call gui_bb_fill_rect
+        pop edx
+        pop ecx
+
+        ; Border
+        mov eax, [.ctx_dx]
+        mov ebx, [.ctx_dy]
+        push ecx
+        push edx
+        mov ecx, GUI_CTX_W
+        mov edx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_rect
+        pop edx
+        pop ecx
+
+        ; Draw items
+        xor ecx, ecx
+.ctx_item:
+        cmp ecx, GUI_CTX_ITEMS
+        jge .ctx_done
+
+        mov ebx, ecx
+        imul ebx, GUI_CTX_ITEM_H
+        add ebx, [.ctx_dy]
+
+        ; Highlight if hovered
+        cmp ecx, [gui_ctx_sel]
+        jne .ctx_no_hl
+        push ecx
+        mov eax, [.ctx_dx]
+        inc eax
+        inc ebx
+        mov ecx, GUI_CTX_W - 2
+        mov edx, GUI_CTX_ITEM_H - 1
+        mov esi, [gui_theme + THEME_MENU_HIGHLIGHT]
+        call gui_bb_fill_rect
+        dec ebx
+        pop ecx
+.ctx_no_hl:
+        push ecx
+        mov eax, [.ctx_dx]
+        add eax, 12
+        add ebx, 3
+        mov esi, [gui_ctx_strings + ecx*4]
+        mov edx, [gui_theme + THEME_MENU_TEXT]
+        cmp ecx, [gui_ctx_sel]
+        jne .ctx_txt_ok
+        mov edx, 0x00FFFFFF
+.ctx_txt_ok:
+        call gui_bb_draw_string
+        pop ecx
+
+        inc ecx
+        jmp .ctx_item
+.ctx_done:
+        popad
+        ret
+.ctx_dx: dd 0
+.ctx_dy: dd 0
+
+;---------------------------------------
+; gui_ctx_hit_test - Check if click is in context menu
+; EAX = x, EBX = y  Returns: EAX = item or -1
+;---------------------------------------
+gui_ctx_hit_test:
+        push ebx
+        push ecx
+        push edx
+
+        ; Reconstruct clipped position
+        mov ecx, [gui_ctx_x]
+        mov edx, ecx
+        add edx, GUI_CTX_W
+        cmp edx, GUI_SCREEN_W
+        jle .cth_xok
+        sub ecx, GUI_CTX_W
+.cth_xok:
+        mov edx, [gui_ctx_y]
+        push edx
+        mov edi, edx
+        add edi, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
+        cmp edi, TASKBAR_Y
+        jle .cth_yok
+        sub edx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
+.cth_yok:
+
+        ; Check bounds
+        cmp eax, ecx
+        jl .cth_miss
+        add ecx, GUI_CTX_W
+        cmp eax, ecx
+        jge .cth_miss
+        cmp ebx, edx
+        jl .cth_miss
+        push edx
+        add edx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
+        cmp ebx, edx
+        pop edx
+        jge .cth_miss
+
+        ; Compute item index
+        sub ebx, edx
+        xor edx, edx
+        mov eax, ebx
+        mov ecx, GUI_CTX_ITEM_H
+        div ecx
+        cmp eax, GUI_CTX_ITEMS
+        jge .cth_miss
+        pop edx
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+.cth_miss:
+        pop edx
+        mov eax, -1
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+;---------------------------------------
+; gui_ctx_select - Execute context menu item
+; EAX = item index
+;---------------------------------------
+gui_ctx_select:
+        pushad
+        mov byte [gui_ctx_open], 0
+        cmp eax, 0
+        je .cx_term
+        cmp eax, 1
+        je .cx_files
+        cmp eax, 2
+        je .cx_about
+        cmp eax, 3
+        je .cx_settings
+        cmp eax, 4
+        je .cx_exit
+        popad
+        ret
+.cx_term:
+        mov esi, gui_prog_bterm
+        call gui_launch_app
+        popad
+        ret
+.cx_files:
+        mov esi, gui_prog_bfiles
+        call gui_launch_app
+        popad
+        ret
+.cx_about:
+        popad
+        call gui_applet_about
+        ret
+.cx_settings:
+        popad
+        call gui_applet_settings
+        ret
+.cx_exit:
+        mov byte [gui_exit_flag], 1
         popad
         ret
 
@@ -2094,11 +2938,11 @@ sys_gui:
         call kb_pollchar
         cmp al, 0
         jne .sg_p_key
-        ; Check mouse
-        movzx eax, byte [mouse_buttons]
-        mov ebx, [gui_prev_mouse_btn]
-        cmp al, bl
-        jne .sg_p_mouse_btn
+        ; Check mouse button latch (catches brief clicks between polls)
+        movzx eax, byte [mouse_btn_latch]
+        test al, al
+        jnz .sg_p_mouse_btn
+        ; Check mouse movement
         mov eax, [mouse_x]
         cmp eax, [gui_prev_mouse_x]
         jne .sg_p_mouse_mv
@@ -2112,7 +2956,9 @@ sys_gui:
         mov eax, EVT_KEY_PRESS
         iretd
 .sg_p_mouse_btn:
-        ; Update prev
+        ; Clear latch and update prev state
+        mov byte [mouse_btn_latch], 0
+        movzx eax, byte [mouse_buttons]
         mov [gui_prev_mouse_btn], al
         mov eax, [mouse_x]
         mov [gui_prev_mouse_x], eax
@@ -2446,16 +3292,77 @@ db 0x00,0x00,0x70,0x18,0x18,0x18,0x0E,0x18,0x18,0x18,0x18,0x70,0x00,0x00,0x00,0x
 db 0x00,0x00,0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 
 ;=======================================================================
-; DATA: CURSOR BITMAPS (fill + border, 14 rows x 8 bits)
+; DATA: CURSOR BITMAPS (16-bit wide × 20 rows: fill, border, shadow)
 ;=======================================================================
 
-; Fill (white interior)
-gui_cursor_data:
-        db 0x00, 0x40, 0x60, 0x70, 0x78, 0x7C, 0x7E, 0x7C
-        db 0x78, 0x78, 0x48, 0x04, 0x04, 0x02
-; Border (black outline)
-        db 0x80, 0xA0, 0x90, 0x88, 0x84, 0x82, 0x81, 0x82
-        db 0x84, 0x84, 0xB4, 0x4A, 0x0A, 0x05
+; Fill (white interior) - 20 rows × 16 bits (MSB=left)
+gui_cursor_fill:
+        dw 0x0000               ; row  0
+        dw 0x4000               ; row  1
+        dw 0x6000               ; row  2
+        dw 0x7000               ; row  3
+        dw 0x7800               ; row  4
+        dw 0x7C00               ; row  5
+        dw 0x7E00               ; row  6
+        dw 0x7F00               ; row  7
+        dw 0x7F80               ; row  8
+        dw 0x7FC0               ; row  9
+        dw 0x7FE0               ; row 10
+        dw 0x7F00               ; row 11
+        dw 0x7F00               ; row 12
+        dw 0x6780               ; row 13
+        dw 0x4380               ; row 14
+        dw 0x03C0               ; row 15
+        dw 0x01C0               ; row 16
+        dw 0x01E0               ; row 17
+        dw 0x00E0               ; row 18
+        dw 0x0000               ; row 19
+
+; Border (black outline) - 20 rows × 16 bits
+gui_cursor_border:
+        dw 0x8000               ; row  0
+        dw 0xA000               ; row  1
+        dw 0x9000               ; row  2
+        dw 0x8800               ; row  3
+        dw 0x8400               ; row  4
+        dw 0x8200               ; row  5
+        dw 0x8100               ; row  6
+        dw 0x8080               ; row  7
+        dw 0x8040               ; row  8
+        dw 0x8020               ; row  9
+        dw 0x8010               ; row 10
+        dw 0x80F0               ; row 11
+        dw 0x8080               ; row 12
+        dw 0x9840               ; row 13
+        dw 0x3C40               ; row 14
+        dw 0x0420               ; row 15
+        dw 0x0220               ; row 16
+        dw 0x0210               ; row 17
+        dw 0x0110               ; row 18
+        dw 0x00F0               ; row 19
+
+; Shadow (soft outline for visibility) - 20 rows × 16 bits
+gui_cursor_shadow:
+        dw 0xC000               ; row  0
+        dw 0xF000               ; row  1
+        dw 0xF800               ; row  2
+        dw 0xFC00               ; row  3
+        dw 0xFE00               ; row  4
+        dw 0xFF00               ; row  5
+        dw 0xFF80               ; row  6
+        dw 0xFFC0               ; row  7
+        dw 0xFFE0               ; row  8
+        dw 0xFFF0               ; row  9
+        dw 0xFFF8               ; row 10
+        dw 0xFFFC               ; row 11
+        dw 0xFFF0               ; row 12
+        dw 0xFFC0               ; row 13
+        dw 0x7FC0               ; row 14
+        dw 0x07E0               ; row 15
+        dw 0x03E0               ; row 16
+        dw 0x03F0               ; row 17
+        dw 0x01F0               ; row 18
+        dw 0x00F0               ; row 19
 
 ;=======================================================================
 ; DATA: THEME PRESETS
@@ -2560,6 +3467,47 @@ gui_prog_bcalc:     db "bcalc", 0
 gui_prog_bpaint:    db "bpaint", 0
 gui_prog_bsysmon:   db "bsysmon", 0
 
+; Desktop icon data
+gui_icon_symbols:   db 'T', 'F', 'E', 'C', 'P', 'M'  ; letters on icons
+                    db 0, 0                              ; padding
+
+gui_icon_labels:
+        dd gui_str_ic_term
+        dd gui_str_ic_files
+        dd gui_str_ic_edit
+        dd gui_str_ic_calc
+        dd gui_str_ic_paint
+        dd gui_str_ic_sysmon
+
+gui_icon_progs:
+        dd gui_prog_bterm
+        dd gui_prog_bfiles
+        dd gui_prog_bedit
+        dd gui_prog_bcalc
+        dd gui_prog_bpaint
+        dd gui_prog_bsysmon
+
+gui_str_ic_term:    db "Terminal", 0
+gui_str_ic_files:   db "Files", 0
+gui_str_ic_edit:    db "Editor", 0
+gui_str_ic_calc:    db "Calc", 0
+gui_str_ic_paint:   db "Paint", 0
+gui_str_ic_sysmon:  db "Monitor", 0
+
+; Right-click context menu strings
+gui_str_ctx_term:   db "Open Terminal", 0
+gui_str_ctx_files:  db "File Manager", 0
+gui_str_ctx_about:  db "About", 0
+gui_str_ctx_set:    db "Settings", 0
+gui_str_ctx_exit:   db "Exit Desktop", 0
+
+gui_ctx_strings:
+        dd gui_str_ctx_term
+        dd gui_str_ctx_files
+        dd gui_str_ctx_about
+        dd gui_str_ctx_set
+        dd gui_str_ctx_exit
+
 ;=======================================================================
 ; STATE VARIABLES (initialized, in binary image)
 ;=======================================================================
@@ -2567,6 +3515,7 @@ gui_prog_bsysmon:   db "bsysmon", 0
 gui_desktop_active: db 0
 gui_exit_flag:      db 0
 gui_menu_open:      db 0
+gui_ctx_open:       db 0
 gui_dragging:       db 0
 gui_drag_win:       dd 0
 gui_drag_off_x:     dd 0
@@ -2575,6 +3524,9 @@ gui_focused_win:    dd -1
 gui_win_count:      dd 0
 gui_next_z:         dd 0
 gui_menu_sel:       dd -1
+gui_ctx_sel:        dd -1
+gui_ctx_x:          dd 0
+gui_ctx_y:          dd 0
 gui_prev_mouse_x:   dd 0
 gui_prev_mouse_y:   dd 0
 gui_prev_mouse_btn: db 0

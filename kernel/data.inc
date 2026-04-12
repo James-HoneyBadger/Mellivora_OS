@@ -177,6 +177,7 @@ cmd_touch_str:  db "touch", 0
 cmd_set_str:    db "set", 0
 cmd_unset_str:  db "unset", 0
 cmd_shutdown_str: db "shutdown", 0
+cmd_reboot_str: db "reboot", 0
 cmd_cls_str:    db "cls", 0
 cmd_head_str:   db "head", 0
 cmd_tail_str:   db "tail", 0
@@ -361,6 +362,7 @@ msg_ata_none:   db "  ATA disk:      not detected", 0x0A, 0
 msg_shutdown_bar: db "===========================================================", 0x0A, 0
 msg_shutdown:   db "  Shutting down Mellivora OS...", 0x0A, 0
 msg_halt:       db "  System halted. You may power off now.", 0x0A, 0
+msg_reboot:     db "  Rebooting Mellivora OS...", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0
 msg_cpu:        db "  CPU:           i486+ (32-bit protected mode)", 0x0A, 0
 msg_mem_detect: db "  RAM:           ", 0
