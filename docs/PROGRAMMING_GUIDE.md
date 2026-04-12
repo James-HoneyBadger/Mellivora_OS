@@ -21,11 +21,12 @@ compiler.
 11. [Serial Port I/O](#serial-port-io)
 12. [Environment & Arguments](#environment--arguments)
 13. [Networking](#networking)
-14. [Game Loop Pattern](#game-loop-pattern)
-15. [Building Assembly Programs](#building-assembly-programs)
-16. [C Programming with TCC](#c-programming-with-tcc)
-17. [Debugging Tips](#debugging-tips)
-18. [Complete Syscall Table](#complete-syscall-table)
+14. [GUI Programming](#gui-programming)
+15. [Game Loop Pattern](#game-loop-pattern)
+16. [Building Assembly Programs](#building-assembly-programs)
+17. [C Programming with TCC](#c-programming-with-tcc)
+18. [Debugging Tips](#debugging-tips)
+19. [Complete Syscall Table](#complete-syscall-table)
 
 ---
 
@@ -162,6 +163,19 @@ SYS_GETARGS     equ 32
 SYS_SERIAL_IN   equ 33
 SYS_STDIN_READ  equ 34
 SYS_YIELD       equ 35
+SYS_MOUSE       equ 36
+SYS_FRAMEBUF    equ 37
+SYS_GUI         equ 38
+SYS_SOCKET      equ 39
+SYS_CONNECT     equ 40
+SYS_SEND        equ 41
+SYS_RECV        equ 42
+SYS_BIND        equ 43
+SYS_LISTEN      equ 44
+SYS_ACCEPT      equ 45
+SYS_DNS         equ 46
+SYS_SOCKCLOSE   equ 47
+SYS_PING        equ 48
 ```
 
 Or include the provided header:
@@ -907,6 +921,176 @@ ip_string: db "10.0.2.2", 0
 
 ---
 
+## GUI Programming
+
+Mellivora's Burrows desktop environment provides a windowed GUI accessible through
+`SYS_GUI` (syscall 38) and its 12 sub-functions. The `lib/gui.inc` library wraps
+these into convenient functions.
+
+### Setting Up a GUI Application
+
+```nasm
+%include "syscalls.inc"
+%include "lib/gui.inc"
+
+start:
+        ; Create a window: x=50, y=40, w=300, h=200
+        mov eax, 50
+        mov ebx, 40
+        mov ecx, 300
+        mov edx, 200
+        mov esi, title
+        call gui_create_window
+        cmp eax, -1
+        je .exit
+        mov [win_id], eax
+```
+
+### Window Drawing
+
+All drawing coordinates are relative to the window's content area (0,0 is the
+top-left corner inside the title bar and border):
+
+```nasm
+        ; Fill window background
+        mov eax, [win_id]
+        xor ebx, ebx           ; x=0
+        xor ecx, ecx           ; y=0
+        mov edx, 300            ; width
+        mov esi, 200            ; height
+        mov edi, 0x2F2F3F       ; dark blue-gray
+        call gui_fill_rect
+
+        ; Draw text
+        mov eax, [win_id]
+        mov ebx, 10             ; x offset
+        mov ecx, 20             ; y offset
+        mov esi, label_text
+        mov edi, 0xFFFFFF       ; white
+        call gui_draw_text
+
+        ; Draw single pixel
+        mov eax, [win_id]
+        mov ebx, 150            ; x
+        mov ecx, 100            ; y
+        mov esi, 0xFF0000       ; red
+        call gui_draw_pixel
+```
+
+### The GUI Event Loop
+
+Every GUI application follows the compose → flip → poll pattern:
+
+```nasm
+.event_loop:
+        ; 1. Compose the desktop (all windows, taskbar, etc.)
+        call gui_compose
+
+        ; 2. Flip back buffer to screen
+        call gui_flip
+
+        ; 3. Poll for events
+        call gui_poll_event
+        ; EAX = event type, EBX = param1, ECX = param2
+
+        cmp eax, EVT_CLOSE
+        je .close
+
+        cmp eax, EVT_KEY_PRESS
+        je .handle_key
+
+        cmp eax, EVT_MOUSE_CLICK
+        je .handle_click
+
+        ; Yield to avoid busy-waiting
+        mov eax, SYS_YIELD
+        int 0x80
+
+        jmp .event_loop
+
+.close:
+        mov eax, [win_id]
+        call gui_destroy_window
+.exit:
+        mov eax, SYS_EXIT
+        xor ebx, ebx
+        int 0x80
+```
+
+### Event Types
+
+| Constant | Value | EBX | ECX |
+| --- | --- | --- | --- |
+| `EVT_NONE` | 0 | — | — |
+| `EVT_MOUSE_CLICK` | 1 | x position | y position |
+| `EVT_MOUSE_MOVE` | 2 | x position | y position |
+| `EVT_KEY_PRESS` | 3 | key code | — |
+| `EVT_CLOSE` | 4 | window id | — |
+
+### Themes
+
+Applications can read and apply themes:
+
+```nasm
+        ; Get current theme into buffer
+        mov eax, theme_buf
+        call gui_get_theme
+
+        ; Set a theme (0=Blue, 1=Dark, 2=Light)
+        mov eax, SYS_GUI
+        mov ebx, GUI_SET_THEME
+        mov ecx, 1              ; Dark theme
+        int 0x80
+```
+
+### Mouse Input (Outside GUI)
+
+For programs that need raw mouse coordinates without the Burrows desktop:
+
+```nasm
+        mov eax, SYS_MOUSE     ; syscall 36
+        int 0x80
+        ; EAX = X position, EBX = Y position, ECX = button state
+        ; Buttons: bit 0 = left, bit 1 = right, bit 2 = middle
+```
+
+### Framebuffer Access (Advanced)
+
+For programs that need direct pixel access without the window manager:
+
+```nasm
+        ; Get framebuffer info
+        mov eax, SYS_FRAMEBUF  ; syscall 37
+        mov ebx, 0             ; sub-fn 0 = get info
+        int 0x80
+        ; EAX = LFB address, EBX = width, ECX = height, EDX = bpp
+
+        ; Switch to 640×480×32 mode
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 1             ; sub-fn 1 = set mode
+        int 0x80
+
+        ; Restore text mode when done
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2             ; sub-fn 2 = restore text
+        int 0x80
+```
+
+### Built-in Burrows Apps
+
+These programs in the `programs/` directory use `gui.inc` and demonstrate GUI patterns:
+
+| Program | Description | Pattern Demonstrated |
+| --- | --- | --- |
+| `bcalc` | Calculator | Button grid, click handling |
+| `bedit` | Text editor | Text input, scrolling |
+| `bfiles` | File manager | List view, directory navigation |
+| `bpaint` | Paint program | Pixel drawing, tool selection |
+| `bsysmon` | System monitor | Real-time data display |
+| `bterm` | Terminal emulator | Text rendering, keyboard I/O |
+
+---
+
 ## Game Loop Pattern
 
 Here's the standard pattern used by games like Snake, Tetris, and 2048:
@@ -1219,7 +1403,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 46 syscalls:
+Quick reference for all 49 syscalls (0–48):
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |
@@ -1259,6 +1443,9 @@ Quick reference for all 46 syscalls:
 | 33 | SERIAL_IN | — | — | — | char |
 | 34 | STDIN_READ | buffer | max len | — | bytes or -1 |
 | 35 | YIELD | — | — | — | 0 |
+| 36 | MOUSE | — | — | — | EAX=x, EBX=y, ECX=btns |
+| 37 | FRAMEBUF | sub-fn | — | — | (varies by sub-fn) |
+| 38 | GUI | sub-fn | (varies) | (varies) | (varies) |
 | 39 | SOCKET | type (1=TCP, 2=UDP) | — | — | fd or -1 |
 | 40 | CONNECT | socket fd | IP address | port | 0 or -1 |
 | 41 | SEND | socket fd | buffer ptr | length | bytes or -1 |

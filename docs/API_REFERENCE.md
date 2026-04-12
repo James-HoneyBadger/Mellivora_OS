@@ -14,6 +14,7 @@ All libraries live in `programs/lib/` and are included via NASM `%include` direc
 %include "lib/mem.inc"          ; Heap allocation, pool/arena allocators
 %include "lib/data.inc"         ; Stacks, queues, bitmaps, arrays
 %include "lib/net.inc"          ; TCP/UDP sockets, DNS, ICMP ping
+%include "lib/gui.inc"          ; Burrows desktop GUI wrappers
 
 start:
         ; Your code here
@@ -531,4 +532,111 @@ section .bss
 ip:      resd 1
 fd:      resd 1
 buf:     resb 513
+```
+
+---
+
+## gui.inc — Burrows Desktop GUI
+
+Wrapper functions for the `SYS_GUI` syscall (38) sub-functions. Provides a clean
+calling convention for creating and managing windows in the Burrows desktop environment.
+Requires `syscalls.inc`.
+
+**Coordinate packing:** Many SYS_GUI sub-functions use `hi16:lo16` packed registers.
+The `gui.inc` wrappers handle this packing automatically — you pass x, y, w, h as
+separate registers.
+
+### Window Management
+
+| Function | Input | Output | Description |
+| --- | --- | --- | --- |
+| `gui_create_window` | EAX=x, EBX=y, ECX=w, EDX=h, ESI=title | EAX=win_id (0–15, -1=error) | Create a new window |
+| `gui_destroy_window` | EAX=win_id | — | Destroy a window |
+
+### Drawing
+
+| Function | Input | Output | Description |
+| --- | --- | --- | --- |
+| `gui_fill_rect` | EAX=win_id, EBX=x, ECX=y, EDX=w, ESI=h, EDI=color | — | Fill rectangle in window |
+| `gui_draw_text` | EAX=win_id, EBX=x, ECX=y, ESI=text, EDI=color | — | Draw text in window |
+| `gui_draw_pixel` | EAX=win_id, EBX=x, ECX=y, ESI=color | — | Plot single pixel |
+
+### Events & Compositing
+
+| Function | Input | Output | Description |
+| --- | --- | --- | --- |
+| `gui_poll_event` | — | EAX=event type, EBX=param1, ECX=param2 | Poll for GUI event |
+| `gui_compose` | — | — | Compose desktop to back buffer |
+| `gui_flip` | — | — | Draw cursor and flip to screen |
+
+### Themes
+
+| Function | Input | Output | Description |
+| --- | --- | --- | --- |
+| `gui_get_theme` | EAX=dest buffer (48 bytes) | — | Copy current theme data |
+| `gui_set_theme` | EAX=source buffer (48 bytes) | — | Apply theme |
+
+### Event Types
+
+Returned in EAX by `gui_poll_event`:
+
+| Constant | Value | Description |
+| --- | --- | --- |
+| `EVT_NONE` | 0 | No event pending |
+| `EVT_MOUSE_CLICK` | 1 | Mouse button pressed |
+| `EVT_MOUSE_MOVE` | 2 | Mouse position changed |
+| `EVT_KEY_PRESS` | 3 | Keyboard key pressed |
+| `EVT_CLOSE` | 4 | Window close requested |
+
+### Example: Simple GUI Application
+
+```nasm
+%include "syscalls.inc"
+%include "lib/gui.inc"
+
+start:
+        ; Create a window at (100, 80), 200x150
+        mov eax, 100
+        mov ebx, 80
+        mov ecx, 200
+        mov edx, 150
+        mov esi, title
+        call gui_create_window
+        mov [win], eax
+
+        ; Fill background
+        mov eax, [win]
+        xor ebx, ebx
+        xor ecx, ecx
+        mov edx, 200
+        mov esi, 150
+        mov edi, 0x404060
+        call gui_fill_rect
+
+        ; Draw text
+        mov eax, [win]
+        mov ebx, 20
+        mov ecx, 40
+        mov esi, message
+        mov edi, 0xFFFFFF
+        call gui_draw_text
+
+.loop:
+        call gui_compose
+        call gui_flip
+        call gui_poll_event
+        cmp eax, EVT_CLOSE
+        jne .loop
+
+        mov eax, [win]
+        call gui_destroy_window
+        mov eax, SYS_EXIT
+        xor ebx, ebx
+        int 0x80
+
+title:   db "My App", 0
+message: db "Hello, Burrows!", 0
+
+section .bss
+win:     resd 1
 ```

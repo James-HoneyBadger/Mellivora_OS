@@ -90,7 +90,7 @@ This single command:
 4. Creates a 64 MB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (73 files at the time of this update)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (96 files)
 
 ### Build Targets
 
@@ -211,6 +211,7 @@ Useful additional options:
 | -------- | ------------- |
 | `-m 256` | Increase RAM to 256 MB |
 | `-serial stdio` | Route serial output (COM1) to your terminal |
+| `-nic user,model=rtl8139` | Enable networking (RTL8139 NIC, QEMU user-mode) |
 | `-audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd` | Enable PC speaker audio |
 | `-S -s` | Start paused + enable GDB server on port 1234 |
 
@@ -234,7 +235,7 @@ LBA 554+        ~63 MB      Data blocks (4 KB each)
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 4 subdirectories and places the curated runtime file set (73 files at the time of this update):
+The `populate.py` script creates 4 subdirectories and places the curated runtime file set (96 files):
 
 ```text
 /
@@ -298,14 +299,36 @@ sync
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (16-bit real mode)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
-├── kernel.asm              Kernel entry and include graph (main file + 13 include modules)
+├── kernel.asm              Kernel entry and include graph (main file + 19 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v1.15)
+├── CHANGELOG.md            Version history (v1.0 → v2.1)
 ├── README.md               Project overview
 │
-├── programs/               User-space assembly programs (currently 56)
+├── kernel/                 Kernel subsystem modules
+│   ├── ata.inc             ATA/IDE disk driver
+│   ├── data.inc            Kernel data tables
+│   ├── filesearch.inc      File search and PATH resolution
+│   ├── hbfs.inc            HoneyBadger File System
+│   ├── idt.inc             Interrupt Descriptor Table
+│   ├── isr.inc             Interrupt Service Routines
+│   ├── pic.inc             Programmable Interrupt Controller
+│   ├── pit.inc             Programmable Interval Timer
+│   ├── pmm.inc             Physical Memory Manager
+│   ├── shell.inc           Shell and command interpreter
+│   ├── syscall.inc         System call dispatcher
+│   ├── util.inc            Kernel utility functions
+│   ├── vga.inc             VGA text mode driver
+│   ├── net.inc             TCP/IP networking stack
+│   ├── vbe.inc             VBE/BGA framebuffer driver
+│   ├── mouse.inc           PS/2 mouse driver
+│   ├── sched.inc           Preemptive scheduler
+│   ├── burrows.inc         Burrows desktop environment
+│   └── paging.inc          Paging and virtual memory
+│
+├── programs/               User-space assembly programs (79 programs)
 │   ├── syscalls.inc        Shared constants and helpers
+│   ├── lib/                Reusable libraries (string, io, math, vga, mem, data, net, gui)
 │   ├── hello.asm           ... through ...
 │   └── wc.asm
 │
@@ -318,7 +341,9 @@ Mellivora_OS/
     ├── USER_GUIDE.md        Shell command reference
     ├── PROGRAMMING_GUIDE.md Writing programs for Mellivora
     ├── TECHNICAL_REFERENCE.md Architecture and internals
-    └── TUTORIAL.md          Beginner walkthrough
+    ├── API_REFERENCE.md     Library function reference
+    ├── TUTORIAL.md          Beginner walkthrough
+    └── NETWORKING_GUIDE.md  Networking architecture and usage
 ```
 
 ---
@@ -363,3 +388,23 @@ qemu-system-i386 -cpu 486 -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -serial stdio
 ```
+
+### Networking not working
+
+Ensure QEMU is launched with an RTL8139 NIC. The `make run` target includes this by
+default. If launching manually:
+
+```bash
+qemu-system-i386 -cpu 486 -m 128 \
+  -drive file=mellivora.img,format=raw,if=ide -boot c \
+  -nic user,model=rtl8139
+```
+
+Inside the OS, run `dhcp` to obtain an IP address, then `ping 10.0.2.2` to verify.
+QEMU's user-mode networking provides NAT via gateway 10.0.2.2 and DNS at 10.0.2.3.
+
+### Burrows desktop not displaying
+
+The BGA (Bochs Graphics Adapter) must be available — this is the default for QEMU.
+If the desktop shows a blank screen, ensure your QEMU version supports VBE/BGA
+(all recent releases do). VirtualBox and VMware also provide compatible VBE adapters.

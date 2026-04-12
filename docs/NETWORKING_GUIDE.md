@@ -92,12 +92,14 @@ exposes functionality through syscalls and shell commands.
 | Resource | Limit |
 | --- | --- |
 | Simultaneous sockets | 8 |
-| Socket buffer size | 128 bytes per socket |
+| Socket structure size | 128 bytes per socket |
+| Socket recv buffer | 4,096 bytes per socket |
+| Socket send buffer | 4,096 bytes per TCP socket |
 | ARP cache entries | 16 |
 | DNS cache entries | 8 |
 | DHCP buffer | 600 bytes |
-| TX buffer | 2048 bytes |
-| RX buffer | 8192 + 16 bytes |
+| TX buffer | 1,536 bytes |
+| RX buffer | 8,192 + 16 bytes |
 
 ---
 

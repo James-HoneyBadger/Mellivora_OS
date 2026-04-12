@@ -1,5 +1,78 @@
 # Mellivora OS - Changelog
 
+## v2.1.0 - Full TCP/IP Networking Stack
+
+### Kernel — TCP/IP Networking (`kernel/net.inc`, ~3,800 lines)
+
+The former RTL8139 networking stub has been replaced with a complete, from-scratch TCP/IP stack:
+
+- **RTL8139 NIC driver**: PCI auto-detect (bus/device/function scan), software reset with timeout, interrupt-driven RX/TX (ISR handles ROK, TOK, RER, TER, LinkChg), 8 KB RX ring buffer with wrap-around, 4 TX descriptors with round-robin rotation.
+- **Ethernet II**: Frame construction and parsing with proper EtherType dispatch (0x0800 IPv4, 0x0806 ARP).
+- **ARP**: Request/reply handling, 16-entry ARP cache with lookup and expiry, gratuitous ARP on interface configuration.
+- **IPv4**: Header construction with checksum, packet reception and protocol dispatch (ICMP=1, UDP=17, TCP=6).
+- **ICMP**: Echo request/reply (ping) with sequence numbering and round-trip time calculation.
+- **UDP**: Connectionless send/receive with port matching, used for DHCP and DNS.
+- **TCP**: Full state machine — SYN → SYN-ACK → ESTABLISHED → data transfer → FIN/FIN-ACK → CLOSED. Sequence/acknowledgment number tracking, 1460-byte MSS, retransmission, connection timeout.
+- **DHCP client**: Complete 4-phase negotiation (DISCOVER → OFFER → REQUEST → ACK) with option parsing for subnet mask, gateway, DNS server, and lease time.
+- **DNS resolver**: UDP-based query construction and response parsing with answer section extraction.
+
+### Kernel — Socket API (10 new syscalls)
+
+| Syscall | Number | Description |
+|---------|--------|-------------|
+| `SYS_SOCKET` | 39 | Create a TCP or UDP socket |
+| `SYS_CONNECT` | 40 | Connect a TCP socket to a remote host:port |
+| `SYS_SEND` | 41 | Send data on a connected socket |
+| `SYS_RECV` | 42 | Receive data from a connected socket |
+| `SYS_BIND` | 43 | Bind a socket to a local port |
+| `SYS_LISTEN` | 44 | Mark a socket as listening for connections |
+| `SYS_ACCEPT` | 45 | Accept an incoming TCP connection |
+| `SYS_DNS` | 46 | Resolve a hostname to an IPv4 address |
+| `SYS_SOCKCLOSE` | 47 | Close a socket and free resources |
+| `SYS_PING` | 48 | Send an ICMP echo request and wait for reply |
+
+### Kernel — ISR TX Re-entrance Fix
+
+- **Problem**: TCP acknowledgments and DHCP responses were sent from within the RTL8139 interrupt handler (ISR), which could corrupt in-flight TX descriptors and cause packet loss or hangs.
+- **Solution**: Added `SOCK_PENDING` field (offset 48) to the socket structure. The ISR stores pending flags (ACK, SYN-ACK, FIN-ACK) instead of calling `tcp_send_flags` directly. Polling loops in `sys_connect`, `sys_recv`, `sys_send`, `sys_accept`, and `sys_sockclose` call `tcp_flush_pending` to drain deferred transmissions outside interrupt context.
+- **Impact**: Fixed DHCP timeout failures and TCP connection stalls.
+
+### Kernel — Bug Fixes
+
+- **`sys_recv` return path**: Changed `ret` to `iretd` — the syscall returns via interrupt frame, not a near return. Missing `iretd` caused stack corruption and triple faults after receiving data.
+- **DHCP buffer overflow**: Reduced DHCP option copy length from 300 to 75 bytes (maximum valid DHCP option payload), preventing overwrite of adjacent kernel data.
+- **DHCP race condition**: Added `dhcp_state` flag to prevent processing duplicate OFFER/ACK packets from retriggered responses during the 4-phase handshake.
+
+### Shell — 5 New Networking Commands
+
+- **`dhcp`**: Run DHCP client to obtain IP, subnet mask, gateway, and DNS server.
+- **`ping <host>`**: Send ICMP echo request and display RTT.
+- **`arp`**: Display the ARP cache (IP → MAC mappings).
+- **`ifconfig`**: Show network interface configuration (IP, MAC, gateway, DNS).
+- **`net`**: Display NIC status, PCI location, I/O base, and MAC address.
+
+### Programs — 7 New Internet Clients + Network Library
+
+- **http** — HTTP/1.0 client. Connects to port 80, sends GET request, displays response body. Tested end-to-end with `http example.com` in QEMU.
+- **ping** — Standalone ICMP ping utility with configurable count, TTL display, and RTT statistics.
+- **telnet** — Interactive Telnet client with raw TCP socket communication and escape sequences.
+- **ftp** — FTP client with passive mode, directory listing, file get/put, and cd/ls commands.
+- **gopher** — Gopher protocol browser (port 70) with selector navigation.
+- **mail** — SMTP mail client for composing and sending email via port 25.
+- **news** — NNTP news reader for browsing Usenet newsgroups.
+- **`programs/lib/net.inc`**: User-space networking library with socket wrappers, DNS helper, HTTP request builder, and line-buffered receive.
+
+### Build Stats
+
+- Disk image: 96 files across 4 subdirectories
+- Kernel: ~20,000 lines of x86 assembly (19 include files)
+- Kernel binary: ~399 KB
+- Tests: 709 (175 build + 534 HBFS integrity)
+- Syscalls: 48 (0–48)
+- Programs: 79 assembly + 11 C samples
+
+---
+
 ## v2.0.0 - Paging, Preemptive Multitasking, Mouse, Burrows Desktop & 10 New Programs
 
 ### Kernel — Virtual Memory

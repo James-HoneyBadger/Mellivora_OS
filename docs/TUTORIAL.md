@@ -18,8 +18,10 @@ assembly program, compile C code, and automate tasks with scripts.
 8. [Writing Your First Assembly Program](#writing-your-first-assembly-program)
 9. [Writing and Compiling C Programs](#writing-and-compiling-c-programs)
 10. [Batch Scripting](#batch-scripting)
-11. [Customizing Your Environment](#customizing-your-environment)
-12. [Next Steps](#next-steps)
+11. [Networking](#networking)
+12. [The Burrows Desktop](#the-burrows-desktop)
+13. [Customizing Your Environment](#customizing-your-environment)
+14. [Next Steps](#next-steps)
 
 ---
 
@@ -556,6 +558,121 @@ Lair:/> batch backup.bat
 
 ---
 
+## Networking
+
+Mellivora includes a full TCP/IP networking stack. When running under QEMU with default
+settings, the network is ready to use.
+
+### Getting Connected
+
+The OS automatically configures networking via DHCP at boot. Verify your connection:
+
+```text
+Lair:/> ifconfig
+IP Address:    10.0.2.15
+Subnet Mask:   255.255.255.0
+Gateway:       10.0.2.2
+DNS Server:    10.0.2.3
+MAC Address:   52:54:00:12:34:56
+```
+
+If DHCP didn't run automatically:
+
+```text
+Lair:/> dhcp
+Sending DHCP DISCOVER...
+Received DHCP OFFER: 10.0.2.15
+Sending DHCP REQUEST...
+Received DHCP ACK
+Network configured successfully.
+```
+
+### Ping a Host
+
+```text
+Lair:/> ping 10.0.2.2
+Reply from 10.0.2.2: time=1ms
+```
+
+### View the ARP Table
+
+```text
+Lair:/> arp
+IP Address       MAC Address        State
+10.0.2.2         52:55:0a:00:02:02  Resolved
+```
+
+### Network Programs
+
+Several programs use the network. Make sure DHCP has completed first:
+
+```text
+Lair:/> http example.com           → Fetch a web page via HTTP
+Lair:/> dns example.com            → Resolve a hostname
+Lair:/> nslookup google.com        → DNS lookup
+Lair:/> netstat                    → Show open sockets
+Lair:/> wget http://example.com/   → Download a page
+```
+
+### Writing Network Programs
+
+See the [Programming Guide](PROGRAMMING_GUIDE.md#networking) for how to write your own
+TCP/UDP clients and servers using the `lib/net.inc` library.
+
+---
+
+## The Burrows Desktop
+
+Mellivora includes a graphical desktop environment called Burrows, with windows, a
+mouse cursor, taskbar and application menu.
+
+### Launching the Desktop
+
+```text
+Lair:/> burrow
+```
+
+The screen switches to 640×480 graphical mode. You'll see a desktop background, a
+taskbar at the bottom, and a "Menu" button.
+
+### Using the Desktop
+
+- **Click "Menu"** to open the application menu
+- **Click an app** to launch it in a window
+- **Click a window's title bar** to focus it
+- **Drag a window's title bar** to move it
+- **Click ×** in the title bar to close a window
+- **Click a window button in the taskbar** to bring it to front
+
+### Built-in Desktop Applications
+
+| App | Description |
+| --- | --- |
+| About | Shows OS version information |
+| Clock | Displays the current time |
+| Settings | Change the desktop theme |
+| Calculator (bcalc) | GUI calculator |
+| Text Editor (bedit) | Graphical text editor |
+| File Manager (bfiles) | Browse and manage files |
+| Paint (bpaint) | Pixel art drawing tool |
+| System Monitor (bsysmon) | Real-time CPU and memory stats |
+| Terminal (bterm) | Terminal emulator inside the desktop |
+
+### Changing Themes
+
+Open **Settings** from the menu (or run `bsysmon` and use its theme button) to switch
+between three themes:
+
+- **Blue** — Default, professional look
+- **Dark** — Dark mode with green accents
+- **Light** — Light background theme
+
+### Exiting the Desktop
+
+Press **ESC** or close all windows to return to the text-mode shell.
+
+---
+
 ## Customizing Your Environment
 
 ### Change Text Colors
@@ -613,6 +730,8 @@ Or on the host, read:
 - **[USER_GUIDE.md](USER_GUIDE.md)** — Complete command reference
 - **[TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md)** — OS internals and architecture
 - **[PROGRAMMING_GUIDE.md](PROGRAMMING_GUIDE.md)** — Write your own programs
+- **[API_REFERENCE.md](API_REFERENCE.md)** — Library function reference
+- **[NETWORKING_GUIDE.md](NETWORKING_GUIDE.md)** — Networking architecture and usage
 
 ### Study Existing Programs
 
@@ -628,11 +747,13 @@ Look at the source code in `programs/` for real-world examples:
 Ideas for your own programs:
 
 - A text adventure game
-- A simple drawing program (move cursor, toggle pixels)
+- A network chat client (use `lib/net.inc`)
+- A GUI drawing program (use `lib/gui.inc`)
 - A file encryption tool (XOR cipher)
 - A math quiz game
 - A clock that updates in real-time
 - A simple BASIC interpreter (there's already one — extend it!)
+- An HTTP server that serves files from HBFS
 
 ### Contribute
 
