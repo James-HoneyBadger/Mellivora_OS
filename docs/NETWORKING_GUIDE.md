@@ -218,6 +218,7 @@ Connecting to example.com...
 ```
 
 URL formats accepted:
+
 - `http example.com` — GET `/` on port 80
 - `http example.com/page.html` — GET `/page.html` on port 80
 - `http example.com:8080/api` — GET `/api` on port 8080

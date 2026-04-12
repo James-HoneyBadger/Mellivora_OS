@@ -19,7 +19,7 @@ The former RTL8139 networking stub has been replaced with a complete, from-scrat
 ### Kernel — Socket API (10 new syscalls)
 
 | Syscall | Number | Description |
-|---------|--------|-------------|
+| --------- | -------- | ------------- |
 | `SYS_SOCKET` | 39 | Create a TCP or UDP socket |
 | `SYS_CONNECT` | 40 | Connect a TCP socket to a remote host:port |
 | `SYS_SEND` | 41 | Send data on a connected socket |

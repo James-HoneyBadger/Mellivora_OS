@@ -831,6 +831,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_shutdown
 
+        mov edi, cmd_reboot_str
+        call str_starts_with
+        jc .cmd_reboot
+
         mov edi, cmd_cls_str
         call str_starts_with
         jc .cmd_clear
@@ -1310,6 +1314,10 @@ shell_dispatch_core:
 
 .cmd_shutdown:
         call cmd_shutdown
+        ret
+
+.cmd_reboot:
+        call cmd_reboot
         ret
 
 .cmd_head:
@@ -2286,6 +2294,7 @@ cmd_which:
         dd cmd_find_str, cmd_append_str, cmd_date_str, cmd_beep_str
         dd cmd_batch_str, cmd_mkdir_str, cmd_cd_str, cmd_pwd_str
         dd cmd_touch_str, cmd_set_str, cmd_unset_str, cmd_shutdown_str
+        dd cmd_reboot_str
         dd cmd_cls_str, cmd_head_str, cmd_tail_str, cmd_type_str
         dd cmd_diff_str, cmd_uniq_str, cmd_rev_str, cmd_tac_str
         dd cmd_alias_str, cmd_history_str, cmd_which_str
@@ -3027,6 +3036,45 @@ cmd_shutdown:
 .halt_loop:
         hlt
         jmp .halt_loop
+
+;---------------------------------------
+; Command: reboot - Warm reboot the system
+;---------------------------------------
+cmd_reboot:
+        ; Print reboot banner
+        mov al, 0x0A
+        call vga_putchar
+        mov byte [vga_color], COLOR_HEADER
+        mov esi, msg_shutdown_bar
+        call vga_print
+        mov byte [vga_color], COLOR_INFO
+        mov esi, msg_reboot
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+
+        ; Small delay so user can see the message
+        mov ecx, 0x3FFFFFF
+.reboot_delay:
+        dec ecx
+        jnz .reboot_delay
+
+        ; Method 1: Pulse the 8042 keyboard controller reset line
+        cli
+        mov al, 0xFE
+        out 0x64, al
+
+        ; Method 2: Triple fault (if 8042 method didn't work)
+        lidt [.reboot_null_idt]
+        int 0
+
+        ; Should never reach here
+.reboot_halt:
+        hlt
+        jmp .reboot_halt
+
+.reboot_null_idt:
+        dw 0
+        dd 0
 
 ;---------------------------------------
 ; Command: cat - Display file contents

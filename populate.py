@@ -596,11 +596,11 @@ def main():
                 else:
                     fs.add_file(prog_name, data, directory="bin")
 
-    # Add C sample source files
+    # Add sample source files (.c, .pl)
     samples_dir = "samples"
     if os.path.isdir(samples_dir):
         for fname in sorted(os.listdir(samples_dir)):
-            if fname.endswith('.c'):
+            if fname.endswith('.c') or fname.endswith('.pl'):
                 fpath = os.path.join(samples_dir, fname)
                 with open(fpath, 'r', encoding='ascii') as f:
                     data = f.read()

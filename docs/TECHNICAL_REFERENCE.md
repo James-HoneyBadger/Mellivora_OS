@@ -709,7 +709,7 @@ Once detected, the LFB region (8 MB / 2048 pages) is identity-mapped via `paging
 
 ### Pixel Addressing
 
-```
+```text
 pixel_offset = y * pitch + x * Bpp + lfb_addr
 ```
 
@@ -1115,7 +1115,7 @@ When found, it reads BAR0 for the I/O base and the interrupt line for the IRQ nu
 
 #### Ethernet Frame
 
-```
+```text
 [dst MAC 6B][src MAC 6B][EtherType 2B][payload...][FCS 4B]
 ```
 
