@@ -105,6 +105,44 @@ syscall_handler:
         je sys_sockclose
         cmp eax, SYS_PING
         je sys_ping
+        cmp eax, SYS_SETDATE
+        je sys_setdate
+        cmp eax, SYS_AUDIO_PLAY
+        je sys_audio_play
+        cmp eax, SYS_AUDIO_STOP
+        je sys_audio_stop
+        cmp eax, SYS_AUDIO_STATUS
+        je sys_audio_status
+        cmp eax, SYS_KILL
+        je sys_kill
+        cmp eax, SYS_GETPID
+        je sys_getpid
+        cmp eax, SYS_CLIPBOARD_COPY
+        je sys_clipboard_copy
+        cmp eax, SYS_CLIPBOARD_PASTE
+        je sys_clipboard_paste
+        cmp eax, SYS_NOTIFY
+        je sys_notify
+        cmp eax, SYS_FILE_OPEN_DLG
+        je sys_file_open_dlg
+        cmp eax, SYS_FILE_SAVE_DLG
+        je sys_file_save_dlg
+        cmp eax, SYS_PIPE_CREATE
+        je sys_pipe_create
+        cmp eax, SYS_PIPE_WRITE
+        je sys_pipe_write
+        cmp eax, SYS_PIPE_READ
+        je sys_pipe_read
+        cmp eax, SYS_PIPE_CLOSE
+        je sys_pipe_close
+        cmp eax, SYS_SHMGET
+        je sys_shmget
+        cmp eax, SYS_SHMADDR
+        je sys_shmaddr
+        cmp eax, SYS_PROCLIST
+        je sys_proclist
+        cmp eax, SYS_MEMINFO
+        je sys_meminfo
 
         ; Unknown syscall
         mov eax, -1

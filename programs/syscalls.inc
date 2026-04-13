@@ -62,6 +62,30 @@ SYS_ACCEPT      equ 45          ; Accept: EBX=fd -> EAX=new_fd
 SYS_DNS         equ 46          ; DNS: EBX=hostname -> EAX=ip (0=fail)
 SYS_SOCKCLOSE   equ 47          ; Close socket: EBX=fd -> EAX=0
 SYS_PING        equ 48          ; Ping: EBX=ip -> EAX=rtt/-1
+SYS_SETDATE     equ 49          ; Set RTC: EBX=buf[sec,min,hr,day,mon,yr] ECX=century
+SYS_AUDIO_PLAY  equ 50          ; Play PCM: EBX=buf ECX=len EDX=fmt -> EAX=0/-1
+SYS_AUDIO_STOP  equ 51          ; Stop playback -> EAX=0
+SYS_AUDIO_STATUS equ 52         ; Query: -> EAX=state(0/1/2) EBX=present
+SYS_KILL        equ 53          ; Kill task: EBX=pid -> EAX=0/-1
+SYS_GETPID      equ 54          ; Get PID: -> EAX=pid
+SYS_CLIPBOARD_COPY  equ 55      ; Copy: EBX=buf ECX=len -> EAX=0
+SYS_CLIPBOARD_PASTE equ 56      ; Paste: EBX=buf ECX=maxlen -> EAX=len
+SYS_NOTIFY      equ 57          ; Notify: EBX=text EDX=color -> EAX=0
+SYS_FILE_OPEN_DLG equ 58        ; Open dialog: EBX=title EDX=filter -> EAX=1/0 ECX=name
+SYS_FILE_SAVE_DLG equ 59        ; Save dialog: EBX=title EDX=filter -> EAX=1/0 ECX=name
+SYS_PIPE_CREATE equ 60          ; Create pipe: -> EAX=pipe_id
+SYS_PIPE_WRITE  equ 61          ; Write pipe: EBX=id ECX=buf EDX=len -> EAX=written
+SYS_PIPE_READ   equ 62          ; Read pipe: EBX=id ECX=buf EDX=max -> EAX=read
+SYS_PIPE_CLOSE  equ 63          ; Close pipe: EBX=id -> EAX=0
+SYS_SHMGET      equ 64          ; Get shared mem: EBX=key ECX=size -> EAX=shm_id
+SYS_SHMADDR     equ 65          ; Get shm address: EBX=shm_id -> EAX=ptr
+SYS_PROCLIST    equ 66          ; Get task info: EBX=slot ECX=buf(16B) -> EAX=0/-1
+SYS_MEMINFO     equ 67          ; Get mem info: -> EAX=free_pages EBX=boot_free_pages
+
+; Audio format flags (for SYS_AUDIO_PLAY EDX)
+SB_FMT_16BIT    equ (1 << 16)
+SB_FMT_STEREO   equ (1 << 17)
+SB_FMT_SIGNED   equ (1 << 18)
 
 ; SYS_GUI sub-functions (EBX)
 GUI_CREATE_WINDOW  equ 0        ; ECX=x|y EDX=w|h ESI=title -> EAX=win_id
@@ -76,6 +100,13 @@ GUI_DRAW_LINE      equ 8        ; ECX=win_id EDX=x1|y1 ESI=x2|y2 EDI=color
 GUI_COMPOSE        equ 9        ; Compose desktop to backbuffer
 GUI_FLIP           equ 10       ; Flip backbuffer to screen
 GUI_DESKTOP        equ 11       ; Reserved
+GUI_DRAW_BUTTON    equ 20       ; ECX=win_id ESI=param_block
+GUI_DRAW_CHECKBOX  equ 21       ; ECX=win_id ESI=param_block
+GUI_DRAW_PROGRESS  equ 22       ; ECX=win_id ESI=param_block
+GUI_DRAW_TEXTBOX   equ 23       ; ECX=win_id ESI=param_block
+GUI_DRAW_LISTBOX   equ 24       ; ECX=win_id ESI=param_block
+GUI_DRAW_LABEL     equ 25       ; ECX=win_id ESI=param_block
+GUI_DRAW_RECT      equ 26       ; ECX=win_id ESI=param_block
 
 ; GUI event types
 EVT_NONE        equ 0

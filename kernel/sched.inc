@@ -30,7 +30,7 @@ TCB_PAD1     equ 24         ; Reserved
 TCB_PAD2     equ 28         ; Reserved
 TCB_SIZE     equ 32
 
-MAX_TASKS    equ 4
+MAX_TASKS    equ 16
 
 ;---------------------------------------
 ; sched_init - Initialize the scheduler
@@ -271,4 +271,105 @@ sys_yield:
         ; Couldn't switch — restore current task state and return
         popad
 .yield_nop:
+        iretd
+
+;---------------------------------------
+; sys_getpid - Return current task PID
+; Returns EAX = task PID (or -1 if shell)
+;---------------------------------------
+sys_getpid:
+        ; Find RUNNING task
+        mov edi, task_table
+        xor ecx, ecx
+.gp_find:
+        cmp ecx, MAX_TASKS
+        jge .gp_shell
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .gp_found
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .gp_find
+.gp_found:
+        mov eax, [edi + TCB_PID]
+        iretd
+.gp_shell:
+        mov eax, -1
+        iretd
+
+;---------------------------------------
+; sys_kill - Terminate task by PID
+;   EBX = PID to kill
+; Returns EAX = 0 on success, -1 on fail
+;---------------------------------------
+sys_kill:
+        pushad
+        ; Find task with matching PID
+        mov edi, task_table
+        xor ecx, ecx
+.sk_find:
+        cmp ecx, MAX_TASKS
+        jge .sk_fail
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .sk_next
+        cmp [edi + TCB_PID], ebx
+        je .sk_found
+.sk_next:
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .sk_find
+
+.sk_found:
+        ; Free the kernel stack page
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .sk_clear
+        sub eax, 4096
+        call pmm_free_page
+
+.sk_clear:
+        ; Clear the TCB
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_ESP], 0
+        mov dword [edi + TCB_KSTACK], 0
+        dec dword [task_count]
+
+        mov dword [esp + 28], 0    ; Return EAX=0
+        popad
+        iretd
+
+.sk_fail:
+        mov dword [esp + 28], -1   ; Return EAX=-1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_proclist - Get task info for a scheduler slot
+; EBX = slot index (0..MAX_TASKS-1)
+; ECX = pointer to 16-byte output buffer
+; Output buffer: [state(4), pid(4), entry(4), esp(4)]
+; Returns: EAX=0 on success, -1 if invalid slot
+;---------------------------------------
+sys_proclist:
+        pushad
+        cmp ebx, MAX_TASKS
+        jge .spl_fail
+        ; Calculate TCB address
+        mov edi, ebx
+        imul edi, TCB_SIZE
+        add edi, task_table
+        ; Fill output buffer
+        mov eax, [edi + TCB_STATE]
+        mov [ecx], eax
+        mov eax, [edi + TCB_PID]
+        mov [ecx + 4], eax
+        mov eax, [edi + TCB_ENTRY]
+        mov [ecx + 8], eax
+        mov eax, [edi + TCB_ESP]
+        mov [ecx + 12], eax
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.spl_fail:
+        mov dword [esp + 28], -1
+        popad
         iretd

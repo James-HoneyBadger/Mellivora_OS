@@ -1,7 +1,9 @@
 ; basic.asm - Tiny BASIC Interpreter for Mellivora OS
 ; Supports: PRINT, INPUT, LET, IF/THEN, GOTO, GOSUB/RETURN,
-;           FOR/NEXT, END, REM, LIST, RUN, NEW, LOAD, SAVE
+;           FOR/TO/STEP/NEXT, END, REM, LIST, RUN, NEW, LOAD, SAVE
+;           POKE, SLEEP, DIM, PEEK(), ABS(), TIME(), array access A(N)
 ; Variables: A-Z (26 integer variables)
+; Arrays: DIM A(size) — up to 4 arrays, 100 elements each
 ; Expressions: +, -, *, /, %, (, ), comparison (=, <, >, <=, >=, <>)
 ; String literals in PRINT with "..."
 ; Line numbers 1-9999
@@ -14,6 +16,8 @@ PROG_SIZE       equ MAX_LINES * (4 + MAX_LINE_LEN) ; linenum(4) + text
 GOSUB_DEPTH     equ 16
 FOR_DEPTH       equ 8
 INPUT_BUF_LEN   equ 80
+MAX_ARRAYS      equ 4
+ARRAY_MAX_SIZE  equ 100
 
 start:
         ; Print welcome
@@ -369,6 +373,12 @@ exec_statement:
         jc .es_done
         call try_beep_stmt
         jc .es_done
+        call try_poke
+        jc .es_done
+        call try_sleep
+        jc .es_done
+        call try_dim
+        jc .es_done
 
         ; Try implicit LET (A=5)
         call try_implicit_let
@@ -612,11 +622,13 @@ try_implicit_let:
         jl .til_fail
         cmp al, 'Z'
         jg .til_fail
-        ; Check next char is = or space then =
+        ; Check next char is = or space then = or ( for array
         push eax
         mov al, [esi + 1]
         cmp al, '='
         je .til_ok
+        cmp al, '('
+        je .til_ok              ; array assignment A(n)=expr
         cmp al, ' '
         jne .til_fail2
         mov al, [esi + 2]
@@ -640,9 +652,14 @@ do_assignment:
         call to_upper
         sub al, 'A'
         movzx ebx, al
+        inc esi
+
+        ; Check for array assignment: A(n) = expr
+        cmp byte [esi], '('
+        je .da_array
+
         shl ebx, 2
         push ebx
-        inc esi
         call skip_spc
         cmp byte [esi], '='
         jne .da_err
@@ -651,6 +668,54 @@ do_assignment:
         call eval_expr
         pop ebx
         mov [variables + ebx], eax
+        ret
+
+.da_array:
+        ; Array assignment
+        inc esi                 ; skip (
+        push ebx               ; var index
+        call eval_expr          ; index
+        cmp byte [esi], ')'
+        jne .da_arr_err
+        inc esi
+        call skip_spc
+        cmp byte [esi], '='
+        jne .da_arr_err
+        inc esi
+        call skip_spc
+        push eax               ; array index
+        call eval_expr          ; value
+        mov ecx, eax            ; value to store
+        pop eax                 ; array index
+        pop ebx                 ; var index
+        ; Find array
+        push esi
+        mov esi, array_table
+        mov edx, MAX_ARRAYS
+.da_arr_find:
+        cmp [esi], ebx
+        je .da_arr_store
+        add esi, 4 + ARRAY_MAX_SIZE * 4
+        dec edx
+        jnz .da_arr_find
+        pop esi
+        mov byte [run_error], ERR_SYNTAX
+        ret
+.da_arr_store:
+        cmp eax, 0
+        jl .da_arr_bad
+        cmp eax, ARRAY_MAX_SIZE
+        jge .da_arr_bad
+        mov [esi + 4 + eax * 4], ecx
+        pop esi
+        ret
+.da_arr_bad:
+        pop esi
+        mov byte [run_error], ERR_SYNTAX
+        ret
+.da_arr_err:
+        pop ebx
+        mov byte [run_error], ERR_SYNTAX
         ret
 .da_err:
         pop ebx
@@ -909,21 +974,40 @@ try_for:
         call eval_expr
         mov ecx, eax            ; end value
 
+        ; Check for STEP
+        push ecx
+        call skip_spc
+        push esi
+        mov edi, kw_step
+        call match_kw
+        jnc .tf_no_step
+        call eval_expr
+        mov ebp, eax            ; step value
+        add esp, 4              ; pop saved esi
+        pop ecx
+        jmp .tf_have_step
+.tf_no_step:
+        pop esi
+        pop ecx
+        mov ebp, 1              ; default step = 1
+.tf_have_step:
+
         pop edx                 ; var index
         pop eax                 ; start value
 
         ; Set variable to start
         mov [variables + edx * 4], eax
 
-        ; Push FOR frame
+        ; Push FOR frame (16 bytes: var, end, line, step)
         mov ebx, [for_sp]
         cmp ebx, FOR_DEPTH
         jge .tf_err
-        imul ebx, 12            ; 3 dwords per frame
+        shl ebx, 4              ; * 16 per frame
         mov [for_stack + ebx], edx          ; var index
         mov [for_stack + ebx + 4], ecx      ; end value
         mov eax, [current_line_idx]
         mov [for_stack + ebx + 8], eax      ; line index of FOR
+        mov [for_stack + ebx + 12], ebp     ; step value
         inc dword [for_sp]
 
         add esp, 4
@@ -965,7 +1049,7 @@ try_next:
         cmp eax, 0
         je .tn_err
         dec eax
-        imul eax, 12
+        shl eax, 4
         mov edx, [for_stack + eax]      ; var index from top frame
 
 .tn_check:
@@ -976,7 +1060,8 @@ try_next:
 
 .tn_search:
         dec eax
-        imul ebx, eax, 12
+        mov ebx, eax
+        shl ebx, 4
         cmp edx, [for_stack + ebx]
         je .tn_found
         cmp eax, 0
@@ -984,18 +1069,28 @@ try_next:
         jmp .tn_err
 
 .tn_found:
-        ; Increment variable
-        inc dword [variables + edx * 4]
+        ; Increment variable by STEP
+        mov ecx, [for_stack + ebx + 12]    ; step value
+        add [variables + edx * 4], ecx
         mov ecx, [variables + edx * 4]
-        mov ebx, [for_stack + ebx + 4]     ; end value
+        mov edi, [for_stack + ebx + 4]     ; end value
+        mov ebp, [for_stack + ebx + 12]    ; step
 
-        cmp ecx, ebx
+        ; For positive step: done if var > end
+        ; For negative step: done if var < end
+        cmp ebp, 0
+        jl .tn_neg_step
+        cmp ecx, edi
         jg .tn_done_loop
-
+        jmp .tn_continue
+.tn_neg_step:
+        cmp ecx, edi
+        jl .tn_done_loop
+.tn_continue:
         ; Loop back: set return to FOR line + 1
         mov eax, [for_sp]
         dec eax
-        imul eax, 12
+        shl eax, 4
         mov ebx, [for_stack + eax + 8]     ; FOR line index
         inc ebx
         mov [return_line_idx], ebx
@@ -1098,6 +1193,155 @@ try_beep_stmt:
         stc
         ret
 .tb_fail:
+        pop esi
+        clc
+        ret
+
+;---------------------------------------
+; POKE address, value
+;---------------------------------------
+try_poke:
+        push esi
+        mov edi, kw_poke
+        call match_kw
+        jnc .tpk_fail
+        call eval_expr
+        mov edx, eax            ; address
+        call skip_spc
+        cmp byte [esi], ','
+        jne .tpk_err
+        inc esi
+        call skip_spc
+        call eval_expr
+        ; Write byte
+        mov [edx], al
+        add esp, 4
+        stc
+        ret
+.tpk_err:
+        mov byte [run_error], ERR_SYNTAX
+        add esp, 4
+        stc
+        ret
+.tpk_fail:
+        pop esi
+        clc
+        ret
+
+;---------------------------------------
+; SLEEP expr (in centiseconds / ticks)
+;---------------------------------------
+try_sleep:
+        push esi
+        mov edi, kw_sleep
+        call match_kw
+        jnc .tsl_fail
+        call eval_expr
+        mov ebx, eax
+        mov eax, SYS_SLEEP
+        int 0x80
+        add esp, 4
+        stc
+        ret
+.tsl_fail:
+        pop esi
+        clc
+        ret
+
+;---------------------------------------
+; DIM var(size) - Allocate an array
+;---------------------------------------
+try_dim:
+        push esi
+        mov edi, kw_dim
+        call match_kw
+        jnc .tdm_fail
+
+        ; Get variable letter
+        mov al, [esi]
+        call to_upper
+        cmp al, 'A'
+        jl .tdm_err
+        cmp al, 'Z'
+        jg .tdm_err
+        sub al, 'A'
+        movzx edx, al
+        inc esi
+
+        ; Expect (size)
+        cmp byte [esi], '('
+        jne .tdm_err
+        inc esi
+        call eval_expr
+        cmp byte [esi], ')'
+        jne .tdm_err
+        inc esi
+
+        ; Clamp size to ARRAY_MAX_SIZE
+        cmp eax, ARRAY_MAX_SIZE
+        jle .tdm_size_ok
+        mov eax, ARRAY_MAX_SIZE
+.tdm_size_ok:
+        cmp eax, 1
+        jl .tdm_err
+
+        ; Find free array slot or existing for this var
+        push eax
+        push edx
+        mov edi, array_table
+        mov ecx, MAX_ARRAYS
+.tdm_find:
+        cmp dword [edi], edx
+        je .tdm_reinit
+        cmp dword [edi], -1
+        je .tdm_alloc
+        add edi, 4 + ARRAY_MAX_SIZE * 4
+        dec ecx
+        jnz .tdm_find
+        ; No free slot
+        pop edx
+        pop eax
+        mov byte [run_error], ERR_MEM
+        add esp, 4
+        stc
+        ret
+
+.tdm_alloc:
+        ; Allocate: set var id
+        pop edx
+        mov [edi], edx
+        jmp .tdm_zero
+
+.tdm_reinit:
+        pop edx                 ; discard
+
+.tdm_zero:
+        pop eax                 ; size
+        ; Zero the array data
+        push eax
+        push edi
+        add edi, 4
+        mov ecx, ARRAY_MAX_SIZE
+        push eax
+        xor eax, eax
+        rep stosd
+        pop eax
+        pop edi
+        ; Store size at last position (used for bounds checking)
+        ; We store it after the data: [edi + 4 + ARRAY_MAX_SIZE * 4 - 4]
+        ; Actually store at a known offset — just use the variable's dim size
+        ; We'll keep it simple: arrays are always ARRAY_MAX_SIZE elements
+        pop eax
+        add esp, 4
+        stc
+        ret
+
+.tdm_err:
+        mov byte [run_error], ERR_SYNTAX
+        add esp, 4
+        stc
+        ret
+.tdm_fail:
         pop esi
         clc
         ret
@@ -1477,7 +1721,8 @@ eval_atom:
         push esi
         mov edi, kw_rnd
         call match_kw
-        jnc .ea_err
+        jnc .ea_peek
+
         ; Expect (expr)
         cmp byte [esi], '('
         jne .ea_rnd_noarg
@@ -1502,6 +1747,111 @@ eval_atom:
         call random
         ret
 
+.ea_peek:
+        ; PEEK(addr) function
+        mov edi, kw_peek
+        call match_kw
+        jnc .ea_abs
+        cmp byte [esi], '('
+        jne .ea_peek_err
+        inc esi
+        call eval_expr
+        cmp byte [esi], ')'
+        jne .ea_peek_err
+        inc esi
+        movzx eax, byte [eax]
+        ret
+.ea_peek_err:
+        mov byte [run_error], ERR_SYNTAX
+        xor eax, eax
+        ret
+
+.ea_abs:
+        ; ABS(expr) function
+        mov edi, kw_abs
+        call match_kw
+        jnc .ea_time
+        cmp byte [esi], '('
+        jne .ea_abs_err
+        inc esi
+        call eval_expr
+        cmp byte [esi], ')'
+        jne .ea_abs_err
+        inc esi
+        cmp eax, 0
+        jge .ea_abs_done
+        neg eax
+.ea_abs_done:
+        ret
+.ea_abs_err:
+        mov byte [run_error], ERR_SYNTAX
+        xor eax, eax
+        ret
+
+.ea_time:
+        ; TIME function (returns tick count, no parens needed)
+        mov edi, kw_time
+        call match_kw
+        jnc .ea_arr
+        mov eax, SYS_GETTIME
+        int 0x80
+        ret
+
+.ea_arr:
+        ; Array access: A(expr)
+        ; Check if it's a variable letter followed by (
+        mov al, [esi]
+        call to_upper
+        cmp al, 'A'
+        jl .ea_err2
+        cmp al, 'Z'
+        jg .ea_err2
+        cmp byte [esi + 1], '('
+        jne .ea_err2
+        sub al, 'A'
+        movzx edx, al          ; var letter index
+        add esi, 2              ; skip letter and (
+        push edx
+        call eval_expr
+        pop edx
+        cmp byte [esi], ')'
+        jne .ea_arr_err
+        inc esi
+        ; Find array for variable edx
+        push esi
+        mov esi, array_table
+        mov ecx, MAX_ARRAYS
+.ea_arr_find:
+        cmp dword [esi], edx
+        je .ea_arr_got
+        add esi, 4 + ARRAY_MAX_SIZE * 4
+        dec ecx
+        jnz .ea_arr_find
+        pop esi
+        mov byte [run_error], ERR_SYNTAX
+        xor eax, eax
+        ret
+.ea_arr_got:
+        ; Check bounds
+        cmp eax, 0
+        jl .ea_arr_bounds
+        cmp eax, ARRAY_MAX_SIZE
+        jge .ea_arr_bounds
+        mov eax, [esi + 4 + eax * 4]
+        pop esi
+        ret
+.ea_arr_bounds:
+        pop esi
+        mov byte [run_error], ERR_SYNTAX
+        xor eax, eax
+        ret
+.ea_arr_err:
+        mov byte [run_error], ERR_SYNTAX
+        xor eax, eax
+        ret
+
+.ea_err2:
+        pop esi
 .ea_err:
         pop esi
         mov byte [run_error], ERR_SYNTAX
@@ -2085,10 +2435,17 @@ kw_cls:         db "CLS", 0
 kw_color:       db "COLOR", 0
 kw_beep:        db "BEEP", 0
 kw_rnd:         db "RND", 0
+kw_step:        db "STEP", 0
+kw_peek:        db "PEEK", 0
+kw_poke:        db "POKE", 0
+kw_abs:         db "ABS", 0
+kw_time:        db "TIME", 0
+kw_sleep:       db "SLEEP", 0
+kw_dim:         db "DIM", 0
 
 ; Messages
-msg_banner:     db "Mellivora Tiny BASIC v1.0", 0x0A
-                db "========================", 0x0A
+msg_banner:     db "Mellivora BASIC v2.0", 0x0A
+                db "====================", 0x0A
                 db "Type HELP for commands", 0x0A, 0
 msg_ready:      db "Ready.", 0x0A, 0
 msg_prompt:     db "] ", 0
@@ -2126,9 +2483,9 @@ run_error:      db 0
 gosub_sp:       dd 0
 gosub_stack:    times GOSUB_DEPTH dd 0
 
-; FOR stack (var_idx, end_val, line_idx per entry)
+; FOR stack (var_idx, end_val, line_idx, step per entry = 16 bytes)
 for_sp:         dd 0
-for_stack:      times FOR_DEPTH * 3 dd 0
+for_stack:      times FOR_DEPTH * 4 dd 0
 
 ; Buffers
 input_buf:      times INPUT_BUF_LEN + 1 db 0
@@ -2140,3 +2497,11 @@ program_area:   times PROG_SIZE db 0
 
 ; File I/O buffer
 file_buffer:    times 16384 db 0
+
+; Array table: MAX_ARRAYS entries, each = 4 (var_id) + ARRAY_MAX_SIZE*4 (data)
+; var_id = -1 means free
+array_table:
+%rep MAX_ARRAYS
+        dd -1                   ; var_id (-1 = free)
+        times ARRAY_MAX_SIZE dd 0
+%endrep

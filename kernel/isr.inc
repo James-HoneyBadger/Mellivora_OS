@@ -205,11 +205,25 @@ irq_keyboard:
         cmp bl, 0x1D            ; Left ctrl press
         je .ctrl_on
 
+        ; Check for alt press
+        cmp bl, 0x38            ; Left alt press
+        je .alt_on
+
         ; Check for shift press BEFORE ASCII lookup
         cmp bl, 0x2A            ; Left shift press
         je .shift_on
         cmp bl, 0x36            ; Right shift press
         je .shift_on
+
+        ; Check for Alt+Tab (Alt held + Tab scancode)
+        cmp bl, 0x0F            ; Tab scancode
+        jne .not_alt_tab
+        cmp byte [kb_alt], 1
+        jne .not_alt_tab
+        ; Inject Alt+Tab special code (0x8E) into keyboard buffer
+        mov al, 0x8E
+        jmp .store_key
+.not_alt_tab:
 
         ; Translate scancode to ASCII
         mov al, [scancode_table + ebx]
@@ -253,6 +267,7 @@ irq_keyboard:
         sti
         jmp shell_main
 .no_ctrl:
+.store_key:
         ; Check if buffer is full before writing
         mov ebx, [kb_write_idx]
         lea ecx, [ebx + 1]
@@ -274,10 +289,16 @@ irq_keyboard:
         or byte [kb_ctrl], 1
         jmp .eoi
 
+.alt_on:
+        or byte [kb_alt], 1
+        jmp .eoi
+
 .key_up:
         and al, 0x7F            ; Remove release bit
         cmp al, 0x1D
         je .ctrl_off
+        cmp al, 0x38
+        je .alt_off
         cmp al, 0x2A
         je .shift_off
         cmp al, 0x36
@@ -286,6 +307,10 @@ irq_keyboard:
 
 .ctrl_off:
         and byte [kb_ctrl], ~1
+        jmp .eoi
+
+.alt_off:
+        and byte [kb_alt], ~1
         jmp .eoi
 
 .shift_off:

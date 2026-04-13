@@ -810,10 +810,48 @@ fetch_http_page:
         call net_close
         mov eax, [response_len]
         mov byte [response_buf + eax], 0
+        ; Check for redirect (3xx)
+        call check_http_redirect
+        test eax, eax
+        jnz .do_redirect
+
+        ; Check for chunked transfer encoding
+        call check_chunked_encoding
+        test eax, eax
+        jnz .do_dechunk
+
         call parse_response_body
         mov esi, msg_loaded
         mov edi, status_buf
         call copy_zstr
+        mov byte [http_redir_count], 0
+        popad
+        ret
+
+.do_redirect:
+        ; ESI points to redirect URL from Location: header
+        inc byte [http_redir_count]
+        cmp byte [http_redir_count], http_redir_max
+        jg .redir_limit
+        call parse_url
+        popad
+        jmp fetch_http_page
+
+.redir_limit:
+        mov byte [http_redir_count], 0
+        mov esi, msg_redir_limit
+        mov edi, status_buf
+        call copy_zstr
+        popad
+        ret
+
+.do_dechunk:
+        call dechunk_response
+        call parse_response_body
+        mov esi, msg_loaded
+        mov edi, status_buf
+        call copy_zstr
+        mov byte [http_redir_count], 0
         popad
         ret
 
@@ -862,6 +900,236 @@ append_response:
         rep movsb
         add [response_len], edx
 .ar_done:
+        popad
+        ret
+
+;---------------------------------------
+; check_http_redirect - Check for 3xx redirect in response
+; Returns: EAX = 1 if redirect found, ESI = new URL location
+;          EAX = 0 if no redirect
+;---------------------------------------
+check_http_redirect:
+        push ebx
+        push ecx
+        push edx
+        mov esi, response_buf
+        ; Check "HTTP/1.x 3xx"
+        ; Skip to status code (after first space)
+.chr_skip:
+        cmp byte [esi], ' '
+        je .chr_got_space
+        cmp byte [esi], 0
+        je .chr_no
+        inc esi
+        jmp .chr_skip
+.chr_got_space:
+        inc esi
+        cmp byte [esi], '3'
+        jne .chr_no
+
+        ; It's a 3xx — find "Location:" header
+        mov esi, response_buf
+.chr_find_loc:
+        cmp byte [esi], 0
+        je .chr_no
+        ; Check for end of headers
+        cmp dword [esi], 0x0A0D0A0D
+        je .chr_no
+        ; Case-insensitive "Location: "
+        mov al, [esi]
+        or al, 0x20
+        cmp al, 'l'
+        jne .chr_next
+        mov al, [esi + 1]
+        or al, 0x20
+        cmp al, 'o'
+        jne .chr_next
+        mov al, [esi + 2]
+        or al, 0x20
+        cmp al, 'c'
+        jne .chr_next
+        mov al, [esi + 3]
+        or al, 0x20
+        cmp al, 'a'
+        jne .chr_next
+        cmp byte [esi + 9], ' '
+        jne .chr_next
+        ; Found "Location: " — ESI+10 is the URL
+        add esi, 10
+        ; Skip leading spaces
+.chr_skip_sp:
+        cmp byte [esi], ' '
+        jne .chr_got_url
+        inc esi
+        jmp .chr_skip_sp
+.chr_got_url:
+        ; Copy URL to address_buf (stop at CR/LF)
+        mov edi, address_buf
+        xor ecx, ecx
+.chr_copy_url:
+        mov al, [esi + ecx]
+        cmp al, 0x0D
+        je .chr_url_done
+        cmp al, 0x0A
+        je .chr_url_done
+        cmp al, 0
+        je .chr_url_done
+        mov [edi + ecx], al
+        inc ecx
+        cmp ecx, 255
+        jb .chr_copy_url
+.chr_url_done:
+        mov byte [edi + ecx], 0
+        mov esi, address_buf
+        mov eax, 1
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+.chr_next:
+        inc esi
+        jmp .chr_find_loc
+.chr_no:
+        xor eax, eax
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+;---------------------------------------
+; check_chunked_encoding - Check for "Transfer-Encoding: chunked"
+; Returns: EAX = 1 if chunked, 0 if not
+;---------------------------------------
+check_chunked_encoding:
+        push esi
+        push ecx
+        mov esi, response_buf
+.cce_loop:
+        cmp byte [esi], 0
+        je .cce_no
+        cmp dword [esi], 0x0A0D0A0D
+        je .cce_no
+        ; Check "chunked" (case-insensitive)
+        mov al, [esi]
+        or al, 0x20
+        cmp al, 'c'
+        jne .cce_next
+        mov al, [esi + 1]
+        or al, 0x20
+        cmp al, 'h'
+        jne .cce_next
+        mov al, [esi + 2]
+        or al, 0x20
+        cmp al, 'u'
+        jne .cce_next
+        mov al, [esi + 3]
+        or al, 0x20
+        cmp al, 'n'
+        jne .cce_next
+        mov al, [esi + 4]
+        or al, 0x20
+        cmp al, 'k'
+        jne .cce_next
+        mov al, [esi + 5]
+        or al, 0x20
+        cmp al, 'e'
+        jne .cce_next
+        mov al, [esi + 6]
+        or al, 0x20
+        cmp al, 'd'
+        jne .cce_next
+        mov eax, 1
+        pop ecx
+        pop esi
+        ret
+.cce_next:
+        inc esi
+        jmp .cce_loop
+.cce_no:
+        xor eax, eax
+        pop ecx
+        pop esi
+        ret
+
+;---------------------------------------
+; dechunk_response - Decode chunked transfer encoding in-place
+; Finds the body (after \r\n\r\n) and reassembles chunks
+;---------------------------------------
+dechunk_response:
+        pushad
+        ; Find body start
+        mov esi, response_buf
+        mov ecx, [response_len]
+.dc_find:
+        cmp ecx, 4
+        jb .dc_done
+        cmp dword [esi], 0x0A0D0A0D
+        je .dc_found
+        inc esi
+        dec ecx
+        jmp .dc_find
+.dc_found:
+        add esi, 4             ; skip \r\n\r\n
+        mov edi, esi           ; write pointer = body start
+
+        ; Process chunks
+.dc_chunk:
+        ; Parse hex chunk size
+        xor eax, eax
+.dc_hex:
+        movzx ebx, byte [esi]
+        cmp bl, '0'
+        jb .dc_hex_letter
+        cmp bl, '9'
+        jbe .dc_hex_digit
+.dc_hex_letter:
+        or bl, 0x20
+        cmp bl, 'a'
+        jb .dc_hex_done
+        cmp bl, 'f'
+        ja .dc_hex_done
+        sub bl, 'a' - 10
+        jmp .dc_hex_add
+.dc_hex_digit:
+        sub bl, '0'
+.dc_hex_add:
+        shl eax, 4
+        add eax, ebx
+        inc esi
+        jmp .dc_hex
+.dc_hex_done:
+        ; Skip \r\n after chunk size
+        cmp byte [esi], 0x0D
+        jne .dc_skip_lf
+        inc esi
+.dc_skip_lf:
+        cmp byte [esi], 0x0A
+        jne .dc_copy
+        inc esi
+
+.dc_copy:
+        ; eax = chunk size
+        test eax, eax
+        jz .dc_finalize         ; 0-size chunk = end
+        mov ecx, eax
+        rep movsb
+        ; Skip trailing \r\n
+        cmp byte [esi], 0x0D
+        jne .dc_no_cr
+        inc esi
+.dc_no_cr:
+        cmp byte [esi], 0x0A
+        jne .dc_chunk
+        inc esi
+        jmp .dc_chunk
+
+.dc_finalize:
+        ; Update response_len to new body end
+        mov eax, edi
+        sub eax, response_buf
+        mov [response_len], eax
+        mov byte [edi], 0
+.dc_done:
         popad
         ret
 
@@ -1629,9 +1897,12 @@ cursor_str:     db "_", 0
 links_label:    db "Links", 0
 home_prefix:    db "Home: ", 0
 http_prefix:    db "http://", 0
-http_proto:     db " HTTP/1.0", 0x0D, 0x0A, 0
+http_proto:     db " HTTP/1.1", 0x0D, 0x0A, 0
 host_hdr:       db "Host: ", 0
-conn_close:     db 0x0D, 0x0A, "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A, 0
+conn_close:     db 0x0D, 0x0A, "Connection: close", 0x0D, 0x0A
+                db "Accept: text/html, text/*", 0x0D, 0x0A, 0x0D, 0x0A, 0
+http_redir_max: equ 5
+http_redir_count: db 0
 cmd_ftp:        db "ftp", 0
 cmd_telnet:     db "telnet", 0
 cmd_gopher:     db "gopher", 0
@@ -1645,6 +1916,7 @@ msg_conn_fail:  db "Connection failed", 0
 msg_send_fail:  db "Send failed", 0
 msg_launch_fail: db "Could not launch external protocol handler", 0
 msg_home_set:   db "Home page set", 0
+msg_redir_limit: db "Too many redirects", 0
 
 win_id:         dd 0
 address_len:    dd 0

@@ -105,6 +105,23 @@ banner_str:
         db "          Mellivora OS - 32-bit Protected Mode Operating System          ", 0x0A
         db "       HB Lair v2.0 - Honey Badger Lair / i486+                        ", 0x0A, 0
 
+; Boot splash ASCII art
+splash_line1: db "                    .---.                                  ", 0x0A, 0
+splash_line2: db "                   / o o \        ___                     ", 0x0A, 0
+splash_line3: db "                  (   V   )      /   \                    ", 0x0A, 0
+splash_line4: db "                  /|     |\    /       \                  ", 0x0A, 0
+splash_line5: db "                 / |     | \  |  HONEY  |                 ", 0x0A, 0
+splash_line6: db "                /  |     |  \ | BADGER  |                 ", 0x0A, 0
+splash_line7: db "               `-._|     |_.-' \       /                  ", 0x0A, 0
+splash_line8: db "                   `-----'      `-----'                   ", 0x0A, 0x0A, 0
+
+splash_title:    db "              M E L L I V O R A    O S", 0x0A, 0
+splash_subtitle: db "           Honey Badger Edition  /  i486+", 0x0A, 0x0A, 0
+splash_version:  db "                 v2.1.0 - 32-bit Protected Mode", 0x0A, 0x0A, 0
+
+splash_bar_pre:  db "          Booting [", 0
+splash_bar_post: db "] Done!", 0x0A, 0
+
 version_text:
         db "Mellivora OS v2.0.0", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
@@ -199,6 +216,25 @@ cmd_ping_str:   db "ping", 0
 cmd_ifconfig_str: db "ifconfig", 0
 cmd_dhcp_str:   db "dhcp", 0
 cmd_arp_str:    db "arp", 0
+cmd_scrsaver_str: db "scrsaver", 0
+cmd_whoami_str: db "whoami", 0
+
+; Screensaver strings
+msg_scrsaver_set:  db "  Screensaver mode set to: ", 0
+msg_scrsaver_cur:  db "  Current screensaver mode: ", 0
+msg_scrsaver_help: db "  Usage: scrsaver [0-3]", 0x0A
+                   db "    0 = Starfield   1 = Matrix", 0x0A
+                   db "    2 = Pipes       3 = Bouncing logo", 0x0A, 0
+
+scr_mode_names:
+        dd scr_mode_0
+        dd scr_mode_1
+        dd scr_mode_2
+        dd scr_mode_3
+scr_mode_0: db "Starfield", 0
+scr_mode_1: db "Matrix", 0
+scr_mode_2: db "Pipes", 0
+scr_mode_3: db "Bouncing logo", 0
 
 ; Help text
 msg_help_no_detail:
@@ -362,6 +398,8 @@ msg_ata_none:   db "  ATA disk:      not detected", 0x0A, 0
 msg_shutdown_bar: db "===========================================================", 0x0A, 0
 msg_shutdown:   db "  Shutting down Mellivora OS...", 0x0A, 0
 msg_halt:       db "  System halted. You may power off now.", 0x0A, 0
+msg_shutdown_sync: db "  Syncing filesystem...", 0x0A, 0
+msg_shutdown_done: db "  Filesystem synced. Powering off...", 0x0A, 0
 msg_reboot:     db "  Rebooting Mellivora OS...", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0
 msg_cpu:        db "  CPU:           i486+ (32-bit protected mode)", 0x0A, 0
@@ -462,12 +500,15 @@ msg_sleeping:   db "Sleeping ", 0
 msg_sleep_sec:  db " seconds...", 0x0A, 0
 msg_color_set:  db "Color set.", 0x0A, 0
 msg_color_usage: db "Usage: color FG [BG] (hex 0-F)", 0x0A, 0
+msg_date_set:   db "Date/time updated: ", 0
+msg_date_usage: db "Usage: date [YYYY-MM-DD] [HH:MM[:SS]]", 0x0A, 0
 msg_alias_usage: db "Usage: alias NAME COMMAND", 0x0A, 0
 msg_no_aliases: db "No aliases defined.", 0x0A, 0
 msg_need_filename: db "Error: filename required", 0x0A, 0
 msg_need_2files: db "Usage: diff FILE1 FILE2", 0x0A, 0
 msg_file_not_found: db "File not found", 0x0A, 0
 msg_no_history: db "No command history.", 0x0A, 0
+msg_bad_hist: db "!: event not found", 0x0A, 0
 msg_table_full: db "Alias table full.", 0x0A, 0
 msg_file_colon: db ": ", 0
 msg_sleep_usage: db "Usage: sleep SECONDS", 0x0A, 0
@@ -566,6 +607,7 @@ serial_present: resb 1
 
 ; Keyboard ctrl state
 kb_ctrl:        resb 1
+kb_alt:         resb 1
 boot_kb_flushed: resb 1
 
 ; RTC time fields
@@ -799,5 +841,41 @@ net_dns_result_ip: resd 1
 net_dns_query_name: resd 1        ; pointer to query hostname
 net_dns_buf:      resb 512        ; DNS packet build buffer
 net_dns_cache:    resb 8 * 32     ; 8 entries * 32 bytes (28 name + 4 IP)
+
+; Sound Blaster 16 state
+sb16_present:     resb 1          ; 1 if SB16 detected
+sb16_state:       resb 1          ; 0=idle, 1=playing, 2=done
+sb16_version_major: resb 1
+sb16_version_minor: resb 1
+sb16_sample_rate: resd 1          ; Current sample rate
+sb16_buf_addr:    resd 1          ; DMA buffer physical address
+sb16_buf_len:     resd 1          ; DMA buffer length
+sb16_format:      resd 1          ; Format flags
+
+; Clipboard
+clipboard_buf:    resb 4096       ; 4 KB clipboard buffer
+clipboard_len:    resd 1          ; Current clipboard content length
+
+; Screensaver
+scr_idle_count:   resd 1          ; Idle tick counter
+scr_mode:         resb 1          ; Active screensaver mode (0-3)
+scr_rng_state:    resd 1          ; PRNG state
+scr_star_x:       resw SCR_NUM_STARS
+scr_star_y:       resw SCR_NUM_STARS
+scr_star_z:       resw SCR_NUM_STARS
+scr_matrix_pos:   resb SCR_MATRIX_COLS
+scr_matrix_spd:   resb SCR_MATRIX_COLS
+scr_matrix_chr:   resb SCR_MATRIX_COLS * SCR_MATRIX_ROWS
+scr_matrix_tick:  resb 1
+scr_pipe_x:       resd SCR_NUM_PIPES
+scr_pipe_y:       resd SCR_NUM_PIPES
+scr_pipe_dir:     resb SCR_NUM_PIPES
+scr_pipe_color:   resd SCR_NUM_PIPES
+scr_pipe_seg:     resb SCR_NUM_PIPES
+scr_pipe_frame:   resd 1
+scr_bounce_x:     resd 1
+scr_bounce_y:     resd 1
+scr_bounce_dx:    resd 1
+scr_bounce_dy:    resd 1
 
 bss_end:

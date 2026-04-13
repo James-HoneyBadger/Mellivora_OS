@@ -69,6 +69,8 @@ start:
         je .key_bs
         cmp bl, 19              ; Ctrl+S
         je .key_save
+        cmp bl, 15              ; Ctrl+O
+        je .key_open
         cmp bl, 32
         jl .main_loop
         cmp bl, 126
@@ -121,8 +123,65 @@ start:
         jmp .main_loop
 
 .key_save:
+        ; If no filename, pop Save dialog
+        cmp byte [arg_buf], 0
+        jne .key_save_go
+        mov eax, SYS_FILE_SAVE_DLG
+        mov ebx, .dlg_save_title
+        xor edx, edx            ; all types
+        int 0x80
+        test eax, eax
+        jz .main_loop           ; cancelled
+        ; Copy chosen name into arg_buf
+        mov esi, ecx
+        mov edi, arg_buf
+        mov ecx, 63
+.save_cp:
+        lodsb
+        stosb
+        test al, al
+        jz .key_save_go
+        dec ecx
+        jnz .save_cp
+        mov byte [edi], 0
+.key_save_go:
         call save_file
         jmp .main_loop
+
+.key_open:
+        mov eax, SYS_FILE_OPEN_DLG
+        mov ebx, .dlg_open_title
+        xor edx, edx            ; all types
+        int 0x80
+        test eax, eax
+        jz .main_loop           ; cancelled
+        ; Copy chosen name into arg_buf
+        mov esi, ecx
+        mov edi, arg_buf
+        mov ecx, 63
+.open_cp:
+        lodsb
+        stosb
+        test al, al
+        jz .open_load
+        dec ecx
+        jnz .open_cp
+        mov byte [edi], 0
+.open_load:
+        ; Clear text buf and reload
+        mov edi, text_buf
+        mov ecx, (MAX_LINES * LINE_LEN) / 4
+        xor eax, eax
+        rep stosd
+        mov dword [num_lines], 1
+        mov dword [cur_line], 0
+        mov dword [cur_col], 0
+        mov dword [scroll_y], 0
+        call load_file
+        jmp .main_loop
+
+.dlg_open_title: db "Open File", 0
+.dlg_save_title: db "Save As", 0
 
 .close:
         mov eax, [win_id]
@@ -537,7 +596,7 @@ strlen_from:
 
 ; Data
 title_str:      db "BEdit", 0
-status_str:     db "Ctrl+S:Save  ESC:Exit  Arrows:Move", 0
+status_str:     db "^O:Open ^S:Save  ESC:Exit  Arrows:Move", 0
 
 win_id:         dd 0
 cur_line:       dd 0

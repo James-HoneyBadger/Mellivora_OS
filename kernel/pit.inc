@@ -20,6 +20,8 @@ kb_init:
         mov dword [kb_read_idx], 0
         mov dword [kb_write_idx], 0
         mov byte [kb_shift], 0
+        mov byte [kb_ctrl], 0
+        mov byte [kb_alt], 0
         ret
 
 ; Read a key from buffer (blocking)

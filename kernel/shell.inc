@@ -197,6 +197,74 @@ shell_main:
         cmp ecx, 0
         je .prompt
 
+        ; --- History recall: !! and !n ---
+        cmp byte [line_buffer], '!'
+        jne .no_hist_recall
+        cmp byte [line_buffer+1], '!'
+        je .recall_last
+        ; Check for !n (digit)
+        movzx eax, byte [line_buffer+1]
+        cmp al, '0'
+        jb .no_hist_recall
+        cmp al, '9'
+        ja .no_hist_recall
+        ; Parse number from line_buffer+1
+        lea esi, [line_buffer+1]
+        xor eax, eax
+.parse_bang_n:
+        movzx edx, byte [esi]
+        cmp dl, '0'
+        jb .bang_n_done
+        cmp dl, '9'
+        ja .bang_n_done
+        imul eax, 10
+        sub dl, '0'
+        movzx edx, dl
+        add eax, edx
+        inc esi
+        jmp .parse_bang_n
+.bang_n_done:
+        ; EAX = 1-based history number
+        dec eax                 ; convert to 0-based index
+        cmp eax, 0
+        jl .bad_hist_ref
+        cmp eax, [hist_count]
+        jge .bad_hist_ref
+        jmp .do_recall
+
+.recall_last:
+        mov eax, [hist_count]
+        dec eax
+        cmp eax, 0
+        jl .bad_hist_ref
+
+.do_recall:
+        ; Copy hist_buf[eax] to line_buffer
+        imul eax, HIST_ENTRY_SIZE
+        lea esi, [hist_buf + eax]
+        mov edi, line_buffer
+        xor ecx, ecx
+.recall_copy:
+        lodsb
+        stosb
+        cmp al, 0
+        je .recall_show
+        inc ecx
+        jmp .recall_copy
+.recall_show:
+        ; Show the recalled command
+        mov esi, line_buffer
+        call vga_print
+        call vga_newline
+        jmp .no_hist_recall
+
+.bad_hist_ref:
+        mov esi, msg_bad_hist
+        call vga_print
+        jmp .prompt
+
+.no_hist_recall:
+
         ; Save to history
         call shell_save_history
 
@@ -919,6 +987,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_arp
 
+        mov edi, cmd_scrsaver_str
+        call str_starts_with
+        jc .cmd_scrsaver
+
+        mov edi, cmd_whoami_str
+        call str_starts_with
+        jc .cmd_whoami
+
         ; Unknown command - try to execute as program
         mov esi, line_buffer
         call cmd_exec_program
@@ -1274,6 +1350,12 @@ shell_dispatch_core:
         ret
 
 .cmd_date:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .cmd_date_show_only
+        call cmd_date_set
+        ret
+.cmd_date_show_only:
         call cmd_date_show
         ret
 
@@ -1398,6 +1480,20 @@ shell_dispatch_core:
         call gui_desktop_main
         ret
 
+.cmd_whoami:
+        cmp byte [login_authenticated], 1
+        je .whoami_show
+        mov esi, .whoami_none
+        call vga_print
+        ret
+.whoami_show:
+        mov esi, login_current_user
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        ret
+.whoami_none: db "Not logged in", 0x0A, 0
+
 .cmd_ping:
         call cmd_ping
         ret
@@ -1412,6 +1508,62 @@ shell_dispatch_core:
 
 .cmd_arp:
         call cmd_arp_show
+        ret
+
+.cmd_scrsaver:
+        mov esi, line_buffer
+        mov edi, cmd_scrsaver_str
+        call str_starts_with
+        call skip_spaces
+        cmp byte [esi], 0
+        je .scrsaver_show
+
+        ; Parse mode number (0-3)
+        movzx eax, byte [esi]
+        sub eax, '0'
+        cmp eax, 3
+        ja .scrsaver_usage
+        mov [scr_mode], al
+        mov esi, msg_scrsaver_set
+        call vga_print
+        movzx eax, byte [scr_mode]
+        add al, '0'
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        mov al, '('
+        call vga_putchar
+        movzx eax, byte [scr_mode]
+        mov esi, [scr_mode_names + eax*4]
+        call vga_print
+        mov al, ')'
+        call vga_putchar
+        call vga_newline
+        ret
+
+.scrsaver_show:
+        mov esi, msg_scrsaver_cur
+        call vga_print
+        movzx eax, byte [scr_mode]
+        add al, '0'
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        mov al, '('
+        call vga_putchar
+        movzx eax, byte [scr_mode]
+        mov esi, [scr_mode_names + eax*4]
+        call vga_print
+        mov al, ')'
+        call vga_putchar
+        call vga_newline
+        mov esi, msg_scrsaver_help
+        call vga_print
+        ret
+
+.scrsaver_usage:
+        mov esi, msg_scrsaver_help
+        call vga_print
         ret
 
 ;---------------------------------------
@@ -2303,6 +2455,8 @@ cmd_which:
         dd cmd_sleep_str, cmd_color_str, cmd_size_str, cmd_strings_str
         dd cmd_mouse_str
         dd cmd_gui_str
+        dd cmd_scrsaver_str
+        dd cmd_whoami_str
         dd 0
 
 ;---------------------------------------
@@ -3010,6 +3164,30 @@ cmd_shutdown:
         mov esi, msg_shutdown
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
+
+        ; Flush filesystem (write bitmap back to disk)
+        mov esi, msg_shutdown_sync
+        call vga_print
+        mov eax, HBFS_BITMAP_START
+        mov ecx, HBFS_BITMAP_SECTS
+        mov esi, hbfs_bitmap_buf
+        call ata_write_sectors
+
+        ; Flush ATA write cache
+        mov dx, ATA_CMD
+        mov al, 0xE7            ; FLUSH CACHE command
+        out dx, al
+        mov ecx, 0xFFFFF
+.flush_wait:
+        in al, dx
+        test al, 0x80           ; BSY?
+        jz .flush_ok
+        dec ecx
+        jnz .flush_wait
+.flush_ok:
+
+        mov esi, msg_shutdown_done
+        call vga_print
 
         ; Small delay so user can see the message
         mov ecx, 0x3FFFFFF

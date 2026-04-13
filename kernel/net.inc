@@ -104,7 +104,7 @@ TCP_LAST_ACK    equ 9
 TCP_TIME_WAIT   equ 10
 
 ; Socket constants
-MAX_SOCKETS     equ 8
+MAX_SOCKETS     equ 32
 SOCK_SIZE       equ 128
 SOCK_TCP        equ 1
 SOCK_UDP        equ 2
@@ -124,9 +124,13 @@ SOCK_SEND_LEN   equ 36          ; dword: bytes pending send
 SOCK_FLAGS      equ 40          ; dword: misc flags
 SOCK_TIMER      equ 44          ; dword: timeout tick count
 SOCK_PENDING    equ 48          ; byte: TCP flags to send from non-ISR context
+SOCK_RETX_SEQ   equ 52          ; dword: SEQ of unACKed data
+SOCK_RETX_LEN   equ 56          ; dword: length of unACKed data (0 = none)
+SOCK_RETX_TIMER equ 60          ; dword: tick count for retransmit timeout
+SOCK_RETX_COUNT equ 64          ; dword: retransmissions performed
 
 ; Socket buffer size
-SOCK_BUF_SIZE   equ 4096
+SOCK_BUF_SIZE   equ 8192
 
 ; ARP cache
 ARP_CACHE_SIZE  equ 16
@@ -1751,6 +1755,17 @@ tcp_handle:
         mov eax, [net_tcp_their_ack]
         mov [ebp + SOCK_SEQ], eax
 
+        ; Clear retransmission state if they ACKed our data
+        cmp dword [ebp + SOCK_RETX_LEN], 0
+        je .tcp_retx_clear_done
+        mov edx, [ebp + SOCK_RETX_SEQ]
+        add edx, [ebp + SOCK_RETX_LEN]
+        cmp eax, edx
+        jb .tcp_retx_clear_done
+        ; All data ACKed, cancel retransmit
+        mov dword [ebp + SOCK_RETX_LEN], 0
+.tcp_retx_clear_done:
+
         ; Calculate payload: total TCP segment - TCP header
         mov eax, [net_tcp_hdr_len]
         sub ecx, eax
@@ -1858,9 +1873,42 @@ tcp_handle:
 tcp_flush_pending:
         mov al, [ebp + SOCK_PENDING]
         test al, al
-        jz .tfp_none
+        jz .tfp_no_pending
         mov byte [ebp + SOCK_PENDING], 0
         call tcp_send_flags
+.tfp_no_pending:
+        ; Check retransmission timer
+        cmp dword [ebp + SOCK_RETX_LEN], 0
+        je .tfp_none
+        cmp dword [ebp + SOCK_STATE], TCP_ESTABLISHED
+        jne .tfp_none
+        mov eax, [tick_count]
+        cmp eax, [ebp + SOCK_RETX_TIMER]
+        jb .tfp_none
+        ; Timer expired — retransmit (max 3 attempts)
+        cmp dword [ebp + SOCK_RETX_COUNT], 3
+        jge .tfp_give_up
+        inc dword [ebp + SOCK_RETX_COUNT]
+        ; Reset SEQ to retransmit position
+        mov eax, [ebp + SOCK_RETX_SEQ]
+        mov [ebp + SOCK_SEQ], eax
+        ; Resend from send buffer
+        mov esi, [ebp + SOCK_SEND_BUF]
+        test esi, esi
+        jz .tfp_none
+        mov ecx, [ebp + SOCK_RETX_LEN]
+        call tcp_send_data
+        ; Double the timeout (exponential backoff: 3s, 6s, 12s)
+        mov eax, [tick_count]
+        mov ecx, [ebp + SOCK_RETX_COUNT]
+        mov edx, 300              ; base timeout
+        shl edx, cl               ; 300 << count
+        add eax, edx
+        mov [ebp + SOCK_RETX_TIMER], eax
+        jmp .tfp_none
+.tfp_give_up:
+        ; Too many retransmissions — clear state (connection likely dead)
+        mov dword [ebp + SOCK_RETX_LEN], 0
 .tfp_none:
         ret
 
@@ -1940,6 +1988,31 @@ tcp_send_data:
         pushad
         mov [net_tcp_data_ptr], esi
         mov [net_tcp_data_len], ecx
+
+        ; Save data to send buffer for retransmission
+        mov edi, [ebp + SOCK_SEND_BUF]
+        test edi, edi
+        jz .tsd_no_save
+        push ecx
+        push esi
+        cmp ecx, SOCK_BUF_SIZE
+        jle .tsd_save_ok
+        mov ecx, SOCK_BUF_SIZE
+.tsd_save_ok:
+        cld
+        rep movsb
+        pop esi
+        pop ecx
+        ; Record retransmission state
+        mov eax, [ebp + SOCK_SEQ]
+        mov [ebp + SOCK_RETX_SEQ], eax
+        mov [ebp + SOCK_RETX_LEN], ecx
+        mov dword [ebp + SOCK_RETX_COUNT], 0
+        ; Set retransmit timer: 3 seconds (300 ticks)
+        mov eax, [tick_count]
+        add eax, 300
+        mov [ebp + SOCK_RETX_TIMER], eax
+.tsd_no_save:
 
         mov edi, net_tcp_buf
 

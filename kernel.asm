@@ -221,6 +221,25 @@ SYS_ACCEPT          equ 45      ; Accept: EBX=fd -> EAX=new_fd
 SYS_DNS             equ 46      ; DNS resolve: EBX=hostname -> EAX=ip
 SYS_SOCKCLOSE       equ 47      ; Close socket: EBX=fd -> EAX=0
 SYS_PING            equ 48      ; Ping: EBX=ip -> EAX=rtt_ticks/-1
+SYS_SETDATE         equ 49      ; Set RTC: EBX=buf[s,m,h,d,mo,yr] ECX=century
+SYS_AUDIO_PLAY      equ 50      ; Play PCM: EBX=buf ECX=len EDX=fmt -> EAX=0/-1
+SYS_AUDIO_STOP      equ 51      ; Stop playback: -> EAX=0
+SYS_AUDIO_STATUS    equ 52      ; Query audio: -> EAX=state EBX=present
+SYS_KILL            equ 53      ; Kill task: EBX=pid -> EAX=0/-1
+SYS_GETPID          equ 54      ; Get PID: -> EAX=pid
+SYS_CLIPBOARD_COPY  equ 55      ; Copy to clipboard: EBX=buf ECX=len -> EAX=0
+SYS_CLIPBOARD_PASTE equ 56      ; Paste clipboard: EBX=buf ECX=maxlen -> EAX=len
+SYS_NOTIFY          equ 57      ; Post notification: EBX=text EDX=color -> EAX=0
+SYS_FILE_OPEN_DLG   equ 58      ; Open file dialog: EBX=title EDX=filter -> EAX=1/0 ECX=name_buf
+SYS_FILE_SAVE_DLG   equ 59      ; Save file dialog: EBX=title EDX=filter -> EAX=1/0 ECX=name_buf
+SYS_PIPE_CREATE     equ 60      ; Create pipe: -> EAX=pipe_id (-1=fail)
+SYS_PIPE_WRITE      equ 61      ; Write pipe: EBX=pipe_id ECX=buf EDX=len -> EAX=bytes_written
+SYS_PIPE_READ       equ 62      ; Read pipe: EBX=pipe_id ECX=buf EDX=maxlen -> EAX=bytes_read
+SYS_PIPE_CLOSE      equ 63      ; Close pipe: EBX=pipe_id -> EAX=0
+SYS_SHMGET          equ 64      ; Get shared mem: EBX=key ECX=size -> EAX=shm_id
+SYS_SHMADDR         equ 65      ; Get shm address: EBX=shm_id -> EAX=pointer
+SYS_PROCLIST        equ 66      ; Get task info: EBX=slot(0-15) ECX=buf(16 bytes) -> EAX=0/-1
+SYS_MEMINFO         equ 67      ; Get mem info: -> EAX=free_pages, EBX=total_free_pages_at_boot
 
 ; File descriptor constants
 FD_MAX              equ 8
@@ -288,9 +307,11 @@ kernel_entry:
         call serial_init
         call tss_init
         call sched_init
+        call ipc_init
         call net_init
         call paging_init
         call mouse_init
+        call sb16_init
         call vbe_init
         call burrows_init
 
@@ -307,10 +328,8 @@ kernel_entry:
         ; Enable interrupts
         sti
 
-        ; Print banner
-        mov esi, banner_str
-        call vga_print_color
-        mov byte [vga_color], COLOR_DEFAULT
+        ; Boot splash
+        call boot_splash
 
         ; Print system info
         call print_sysinfo
@@ -320,6 +339,92 @@ kernel_entry:
 
         ; Enter the command shell
         jmp shell_main
+
+;-----------------------------------------------------------------------
+; boot_splash - Animated boot splash with ASCII art
+;-----------------------------------------------------------------------
+boot_splash:
+        pushad
+
+        ; Clear screen
+        call vga_clear
+
+        ; Draw splash lines with color
+        mov byte [vga_color], 0x06      ; Brown/dark yellow
+        mov esi, splash_line1
+        call vga_print
+        mov esi, splash_line2
+        call vga_print
+        mov esi, splash_line3
+        call vga_print
+        mov esi, splash_line4
+        call vga_print
+        mov esi, splash_line5
+        call vga_print
+        mov esi, splash_line6
+        call vga_print
+        mov esi, splash_line7
+        call vga_print
+        mov esi, splash_line8
+        call vga_print
+
+        ; Title
+        mov byte [vga_color], 0x0F      ; Bright white
+        mov esi, splash_title
+        call vga_print
+
+        ; Subtitle
+        mov byte [vga_color], 0x0E      ; Yellow
+        mov esi, splash_subtitle
+        call vga_print
+
+        ; Version
+        mov byte [vga_color], 0x08      ; Dark gray
+        mov esi, splash_version
+        call vga_print
+
+        ; Boot progress bar
+        mov byte [vga_color], 0x0A      ; Light green
+        mov esi, splash_bar_pre
+        call vga_print
+
+        ; Animate the progress bar
+        mov ecx, 40
+.splash_bar_loop:
+        push ecx
+        mov al, 0xDB           ; Full block character
+        call vga_putchar
+        ; Small delay (~20ms per block = ~0.8s total)
+        mov ebx, [tick_count]
+        add ebx, 2
+.splash_delay:
+        cmp [tick_count], ebx
+        jl .splash_delay
+        pop ecx
+        dec ecx
+        jnz .splash_bar_loop
+
+        mov byte [vga_color], 0x0A
+        mov esi, splash_bar_post
+        call vga_print
+
+        ; Brief pause to admire
+        mov ebx, [tick_count]
+        add ebx, 50            ; 500ms
+.splash_pause:
+        cmp [tick_count], ebx
+        jl .splash_pause
+
+        ; Clear screen for shell
+        call vga_clear
+
+        ; Print the normal banner
+        mov esi, banner_str
+        call vga_print_color
+        mov byte [vga_color], COLOR_DEFAULT
+
+        popad
+        ret
 
 ;-----------------------------------------------------------------------
 ; Subsystem includes – each file corresponds to a logical kernel module.
@@ -337,11 +442,14 @@ kernel_entry:
 %include "kernel/filesearch.inc"
 %include "kernel/syscall.inc"
 %include "kernel/sched.inc"
+%include "kernel/ipc.inc"
 %include "kernel/net.inc"
 %include "kernel/paging.inc"
 %include "kernel/mouse.inc"
+%include "kernel/sb16.inc"
 %include "kernel/vbe.inc"
 %include "kernel/burrows.inc"
+%include "kernel/screensaver.inc"
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
 %include "kernel/data.inc"

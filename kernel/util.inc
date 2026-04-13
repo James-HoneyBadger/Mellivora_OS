@@ -721,6 +721,116 @@ rtc_read_time:
         popad
         ret
 
+;---------------------------------------
+; rtc_write_reg - Write value to RTC register
+; AL = register, AH = value
+;---------------------------------------
+rtc_write_reg:
+        out RTC_INDEX, al
+        jmp short $+2
+        mov al, ah
+        out RTC_DATA, al
+        ret
+
+;---------------------------------------
+; rtc_bin_to_bcd - Convert binary to BCD
+; AL = binary value -> AL = BCD
+;---------------------------------------
+rtc_bin_to_bcd:
+        push ecx
+        push edx
+        movzx eax, al
+        xor edx, edx
+        mov ecx, 10
+        div ecx             ; AL = tens, DL = ones
+        shl al, 4
+        or al, dl
+        pop edx
+        pop ecx
+        ret
+
+;---------------------------------------
+; rtc_write_time - Write rtc_* fields to CMOS RTC
+; Reads from rtc_sec, rtc_min, rtc_hour, rtc_day, rtc_month, rtc_year, rtc_century
+;---------------------------------------
+rtc_write_time:
+        pushad
+        ; Disable NMI and wait for update-in-progress to clear
+.wt_wait:
+        mov al, 0x0A
+        call rtc_read_reg
+        test al, 0x80
+        jnz .wt_wait
+
+        ; Read register B to check BCD/binary mode
+        mov al, 0x0B
+        call rtc_read_reg
+        push eax                ; save reg B
+
+        ; Set bit 7 of register B to inhibit updates during write
+        or al, 0x80
+        mov ah, al
+        mov al, 0x0B
+        call rtc_write_reg
+
+        ; Write seconds
+        mov al, [rtc_sec]
+        call rtc_bin_to_bcd
+        mov ah, al
+        mov al, 0x00
+        call rtc_write_reg
+
+        ; Write minutes
+        mov al, [rtc_min]
+        call rtc_bin_to_bcd
+        mov ah, al
+        mov al, 0x02
+        call rtc_write_reg
+
+        ; Write hours
+        mov al, [rtc_hour]
+        call rtc_bin_to_bcd
+        mov ah, al
+        mov al, 0x04
+        call rtc_write_reg
+
+        ; Write day of month
+        mov al, [rtc_day]
+        call rtc_bin_to_bcd
+        mov ah, al
+        mov al, 0x07
+        call rtc_write_reg
+
+        ; Write month
+        mov al, [rtc_month]
+        call rtc_bin_to_bcd
+        mov ah, al
+        mov al, 0x08
+        call rtc_write_reg
+
+        ; Write year (2-digit)
+        mov al, [rtc_year]
+        call rtc_bin_to_bcd
+        mov ah, al
+        mov al, 0x09
+        call rtc_write_reg
+
+        ; Write century
+        mov al, [rtc_century]
+        call rtc_bin_to_bcd
+        mov ah, al
+        mov al, 0x32
+        call rtc_write_reg
+
+        ; Restore register B (clears inhibit bit)
+        pop eax
+        mov ah, al
+        mov al, 0x0B
+        call rtc_write_reg
+
+        popad
+        ret
+
 ;=======================================================================
 ; PC SPEAKER
 ;=======================================================================
@@ -1677,6 +1787,122 @@ sys_date:
         pop esi
         iretd
 
+;---------------------------------------
+; SYS_SETDATE - Set RTC date/time
+; EBX = pointer to 6-byte buf: [sec, min, hour, day, month, year_2digit]
+; ECX = century (e.g. 20 for 2000s)
+; Returns: EAX = 0 on success
+;---------------------------------------
+sys_setdate:
+        push esi
+        mov al, [ebx]
+        mov [rtc_sec], al
+        mov al, [ebx + 1]
+        mov [rtc_min], al
+        mov al, [ebx + 2]
+        mov [rtc_hour], al
+        mov al, [ebx + 3]
+        mov [rtc_day], al
+        mov al, [ebx + 4]
+        mov [rtc_month], al
+        mov al, [ebx + 5]
+        mov [rtc_year], al
+        mov [rtc_century], cl
+        call rtc_write_time
+        xor eax, eax
+        pop esi
+        iretd
+
+;---------------------------------------
+; sys_clipboard_copy - Copy data to clipboard
+;   EBX = source buffer
+;   ECX = length (max 4096)
+; Returns: EAX = 0
+;---------------------------------------
+sys_clipboard_copy:
+        pushad
+        ; Clamp length to 4096
+        cmp ecx, 4096
+        jbe .cc_ok
+        mov ecx, 4096
+.cc_ok:
+        mov [clipboard_len], ecx
+        mov esi, ebx
+        mov edi, clipboard_buf
+        rep movsb
+        popad
+        xor eax, eax
+        iretd
+
+;---------------------------------------
+; sys_clipboard_paste - Paste from clipboard
+;   EBX = destination buffer
+;   ECX = max length
+; Returns: EAX = bytes copied
+;---------------------------------------
+sys_clipboard_paste:
+        pushad
+        mov ecx, [clipboard_len]
+        test ecx, ecx
+        jz .cp_done
+        ; Clamp to destination size (in EDX from original ECX)
+        ; ECX already has clipboard_len; original max was in ECX before pushad
+        mov eax, [esp + 24]     ; Original ECX (max len) from pushad frame
+        cmp ecx, eax
+        jbe .cp_copy
+        mov ecx, eax
+.cp_copy:
+        mov esi, clipboard_buf
+        mov edi, ebx
+        push ecx
+        rep movsb
+        pop ecx
+        mov [esp + 28], ecx     ; Return EAX = bytes copied
+        popad
+        iretd
+.cp_done:
+        mov dword [esp + 28], 0
+        popad
+        iretd
+
+;---------------------------------------
+; sys_notify - Post a desktop notification
+;   EBX = text string pointer
+;   EDX = color (0 = default blue)
+; Returns: EAX = 0
+;---------------------------------------
+sys_notify:
+        mov esi, ebx            ; gui_notify expects ESI=text, EDX=color
+        call gui_notify
+        xor eax, eax
+        iretd
+
+;---------------------------------------
+; SYS_FILE_OPEN_DLG (58): Show file open dialog
+; EBX = title string, EDX = type filter (0=all)
+; Returns: EAX = 1 if selected (0 if cancelled)
+;          ECX = pointer to fdlg_result (filename)
+;---------------------------------------
+sys_file_open_dlg:
+        mov esi, ebx
+        call gui_file_open_dialog
+        ; EAX already set by gui_file_open_dialog (1=ok, 0=cancel)
+        mov ecx, fdlg_result
+        iretd
+
+;---------------------------------------
+; SYS_FILE_SAVE_DLG (59): Show file save dialog
+; EBX = title string, EDX = type filter (0=all)
+; Returns: EAX = 1 if selected (0 if cancelled)
+;          ECX = pointer to fdlg_result (filename)
+;---------------------------------------
+sys_file_save_dlg:
+        mov esi, ebx
+        call gui_file_save_dialog
+        ; EAX already set by gui_file_save_dialog (1=ok, 0=cancel)
+        mov ecx, fdlg_result
+        iretd
+
 sys_chdir:
         push esi
         push edi
@@ -1709,6 +1935,16 @@ sys_serial_in:
         jne .si_ok
         mov eax, -1             ; Return -1 (0xFFFFFFFF) when no data
 .si_ok:
+        iretd
+
+;---------------------------------------
+; sys_meminfo - Return memory information
+; Returns: EAX = current free pages, EBX = initial free pages
+;---------------------------------------
+sys_meminfo:
+        call pmm_count_free
+        ; EAX = current free pages
+        mov ebx, [total_free_pages]     ; initial count at boot
         iretd
 
 sys_getenv:
@@ -2448,6 +2684,157 @@ cmd_date_show:
         call vga_print_dec
         ret
 
+;---------------------------------------
+; cmd_date_set - Set date/time from command line
+; ESI points to argument string: "YYYY-MM-DD HH:MM:SS"
+; Also accepts: "HH:MM:SS" (date unchanged) or "YYYY-MM-DD" (time set to 00:00:00)
+;---------------------------------------
+cmd_date_set:
+        pushad
+
+        ; First read current RTC so unchanged fields are preserved
+        call rtc_read_time
+
+        ; Check if first char is digit
+        cmp byte [esi], '0'
+        jb .ds_usage
+        cmp byte [esi], '9'
+        ja .ds_usage
+
+        ; Try to detect format: count digits before first non-digit
+        push esi
+        xor ecx, ecx
+.ds_count:
+        cmp byte [esi], '0'
+        jb .ds_counted
+        cmp byte [esi], '9'
+        ja .ds_counted
+        inc ecx
+        inc esi
+        jmp .ds_count
+.ds_counted:
+        pop esi
+
+        ; If first separator is ':', this is time-only (HH:MM:SS)
+        cmp byte [esi + ecx], ':'
+        je .ds_time_only
+
+        ; Parse YYYY-MM-DD
+        call .ds_parse_num      ; YYYY
+        mov ebx, eax
+        ; Extract century and year
+        xor edx, edx
+        mov ecx, 100
+        div ecx                 ; EAX = century, EDX = year
+        mov [rtc_century], al
+        mov [rtc_year], dl
+
+        cmp byte [esi], '-'
+        jne .ds_usage
+        inc esi
+
+        call .ds_parse_num      ; MM
+        cmp eax, 1
+        jb .ds_usage
+        cmp eax, 12
+        ja .ds_usage
+        mov [rtc_month], al
+
+        cmp byte [esi], '-'
+        jne .ds_usage
+        inc esi
+
+        call .ds_parse_num      ; DD
+        cmp eax, 1
+        jb .ds_usage
+        cmp eax, 31
+        ja .ds_usage
+        mov [rtc_day], al
+
+        ; Check if time follows
+        cmp byte [esi], ' '
+        jne .ds_set_time_zero
+        inc esi
+        cmp byte [esi], '0'
+        jb .ds_set_time_zero
+        cmp byte [esi], '9'
+        ja .ds_set_time_zero
+        jmp .ds_parse_time
+
+.ds_set_time_zero:
+        mov byte [rtc_hour], 0
+        mov byte [rtc_min], 0
+        mov byte [rtc_sec], 0
+        jmp .ds_write
+
+.ds_time_only:
+        ; Parse HH:MM:SS (date fields stay as current RTC)
+
+.ds_parse_time:
+        call .ds_parse_num      ; HH
+        cmp eax, 23
+        ja .ds_usage
+        mov [rtc_hour], al
+
+        cmp byte [esi], ':'
+        jne .ds_usage
+        inc esi
+
+        call .ds_parse_num      ; MM
+        cmp eax, 59
+        ja .ds_usage
+        mov [rtc_min], al
+
+        ; Seconds are optional
+        cmp byte [esi], ':'
+        jne .ds_no_sec
+        inc esi
+        call .ds_parse_num      ; SS
+        cmp eax, 59
+        ja .ds_usage
+        mov [rtc_sec], al
+        jmp .ds_write
+
+.ds_no_sec:
+        mov byte [rtc_sec], 0
+
+.ds_write:
+        call rtc_write_time
+
+        ; Show confirmation
+        mov byte [vga_color], COLOR_SUCCESS
+        mov esi, msg_date_set
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        call cmd_date_show
+        popad
+        ret
+
+.ds_usage:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_date_usage
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+
+; Parse decimal number from ESI -> EAX, advance ESI past digits
+.ds_parse_num:
+        xor eax, eax
+.ds_pn_loop:
+        movzx ecx, byte [esi]
+        cmp cl, '0'
+        jb .ds_pn_done
+        cmp cl, '9'
+        ja .ds_pn_done
+        imul eax, 10
+        sub cl, '0'
+        add eax, ecx
+        inc esi
+        jmp .ds_pn_loop
+.ds_pn_done:
+        ret
+
 cmd_beep:
         pushad
         mov ebx, 1000
@@ -3059,70 +3446,162 @@ shell_tab_complete:
         push ebp
         mov byte [line_buffer + ecx], 0
         mov [.tc_count], ecx
+
+        ; Determine if we're completing the first word (command) or argument (file)
+        ; If line_buffer has no space, we're on the first word
+        mov esi, line_buffer
+        xor eax, eax
+.tc_check_space:
+        mov al, [esi]
+        cmp al, 0
+        je .tc_first_word       ; No space found — completing command
+        cmp al, ' '
+        je .tc_file_word        ; Space found — completing filename argument
+        inc esi
+        jmp .tc_check_space
+
+.tc_first_word:
+        ; Complete against built-in commands + filesystem entries
+        xor ebx, ebx           ; Match count
+        xor ebp, ebp           ; Last match pointer
+
+        ; Scan built-in command table
+        mov esi, .tc_builtins
+.tc_cmd_scan:
+        mov edx, [esi]
+        test edx, edx
+        jz .tc_cmd_scan_done
+        ; Compare prefix
+        push esi
+        mov esi, line_buffer
+        mov edi, edx
+.tc_cmd_cmp:
+        mov al, [esi]
+        cmp al, 0
+        je .tc_cmd_match
+        cmp al, [edi]
+        jne .tc_cmd_no
+        inc esi
+        inc edi
+        jmp .tc_cmd_cmp
+.tc_cmd_match:
+        pop esi
+        inc ebx
+        mov ebp, edx            ; Last match = command string
+        add esi, 4
+        jmp .tc_cmd_scan
+.tc_cmd_no:
+        pop esi
+        add esi, 4
+        jmp .tc_cmd_scan
+.tc_cmd_scan_done:
+
+        ; Also scan current directory for files
+        push ebx
+        push ebp
         call hbfs_load_root_dir
+        pop ebp
+        pop ebx
         mov edi, hbfs_dir_buf
-        xor ebx, ebx
-        xor ebp, ebp
         call hbfs_get_max_entries
         mov edx, eax
-.tc_scan:
+.tc_fscan:
         cmp edx, 0
-        je .tc_result
+        je .tc_first_result
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
-        je .tc_next
+        je .tc_fnext
         push esi
         push edi
         mov esi, line_buffer
-.tc_cmp:
+.tc_fcmp:
         mov al, [esi]
         cmp al, 0
-        je .tc_match
+        je .tc_fmatch
         cmp al, [edi]
-        jne .tc_nomatch
+        jne .tc_fno
         inc esi
         inc edi
-        jmp .tc_cmp
-.tc_match:
+        jmp .tc_fcmp
+.tc_fmatch:
         pop edi
         pop esi
         inc ebx
         mov ebp, edi
-        jmp .tc_next
-.tc_nomatch:
+        jmp .tc_fnext
+.tc_fno:
         pop edi
         pop esi
-.tc_next:
+.tc_fnext:
         add edi, HBFS_DIR_ENTRY_SIZE
         dec edx
-        jmp .tc_scan
-.tc_result:
+        jmp .tc_fscan
+
+.tc_first_result:
         cmp ebx, 0
         je .tc_done
         cmp ebx, 1
         je .tc_single
+        ; Multiple matches — display them
         mov al, 0x0A
         call vga_putchar
+
+        ; Show built-in command matches
+        mov esi, .tc_builtins
+.tc_show_cmd:
+        mov edx, [esi]
+        test edx, edx
+        jz .tc_show_files
+        push esi
+        mov esi, line_buffer
+        mov edi, edx
+.tc_sc_cmp:
+        mov al, [esi]
+        cmp al, 0
+        je .tc_sc_yes
+        cmp al, [edi]
+        jne .tc_sc_no
+        inc esi
+        inc edi
+        jmp .tc_sc_cmp
+.tc_sc_yes:
+        pop esi
+        push esi
+        mov esi, edx
+        call vga_print
+        mov al, ' '
+        call vga_putchar
+        call vga_putchar
+        pop esi
+        add esi, 4
+        jmp .tc_show_cmd
+.tc_sc_no:
+        pop esi
+        add esi, 4
+        jmp .tc_show_cmd
+
+.tc_show_files:
+        ; Show filesystem matches
         mov edi, hbfs_dir_buf
         call hbfs_get_max_entries
         mov edx, eax
-.tc_show:
+.tc_sf_loop:
         cmp edx, 0
         je .tc_reprint
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
-        je .tc_snext
+        je .tc_sf_next
         push esi
         push edi
         mov esi, line_buffer
-.tc_scmp:
+.tc_sf_cmp:
         mov al, [esi]
         cmp al, 0
-        je .tc_syes
+        je .tc_sf_yes
         cmp al, [edi]
-        jne .tc_sno
+        jne .tc_sf_no
         inc esi
         inc edi
-        jmp .tc_scmp
-.tc_syes:
+        jmp .tc_sf_cmp
+.tc_sf_yes:
         pop edi
         pop esi
         push esi
@@ -3132,14 +3611,156 @@ shell_tab_complete:
         call vga_putchar
         call vga_putchar
         pop esi
-        jmp .tc_snext
-.tc_sno:
+        jmp .tc_sf_next
+.tc_sf_no:
         pop edi
         pop esi
-.tc_snext:
+.tc_sf_next:
         add edi, HBFS_DIR_ENTRY_SIZE
         dec edx
-        jmp .tc_show
+        jmp .tc_sf_loop
+
+        jmp .tc_reprint
+
+.tc_file_word:
+        ; Completing a filename argument (after first space)
+        ; Find the last word start (after last space)
+        mov esi, line_buffer
+        mov edi, esi            ; Last word start
+.tc_find_last:
+        mov al, [esi]
+        cmp al, 0
+        je .tc_found_last
+        cmp al, ' '
+        jne .tc_fl_next
+        lea edi, [esi + 1]     ; Word starts after space
+.tc_fl_next:
+        inc esi
+        jmp .tc_find_last
+.tc_found_last:
+        ; EDI = start of last word in line_buffer
+        mov [.tc_word_start], edi
+
+        ; Scan current directory for matches
+        push ebx
+        push ebp
+        call hbfs_load_root_dir
+        pop ebp
+        pop ebx
+        xor ebx, ebx           ; Match count
+        xor ebp, ebp           ; Last match
+
+        mov edi, hbfs_dir_buf
+        call hbfs_get_max_entries
+        mov edx, eax
+.tc_af_scan:
+        cmp edx, 0
+        je .tc_af_result
+        cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        je .tc_af_next
+        push esi
+        push edi
+        mov esi, [.tc_word_start]
+.tc_af_cmp:
+        mov al, [esi]
+        cmp al, 0
+        je .tc_af_match
+        cmp al, [edi]
+        jne .tc_af_no
+        inc esi
+        inc edi
+        jmp .tc_af_cmp
+.tc_af_match:
+        pop edi
+        pop esi
+        inc ebx
+        mov ebp, edi
+        jmp .tc_af_next
+.tc_af_no:
+        pop edi
+        pop esi
+.tc_af_next:
+        add edi, HBFS_DIR_ENTRY_SIZE
+        dec edx
+        jmp .tc_af_scan
+
+.tc_af_result:
+        cmp ebx, 0
+        je .tc_done
+        cmp ebx, 1
+        je .tc_af_single
+
+        ; Multiple matches — show them
+        mov al, 0x0A
+        call vga_putchar
+        mov edi, hbfs_dir_buf
+        call hbfs_get_max_entries
+        mov edx, eax
+.tc_af_show:
+        cmp edx, 0
+        je .tc_reprint
+        cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        je .tc_af_snext
+        push esi
+        push edi
+        mov esi, [.tc_word_start]
+.tc_af_scmp:
+        mov al, [esi]
+        cmp al, 0
+        je .tc_af_syes
+        cmp al, [edi]
+        jne .tc_af_sno
+        inc esi
+        inc edi
+        jmp .tc_af_scmp
+.tc_af_syes:
+        pop edi
+        pop esi
+        push esi
+        mov esi, edi
+        call vga_print
+        mov al, ' '
+        call vga_putchar
+        call vga_putchar
+        pop esi
+        jmp .tc_af_snext
+.tc_af_sno:
+        pop edi
+        pop esi
+.tc_af_snext:
+        add edi, HBFS_DIR_ENTRY_SIZE
+        dec edx
+        jmp .tc_af_show
+
+.tc_af_single:
+        ; Complete the single match
+        mov esi, ebp
+        ; Skip past the prefix already typed
+        mov edi, [.tc_word_start]
+.tc_af_skip:
+        cmp byte [edi], 0
+        je .tc_af_type
+        inc esi
+        inc edi
+        jmp .tc_af_skip
+.tc_af_type:
+        mov ecx, [.tc_count]
+.tc_af_copy:
+        lodsb
+        cmp al, 0
+        je .tc_af_space
+        mov [line_buffer + ecx], al
+        inc ecx
+        call vga_putchar
+        jmp .tc_af_copy
+.tc_af_space:
+        mov byte [line_buffer + ecx], ' '
+        inc ecx
+        mov al, ' '
+        call vga_putchar
+        mov [.tc_count], ecx
+        jmp .tc_done
+
 .tc_reprint:
         mov al, 0x0A
         call vga_putchar
@@ -3187,6 +3808,26 @@ shell_tab_complete:
         pop eax
         ret
 .tc_count: dd 0
+.tc_word_start: dd 0
+
+; Built-in command pointer table for tab completion
+.tc_builtins:
+        dd cmd_help_str, cmd_ver_str, cmd_clear_str, cmd_dir_str
+        dd cmd_ls_str, cmd_del_str, cmd_rm_str, cmd_format_str
+        dd cmd_cat_str, cmd_write_str, cmd_hex_str, cmd_mem_str
+        dd cmd_time_str, cmd_disk_str, cmd_run_str, cmd_enter_str
+        dd cmd_copy_str, cmd_ren_str, cmd_mv_str, cmd_move_str
+        dd cmd_df_str, cmd_more_str, cmd_echo_str, cmd_wc_str
+        dd cmd_find_str, cmd_append_str, cmd_date_str, cmd_beep_str
+        dd cmd_batch_str, cmd_mkdir_str, cmd_cd_str, cmd_pwd_str
+        dd cmd_touch_str, cmd_set_str, cmd_unset_str, cmd_shutdown_str
+        dd cmd_reboot_str, cmd_cls_str, cmd_head_str, cmd_tail_str
+        dd cmd_type_str, cmd_diff_str, cmd_uniq_str, cmd_rev_str
+        dd cmd_tac_str, cmd_alias_str, cmd_history_str, cmd_which_str
+        dd cmd_sleep_str, cmd_color_str, cmd_size_str, cmd_strings_str
+        dd cmd_mouse_str, cmd_gui_str, cmd_ping_str, cmd_ifconfig_str
+        dd cmd_dhcp_str, cmd_arp_str, cmd_scrsaver_str, cmd_net_str
+        dd 0
 
 ;=======================================================================
 ; UTILITY: String copy ESI -> EDI
