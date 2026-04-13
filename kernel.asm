@@ -328,9 +328,6 @@ kernel_entry:
         ; Enable interrupts
         sti
 
-        ; Boot splash
-        call boot_splash
-
         ; Print system info
         call print_sysinfo
 
@@ -342,90 +339,6 @@ kernel_entry:
 
 ;-----------------------------------------------------------------------
 ; boot_splash - Animated boot splash with ASCII art
-;-----------------------------------------------------------------------
-boot_splash:
-        pushad
-
-        ; Clear screen
-        call vga_clear
-
-        ; Draw splash lines with color
-        mov byte [vga_color], 0x06      ; Brown/dark yellow
-        mov esi, splash_line1
-        call vga_print
-        mov esi, splash_line2
-        call vga_print
-        mov esi, splash_line3
-        call vga_print
-        mov esi, splash_line4
-        call vga_print
-        mov esi, splash_line5
-        call vga_print
-        mov esi, splash_line6
-        call vga_print
-        mov esi, splash_line7
-        call vga_print
-        mov esi, splash_line8
-        call vga_print
-
-        ; Title
-        mov byte [vga_color], 0x0F      ; Bright white
-        mov esi, splash_title
-        call vga_print
-
-        ; Subtitle
-        mov byte [vga_color], 0x0E      ; Yellow
-        mov esi, splash_subtitle
-        call vga_print
-
-        ; Version
-        mov byte [vga_color], 0x08      ; Dark gray
-        mov esi, splash_version
-        call vga_print
-
-        ; Boot progress bar
-        mov byte [vga_color], 0x0A      ; Light green
-        mov esi, splash_bar_pre
-        call vga_print
-
-        ; Animate the progress bar
-        mov ecx, 40
-.splash_bar_loop:
-        push ecx
-        mov al, 0xDB           ; Full block character
-        call vga_putchar
-        ; Small delay (~20ms per block = ~0.8s total)
-        mov ebx, [tick_count]
-        add ebx, 2
-.splash_delay:
-        cmp [tick_count], ebx
-        jl .splash_delay
-        pop ecx
-        dec ecx
-        jnz .splash_bar_loop
-
-        mov byte [vga_color], 0x0A
-        mov esi, splash_bar_post
-        call vga_print
-
-        ; Brief pause to admire
-        mov ebx, [tick_count]
-        add ebx, 50            ; 500ms
-.splash_pause:
-        cmp [tick_count], ebx
-        jl .splash_pause
-
-        ; Clear screen for shell
-        call vga_clear
-
-        ; Print the normal banner
-        mov esi, banner_str
-        call vga_print_color
-        mov byte [vga_color], COLOR_DEFAULT
-
-        popad
-        ret
-
 ;-----------------------------------------------------------------------
 ; Subsystem includes – each file corresponds to a logical kernel module.
 ; The build still produces one flat binary; this split is for readability.

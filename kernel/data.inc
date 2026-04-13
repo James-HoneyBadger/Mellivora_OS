@@ -105,23 +105,6 @@ banner_str:
         db "          Mellivora OS - 32-bit Protected Mode Operating System          ", 0x0A
         db "       HB Lair v2.0 - Honey Badger Lair / i486+                        ", 0x0A, 0
 
-; Boot splash ASCII art
-splash_line1: db "                    .---.                                  ", 0x0A, 0
-splash_line2: db "                   / o o \        ___                     ", 0x0A, 0
-splash_line3: db "                  (   V   )      /   \                    ", 0x0A, 0
-splash_line4: db "                  /|     |\    /       \                  ", 0x0A, 0
-splash_line5: db "                 / |     | \  |  HONEY  |                 ", 0x0A, 0
-splash_line6: db "                /  |     |  \ | BADGER  |                 ", 0x0A, 0
-splash_line7: db "               `-._|     |_.-' \       /                  ", 0x0A, 0
-splash_line8: db "                   `-----'      `-----'                   ", 0x0A, 0x0A, 0
-
-splash_title:    db "              M E L L I V O R A    O S", 0x0A, 0
-splash_subtitle: db "           Honey Badger Edition  /  i486+", 0x0A, 0x0A, 0
-splash_version:  db "                 v2.1.0 - 32-bit Protected Mode", 0x0A, 0x0A, 0
-
-splash_bar_pre:  db "          Booting [", 0
-splash_bar_post: db "] Done!", 0x0A, 0
-
 version_text:
         db "Mellivora OS v2.0.0", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
