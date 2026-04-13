@@ -1,4 +1,4 @@
-; bcalc.asm - Burrows Calculator
+; bcalc.asm - BCalc - Burrows Calculator
 ; Clickable GUI calculator with basic operations.
 
 %include "syscalls.inc"
@@ -467,7 +467,7 @@ tmp_char:  db 0, 0
 btn_labels: db "789/456*123-0C=+"
 
 ; Data
-title_str:   db "Calculator", 0
+title_str:   db "BCalc", 0
 display:     times 16 db 0
 disp_len:    dd 1
 win_id:      dd 0

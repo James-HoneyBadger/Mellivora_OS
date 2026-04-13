@@ -269,7 +269,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 
 | Command | Description |
 | --- | --- |
-| `gui` | Launch the Burrows desktop environment |
+| `burrows` | Launch the Burrows desktop environment |
 
 ### Environment Variables
 
@@ -545,7 +545,7 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 
 | Program | Usage | Description |
 | --- | --- | --- |
-| `http` | `http <host>` | HTTP/1.0 GET client — fetch web pages |
+| `forager` | `forager <host>` | Web browser — fetch web pages |
 | `ping` | `ping <host>` | ICMP echo request with RTT display |
 | `telnet` | `telnet <host> [port]` | Interactive Telnet client |
 | `ftp` | `ftp <host> [port]` | FTP client with passive mode (ls, cd, get, put) |
@@ -627,14 +627,15 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 ### Burrows GUI Applications (7) — in `/bin`
 
 | Program | Description |
-| --- | --- |
-| `burrow` | Desktop environment launcher |
-| `bterm` | GUI terminal emulator |
-| `bedit` | GUI text editor |
-| `bfiles` | GUI file manager |
-| `bcalc` | GUI calculator |
-| `bpaint` | GUI paint application |
-| `bsysmon` | GUI system monitor |
+| --- | ---|
+| `burrows` | Desktop environment launcher |
+| `bterm` | BTerm GUI terminal emulator |
+| `bedit` | BEdit GUI text editor |
+| `bhive` | BHive GUI file manager |
+| `bforager` | BForager GUI web browser |
+| `bcalc` | BCalc GUI calculator |
+| `bpaint` | BPaint GUI paint application |
+| `bsysmon` | BSysMon GUI system monitor |
 
 ### The Text Editor (edit)
 
@@ -685,7 +686,7 @@ DNS: 10.0.2.3
 ### Browsing the Web
 
 ```text
-Lair:/> http example.com
+Lair:/> forager example.com
 Connecting to example.com...
 <!doctype html>
 <html>
@@ -694,7 +695,7 @@ Connecting to example.com...
 ...
 ```
 
-The HTTP client resolves hostnames via DNS, performs a TCP handshake, sends an
+Forager resolves hostnames via DNS, performs a TCP handshake, sends an
 HTTP/1.0 GET request, and displays the response body.
 
 ### Telnet Sessions
@@ -765,10 +766,10 @@ For complete networking documentation, see the [Networking Guide](NETWORKING_GUI
 Launch the windowed desktop with:
 
 ```text
-Lair:/> gui
+Lair:/> burrows
 ```
 
-Or run `burrow` from the command line.
+Or run `burrows` from the command line.
 
 ### Desktop Features
 
@@ -783,12 +784,13 @@ Or run `burrow` from the command line.
 
 | Application | Description |
 | --- | --- |
-| **Terminal** (`bterm`) | GUI terminal emulator with shell access |
-| **Editor** (`bedit`) | GUI text editor with file open/save |
-| **Files** (`bfiles`) | GUI file manager with directory browsing |
-| **Calculator** (`bcalc`) | GUI calculator with button interface |
-| **Paint** (`bpaint`) | Drawing application with color palette |
-| **System Monitor** (`bsysmon`) | GUI task and memory monitor |
+| **BTerm** (`bterm`) | GUI terminal emulator with shell access |
+| **BEdit** (`bedit`) | GUI text editor with file open/save |
+| **BHive** (`bhive`) | GUI file manager with directory browsing |
+| **BForager** (`bforager`) | GUI web browser with clickable links |
+| **BCalc** (`bcalc`) | GUI calculator with button interface |
+| **BPaint** (`bpaint`) | Drawing application with color palette |
+| **BSysMon** (`bsysmon`) | GUI task and memory monitor |
 
 ### Returning to Text Mode
 
@@ -916,7 +918,7 @@ D=LightMagenta, E=Yellow, F=White
 ### Networking Quick Start
 
 ```text
-Lair:/> dhcp && http example.com     # Get IP, then fetch a page
+Lair:/> dhcp && forager example.com  # Get IP, then fetch a page
 Lair:/> dhcp && ping 8.8.8.8         # Get IP, then ping Google DNS
 ```
 

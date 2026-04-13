@@ -1,4 +1,4 @@
-; bpaint.asm - Burrows Paint
+; bpaint.asm - BPaint - Burrows Paint
 ; Freehand mouse drawing with color selection palette.
 
 %include "syscalls.inc"
@@ -289,7 +289,7 @@ render_palette:
         ret
 
 ; ---- Data ----
-title_str:      db "Paint", 0
+title_str:      db "BPaint", 0
 full_str:       db "FULL!", 0
 hint1_str:      db "1-9:Col", 0
 hint2_str:      db "C:Clr", 0

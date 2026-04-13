@@ -75,7 +75,7 @@ programs, and 11 C samples — all written in x86 assembly.
 - **Socket API** — 10 syscalls: socket, connect, send,
   recv, bind, listen, accept, dns, close, ping
 - **5 shell commands**: `net`, `dhcp`, `ping`, `arp`, `ifconfig`
-- **7 network programs**: HTTP client, Telnet, FTP, Gopher, Ping, Mail, News
+- **7 network programs**: Forager web browser, Telnet, FTP, Gopher, Ping, Mail, News
 
 ### Burrows Desktop Environment
 
@@ -87,7 +87,7 @@ programs, and 11 C samples — all written in x86 assembly.
 - **3 built-in themes** — Dark, Light, Classic
 - **GUI syscall API** — 12 sub-functions for windows,
   drawing, events, and compositing
-- **6 GUI applications**: terminal, text editor,
+- **7 GUI applications**: terminal, text editor,
   file manager, calculator, paint, system monitor
 
 ### HB Lair Shell
@@ -154,7 +154,7 @@ programs, and 11 C samples — all written in x86 assembly.
 
 | Program | Description |
 | --------- | ------------- |
-| `http` | HTTP client — fetch web pages (tested: example.com) |
+| `forager` | Web browser — fetch web pages (tested: example.com) |
 | `ping` | ICMP echo request with RTT display |
 | `telnet` | Interactive Telnet client |
 | `ftp` | FTP client with passive mode (ls, cd, get, put) |
@@ -236,18 +236,19 @@ programs, and 11 C samples — all written in x86 assembly.
 | `yes` | Print "y" continuously |
 | `tee` | Split output to file and stdout |
 | `uptime` | Show system uptime |
-| `burrow` | Desktop environment launcher |
+| `burrows` | Desktop environment launcher |
 
-### Burrows GUI Applications (6)
+### Burrows GUI Applications (7)
 
 | Program | Description |
 | --------- | ------------- |
-| `bterm` | GUI terminal emulator |
-| `bedit` | GUI text editor |
-| `bfiles` | GUI file manager |
-| `bcalc` | GUI calculator |
-| `bpaint` | GUI paint application |
-| `bsysmon` | GUI system monitor |
+| `bterm` | BTerm GUI terminal emulator |
+| `bedit` | BEdit GUI text editor |
+| `bhive` | BHive GUI file manager |
+| `bforager` | BForager GUI web browser |
+| `bcalc` | BCalc GUI calculator |
+| `bpaint` | BPaint GUI paint application |
+| `bsysmon` | BSysMon GUI system monitor |
 
 ### C Samples (11)
 
@@ -310,8 +311,8 @@ Lair:/> dir                        # List files and directories
 Lair:/> snake                      # Play Snake
 Lair:/> tcc /samples/hello.c       # Compile and run a C program
 Lair:/> dhcp                       # Get an IP via DHCP
-Lair:/> http example.com           # Fetch a web page
-Lair:/> gui                        # Launch the Burrows desktop
+Lair:/> forager example.com        # Fetch a web page
+Lair:/> burrows                    # Launch the Burrows desktop
 ```
 
 ---
@@ -404,7 +405,7 @@ Programs in `/bin` and `/games` are in the default
 | Command | Description |
 | --------- | ------------- |
 | `make full` | Full build: boot + kernel + programs + FS |
-| `make run` | Launch in QEMU (i486 CPU, 128 MB RAM, audio, networking) |
+| `make run` | Launch in QEMU (i486 CPU, 128 MB RAM, networking, host-aware audio backend) |
 | `make debug` | Launch with QEMU monitor on stdio for debugging |
 | `make iso` | Create bootable ISO image with documentation |
 | `make check` | Run the full regression suite (709 tests) |

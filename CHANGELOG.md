@@ -53,7 +53,7 @@ The former RTL8139 networking stub has been replaced with a complete, from-scrat
 
 ### Programs — 7 New Internet Clients + Network Library
 
-- **http** — HTTP/1.0 client. Connects to port 80, sends GET request, displays response body. Tested end-to-end with `http example.com` in QEMU.
+- **forager** — HTTP/1.0 web browser. Connects to port 80, sends GET request, displays response body. Tested end-to-end with `forager example.com` in QEMU.
 - **ping** — Standalone ICMP ping utility with configurable count, TTL display, and RTT statistics.
 - **telnet** — Interactive Telnet client with raw TCP socket communication and escape sequences.
 - **ftp** — FTP client with passive mode, directory listing, file get/put, and cd/ls commands.

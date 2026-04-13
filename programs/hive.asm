@@ -1,5 +1,5 @@
 ;=======================================================================
-; burrow.asm - HB Burrow - File Manager TUI for Mellivora OS
+; hive.asm - HB Hive - File Manager TUI for Mellivora OS
 ;
 ; A Midnight Commander-style dual-pane file browser.
 ;
@@ -1234,7 +1234,7 @@ vga_show_cursor:
 ;=======================================================================
 section .data
 
-s_title:  db " HB Burrow - File Manager                                 Tab:Switch  Ctrl+Q:Quit", 0
+s_title:  db " HB Hive - File Manager                                   Tab:Switch  Ctrl+Q:Quit", 0
 s_root:   db "/", 0
 s_blank:  db "                                                                                ", 0
 

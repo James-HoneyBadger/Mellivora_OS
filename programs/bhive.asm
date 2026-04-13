@@ -1,4 +1,4 @@
-; bfiles.asm - Burrows File Manager
+; bhive.asm - BHive - Burrows GUI File Manager
 ; Browse files in the current directory with a GUI window.
 
 %include "syscalls.inc"
@@ -261,9 +261,9 @@ load_dir:
         ret
 
 ; Data
-title_str:      db "Files", 0
-hdr_str:        db "Current Directory", 0
-count_label:    db "Files:", 0
+title_str:      db "BHive", 0
+hdr_str:        db "BHive Directory", 0
+count_label:    db "Items:", 0
 scroll_hint:    db "Up/Down to scroll", 0
 
 win_id:         dd 0

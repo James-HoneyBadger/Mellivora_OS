@@ -607,7 +607,7 @@ IP Address       MAC Address        State
 Several programs use the network. Make sure DHCP has completed first:
 
 ```text
-Lair:/> http example.com           → Fetch a web page via HTTP
+Lair:/> forager example.com        → Fetch a web page via HTTP
 Lair:/> dns example.com            → Resolve a hostname
 Lair:/> nslookup google.com        → DNS lookup
 Lair:/> netstat                    → Show open sockets
@@ -651,12 +651,13 @@ taskbar at the bottom, and a "Menu" button.
 | About | Shows OS version information |
 | Clock | Displays the current time |
 | Settings | Change the desktop theme |
-| Calculator (bcalc) | GUI calculator |
-| Text Editor (bedit) | Graphical text editor |
-| File Manager (bfiles) | Browse and manage files |
-| Paint (bpaint) | Pixel art drawing tool |
-| System Monitor (bsysmon) | Real-time CPU and memory stats |
-| Terminal (bterm) | Terminal emulator inside the desktop |
+| BCalc (bcalc) | GUI calculator |
+| BEdit (bedit) | Graphical text editor |
+| BHive (bhive) | Browse and manage files |
+| BForager (bforager) | GUI web browser |
+| BPaint (bpaint) | Pixel art drawing tool |
+| BSysMon (bsysmon) | Real-time CPU and memory stats |
+| BTerm (bterm) | Terminal emulator inside the desktop |
 
 ### Changing Themes
 

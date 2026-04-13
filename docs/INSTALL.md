@@ -163,6 +163,21 @@ that space in the output binary.
 make run
 ```
 
+`make run` now selects a host-compatible QEMU audio backend automatically:
+
+| Host OS | Default backend |
+| ------- | --------------- |
+| Linux | `none` (safe default across distros) |
+| macOS | `coreaudio` |
+
+If your local QEMU supports a different Linux backend, you can override it:
+
+```bash
+make run QEMU_AUDIO_BACKEND=alsa
+# or
+make run QEMU_AUDIO_BACKEND=pa
+```
+
 ### Booting the ISO in QEMU
 
 ```bash

@@ -1,4 +1,4 @@
-; bsysmon.asm - Burrows System Monitor
+; bsysmon.asm - BSysMon - Burrows System Monitor
 ; Displays system information: uptime, memory, disk stats.
 
 %include "syscalls.inc"
@@ -259,7 +259,7 @@ byte_to_dec:
         ret
 
 ; ---- Data ----
-title_str:      db "System Monitor", 0
+title_str:      db "BSysMon", 0
 hdr_str:        db "System Information", 0
 
 lbl_os:         db "OS:", 0

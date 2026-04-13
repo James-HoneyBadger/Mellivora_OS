@@ -42,7 +42,7 @@ PING 10.0.2.2:
 You now have a working network connection. Try fetching a web page:
 
 ```text
-Lair:/> http example.com
+Lair:/> forager example.com
 Connecting to example.com...
 <!doctype html>
 <html>
@@ -198,17 +198,17 @@ PING 93.184.216.34:
 --- Ping statistics: 4/4 packets received
 ```
 
-### http — HTTP Client
+### forager — Web Browser
 
 ```text
-Usage: http <url>
+Usage: forager <url>
 ```
 
 Fetches a web page via HTTP/1.0 GET and prints the response body. The URL can include
 an optional `http://` prefix, port number, and path.
 
 ```text
-Lair:/> http example.com
+Lair:/> forager example.com
 Connecting to example.com...
 <!doctype html>
 <html>
@@ -219,10 +219,10 @@ Connecting to example.com...
 
 URL formats accepted:
 
-- `http example.com` — GET `/` on port 80
-- `http example.com/page.html` — GET `/page.html` on port 80
-- `http example.com:8080/api` — GET `/api` on port 8080
-- `http http://example.com/path` — `http://` prefix is stripped
+- `forager example.com` — GET `/` on port 80
+- `forager example.com/page.html` — GET `/page.html` on port 80
+- `forager example.com:8080/api` — GET `/api` on port 8080
+- `forager http://example.com/path` — `http://` prefix is stripped
 
 ### telnet — Interactive Telnet Client
 

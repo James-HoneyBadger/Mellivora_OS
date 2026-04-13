@@ -66,7 +66,7 @@ EVT_CLOSE       equ 4
 GUI_MENU_X      equ 4
 GUI_MENU_W      equ 160
 GUI_MENU_ITEM_H equ 24
-GUI_MENU_ITEMS  equ 10
+GUI_MENU_ITEMS  equ 11
 
 ; Theme struct offsets (12 colors x 4 bytes = 48 bytes)
 THEME_DESKTOP_BG        equ 0
@@ -231,6 +231,7 @@ gui_exit_desktop:
 
         ; Restore text mode
         call vbe_restore_text
+        call vga_init
         popad
         ret
 
@@ -280,7 +281,7 @@ ICON_CELL_H     equ 64          ; grid cell height
 ICON_START_X    equ 20          ; first column x
 ICON_START_Y    equ 16          ; first row y
 ICON_COLS       equ 1           ; single column of icons
-ICON_COUNT      equ 6           ; number of desktop icons
+ICON_COUNT      equ 7           ; number of desktop icons
 
 ;---------------------------------------
 ; gui_draw_desktop_icons - Draw icons on desktop surface
@@ -1719,20 +1720,22 @@ gui_menu_select:
         cmp eax, 1
         je .ms_files
         cmp eax, 2
-        je .ms_edit
+        je .ms_forager
         cmp eax, 3
-        je .ms_calc
+        je .ms_edit
         cmp eax, 4
-        je .ms_paint
+        je .ms_calc
         cmp eax, 5
-        je .ms_clock
+        je .ms_paint
         cmp eax, 6
-        je .ms_settings
+        je .ms_clock
         cmp eax, 7
-        je .ms_sysmon
+        je .ms_settings
         cmp eax, 8
-        je .ms_about
+        je .ms_sysmon
         cmp eax, 9
+        je .ms_about
+        cmp eax, 10
         je .ms_exit
         popad
         ret
@@ -1742,7 +1745,12 @@ gui_menu_select:
         popad
         ret
 .ms_files:
-        mov esi, gui_prog_bfiles
+        mov esi, gui_prog_bhive
+        call gui_launch_app
+        popad
+        ret
+.ms_forager:
+        mov esi, gui_prog_bforager
         call gui_launch_app
         popad
         ret
@@ -2342,7 +2350,7 @@ gui_ctx_select:
         popad
         ret
 .cx_files:
-        mov esi, gui_prog_bfiles
+        mov esi, gui_prog_bhive
         call gui_launch_app
         popad
         ret
@@ -3436,20 +3444,22 @@ gui_str_set_cur:    db "Current Theme", 0
 gui_str_set_instr:  db "Click or press 1/2/3", 0
 
 ; Menu item strings
-gui_str_m_term:     db "Terminal", 0
-gui_str_m_files:    db "Files", 0
-gui_str_m_edit:     db "Editor", 0
-gui_str_m_calc:     db "Calculator", 0
-gui_str_m_paint:    db "Paint", 0
+gui_str_m_term:     db "BTerm", 0
+gui_str_m_files:    db "BHive", 0
+gui_str_m_forager:  db "BForager", 0
+gui_str_m_edit:     db "BEdit", 0
+gui_str_m_calc:     db "BCalc", 0
+gui_str_m_paint:    db "BPaint", 0
 gui_str_m_clock:    db "Clock", 0
 gui_str_m_settings: db "Settings", 0
-gui_str_m_sysmon:   db "System Monitor", 0
+gui_str_m_sysmon:   db "BSysMon", 0
 gui_str_m_about:    db "About", 0
 gui_str_m_exit:     db "Exit Desktop", 0
 
 gui_menu_strings:
         dd gui_str_m_term
         dd gui_str_m_files
+        dd gui_str_m_forager
         dd gui_str_m_edit
         dd gui_str_m_calc
         dd gui_str_m_paint
@@ -3461,19 +3471,20 @@ gui_menu_strings:
 
 ; Program names for external apps
 gui_prog_bterm:     db "bterm", 0
-gui_prog_bfiles:    db "bfiles", 0
+gui_prog_bhive:     db "bhive", 0
+gui_prog_bforager:  db "bforager", 0
 gui_prog_bedit:     db "bedit", 0
 gui_prog_bcalc:     db "bcalc", 0
 gui_prog_bpaint:    db "bpaint", 0
 gui_prog_bsysmon:   db "bsysmon", 0
 
 ; Desktop icon data
-gui_icon_symbols:   db 'T', 'F', 'E', 'C', 'P', 'M'  ; letters on icons
-                    db 0, 0                              ; padding
+gui_icon_symbols:   db 'T', 'H', 'W', 'E', 'C', 'P', 'M', 0
 
 gui_icon_labels:
         dd gui_str_ic_term
         dd gui_str_ic_files
+        dd gui_str_ic_forager
         dd gui_str_ic_edit
         dd gui_str_ic_calc
         dd gui_str_ic_paint
@@ -3481,22 +3492,24 @@ gui_icon_labels:
 
 gui_icon_progs:
         dd gui_prog_bterm
-        dd gui_prog_bfiles
+        dd gui_prog_bhive
+        dd gui_prog_bforager
         dd gui_prog_bedit
         dd gui_prog_bcalc
         dd gui_prog_bpaint
         dd gui_prog_bsysmon
 
-gui_str_ic_term:    db "Terminal", 0
-gui_str_ic_files:   db "Files", 0
-gui_str_ic_edit:    db "Editor", 0
-gui_str_ic_calc:    db "Calc", 0
-gui_str_ic_paint:   db "Paint", 0
-gui_str_ic_sysmon:  db "Monitor", 0
+gui_str_ic_term:    db "BTerm", 0
+gui_str_ic_files:   db "BHive", 0
+gui_str_ic_forager: db "BForager", 0
+gui_str_ic_edit:    db "BEdit", 0
+gui_str_ic_calc:    db "BCalc", 0
+gui_str_ic_paint:   db "BPaint", 0
+gui_str_ic_sysmon:  db "BSysMon", 0
 
 ; Right-click context menu strings
-gui_str_ctx_term:   db "Open Terminal", 0
-gui_str_ctx_files:  db "File Manager", 0
+gui_str_ctx_term:   db "Open BTerm", 0
+gui_str_ctx_files:  db "Open BHive", 0
 gui_str_ctx_about:  db "About", 0
 gui_str_ctx_set:    db "Settings", 0
 gui_str_ctx_exit:   db "Exit Desktop", 0

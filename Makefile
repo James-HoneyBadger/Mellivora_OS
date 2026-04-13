@@ -13,6 +13,7 @@
 NASM = nasm
 QEMU = qemu-system-i386
 DD = dd
+UNAME_S := $(shell uname -s)
 
 # Output
 IMAGE = mellivora.img
@@ -29,14 +30,32 @@ STAGE2_SRC = stage2.asm
 KERNEL_SRC = kernel.asm
 
 # QEMU settings
+# Choose a host-compatible QEMU audio backend by default.
+# Override manually when needed, e.g.:
+#   make run QEMU_AUDIO_BACKEND=alsa
+#   make run QEMU_AUDIO_BACKEND=pa
+QEMU_AUDIO_BACKEND ?= none
+ifeq ($(UNAME_S),Darwin)
+QEMU_AUDIO_BACKEND ?= coreaudio
+endif
+
+QEMU_AUDIO_FLAGS = -audiodev $(QEMU_AUDIO_BACKEND),id=snd0 \
+			 -machine pcspk-audiodev=snd0,usb=off
+
+# Reboot behavior: allow guest reboot by default.
+# Set QEMU_NO_REBOOT=1 to make QEMU exit on guest reset.
+QEMU_RESET_FLAGS =
+ifeq ($(QEMU_NO_REBOOT),1)
+QEMU_RESET_FLAGS += -no-reboot
+endif
+
 QEMU_FLAGS = -cpu 486 \
              -m 128 \
              -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough \
              -boot c \
-             -no-reboot \
              -no-shutdown \
-             -audiodev coreaudio,id=snd0 \
-             -machine pcspk-audiodev=snd0,usb=off \
+		 $(QEMU_RESET_FLAGS) \
+		 $(QEMU_AUDIO_FLAGS) \
              -netdev user,id=net0 \
              -device rtl8139,netdev=net0
 
@@ -110,17 +129,20 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 # Run in QEMU with i486 CPU
 run: $(IMAGE)
 	@echo "=== Launching Mellivora in QEMU (i486 CPU, 128MB RAM) ==="
+	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS)
 
 # Run with serial console on TCP port (connect with: nc localhost 4555)
 run-serial: $(IMAGE)
 	@echo "=== Launching Mellivora with serial on TCP port 4555 ==="
 	@echo "    Connect with:  nc localhost 4555"
+	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS) -serial tcp:127.0.0.1:4555,server=on,wait=off
 
 # Run with debug output
 debug: $(IMAGE)
 	@echo "=== Launching Mellivora in QEMU (DEBUG MODE) ==="
+	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_DEBUG_FLAGS)
 
 # Build all sample programs

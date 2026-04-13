@@ -194,7 +194,7 @@ cmd_color_str:  db "color", 0
 cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
 cmd_mouse_str:  db "mouse", 0
-cmd_gui_str:    db "gui", 0
+cmd_gui_str:    db "burrows", 0
 cmd_ping_str:   db "ping", 0
 cmd_ifconfig_str: db "ifconfig", 0
 cmd_dhcp_str:   db "dhcp", 0
@@ -265,7 +265,7 @@ help_help_mouse:
         db "mouse", 0x0A
         db "Show PS/2 mouse status (position and buttons).", 0x0A, 0
 help_help_gui:
-        db "gui", 0x0A
+        db "burrows", 0x0A
         db "Enter Burrows desktop (640x480 graphical mode). Press any key to exit.", 0x0A, 0
 
 help_text:
@@ -328,7 +328,7 @@ help_text:
         db "  size F     - Show file size and type", 0x0A
         db "  strings F  - Extract printable strings from file", 0x0A
         db "  mouse      - Show PS/2 mouse status", 0x0A
-        db "  gui        - Enter Burrows desktop (640x480)", 0x0A
+        db "  burrows    - Enter Burrows desktop (640x480)", 0x0A
         db "  <name>     - Run program (searches PATH)", 0x0A
         db "  >, >>, <   - Redirect output/input to files", 0x0A
         db "  cmd1 | cmd2- Pipe one command into another", 0x0A

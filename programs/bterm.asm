@@ -1,4 +1,4 @@
-; bterm.asm - Burrows Terminal Emulator
+; bterm.asm - BTerm - Burrows Terminal Emulator
 ; A full shell-like terminal running inside a GUI window.
 ; Supports: ls, cat, cd, pwd, mkdir, rm, touch, echo, clear,
 ;           date, help, exit, ver, size, hex, write, whoami
@@ -1077,7 +1077,7 @@ hex_byte_out:
         ret
 
 ; ======================= DATA =======================
-title_str:      db "Terminal", 0
+title_str:      db "BTerm", 0
 prompt_str:     db "> ", 0
 cursor_str:     db "_", 0
 root_path:      db "/", 0

@@ -1,5 +1,5 @@
-; http.asm - HTTP client (wget-like)
-; Usage: http <url>
+; forager.asm - Forager web browser
+; Usage: forager <url>
 ;
 ; Fetches a web page via HTTP/1.0 GET and displays the response body.
 ; Supports: http://host/path or just host/path
@@ -19,7 +19,9 @@ start:
         mov esi, arg_buf
         cmp dword [esi], 'http'
         jne .no_scheme
-        cmp word [esi+4], '://'
+        cmp byte [esi+4], ':'
+        jne .no_scheme
+        cmp word [esi+5], '//'
         jne .no_scheme
         add esi, 7
 .no_scheme:
@@ -300,7 +302,7 @@ start:
 http_proto:   db " HTTP/1.0", 0x0D, 0x0A, 0
 host_hdr:     db "Host: ", 0
 conn_close:   db 0x0D, 0x0A, "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A, 0
-msg_usage:    db "Usage: http <url>", 0x0A, "  Example: http example.com/index.html", 0x0A, 0
+msg_usage:    db "Usage: forager <url>", 0x0A, "  Example: forager example.com/index.html", 0x0A, 0
 msg_connecting: db "Connecting to ", 0
 msg_newline:  db 0x0A, 0
 msg_dns_fail: db "Error: DNS resolution failed", 0x0A, 0

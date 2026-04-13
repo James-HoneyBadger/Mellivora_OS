@@ -1146,6 +1146,8 @@ shell_dispatch_core:
         ret
 
 .cmd_clear:
+        call vbe_restore_text
+        call vga_init
         call vga_clear
         ret
 
@@ -3052,18 +3054,49 @@ cmd_reboot:
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
 
-        ; Small delay so user can see the message
-        mov ecx, 0x3FFFFFF
+        ; Small delay so user can see the message without feeling stalled
+        mov ecx, 0x0800000
 .reboot_delay:
         dec ecx
         jnz .reboot_delay
 
-        ; Method 1: Pulse the 8042 keyboard controller reset line
         cli
+
+        ; Method 1: 8042 keyboard controller pulse reset.
+        ; Wait until input buffer is clear before writing command 0xFE.
+        mov ecx, 0x20000
+.wait_kbc_ready:
+        in al, 0x64
+        test al, 0x02
+        jz .kbc_ready
+        dec ecx
+        jnz .wait_kbc_ready
+        jmp .try_cf9
+
+.kbc_ready:
         mov al, 0xFE
         out 0x64, al
 
-        ; Method 2: Triple fault (if 8042 method didn't work)
+        ; Give hardware a short window to react.
+        mov ecx, 0x200000
+.wait_kbc_reset:
+        dec ecx
+        jnz .wait_kbc_reset
+
+        ; Method 2: QEMU/PC chipset hard reset control register.
+.try_cf9:
+        mov dx, 0xCF9
+        mov al, 0x02
+        out dx, al
+        mov al, 0x06
+        out dx, al
+
+        ; Method 3: Fast A20/reset register.
+        in al, 0x92
+        or al, 0x01
+        out 0x92, al
+
+        ; Method 4: Triple fault fallback.
         lidt [.reboot_null_idt]
         int 0
 

@@ -1082,12 +1082,13 @@ These programs in the `programs/` directory use `gui.inc` and demonstrate GUI pa
 
 | Program | Description | Pattern Demonstrated |
 | --- | --- | --- |
-| `bcalc` | Calculator | Button grid, click handling |
-| `bedit` | Text editor | Text input, scrolling |
-| `bfiles` | File manager | List view, directory navigation |
-| `bpaint` | Paint program | Pixel drawing, tool selection |
-| `bsysmon` | System monitor | Real-time data display |
-| `bterm` | Terminal emulator | Text rendering, keyboard I/O |
+| `bcalc` | BCalc | Button grid, click handling |
+| `bedit` | BEdit | Text input, scrolling |
+| `bhive` | BHive | List view, directory navigation |
+| `bforager` | BForager | Address bar, link navigation, protocol handoff |
+| `bpaint` | BPaint | Pixel drawing, tool selection |
+| `bsysmon` | BSysMon | Real-time data display |
+| `bterm` | BTerm | Text rendering, keyboard I/O |
 
 ---
 

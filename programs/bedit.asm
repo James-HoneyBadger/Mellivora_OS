@@ -1,4 +1,4 @@
-; bedit.asm - Burrows Text Editor
+; bedit.asm - BEdit - Burrows Text Editor
 ; Simple text editor with load/save, cursor movement, and basic editing.
 
 %include "syscalls.inc"
@@ -536,7 +536,7 @@ strlen_from:
         ret
 
 ; Data
-title_str:      db "Editor", 0
+title_str:      db "BEdit", 0
 status_str:     db "Ctrl+S:Save  ESC:Exit  Arrows:Move", 0
 
 win_id:         dd 0
