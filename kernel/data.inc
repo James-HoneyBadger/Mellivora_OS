@@ -887,6 +887,7 @@ net_dns_resolved: resb 1
                   resb 1          ; alignment
 net_dns_result_ip: resd 1
 net_dns_query_name: resd 1        ; pointer to query hostname
+net_dns_query_len: resw 1         ; length of built query (for retry)
 net_dns_buf:      resb 512        ; DNS packet build buffer
 net_dns_cache:    resb 8 * 32     ; 8 entries * 32 bytes (28 name + 4 IP)
 

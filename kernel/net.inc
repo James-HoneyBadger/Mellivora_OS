@@ -2681,7 +2681,7 @@ dhcp_request:
 ; dns_resolve - Resolve hostname to IP via DNS
 ;  ESI = null-terminated hostname
 ; Returns: EAX = IP address (0 on failure)
-; Blocks for up to 5 seconds
+; Blocks up to ~5 seconds (two 2.5s attempts with retry)
 ;---------------------------------------
 dns_resolve:
         push ebx
@@ -2694,6 +2694,10 @@ dns_resolve:
         call dns_cache_lookup
         test eax, eax
         jnz .dns_cached
+
+        ; Fail immediately if NIC is not initialised
+        cmp dword [net_state], NET_STATE_UP
+        jne .dns_fail
 
         ; Build DNS query
         mov [net_dns_query_name], esi
@@ -2745,31 +2749,57 @@ dns_resolve:
         mov byte [edi+3], 1
         add edi, 4
 
-        ; Calculate query length
+        ; Calculate and save query length for retry
         mov ecx, edi
         sub ecx, net_dns_buf
+        mov [net_dns_query_len], cx
 
-        ; Send DNS query via UDP to dns server on port 53
+        ; --- ATTEMPT 1 ---
         mov byte [net_dns_resolved], 0
         mov dword [net_dns_result_ip], 0
         mov esi, net_dns_buf
         mov eax, [net_dns]
         mov bx, DNS_PORT
-        ; Use an ephemeral source port
         mov dx, [net_ephemeral_port]
         inc word [net_ephemeral_port]
         call udp_send
 
-        ; Wait for response (up to 5 seconds)
-        mov ecx, 500
-.dns_wait:
+        ; Wait up to 2.5 seconds for first response
+        mov ecx, 250
+.dns_wait1:
         hlt
         cmp byte [net_dns_resolved], 1
         je .dns_got_response
         dec ecx
-        jnz .dns_wait
+        jnz .dns_wait1
 
-        ; Timeout
+        ; --- ATTEMPT 2: retry with a fresh transaction ID ---
+        mov ax, [net_dns_id]
+        inc word [net_dns_id]
+        xchg al, ah
+        mov word [net_dns_buf], ax    ; patch TxID in already-built query
+
+        mov byte [net_dns_resolved], 0
+        mov dword [net_dns_result_ip], 0
+        mov esi, net_dns_buf
+        mov eax, [net_dns]
+        mov bx, DNS_PORT
+        mov dx, [net_ephemeral_port]
+        inc word [net_ephemeral_port]
+        movzx ecx, word [net_dns_query_len]
+        call udp_send
+
+        ; Wait up to 2.5 seconds for retry response
+        mov ecx, 250
+.dns_wait2:
+        hlt
+        cmp byte [net_dns_resolved], 1
+        je .dns_got_response
+        dec ecx
+        jnz .dns_wait2
+
+.dns_fail:
+        ; All attempts timed out (or NIC not up)
         xor eax, eax
         jmp .dns_return
 
