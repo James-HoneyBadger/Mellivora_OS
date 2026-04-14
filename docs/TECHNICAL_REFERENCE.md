@@ -117,9 +117,9 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
 | 1–32 | 16 KB | Stage 2 loader (stage2.asm) |
 | 33+ | Variable | Kernel (kernel.asm + include modules) |
 | 417 | 512 B | HBFS Superblock |
-| 418–425 | 4 KB | Block allocation bitmap |
-| 426–553 | 64 KB | Root directory (16 blocks) |
-| 554+ | — | Data blocks (4 KB each) |
+| 418–545 | 64 KB | Block allocation bitmap (16 blocks) |
+| 546–801 | 128 KB | Root directory (32 blocks, 455 entries) |
+| 802+ | — | Data blocks (4 KB each) |
 
 ---
 
@@ -342,9 +342,9 @@ a block allocation bitmap, and support for nested subdirectories.
 | Region | LBA Start | LBA Count | Size | Description |
 | --- | --- | --- | --- | --- |
 | Superblock | 417 | 1 | 512 B | Filesystem metadata |
-| Bitmap | 418 | 8 | 4 KB | Block allocation bitmap |
-| Root Directory | 426 | 128 | 64 KB | 16 blocks × 4 KB |
-| Data Area | 554 | — | — | File/directory data blocks |
+| Bitmap | 418 | 128 | 64 KB | Block allocation bitmap (16 blocks) |
+| Root Directory | 546 | 256 | 128 KB | 32 blocks × 4 KB |
+| Data Area | 802 | — | — | File/directory data blocks |
 
 ### Constants
 
@@ -355,16 +355,16 @@ a block allocation bitmap, and support for nested subdirectories.
 | `HBFS_SECTORS_PER_BLK` | 8 |
 | `HBFS_MAX_FILENAME` | 252 characters |
 | `HBFS_DIR_ENTRY_SIZE` | 288 bytes |
-| `HBFS_ROOT_DIR_BLOCKS` | 16 |
-| `HBFS_ROOT_DIR_SECTS` | 128 (16 × 8) |
-| `HBFS_ROOT_DIR_SIZE` | 65,536 bytes |
-| `HBFS_MAX_FILES` | 227 (65,536 / 288) |
-| `HBFS_SUBDIR_BLOCKS` | 4 |
-| `HBFS_SUBDIR_MAX_ENTRIES` | 56 (4 × 4096 / 288) |
+| `HBFS_ROOT_DIR_BLOCKS` | 32 |
+| `HBFS_ROOT_DIR_SECTS` | 256 (32 × 8) |
+| `HBFS_ROOT_DIR_SIZE` | 131,072 bytes |
+| `HBFS_MAX_FILES` | 455 (131,072 / 288) |
+| `HBFS_SUBDIR_BLOCKS` | 16 |
+| `HBFS_SUBDIR_MAX_ENTRIES` | 224 (16 × 4096 / 288) |
 | `HBFS_SUPERBLOCK_LBA` | 417 |
 | `HBFS_BITMAP_START` | 418 |
-| `HBFS_ROOT_DIR_START` | 426 |
-| `HBFS_DATA_START` | 554 |
+| `HBFS_ROOT_DIR_START` | 546 |
+| `HBFS_DATA_START` | 802 |
 
 ### Superblock Structure (512 bytes at LBA 417)
 
@@ -372,11 +372,11 @@ a block allocation bitmap, and support for nested subdirectories.
 | --- | --- | --- | --- |
 | 0 | 4 | Magic (`'HBFS'`) | `0x48424653` |
 | 4 | 4 | Version | 1 |
-| 8 | 4 | Total blocks | 32,768 |
-| 12 | 4 | Free blocks | 32,768 |
-| 16 | 4 | Root directory LBA | 426 |
+| 8 | 4 | Total blocks | 524,288 |
+| 12 | 4 | Free blocks | 524,288 |
+| 16 | 4 | Root directory LBA | 546 |
 | 20 | 4 | Bitmap start LBA | 418 |
-| 24 | 4 | Data start LBA | 554 |
+| 24 | 4 | Data start LBA | 802 |
 | 28 | 4 | Block size | 4096 |
 
 ### Directory Entry Structure (288 bytes)
@@ -1853,6 +1853,6 @@ period with no keyboard or mouse input.
 | Variable | Type | Description |
 | --- | --- | --- |
 | `scr_idle_count` | dword | Idle tick counter (reset on input) |
-| `scr_mode` | byte | Active screensaver mode (0–3) |
+| `scr_mode` | byte | Active screensaver mode (0–4) |
 
 The `scrsaver` shell command cycles through modes or sets a specific mode.

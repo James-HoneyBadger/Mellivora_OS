@@ -2444,7 +2444,7 @@ kw_sleep:       db "SLEEP", 0
 kw_dim:         db "DIM", 0
 
 ; Messages
-msg_banner:     db "Mellivora BASIC v2.0", 0x0A
+msg_banner:     db "Mellivora BASIC v2.2", 0x0A
                 db "====================", 0x0A
                 db "Type HELP for commands", 0x0A, 0
 msg_ready:      db "Ready.", 0x0A, 0

@@ -263,7 +263,7 @@ title_str:      db "BSysMon", 0
 hdr_str:        db "System Information", 0
 
 lbl_os:         db "OS:", 0
-val_os:         db "Mellivora OS v2.0", 0
+val_os:         db "Mellivora OS v2.2", 0
 
 lbl_time:       db "Time:", 0
 lbl_date:       db "Date:", 0

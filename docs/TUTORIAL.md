@@ -663,11 +663,12 @@ taskbar at the bottom, and a "Menu" button.
 ### Changing Themes
 
 Open **Settings** from the menu (or run `bsysmon` and use its theme button) to switch
-between three themes:
+between four themes:
 
 - **Blue** — Default, professional look
 - **Dark** — Dark mode with green accents
 - **Light** — Light background theme
+- **Amber** — Retro CRT amber-on-brown
 
 ### Exiting the Desktop
 

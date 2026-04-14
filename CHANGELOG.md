@@ -1,5 +1,108 @@
 # Mellivora OS - Changelog
 
+## v2.2.0 - IPC, Audio, Screensavers, 52 New Programs & Bug Fixes
+
+### Kernel — Inter-Process Communication (`kernel/ipc.inc`)
+
+- **Pipes**: 8 concurrent pipes, 4 KB circular buffer each, with `SYS_PIPE_CREATE`, `SYS_PIPE_WRITE`, `SYS_PIPE_READ`, `SYS_PIPE_CLOSE` (syscalls 60–63).
+- **Shared memory**: 4 regions, 4 KB each, keyed access via `SYS_SHMGET` and `SYS_SHMADDR` (syscalls 64–65).
+
+### Kernel — Sound Blaster 16 Audio Driver (`kernel/sb16.inc`)
+
+- ISA DMA playback via SB16 DSP (base port 0x220, IRQ 5, DMA channels 1/5).
+- Supports 8-bit and 16-bit PCM, mono/stereo, configurable sample rate.
+- Three syscalls: `SYS_AUDIO_PLAY` (50), `SYS_AUDIO_STOP` (51), `SYS_AUDIO_STATUS` (52).
+
+### Kernel — Process Management
+
+- `SYS_KILL` (53): Terminate a task by PID.
+- `SYS_GETPID` (54): Get current task PID.
+- `SYS_PROCLIST` (66): Query task table slots (0–15).
+- `SYS_MEMINFO` (67): Report free/total physical pages.
+
+### Kernel — GUI Enhancements
+
+- **Clipboard**: `SYS_CLIP_COPY` (55) and `SYS_CLIP_PASTE` (56) for inter-app text sharing.
+- **Notifications**: `SYS_NOTIFY` (57) — toast-style notifications with color accent bars.
+- **File dialogs**: `SYS_FILE_OPEN_DLG` (58) and `SYS_FILE_SAVE_DLG` (59).
+- **Date setting**: `SYS_SETDATE` (49) — write to RTC from user programs.
+- **Widget toolkit**: 7 sub-functions (button, checkbox, progress bar, textbox, listbox, label, rectangle outline) for GUI_DRAW_BUTTON through GUI_DRAW_RECT (sub-functions 20–26).
+
+### Kernel — Screensaver System (`kernel/screensaver.inc`)
+
+- 5 screensaver modes: Starfield (64 parallax stars), Matrix (cascading green columns), Pipes (6 colored growing pipes), Bouncing Logo, Plasma (color-cycling plasma effect).
+- Activates after 5 minutes idle. `scrsaver` shell command to cycle/set mode.
+
+### Kernel — Bug Fixes
+
+- **VBE font restore**: Save/restore 8 KB VGA plane 2 font data before/after BGA mode switches. Fixes corrupted text mode characters after exiting Burrows desktop.
+- **3D button rendering**: `gui_bb_button_3d` left-highlight vline clobbered EDX (button height) with the white color value. This caused 3 spurious dark vertical lines from each window's title bar buttons to the bottom of the screen. Fixed by preserving EDX across the vline call.
+- **HBFS directory caching**: Added cache-tag check in `hbfs_load_root_dir` to avoid redundant disk reads during PATH searches.
+- **HBFS timestamps**: Files now store RTC-based create/modify timestamps in DOS-compatible packed format.
+- **HBFS symbolic links**: File type 5 (`FTYPE_LINK`) with `ln -s` shell command and `stat` resolution.
+
+### Shell — New Commands
+
+- **`stat`**: Display file metadata (type, size, blocks, timestamps, link target).
+- **`fsck`**: Filesystem consistency check (bitmap vs. directory cross-validation).
+- **`whoami`**: Print current user name.
+- **`ln`**: Create symbolic links (`ln -s target linkname`).
+- **`scrsaver`**: Cycle or set screensaver mode.
+- **`mouse`**: Show mouse position and button state.
+- Total: 58 unique commands + 6 aliases = 64 dispatched names.
+
+### Programs — 61 New Programs (79 → 140)
+
+New games: blackjack, breakout, chess, connect4, freecell, kingdom, mastermind, neurovault, outbreak, pong, puzzle15, raycaster, rogue, simon, solitaire, starfield.
+
+New utilities: asm (in-OS assembler), banner, base64, basename, bcalc, bedit, bforager, bhive, bnotes, bpaint, bplayer, bsettings, bsheet, bsysmon, bterm, bview, cmp, csv, cut, debug, df, diff, dirname, du, expr, factor, find, forth, free, grep, hexdump, id, lolcat, mandel, nl, od, paste, periodic, perl (interpreter), pipes, ps, sed, seq, sort, strings, sysinfo, tac, tcc (C compiler).
+
+### Programs — Perl Interpreter & Samples
+
+- **perl**: In-OS Perl interpreter supporting variables, arrays, hashes, control flow, string operations, and built-in functions.
+- 6 Perl sample scripts: `hello.pl`, `factorial.pl`, `fizzbuzz.pl`, `guess.pl`, `arrays.pl`, `strings.pl`.
+
+### Syscall Summary
+
+20 new syscalls added (48 → 68 total, numbered 0–67):
+
+| Range | Syscalls |
+| --- | --- |
+| 49 | `SYS_SETDATE` |
+| 50–52 | `SYS_AUDIO_PLAY`, `SYS_AUDIO_STOP`, `SYS_AUDIO_STATUS` |
+| 53–54 | `SYS_KILL`, `SYS_GETPID` |
+| 55–56 | `SYS_CLIP_COPY`, `SYS_CLIP_PASTE` |
+| 57 | `SYS_NOTIFY` |
+| 58–59 | `SYS_FILE_OPEN_DLG`, `SYS_FILE_SAVE_DLG` |
+| 60–63 | `SYS_PIPE_CREATE`, `SYS_PIPE_WRITE`, `SYS_PIPE_READ`, `SYS_PIPE_CLOSE` |
+| 64–65 | `SYS_SHMGET`, `SYS_SHMADDR` |
+| 66–67 | `SYS_PROCLIST`, `SYS_MEMINFO` |
+
+### Documentation
+
+- All 7 documentation files verified and updated against actual kernel code.
+- Fixed outdated statistics across README, USER_GUIDE, INSTALL, TUTORIAL, TECHNICAL_REFERENCE.
+
+### ISO Distribution
+
+- **Bootable ISO**: `make iso` produces an El Torito no-emulation ISO with full disk image, all 7 docs, README, LICENSE, and CHANGELOG.
+- **Lite ISO**: `make iso-lite` truncates the 2 GB disk image to 64 MB (~65 MiB ISO vs ~2.1 GiB full) — all HBFS data preserved.
+- **ISO verification**: `make iso-verify` validates the El Torito boot record and boot-load-size.
+- **ISO launcher**: `run_iso.sh` extracts and boots the ISO with colored output and ASCII banner.
+- **Build script**: `build_iso.sh` rewritten with ANSI-colored status output, pre/post build stats, and SHA256 checksums.
+- Supports 4 ISO-creation backends: xorriso, genisoimage, mkisofs, hdiutil.
+
+### Build Stats
+
+- Disk image: 169 files, 710 blocks across 4 subdirectories
+- Kernel: ~28,800 lines of x86 assembly (22 include files)
+- Kernel binary: ~550 KB
+- Tests: 1,160 (45 build + 1,115 HBFS integrity)
+- Syscalls: 68 (0–67)
+- Programs: 140 assembly + 11 C samples + 6 Perl samples
+
+---
+
 ## v2.1.0 - Full TCP/IP Networking Stack
 
 ### Kernel — TCP/IP Networking (`kernel/net.inc`, ~3,800 lines)

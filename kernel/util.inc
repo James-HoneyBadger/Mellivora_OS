@@ -1556,6 +1556,47 @@ cmd_cd_internal:
         cmp byte [esi], 0
         je .cd_fail
 
+        ; Check for "cd -" (return to previous directory)
+        cmp byte [esi], '-'
+        jne .cd_not_dash
+        cmp byte [esi + 1], 0
+        jne .cd_not_dash
+        cmp byte [prev_dir_valid], 0
+        je .cd_no_prev
+        ; Restore previous directory state directly
+        mov eax, [prev_dir_lba]
+        mov [current_dir_lba], eax
+        mov eax, [prev_dir_sects]
+        mov [current_dir_sects], eax
+        mov eax, [prev_dir_depth]
+        mov [dir_depth], eax
+        mov esi, prev_dir_name
+        mov edi, current_dir_name
+        call str_copy
+        mov esi, prev_dir_stack
+        mov edi, dir_stack
+        mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+        rep movsb
+        ; Print new path
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, path_search_buf
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        mov dword [esp + 28], 0
+        popad
+        ret
+.cd_no_prev:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_no_prev_dir
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        mov dword [esp + 28], 0  ; Not a failure — just informational
+        popad
+        ret
+.cd_not_dash:
+
         ; Check for "cd /" (absolute root)
         cmp byte [esi], '/'
         jne .cd_check_dotdot
@@ -3401,6 +3442,22 @@ cmd_mkdir:
 
 cmd_cd:
         pushad
+
+        ; Save current CWD snapshot before changing directory
+        mov eax, [current_dir_lba]
+        mov [.cd_snap_lba], eax
+        mov eax, [current_dir_sects]
+        mov [.cd_snap_sects], eax
+        mov eax, [dir_depth]
+        mov [.cd_snap_depth], eax
+        mov esi, current_dir_name
+        mov edi, .cd_snap_name
+        call str_copy
+        mov esi, dir_stack
+        mov edi, .cd_snap_stack
+        mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+        rep movsb
+
         call cmd_cd_internal
         cmp eax, -1             ; cmd_cd_internal returns 0 or -1 in EAX
         jne .cd_ok
@@ -3408,9 +3465,35 @@ cmd_cd:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
+        jmp .cd_ret
+
 .cd_ok:
+        ; On success, commit snapshot as previous directory
+        mov eax, [.cd_snap_lba]
+        mov [prev_dir_lba], eax
+        mov eax, [.cd_snap_sects]
+        mov [prev_dir_sects], eax
+        mov eax, [.cd_snap_depth]
+        mov [prev_dir_depth], eax
+        mov esi, .cd_snap_name
+        mov edi, prev_dir_name
+        call str_copy
+        mov esi, .cd_snap_stack
+        mov edi, prev_dir_stack
+        mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+        rep movsb
+        mov byte [prev_dir_valid], 1
+
+.cd_ret:
         popad
         ret
+
+; Local scratch for CWD snapshot (in BSS-like inline storage)
+.cd_snap_lba:   dd 0
+.cd_snap_sects: dd 0
+.cd_snap_depth: dd 0
+.cd_snap_name:  times 256 db 0
+.cd_snap_stack: times DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE db 0
 
 cmd_pwd:
         pushad
@@ -3418,6 +3501,184 @@ cmd_pwd:
         call build_cwd_path
         mov esi, path_search_buf
         call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        popad
+        ret
+
+;---------------------------------------
+; cmd_pushd - Push current dir and cd to argument
+; ESI = directory argument (or empty to just swap)
+;---------------------------------------
+cmd_pushd:
+        pushad
+
+        ; Check stack not full
+        mov eax, [pushd_count]
+        cmp eax, PUSHD_MAX
+        jge .pushd_full
+
+        ; Calculate destination in pushd_stack
+        imul eax, PUSHD_ENTRY_SIZE
+        lea edi, [pushd_stack + eax]
+
+        ; Save current CWD into pushd_stack[pushd_count]
+        mov eax, [current_dir_lba]
+        mov [edi], eax
+        mov eax, [current_dir_sects]
+        mov [edi + 4], eax
+        mov eax, [dir_depth]
+        mov [edi + 8], eax
+
+        ; Copy name (256 bytes)
+        push edi
+        add edi, 12
+        mov esi, current_dir_name
+        mov ecx, 256
+        rep movsb
+        pop edi
+
+        ; Copy dir_stack (4224 bytes)
+        push edi
+        add edi, 12 + 256
+        mov esi, dir_stack
+        mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+        rep movsb
+        pop edi
+
+        inc dword [pushd_count]
+
+        ; Now cd to the argument
+        popad
+        pushad
+        call skip_spaces
+        cmp byte [esi], 0
+        je .pushd_show          ; No arg = just push, show stack
+
+        call cmd_cd
+        jmp .pushd_show
+
+.pushd_full:
+        mov esi, msg_pushd_full
+        call vga_print
+        popad
+        ret
+
+.pushd_show:
+        ; Print dirs listing
+        call cmd_dirs_internal
+        popad
+        ret
+
+;---------------------------------------
+; cmd_popd - Pop top directory from stack and restore it
+;---------------------------------------
+cmd_popd:
+        pushad
+
+        ; Check stack not empty
+        cmp dword [pushd_count], 0
+        je .popd_empty
+
+        dec dword [pushd_count]
+        mov eax, [pushd_count]
+        imul eax, PUSHD_ENTRY_SIZE
+        lea esi, [pushd_stack + eax]
+
+        ; Restore CWD from pushd_stack entry
+        mov eax, [esi]
+        mov [current_dir_lba], eax
+        mov eax, [esi + 4]
+        mov [current_dir_sects], eax
+        mov eax, [esi + 8]
+        mov [dir_depth], eax
+
+        ; Restore name
+        push esi
+        add esi, 12
+        mov edi, current_dir_name
+        mov ecx, 256
+        rep movsb
+        pop esi
+
+        ; Restore dir_stack
+        add esi, 12 + 256
+        mov edi, dir_stack
+        mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+        rep movsb
+
+        ; Print dirs listing
+        call cmd_dirs_internal
+        popad
+        ret
+
+.popd_empty:
+        mov esi, msg_popd_empty
+        call vga_print
+        popad
+        ret
+
+;---------------------------------------
+; cmd_dirs - Print the directory stack
+;---------------------------------------
+cmd_dirs:
+        pushad
+        call cmd_dirs_internal
+        popad
+        ret
+
+;---------------------------------------
+; cmd_dirs_internal - Print CWD then all pushd entries
+;---------------------------------------
+cmd_dirs_internal:
+        pushad
+
+        ; Print current directory first
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, path_search_buf
+        call vga_print
+
+        ; Print pushd stack entries (top = most recent push)
+        mov ecx, [pushd_count]
+        test ecx, ecx
+        jz .dirs_nl
+
+.dirs_loop:
+        dec ecx
+        ; Print separator space
+        mov al, ' '
+        call vga_putchar
+
+        ; Calculate entry address
+        mov eax, ecx
+        imul eax, PUSHD_ENTRY_SIZE
+        lea ebx, [pushd_stack + eax]
+
+        ; Build path from this saved state
+        ; We need to reconstruct the path from depth + stack + name
+        ; Simple approach: just print the saved name (leaf dir)
+        ; For root, depth=0, print "/"
+        cmp dword [ebx + 8], 0
+        jne .dirs_has_depth
+
+        ; Root directory
+        mov al, '/'
+        call vga_putchar
+        jmp .dirs_next
+
+.dirs_has_depth:
+        ; Print "/" + saved dir name
+        mov al, '/'
+        call vga_putchar
+        lea esi, [ebx + 12]
+        call vga_print
+
+.dirs_next:
+        test ecx, ecx
+        jnz .dirs_loop
+
+.dirs_nl:
         mov al, 0x0A
         call vga_putchar
         popad

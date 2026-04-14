@@ -21,7 +21,7 @@ real-time timestamps, preemptive multitasking (16 tasks) with
 ring 0/3 privilege separation, virtual memory with paging, a
 full TCP/IP networking stack with RTL8139 driver, Sound Blaster 16
 audio, a windowed desktop environment with screensavers, IPC
-(pipes and shared memory), an in-OS C compiler, 131 bundled
+(pipes and shared memory), an in-OS C compiler, 140 bundled
 assembly programs, and 17 sample scripts — all written in x86
 assembly.
 
@@ -38,7 +38,7 @@ assembly.
 | --- | --- |
 | **Boot** | 3-stage BIOS boot → protected mode, paging |
 | **Shell** | 64 commands, pipes, redirection, globs, scripting |
-| **Programs** | 131 asm programs + 17 samples (11 C, 6 Perl) |
+| **Programs** | 140 asm programs + 17 samples (11 C, 6 Perl) |
 | **Networking** | TCP/IP — ARP, IP, ICMP, UDP, TCP, DHCP, DNS |
 | **Desktop** | Burrows GUI — 640×480×32, mouse, themes, screensavers |
 | **Filesystem** | HBFS — 4 KB blocks, subdirs, symlinks, dir caching |
@@ -89,8 +89,8 @@ assembly.
 - **Window manager** — up to 16 draggable windows with title bars and close buttons
 - **Taskbar** with application launcher menu and clock
 - **Mouse support** — PS/2 IRQ12 driver with cursor tracking
-- **3 built-in themes** — Dark, Light, Classic
-- **4 screensaver modes** — Starfield, Matrix, Pipes, Bouncing logo
+- **4 built-in themes** — Blue, Dark, Light, Amber
+- **5 screensaver modes** — Starfield, Matrix, Pipes, Bouncing logo, Plasma
 - **GUI syscall API** — 19 sub-functions for windows,
   drawing, widgets, events, and compositing
 - **Widget toolkit** — Button, Checkbox, Progress bar, Textbox, Listbox, Label
@@ -143,7 +143,7 @@ assembly.
 
 ---
 
-## 🎮 Included Programs (131 Assembly + 17 Samples)
+## 🎮 Included Programs (140 Assembly + 17 Samples)
 
 ### Games & Puzzles (32)
 
@@ -372,8 +372,16 @@ brew install nasm qemu make python3
 ```bash
 git clone https://github.com/James-HoneyBadger/Mellivora_OS.git
 cd Mellivora_OS
-make full      # Build everything: boot + kernel + 131 programs + filesystem
+make full      # Build everything: boot + kernel + 140 programs + filesystem
 make run       # Launch in QEMU
+```
+
+Or create a bootable ISO:
+
+```bash
+make iso       # Full ISO (~2.1 GiB) with docs
+make iso-lite  # Lite ISO (~65 MiB) — same content, truncated image
+make run-iso   # Boot the ISO in QEMU
 ```
 
 The HB Lair shell appears:
@@ -405,7 +413,7 @@ Mellivora_OS/
 ├── boot.asm                MBR boot sector (512 bytes, 16-bit real mode)
 ├── stage2.asm              Stage 2 loader (A20, E820, GDT, protected mode switch)
 ├── kernel.asm              Kernel entry point + subsystem includes
-├── kernel/                 Kernel subsystems (22 modules, ~27,000 lines)
+├── kernel/                 Kernel subsystems (22 modules, ~28,800 lines)
 │   ├── shell.inc           HB Lair shell (64 commands)
 │   ├── net.inc             TCP/IP networking stack
 │   ├── util.inc            Utilities, ELF loader, env vars
@@ -427,8 +435,8 @@ Mellivora_OS/
 │   ├── filesearch.inc      Global file search across directories
 │   ├── sb16.inc            Sound Blaster 16 audio driver
 │   ├── ipc.inc             Inter-process communication (pipes, shared memory)
-│   └── screensaver.inc     Screensaver modes (starfield, matrix, pipes, bounce)
-├── programs/               User-space programs (131 .asm files)
+│   └── screensaver.inc     Screensaver modes (starfield, matrix, pipes, bounce, plasma)
+├── programs/               User-space programs (140 .asm files)
 │   ├── syscalls.inc        Syscall numbers and macros
 │   └── lib/                Reusable libraries (8 modules)
 │       ├── string.inc      String manipulation (30+ functions)
@@ -455,11 +463,12 @@ Mellivora_OS/
 
 ```text
 /
-├── bin/          110 utility and tool programs
+├── bin/          119 utility and tool programs
 ├── games/         21 games
 ├── samples/       17 sample scripts (11 C, 6 Perl)
-├── docs/           5 text files (readme, license, notes, todo, poem)
-└── script.bat    Example batch script
+├── docs/          10 text files (readme, license, notes, todo, poem, man pages)
+├── script.bat    Example batch script
+└── welcome.bat   System highlights and quick-start tips
 ```
 
 Programs in `/bin` and `/games` are in the default
@@ -478,7 +487,7 @@ Programs in `/bin` and `/games` are in the default
 | **[API Reference](docs/API_REFERENCE.md)** | Complete syscall and library function reference |
 | **[Technical Reference](docs/TECHNICAL_REFERENCE.md)** | OS internals: boot, memory, filesystem, drivers, scheduler |
 | **[Networking Guide](docs/NETWORKING_GUIDE.md)** | TCP/IP stack architecture, socket API, protocol details |
-| **[Changelog](CHANGELOG.md)** | Full version history from v1.0 to v2.1.0 |
+| **[Changelog](CHANGELOG.md)** | Full version history from v1.0 to v2.2.0 |
 
 ---
 
@@ -489,10 +498,13 @@ Programs in `/bin` and `/games` are in the default
 | `make full` | Full build: boot + kernel + programs + FS |
 | `make run` | Launch in QEMU (i486 CPU, 128 MB RAM, networking, host-aware audio backend) |
 | `make debug` | Launch with QEMU monitor on stdio for debugging |
-| `make iso` | Create bootable ISO image with documentation |
+| `make iso` | Create bootable ISO image (~2.1 GiB) with documentation |
+| `make iso-lite` | Create smaller ISO (~65 MiB) with truncated disk image |
+| `make iso-verify` | Validate El Torito boot record in the ISO |
+| `make run-iso` | Boot the ISO in QEMU (CD-ROM + IDE disk) |
 | `make check` | Run the full regression suite (1,160 tests) |
 | `make clean` | Remove all build artifacts |
-| `make sizes` | Show component binary sizes |
+| `make sizes` | Show component and ISO binary sizes |
 
 ---
 
@@ -518,15 +530,15 @@ Programs in `/bin` and `/games` are in the default
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | ~27,000 lines across 22 modules |
-| Kernel binary | ~490 KB |
-| Program source | ~79,000 lines across 131 programs |
+| Kernel source | ~28,800 lines across 22 modules |
+| Kernel binary | ~550 KB |
+| Program source | ~81,500 lines across 140 programs |
 | User libraries | ~4,400 lines across 8 modules |
 | Syscalls | 68 (via `INT 0x80`) |
 | Shell commands | 64 built-in |
-| Programs | 131 assembly + 17 samples (11 C, 6 Perl) |
+| Programs | 140 assembly + 17 samples (11 C, 6 Perl) |
 | Disk image | 2 GB with HBFS filesystem |
-| Files on disk | 154 files across 4 subdirectories |
+| Files on disk | 169 files across 4 subdirectories |
 | Test coverage | 1,160 regression and integrity checks |
 | Networking protocols | Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP, DNS |
 | GUI windows | Up to 16 simultaneous |

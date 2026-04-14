@@ -52,7 +52,7 @@ brew install nasm qemu make python3
 
 ### Optional ISO-building tools on Linux
 
-To build `mellivora.iso` on Linux, install one of the following:
+To build `mellivora.iso` on Linux, install one of the following ISO-creation tools:
 
 ```bash
 # Debian/Ubuntu
@@ -64,6 +64,9 @@ sudo dnf install xorriso
 # Arch
 sudo pacman -S xorriso
 ```
+
+To run the standalone ISO launcher (`run_iso.sh`), you also need one of
+`xorriso`, `bsdtar`, or `7z` to extract the disk image from the ISO.
 
 ### Installing on Windows
 
@@ -87,10 +90,10 @@ This single command:
 1. Assembles the boot sector (`boot.asm` → `boot.bin`, 512 bytes)
 2. Assembles the Stage 2 loader (`stage2.asm` → `stage2.bin`, ≤16 KB)
 3. Assembles the kernel (`kernel.asm` → `kernel.bin`)
-4. Creates a 64 MB raw disk image (`mellivora.img`)
+4. Creates a 2 GB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (154 files)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (169 files)
 
 ### Build Targets
 
@@ -101,9 +104,12 @@ This single command:
 | **Populate** | `make populate` | Write files and programs into the disk image |
 | **Full build** | `make full` | All of the above in order |
 | **Bootable ISO** | `make iso` | Create `mellivora.iso` with install docs and user guide included |
+| **Lite ISO** | `make iso-lite` | Create a smaller `mellivora-lite.iso` (64 MB truncated image) |
+| **Verify ISO** | `make iso-verify` | Validate El Torito boot record in the ISO |
 | **Clean** | `make clean` | Remove all generated files (`.bin`, `.lst`, `.img`, `.iso`) |
-| **Sizes** | `make sizes` | Show component sizes |
+| **Sizes** | `make sizes` | Show component sizes (includes ISO if present) |
 | **Run** | `make run` | Launch in QEMU |
+| **Run ISO** | `make run-iso` | Build ISO and launch in QEMU (CD-ROM + IDE disk) |
 | **Debug** | `make debug` | Launch in QEMU with monitor + debug logging |
 
 ### Build Outputs
@@ -111,8 +117,9 @@ This single command:
 After a successful build:
 
 ```text
-mellivora.img          64 MB bootable raw disk image
+mellivora.img          2 GB bootable raw disk image (HBFS filesystem)
 mellivora.iso          Bootable ISO media with docs and install guide
+mellivora-lite.iso     Smaller ISO with 64 MB truncated disk image
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
 kernel.bin             32-bit kernel
@@ -129,16 +136,27 @@ make iso
 This creates `mellivora.iso`, which:
 
 1. boots directly in BIOS/legacy-compatible VMs,
-2. includes `mellivora.img` as the El Torito hard-disk boot image,
-3. bundles the full `INSTALL.md` and `USER_GUIDE.md` documentation inside the ISO.
+2. includes `mellivora.img` as the El Torito no-emulation boot image,
+3. bundles the complete documentation set inside the ISO.
+
+For a smaller download, use `make iso-lite` which truncates the disk image to 64 MB
+(all filesystem data is preserved; QEMU extends the file on writes).
 
 The ISO staging tree includes:
 
 ```text
-boot/mellivora.img
-README.txt
+boot/mellivora.img          2 GB bootable disk image (HBFS)
+README.txt                  Quick-start guide
+README.md                   Project README
+LICENSE                     MIT license
+CHANGELOG.md                Release notes
 docs/INSTALL.md
 docs/USER_GUIDE.md
+docs/PROGRAMMING_GUIDE.md
+docs/TECHNICAL_REFERENCE.md
+docs/TUTORIAL.md
+docs/API_REFERENCE.md
+docs/NETWORKING_GUIDE.md
 ```
 
 ### Expected Warnings
@@ -180,22 +198,40 @@ make run QEMU_AUDIO_BACKEND=pa
 
 ### Booting the ISO in QEMU
 
+The easiest method uses the Makefile target:
+
 ```bash
-make iso
-qemu-system-i386 -m 128 -cdrom mellivora.iso -boot d -no-reboot -no-shutdown
+make run-iso
 ```
 
-This is the recommended way to test the distributable install media exactly as users will receive it.
+Or use the standalone helper script (works without the source tree):
 
-This launches QEMU with:
+```bash
+./Experimental/tools/run_iso.sh mellivora.iso
+```
+
+Manual QEMU launch (note: **both** the ISO and the IDE disk image are required):
+
+```bash
+qemu-system-i386 -cpu 486 -m 128 \
+  -cdrom mellivora.iso \
+  -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
+  -boot d -no-shutdown \
+  -audiodev none,id=snd0 -machine pcspk-audiodev=snd0,usb=off \
+  -netdev user,id=net0 -device rtl8139,netdev=net0
+```
+
+The kernel boots from the CD-ROM via El Torito but requires an ATA hard disk
+for the HBFS filesystem.  The QEMU command attaches both devices.
 
 | Setting | Value |
 | --------- | ------- |
 | **CPU** | i486 emulation |
 | **RAM** | 128 MB |
-| **Disk** | `mellivora.img` as raw IDE drive |
-| **Boot** | Hard disk (drive C) |
-| **Behavior** | No auto-reboot, no auto-shutdown |
+| **CD-ROM** | `mellivora.iso` (El Torito boot) |
+| **IDE Disk** | `mellivora.img` as raw IDE drive (HBFS) |
+| **Boot** | CD-ROM (drive D) |
+| **Behavior** | No auto-shutdown |
 
 ### Debug Launch
 
@@ -234,7 +270,7 @@ Useful additional options:
 
 ## Disk Image Layout
 
-The 64 MB raw disk image has this layout:
+The 2 GB raw disk image has this layout:
 
 ```text
 LBA Range       Size        Content
@@ -243,21 +279,21 @@ LBA 0           512 B       Stage 1 boot sector (MBR)
 LBA 1–32        16 KB       Stage 2 loader
 LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size)
 LBA 417         512 B       HBFS superblock
-LBA 418–425     4 KB        Block allocation bitmap
-LBA 426–553     64 KB       Root directory (16 blocks, 227 entries)
-LBA 554+        ~63 MB      Data blocks (4 KB each)
+LBA 418–545     64 KB       Block allocation bitmap (16 blocks)
+LBA 546–801     128 KB      Root directory (32 blocks, 455 entries)
+LBA 802+        ~2 GB       Data blocks (4 KB each)
 ```
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 4 subdirectories and places the curated runtime file set (154 files):
+The `populate.py` script creates 4 subdirectories and places the curated runtime file set (169 files):
 
 ```text
 /
 ├── bin/           Utility programs (hello, edit, grep, sort, tcc, ...)
 ├── games/         Games (snake, tetris, 2048, galaga, mine, ...)
 ├── samples/       11 C and 6 Perl source files (hello.c, fib.c, wumpus.c, ...)
-├── docs/           5 text files (readme, license, notes, todo, poem)
+├── docs/          10 text files (readme, license, notes, todo, poem, man pages)
 └── script.bat     Example batch script
 ```
 
@@ -317,7 +353,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry and include graph (main file + 22 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v2.1)
+├── CHANGELOG.md            Version history (v1.0 → v2.2)
 ├── README.md               Project overview
 │
 ├── kernel/                 Kernel subsystem modules
@@ -344,7 +380,7 @@ Mellivora_OS/
 │   ├── sb16.inc            Sound Blaster 16 audio driver
 │   └── screensaver.inc     Screensaver modes
 │
-├── programs/               User-space assembly programs (131 programs)
+├── programs/               User-space assembly programs (140 programs)
 │   ├── syscalls.inc        Shared constants and helpers
 │   ├── lib/                Reusable libraries (string, io, math, vga, mem, data, net, gui)
 │   ├── hello.asm           ... through ...

@@ -1,4 +1,4 @@
-; edit.asm - Full-screen text editor for Mellivora OS v2.0
+; edit.asm - Full-screen text editor for Mellivora OS v2.2
 ;
 ; Controls:
 ;   Arrow keys  : Move cursor (with line-wrap)

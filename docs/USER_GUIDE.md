@@ -3,7 +3,7 @@
 Welcome to Mellivora OS! This guide covers everything you need to know to use the
 HB Lair shell, manage files, run programs, network, and get the most out of the system.
 
-> **Version 2.1.0** — 131 programs, 68 syscalls, full TCP/IP networking, Burrows desktop
+> **Version 2.2.0** — 140 programs, 68 syscalls, full TCP/IP networking, Burrows desktop
 
 ---
 
@@ -64,26 +64,27 @@ press **Enter** to execute them. Type `help` to see all available commands.
 
 ### Command History
 
-The shell remembers the last 8 commands. Use **Up** and **Down** arrows to browse.
+The shell remembers the last 64 commands. Use **Up** and **Down** arrows to browse.
 Press **Enter** to re-execute a recalled command.
 
 ---
 
 ## Directory Structure
 
-Mellivora organizes 154 files into subdirectories:
+Mellivora organizes 169 files into subdirectories:
 
 ```text
 /
-├── bin/          110 utility and tool programs (edit, grep, tcc, httpd, ...)
+├── bin/          119 utility and tool programs (edit, grep, tcc, httpd, ...)
 ├── games/         21 games (snake, tetris, chess, rogue, galaga, ...)
 ├── samples/       17 sample scripts (11 C, 6 Perl)
-├── docs/           5 text files (readme, license, notes, todo, poem)
-└── script.bat    Example batch script
+├── docs/          10 text files (readme, license, notes, todo, poem, man pages)
+├── script.bat    Example batch script
+└── welcome.bat   System highlights and quick-start tips
 ```
 
-Directories support up to 16 levels of nesting. The root directory holds up to 227
-entries; subdirectories hold up to 56 entries each.
+Directories support up to 16 levels of nesting. The root directory holds up to 455
+entries; subdirectories hold up to 224 entries each.
 
 ---
 
@@ -531,7 +532,7 @@ Finished.
 
 ## Programs
 
-Mellivora ships with **131 assembly programs** organized in `/bin` (110 utilities) and
+Mellivora ships with **140 assembly programs** organized in `/bin` (119 utilities) and
 `/games` (21 games), plus **17 sample scripts** (11 C, 6 Perl) in `/samples`.
 
 ### Games (21) — in `/games`
@@ -818,8 +819,8 @@ Or run `burrows` from the command line.
 - **Window manager** — up to 16 draggable windows with title bars, close buttons
 - **Taskbar** with application launcher and clock
 - **Mouse support** — PS/2 IRQ12 driver with cursor tracking
-- **3 themes** — Dark, Light, Classic
-- **4 screensaver modes** — Starfield, Matrix, Pipes, Bouncing logo
+- **4 themes** — Blue, Dark, Light, Amber
+- **5 screensaver modes** — Starfield, Matrix, Pipes, Bouncing logo, Plasma
 - **Double buffering** — flicker-free rendering
 
 ### GUI Applications
@@ -1009,7 +1010,7 @@ Lair:/> dhcp && ping 8.8.8.8         # Get IP, then ping Google DNS
 - **No file permissions**: All files are accessible to all operations.
 - **Case-sensitive filenames**: `README.txt` and `readme.txt` are different files.
 - **128 MB RAM limit**: Physical memory manager identity-maps up to 128 MB.
-- **Root: 227 files, Subdirs: 56 files**: Directory entry limits per directory.
+- **Root: 455 files, Subdirs: 224 files**: Directory entry limits per directory.
 - **16-level directory nesting**: Maximum subdirectory depth.
 - **Tab completion**: Completes filenames in the current directory only (not PATH-aware).
 - **DNS cache**: 8-entry cache — repeated queries for the same hostname are served from cache.

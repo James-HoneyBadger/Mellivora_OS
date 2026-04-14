@@ -3631,7 +3631,7 @@ gui_applet_about:
         mov edx, [gui_theme + THEME_ACCENT]
         call gui_bb_draw_string
 
-        ; Line 2: "v2.0.0"
+        ; Line 2: "v2.2.0"
         mov edx, [ebp + WIN_Y]
         lea eax, [ecx + 100]
         lea ebx, [edx + 44]
@@ -4560,9 +4560,28 @@ gui_applet_settings:
         call gui_bb_draw_string
         pop edx
 
+        ; Amber theme button
+        lea eax, [ecx + 20]
+        lea ebx, [edx + 96]
+        push ecx
+        push edx
+        mov ecx, 100
+        mov edx, 36
+        mov esi, 0x00CC8800
+        call gui_bb_fill_rect
+        pop edx
+        pop ecx
+        lea eax, [ecx + 36]
+        push edx
+        lea ebx, [edx + 106]
+        mov esi, gui_str_theme_amber
+        mov edx, 0x00FFCC00
+        call gui_bb_draw_string
+        pop edx
+
         ; Current theme preview (color bar)
         lea eax, [ecx + 20]
-        lea ebx, [edx + 110]
+        lea ebx, [edx + 150]
         push ecx
         push edx
         mov ecx, 320
@@ -4573,7 +4592,7 @@ gui_applet_settings:
         pop ecx
 
         lea eax, [ecx + 100]
-        lea ebx, [edx + 122]
+        lea ebx, [edx + 162]
         mov esi, gui_str_set_cur
         push edx
         mov edx, 0x00FFFFFF
@@ -4582,7 +4601,7 @@ gui_applet_settings:
 
         ; Instructions
         lea eax, [ecx + 40]
-        lea ebx, [edx + 170]
+        lea ebx, [edx + 210]
         mov esi, gui_str_set_instr
         mov edx, 0x00808080
         call gui_bb_draw_string
@@ -4601,6 +4620,8 @@ gui_applet_settings:
         je .set_dark
         cmp al, '3'
         je .set_light
+        cmp al, '4'
+        je .set_amber
         cmp al, 0
         jne .set_loop
 
@@ -4644,10 +4665,12 @@ gui_applet_settings:
         sub edx, ebx
         mov edi, [mouse_y]
         sub edi, ecx
+
+        ; Row 1 buttons: y+50..y+86
         cmp edi, 50
         jl .set_loop
         cmp edi, 86
-        jg .set_loop
+        jg .set_row2_check
         cmp edx, 20
         jl .set_loop
         cmp edx, 120
@@ -4660,6 +4683,18 @@ gui_applet_settings:
         jl .set_loop
         cmp edx, 340
         jle .set_light_click
+        jmp .set_loop
+
+.set_row2_check:
+        ; Row 2 buttons: y+96..y+132
+        cmp edi, 96
+        jl .set_loop
+        cmp edi, 132
+        jg .set_loop
+        cmp edx, 20
+        jl .set_loop
+        cmp edx, 120
+        jle .set_amber_click
         jmp .set_loop
 
 .set_blue_click:
@@ -4694,6 +4729,18 @@ gui_applet_settings:
         jnz .set_lrel
 .set_light:
         mov esi, gui_theme_light
+        mov edi, gui_theme
+        mov ecx, THEME_SIZE / 4
+        rep movsd
+        jmp .set_loop
+
+.set_amber_click:
+.set_arel:
+        movzx eax, byte [mouse_buttons]
+        test eax, 0x01
+        jnz .set_arel
+.set_amber:
+        mov esi, gui_theme_amber
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
@@ -5783,6 +5830,20 @@ gui_theme_light:
         dd 0x00E0E0E0
         dd 0x004080C0
 
+gui_theme_amber:
+        dd 0x00201000           ; desktop bg - deep brown
+        dd 0x00301800           ; taskbar bg - dark brown
+        dd 0x00CC8800           ; title active - amber
+        dd 0x00604020           ; title inactive - muted brown
+        dd 0x00FFCC00           ; title text - bright amber
+        dd 0x00281400           ; window bg - very dark brown
+        dd 0x00CC8800           ; window border - amber
+        dd 0x00301800           ; menu bg - dark brown
+        dd 0x00FFAA00           ; menu text - amber
+        dd 0x00CC8800           ; menu highlight - amber
+        dd 0x00503000           ; button bg - brown
+        dd 0x00FF9900           ; accent - orange-amber
+
 ;=======================================================================
 ; DATA: STRINGS
 ;=======================================================================
@@ -5793,7 +5854,7 @@ gui_str_clock:      db "Clock", 0
 gui_str_settings:   db "Settings", 0
 
 gui_str_about_l1:   db "Mellivora OS", 0
-gui_str_about_l2:   db "v2.0.0", 0
+gui_str_about_l2:   db "v2.2.0", 0
 gui_str_about_l3:   db "Burrows Desktop Environment", 0
 gui_str_about_l4:   db "32-bit Protected Mode / i486+", 0
 gui_str_about_l5:   db "HBFS Filesystem / 2 GB", 0
@@ -5816,8 +5877,9 @@ gui_str_set_title:  db "Select Color Theme", 0
 gui_str_theme_blue: db "Blue", 0
 gui_str_theme_dark: db "Dark", 0
 gui_str_theme_light: db "Light", 0
+gui_str_theme_amber: db "Amber", 0
 gui_str_set_cur:    db "Current Theme", 0
-gui_str_set_instr:  db "Click or press 1/2/3", 0
+gui_str_set_instr:  db "Click or press 1/2/3/4", 0
 
 ; Menu item strings
 gui_str_m_term:     db "BTerm", 0

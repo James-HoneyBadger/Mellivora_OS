@@ -1055,7 +1055,7 @@ Applications can read and apply themes:
         mov eax, theme_buf
         call gui_get_theme
 
-        ; Set a theme (0=Blue, 1=Dark, 2=Light)
+        ; Set a theme (0=Blue, 1=Dark, 2=Light, 3=Amber)
         mov eax, SYS_GUI
         mov ebx, GUI_SET_THEME
         mov ecx, 1              ; Dark theme

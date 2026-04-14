@@ -8,6 +8,12 @@ shell_main:
         mov eax, [program_exit_code]
         mov [shell_last_status], eax
 
+        ; Print elapsed time if "time <cmd>" was active
+        cmp byte [time_active], 1
+        jne .no_time_report
+        call shell_print_elapsed
+.no_time_report:
+
         ; Re-launch parent program if child was exec'd from user-mode
         cmp byte [parent_active], 0
         je .no_parent_resume
@@ -28,6 +34,45 @@ shell_main:
         ; Set default PATH
         mov esi, default_path
         call env_set_str
+
+        ; Show MOTD on first boot
+        cmp byte [boot_motd_shown], 0
+        jne .no_motd
+        mov byte [boot_motd_shown], 1
+        mov byte [vga_color], COLOR_INFO
+        mov esi, motd_str
+        call vga_print
+
+        ; Print boot time
+        mov esi, msg_boot_time
+        call vga_print
+        mov eax, [tick_count]
+        xor edx, edx
+        mov ebx, PIT_HZ
+        div ebx                 ; EAX = whole seconds, EDX = remainder
+        push edx
+        call vga_print_dec
+        mov al, '.'
+        call vga_putchar
+        pop eax
+        ; Convert remainder to centiseconds: rem * 100 / PIT_HZ
+        imul eax, 100
+        xor edx, edx
+        mov ebx, PIT_HZ
+        div ebx
+        cmp eax, 10
+        jge .bt_no_pad
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.bt_no_pad:
+        call vga_print_dec
+        mov esi, msg_boot_suf
+        call vga_print
+
+        mov byte [vga_color], COLOR_DEFAULT
+.no_motd:
 
 .prompt:
         ; Print prompt with full current directory path
@@ -276,7 +321,7 @@ shell_main:
 ;---------------------------------------
 ; Save current line_buffer to history ring
 ;---------------------------------------
-HIST_MAX        equ 8
+HIST_MAX        equ 64
 HIST_ENTRY_SIZE equ 256
 
 shell_save_history:
@@ -349,6 +394,56 @@ shell_parse_cmd:
 
 shell_status_fail:
         mov dword [shell_last_status], 1
+        ret
+
+;---------------------------------------
+; shell_print_elapsed - Print elapsed time since time_start_ticks
+; Output: "real 1.23s" format (seconds with 2 decimal places)
+;---------------------------------------
+shell_print_elapsed:
+        pushad
+        mov byte [time_active], 0
+
+        ; Calculate elapsed ticks
+        mov eax, [tick_count]
+        sub eax, [time_start_ticks]
+
+        ; Convert ticks to centiseconds: ticks * 100 / PIT_HZ
+        ; Since PIT_HZ=100, ticks already ARE centiseconds (10ms each)
+        mov ecx, eax            ; ECX = centiseconds total
+
+        ; Print prefix
+        mov esi, msg_elapsed
+        call vga_print
+
+        ; Print whole seconds: centiseconds / 100
+        mov eax, ecx
+        xor edx, edx
+        mov ebx, 100
+        div ebx                 ; EAX = seconds, EDX = remainder
+        push edx
+        call vga_print_dec
+
+        ; Print decimal point
+        mov esi, msg_dot
+        call vga_print
+
+        ; Print fractional part (2 digits, zero-padded)
+        pop eax                 ; remainder (0-99)
+        cmp eax, 10
+        jge .no_pad
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.no_pad:
+        call vga_print_dec
+
+        ; Print "s\n"
+        mov esi, msg_s_nl
+        call vga_print
+
+        popad
         ret
 
 ;---------------------------------------
@@ -883,6 +978,18 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_pwd
 
+        mov edi, cmd_pushd_str
+        call str_starts_with
+        jc .cmd_pushd
+
+        mov edi, cmd_popd_str
+        call str_starts_with
+        jc .cmd_popd
+
+        mov edi, cmd_dirs_str
+        call str_starts_with
+        jc .cmd_dirs
+
         mov edi, cmd_touch_str
         call str_starts_with
         jc .cmd_touch
@@ -1287,6 +1394,10 @@ shell_dispatch_core:
         ret
 
 .cmd_time:
+        ; If no arguments, show uptime
+        cmp byte [esi], 0
+        jne .cmd_time_cmd
+
         mov esi, msg_uptime
         call vga_print
         mov eax, [tick_count]
@@ -1296,6 +1407,36 @@ shell_dispatch_core:
         call vga_print_dec
         mov esi, msg_seconds
         call vga_print
+        ret
+
+.cmd_time_cmd:
+        ; "time <command>" — measure execution duration
+        ; Copy remaining args into line_buffer for re-dispatch
+        mov edi, line_buffer
+        mov ecx, 255
+.tc_copy:
+        lodsb
+        stosb
+        test al, al
+        jz .tc_go
+        dec ecx
+        jnz .tc_copy
+.tc_go:
+        ; Record start ticks and set flag
+        mov eax, [tick_count]
+        mov [time_start_ticks], eax
+        mov byte [time_active], 1
+
+        ; Re-dispatch the command in line_buffer
+        mov esi, line_buffer
+        call skip_spaces
+        call shell_dispatch_core
+
+        ; If we get here, it was a built-in (externals don't return)
+        cmp byte [time_active], 1
+        jne .tc_done
+        call shell_print_elapsed
+.tc_done:
         ret
 
 .cmd_net:
@@ -1392,6 +1533,19 @@ shell_dispatch_core:
 
 .cmd_pwd:
         call cmd_pwd
+        ret
+
+.cmd_pushd:
+        call skip_spaces
+        call cmd_pushd
+        ret
+
+.cmd_popd:
+        call cmd_popd
+        ret
+
+.cmd_dirs:
+        call cmd_dirs
         ret
 
 .cmd_touch:
@@ -1542,10 +1696,10 @@ shell_dispatch_core:
         cmp byte [esi], 0
         je .scrsaver_show
 
-        ; Parse mode number (0-3)
+        ; Parse mode number (0-4)
         movzx eax, byte [esi]
         sub eax, '0'
-        cmp eax, 3
+        cmp eax, 4
         ja .scrsaver_usage
         mov [scr_mode], al
         mov esi, msg_scrsaver_set
@@ -2471,6 +2625,7 @@ cmd_which:
         dd cmd_df_str, cmd_more_str, cmd_echo_str, cmd_wc_str
         dd cmd_find_str, cmd_append_str, cmd_date_str, cmd_beep_str
         dd cmd_batch_str, cmd_mkdir_str, cmd_cd_str, cmd_pwd_str
+        dd cmd_pushd_str, cmd_popd_str, cmd_dirs_str
         dd cmd_touch_str, cmd_set_str, cmd_unset_str, cmd_shutdown_str
         dd cmd_reboot_str
         dd cmd_cls_str, cmd_head_str, cmd_tail_str, cmd_type_str

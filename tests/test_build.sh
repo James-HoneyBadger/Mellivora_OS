@@ -45,7 +45,7 @@ check "stage2.bin <= 16384 bytes (32 sectors)" "[[ ${STAGE2_SIZE:-0} -le 16384 ]
 
 KERNEL_SIZE=$(file_sz kernel.bin)
 check "kernel.bin exists"       "[[ ${KERNEL_SIZE:-0} -gt 0 ]]"
-check "kernel.bin <= 512 KB"    "[[ ${KERNEL_SIZE:-0} -le 524288 ]]"
+check "kernel.bin <= 640 KB"    "[[ ${KERNEL_SIZE:-0} -le 655360 ]]"
 check "kernel.bin > 100 KB"     "[[ ${KERNEL_SIZE:-0} -ge 102400 ]]"
 
 IMG_SIZE=$(file_sz "$IMG")

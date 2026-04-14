@@ -102,11 +102,23 @@ str_copy:
 
 banner_str:
         db COLOR_HEADER
-        db "          Mellivora OS - 32-bit Protected Mode Operating System          ", 0x0A
-        db "       HB Lair v2.0 - Honey Badger Lair / i486+                        ", 0x0A, 0
+        db "     __  __      _ _ _                        ___  ____                  ", 0x0A
+        db "    |  \/  | ___| | (_)_   _____  _ __ __ _  / _ \/ ___|                 ", 0x0A
+        db "    | |\/| |/ _ \ | | \ \ / / _ \| '__/ _` || | | \___ \                 ", 0x0A
+        db "    | |  | |  __/ | | |\ V / (_) | | | (_| || |_| |___) |                ", 0x0A
+        db "    |_|  |_|\___|_|_|_| \_/ \___/|_|  \__,_| \___/|____/                 ", 0x0A
+        db "                                                                          ", 0x0A
+        db "       HB Lair v2.2 - Honey Badger Lair  |  32-bit i486+                ", 0x0A, 0
+
+motd_str:
+        db 0x0A
+        db "  Welcome to the Lair!  Type 'help' for commands, 'ver' for system info.", 0x0A, 0
+
+msg_boot_time:  db "  Boot complete in ", 0
+msg_boot_suf:   db "s", 0x0A, 0x0A, 0
 
 version_text:
-        db "Mellivora OS v2.0.0", 0x0A
+        db "Mellivora OS v2.2.0", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair (Honey Badger Lair)", 0x0A
@@ -115,7 +127,7 @@ version_text:
         db "  Disk:          ATA PIO, LBA48 (up to 128 PB)", 0x0A
         db "  Filesystem:    HBFS (Honey Badger File System)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
-        db "    Max files:   455 root / 56 per subdirectory", 0x0A
+        db "    Max files:   455 root / 224 per subdirectory", 0x0A
         db "    Max name:    252 characters", 0x0A
         db "    Multi-block: Files can span multiple blocks", 0x0A
         db "    Subdirs:     mkdir / cd / pwd", 0x0A
@@ -124,13 +136,16 @@ version_text:
         db "  Display:       VGA 80x25 text, 16 colors", 0x0A
         db "  Serial:        COM1 at 115200 baud", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
-        db "  Syscalls:      INT 0x80 (34 syscalls)", 0x0A
+        db "  Audio:         Sound Blaster 16 (ISA DMA)", 0x0A
+        db "  Syscalls:      INT 0x80 (68 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Shell:         Tab completion, history, Ctrl+C abort", 0x0A
         db "  Programs:      Flat binary + ELF32 (ring 3)", 0x0A
         db "  Arguments:     Command-line args via SYS_GETARGS", 0x0A
         db "  Env vars:      set/unset with $VAR expansion", 0x0A
         db "  File I/O:      open/read/write/close/seek (fd)", 0x0A
+        db "  IPC:           Pipes (8) + shared memory (4)", 0x0A
+        db "  Networking:    TCP/IP (RTL8139, ARP, DHCP, DNS)", 0x0A
         db "  Scripts:       Batch file execution", 0x0A
         db "  Security:      Raw disk access denied to ring 3", 0x0A, 0
 
@@ -173,6 +188,9 @@ cmd_batch_str:  db "batch", 0
 cmd_mkdir_str:  db "mkdir", 0
 cmd_cd_str:     db "cd", 0
 cmd_pwd_str:    db "pwd", 0
+cmd_pushd_str:  db "pushd", 0
+cmd_popd_str:   db "popd", 0
+cmd_dirs_str:   db "dirs", 0
 cmd_touch_str:  db "touch", 0
 cmd_set_str:    db "set", 0
 cmd_unset_str:  db "unset", 0
@@ -208,19 +226,22 @@ cmd_ln_str:     db "ln", 0
 ; Screensaver strings
 msg_scrsaver_set:  db "  Screensaver mode set to: ", 0
 msg_scrsaver_cur:  db "  Current screensaver mode: ", 0
-msg_scrsaver_help: db "  Usage: scrsaver [0-3]", 0x0A
+msg_scrsaver_help: db "  Usage: scrsaver [0-4]", 0x0A
                    db "    0 = Starfield   1 = Matrix", 0x0A
-                   db "    2 = Pipes       3 = Bouncing logo", 0x0A, 0
+                   db "    2 = Pipes       3 = Bouncing logo", 0x0A
+                   db "    4 = Plasma", 0x0A, 0
 
 scr_mode_names:
         dd scr_mode_0
         dd scr_mode_1
         dd scr_mode_2
         dd scr_mode_3
+        dd scr_mode_4
 scr_mode_0: db "Starfield", 0
 scr_mode_1: db "Matrix", 0
 scr_mode_2: db "Pipes", 0
 scr_mode_3: db "Bouncing logo", 0
+scr_mode_4: db "Plasma", 0
 
 ; Help text
 msg_help_no_detail:
@@ -326,8 +347,11 @@ help_text:
         db "    rem comment - Batch comment (skipped)", 0x0A
         db "    @cmd       - Execute silently (no echo)", 0x0A
         db "  mkdir D    - Create directory", 0x0A
-        db "  cd DIR     - Change directory", 0x0A
+        db "  cd DIR     - Change directory (cd - for previous)", 0x0A
         db "  pwd        - Print working directory", 0x0A
+        db "  pushd DIR  - Push directory and cd to DIR", 0x0A
+        db "  popd       - Pop directory and restore it", 0x0A
+        db "  dirs       - Show directory stack", 0x0A
         db "  set N V    - Set environment variable", 0x0A
         db "  unset N    - Remove environment variable", 0x0A
         db "  shutdown   - Shut down the system", 0x0A
@@ -335,7 +359,7 @@ help_text:
         db "  mem        - Memory information", 0x0A
         db "  disk       - Disk information", 0x0A
         db "  df         - Filesystem usage", 0x0A
-        db "  time       - Uptime", 0x0A
+        db "  time [CMD] - Uptime / measure command duration", 0x0A
         db "  net        - Show network interface status", 0x0A
         db "  diff F1 F2 - Compare two files line by line", 0x0A
         db "  uniq [-cd] [F] - Remove adjacent duplicates", 0x0A
@@ -430,6 +454,9 @@ type_link:      db "link ", 0
 msg_dir_count:  db "  ", 0
 msg_dir_files:  db " file(s)", 0x0A, 0
 msg_not_found:  db "File not found", 0x0A, 0
+msg_no_prev_dir: db "cd: no previous directory", 0x0A, 0
+msg_pushd_full: db "pushd: directory stack full", 0x0A, 0
+msg_popd_empty: db "popd: directory stack empty", 0x0A, 0
 msg_deleted:    db "Deleted.", 0x0A, 0
 msg_saved:      db "Saved.", 0x0A, 0
 msg_copied:     db "Copied.", 0x0A, 0
@@ -451,6 +478,9 @@ msg_format_confirm: db "Format will erase all data. Continue? (y/N) ", 0
 msg_cancelled:  db "Cancelled.", 0x0A, 0
 msg_uptime:     db "Uptime: ", 0
 msg_seconds:    db " seconds", 0x0A, 0
+msg_elapsed:    db 0x0A, "real ", 0
+msg_dot:        db ".", 0
+msg_s_nl:       db "s", 0x0A, 0
 msg_serial_info: db "  Serial:        COM1 @ 115200 baud", 0x0A, 0
 
 ; (Networking strings moved to net.inc)
@@ -585,7 +615,7 @@ redir_in_buf:   resb BATCH_BUFFER_SIZE
 exc_eip:        resd 1          ; Saved EIP from exception
 exc_errcode:    resd 1          ; Saved error code from exception
 
-hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (8 * 256 = 2KB)
+hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (64 * 256 = 16KB)
 hist_count:     resd 1          ; Number of entries in history
 hist_browse:    resd 1          ; Current browse position
 
@@ -598,6 +628,7 @@ serial_present: resb 1
 kb_ctrl:        resb 1
 kb_alt:         resb 1
 boot_kb_flushed: resb 1
+boot_motd_shown: resb 1          ; 0 = show MOTD on first prompt
 
 ; RTC time fields
 rtc_sec:        resb 1
@@ -698,6 +729,25 @@ path_save_sects:  resd 1          ; Saved current_dir_sects
 path_save_depth:  resd 1          ; Saved dir_depth
 path_save_name:   resb 256        ; Saved current_dir_name
 path_save_stack:  resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE  ; Saved dir_stack
+
+; Previous directory state for "cd -"
+prev_dir_lba:     resd 1
+prev_dir_sects:   resd 1
+prev_dir_depth:   resd 1
+prev_dir_name:    resb 256
+prev_dir_stack:   resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
+prev_dir_valid:   resb 1          ; 0 = no previous dir yet
+
+; pushd/popd directory stack (8 entries, each is a full CWD snapshot)
+PUSHD_MAX         equ 8
+; Each pushd entry: lba(4) + sects(4) + depth(4) + name(256) + dir_stack(4224) = 4492
+PUSHD_ENTRY_SIZE  equ 4 + 4 + 4 + 256 + (DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE)
+pushd_stack:      resb PUSHD_MAX * PUSHD_ENTRY_SIZE
+pushd_count:      resd 1          ; Number of entries on pushd stack
+
+; Shell "time" command timing state
+time_active:      resb 1          ; 1 = timing a command
+time_start_ticks: resd 1          ; tick_count at start
 
 ; File-level CWD save (used by hbfs_read_file path resolution)
 file_save_lba:    resd 1
@@ -847,7 +897,7 @@ clipboard_len:    resd 1          ; Current clipboard content length
 
 ; Screensaver
 scr_idle_count:   resd 1          ; Idle tick counter
-scr_mode:         resb 1          ; Active screensaver mode (0-3)
+scr_mode:         resb 1          ; Active screensaver mode (0-4)
 scr_rng_state:    resd 1          ; PRNG state
 scr_star_x:       resw SCR_NUM_STARS
 scr_star_y:       resw SCR_NUM_STARS

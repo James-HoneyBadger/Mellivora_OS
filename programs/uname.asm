@@ -133,7 +133,7 @@ skip_spaces:
 ;=======================================
 sysname:    db "Mellivora", 0
 nodename:   db "honeybadger", 0
-release:    db "2.1.0", 0
+release:    db "2.2.0", 0
 version:    db "#1 SMP i486", 0
 machine:    db "i486", 0
 

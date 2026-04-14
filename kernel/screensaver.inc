@@ -7,6 +7,7 @@
 ;   1 = Matrix rain (green cascading characters)
 ;   2 = Pipes (colored pipes growing in random directions)
 ;   3 = Bouncing logo (Mellivora text bouncing around)
+;   4 = Plasma (color-cycling plasma effect)
 ;
 ; Integration:
 ;   Call scr_idle_tick each frame from gui_desktop_loop.
@@ -87,6 +88,8 @@ scr_run:
         je .scr_init_pipes
         cmp eax, 3
         je .scr_init_bounce
+        cmp eax, 4
+        je .scr_init_plasma
         ; Default: starfield
         call scr_starfield_init
         jmp .scr_loop
@@ -98,6 +101,9 @@ scr_run:
         jmp .scr_loop
 .scr_init_bounce:
         call scr_bounce_init
+        jmp .scr_loop
+.scr_init_plasma:
+        call scr_plasma_init
 
 .scr_loop:
         ; Clear backbuffer to black (Pipes skips clear to accumulate)
@@ -119,6 +125,8 @@ scr_run:
         je .scr_draw_pipes
         cmp eax, 3
         je .scr_draw_bounce
+        cmp eax, 4
+        je .scr_draw_plasma
         call scr_starfield_frame
         jmp .scr_flip
 .scr_draw_matrix:
@@ -129,6 +137,9 @@ scr_run:
         jmp .scr_flip
 .scr_draw_bounce:
         call scr_bounce_frame
+        jmp .scr_flip
+.scr_draw_plasma:
+        call scr_plasma_frame
 
 .scr_flip:
         call gui_flip
@@ -773,4 +784,190 @@ scr_bounce_frame:
 ;---------------------------------------
 scr_bounce_str1: db "  MELLIVORA OS  ", 0
 scr_bounce_str2: db " Honey Badger Edition ", 0
-scr_bounce_str3: db "  v2.1.0  ", 0
+scr_bounce_str3: db "  v2.2.0  ", 0
+
+;=======================================================================
+; SCREENSAVER 4: PLASMA (Color-cycling plasma effect)
+;=======================================================================
+; Uses a simple integer approximation of sin-based plasma.
+; Renders at reduced resolution (160x120) and scales 4x to 640x480.
+
+SCR_PLASMA_W    equ 160
+SCR_PLASMA_H    equ 120
+
+scr_plasma_init:
+        pushad
+        mov dword [scr_plasma_time], 0
+
+        ; Build approximate sine table (256 entries, values 0-255)
+        ; Uses a simple quadratic approximation
+        mov edi, scr_sine_tbl
+        xor ecx, ecx           ; i = 0
+.sine_loop:
+        ; Approximate: sin(i * 2pi/256) mapped to 0..255
+        ; Split into quadrants
+        mov eax, ecx
+        and eax, 0x3F          ; position within quadrant (0-63)
+        test ecx, 0x40         ; 2nd/4th quadrant?
+        jz .sine_rising
+        mov ebx, 63
+        sub ebx, eax
+        mov eax, ebx
+.sine_rising:
+        ; eax = 0..63, map to 0..127 with smooth curve
+        ; Use (x * (128 - x)) >> 5 for a smooth-ish curve
+        mov ebx, 64
+        sub ebx, eax           ; 64 - x
+        imul eax, ebx          ; x * (64 - x), max=1024
+        shr eax, 3             ; max ~128
+        cmp eax, 128
+        jbe .sine_cap
+        mov eax, 128
+.sine_cap:
+        ; Map to 0..255 based on half of cycle
+        test ecx, 0x80
+        jz .sine_pos
+        ; Negative half: 128 - val
+        mov ebx, 128
+        sub ebx, eax
+        mov eax, ebx
+        jmp .sine_store
+.sine_pos:
+        add eax, 128           ; Positive half: 128 + val
+        cmp eax, 255
+        jbe .sine_store
+        mov eax, 255
+.sine_store:
+        mov [edi], al
+        inc edi
+        inc ecx
+        cmp ecx, 256
+        jb .sine_loop
+
+        popad
+        ret
+
+;---------------------------------------
+; scr_plasma_frame - Render one plasma frame
+;---------------------------------------
+scr_plasma_frame:
+        pushad
+
+        inc dword [scr_plasma_time]
+        mov ebp, [scr_plasma_time]
+
+        ; For each pixel at reduced resolution, compute color
+        mov edi, GUI_BACKBUF
+        xor ebx, ebx           ; y = 0
+
+.pf_row:
+        xor ecx, ecx           ; x = 0
+
+.pf_col:
+        ; Compute plasma value from multiple sine terms
+        ; val = sin[x+t] + sin[y+t*2] + sin[(x+y)/2+t] + sin[sqrt_approx(x,y)+t*3]
+
+        ; Term 1: sin[(x*3 + time) & 0xFF]
+        mov eax, ecx
+        lea eax, [eax + eax*2]  ; x*3
+        add eax, ebp
+        and eax, 0xFF
+        movzx esi, byte [scr_sine_tbl + eax]
+
+        ; Term 2: sin[(y*3 + time*2) & 0xFF]
+        mov eax, ebx
+        lea eax, [eax + eax*2]  ; y*3
+        lea edx, [ebp + ebp]    ; time*2
+        add eax, edx
+        and eax, 0xFF
+        movzx eax, byte [scr_sine_tbl + eax]
+        add esi, eax
+
+        ; Term 3: sin[((x+y)*2 + time) & 0xFF]
+        mov eax, ecx
+        add eax, ebx
+        shl eax, 1
+        add eax, ebp
+        and eax, 0xFF
+        movzx eax, byte [scr_sine_tbl + eax]
+        add esi, eax
+
+        ; Term 4: sin[(x*2 - y + time*3) & 0xFF]
+        mov eax, ecx
+        shl eax, 1
+        sub eax, ebx
+        lea edx, [ebp + ebp*2]  ; time*3
+        add eax, edx
+        and eax, 0xFF
+        movzx eax, byte [scr_sine_tbl + eax]
+        add esi, eax
+
+        ; esi = sum of 4 terms (0..1020), divide by 4 -> 0..255
+        shr esi, 2
+
+        ; Map value to RGB color using smooth gradient
+        ; R = sin[val], G = sin[val + 85], B = sin[val + 170]
+        movzx eax, byte [scr_sine_tbl + esi]
+        shr eax, 1              ; R (0-127 range, softer)
+        mov edx, eax
+        shl edx, 16             ; R in position
+
+        lea eax, [esi + 85]
+        and eax, 0xFF
+        movzx eax, byte [scr_sine_tbl + eax]
+        shr eax, 1
+        shl eax, 8              ; G in position
+        or edx, eax
+
+        lea eax, [esi + 170]
+        and eax, 0xFF
+        movzx eax, byte [scr_sine_tbl + eax]
+        shr eax, 1              ; B
+        or edx, eax
+
+        ; Write 4x4 block (scale 160x120 -> 640x480)
+        push ebx
+        push ecx
+        push edi
+
+        ; Calculate top-left framebuffer offset: (y*4)*640 + (x*4)
+        mov eax, ebx
+        shl eax, 2              ; y*4
+        imul eax, GUI_SCREEN_W  ; * 640
+        mov edi, ecx
+        shl edi, 2              ; x*4
+        add edi, eax
+        shl edi, 2              ; * 4 bytes per pixel
+        add edi, GUI_BACKBUF
+
+        ; Write 4 rows of 4 pixels each
+        mov eax, edx
+        %assign _prow 0
+        %rep 4
+            mov [edi + _prow * GUI_SCREEN_W * 4], eax
+            mov [edi + _prow * GUI_SCREEN_W * 4 + 4], eax
+            mov [edi + _prow * GUI_SCREEN_W * 4 + 8], eax
+            mov [edi + _prow * GUI_SCREEN_W * 4 + 12], eax
+            %assign _prow _prow + 1
+        %endrep
+
+        pop edi
+        pop ecx
+        pop ebx
+
+        inc ecx
+        cmp ecx, SCR_PLASMA_W
+        jb .pf_col
+
+        inc ebx
+        cmp ebx, SCR_PLASMA_H
+        jb .pf_row
+
+        popad
+        ret
+
+;---------------------------------------
+; Plasma data
+;---------------------------------------
+scr_plasma_time: dd 0
+scr_sine_tbl:    times 256 db 0

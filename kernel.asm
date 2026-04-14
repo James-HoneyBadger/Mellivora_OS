@@ -122,7 +122,7 @@ HBFS_ROOT_DIR_BLOCKS equ 32            ; Root directory uses 32 blocks (supports
 HBFS_ROOT_DIR_SECTS  equ HBFS_ROOT_DIR_BLOCKS * HBFS_SECTORS_PER_BLK ; 256 sectors
 HBFS_ROOT_DIR_SIZE   equ HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE      ; 131072 bytes
 HBFS_MAX_FILES       equ HBFS_ROOT_DIR_SIZE / HBFS_DIR_ENTRY_SIZE    ; 455 entries
-HBFS_SUBDIR_BLOCKS   equ 8            ; Subdirectories get 8 blocks (112 entries each)
+HBFS_SUBDIR_BLOCKS   equ 16           ; Subdirectories get 16 blocks (224 entries each)
 HBFS_SUPERBLOCK_LBA  equ 417           ; After kernel area (LBA 33 + 384 sectors)
 HBFS_BITMAP_START    equ 418           ; Block allocation bitmap start
 HBFS_BITMAP_BLOCKS   equ 16            ; 16 blocks for bitmap (covers 524288 blocks)

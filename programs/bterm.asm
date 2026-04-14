@@ -1104,8 +1104,8 @@ cmd_help:       db "help", 0
 cmd_exit:       db "exit", 0
 
 ; Messages
-msg_welcome:    db "Mellivora Terminal v2.0", 0
-msg_version:    db "Mellivora OS v2.1", 0
+msg_welcome:    db "Mellivora Terminal v2.2", 0
+msg_version:    db "Mellivora OS v2.2", 0
 msg_whoami:     db "root", 0
 msg_unknown:    db "Unknown command. Type 'help'.", 0
 msg_ok:         db "OK", 0
