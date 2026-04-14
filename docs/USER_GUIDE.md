@@ -3,7 +3,7 @@
 Welcome to Mellivora OS! This guide covers everything you need to know to use the
 HB Lair shell, manage files, run programs, network, and get the most out of the system.
 
-> **Version 2.2.0** — 140 programs, 68 syscalls, full TCP/IP networking, Burrows desktop
+> **Version 3.0.0** — 140 programs, 72 syscalls, full TCP/IP networking, Burrows desktop
 
 ---
 

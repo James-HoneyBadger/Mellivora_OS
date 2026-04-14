@@ -118,7 +118,7 @@ msg_boot_time:  db "  Boot complete in ", 0
 msg_boot_suf:   db "s", 0x0A, 0x0A, 0
 
 version_text:
-        db "Mellivora OS v2.2.0", 0x0A
+        db "Mellivora OS v3.0.0", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair (Honey Badger Lair)", 0x0A
@@ -394,6 +394,13 @@ msg_pf:         db "*** PAGE FAULT ***", 0x0A, 0
 msg_pf_addr:    db "  Address: 0x", 0
 msg_pf_eip:     db "  EIP: 0x", 0
 msg_pf_err:     db "  Error: 0x", 0
+msg_pf_cause:   db "  Cause: ", 0
+msg_pf_not_present: db "[not present] ", 0
+msg_pf_protection:  db "[protection] ", 0
+msg_pf_read:    db "[read] ", 0
+msg_pf_write_acc: db "[write] ", 0
+msg_pf_supervisor: db "[supervisor]", 0
+msg_pf_usermode: db "[user]", 0
 msg_mouse_hdr:  db "PS/2 Mouse status:", 0x0A, 0
 msg_mouse_pos:  db "  Position: ", 0
 msg_mouse_btn:  db "  Buttons:  ", 0

@@ -167,6 +167,46 @@ isr_page_fault:
         mov al, 0x0A
         call vga_putchar
 
+        ; v3.0: Parse error code bits and print human-readable cause
+        ; Bit 0: 0 = page not present, 1 = protection violation
+        ; Bit 1: 0 = read access, 1 = write access
+        ; Bit 2: 0 = supervisor mode, 1 = user mode
+        mov esi, msg_pf_cause
+        call vga_print
+
+        test dword [pf_errcode], 0x01
+        jnz .pf_present
+        mov esi, msg_pf_not_present
+        call vga_print
+        jmp .pf_check_rw
+.pf_present:
+        mov esi, msg_pf_protection
+        call vga_print
+
+.pf_check_rw:
+        test dword [pf_errcode], 0x02
+        jnz .pf_write
+        mov esi, msg_pf_read
+        call vga_print
+        jmp .pf_check_mode
+.pf_write:
+        mov esi, msg_pf_write_acc
+        call vga_print
+
+.pf_check_mode:
+        test dword [pf_errcode], 0x04
+        jnz .pf_user
+        mov esi, msg_pf_supervisor
+        call vga_print
+        jmp .pf_cause_done
+.pf_user:
+        mov esi, msg_pf_usermode
+        call vga_print
+
+.pf_cause_done:
+        mov al, 0x0A
+        call vga_putchar
+
         mov byte [vga_color], COLOR_DEFAULT
         popad
 

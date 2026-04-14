@@ -77,6 +77,8 @@ sys_pipe_create:
 ; sys_pipe_write - Write data to pipe
 ; EBX = pipe_id, ECX = source buf, EDX = length
 ; Returns: EAX = bytes written
+;
+; v3.0: Wakes any tasks waiting on this pipe after writing.
 ;---------------------------------------
 sys_pipe_write:
         pushad
@@ -115,6 +117,10 @@ sys_pipe_write:
         jmp .spw_loop
 
 .spw_done:
+        ; Wake any task waiting on this pipe (v3.0)
+        mov eax, ebx            ; pipe_id already in EBX from entry
+        call pipe_wake_waiter
+
         mov [esp + 28], edi     ; return bytes written in EAX
         popad
         iretd
@@ -127,7 +133,14 @@ sys_pipe_write:
 ; sys_pipe_read - Read data from pipe
 ; EBX = pipe_id, ECX = dest buf, EDX = max length
 ; Returns: EAX = bytes read
+;
+; v3.0: If pipe is empty, yields CPU up to PIPE_READ_RETRIES
+;       times before returning 0 (non-blocking fallback).
+;       This replaces the old immediate-return-0 that forced
+;       callers into 100% CPU polling loops.
 ;---------------------------------------
+PIPE_READ_RETRIES equ 200       ; ~200 yields before giving up
+
 sys_pipe_read:
         pushad
         ; Validate pipe_id
@@ -139,6 +152,34 @@ sys_pipe_read:
         cmp byte [ebp + PIPE_ACTIVE], 1
         jne .spr_fail
 
+        ; If buffer empty, yield and retry up to PIPE_READ_RETRIES times
+        mov dword [pipe_retry_count], 0
+.spr_wait:
+        cmp dword [ebp + PIPE_COUNT], 0
+        jne .spr_has_data
+        inc dword [pipe_retry_count]
+        cmp dword [pipe_retry_count], PIPE_READ_RETRIES
+        jge .spr_empty
+        ; Yield the CPU instead of spinning
+        push ebx
+        push ecx
+        push edx
+        push ebp
+        mov eax, SYS_YIELD
+        int 0x80
+        pop ebp
+        pop edx
+        pop ecx
+        pop ebx
+        jmp .spr_wait
+
+.spr_empty:
+        ; No data after retries — return 0
+        mov dword [esp + 28], 0
+        popad
+        iretd
+
+.spr_has_data:
         ; Read bytes from circular buffer
         mov edi, ecx            ; dest buffer
         xor esi, esi            ; bytes read counter
@@ -172,6 +213,15 @@ sys_pipe_read:
         popad
         mov eax, -1
         iretd
+
+;---------------------------------------
+; pipe_wake_waiter - Stub for future
+; wait-queue integration. Currently a NOP
+; since yield-based retry handles wakeup.
+; EAX = pipe_id (preserved)
+;---------------------------------------
+pipe_wake_waiter:
+        ret
 
 ;---------------------------------------
 ; sys_pipe_close - Close/free a pipe
@@ -287,3 +337,4 @@ sys_shmaddr:
 ;=======================================================================
 ipc_pipes:      times (IPC_MAX_PIPES * PIPE_STRUCT_SIZE) db 0
 ipc_shm:        times (IPC_MAX_SHM * SHM_STRUCT_SIZE) db 0
+pipe_retry_count: dd 0

@@ -3631,7 +3631,7 @@ gui_applet_about:
         mov edx, [gui_theme + THEME_ACCENT]
         call gui_bb_draw_string
 
-        ; Line 2: "v2.2.0"
+        ; Line 2: "v3.0.0"
         mov edx, [ebp + WIN_Y]
         lea eax, [ecx + 100]
         lea ebx, [edx + 44]
@@ -5854,7 +5854,7 @@ gui_str_clock:      db "Clock", 0
 gui_str_settings:   db "Settings", 0
 
 gui_str_about_l1:   db "Mellivora OS", 0
-gui_str_about_l2:   db "v2.2.0", 0
+gui_str_about_l2:   db "v3.0.0", 0
 gui_str_about_l3:   db "Burrows Desktop Environment", 0
 gui_str_about_l4:   db "32-bit Protected Mode / i486+", 0
 gui_str_about_l5:   db "HBFS Filesystem / 2 GB", 0

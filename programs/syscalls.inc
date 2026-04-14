@@ -81,6 +81,11 @@ SYS_SHMGET      equ 64          ; Get shared mem: EBX=key ECX=size -> EAX=shm_id
 SYS_SHMADDR     equ 65          ; Get shm address: EBX=shm_id -> EAX=ptr
 SYS_PROCLIST    equ 66          ; Get task info: EBX=slot ECX=buf(16B) -> EAX=0/-1
 SYS_MEMINFO     equ 67          ; Get mem info: -> EAX=free_pages EBX=boot_free_pages
+; v3.0 syscalls
+SYS_CHMOD       equ 68          ; Change perms: EBX=filename ECX=perms -> EAX=0/-1
+SYS_CHOWN       equ 69          ; Change owner: EBX=filename ECX=uid -> EAX=0/-1
+SYS_SYMLINK     equ 70          ; Create link: EBX=linkname ECX=target -> EAX=0/-1
+SYS_READLINK    equ 71          ; Read link: EBX=linkname ECX=buf -> EAX=len/-1
 
 ; Audio format flags (for SYS_AUDIO_PLAY EDX)
 SB_FMT_16BIT    equ (1 << 16)

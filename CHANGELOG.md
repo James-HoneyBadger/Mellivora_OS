@@ -1,5 +1,64 @@
 # Mellivora OS - Changelog
 
+## v3.0.0 - Kernel Overhaul, Filesystem Permissions, TCP Backlog & 4 New Syscalls
+
+### Kernel — Syscall Dispatch (`kernel/syscall.inc`)
+
+- **O(1) jump table**: Replaced 68-entry linear `cmp`/`je` chain with a 128-entry indexed jump table (`jmp [syscall_table + eax * 4]`). Average dispatch time reduced from ~34 comparisons to 1 lookup.
+- **Extensible**: Reserved slots 72–127 for future syscalls; unused entries point to a safe error handler.
+
+### Kernel — Scheduler Enhancements (`kernel/sched.inc`)
+
+- **TASK_BLOCKED state** (state 3): New task state for sleeping/waiting tasks, automatically skipped by round-robin scanner.
+- **sys_sleep** (SYS_SLEEP #16): Rewritten from busy-wait `HLT` loop to proper blocking — sets TASK_BLOCKED, stores wakeup tick in `TCB_WAKEUP`, yields CPU to other tasks.
+- **sched_wake_sleepers**: Called every PIT tick from `irq_timer`; scans all blocked tasks and wakes those whose wakeup tick has elapsed.
+- **TCB_PRIORITY** (offset 24) and **TCB_WAKEUP** (offset 28): New fields replacing reserved padding.
+- **MAX_TASKS** doubled from 16 to 32.
+
+### Kernel — IPC Pipe Fix (`kernel/ipc.inc`)
+
+- **Non-spinning pipe reads**: `sys_pipe_read` now yields CPU up to 200 times when the pipe buffer is empty, instead of immediately returning 0 bytes. Eliminates 100% CPU polling loops in callers.
+- **pipe_wake_waiter** stub: Preparation for future proper wait-queue integration on pipe write.
+
+### Kernel — ISR / IRQ Hardening (`kernel/isr.inc`)
+
+- **Timer context switch CLI**: Added defensive `CLI` before the critical ESP-swap section in `irq_timer`. Prevents potential nested-interrupt corruption if gate type ever changes.
+- **Wake sleepers on tick**: `irq_timer` now calls `sched_wake_sleepers` every tick to unblock sleeping tasks.
+
+### Kernel — Page Fault Handler (`kernel/paging.inc`)
+
+- **Human-readable error codes**: Page fault handler now parses error code bits and prints cause: `[not present]`/`[protection]`, `[read]`/`[write]`, `[supervisor]`/`[user]`.
+
+### Filesystem — Permissions & Symlinks (`kernel/hbfs.inc`)
+
+- **File permissions** (DIRENT_PERMS, offset 276): 9-bit Unix-style `rwxrwxrwx` stored in previously-reserved directory entry bytes. New files default to `0777`.
+- **File ownership** (DIRENT_OWNER, offset 278): 16-bit owner UID per file.
+- **SYS_CHMOD** (#68): Change file permission bits.
+- **SYS_CHOWN** (#69): Change file owner UID.
+- **SYS_SYMLINK** (#70): Create symbolic link (file type `FTYPE_LINK=5`, target path stored as file data).
+- **SYS_READLINK** (#71): Read symbolic link target path.
+
+### Networking — TCP Accept Backlog (`kernel/net.inc`)
+
+- **Child socket allocation**: When a SYN arrives on a LISTEN socket, a NEW child socket is allocated. The parent stays in `TCP_LISTEN` for more connections — enables multiple simultaneous accepts.
+- **TCP SYN_RCVD state handler**: Added missing state machine handler for `TCP_SYN_RCVD`. When the final ACK of the 3-way handshake arrives, properly transitions child socket to `TCP_ESTABLISHED`. This fixes a bug where server-side TCP connections could never complete.
+- **Child socket resolution**: `tcp_handle` now scans for child sockets matching remote IP/port before dispatching, ensuring handshake packets reach the correct socket.
+- **SOCK_PARENT field** (offset 68): Tracks which listening socket spawned each child.
+
+### Networking — UDP Checksum (`kernel/net.inc`)
+
+- **RFC 768 checksum**: `udp_send` now computes a proper UDP checksum over the pseudo-header (source IP, dest IP, protocol, length) plus UDP header and payload, replacing the previous hardcoded zero.
+
+### Programs & User-Space
+
+- **syscalls.inc**: Added `SYS_CHMOD` (#68), `SYS_CHOWN` (#69), `SYS_SYMLINK` (#70), `SYS_READLINK` (#71) for user programs.
+- Version strings updated across: `neofetch`, `uname`, `bterm`, screensaver, MOTD, Burrows About dialog.
+
+### Build & Tests
+
+- All 45 tests passing (syscall consistency, HBFS layout, listing validation).
+- 169 files populated in HBFS image.
+
 ## v2.2.0 - IPC, Audio, Screensavers, 52 New Programs & Bug Fixes
 
 ### Kernel — Inter-Process Communication (`kernel/ipc.inc`)

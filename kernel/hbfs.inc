@@ -553,6 +553,10 @@ hbfs_create_file:
         mov [edi + 268], eax            ; Created timestamp (RTC packed)
         mov [edi + 272], eax            ; Modified timestamp (RTC packed)
 
+        ; v3.0: Set default permissions and owner
+        mov word [edi + DIRENT_PERMS], 0x1FF   ; rwxrwxrwx (0777)
+        mov word [edi + DIRENT_OWNER], 0       ; root (UID 0)
+
         ; Save directory
         call hbfs_save_root_dir
 
@@ -691,3 +695,142 @@ hbfs_mkdir:
 
 .hm_name:  dd 0
 .hm_block: dd 0
+
+;=======================================================================
+; v3.0 FILESYSTEM EXTENSIONS
+;=======================================================================
+
+;---------------------------------------
+; sys_chmod - Change file permissions
+;   EBX = filename pointer
+;   ECX = new permission bits (9 bits: rwxrwxrwx)
+; Returns: EAX = 0 on success, -1 on failure
+;---------------------------------------
+sys_chmod:
+        pushad
+        mov esi, ebx
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .chmod_fail
+        ; EDI = directory entry pointer
+        and ecx, 0x1FF         ; Mask to 9 permission bits
+        mov [edi + DIRENT_PERMS], cx
+        ; Update modified timestamp
+        call rtc_get_timestamp
+        mov [edi + DIRENT_MODIFIED], eax
+        call hbfs_save_root_dir
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.chmod_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_chown - Change file owner
+;   EBX = filename pointer
+;   ECX = new owner UID
+; Returns: EAX = 0 on success, -1 on failure
+;---------------------------------------
+sys_chown:
+        pushad
+        mov esi, ebx
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .chown_fail
+        ; EDI = directory entry pointer
+        mov [edi + DIRENT_OWNER], cx
+        ; Update modified timestamp
+        call rtc_get_timestamp
+        mov [edi + DIRENT_MODIFIED], eax
+        call hbfs_save_root_dir
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.chown_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_symlink - Create a symbolic link
+;   EBX = link name pointer
+;   ECX = target path pointer
+; Returns: EAX = 0 on success, -1 on failure
+;
+; Creates a file of type FTYPE_LINK whose
+; data content is the target path string.
+;---------------------------------------
+sys_symlink:
+        pushad
+        ; Calculate target path length
+        mov esi, ecx
+        xor edx, edx
+.sym_len:
+        lodsb
+        inc edx
+        test al, al
+        jnz .sym_len
+        ; EDX = length including null terminator
+
+        ; Create file with FTYPE_LINK
+        mov esi, ebx            ; link name
+        mov ecx, edx            ; size = target length
+        mov edi, [esp + 12]     ; original ECX = target data pointer
+                                ; (pushad: EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX)
+                                ; [esp+0]=EDI, [esp+4]=ESI, [esp+8]=EBP, [esp+12]=ESP_orig
+                                ; Actually need original ECX from pushad frame
+        mov edi, [esp + 8]      ; pushad frame: [esp+0]=EDI [esp+4]=ESI [esp+8]=EBP [esp+12]=ESP [esp+16]=EBX [esp+20]=EDX [esp+24]=ECX [esp+28]=EAX
+        ; Correction: ECX is at esp+24 in pushad frame (EAX=28, ECX=24, EDX=20, EBX=16, ESP=12, EBP=8, ESI=4, EDI=0)
+        mov edi, [esp + 24]     ; original ECX = target path pointer
+        mov edx, FTYPE_LINK
+        call hbfs_create_file
+        jc .symlink_fail
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.symlink_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_readlink - Read symbolic link target
+;   EBX = link name pointer
+;   ECX = output buffer pointer
+; Returns: EAX = target path length, -1 on failure
+;---------------------------------------
+sys_readlink:
+        pushad
+        mov esi, ebx
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .readlink_fail
+        ; Check it's actually a symlink
+        cmp byte [edi + DIRENT_TYPE], FTYPE_LINK
+        jne .readlink_fail
+        ; Read the link data (target path) from disk
+        mov eax, [edi + DIRENT_START_BLOCK]
+        push ecx                ; save output buffer
+        push dword [edi + DIRENT_SIZE]  ; save size
+        ; Convert block to LBA
+        imul eax, HBFS_SECTORS_PER_BLK
+        add eax, HBFS_DATA_START
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov edi, hbfs_block_buf
+        call ata_read_sectors
+        pop edx                 ; EDX = size
+        pop edi                 ; EDI = output buffer
+        jc .readlink_fail
+        ; Copy target path to output buffer
+        mov esi, hbfs_block_buf
+        mov ecx, edx
+        rep movsb
+        mov [esp + 28], edx     ; Return length in EAX
+        popad
+        iretd
+.readlink_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd

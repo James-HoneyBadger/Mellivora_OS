@@ -128,6 +128,8 @@ SOCK_RETX_SEQ   equ 52          ; dword: SEQ of unACKed data
 SOCK_RETX_LEN   equ 56          ; dword: length of unACKed data (0 = none)
 SOCK_RETX_TIMER equ 60          ; dword: tick count for retransmit timeout
 SOCK_RETX_COUNT equ 64          ; dword: retransmissions performed
+; v3.0 fields
+SOCK_PARENT     equ 68          ; dword: parent listening socket index (-1 = none)
 
 ; Socket buffer size
 SOCK_BUF_SIZE   equ 8192
@@ -1585,7 +1587,7 @@ udp_send:
         add eax, 8
         xchg al, ah
         stosw
-        ; Checksum = 0 (optional for UDP over IPv4)
+        ; v3.0: Checksum placeholder (computed below)
         xor ax, ax
         stosw
 
@@ -1595,6 +1597,11 @@ udp_send:
         cld
         rep movsb
 
+        ; v3.0: Compute UDP checksum over pseudo-header + UDP packet
+        ; Pseudo-header: src_ip(4) + dst_ip(4) + zero(1) + proto(1) + udp_len(2)
+        call udp_compute_checksum
+        mov [net_udp_buf + 6], ax       ; Store checksum at offset 6
+
         ; Send via IP
         mov esi, net_udp_buf
         mov ecx, [net_udp_payload_len]
@@ -1602,6 +1609,80 @@ udp_send:
         mov eax, [net_udp_dst_ip]
         mov dl, IP_PROTO_UDP
         call ip_send
+        popad
+        ret
+
+;---------------------------------------
+; udp_compute_checksum - v3.0
+; Computes RFC 768 UDP checksum over
+; pseudo-header + UDP header + payload.
+; Uses net_udp_buf (complete UDP packet),
+; net_ip (our IP), net_udp_dst_ip.
+; Returns: AX = checksum (network byte order)
+;---------------------------------------
+udp_compute_checksum:
+        pushad
+        xor edx, edx           ; 32-bit accumulator
+
+        ; Add pseudo-header fields
+        ; Source IP (in network byte order)
+        movzx eax, word [net_ip]
+        add edx, eax
+        movzx eax, word [net_ip + 2]
+        add edx, eax
+        ; Destination IP
+        movzx eax, word [net_udp_dst_ip]
+        add edx, eax
+        movzx eax, word [net_udp_dst_ip + 2]
+        add edx, eax
+        ; Zero + Protocol (0x0011 = UDP in big-endian: 0x1100)
+        add edx, 0x1100
+        ; UDP length (already in buffer at offset 4, big-endian)
+        movzx eax, word [net_udp_buf + 4]
+        add edx, eax
+
+        ; Sum UDP header + payload (16-bit words)
+        mov esi, net_udp_buf
+        mov ecx, [net_udp_payload_len]
+        add ecx, 8             ; total UDP length
+        shr ecx, 1             ; word count
+        jz .udp_cksum_odd
+.udp_cksum_loop:
+        movzx eax, word [esi]
+        add edx, eax
+        add esi, 2
+        dec ecx
+        jnz .udp_cksum_loop
+.udp_cksum_odd:
+        ; Handle odd byte
+        mov ecx, [net_udp_payload_len]
+        add ecx, 8
+        test ecx, 1
+        jz .udp_cksum_fold
+        movzx eax, byte [esi]
+        shl eax, 8             ; pad with zero on right
+        add edx, eax
+
+.udp_cksum_fold:
+        ; Fold 32-bit sum to 16 bits
+        mov eax, edx
+        shr eax, 16
+        and edx, 0xFFFF
+        add edx, eax
+        ; Fold again in case of carry
+        mov eax, edx
+        shr eax, 16
+        add edx, eax
+        and edx, 0xFFFF
+
+        ; One's complement
+        not dx
+        ; If checksum is 0, set to 0xFFFF (UDP convention)
+        test dx, dx
+        jnz .udp_cksum_ok
+        mov dx, 0xFFFF
+.udp_cksum_ok:
+        mov [esp + 28], edx    ; Return in EAX via pushad frame
         popad
         ret
 
@@ -1669,7 +1750,7 @@ tcp_handle:
 
         ; Verify remote IP and port match (for connected sockets)
         cmp dword [ebp + SOCK_STATE], TCP_LISTEN
-        je .tcp_state_listen
+        je .tcp_try_child       ; v3.0: Try child socket first
 
         mov eax, [net_recv_src_ip]
         cmp [ebp + SOCK_REMOTE_IP], eax
@@ -1678,8 +1759,11 @@ tcp_handle:
         cmp [ebp + SOCK_REMOTE_PORT], ax
         jne .tcp_h_done
 
+.tcp_dispatch_state:
         ; Dispatch by state
         mov eax, [ebp + SOCK_STATE]
+        cmp eax, TCP_SYN_RCVD
+        je .tcp_state_syn_rcvd
         cmp eax, TCP_SYN_SENT
         je .tcp_state_syn_sent
         cmp eax, TCP_ESTABLISHED
@@ -1694,22 +1778,150 @@ tcp_handle:
         je .tcp_state_last_ack
         jmp .tcp_h_done
 
+; v3.0: When the found socket is LISTEN, first check if there's a
+; child socket (SYN_RCVD/ESTABLISHED) matching the remote IP/port.
+; This handles the ACK half of the 3-way handshake for spawned children.
+.tcp_try_child:
+        test byte [net_tcp_flags], TCP_SYN
+        jnz .tcp_state_listen   ; New SYN → handle in LISTEN state
+        ; Non-SYN packet → search for child socket matching src IP/port
+        push esi
+        push ecx
+        mov edi, net_sock_table
+        xor edx, edx
+.tcp_child_scan:
+        cmp edx, MAX_SOCKETS
+        jge .tcp_child_not_found
+        cmp dword [edi + SOCK_TYPE], SOCK_TCP
+        jne .tcp_child_next
+        ; Check if this socket's remote matches the packet's source
+        mov eax, [net_recv_src_ip]
+        cmp [edi + SOCK_REMOTE_IP], eax
+        jne .tcp_child_next
+        movzx eax, word [net_tcp_src_port]
+        cmp [edi + SOCK_REMOTE_PORT], ax
+        jne .tcp_child_next
+        ; Check state is SYN_RCVD or ESTABLISHED (not LISTEN/CLOSED)
+        cmp dword [edi + SOCK_STATE], TCP_SYN_RCVD
+        je .tcp_child_found
+        cmp dword [edi + SOCK_STATE], TCP_ESTABLISHED
+        je .tcp_child_found
+        cmp dword [edi + SOCK_STATE], TCP_FIN_WAIT_1
+        je .tcp_child_found
+        cmp dword [edi + SOCK_STATE], TCP_FIN_WAIT_2
+        je .tcp_child_found
+        cmp dword [edi + SOCK_STATE], TCP_CLOSE_WAIT
+        je .tcp_child_found
+        cmp dword [edi + SOCK_STATE], TCP_LAST_ACK
+        je .tcp_child_found
+.tcp_child_next:
+        add edi, SOCK_SIZE
+        inc edx
+        jmp .tcp_child_scan
+.tcp_child_found:
+        ; Use child socket instead
+        mov ebp, edi
+        pop ecx
+        pop esi
+        jmp .tcp_dispatch_state
+.tcp_child_not_found:
+        pop ecx
+        pop esi
+        jmp .tcp_h_done
+
+;---------------------------------------
+; v3.0: SYN_RCVD state — awaiting final ACK of 3-way handshake.
+; When ACK is received, transition to ESTABLISHED.
+;---------------------------------------
+.tcp_state_syn_rcvd:
+        ; Check for RST
+        test byte [net_tcp_flags], TCP_RST
+        jnz .tcp_rst_close
+        ; Check for ACK (completing 3-way handshake)
+        test byte [net_tcp_flags], TCP_ACK
+        jz .tcp_h_done
+        ; Verify ACK number matches our SEQ
+        mov eax, [net_tcp_their_ack]
+        cmp eax, [ebp + SOCK_SEQ]
+        jb .tcp_h_done          ; Stale ACK
+        ; Transition to ESTABLISHED
+        mov dword [ebp + SOCK_STATE], TCP_ESTABLISHED
+        ; Update sequence tracking
+        mov eax, [net_tcp_their_seq]
+        mov [ebp + SOCK_ACK], eax
+        jmp .tcp_h_done
+
 .tcp_state_listen:
         ; Received SYN?
         test byte [net_tcp_flags], TCP_SYN
         jz .tcp_h_done
-        ; Store remote info
+
+        ; v3.0: Allocate a child socket for this connection
+        ; so the parent stays in LISTEN for more connections.
+        push esi
+        push ecx
+
+        ; Save parent socket index
+        mov eax, ebp
+        sub eax, net_sock_table
+        push eax                ; save parent offset
+
+        ; Allocate new TCP socket
+        mov eax, SOCK_TCP
+        call sock_alloc
+        cmp eax, -1
+        je .tcp_listen_no_slot
+
+        ; EAX = child socket index
+        mov ecx, eax
+        imul eax, SOCK_SIZE
+        lea edi, [net_sock_table + eax]
+
+        ; Copy local port from parent
+        mov ax, [ebp + SOCK_LOCAL_PORT]
+        mov [edi + SOCK_LOCAL_PORT], ax
+
+        ; Store remote info in child socket
         mov eax, [net_recv_src_ip]
-        mov [ebp + SOCK_REMOTE_IP], eax
+        mov [edi + SOCK_REMOTE_IP], eax
         movzx eax, word [net_tcp_src_port]
-        mov [ebp + SOCK_REMOTE_PORT], ax
+        mov [edi + SOCK_REMOTE_PORT], ax
+
         ; Set initial ACK = their seq + 1
         mov eax, [net_tcp_their_seq]
         inc eax
-        mov [ebp + SOCK_ACK], eax
-        ; Defer SYN-ACK to non-ISR context (TX re-entrance fix)
-        mov dword [ebp + SOCK_STATE], TCP_SYN_RCVD
-        mov byte [ebp + SOCK_PENDING], TCP_SYN | TCP_ACK
+        mov [edi + SOCK_ACK], eax
+
+        ; Initialize sequence number
+        mov eax, [tick_count]
+        mov [edi + SOCK_SEQ], eax
+
+        ; Store parent reference
+        pop eax                 ; parent offset
+        push eax
+        ; Convert offset to index
+        xor edx, edx
+        push ecx
+        mov ecx, SOCK_SIZE
+        div ecx
+        pop ecx
+        mov [edi + SOCK_PARENT], eax
+
+        ; Child enters SYN_RCVD and defers SYN-ACK
+        mov dword [edi + SOCK_STATE], TCP_SYN_RCVD
+        mov byte [edi + SOCK_PENDING], TCP_SYN | TCP_ACK
+
+        ; Parent stays in LISTEN
+        pop eax                 ; discard parent offset
+        pop ecx
+        pop esi
+        jmp .tcp_h_done
+
+.tcp_listen_no_slot:
+        ; No free socket — drop the SYN
+        pop eax
+        pop ecx
+        pop esi
         jmp .tcp_h_done
 
 .tcp_state_syn_sent:
@@ -3236,6 +3448,11 @@ sys_listen:
 ; sys_accept - Accept incoming connection
 ;  EBX = listening socket fd
 ; Returns: EAX = new socket fd, -1 on timeout
+;
+; v3.0: Scans for a child socket spawned from
+; this listener (matching SOCK_PARENT). The
+; listener stays in TCP_LISTEN for more
+; connections.
 ;---------------------------------------
 sys_accept:
         pushad
@@ -3247,24 +3464,45 @@ sys_accept:
         cmp dword [ebp + SOCK_STATE], TCP_LISTEN
         jne .saccept_fail
 
-        ; Wait for connection (up to 30 seconds)
+        ; Wait for a child socket to reach ESTABLISHED (up to 30 seconds)
         mov ecx, 3000
 .saccept_wait:
         hlt
         call tcp_flush_pending    ; Send deferred SYN-ACK from non-ISR context
-        cmp dword [ebp + SOCK_STATE], TCP_ESTABLISHED
-        je .saccept_ok
-        cmp dword [ebp + SOCK_STATE], TCP_SYN_RCVD
-        je .saccept_wait        ; Still handshaking
+
+        ; Scan socket table for child socket that has our index as parent
+        push ecx
+        mov edi, net_sock_table
+        xor edx, edx
+.saccept_scan:
+        cmp edx, MAX_SOCKETS
+        jge .saccept_scan_done
+        cmp dword [edi + SOCK_PARENT], ebx
+        jne .saccept_scan_next
+        ; Found child — check if ESTABLISHED
+        cmp dword [edi + SOCK_STATE], TCP_ESTABLISHED
+        je .saccept_found
+        ; If SYN_RCVD, keep waiting
+        cmp dword [edi + SOCK_STATE], TCP_SYN_RCVD
+        je .saccept_scan_done   ; child is handshaking, keep waiting
+.saccept_scan_next:
+        add edi, SOCK_SIZE
+        inc edx
+        jmp .saccept_scan
+
+.saccept_scan_done:
+        pop ecx
         dec ecx
         jnz .saccept_wait
         jmp .saccept_fail
 
-.saccept_ok:
-        ; The listening socket itself became the connection socket
-        ; Return the same fd
+.saccept_found:
+        ; EDX = child socket index
+        ; Clear parent reference (connection is now independent)
+        mov dword [edi + SOCK_PARENT], -1
+        pop ecx                 ; balance push ecx
+        mov [esp + 28], edx     ; return child socket fd in EAX
         popad
-        mov eax, ebx
         iretd
 
 .saccept_fail:

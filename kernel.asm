@@ -179,6 +179,9 @@ DIRENT_START_BLOCK  equ 260
 DIRENT_BLOCK_COUNT  equ 264
 DIRENT_CREATED      equ 268
 DIRENT_MODIFIED     equ 272
+DIRENT_PERMS        equ 276            ; v3.0: Permission bits (2 bytes, rwxrwxrwx = 9 bits)
+DIRENT_OWNER        equ 278            ; v3.0: Owner UID (2 bytes)
+; Bytes 280-287 still reserved
 
 ; Serial port (COM1)
 COM1_PORT           equ 0x3F8
@@ -241,6 +244,11 @@ SYS_SHMGET          equ 64      ; Get shared mem: EBX=key ECX=size -> EAX=shm_id
 SYS_SHMADDR         equ 65      ; Get shm address: EBX=shm_id -> EAX=pointer
 SYS_PROCLIST        equ 66      ; Get task info: EBX=slot(0-15) ECX=buf(16 bytes) -> EAX=0/-1
 SYS_MEMINFO         equ 67      ; Get mem info: -> EAX=free_pages, EBX=total_free_pages_at_boot
+; v3.0 syscalls
+SYS_CHMOD           equ 68      ; Change permissions: EBX=filename ECX=perms -> EAX=0/-1
+SYS_CHOWN           equ 69      ; Change owner: EBX=filename ECX=uid -> EAX=0/-1
+SYS_SYMLINK         equ 70      ; Create symlink: EBX=linkname ECX=target -> EAX=0/-1
+SYS_READLINK        equ 71      ; Read link: EBX=linkname ECX=buf -> EAX=len/-1
 
 ; File descriptor constants
 FD_MAX              equ 8

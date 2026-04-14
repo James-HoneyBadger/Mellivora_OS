@@ -14,6 +14,7 @@
 TASK_FREE    equ 0
 TASK_READY   equ 1
 TASK_RUNNING equ 2
+TASK_BLOCKED equ 3          ; v3.0: Blocked (sleeping / waiting on I/O)
 
 ; Preemptive scheduling quantum (in PIT ticks, 100 Hz)
 ; 10 ticks = 100 ms per time slice
@@ -21,16 +22,16 @@ SCHED_QUANTUM equ 10
 
 ; TCB field offsets (32 bytes per entry)
 TCB_ESP      equ 0          ; Saved kernel-mode ESP (pushad+iretd frame)
-TCB_STATE    equ 4          ; Task state (FREE / READY / RUNNING)
+TCB_STATE    equ 4          ; Task state (FREE / READY / RUNNING / BLOCKED)
 TCB_KSTACK   equ 8          ; Kernel stack top (for TSS ESP0)
 TCB_USTACK   equ 12         ; User-mode stack top
 TCB_ENTRY    equ 16         ; Program entry point
 TCB_PID      equ 20         ; Task ID
-TCB_PAD1     equ 24         ; Reserved
-TCB_PAD2     equ 28         ; Reserved
+TCB_PRIORITY equ 24         ; v3.0: Task priority (0=highest, 3=lowest)
+TCB_WAKEUP   equ 28         ; v3.0: Wakeup tick count (for sys_sleep)
 TCB_SIZE     equ 32
 
-MAX_TASKS    equ 16
+MAX_TASKS    equ 32          ; v3.0: Doubled from 16
 
 ;---------------------------------------
 ; sched_init - Initialize the scheduler
@@ -373,3 +374,106 @@ sys_proclist:
         mov dword [esp + 28], -1
         popad
         iretd
+
+;---------------------------------------
+; sys_sleep - Block current task for N
+;             PIT ticks (each = 10 ms)
+;   EBX = number of ticks to sleep
+; Returns: EAX = 0 on wakeup
+;
+; v3.0: Sets TASK_BLOCKED and stores the
+;       target wakeup tick in TCB_WAKEUP.
+;       irq_timer checks blocked tasks each
+;       tick and wakes them when time expires.
+;---------------------------------------
+sys_sleep:
+        cmp dword [task_count], 0
+        je .sleep_nop
+
+        pushad
+
+        ; Find the current RUNNING task
+        mov edi, task_table
+        xor edx, edx
+.sleep_find:
+        cmp edx, MAX_TASKS
+        jge .sleep_abort
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .sleep_block
+        add edi, TCB_SIZE
+        inc edx
+        jmp .sleep_find
+
+.sleep_block:
+        ; Calculate wakeup tick = tick_count + EBX
+        mov eax, [tick_count]
+        add eax, ebx
+        mov [edi + TCB_WAKEUP], eax
+
+        ; Mark as BLOCKED and save ESP
+        mov dword [edi + TCB_STATE], TASK_BLOCKED
+        mov [edi + TCB_ESP], esp
+
+        ; Try to find another READY task to run
+        mov ecx, MAX_TASKS
+        mov esi, edx
+.sleep_scan:
+        inc esi
+        cmp esi, MAX_TASKS
+        jb .sleep_check
+        xor esi, esi
+.sleep_check:
+        mov eax, esi
+        imul eax, TCB_SIZE
+        lea ebx, [task_table + eax]
+        cmp dword [ebx + TCB_STATE], TASK_READY
+        je .sleep_switch
+        dec ecx
+        jnz .sleep_scan
+
+        ; No other task — unblock self immediately (can't sleep)
+        mov dword [edi + TCB_STATE], TASK_RUNNING
+        jmp .sleep_abort
+
+.sleep_switch:
+        mov dword [ebx + TCB_STATE], TASK_RUNNING
+        mov [task_current], esi
+        mov eax, [ebx + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+        mov esp, [ebx + TCB_ESP]
+        popad
+        iretd
+
+.sleep_abort:
+        popad
+.sleep_nop:
+        xor eax, eax
+        iretd
+
+;---------------------------------------
+; sched_wake_sleepers - Check all BLOCKED
+;     tasks and wake those whose wakeup
+;     tick has been reached.
+; Called from irq_timer every tick.
+; Clobbers: EAX, ECX, EDI (caller saves)
+;---------------------------------------
+sched_wake_sleepers:
+        mov edi, task_table
+        xor ecx, ecx
+.wake_loop:
+        cmp ecx, MAX_TASKS
+        jge .wake_done
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .wake_next
+        ; Check if wakeup tick has been reached
+        mov eax, [tick_count]
+        cmp eax, [edi + TCB_WAKEUP]
+        jb .wake_next
+        ; Wake this task
+        mov dword [edi + TCB_STATE], TASK_READY
+.wake_next:
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .wake_loop
+.wake_done:
+        ret

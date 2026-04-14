@@ -353,7 +353,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry and include graph (main file + 22 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v2.2)
+├── CHANGELOG.md            Version history (v1.0 → v3.0)
 ├── README.md               Project overview
 │
 ├── kernel/                 Kernel subsystem modules

@@ -106,6 +106,9 @@ irq_timer:
         mov al, 0x20
         out PIC1_CMD, al
 
+        ; v3.0: Wake any sleeping/blocked tasks whose timer expired
+        call sched_wake_sleepers
+
         ; --- Preemptive scheduling ---
         ; Only preempt if we have active tasks
         cmp dword [task_count], 0
@@ -166,6 +169,13 @@ irq_timer:
         jmp .timer_done
 
 .timer_switch:
+        ; v3.0: Disable interrupts during critical context switch.
+        ; EOI was already sent above, so the PIC could deliver another
+        ; IRQ between now and IRETD if interrupts were enabled.
+        ; Interrupt gates clear IF on entry, but CLI is defensive in
+        ; case the gate type ever changes or an NMI arrives.
+        cli
+
         ; EBX = new task's TCB
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
@@ -178,6 +188,7 @@ irq_timer:
         mov esp, [ebx + TCB_ESP]
 
         ; Restore GP regs and IRETD to new task's ring-3 context
+        ; (IRETD restores EFLAGS which re-enables IF for user mode)
         popad
         iretd
 

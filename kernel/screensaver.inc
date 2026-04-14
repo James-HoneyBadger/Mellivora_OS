@@ -784,7 +784,7 @@ scr_bounce_frame:
 ;---------------------------------------
 scr_bounce_str1: db "  MELLIVORA OS  ", 0
 scr_bounce_str2: db " Honey Badger Edition ", 0
-scr_bounce_str3: db "  v2.2.0  ", 0
+scr_bounce_str3: db "  v3.0.0  ", 0
 
 ;=======================================================================
 ; SCREENSAVER 4: PLASMA (Color-cycling plasma effect)

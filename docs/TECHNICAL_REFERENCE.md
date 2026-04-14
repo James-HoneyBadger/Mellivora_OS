@@ -1039,13 +1039,13 @@ Each 32-byte TCB contains:
 | Field | Offset | Type | Description |
 | --- | --- | --- | --- |
 | `TCB_ESP` | 0 | dword | Saved kernel-mode stack pointer |
-| `TCB_STATE` | 4 | dword | Task state (FREE/READY/RUNNING) |
+| `TCB_STATE` | 4 | dword | Task state (FREE/READY/RUNNING/BLOCKED) |
 | `TCB_KSTACK` | 8 | dword | Top of kernel stack (for TSS ESP0) |
 | `TCB_USTACK` | 12 | dword | User-mode stack top |
 | `TCB_ENTRY` | 16 | dword | Program entry point |
 | `TCB_PID` | 20 | dword | Task ID |
-| `TCB_PAD1` | 24 | dword | Reserved |
-| `TCB_PAD2` | 28 | dword | Reserved |
+| `TCB_PRIORITY` | 24 | dword | Task priority (v3.0, 0=highest) |
+| `TCB_WAKEUP` | 28 | dword | Wakeup tick for sys_sleep (v3.0) |
 
 ### Ring 3 Selectors
 

@@ -494,8 +494,8 @@ str_at:         db "@", 0
 str_hostname:   db "honeybadger", 0
 str_separator:  db "------------------------", 0
 str_colon:      db ": ", 0
-str_os_val:     db "Mellivora OS v2.2.0", 0
-str_kernel_val: db "Mellivora 2.2.0 (i486 32-bit)", 0
+str_os_val:     db "Mellivora OS v3.0.0", 0
+str_kernel_val: db "Mellivora 3.0.0 (i486 32-bit)", 0
 str_shell_val:  db "HB Lair v2.2 (Honey Badger Lair)", 0
 str_cpu_val:    db "i486+ (Protected Mode, Ring 0/3)", 0
 str_disk_val:   db "ATA PIO, HBFS (2 GB, 4 KB blocks)", 0

@@ -487,7 +487,7 @@ Programs in `/bin` and `/games` are in the default
 | **[API Reference](docs/API_REFERENCE.md)** | Complete syscall and library function reference |
 | **[Technical Reference](docs/TECHNICAL_REFERENCE.md)** | OS internals: boot, memory, filesystem, drivers, scheduler |
 | **[Networking Guide](docs/NETWORKING_GUIDE.md)** | TCP/IP stack architecture, socket API, protocol details |
-| **[Changelog](CHANGELOG.md)** | Full version history from v1.0 to v2.2.0 |
+| **[Changelog](CHANGELOG.md)** | Full version history from v1.0 to v3.0.0 |
 
 ---
 
