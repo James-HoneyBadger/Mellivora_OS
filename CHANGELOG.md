@@ -1,5 +1,31 @@
 # Mellivora OS - Changelog
 
+## v3.0.1 - Bug Fixes: Sleep Regression, Neofetch, Pipe Race, Permissions UI
+
+### Kernel — Scheduler (`kernel/sched.inc`)
+
+- **`sys_sleep` HLT fallback**: In v3.0.0 the `SYS_SLEEP` rewrite made sleep a no-op when `task_count == 0` (normal shell / single-program context). This broke 29 programs that use `SYS_SLEEP` for timing, animation frame-rates, and CPU-yield poll loops (clock, galaga, doomfire, matrix, rain, ntpd, serial, etc.). Fixed: when no scheduler tasks are running, `sys_sleep` falls back to the original HLT-based busy-wait loop so timing is preserved.
+
+### Kernel — IPC (`kernel/ipc.inc`)
+
+- **`pipe_retry_count` race condition**: The retry counter in `sys_pipe_read` was a global static variable (`dd 0`). Under preemptive multitasking two tasks blocking on separate pipes could clobber each other's count, causing infinite waits. Fixed by moving the counter to a register (EAX) local to each call — the global is removed.
+
+### Kernel — Filesystem (`kernel/hbfs.inc`)
+
+- **`sys_symlink` dead code**: Two dead `mov edi, ...` instructions preceded the correct `mov edi, [esp+24]` line, producing confusing assembly. Removed the two stale lines; behavior is unchanged.
+
+### Shell — New Commands (`kernel/shell.inc`, `kernel/data.inc`)
+
+- **`chmod <octal> <filename>`**: New shell command wrapping `SYS_CHMOD` (#68). Parses an octal permission value (e.g. `chmod 755 myprog`) and updates `DIRENT_PERMS`. Returns success/failure message.
+- **`chown <uid> <filename>`**: New shell command wrapping `SYS_CHOWN` (#69). Parses a decimal UID and updates `DIRENT_OWNER`.
+- **`stat` permission display**: The `stat` command now shows two additional lines: `Perms: rwxrwxrwx (octal)` and `Owner: <uid>`, reading from `DIRENT_PERMS` and `DIRENT_OWNER` respectively. Previously these fields were stored on disk but never displayed.
+
+### Programs — Display Fix (`programs/neofetch.asm`)
+
+- **Logo null terminators**: Each `logo_art` line was 32 bytes with no null terminator. `SYS_PRINT` (`vga_print`) scans until null, so every logo line printed the entire remaining logo blob as one continuous string. Fixed by adding a null byte to each line (33 bytes/line) and updating the stride calculation from `shl eax, 5` to `imul eax, 33`. Logo now renders correctly.
+
+---
+
 ## v3.0.0 - Kernel Overhaul, Filesystem Permissions, TCP Backlog & 4 New Syscalls
 
 ### Kernel — Syscall Dispatch (`kernel/syscall.inc`)

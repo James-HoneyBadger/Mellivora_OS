@@ -222,6 +222,8 @@ cmd_whoami_str: db "whoami", 0
 cmd_stat_str:   db "stat", 0
 cmd_fsck_str:   db "fsck", 0
 cmd_ln_str:     db "ln", 0
+cmd_chmod_str:  db "chmod", 0
+cmd_chown_str:  db "chown", 0
 
 ; Screensaver strings
 msg_scrsaver_set:  db "  Screensaver mode set to: ", 0

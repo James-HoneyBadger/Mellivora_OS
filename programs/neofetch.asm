@@ -40,7 +40,7 @@ start:
 
         ; Calculate logo line address
         mov eax, esi
-        shl eax, 5              ; * 32 (each logo line is 32 chars max)
+        imul eax, 33            ; each logo line is 33 bytes (32 chars + null)
         lea ebx, [logo_art + eax]
         push ebx
         mov eax, SYS_PRINT
@@ -48,7 +48,7 @@ start:
         int 0x80
 
         ; Pad to INFO_START_COL
-        ; Each logo line is 30 chars, pad with spaces
+        ; Each logo line is 32 chars, pad with 2 spaces to reach col 34
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
@@ -473,29 +473,29 @@ print_color_bar:
 ; DATA
 ;=======================================================================
 
-; ASCII art logo - each line exactly 32 bytes (padded with spaces)
+; ASCII art logo - each line is 32 printable chars + null terminator (33 bytes)
 ; Honey badger / system logo
 logo_art:
-        db "                                "  ; 0
-        db "     .---.                      "  ; 1
-        db "    / o o \   ___               "  ; 2
-        db "   (  >w<  )_/ _ \              "  ; 3
-        db "    \     /  / / \ \            "  ; 4
-        db "     `---'  / /   \ \           "  ; 5
-        db "     |   | / /     \_\          "  ; 6
-        db "     |   |/ /  MELLIVORA        "  ; 7
-        db "     |   | /   Honey Badger OS  "  ; 8
-        db "     \   |/                     "  ; 9
-        db "      `--'                      "  ; 10
-        db "                                "  ; 11
+        db "                                ", 0  ; 0
+        db "     .---.                      ", 0  ; 1
+        db "    / o o \   ___               ", 0  ; 2
+        db "   (  >w<  )_/ _ \              ", 0  ; 3
+        db "    \     /  / / \ \            ", 0  ; 4
+        db "     `---'  / /   \ \           ", 0  ; 5
+        db "     |   | / /     \_\          ", 0  ; 6
+        db "     |   |/ /  MELLIVORA        ", 0  ; 7
+        db "     |   | /   Honey Badger OS  ", 0  ; 8
+        db "     \   |/                     ", 0  ; 9
+        db "      `--'                      ", 0  ; 10
+        db "                                ", 0  ; 11
 
 str_root:       db "root", 0
 str_at:         db "@", 0
 str_hostname:   db "honeybadger", 0
 str_separator:  db "------------------------", 0
 str_colon:      db ": ", 0
-str_os_val:     db "Mellivora OS v3.0.0", 0
-str_kernel_val: db "Mellivora 3.0.0 (i486 32-bit)", 0
+str_os_val:     db "Mellivora OS v3.0.1", 0
+str_kernel_val: db "Mellivora 3.0.1 (i486 32-bit)", 0
 str_shell_val:  db "HB Lair v2.2 (Honey Badger Lair)", 0
 str_cpu_val:    db "i486+ (Protected Mode, Ring 0/3)", 0
 str_disk_val:   db "ATA PIO, HBFS (2 GB, 4 KB blocks)", 0

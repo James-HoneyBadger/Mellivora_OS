@@ -777,12 +777,9 @@ sys_symlink:
         ; Create file with FTYPE_LINK
         mov esi, ebx            ; link name
         mov ecx, edx            ; size = target length
-        mov edi, [esp + 12]     ; original ECX = target data pointer
-                                ; (pushad: EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX)
-                                ; [esp+0]=EDI, [esp+4]=ESI, [esp+8]=EBP, [esp+12]=ESP_orig
-                                ; Actually need original ECX from pushad frame
-        mov edi, [esp + 8]      ; pushad frame: [esp+0]=EDI [esp+4]=ESI [esp+8]=EBP [esp+12]=ESP [esp+16]=EBX [esp+20]=EDX [esp+24]=ECX [esp+28]=EAX
-        ; Correction: ECX is at esp+24 in pushad frame (EAX=28, ECX=24, EDX=20, EBX=16, ESP=12, EBP=8, ESI=4, EDI=0)
+        ; Retrieve original ECX (target path pointer) from pushad frame
+        ; pushad layout: [esp+0]=EDI [esp+4]=ESI [esp+8]=EBP [esp+12]=ESP
+        ;                [esp+16]=EBX [esp+20]=EDX [esp+24]=ECX [esp+28]=EAX
         mov edi, [esp + 24]     ; original ECX = target path pointer
         mov edx, FTYPE_LINK
         call hbfs_create_file

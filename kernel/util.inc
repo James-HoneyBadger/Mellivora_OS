@@ -3458,6 +3458,7 @@ cmd_cd:
         mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
         rep movsb
 
+        mov esi, [esp + 4]      ; restore original ESI from pushad frame
         call cmd_cd_internal
         cmp eax, -1             ; cmd_cd_internal returns 0 or -1 in EAX
         jne .cd_ok

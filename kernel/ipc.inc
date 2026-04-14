@@ -138,6 +138,9 @@ sys_pipe_write:
 ;       times before returning 0 (non-blocking fallback).
 ;       This replaces the old immediate-return-0 that forced
 ;       callers into 100% CPU polling loops.
+;
+; Retry count is kept in EAX (stack context) to avoid a race
+; condition if two tasks both block on pipe reads simultaneously.
 ;---------------------------------------
 PIPE_READ_RETRIES equ 200       ; ~200 yields before giving up
 
@@ -153,14 +156,16 @@ sys_pipe_read:
         jne .spr_fail
 
         ; If buffer empty, yield and retry up to PIPE_READ_RETRIES times
-        mov dword [pipe_retry_count], 0
+        ; EAX = retry counter (stack-local via register — avoids global race)
+        xor eax, eax
 .spr_wait:
         cmp dword [ebp + PIPE_COUNT], 0
         jne .spr_has_data
-        inc dword [pipe_retry_count]
-        cmp dword [pipe_retry_count], PIPE_READ_RETRIES
+        inc eax
+        cmp eax, PIPE_READ_RETRIES
         jge .spr_empty
         ; Yield the CPU instead of spinning
+        push eax
         push ebx
         push ecx
         push edx
@@ -171,6 +176,7 @@ sys_pipe_read:
         pop edx
         pop ecx
         pop ebx
+        pop eax
         jmp .spr_wait
 
 .spr_empty:
@@ -337,4 +343,3 @@ sys_shmaddr:
 ;=======================================================================
 ipc_pipes:      times (IPC_MAX_PIPES * PIPE_STRUCT_SIZE) db 0
 ipc_shm:        times (IPC_MAX_SHM * SHM_STRUCT_SIZE) db 0
-pipe_retry_count: dd 0

@@ -1114,6 +1114,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_ln
 
+        mov edi, cmd_chmod_str
+        call str_starts_with
+        jc .cmd_chmod
+
+        mov edi, cmd_chown_str
+        call str_starts_with
+        jc .cmd_chown
+
         ; Unknown command - try to execute as program
         mov esi, line_buffer
         call cmd_exec_program
@@ -1670,6 +1678,14 @@ shell_dispatch_core:
 
 .cmd_ln:
         call cmd_ln
+        ret
+
+.cmd_chmod:
+        call cmd_chmod
+        ret
+
+.cmd_chown:
+        call cmd_chown
         ret
 
 .cmd_ping:
@@ -2639,6 +2655,8 @@ cmd_which:
         dd cmd_stat_str
         dd cmd_fsck_str
         dd cmd_ln_str
+        dd cmd_chmod_str
+        dd cmd_chown_str
         dd 0
 
 ;---------------------------------------
@@ -5593,6 +5611,98 @@ cmd_stat:
         mov al, 0x0A
         call vga_putchar
 
+        ; Print "  Permissions: rwxrwxrwx (octal)"
+        mov esi, .stat_lbl_perms
+        call vga_print
+        movzx eax, word [edi + DIRENT_PERMS]
+        push edi
+        push eax
+        ; Print symbolic rwxrwxrwx
+        mov edi, .stat_rwx_buf
+        mov ecx, 9
+        mov ebx, eax
+.stat_rwx_loop:
+        mov eax, 9
+        sub eax, ecx            ; bit index 8..0
+        bt ebx, eax
+        jnc .stat_rwx_dash
+        ; map bit position to r/w/x char: mod 3: 0=r,1=w,2=x
+        mov eax, 9
+        sub eax, ecx
+        mov edx, eax
+        mov eax, edx
+        xor edx, edx
+        push ecx
+        mov ecx, 3
+        div ecx
+        pop ecx
+        ; EDX = remainder: 0=r,1=w,2=x
+        cmp edx, 0
+        je .stat_rwx_r
+        cmp edx, 1
+        je .stat_rwx_w
+        mov byte [edi], 'x'
+        inc edi
+        dec ecx
+        jnz .stat_rwx_loop
+        jmp .stat_rwx_done
+.stat_rwx_r:
+        mov byte [edi], 'r'
+        inc edi
+        dec ecx
+        jnz .stat_rwx_loop
+        jmp .stat_rwx_done
+.stat_rwx_w:
+        mov byte [edi], 'w'
+        inc edi
+        dec ecx
+        jnz .stat_rwx_loop
+        jmp .stat_rwx_done
+.stat_rwx_dash:
+        mov byte [edi], '-'
+        inc edi
+        dec ecx
+        jnz .stat_rwx_loop
+.stat_rwx_done:
+        mov byte [edi], 0
+        pop eax
+        pop edi
+        mov esi, .stat_rwx_buf
+        call vga_print
+        mov al, ' '
+        call vga_putchar
+        mov al, '('
+        call vga_putchar
+        movzx eax, word [edi + DIRENT_PERMS]
+        ; Print octal: 3 digits (each 3 bits)
+        push eax
+        shr eax, 6
+        and eax, 7
+        add al, '0'
+        call vga_putchar
+        pop eax
+        push eax
+        shr eax, 3
+        and eax, 7
+        add al, '0'
+        call vga_putchar
+        pop eax
+        and eax, 7
+        add al, '0'
+        call vga_putchar
+        mov al, ')'
+        call vga_putchar
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Print "  Owner:  <uid>"
+        mov esi, .stat_lbl_owner
+        call vga_print
+        movzx eax, word [edi + DIRENT_OWNER]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
         ; If symlink, show target
         cmp byte [edi + 253], FTYPE_LINK
         jne .stat_done
@@ -5722,6 +5832,8 @@ cmd_stat:
 .stat_lbl_block:    db " Block: ", 0
 .stat_lbl_created:  db "  Created:  ", 0
 .stat_lbl_modified: db "  Modified: ", 0
+.stat_lbl_perms:    db "  Perms:    ", 0
+.stat_lbl_owner:    db "  Owner:    ", 0
 .stat_t_file_s:     db "regular file", 0
 .stat_t_dir_s:      db "directory", 0
 .stat_t_exec_s:     db "executable", 0
@@ -5730,6 +5842,7 @@ cmd_stat:
 .stat_t_unk:        db "unknown", 0
 .stat_usage_s:      db "Usage: stat <filename>", 0x0A, 0
 .stat_lbl_target:   db "  Target: ", 0
+.stat_rwx_buf:      times 10 db 0
 .ln_read_buf:       times 256 db 0
 
 ;---------------------------------------
@@ -6036,3 +6149,120 @@ cmd_ln:
 .ln_err:       db "Failed to create link.", 0x0A, 0
 .ln_usage_s:   db "Usage: ln -s <target> <linkname>", 0x0A, 0
 .ln_buf:       times 256 db 0
+
+;---------------------------------------
+; Command: chmod <octal> <filename>
+; Change file permission bits
+; Example: chmod 755 myprog
+;---------------------------------------
+cmd_chmod:
+        pushad
+        call skip_spaces
+        cmp byte [esi], 0
+        je .chmod_usage
+
+        ; Parse octal permission value (e.g. 755 -> 0x1ED)
+        xor ecx, ecx
+.chmod_parse_oct:
+        movzx eax, byte [esi]
+        cmp al, '0'
+        jb .chmod_got_perms
+        cmp al, '7'
+        ja .chmod_got_perms
+        imul ecx, 8
+        sub al, '0'
+        add ecx, eax
+        inc esi
+        jmp .chmod_parse_oct
+.chmod_got_perms:
+        ; ECX = permission bits; skip space to filename
+        call skip_spaces
+        cmp byte [esi], 0
+        je .chmod_usage
+
+        ; Make syscall: EBX = filename, ECX = perms
+        mov ebx, esi
+        mov eax, SYS_CHMOD
+        int 0x80
+        test eax, eax
+        jnz .chmod_fail
+
+        mov byte [vga_color], COLOR_SUCCESS
+        mov esi, .chmod_done
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+.chmod_fail:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .chmod_err
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+.chmod_usage:
+        mov esi, .chmod_usage_s
+        call vga_print
+        popad
+        ret
+.chmod_done:   db "Permissions updated.", 0x0A, 0
+.chmod_err:    db "chmod: file not found.", 0x0A, 0
+.chmod_usage_s: db "Usage: chmod <octal> <filename>", 0x0A
+                db "  e.g. chmod 755 myprog", 0x0A, 0
+
+;---------------------------------------
+; Command: chown <uid> <filename>
+; Change file owner UID
+; Example: chown 1000 myfile
+;---------------------------------------
+cmd_chown:
+        pushad
+        call skip_spaces
+        cmp byte [esi], 0
+        je .chown_usage
+
+        ; Parse decimal uid
+        xor ecx, ecx
+.chown_parse_uid:
+        movzx eax, byte [esi]
+        cmp al, '0'
+        jb .chown_got_uid
+        cmp al, '9'
+        ja .chown_got_uid
+        imul ecx, 10
+        sub al, '0'
+        add ecx, eax
+        inc esi
+        jmp .chown_parse_uid
+.chown_got_uid:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .chown_usage
+
+        mov ebx, esi
+        mov eax, SYS_CHOWN
+        int 0x80
+        test eax, eax
+        jnz .chown_fail
+
+        mov byte [vga_color], COLOR_SUCCESS
+        mov esi, .chown_done
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+.chown_fail:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .chown_err
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+.chown_usage:
+        mov esi, .chown_usage_s
+        call vga_print
+        popad
+        ret
+.chown_done:   db "Owner updated.", 0x0A, 0
+.chown_err:    db "chown: file not found.", 0x0A, 0
+.chown_usage_s: db "Usage: chown <uid> <filename>", 0x0A, 0

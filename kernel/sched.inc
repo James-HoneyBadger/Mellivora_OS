@@ -385,10 +385,14 @@ sys_proclist:
 ;       target wakeup tick in TCB_WAKEUP.
 ;       irq_timer checks blocked tasks each
 ;       tick and wakes them when time expires.
+;
+; When task_count == 0 (shell / single-program context), falls back
+; to a HLT-based busy-wait so that timing programs and poll loops
+; still work correctly even without a scheduler task.
 ;---------------------------------------
 sys_sleep:
         cmp dword [task_count], 0
-        je .sleep_nop
+        je .sleep_hlt_fallback
 
         pushad
 
@@ -446,7 +450,20 @@ sys_sleep:
 
 .sleep_abort:
         popad
-.sleep_nop:
+        ; HLT fallback: shell/single-program context, no tasks to switch to
+.sleep_hlt_fallback:
+        ; EBX = ticks to sleep; sleep via HLT loop (timer fires every 10 ms)
+        test ebx, ebx
+        jz .sleep_hlt_done
+        push ecx
+        mov ecx, [tick_count]
+        add ecx, ebx            ; wakeup tick = now + EBX
+.sleep_hlt_loop:
+        hlt
+        cmp [tick_count], ecx
+        jb .sleep_hlt_loop
+        pop ecx
+.sleep_hlt_done:
         xor eax, eax
         iretd
 
