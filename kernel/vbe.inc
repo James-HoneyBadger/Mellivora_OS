@@ -118,6 +118,13 @@ vbe_set_mode:
         mov [vbe_height], ebx
         mov [vbe_bpp], ecx
 
+        ; Save VGA text font from plane 2 before switching (once)
+        cmp byte [vbe_font_saved], 1
+        je .font_already_saved
+        call vbe_save_vga_font
+        mov byte [vbe_font_saved], 1
+.font_already_saved:
+
         ; Calculate pitch = width * (bpp / 8)
         mov eax, [vbe_width]
         mov edx, ecx
@@ -247,7 +254,7 @@ vbe_restore_text:
         out dx, al
 
         ; CRTC registers for 80x25 (standard mode 3 timings)
-        mov esi, .crtc_mode3
+        mov esi, vbe_crtc_mode3
         xor ecx, ecx
 .crtc_loop:
         cmp ecx, 25
@@ -263,7 +270,7 @@ vbe_restore_text:
 .crtc_done:
 
         ; GC registers
-        mov esi, .gc_mode3
+        mov esi, vbe_gc_mode3
         xor ecx, ecx
 .gc_loop:
         cmp ecx, 9
@@ -288,7 +295,7 @@ vbe_restore_text:
         mov dx, 0x3C0
         mov al, cl
         out dx, al
-        mov al, [.ac_mode3 + ecx]
+        mov al, [vbe_ac_mode3 + ecx]
         out dx, al
         inc ecx
         jmp .ac_loop
@@ -305,6 +312,13 @@ vbe_restore_text:
         rep stosd
 
         mov byte [vbe_active], 0
+
+        ; Restore VGA font into plane 2
+        cmp byte [vbe_font_saved], 1
+        jne .skip_font_restore
+        call vbe_restore_vga_font
+.skip_font_restore:
+
         ; Reset VGA cursor
         mov dword [vga_cursor_x], 0
         mov dword [vga_cursor_y], 0
@@ -313,17 +327,128 @@ vbe_restore_text:
         popad
         ret
 
+;---------------------------------------
+; vbe_save_vga_font - Read font from VGA plane 2
+;---------------------------------------
+vbe_save_vga_font:
+        pushad
+        ; Select plane 2 for reading via GC register 4 (Read Map Select)
+        mov dx, 0x3CE
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x02            ; plane 2
+        out dx, al
+        ; Set sequential addressing: Sequencer reg 4 bit 3
+        mov dx, 0x3C4
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3C5
+        in al, dx
+        or al, 0x04             ; sequential access
+        out dx, al
+        ; Copy 256 chars * 32 bytes = 8192 bytes from plane 2
+        mov esi, 0xA0000
+        mov edi, vbe_font_save_buf
+        mov ecx, 8192 / 4
+        cld
+        rep movsd
+        ; Restore GC Read Map to plane 0
+        mov dx, 0x3CE
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x00
+        out dx, al
+        ; Restore Sequencer reg 4 to normal text mode
+        mov dx, 0x3C4
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3C5
+        mov al, 0x02            ; odd/even mode
+        out dx, al
+        popad
+        ret
+
+;---------------------------------------
+; vbe_restore_vga_font - Write font back to VGA plane 2
+;---------------------------------------
+vbe_restore_vga_font:
+        pushad
+        ; Sequencer: Map Mask = plane 2 only
+        mov dx, 0x3C4
+        mov al, 0x02
+        out dx, al
+        mov dx, 0x3C5
+        mov al, 0x04            ; plane 2
+        out dx, al
+        ; Sequencer: sequential access mode
+        mov dx, 0x3C4
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3C5
+        mov al, 0x06            ; sequential + extended memory
+        out dx, al
+        ; GC: disable odd/even, set write mode 0
+        mov dx, 0x3CE
+        mov al, 0x05
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x00
+        out dx, al
+        mov dx, 0x3CE
+        mov al, 0x06
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x00            ; no odd/even, no chain, map at A0000
+        out dx, al
+        ; Copy saved font data to plane 2
+        mov esi, vbe_font_save_buf
+        mov edi, 0xA0000
+        mov ecx, 8192 / 4
+        cld
+        rep movsd
+        ; Restore Sequencer: Map Mask = all planes
+        mov dx, 0x3C4
+        mov al, 0x02
+        out dx, al
+        mov dx, 0x3C5
+        mov al, 0x03            ; planes 0+1 (text mode normal)
+        out dx, al
+        ; Restore Sequencer: odd/even mode
+        mov dx, 0x3C4
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3C5
+        mov al, 0x02
+        out dx, al
+        ; Restore GC registers for text mode
+        mov dx, 0x3CE
+        mov al, 0x05
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x10            ; odd/even mode
+        out dx, al
+        mov dx, 0x3CE
+        mov al, 0x06
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x0E            ; odd/even + map at B8000
+        out dx, al
+        popad
+        ret
+
 ; Standard mode 3 CRTC register values (indices 0-24)
-.crtc_mode3:
+vbe_crtc_mode3:
         db 0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F
         db 0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x50
         db 0x9C, 0x0E, 0x8F, 0x28, 0x1F, 0x96, 0xB9, 0xA3
         db 0xFF
 ; Standard mode 3 GC register values (indices 0-8)
-.gc_mode3:
+vbe_gc_mode3:
         db 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x00, 0xFF
 ; Standard mode 3 AC register values (indices 0-20)
-.ac_mode3:
+vbe_ac_mode3:
         db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07
         db 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
         db 0x0C, 0x00, 0x0F, 0x08, 0x00
@@ -556,3 +681,6 @@ vbe_height:     dd 0
 vbe_bpp:        dd 0
 vbe_Bpp:        dd 0            ; bytes per pixel
 vbe_pitch:      dd 0
+vbe_font_saved: db 0
+        align 4
+vbe_font_save_buf: times 8192 db 0  ; 256 chars * 32 bytes/char for VGA font

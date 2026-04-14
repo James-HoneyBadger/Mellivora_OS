@@ -90,7 +90,7 @@ This single command:
 4. Creates a 64 MB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (96 files)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (154 files)
 
 ### Build Targets
 
@@ -250,13 +250,13 @@ LBA 554+        ~63 MB      Data blocks (4 KB each)
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 4 subdirectories and places the curated runtime file set (96 files):
+The `populate.py` script creates 4 subdirectories and places the curated runtime file set (154 files):
 
 ```text
 /
 ├── bin/           Utility programs (hello, edit, grep, sort, tcc, ...)
 ├── games/         Games (snake, tetris, 2048, galaga, mine, ...)
-├── samples/       11 C source files (hello.c, fib.c, wumpus.c, ...)
+├── samples/       11 C and 6 Perl source files (hello.c, fib.c, wumpus.c, ...)
 ├── docs/           5 text files (readme, license, notes, todo, poem)
 └── script.bat     Example batch script
 ```
@@ -314,7 +314,7 @@ sync
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (16-bit real mode)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
-├── kernel.asm              Kernel entry and include graph (main file + 19 include modules)
+├── kernel.asm              Kernel entry and include graph (main file + 22 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
 ├── CHANGELOG.md            Version history (v1.0 → v2.1)
@@ -339,17 +339,20 @@ Mellivora_OS/
 │   ├── mouse.inc           PS/2 mouse driver
 │   ├── sched.inc           Preemptive scheduler
 │   ├── burrows.inc         Burrows desktop environment
-│   └── paging.inc          Paging and virtual memory
+│   ├── paging.inc          Paging and virtual memory
+│   ├── ipc.inc             Inter-process communication (pipes, shared memory)
+│   ├── sb16.inc            Sound Blaster 16 audio driver
+│   └── screensaver.inc     Screensaver modes
 │
-├── programs/               User-space assembly programs (79 programs)
+├── programs/               User-space assembly programs (131 programs)
 │   ├── syscalls.inc        Shared constants and helpers
 │   ├── lib/                Reusable libraries (string, io, math, vga, mem, data, net, gui)
 │   ├── hello.asm           ... through ...
 │   └── wc.asm
 │
-├── samples/                11 C source files for TCC
+├── samples/                11 C and 6 Perl source files for TCC and the Perl interpreter
 │   ├── hello.c             ... through ...
-│   └── wumpus.c
+│   └── strings.pl
 │
 └── docs/                   Full documentation suite
     ├── INSTALL.md           This file

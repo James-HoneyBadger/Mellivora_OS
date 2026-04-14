@@ -201,6 +201,9 @@ cmd_dhcp_str:   db "dhcp", 0
 cmd_arp_str:    db "arp", 0
 cmd_scrsaver_str: db "scrsaver", 0
 cmd_whoami_str: db "whoami", 0
+cmd_stat_str:   db "stat", 0
+cmd_fsck_str:   db "fsck", 0
+cmd_ln_str:     db "ln", 0
 
 ; Screensaver strings
 msg_scrsaver_set:  db "  Screensaver mode set to: ", 0
@@ -417,12 +420,13 @@ msg_hbfs_dir_write_err: db "HBFS: directory write failed", 0x0A, 0
 msg_hbfs_bitmap_err:    db "HBFS: bitmap read failed", 0x0A, 0
 msg_ata_read_err:       db "ATA: read failed after retries", 0x0A, 0
 msg_ata_write_err:      db "ATA: write failed after retries", 0x0A, 0
-dir_header:     db "Type       Size  Modified   Name", 0x0A, 0
-dir_separator:  db "----- --------- ---------- ----------------", 0x0A, 0
+dir_header:     db "Type       Size  Modified         Name", 0x0A, 0
+dir_separator:  db "----- --------- ---------------- ----------------", 0x0A, 0
 type_text:      db "text ", 0
 type_batch:     db "batch", 0
 type_exec:      db "exec ", 0
 type_dir:       db "dir  ", 0
+type_link:      db "link ", 0
 msg_dir_count:  db "  ", 0
 msg_dir_files:  db " file(s)", 0x0A, 0
 msg_not_found:  db "File not found", 0x0A, 0
@@ -564,6 +568,8 @@ hbfs_super_buf:  resb 512       ; Superblock buffer
 hbfs_dir_buf:    resb HBFS_ROOT_DIR_SIZE  ; Directory buffer (64KB)
 hbfs_block_buf:  resb HBFS_BLOCK_SIZE     ; General block buffer (4KB)
 hbfs_bitmap_buf: resb HBFS_BITMAP_SIZE     ; Bitmap buffer (64KB)
+dir_cache_lba:   resd 1                     ; LBA of cached directory (0 = invalid)
+dir_cache_sects: resd 1                     ; Sector count of cached directory
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE

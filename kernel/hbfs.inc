@@ -18,8 +18,8 @@
 ;   [256-259] File size in bytes
 ;   [260-263] Start block (in data area)
 ;   [264-267] Block count
-;   [268-271] Created timestamp (ticks)
-;   [272-275] Modified timestamp (ticks)
+;   [268-271] Created timestamp (packed RTC)
+;   [272-275] Modified timestamp (packed RTC)
 ;   [276-287] Reserved
 ;
 ; Block allocation bitmap:
@@ -134,10 +134,23 @@ hbfs_format:
         popad
         ret
 
-; Load current directory into memory
+; Load current directory into memory (with cache)
 ; Returns: CF set on read error
 hbfs_load_root_dir:
         pushad
+        ; Check if the directory buffer already has this directory cached
+        mov eax, [current_dir_lba]
+        cmp eax, [dir_cache_lba]
+        jne .hlrd_miss
+        mov eax, [current_dir_sects]
+        cmp eax, [dir_cache_sects]
+        jne .hlrd_miss
+        ; Cache hit — buffer is already valid
+        popad
+        clc
+        ret
+.hlrd_miss:
+        ; Cache miss — read from disk
         ; Zero entire dir buffer first to clear stale data
         mov edi, hbfs_dir_buf
         mov ecx, HBFS_ROOT_DIR_SIZE / 4
@@ -149,6 +162,11 @@ hbfs_load_root_dir:
         mov edi, hbfs_dir_buf
         call ata_read_sectors
         jc .hlrd_err
+        ; Update cache tag
+        mov eax, [current_dir_lba]
+        mov [dir_cache_lba], eax
+        mov eax, [current_dir_sects]
+        mov [dir_cache_sects], eax
         popad
         clc
         ret
@@ -531,9 +549,9 @@ hbfs_create_file:
         mov [edi + 256], ecx            ; File size
         mov ecx, [.save_blocks]
         mov [edi + 264], ecx            ; Block count
-        mov ecx, [tick_count]
-        mov [edi + 268], ecx            ; Created timestamp
-        mov [edi + 272], ecx            ; Modified timestamp
+        call rtc_get_timestamp
+        mov [edi + 268], eax            ; Created timestamp (RTC packed)
+        mov [edi + 272], eax            ; Modified timestamp (RTC packed)
 
         ; Save directory
         call hbfs_save_root_dir

@@ -176,6 +176,25 @@ SYS_ACCEPT      equ 45
 SYS_DNS         equ 46
 SYS_SOCKCLOSE   equ 47
 SYS_PING        equ 48
+SYS_SETDATE     equ 49
+SYS_AUDIO_PLAY  equ 50
+SYS_AUDIO_STOP  equ 51
+SYS_AUDIO_STATUS equ 52
+SYS_KILL        equ 53
+SYS_GETPID      equ 54
+SYS_CLIP_COPY   equ 55
+SYS_CLIP_PASTE  equ 56
+SYS_NOTIFY      equ 57
+SYS_FILE_OPEN_DLG equ 58
+SYS_FILE_SAVE_DLG equ 59
+SYS_PIPE_CREATE equ 60
+SYS_PIPE_WRITE  equ 61
+SYS_PIPE_READ   equ 62
+SYS_PIPE_CLOSE  equ 63
+SYS_SHMGET      equ 64
+SYS_SHMADDR     equ 65
+SYS_PROCLIST    equ 66
+SYS_MEMINFO     equ 67
 ```
 
 Or include the provided header:
@@ -924,7 +943,7 @@ ip_string: db "10.0.2.2", 0
 ## GUI Programming
 
 Mellivora's Burrows desktop environment provides a windowed GUI accessible through
-`SYS_GUI` (syscall 38) and its 12 sub-functions. The `lib/gui.inc` library wraps
+`SYS_GUI` (syscall 38) and its 20 sub-functions. The `lib/gui.inc` library wraps
 these into convenient functions.
 
 ### Setting Up a GUI Application
@@ -1076,6 +1095,104 @@ For programs that need direct pixel access without the window manager:
         int 0x80
 ```
 
+### Audio Playback (Sound Blaster 16)
+
+Programs can play audio via the SB16 driver:
+
+```nasm
+        ; Play a PCM buffer (8-bit, 11025 Hz, mono)
+        mov eax, 50             ; SYS_AUDIO_PLAY
+        mov ebx, audio_data     ; pointer to PCM data
+        mov ecx, audio_len      ; length in bytes
+        mov edx, 11025          ; format: sample rate in bits 0-15
+        int 0x80
+
+        ; Check playback status
+        mov eax, 52             ; SYS_AUDIO_STATUS
+        int 0x80
+        ; EAX = state (0=idle, 1=playing, 2=done)
+        ; EBX = sb16_present (0/1)
+
+        ; Stop playback
+        mov eax, 51             ; SYS_AUDIO_STOP
+        int 0x80
+```
+
+Format flags for EDX: bits 0–15 = sample rate Hz, bit 16 = 16-bit,
+bit 17 = stereo, bit 18 = signed samples.
+
+### Inter-Process Communication
+
+#### Pipes
+
+```nasm
+        ; Create a pipe
+        mov eax, 60             ; SYS_PIPE_CREATE
+        int 0x80
+        ; EAX = pipe_id (-1 on error)
+        mov [pipe_id], eax
+
+        ; Write to pipe
+        mov eax, 61             ; SYS_PIPE_WRITE
+        mov ebx, [pipe_id]
+        mov ecx, message        ; buffer
+        mov edx, msg_len        ; length
+        int 0x80
+
+        ; Read from pipe
+        mov eax, 62             ; SYS_PIPE_READ
+        mov ebx, [pipe_id]
+        mov ecx, recv_buf
+        mov edx, 256            ; max bytes
+        int 0x80
+        ; EAX = bytes read
+
+        ; Close pipe
+        mov eax, 63             ; SYS_PIPE_CLOSE
+        mov ebx, [pipe_id]
+        int 0x80
+```
+
+#### Shared Memory
+
+```nasm
+        ; Get or create a shared memory region
+        mov eax, 64             ; SYS_SHMGET
+        mov ebx, 1              ; key (any integer)
+        mov ecx, 4096           ; size
+        int 0x80
+        ; EAX = shm_id (-1 on error)
+        mov [shm_id], eax
+
+        ; Get the data pointer
+        mov eax, 65             ; SYS_SHMADDR
+        mov ebx, [shm_id]
+        int 0x80
+        ; EAX = pointer to 4 KB region
+        mov [shm_ptr], eax
+```
+
+### Process Management
+
+```nasm
+        ; Get current PID
+        mov eax, 54             ; SYS_GETPID
+        int 0x80
+        ; EAX = current task PID
+
+        ; List tasks (slot 0–15)
+        mov eax, 66             ; SYS_PROCLIST
+        mov ebx, 0              ; slot index
+        mov ecx, task_buf       ; 16-byte buffer
+        int 0x80
+        ; EAX = 0 if slot active, -1 if empty
+
+        ; Get memory info
+        mov eax, 67             ; SYS_MEMINFO
+        int 0x80
+        ; EAX = free pages, EBX = total at boot
+```
+
 ### Built-in Burrows Apps
 
 These programs in the `programs/` directory use `gui.inc` and demonstrate GUI patterns:
@@ -1089,6 +1206,11 @@ These programs in the `programs/` directory use `gui.inc` and demonstrate GUI pa
 | `bpaint` | BPaint | Pixel drawing, tool selection |
 | `bsysmon` | BSysMon | Real-time data display |
 | `bterm` | BTerm | Text rendering, keyboard I/O |
+| `bnotes` | BNotes | Simple data persistence |
+| `bplayer` | BPlayer | Audio playback, progress bar |
+| `bsettings` | BSettings | Theme switching, preferences |
+| `bsheet` | BSheet | Grid layout, formula evaluation |
+| `bview` | BView | Image rendering, file loading |
 
 ---
 
@@ -1319,6 +1441,19 @@ The `/samples` directory contains ready-to-compile examples:
 | `stars.c` | Starfield animation |
 | `echo.c` | Echo arguments |
 
+### Perl Samples
+
+The `/samples` directory also contains Perl scripts for the in-OS interpreter:
+
+| File | Description |
+| --- | --- |
+| `hello.pl` | Hello World |
+| `factorial.pl` | Factorial calculator |
+| `fizzbuzz.pl` | FizzBuzz |
+| `guess.pl` | Number guessing game |
+| `arrays.pl` | Array operations demo |
+| `strings.pl` | String manipulation demo |
+
 ---
 
 ## Debugging Tips
@@ -1404,7 +1539,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 49 syscalls (0–48):
+Quick reference for all 68 syscalls (0–67):
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |
@@ -1457,3 +1592,22 @@ Quick reference for all 49 syscalls (0–48):
 | 46 | DNS | hostname ptr | — | — | IP or 0 |
 | 47 | SOCKCLOSE | socket fd | — | — | 0 |
 | 48 | PING | IP address | — | — | RTT ticks or -1 |
+| 49 | SETDATE | 6-byte buf | century | — | 0 |
+| 50 | AUDIO_PLAY | buffer | length | format | 0/-1 |
+| 51 | AUDIO_STOP | — | — | — | 0 |
+| 52 | AUDIO_STATUS | — | — | — | state, EBX=present |
+| 53 | KILL | pid | — | — | 0/-1 |
+| 54 | GETPID | — | — | — | pid |
+| 55 | CLIP_COPY | buffer | length | — | 0 |
+| 56 | CLIP_PASTE | buffer | max len | — | bytes |
+| 57 | NOTIFY | text ptr | — | color | 0 |
+| 58 | FILE_OPEN_DLG | title | — | filter | 1/0, ECX=name |
+| 59 | FILE_SAVE_DLG | title | — | filter | 1/0, ECX=name |
+| 60 | PIPE_CREATE | — | — | — | pipe_id or -1 |
+| 61 | PIPE_WRITE | pipe_id | buffer | length | bytes |
+| 62 | PIPE_READ | pipe_id | buffer | max len | bytes |
+| 63 | PIPE_CLOSE | pipe_id | — | — | 0 |
+| 64 | SHMGET | key | size | — | shm_id or -1 |
+| 65 | SHMADDR | shm_id | — | — | pointer |
+| 66 | PROCLIST | slot (0–15) | 16B buf | — | 0/-1 |
+| 67 | MEMINFO | — | — | — | free pages, EBX=total |

@@ -722,6 +722,46 @@ rtc_read_time:
         ret
 
 ;---------------------------------------
+; rtc_get_timestamp - Pack current RTC into 32-bit DOS-style timestamp
+; Returns: EAX = packed timestamp
+;   Bits 31-25: Year (0-127, +2000)
+;   Bits 24-21: Month (1-12)
+;   Bits 20-16: Day (1-31)
+;   Bits 15-11: Hour (0-23)
+;   Bits 10-5:  Minute (0-59)
+;   Bits 4-0:   Second/2 (0-29)
+;---------------------------------------
+rtc_get_timestamp:
+        push ecx
+        call rtc_read_time
+        xor eax, eax
+        ; Year: century*100 + year - 2000
+        movzx ecx, byte [rtc_century]
+        imul ecx, 100
+        movzx eax, byte [rtc_year]
+        add eax, ecx
+        sub eax, 2000
+        and eax, 0x7F          ; 7 bits
+        shl eax, 4
+        movzx ecx, byte [rtc_month]
+        or eax, ecx            ; 4 bits month
+        shl eax, 5
+        movzx ecx, byte [rtc_day]
+        or eax, ecx            ; 5 bits day
+        shl eax, 5
+        movzx ecx, byte [rtc_hour]
+        or eax, ecx            ; 5 bits hour
+        shl eax, 6
+        movzx ecx, byte [rtc_min]
+        or eax, ecx            ; 6 bits minute
+        shl eax, 5
+        movzx ecx, byte [rtc_sec]
+        shr ecx, 1             ; seconds / 2
+        or eax, ecx            ; 5 bits second/2
+        pop ecx
+        ret
+
+;---------------------------------------
 ; rtc_write_reg - Write value to RTC register
 ; AL = register, AH = value
 ;---------------------------------------
@@ -1211,7 +1251,7 @@ fd_close:
 .fcl_found:
         ; Update file size and modified timestamp in directory entry
         mov [edi + DIRENT_SIZE], edx
-        mov eax, [tick_count]
+        call rtc_get_timestamp
         mov [edi + DIRENT_MODIFIED], eax
         call hbfs_save_root_dir
 

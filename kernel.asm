@@ -139,6 +139,7 @@ FTYPE_FILE          equ 1              ; Alias for backward compat
 FTYPE_DIR           equ 2              ; Directory
 FTYPE_EXEC          equ 3              ; Executable (flat binary or ELF)
 FTYPE_BATCH         equ 4              ; Batch script
+FTYPE_LINK          equ 5              ; Symbolic link
 
 ; Syscall numbers (via INT 0x80)
 SYS_EXIT            equ 0

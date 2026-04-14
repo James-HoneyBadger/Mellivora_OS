@@ -146,6 +146,7 @@ FTYPE_TEXT      equ 1
 FTYPE_DIR       equ 2
 FTYPE_EXEC      equ 3
 FTYPE_BATCH     equ 4
+FTYPE_LINK      equ 5
 
 ;---------------------------------------
 ; Shared print_dec: print EAX as decimal

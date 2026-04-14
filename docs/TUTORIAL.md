@@ -608,10 +608,11 @@ Several programs use the network. Make sure DHCP has completed first:
 
 ```text
 Lair:/> forager example.com        → Fetch a web page via HTTP
-Lair:/> dns example.com            → Resolve a hostname
-Lair:/> nslookup google.com        → DNS lookup
-Lair:/> netstat                    → Show open sockets
-Lair:/> wget http://example.com/   → Download a page
+Lair:/> gopher floodgap.com        → Browse Gopher sites
+Lair:/> ftp                        → FTP file transfer client
+Lair:/> irc                        → IRC chat client
+Lair:/> mail                       → POP3/SMTP email client
+Lair:/> news                       → NNTP Usenet newsreader
 ```
 
 ### Writing Network Programs
@@ -629,7 +630,7 @@ mouse cursor, taskbar and application menu.
 ### Launching the Desktop
 
 ```text
-Lair:/> burrow
+Lair:/> burrows
 ```
 
 The screen switches to 640×480 graphical mode. You'll see a desktop background, a

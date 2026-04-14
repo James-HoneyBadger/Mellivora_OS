@@ -24,6 +24,10 @@ start:
         call draw_content
         call gui_flip
 
+        mov eax, SYS_SLEEP
+        mov ebx, 3             ; ~30ms - prevent busy-loop
+        int 0x80
+
         call gui_poll_event
         cmp eax, EVT_CLOSE
         je .close

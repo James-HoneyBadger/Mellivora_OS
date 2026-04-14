@@ -3,7 +3,7 @@
 Welcome to Mellivora OS! This guide covers everything you need to know to use the
 HB Lair shell, manage files, run programs, network, and get the most out of the system.
 
-> **Version 2.1.0** — 79 programs, 48 syscalls, full TCP/IP networking, Burrows desktop
+> **Version 2.1.0** — 131 programs, 68 syscalls, full TCP/IP networking, Burrows desktop
 
 ---
 
@@ -71,14 +71,14 @@ Press **Enter** to re-execute a recalled command.
 
 ## Directory Structure
 
-Mellivora organizes 96 files into subdirectories:
+Mellivora organizes 154 files into subdirectories:
 
 ```text
 /
-├── bin/          65 utility and tool programs (edit, grep, tcc, http, ...)
-├── games/        14 games (snake, tetris, chess, rogue, galaga, ...)
-├── samples/      11 C source files (hello.c, fib.c, wumpus.c, ...)
-├── docs/          5 text files (readme, license, notes, todo, poem)
+├── bin/          110 utility and tool programs (edit, grep, tcc, httpd, ...)
+├── games/         21 games (snake, tetris, chess, rogue, galaga, ...)
+├── samples/       17 sample scripts (11 C, 6 Perl)
+├── docs/           5 text files (readme, license, notes, todo, poem)
 └── script.bat    Example batch script
 ```
 
@@ -207,7 +207,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `hex FILE` | Hexadecimal dump of file |
 | `size FILE` | Show file size in bytes/blocks and type |
 | `strings FILE` | Extract printable strings (default ≥4 chars) |
-| `stat FILE` | Show file metadata (size, type, block location) |
+| `stat FILE` | Show file metadata (size, type, block location, timestamps) |
 
 ### File Creation & Editing
 
@@ -225,6 +225,13 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `copy SRC DEST` | Copy a file (wildcards supported: `copy *.txt backup/`) |
 | `ren OLD NEW` | Rename a file |
 | `del FILE` / `rm FILE` | Delete a file (wildcards: `del *.tmp`) |
+| `ln -s TARGET LINK` | Create a symbolic link |
+
+### Filesystem Maintenance
+
+| Command | Description |
+| --- | --- |
+| `fsck` | Check filesystem integrity (superblock, bitmap, directories) |
 
 ### Text Processing (HBU — Honey Badger Utilities)
 
@@ -270,6 +277,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | Command | Description |
 | --- | --- |
 | `burrows` | Launch the Burrows desktop environment |
+| `scrsaver` | Cycle screensaver mode or set a specific mode |
 
 ### Environment Variables
 
@@ -294,14 +302,18 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | Command | Description |
 | --- | --- |
 | `history` | Display numbered command history |
+| `!!` | Re-execute the previous command |
+| `!N` | Re-execute command number N from history |
 
 ### System Operations
 
 | Command | Description |
 | --- | --- |
 | `shutdown` | Power off (ACPI S5 shutdown, works in QEMU) |
+| `reboot` | Restart the system |
 | `format` | Format HBFS filesystem (**erases all files!** — requires `y` confirm) |
 | `sleep N` | Pause for N seconds (Ctrl+C to abort) |
+| `whoami` | Show current user |
 
 ---
 
@@ -519,10 +531,10 @@ Finished.
 
 ## Programs
 
-Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities) and
-`/games` (14 games), plus **11 C samples** in `/samples`.
+Mellivora ships with **131 assembly programs** organized in `/bin` (110 utilities) and
+`/games` (21 games), plus **17 sample scripts** (11 C, 6 Perl) in `/samples`.
 
-### Games (14) — in `/games`
+### Games (21) — in `/games`
 
 | Program | Controls | Description |
 | --- | --- | --- |
@@ -532,16 +544,23 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 | `sokoban` | Arrow keys, R restart, ESC | Box-pushing puzzle with multiple levels |
 | `2048` | Arrow keys / WASD, ESC | Sliding number tiles |
 | `galaga` | ←→ move, Space shoot, ESC | Space shooter with enemy waves |
-| `chess` | Algebraic notation (e.g., e2e4), ESC | Two-player chess with check detection |
-| `rogue` | Arrow keys / WASD, ESC | ASCII roguelike dungeon with FOV and inventory |
-| `kingdom` | Number choices | Medieval kingdom management simulation |
-| `outbreak` | Arrow keys | Zombie survival strategy game |
+| `guess` | Type numbers | Number guessing with hints |
 | `life` | ESC | Conway's Game of Life (78×23 auto-running) |
 | `maze` | ESC | Random maze with BFS solver visualization |
-| `neurovault` | Number keys | Pattern memory game |
-| `guess` | Type numbers | Number guessing with hints |
+| `piano` | Letter keys (A–P) | PC speaker musical keyboard (15 notes) |
+| `blackjack` | H/S/Q | Blackjack card game |
+| `connect4` | 1–7 columns | Connect Four against the CPU |
+| `hangman` | Letter keys | Word-guessing hangman game |
+| `hanoi` | Number keys | Towers of Hanoi puzzle |
+| `mastermind` | Letter keys | Guess a hidden color code in ten attempts |
+| `pong` | W/S, ESC | Classic Pong against the CPU |
+| `puzzle15` | Arrow keys | Slide numbered tiles to solve the 15-puzzle |
+| `simon` | Number keys | Repeat growing color sequences |
+| `tictactoe` | Number keys (1–9) | Tic-Tac-Toe against the CPU |
+| `wordle` | Letter keys | Guess a 5-letter word in six attempts |
+| `worm` | Arrow keys | Grow a worm by eating food |
 
-### Internet Clients (7) — in `/bin`
+### Internet Programs (11) — in `/bin`
 
 | Program | Usage | Description |
 | --- | --- | --- |
@@ -552,8 +571,12 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 | `gopher` | `gopher <host> [path] [port]` | Gopher protocol browser with menu formatting |
 | `mail` | `mail <server>` | SMTP mail client |
 | `news` | `news <server>` | NNTP newsgroup reader |
+| `httpd` | `httpd [port]` | HTTP server with directory listing |
+| `irc` | `irc <server> [nick]` | IRC client for chat channels |
+| `ntpd` | `ntpd [server]` | Synchronize system time via NTP |
+| `pkg` | `pkg list\|search\|info` | Package manager |
 
-### Text Processing Tools (13) — in `/bin`
+### Text Processing Tools (16) — in `/bin`
 
 | Program | Usage | Description |
 | --- | --- | --- |
@@ -570,8 +593,11 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 | `rev` | `rev FILE` | Reverse each line |
 | `diff` | `diff FILE1 FILE2` | Line-by-line comparison |
 | `od` | `od FILE` | Octal/hex binary dump |
+| `cmp` | `cmp FILE1 FILE2` | Compare two files byte by byte |
+| `nl` | `nl FILE` | Number lines of a file |
+| `xxd` | `xxd FILE` | Hex dump with ASCII sidebar |
 
-### Language Interpreters (4) — in `/bin`
+### Language Interpreters (5) — in `/bin`
 
 | Program | Usage | Description |
 | --- | --- | --- |
@@ -579,8 +605,9 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 | `basic` | `basic` | BASIC (PRINT, INPUT, LET, IF/THEN, GOTO, FOR/NEXT) |
 | `forth` | `forth` | FORTH with stack operations and word definitions |
 | `asm` | `asm` | Interactive x86 assembler REPL (~25 instruction types) |
+| `perl` | `perl FILE.pl` | Perl 5 subset interpreter and REPL |
 
-### System & File Utilities (21) — in `/bin`
+### System & File Utilities — in `/bin`
 
 | Program | Usage | Description |
 | --- | --- | --- |
@@ -598,22 +625,27 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 | `id` | `id` | User/group IDs (root=0) |
 | `whoami` | `whoami` | Show current user |
 | `uptime` | `uptime` | System uptime display |
-| `sleep` | `sleep SECONDS` | Pause for N seconds |
 | `cal` | `cal` | Calendar with current day highlighted |
 | `calc` | `calc` | Interactive calculator (+, −, ×, ÷, %) |
-| `seq` | `seq N` | Print numbers 1 to N |
-| `true` | `true` | Exit success (for scripts) |
-| `false` | `false` | Exit failure (for scripts) |
-| `yes` | `yes [STRING]` | Print STRING repeatedly (default "y") |
+| `date` | `date` | Display or set current date and time |
+| `debug` | `debug` | Inspect memory, registers, and hex dumps |
+| `df` | `df` | Show disk usage statistics |
+| `du` | `du [FILE]` | Show file sizes on disk |
+| `free` | `free` | Display physical memory usage |
+| `help` | `help [TOPIC]` | Builtin help and manual pages |
+| `hive` | `hive` | Dual-pane TUI file manager |
+| `ps` | `ps` | List active tasks |
+| `strings` | `strings FILE` | Extract printable strings from binary |
+| `touch` | `touch FILE` | Create empty file |
+| `uname` | `uname` | Print system information |
 
-### Demos & Visualizations (13) — in `/bin`
+### Demos & Visualizations — in `/bin`
 
 | Program | Description |
 | --- | --- |
 | `mandel` | Mandelbrot set renderer (fixed-point arithmetic) |
 | `starfield` | Animated 3D starfield with parallax depth |
 | `matrix` | Matrix-style falling green character rain |
-| `piano` | PC speaker musical keyboard (15 notes) |
 | `clock` | Analog ASCII clock with sin/cos hands + digital display |
 | `weather` | Simulated weather station with multi-day forecast |
 | `periodic` | Interactive periodic table browser with element details |
@@ -622,13 +654,17 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 | `hello` | Hello World template program |
 | `primes` | Prime number generator |
 | `fibonacci` | Fibonacci sequence |
-| `tee` | Split output to file and stdout |
+| `cowsay` | Display a message in a cow speech bubble |
+| `fortune` | Display a random fortune or quote |
+| `lolcat` | Print text in rainbow colors |
+| `rot13` | Encode or decode text with the ROT13 cipher |
+| `typist` | Typing practice with WPM and accuracy tracking |
+| `timewarp` | BASIC/PILOT/Logo editor with turtle graphics |
 
-### Burrows GUI Applications (7) — in `/bin`
+### Burrows GUI Applications (12) — in `/bin`
 
 | Program | Description |
 | --- | ---|
-| `burrows` | Desktop environment launcher |
 | `bterm` | BTerm GUI terminal emulator |
 | `bedit` | BEdit GUI text editor |
 | `bhive` | BHive GUI file manager |
@@ -636,6 +672,11 @@ Mellivora ships with **79 assembly programs** organized in `/bin` (65 utilities)
 | `bcalc` | BCalc GUI calculator |
 | `bpaint` | BPaint GUI paint application |
 | `bsysmon` | BSysMon GUI system monitor |
+| `bnotes` | BNotes GUI sticky notes |
+| `bplayer` | BPlayer GUI music player with VU meter |
+| `bsettings` | BSettings GUI theme customizer |
+| `bsheet` | BSheet GUI spreadsheet with formulas |
+| `bview` | BView GUI image viewer (24-bit BMP) |
 
 ### The Text Editor (edit)
 
@@ -778,6 +819,7 @@ Or run `burrows` from the command line.
 - **Taskbar** with application launcher and clock
 - **Mouse support** — PS/2 IRQ12 driver with cursor tracking
 - **3 themes** — Dark, Light, Classic
+- **4 screensaver modes** — Starfield, Matrix, Pipes, Bouncing logo
 - **Double buffering** — flicker-free rendering
 
 ### GUI Applications
@@ -791,6 +833,11 @@ Or run `burrows` from the command line.
 | **BCalc** (`bcalc`) | GUI calculator with button interface |
 | **BPaint** (`bpaint`) | Drawing application with color palette |
 | **BSysMon** (`bsysmon`) | GUI task and memory monitor |
+| **BNotes** (`bnotes`) | Sticky notes application |
+| **BPlayer** (`bplayer`) | Music player with VU meter (WAV playback) |
+| **BSettings** (`bsettings`) | Desktop theme customizer |
+| **BSheet** (`bsheet`) | Spreadsheet with formulas |
+| **BView** (`bview`) | Image viewer (24-bit BMP) |
 
 ### Returning to Text Mode
 
@@ -853,6 +900,33 @@ int main() {
 
 Lair:/> tcc myprogram.c
 ```
+
+---
+
+## The Perl Interpreter
+
+Mellivora includes a Perl 5 subset interpreter that runs `.pl` scripts or
+starts an interactive REPL.
+
+### Running Perl Scripts
+
+```text
+Lair:/> perl /samples/hello.pl
+Hello, World!
+
+Lair:/> perl /samples/factorial.pl
+```
+
+### Available Perl Samples (6 files in `/samples`)
+
+| File | Description |
+| --- | --- |
+| `hello.pl` | Hello World |
+| `factorial.pl` | Factorial calculator |
+| `fizzbuzz.pl` | FizzBuzz |
+| `guess.pl` | Number guessing game |
+| `arrays.pl` | Array operations demo |
+| `strings.pl` | String manipulation demo |
 
 ---
 
@@ -926,7 +1000,7 @@ Lair:/> dhcp && ping 8.8.8.8         # Get IP, then ping Google DNS
 
 ## Limitations
 
-- **Single foreground program**: Preemptive multitasking supports up to 4 tasks, but
+- **Single foreground program**: Preemptive multitasking supports up to 16 tasks, but
   the shell runs one foreground program at a time.
 - **RTL8139 only**: Networking requires an RTL8139-compatible NIC. QEMU provides one
   by default. No Wi-Fi support.
@@ -938,5 +1012,5 @@ Lair:/> dhcp && ping 8.8.8.8         # Get IP, then ping Google DNS
 - **Root: 227 files, Subdirs: 56 files**: Directory entry limits per directory.
 - **16-level directory nesting**: Maximum subdirectory depth.
 - **Tab completion**: Completes filenames in the current directory only (not PATH-aware).
-- **No DNS caching**: Each hostname resolution makes a new DNS query.
+- **DNS cache**: 8-entry cache — repeated queries for the same hostname are served from cache.
 - **TCP single connection**: One active TCP connection at a time per socket.

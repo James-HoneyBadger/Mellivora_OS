@@ -17,6 +17,7 @@ Each directory entry is 288 bytes.
 import struct
 import sys
 import os
+from datetime import datetime
 
 # HBFS constants (must match kernel.asm)
 SECTOR_SIZE = 512
@@ -33,6 +34,22 @@ HBFS_DATA_START = 802
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
 HBFS_MAX_FILENAME = 252
+
+
+def pack_rtc_timestamp(dt=None):
+    """Pack a datetime into HBFS 32-bit DOS-style timestamp.
+    Bits 31-25: Year (0-127, +2000)
+    Bits 24-21: Month (1-12)
+    Bits 20-16: Day (1-31)
+    Bits 15-11: Hour (0-23)
+    Bits 10-5:  Minute (0-59)
+    Bits 4-0:   Second/2 (0-29)
+    """
+    if dt is None:
+        dt = datetime.now()
+    year = max(0, min(127, dt.year - 2000))
+    return ((year << 25) | (dt.month << 21) | (dt.day << 16) |
+            (dt.hour << 11) | (dt.minute << 5) | (dt.second >> 1))
 TOTAL_BLOCKS = 524288
 
 # File types
@@ -82,8 +99,10 @@ def create_superblock():
 
 
 def create_dir_entry(filename, ftype, size, start_block,
-                     block_count, timestamp=1000):
+                     block_count, timestamp=None):
     """Create a single HBFS directory entry (288 bytes)."""
+    if timestamp is None:
+        timestamp = pack_rtc_timestamp()
     entry = bytearray(HBFS_DIR_ENTRY_SIZE)
 
     # Filename: bytes 0-252 (null-terminated, max 252 chars)
@@ -185,7 +204,6 @@ class FSImage:
             size=0,
             start_block=block_num,
             block_count=HBFS_SUBDIR_BLOCKS,
-            timestamp=900
         )
         off = root_entry_count * HBFS_DIR_ENTRY_SIZE
         self.root_dir[off:off + HBFS_DIR_ENTRY_SIZE] = entry
@@ -220,7 +238,6 @@ class FSImage:
             size=len(data),
             start_block=block_num,
             block_count=blocks_needed,
-            timestamp=1000 + self.total_files * 100
         )
 
         if directory and directory in self.subdirs:

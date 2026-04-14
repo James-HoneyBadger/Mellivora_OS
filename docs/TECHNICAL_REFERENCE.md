@@ -36,6 +36,9 @@ anyone who wants to understand how the system works under the hood.
 26. [Alias System](#alias-system)
 27. [Command History](#command-history)
 28. [Tab Completion](#tab-completion)
+29. [Sound Blaster 16 Audio Driver](#sound-blaster-16-audio-driver)
+30. [Inter-Process Communication (IPC)](#inter-process-communication-ipc)
+31. [Screensavers](#screensavers)
 
 ---
 
@@ -88,14 +91,23 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
    - IDT setup (256 entries)
    - PIT timer (100 Hz)
    - Keyboard driver
+   - PMM (using E820 map)
    - ATA/IDE disk detection
    - Serial port (COM1 at 115200 baud)
-   - PMM (using E820 map)
    - TSS (Ring 3 support)
+   - Scheduler (task table, quantum)
+   - IPC (pipes and shared memory)
+   - Network stack (RTL8139, ARP, TCP/IP)
+   - Paging (identity-map 128 MB + LFB)
+   - PS/2 mouse driver
+   - Sound Blaster 16 audio driver
+   - VBE/BGA framebuffer detection
+   - Burrows desktop initialization
+   - Drain 8042 controller
+   - Enable interrupts (`sti`)
+   - Print system info banner
    - HBFS filesystem
-   - Default environment variables
-2. Prints the HB Lair banner
-3. Enters the interactive shell loop
+2. Enters the interactive shell loop (`shell_main`)
 
 ### Disk Layout
 
@@ -377,8 +389,8 @@ a block allocation bitmap, and support for nested subdirectories.
 | 256 | 4 | File size (bytes) |
 | 260 | 4 | Start block (in data area) |
 | 264 | 4 | Block count |
-| 268 | 4 | Created timestamp (ticks) |
-| 272 | 4 | Modified timestamp (ticks) |
+| 268 | 4 | Created timestamp (packed RTC date/time) |
+| 272 | 4 | Modified timestamp (packed RTC date/time) |
 | 276 | 12 | Reserved |
 
 ### Block Allocation Bitmap
@@ -397,6 +409,7 @@ a block allocation bitmap, and support for nested subdirectories.
 | 2 | Directory | Subdirectory (data blocks contain its entries) |
 | 3 | Executable | Binary program (loaded and run by the shell) |
 | 4 | Batch | Batch script (executed line-by-line) |
+| 5 | Link | Symbolic link (target stored in data block) |
 
 ### Key Routines (HBFS)
 
@@ -412,6 +425,44 @@ a block allocation bitmap, and support for nested subdirectories.
 | `hbfs_free_blocks` | Clears bitmap bits for a range of blocks |
 | `hbfs_flush_bitmap` | Writes in-memory bitmap back to disk |
 | `hbfs_flush_dir` | Writes in-memory directory back to disk |
+
+### Directory Caching
+
+The kernel caches the most recently loaded directory to avoid redundant disk reads
+when the same directory is accessed repeatedly (e.g., during PATH searches).
+
+| Variable | Description |
+| --- | --- |
+| `dir_cache_lba` | LBA of the cached directory |
+| `dir_cache_sects` | Sector count of the cached directory |
+
+`hbfs_load_root_dir` checks whether the requested directory matches the cache tag.
+On a hit, the disk read is skipped entirely. On a miss, the directory is read from
+disk and the cache tags are updated.
+
+### Timestamps
+
+File timestamps use the RTC (Real-Time Clock) rather than PIT tick counts. When a
+file is created or modified, `rtc_get_timestamp` reads the current date/time from
+CMOS and packs it into a 32-bit value:
+
+```text
+Bits 31–25: Year (offset from 2000)
+Bits 24–21: Month (1–12)
+Bits 20–16: Day (1–31)
+Bits 15–11: Hour (0–23)
+Bits 10–5:  Minute (0–59)
+Bits 4–0:   Second / 2 (0–29)
+```
+
+This is the same encoding as DOS/FAT timestamps, providing human-readable
+file dates displayed by `dir -l` and `stat` as `YYYY-MM-DD HH:MM`.
+
+### Symbolic Links
+
+Files with type `FTYPE_LINK` (5) store the target path in their data block.
+The `ln -s TARGET LINKNAME` shell command creates a symbolic link. The `stat`
+command resolves and displays link targets.
 
 ---
 
@@ -960,7 +1011,7 @@ divisor = 1,193,182 / desired_frequency_hz
 
 ## Preemptive Scheduler
 
-Mellivora implements a preemptive round-robin scheduler supporting up to 4 concurrent
+Mellivora implements a preemptive round-robin scheduler supporting up to 16 concurrent
 tasks with Ring 3 isolation. The scheduler is driven by the PIT timer interrupt and
 maintains per-task kernel stacks for clean context switching.
 
@@ -968,7 +1019,7 @@ maintains per-task kernel stacks for clean context switching.
 
 | Property | Value |
 | --- | --- |
-| `MAX_TASKS` | 4 |
+| `MAX_TASKS` | 16 |
 | `SCHED_QUANTUM` | 10 PIT ticks (100 ms at 100 Hz) |
 | `TCB_SIZE` | 32 bytes per entry |
 | Kernel stack | 4 KB page per task (allocated via PMM) |
@@ -1389,6 +1440,15 @@ Each theme is 48 bytes (12 colors × 4 bytes each):
 | 9 | `GUI_COMPOSE` | — | Trigger desktop compositing |
 | 10 | `GUI_FLIP` | — | Flip back buffer to screen |
 | 11 | `GUI_DESKTOP` | — | Enter desktop mode |
+| 20 | `GUI_DRAW_BUTTON` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=label | Draw button widget |
+| 21 | `GUI_DRAW_CHECKBOX` | ECX=win_id, EDX=x\|y, ESI=checked, EDI=label | Draw checkbox widget |
+| 22 | `GUI_DRAW_PROGRESS` | ECX=win_id, EDX=x\|y, ESI=w\|value, EDI=color | Draw progress bar |
+| 23 | `GUI_DRAW_TEXTBOX` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=text | Draw text input box |
+| 24 | `GUI_DRAW_LISTBOX` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=items | Draw list box widget |
+| 25 | `GUI_DRAW_LABEL` | ECX=win_id, EDX=x\|y, ESI=text, EDI=color | Draw label widget |
+| 26 | `GUI_DRAW_RECT` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=color | Draw rectangle outline |
+
+Sub-functions 12–19 are reserved. Total: 20 sub-functions (0–11 core, 20–26 widgets).
 
 ### State Variables
 
@@ -1505,7 +1565,7 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 35 | `SYS_YIELD` | — | EAX=0 (cooperative task yield) |
 | 36 | `SYS_MOUSE` | — | EAX=x, EBX=y, ECX=buttons |
 | 37 | `SYS_FRAMEBUF` | EBX=sub-function | (see VBE/BGA section) |
-| 38 | `SYS_GUI` | EBX=sub-function | (see Burrows section, 12 sub-functions) |
+| 38 | `SYS_GUI` | EBX=sub-function | (see Burrows section, 20 sub-functions) |
 | 39 | `SYS_SOCKET` | EBX=type (1=TCP, 2=UDP) | EAX=socket fd (-1 error) |
 | 40 | `SYS_CONNECT` | EBX=fd, ECX=IP, EDX=port | EAX=0/-1 |
 | 41 | `SYS_SEND` | EBX=fd, ECX=buf, EDX=len | EAX=bytes sent |
@@ -1516,8 +1576,27 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 46 | `SYS_DNS` | EBX=hostname | EAX=IP address (0=fail) |
 | 47 | `SYS_SOCKCLOSE` | EBX=fd | EAX=0 |
 | 48 | `SYS_PING` | EBX=IP, ECX=timeout | EAX=RTT ms (-1=timeout) |
+| 49 | `SYS_SETDATE` | EBX=6-byte buf, ECX=century | EAX=0 |
+| 50 | `SYS_AUDIO_PLAY` | EBX=buf, ECX=len, EDX=format | EAX=0/-1 |
+| 51 | `SYS_AUDIO_STOP` | — | EAX=0 |
+| 52 | `SYS_AUDIO_STATUS` | — | EAX=state, EBX=present |
+| 53 | `SYS_KILL` | EBX=pid | EAX=0/-1 |
+| 54 | `SYS_GETPID` | — | EAX=current pid |
+| 55 | `SYS_CLIPBOARD_COPY` | EBX=buf, ECX=len | EAX=0 |
+| 56 | `SYS_CLIPBOARD_PASTE` | EBX=buf, ECX=max | EAX=bytes pasted |
+| 57 | `SYS_NOTIFY` | EBX=text, EDX=color | EAX=0 |
+| 58 | `SYS_FILE_OPEN_DLG` | EBX=title, EDX=filter | EAX=1/0, ECX=filename |
+| 59 | `SYS_FILE_SAVE_DLG` | EBX=title, EDX=filter | EAX=1/0, ECX=filename |
+| 60 | `SYS_PIPE_CREATE` | — | EAX=pipe_id (-1 error) |
+| 61 | `SYS_PIPE_WRITE` | EBX=id, ECX=buf, EDX=len | EAX=bytes written |
+| 62 | `SYS_PIPE_READ` | EBX=id, ECX=buf, EDX=max | EAX=bytes read |
+| 63 | `SYS_PIPE_CLOSE` | EBX=id | EAX=0 |
+| 64 | `SYS_SHMGET` | EBX=key, ECX=size | EAX=shm_id (-1 error) |
+| 65 | `SYS_SHMADDR` | EBX=shm_id | EAX=pointer |
+| 66 | `SYS_PROCLIST` | EBX=slot (0–15), ECX=buf (16B) | EAX=0/-1 |
+| 67 | `SYS_MEMINFO` | — | EAX=free pages, EBX=total |
 
-**Total: 49 syscalls (0–48).**
+**Total: 68 syscalls (0–67).**
 
 ---
 
@@ -1529,13 +1608,13 @@ The shell reads input into `line_buffer` (256 bytes) and processes it through:
 
 1. **Alias expansion** — checks first word against alias table
 2. **Variable expansion** — expands `$VAR` references in echo
-3. **Built-in command matching** — linear scan of `command_table` (38 entries + 6 aliases)
+3. **Built-in command matching** — linear scan of `command_table` (58 commands + 6 aliases)
 4. **External program loading** — current directory, then PATH search
 
-### Built-in Commands (44 dispatched names)
+### Built-in Commands (64 dispatched names)
 
-The 38 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
-`move`→`ren`, `cls`→`clear`, `type`→`cat`) produce 44 dispatched command names.
+The 58 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
+`move`→`ren`, `cls`→`clear`, `type`→`cat`) produce 64 dispatched command names.
 
 ### Shell Line Editing
 
@@ -1654,3 +1733,126 @@ The following are hardcoded in the command table (not user aliases):
 - Only matches filenames in the **current directory** (not PATH-aware)
 - Does not complete built-in command names
 - Does not complete directory names with trailing `/`
+
+---
+
+## Sound Blaster 16 Audio Driver
+
+Mellivora includes a Sound Blaster 16 driver for ISA DMA audio playback.
+
+### Configuration (SB16)
+
+| Property | Value |
+| --- | --- |
+| Base port | `SB16_BASE` = `0x220` |
+| IRQ | 5 (INT vector `0x25`) |
+| 8-bit DMA channel | 1 |
+| 16-bit DMA channel | 5 |
+| DSP version required | ≥ 4.00 |
+
+### Initialization (sb16_init)
+
+1. Reset DSP: write `0x01` to port `0x226`, delay, write `0x00`
+2. Read `0x22A` and verify `0xAA` (ready signal)
+3. Get DSP version: send command `0xE1`, read major/minor
+4. If version < 4.00, mark as unavailable
+5. Set `sb16_present = 1` and install IRQ5 handler
+
+### Playback States
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `SB_STATE_IDLE` | 0 | No playback |
+| `SB_STATE_PLAYING` | 1 | Audio playing |
+| `SB_STATE_DONE` | 2 | Playback finished |
+
+### Format Encoding
+
+The `EDX` format parameter for `SYS_AUDIO_PLAY` encodes:
+
+| Bits | Field |
+| --- | --- |
+| 0–15 | Sample rate in Hz |
+| 16 | `SB_FMT_16BIT` — 16-bit samples |
+| 17 | `SB_FMT_STEREO` — stereo |
+| 18 | `SB_FMT_SIGNED` — signed samples |
+
+### Audio Syscalls
+
+| # | Name | Args | Returns |
+| --- | --- | --- | --- |
+| 50 | `SYS_AUDIO_PLAY` | EBX=buffer, ECX=length, EDX=format | EAX=0/-1 |
+| 51 | `SYS_AUDIO_STOP` | — | EAX=0 |
+| 52 | `SYS_AUDIO_STATUS` | — | EAX=state, EBX=present |
+
+---
+
+## Inter-Process Communication (IPC)
+
+Mellivora provides pipes and shared memory regions for communication between tasks.
+
+### Pipes
+
+| Property | Value |
+| --- | --- |
+| `IPC_MAX_PIPES` | 8 |
+| `IPC_PIPE_SIZE` | 4096 bytes (4 KB per pipe) |
+| `PIPE_STRUCT_SIZE` | 4112 bytes (16 header + 4096 data) |
+
+Each pipe structure contains a circular buffer with read/write offsets and a
+byte count. Writes block (return 0) when the buffer is full; reads block when
+empty.
+
+### Shared Memory
+
+| Property | Value |
+| --- | --- |
+| `IPC_MAX_SHM` | 4 |
+| `IPC_SHM_SIZE` | 4096 bytes (4 KB per region) |
+| `SHM_STRUCT_SIZE` | 4108 bytes (12 header + 4096 data) |
+
+Shared memory regions are identified by an integer key. `SYS_SHMGET` creates
+or retrieves a region by key, and `SYS_SHMADDR` returns the data pointer.
+
+### IPC Syscalls
+
+| # | Name | Args | Returns |
+| --- | --- | --- | --- |
+| 60 | `SYS_PIPE_CREATE` | — | EAX=pipe_id (-1 error) |
+| 61 | `SYS_PIPE_WRITE` | EBX=id, ECX=buf, EDX=len | EAX=bytes written |
+| 62 | `SYS_PIPE_READ` | EBX=id, ECX=buf, EDX=max | EAX=bytes read |
+| 63 | `SYS_PIPE_CLOSE` | EBX=id | EAX=0 |
+| 64 | `SYS_SHMGET` | EBX=key, ECX=size | EAX=shm_id (-1 error) |
+| 65 | `SYS_SHMADDR` | EBX=shm_id | EAX=pointer |
+
+---
+
+## Screensavers
+
+The Burrows desktop includes a screensaver system that activates after an idle
+period with no keyboard or mouse input.
+
+### Configuration (Screensaver)
+
+| Property | Value |
+| --- | --- |
+| `SCR_IDLE_TIMEOUT` | 30,000 ticks (~5 minutes at 100 Hz) |
+| Modes | 4 |
+
+### Screensaver Modes
+
+| Mode | Name | Description |
+| --- | --- | --- |
+| 0 | Starfield | 64 parallax stars with depth simulation |
+| 1 | Matrix | Green cascading character columns (80×30 grid) |
+| 2 | Pipes | 6 colored pipes growing randomly |
+| 3 | Bouncing Logo | Mellivora text bouncing around the screen |
+
+### State Variables (Screensaver)
+
+| Variable | Type | Description |
+| --- | --- | --- |
+| `scr_idle_count` | dword | Idle tick counter (reset on input) |
+| `scr_mode` | byte | Active screensaver mode (0–3) |
+
+The `scrsaver` shell command cycles through modes or sets a specific mode.

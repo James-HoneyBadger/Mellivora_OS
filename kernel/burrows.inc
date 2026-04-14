@@ -1866,9 +1866,11 @@ gui_bb_button_3d:
 
         ; --- Left highlight ---
         push ecx
+        push edx               ; save h (edx is clobbered by color)
         mov ecx, edx           ; ecx = h
         mov edx, 0x00FFFFFF
         call gui_bb_vline       ; vline(x, y, h, white)
+        pop edx                 ; restore h
         pop ecx
 
         ; --- Bottom shadow ---
@@ -2392,13 +2394,13 @@ gui_draw_window_n:
         mov [gui_grad_base], esi
         mov [gui_grad_x], ecx
         mov [gui_grad_y], edx
-        ; width for title bar fill
-        mov eax, esi               ; esi = win_w from stack context
-        ; Actually: at this point ecx=win_x, edx=win_y, esi=win_w
-        ; We need the bar width = win_w + 2*BORDER_W - 2
-        push esi
-        add dword [esp], 2 * BORDER_W - 2
-        pop dword [gui_grad_w]
+        ; width for title bar fill = win_w + 2*BORDER_W - 2
+        ; Note: esi now holds the color, but win_w is on the stack
+        ; from the 'push esi' at the start of this block (before esi
+        ; was overwritten with the theme color).
+        mov eax, [esp]             ; win_w (saved on stack)
+        add eax, 2 * BORDER_W - 2
+        mov [gui_grad_w], eax
         mov dword [gui_grad_row], 0
 
 .grad_loop:

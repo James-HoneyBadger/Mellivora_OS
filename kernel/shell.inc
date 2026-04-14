@@ -995,6 +995,18 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_whoami
 
+        mov edi, cmd_stat_str
+        call str_starts_with
+        jc .cmd_stat
+
+        mov edi, cmd_fsck_str
+        call str_starts_with
+        jc .cmd_fsck
+
+        mov edi, cmd_ln_str
+        call str_starts_with
+        jc .cmd_ln
+
         ; Unknown command - try to execute as program
         mov esi, line_buffer
         call cmd_exec_program
@@ -1493,6 +1505,18 @@ shell_dispatch_core:
         call vga_putchar
         ret
 .whoami_none: db "Not logged in", 0x0A, 0
+
+.cmd_stat:
+        call cmd_stat
+        ret
+
+.cmd_fsck:
+        call cmd_fsck
+        ret
+
+.cmd_ln:
+        call cmd_ln
+        ret
 
 .cmd_ping:
         call cmd_ping
@@ -2457,6 +2481,9 @@ cmd_which:
         dd cmd_gui_str
         dd cmd_scrsaver_str
         dd cmd_whoami_str
+        dd cmd_stat_str
+        dd cmd_fsck_str
+        dd cmd_ln_str
         dd 0
 
 ;---------------------------------------
@@ -2854,6 +2881,8 @@ cmd_list_dir:
         je .sc_exec
         cmp byte [edi + DIRENT_TYPE], FTYPE_BATCH
         je .sc_batch
+        cmp byte [edi + DIRENT_TYPE], FTYPE_LINK
+        je .sc_link
         mov byte [vga_color], COLOR_DEFAULT
         jmp .sc_print
 .sc_dir:
@@ -2864,6 +2893,9 @@ cmd_list_dir:
         jmp .sc_print
 .sc_batch:
         mov byte [vga_color], COLOR_BATCH
+        jmp .sc_print
+.sc_link:
+        mov byte [vga_color], COLOR_INFO
 .sc_print:
         ; Print filename padded to 16 chars
         push esi
@@ -2941,9 +2973,16 @@ cmd_list_dir:
         je .type_exec
         cmp byte [edi + 253], FTYPE_BATCH
         je .type_batch
+        cmp byte [edi + 253], FTYPE_LINK
+        je .type_link
         ; Default: text file
         mov byte [vga_color], COLOR_DEFAULT
         mov esi, type_text
+        call vga_print
+        jmp .print_size
+.type_link:
+        mov byte [vga_color], COLOR_INFO
+        mov esi, type_link
         call vga_print
         jmp .print_size
 .type_dir:
@@ -2974,48 +3013,71 @@ cmd_list_dir:
         mov al, ' '
         call vga_putchar
 
-        ; Print modified timestamp as HHH:MM:SS
+        ; Print modified timestamp as YYYY-MM-DD HH:MM
         push ebx
-        mov eax, [edi + 272]        ; DIRENT_MODIFIED (PIT ticks)
-        xor edx, edx
-        mov ebx, PIT_HZ
-        div ebx                     ; EAX = total seconds
-        push eax
-        ; Compute hours
-        xor edx, edx
-        mov ebx, 3600
-        div ebx                     ; EAX = hours, EDX = remainder
-        push edx                    ; save remainder
-        mov edx, 3
-        call vga_print_dec_width    ; hours in 3-char field
-        mov al, ':'
+        mov ebx, [edi + 272]        ; DIRENT_MODIFIED (packed RTC)
+        ; Extract year: bits 31-25 + 2000
+        mov eax, ebx
+        shr eax, 25
+        and eax, 0x7F
+        add eax, 2000
+        call vga_print_dec
+        mov al, '-'
         call vga_putchar
-        pop eax                     ; remainder seconds
-        ; Compute minutes
-        xor edx, edx
-        mov ebx, 60
-        div ebx                     ; EAX = minutes, EDX = seconds
-        push edx                    ; save seconds
+        ; Extract month: bits 24-21
+        mov eax, ebx
+        shr eax, 21
+        and eax, 0x0F
         cmp eax, 10
-        jge .min_ok
+        jge .mon_ok
         push eax
         mov al, '0'
         call vga_putchar
         pop eax
-.min_ok:
+.mon_ok:
         call vga_print_dec
-        mov al, ':'
+        mov al, '-'
         call vga_putchar
-        pop eax                     ; seconds
+        ; Extract day: bits 20-16
+        mov eax, ebx
+        shr eax, 16
+        and eax, 0x1F
         cmp eax, 10
-        jge .sec_ok
+        jge .day_ok
         push eax
         mov al, '0'
         call vga_putchar
         pop eax
-.sec_ok:
+.day_ok:
         call vga_print_dec
-        pop eax                     ; discard saved total seconds
+        mov al, ' '
+        call vga_putchar
+        ; Extract hour: bits 15-11
+        mov eax, ebx
+        shr eax, 11
+        and eax, 0x1F
+        cmp eax, 10
+        jge .hour_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.hour_ok:
+        call vga_print_dec
+        mov al, ':'
+        call vga_putchar
+        ; Extract minute: bits 10-5
+        mov eax, ebx
+        shr eax, 5
+        and eax, 0x3F
+        cmp eax, 10
+        jge .tmin_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.tmin_ok:
+        call vga_print_dec
         pop ebx
 
         mov al, ' '
@@ -5242,7 +5304,7 @@ cmd_rename_file:
 .rw_name_trunc:
         mov byte [edi + HBFS_MAX_FILENAME], 0
 .rw_name_done:
-        mov eax, [tick_count]
+        call rtc_get_timestamp
         mov [edi + DIRENT_MODIFIED], eax
         pop edi
         pop ecx
@@ -5267,3 +5329,555 @@ cmd_rename_file:
         mov byte [vga_color], COLOR_DEFAULT
         popad
         ret
+
+;---------------------------------------
+; Command: stat <filename>
+; Show detailed file information
+;---------------------------------------
+cmd_stat:
+        pushad
+        ; Skip leading spaces
+.stat_skip:
+        cmp byte [esi], ' '
+        jne .stat_go
+        inc esi
+        jmp .stat_skip
+.stat_go:
+        cmp byte [esi], 0
+        je .stat_usage
+
+        ; Find file in current directory
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .stat_not_found
+        ; EDI = pointer to directory entry
+
+        ; Print "  File: <name>"
+        mov esi, .stat_lbl_file
+        call vga_print
+        push edi
+        mov esi, edi            ; filename at start of entry
+        call vga_print
+        pop edi
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Print "  Type: <type>"
+        mov esi, .stat_lbl_type
+        call vga_print
+        movzx eax, byte [edi + 253]
+        cmp eax, FTYPE_FILE
+        je .stat_t_file
+        cmp eax, FTYPE_DIR
+        je .stat_t_dir
+        cmp eax, FTYPE_EXEC
+        je .stat_t_exec
+        cmp eax, FTYPE_BATCH
+        je .stat_t_batch
+        cmp eax, FTYPE_LINK
+        je .stat_t_link
+        mov esi, .stat_t_unk
+        jmp .stat_t_done
+.stat_t_file:
+        mov esi, .stat_t_file_s
+        jmp .stat_t_done
+.stat_t_dir:
+        mov esi, .stat_t_dir_s
+        jmp .stat_t_done
+.stat_t_exec:
+        mov esi, .stat_t_exec_s
+        jmp .stat_t_done
+.stat_t_batch:
+        mov esi, .stat_t_batch_s
+        jmp .stat_t_done
+.stat_t_link:
+        mov esi, .stat_t_link_s
+        jmp .stat_t_done
+.stat_t_done:
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Print "  Size: <bytes> bytes"
+        mov esi, .stat_lbl_size
+        call vga_print
+        mov eax, [edi + DIRENT_SIZE]
+        call vga_print_dec
+        mov esi, .stat_bytes
+        call vga_print
+
+        ; Print " (<N> blocks)"
+        mov esi, .stat_lbl_paren
+        call vga_print
+        mov eax, [edi + DIRENT_BLOCK_COUNT]
+        call vga_print_dec
+        mov esi, .stat_blocks
+        call vga_print
+
+        ; Print "  Block: <start_block>"
+        mov esi, .stat_lbl_block
+        call vga_print
+        mov eax, [edi + DIRENT_START_BLOCK]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Print "  Created:  YYYY-MM-DD HH:MM:SS"
+        mov esi, .stat_lbl_created
+        call vga_print
+        mov ebx, [edi + DIRENT_CREATED]
+        call .stat_print_ts
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Print "  Modified: YYYY-MM-DD HH:MM:SS"
+        mov esi, .stat_lbl_modified
+        call vga_print
+        mov ebx, [edi + DIRENT_MODIFIED]
+        call .stat_print_ts
+        mov al, 0x0A
+        call vga_putchar
+
+        ; If symlink, show target
+        cmp byte [edi + 253], FTYPE_LINK
+        jne .stat_done
+        mov esi, .stat_lbl_target
+        call vga_print
+        ; Read symlink target from disk
+        mov eax, [edi + DIRENT_START_BLOCK]
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        mov ecx, 1             ; 1 sector is enough for a path
+        push edi
+        mov edi, .ln_read_buf
+        call ata_read_sectors
+        pop edi
+        jc .stat_done
+        mov esi, .ln_read_buf
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+
+.stat_done:
+        popad
+        ret
+
+.stat_usage:
+        mov esi, .stat_usage_s
+        call vga_print
+        popad
+        ret
+
+.stat_not_found:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_not_found
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+
+; Print packed RTC timestamp in EBX as YYYY-MM-DD HH:MM:SS
+.stat_print_ts:
+        push ebx
+        ; Year
+        mov eax, ebx
+        shr eax, 25
+        and eax, 0x7F
+        add eax, 2000
+        call vga_print_dec
+        mov al, '-'
+        call vga_putchar
+        ; Month
+        mov eax, ebx
+        shr eax, 21
+        and eax, 0x0F
+        cmp eax, 10
+        jge .spt_mon
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.spt_mon:
+        call vga_print_dec
+        mov al, '-'
+        call vga_putchar
+        ; Day
+        mov eax, ebx
+        shr eax, 16
+        and eax, 0x1F
+        cmp eax, 10
+        jge .spt_day
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.spt_day:
+        call vga_print_dec
+        mov al, ' '
+        call vga_putchar
+        ; Hour
+        mov eax, ebx
+        shr eax, 11
+        and eax, 0x1F
+        cmp eax, 10
+        jge .spt_hr
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.spt_hr:
+        call vga_print_dec
+        mov al, ':'
+        call vga_putchar
+        ; Minute
+        mov eax, ebx
+        shr eax, 5
+        and eax, 0x3F
+        cmp eax, 10
+        jge .spt_min
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.spt_min:
+        call vga_print_dec
+        mov al, ':'
+        call vga_putchar
+        ; Second (*2)
+        mov eax, ebx
+        and eax, 0x1F
+        shl eax, 1
+        cmp eax, 10
+        jge .spt_sec
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.spt_sec:
+        call vga_print_dec
+        pop ebx
+        ret
+
+.stat_lbl_file:     db "  File: ", 0
+.stat_lbl_type:     db "  Type: ", 0
+.stat_lbl_size:     db "  Size: ", 0
+.stat_bytes:        db " bytes ", 0
+.stat_lbl_paren:    db "(", 0
+.stat_blocks:       db " blocks)", 0x0A, 0
+.stat_lbl_block:    db " Block: ", 0
+.stat_lbl_created:  db "  Created:  ", 0
+.stat_lbl_modified: db "  Modified: ", 0
+.stat_t_file_s:     db "regular file", 0
+.stat_t_dir_s:      db "directory", 0
+.stat_t_exec_s:     db "executable", 0
+.stat_t_batch_s:    db "batch script", 0
+.stat_t_link_s:     db "symbolic link", 0
+.stat_t_unk:        db "unknown", 0
+.stat_usage_s:      db "Usage: stat <filename>", 0x0A, 0
+.stat_lbl_target:   db "  Target: ", 0
+.ln_read_buf:       times 256 db 0
+
+;---------------------------------------
+; Command: fsck
+; Filesystem consistency check
+;---------------------------------------
+cmd_fsck:
+        pushad
+        mov esi, .fsck_banner
+        call vga_print
+
+        ; Step 1: Validate superblock magic
+        mov esi, .fsck_check_sb
+        call vga_print
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov edi, hbfs_block_buf
+        call ata_read_sectors
+        jc .fsck_sb_fail
+        cmp dword [hbfs_block_buf], 'HBFS'
+        jne .fsck_sb_fail
+        mov esi, .fsck_ok
+        call vga_print
+        jmp .fsck_step2
+.fsck_sb_fail:
+        mov esi, .fsck_fail
+        call vga_print
+        mov esi, .fsck_sb_corrupt
+        call vga_print
+        popad
+        ret
+
+.fsck_step2:
+        ; Step 2: Count allocated bits in bitmap
+        mov esi, .fsck_check_bmp
+        call vga_print
+        call hbfs_load_bitmap
+        jc .fsck_bmp_fail
+        xor edx, edx           ; EDX = allocated bit count
+        mov esi, hbfs_bitmap_buf
+        mov ecx, HBFS_BITMAP_SIZE
+.fsck_count_bits:
+        lodsb
+        test al, al
+        jz .fsck_next_byte
+        ; Count set bits in AL
+        push ecx
+        mov ecx, 8
+.fsck_bit_loop:
+        test al, 1
+        jz .fsck_no_bit
+        inc edx
+.fsck_no_bit:
+        shr al, 1
+        loop .fsck_bit_loop
+        pop ecx
+.fsck_next_byte:
+        loop .fsck_count_bits
+        mov [.fsck_bmp_alloc], edx
+        mov esi, .fsck_ok
+        call vga_print
+        jmp .fsck_step3
+.fsck_bmp_fail:
+        mov esi, .fsck_fail
+        call vga_print
+        popad
+        ret
+
+.fsck_step3:
+        ; Step 3: Walk root directory entries, count files and block usage
+        mov esi, .fsck_check_dir
+        call vga_print
+        ; Save current dir state
+        push dword [current_dir_lba]
+        push dword [current_dir_sects]
+        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
+        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
+        ; Invalidate dir cache to force a fresh load
+        mov dword [dir_cache_lba], 0
+        call hbfs_load_root_dir
+        mov edi, hbfs_dir_buf
+        call hbfs_get_max_entries
+        mov ecx, eax
+        xor ebx, ebx           ; EBX = file count
+        xor edx, edx           ; EDX = total blocks from dir entries
+        xor eax, eax           ; EAX = error count
+        mov [.fsck_errors], eax
+
+.fsck_dir_loop:
+        cmp byte [edi + 253], FTYPE_FREE
+        je .fsck_dir_next
+        ; Active entry
+        inc ebx
+        ; Sum block count
+        add edx, [edi + DIRENT_BLOCK_COUNT]
+        ; Validate: block count should match ceil(size/4096)
+        push eax
+        push edx
+        mov eax, [edi + DIRENT_SIZE]
+        add eax, HBFS_BLOCK_SIZE - 1
+        shr eax, 12                    ; ceil(size/4096)
+        cmp eax, 0
+        jg .fsck_has_size
+        mov eax, 1                     ; min 1 block
+.fsck_has_size:
+        cmp eax, [edi + DIRENT_BLOCK_COUNT]
+        je .fsck_size_ok
+        ; Size mismatch
+        push esi
+        push ebx
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .fsck_warn_size
+        call vga_print
+        mov esi, edi
+        call vga_print         ; filename
+        mov al, 0x0A
+        call vga_putchar
+        mov byte [vga_color], COLOR_DEFAULT
+        pop ebx
+        pop esi
+        inc dword [.fsck_errors]
+.fsck_size_ok:
+        pop edx
+        pop eax
+.fsck_dir_next:
+        add edi, HBFS_DIR_ENTRY_SIZE
+        dec ecx
+        jnz .fsck_dir_loop
+
+        mov [.fsck_file_count], ebx
+        mov [.fsck_dir_blocks], edx
+
+        ; Restore directory state
+        pop dword [current_dir_sects]
+        pop dword [current_dir_lba]
+        mov dword [dir_cache_lba], 0   ; invalidate cache
+        mov esi, .fsck_ok
+        call vga_print
+
+        ; Step 4: Compare bitmap vs directory block counts
+        mov esi, .fsck_check_alloc
+        call vga_print
+        mov eax, [.fsck_bmp_alloc]
+        cmp eax, [.fsck_dir_blocks]
+        je .fsck_alloc_ok
+        mov esi, .fsck_warn_alloc
+        call vga_print
+        inc dword [.fsck_errors]
+        jmp .fsck_report
+.fsck_alloc_ok:
+        mov esi, .fsck_ok
+        call vga_print
+
+.fsck_report:
+        ; Print summary
+        mov al, 0x0A
+        call vga_putchar
+        mov esi, .fsck_summary
+        call vga_print
+        mov eax, [.fsck_file_count]
+        call vga_print_dec
+        mov esi, .fsck_sum_files
+        call vga_print
+        mov eax, [.fsck_dir_blocks]
+        call vga_print_dec
+        mov esi, .fsck_sum_blocks
+        call vga_print
+        mov eax, [.fsck_bmp_alloc]
+        call vga_print_dec
+        mov esi, .fsck_sum_bmp
+        call vga_print
+        mov eax, [.fsck_errors]
+        cmp eax, 0
+        je .fsck_clean
+        call vga_print_dec
+        mov esi, .fsck_sum_err
+        call vga_print
+        jmp .fsck_end
+.fsck_clean:
+        mov byte [vga_color], COLOR_SUCCESS
+        mov esi, .fsck_sum_clean
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+.fsck_end:
+        popad
+        ret
+
+.fsck_bmp_alloc:   dd 0
+.fsck_file_count:  dd 0
+.fsck_dir_blocks:  dd 0
+.fsck_errors:      dd 0
+
+.fsck_banner:       db "fsck: HBFS filesystem check", 0x0A, 0
+.fsck_check_sb:     db "  Checking superblock...      ", 0
+.fsck_check_bmp:    db "  Checking bitmap...          ", 0
+.fsck_check_dir:    db "  Checking directory...       ", 0
+.fsck_check_alloc:  db "  Checking allocation...      ", 0
+.fsck_ok:           db "[OK]", 0x0A, 0
+.fsck_fail:         db "[FAIL]", 0x0A, 0
+.fsck_sb_corrupt:   db "  FATAL: Superblock magic invalid!", 0x0A, 0
+.fsck_warn_size:    db "  WARN: Block/size mismatch: ", 0
+.fsck_warn_alloc:   db "[MISMATCH]", 0x0A, 0
+.fsck_summary:      db "  Summary:", 0x0A, "    Files:           ", 0
+.fsck_sum_files:    db 0x0A, "    Blocks (dir):    ", 0
+.fsck_sum_blocks:   db 0x0A, "    Blocks (bitmap): ", 0
+.fsck_sum_bmp:      db 0x0A, "    ", 0
+.fsck_sum_err:      db " error(s) found", 0x0A, 0
+.fsck_sum_clean:    db "Filesystem clean.", 0x0A, 0
+
+;---------------------------------------
+; Command: ln -s <target> <linkname>
+; Create a symbolic link
+;---------------------------------------
+cmd_ln:
+        pushad
+        ; Expect "-s" flag
+        cmp byte [esi], '-'
+        jne .ln_usage
+        cmp byte [esi + 1], 's'
+        jne .ln_usage
+        add esi, 2
+        ; Skip spaces
+.ln_skip1:
+        cmp byte [esi], ' '
+        jne .ln_get_target
+        inc esi
+        jmp .ln_skip1
+.ln_get_target:
+        cmp byte [esi], 0
+        je .ln_usage
+        ; ESI points to target path
+        mov [.ln_target], esi
+        ; Find end of target (next space)
+.ln_scan_target:
+        cmp byte [esi], 0
+        je .ln_usage           ; no link name
+        cmp byte [esi], ' '
+        je .ln_got_target
+        inc esi
+        jmp .ln_scan_target
+.ln_got_target:
+        mov byte [esi], 0     ; null-terminate target
+        inc esi
+        ; Skip spaces before linkname
+.ln_skip2:
+        cmp byte [esi], ' '
+        jne .ln_get_name
+        inc esi
+        jmp .ln_skip2
+.ln_get_name:
+        cmp byte [esi], 0
+        je .ln_usage
+        ; ESI = linkname, [.ln_target] = target path
+        ; Compute target path length
+        push esi               ; save linkname
+        mov esi, [.ln_target]
+        xor ecx, ecx
+.ln_len:
+        cmp byte [esi + ecx], 0
+        je .ln_len_done
+        inc ecx
+        jmp .ln_len
+.ln_len_done:
+        inc ecx                ; include null terminator
+        mov [.ln_tgt_len], ecx
+
+        ; Copy target path to a temp buffer for hbfs_create_file
+        mov esi, [.ln_target]
+        mov edi, .ln_buf
+        rep movsb
+
+        pop esi                ; ESI = linkname
+        ; Create symlink entry: name=linkname, data=target path, type=FTYPE_LINK
+        mov ecx, [.ln_tgt_len]
+        mov edi, .ln_buf       ; data = target path
+        mov edx, FTYPE_LINK
+        call hbfs_create_file
+        jc .ln_fail
+        ; Invalidate dir cache
+        mov dword [dir_cache_lba], 0
+
+        mov esi, .ln_done
+        call vga_print
+        popad
+        ret
+
+.ln_fail:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .ln_err
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        popad
+        ret
+
+.ln_usage:
+        mov esi, .ln_usage_s
+        call vga_print
+        popad
+        ret
+
+.ln_target:    dd 0
+.ln_tgt_len:   dd 0
+.ln_done:      db "Link created.", 0x0A, 0
+.ln_err:       db "Failed to create link.", 0x0A, 0
+.ln_usage_s:   db "Usage: ln -s <target> <linkname>", 0x0A, 0
+.ln_buf:       times 256 db 0
