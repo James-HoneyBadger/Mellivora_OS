@@ -790,7 +790,7 @@ sched_deliver_signals:
         mov [rax + FRAME_RIP], rdx
 
         ; Set RAX in PUSHALL frame to signal number (ecx+1)
-        lea edx, [ecx + 1]
+        lea rdx, [rcx + 1]
         mov qword [rax + FRAME_RAX], rdx
 
         ; Clear this pending bit

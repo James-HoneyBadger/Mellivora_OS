@@ -213,7 +213,7 @@ Or use the standalone helper script (works without the source tree):
 Manual QEMU launch (note: **both** the ISO and the IDE disk image are required):
 
 ```bash
-qemu-system-x86_64 -cpu core2duo -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 2048 \
   -cdrom mellivora.iso \
   -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
   -boot d -no-shutdown \
@@ -227,7 +227,7 @@ for the HBFS filesystem.  The QEMU command attaches both devices.
 | Setting | Value |
 | --------- | ------- |
 | **CPU** | Core 2 Duo emulation |
-| **RAM** | 128 MB |
+| **RAM** | 2048 MB |
 | **CD-ROM** | `mellivora.iso` (El Torito boot) |
 | **IDE Disk** | `mellivora.img` as raw IDE drive (HBFS) |
 | **Boot** | CD-ROM (drive D) |
@@ -251,7 +251,7 @@ Adds QEMU Monitor on stdio and interrupt/reset logging. Useful monitor commands:
 ### Custom QEMU Options
 
 ```bash
-qemu-system-x86_64 -cpu core2duo -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 2048 \
   -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
   -boot c -no-reboot -no-shutdown
 ```
@@ -308,7 +308,7 @@ The `populate.py` script creates 4 subdirectories and places the curated runtime
 
 - Core 2 Duo or newer x86 CPU
 - IDE or SATA disk / USB drive with BIOS legacy boot
-- At least 1 MB RAM (128 MB recommended)
+- At least 1 MB RAM (2048 MB recommended)
 - PS/2 keyboard (USB works if BIOS provides PS/2 emulation)
 - VGA-compatible display
 
@@ -425,7 +425,7 @@ to the filesystem.
 QEMU requires explicit audio configuration:
 
 ```bash
-qemu-system-x86_64 -cpu core2duo -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 2048 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd
 ```
@@ -438,7 +438,7 @@ Check current size with `ls -la kernel.bin`; Stage 2 reads the generated sector 
 ### Serial debug output
 
 ```bash
-qemu-system-x86_64 -cpu core2duo -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 2048 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -serial stdio
 ```
@@ -449,7 +449,7 @@ Ensure QEMU is launched with an RTL8139 NIC. The `make run` target includes this
 default. If launching manually:
 
 ```bash
-qemu-system-x86_64 -cpu core2duo -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 2048 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -nic user,model=rtl8139
 ```

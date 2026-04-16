@@ -411,7 +411,7 @@ Lair:/> burrows                    # Launch the Burrows desktop
 ```text
 Mellivora_OS/
 ├── boot.asm                MBR boot sector (512 bytes, 16-bit real mode)
-├── stage2.asm              Stage 2 loader (A20, E820, GDT, protected mode switch)
+├── stage2.asm              Stage 2 loader (A20, E820, GDT, temporary 32-bit PM → 64-bit long mode)
 ├── kernel.asm              Kernel entry point + subsystem includes
 ├── kernel/                 Kernel subsystems (22 modules, ~28,800 lines)
 │   ├── shell.inc           HB Lair shell (64 commands)

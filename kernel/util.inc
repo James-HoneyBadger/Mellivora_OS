@@ -18,7 +18,7 @@ detect_file_type:
         je .dft_check
         cmp al, '.'
         jne .dft_not_dot
-        lea ebx, [edi + ecx + 1] ; EBX = pointer past the dot
+        lea rbx, [rdi + rcx + 1] ; RBX = pointer past the dot
 .dft_not_dot:
         inc ecx
         jmp .dft_scan
@@ -1740,7 +1740,7 @@ cmd_cd_internal:
         ; Calculate stack entry address: dir_stack + depth * DIR_STACK_ENTRY_SIZE
         push rdi                ; save dir entry pointer
         imul eax, DIR_STACK_ENTRY_SIZE
-        lea ebx, [dir_stack + eax]
+        lea rbx, [dir_stack + rax]
         ; Save current state (interrupts off to keep dir globals consistent)
         cli
         mov eax, [current_dir_lba]
@@ -1749,7 +1749,7 @@ cmd_cd_internal:
         mov [ebx + 4], eax
         ; Copy current_dir_name
         push rsi
-        lea edi, [ebx + 8]
+        lea rdi, [rbx + 8]
         mov esi, current_dir_name
 .cd_push_name:
         lodsb
@@ -1808,7 +1808,7 @@ cmd_cd_internal:
 
         ; Calculate stack entry address
         imul eax, DIR_STACK_ENTRY_SIZE
-        lea ebx, [dir_stack + eax]
+        lea rbx, [dir_stack + rax]
 
         ; Restore parent directory state
         mov eax, [ebx]
@@ -1818,7 +1818,7 @@ cmd_cd_internal:
 
         ; Copy parent name back
         push rsi
-        lea esi, [ebx + 8]
+        lea rsi, [rbx + 8]
         mov edi, current_dir_name
 .cd_pop_name:
         lodsb
@@ -1937,7 +1937,7 @@ sys_clipboard_paste:
         jz .cp_done
         ; Clamp to destination size (in EDX from original ECX)
         ; ECX already has clipboard_len; original max was in ECX before PUSHALL
-        mov eax, [rsp + FRAME_RCX]     ; Original ECX (max len) from PUSHALL frame
+        mov rax, [rsp + FRAME_RCX]     ; Original RCX (max len) from PUSHALL frame
         cmp ecx, eax
         jbe .cp_copy
         mov ecx, eax
@@ -4042,7 +4042,7 @@ cmd_pushd:
 
         ; Calculate destination in pushd_stack
         imul eax, PUSHD_ENTRY_SIZE
-        lea edi, [pushd_stack + eax]
+        lea rdi, [pushd_stack + rax]
 
         ; Save current CWD into pushd_stack[pushd_count]
         mov eax, [current_dir_lba]
@@ -4105,7 +4105,7 @@ cmd_popd:
         dec dword [pushd_count]
         mov eax, [pushd_count]
         imul eax, PUSHD_ENTRY_SIZE
-        lea esi, [pushd_stack + eax]
+        lea rsi, [pushd_stack + rax]
 
         ; Restore CWD from pushd_stack entry
         mov eax, [esi]
@@ -4175,7 +4175,7 @@ cmd_dirs_internal:
         ; Calculate entry address
         mov eax, ecx
         imul eax, PUSHD_ENTRY_SIZE
-        lea ebx, [pushd_stack + eax]
+        lea rbx, [pushd_stack + rax]
 
         ; Build path from this saved state
         ; We need to reconstruct the path from depth + stack + name
@@ -4193,7 +4193,7 @@ cmd_dirs_internal:
         ; Print "/" + saved dir name
         mov al, '/'
         call vga_putchar
-        lea esi, [ebx + 12]
+        lea rsi, [rbx + 12]
         call vga_print
 
 .dirs_next:
@@ -4456,7 +4456,7 @@ shell_tab_complete:
         je .tc_found_last
         cmp al, ' '
         jne .tc_fl_next
-        lea edi, [esi + 1]     ; Word starts after space
+        lea rdi, [rsi + 1]     ; Word starts after space
 .tc_fl_next:
         inc esi
         jmp .tc_find_last
@@ -4671,7 +4671,7 @@ build_cwd_path:
         push rbx
         push rdx
         mov edx, edi            ; save buffer start
-        lea ebx, [edi + PATH_BUF_MAX] ; ebx = one-past-last writable byte
+        lea rbx, [rdi + PATH_BUF_MAX] ; rbx = one-past-last writable byte
 
         ; If at root, just write "/"
         cmp dword [dir_depth], 0
@@ -4687,7 +4687,7 @@ build_cwd_path:
         jge .bcp_current
         mov eax, ecx
         imul eax, DIR_STACK_ENTRY_SIZE
-        lea esi, [dir_stack + eax + 8]
+        lea rsi, [dir_stack + rax + 8]
         ; Skip root "/" entry
         cmp byte [esi], '/'
         jne .bcp_add_comp

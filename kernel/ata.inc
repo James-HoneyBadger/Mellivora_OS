@@ -539,8 +539,8 @@ ata_dma_read:
         out dx, eax
 
         ; Setup ATA command (LBA48 READ DMA EXT)
-        mov eax, [rsp + FRAME_RAX]             ; original EAX (LBA) from PUSHALL
-        mov ecx, [rsp + FRAME_RCX]      ; original ECX (count) from PUSHALL
+        mov rax, [rsp + FRAME_RAX]             ; original RAX (LBA) from PUSHALL
+        mov rcx, [rsp + FRAME_RCX]      ; original RCX (count) from PUSHALL
 
         push rax
         push rcx
@@ -678,8 +678,8 @@ ata_dma_write:
         out dx, eax
 
         ; Setup ATA command
-        mov eax, [rsp + FRAME_RAX]
-        mov ecx, [rsp + FRAME_RCX]
+        mov rax, [rsp + FRAME_RAX]
+        mov rcx, [rsp + FRAME_RCX]
 
         push rax
         push rcx

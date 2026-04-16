@@ -215,8 +215,8 @@ then recover to the shell by resetting `RSP` to `KERNEL_STACK` and jumping to
            │ Stage 2 Loader          │  16 KB
 0x00020000 ├─────────────────────────┤
            │ Kernel temp load buffer │  Variable size (copied to 1 MB)
-0x0009FC00 ├─────────────────────────┤
-           │ Kernel stack (grows ↓)  │  Top of conventional memory
+0x003FF000 ├─────────────────────────┤
+           │ Kernel stack (grows ↓)  │  Kernel stack top (moved in v4.0)
 0x000A0000 ├─────────────────────────┤
            │ Video memory / ROM      │
 0x000B8000 │ VGA text framebuffer    │  4000 bytes (80×25×2)
@@ -239,7 +239,7 @@ then recover to the shell by resetting `RSP` to `KERNEL_STACK` and jumping to
 | --- | --- | --- |
 | `KERNEL_BASE` | `0x00100000` (1 MB) | Kernel load address |
 | `KERNEL_SECTORS` | Generated at build time | Kernel disk size in sectors |
-| `KERNEL_STACK` | `0x0009FC00` | Stack top (conventional memory end) |
+| `KERNEL_STACK` | `0x003FF000` | Stack top (4KB-aligned, below heap) |
 | `PROGRAM_BASE` | `0x00200000` (2 MB) | User program load address |
 | `PROGRAM_MAX_SIZE` | `0x00100000` (1 MB) | Max program size |
 | `PROGRAM_EXIT_ADDR` | `0x002FFFF0` | SYS_EXIT trampoline |

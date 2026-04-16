@@ -168,9 +168,9 @@ irq_timer:
 
         ; Check if we interrupted a ring-3 task (CS on stack has RPL=3)
         ; Stack layout after PUSHALL (15×8=120 bytes): RSP+120=RIP, RSP+128=CS
-        mov eax, [rsp + FRAME_CS]  ; CS from interrupt frame
-        and eax, 3              ; RPL bits
-        cmp eax, 3
+        mov rax, [rsp + FRAME_CS]  ; CS from interrupt frame
+        and rax, 3              ; RPL bits
+        cmp rax, 3
         jne .timer_done         ; Not ring 3 — don't preempt kernel code
 
         ; Count down the current task's time slice
