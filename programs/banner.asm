@@ -73,6 +73,6 @@ line4:  db " | |  | |  __/ | | |\ V / (_) | | | (_| | ", 0x0A, 0
 line5:  db " |_|  |_|\___|_|_|_| \_/ \___/|_|  \__,_| ", 0x0A, 0
 line6:  db "                                           ", 0x0A, 0
 subtitle: db 0x0A
-        db "         32-bit Protected Mode Operating System", 0x0A
-        db "            i486+ | 4GB RAM | LBA48 Disk", 0x0A, 0x0A, 0
+        db "         64-bit Long Mode Operating System", 0x0A
+        db "            x86-64 | 4GB RAM | LBA48 Disk", 0x0A, 0x0A, 0
 credits: db "   Mellivora don't care - it just runs!", 0x0A, 0x0A, 0

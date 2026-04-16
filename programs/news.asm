@@ -155,7 +155,7 @@ start:
 .do_read:
         ; Build ARTICLE <N>
         mov edi, cmd_buf
-        push edi
+        push rdi
         mov esi, article_cmd
         call copy_str
         mov esi, input_buf
@@ -164,7 +164,7 @@ start:
         mov word [edi], 0x0A0D
         add edi, 2
         mov byte [edi], 0
-        pop esi
+        pop rsi
         call nntp_send
         call nntp_recv_multi
         jmp .cmd_loop
@@ -210,7 +210,7 @@ start:
 
         ; Build article
         mov edi, cmd_buf
-        push edi
+        push rdi
         ; Newsgroups:
         mov esi, hdr_ng
         call copy_str
@@ -246,7 +246,7 @@ start:
         mov word [edi], 0x0A0D
         add edi, 2
         mov byte [edi], 0
-        pop esi
+        pop rsi
         call nntp_send
         call nntp_recv
 
@@ -266,7 +266,7 @@ start:
 ; ============================================================
 
 nntp_send:
-        push esi
+        push rsi
         xor ecx, ecx
         mov edi, esi
 .ns_len:
@@ -278,7 +278,7 @@ nntp_send:
         mov eax, [sockfd]
         mov ebx, esi
         call net_send
-        pop esi
+        pop rsi
         ret
 
 nntp_recv:
@@ -318,11 +318,11 @@ nntp_recv_multi:
 
         mov dword [retry_count], 0
         mov byte [resp_buf + eax], 0
-        push eax
+        push rax
         mov eax, SYS_PRINT
         mov ebx, resp_buf
         int 0x80
-        pop eax
+        pop rax
 
         ; Check for ".\r\n" terminator at end
         cmp eax, 3
@@ -353,7 +353,7 @@ nntp_recv_multi:
 strip_crlf:
         mov esi, input_buf
 strip_crlf_esi:
-        push esi
+        push rsi
         mov edi, esi
         xor ecx, ecx
 .scr_len:
@@ -374,11 +374,11 @@ strip_crlf_esi:
         mov byte [edi + ecx], 0
         jmp .scr_strip
 .scr_done:
-        pop esi
+        pop rsi
         ret
 
 starts_with:
-        push esi
+        push rsi
         mov esi, input_buf
 .sw_loop:
         mov al, [edi]
@@ -390,11 +390,11 @@ starts_with:
         inc edi
         jmp .sw_loop
 .sw_match:
-        pop esi
+        pop rsi
         stc
         ret
 .sw_no:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -411,9 +411,9 @@ copy_str:
 ; --- read_line: read a line from keyboard into EDI, max ECX chars ---
 ; Returns EAX = length
 read_line:
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         xor edx, edx
 .rl_loop:
         mov eax, SYS_GETCHAR
@@ -430,17 +430,17 @@ read_line:
         jge .rl_loop
         mov [edi + edx], al
         inc edx
-        push edx
+        push rdx
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop edx
+        pop rdx
         jmp .rl_loop
 .rl_bs:
         test edx, edx
         jz .rl_loop
         dec edx
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
@@ -450,19 +450,19 @@ read_line:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
-        pop edx
+        pop rdx
         jmp .rl_loop
 .rl_done:
         mov byte [edi + edx], 0
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop edx
+        pop rdx
         mov eax, edx
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ; Error handlers

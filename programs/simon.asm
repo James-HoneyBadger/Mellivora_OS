@@ -79,19 +79,19 @@ start:
 
 ;---------------------------------------
 init_game:
-        pushad
+        PUSHALL
         mov dword [seq_len], 0
         mov byte [failed], 0
         ; Seed RNG
         mov eax, SYS_GETTIME
         int 0x80
         mov [rng], eax
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 add_to_sequence:
-        pushad
+        PUSHALL
         ; Generate random 0-3
         mov eax, [rng]
         imul eax, eax, 1103515245
@@ -106,12 +106,12 @@ add_to_sequence:
         mov [sequence + ecx], al
         inc dword [seq_len]
 .ats_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 show_sequence:
-        pushad
+        PUSHALL
         call draw_board
         mov eax, SYS_SLEEP
         mov ebx, 30
@@ -122,29 +122,29 @@ show_sequence:
         cmp ecx, [seq_len]
         jge .ss_done
 
-        push ecx
+        push rcx
         movzx eax, byte [sequence + ecx]
         call flash_color
-        pop ecx
+        pop rcx
 
         ; Pause between flashes
-        push ecx
+        push rcx
         mov eax, SYS_SLEEP
         mov ebx, PAUSE_TIME
         int 0x80
-        pop ecx
+        pop rcx
 
         inc ecx
         jmp .ss_loop
 .ss_done:
         call draw_board
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 flash_color:
         ; EAX = color index (0-3)
-        pushad
+        PUSHALL
         mov [flash_idx], eax
         call draw_board_flash
         ; Beep for color
@@ -158,12 +158,12 @@ flash_color:
         mov ebx, FLASH_TIME
         int 0x80
         call draw_board
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 player_input:
-        pushad
+        PUSHALL
         mov byte [failed], 0
         xor ecx, ecx           ; current position in sequence
 
@@ -173,10 +173,10 @@ player_input:
 
         ; Wait for valid key
 .pi_key:
-        push ecx
+        push rcx
         mov eax, SYS_GETCHAR
         int 0x80
-        pop ecx
+        pop rcx
         cmp al, 'r'
         je .pi_red
         cmp al, 'R'
@@ -213,11 +213,11 @@ player_input:
 
 .pi_check:
         ; Flash the pressed color
-        push ecx
-        push eax
+        push rcx
+        push rax
         call flash_color
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
 
         ; Compare with sequence
         movzx edx, byte [sequence + ecx]
@@ -230,7 +230,7 @@ player_input:
 .pi_fail:
         mov byte [failed], 1
 .pi_done:
-        popad
+        POPALL
         ret
 
 .pi_quit:
@@ -242,7 +242,7 @@ player_input:
 
 ;---------------------------------------
 show_correct:
-        pushad
+        PUSHALL
         call draw_board
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0A
@@ -255,12 +255,12 @@ show_correct:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 draw_board:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -339,13 +339,13 @@ draw_board:
         mov ebx, msg_keys
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 draw_board_flash:
         ; Like draw_board but highlights the color in flash_idx
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -437,7 +437,7 @@ draw_board_flash:
         mov ebx, msg_keys
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================

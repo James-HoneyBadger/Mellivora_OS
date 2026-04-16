@@ -77,6 +77,12 @@ start:
         cmp ebx, 13             ; Enter
         je .do_enter
 
+        cmp ebx, 3              ; Ctrl+C (copy line)
+        je .do_copy
+
+        cmp ebx, 22             ; Ctrl+V (paste)
+        je .do_paste
+
         ; Printable chars only
         cmp ebx, 32
         jb .main_loop
@@ -113,6 +119,52 @@ start:
         mov byte [note_text + ecx], 10  ; newline
         inc dword [cursor_pos]
         jmp .main_loop
+
+.do_copy:
+        ; Copy from cursor to next newline (or end) to clipboard
+        mov ecx, [cursor_pos]
+        lea ebx, [note_text + ecx]
+        ; Find length to next newline or end
+        xor ecx, ecx
+.copy_len:
+        cmp byte [ebx + ecx], 0
+        je .copy_do
+        cmp byte [ebx + ecx], 10
+        je .copy_do
+        inc ecx
+        cmp ecx, MAX_TEXT
+        jl .copy_len
+.copy_do:
+        mov eax, SYS_CLIPBOARD_COPY
+        int 0x80
+        jmp .main_loop
+
+.do_paste:
+        ; Paste clipboard at cursor position
+        mov eax, SYS_CLIPBOARD_PASTE
+        mov ebx, clip_buf
+        mov ecx, MAX_TEXT
+        int 0x80
+        ; EAX = bytes pasted
+        test eax, eax
+        jz .main_loop
+        ; Insert characters at cursor
+        mov esi, clip_buf
+        mov ecx, eax
+.paste_loop:
+        cmp ecx, 0
+        jle .main_loop
+        mov edx, [cursor_pos]
+        cmp edx, MAX_TEXT - 1
+        jge .main_loop
+        mov al, [esi]
+        cmp al, 0
+        je .main_loop
+        mov [note_text + edx], al
+        inc dword [cursor_pos]
+        inc esi
+        dec ecx
+        jmp .paste_loop
 
 .handle_click:
         ; EBX = x, ECX = y (relative to client area)
@@ -205,7 +257,7 @@ start:
 
 ; ─── draw_all ────────────────────────────────────────────────
 draw_all:
-        pushad
+        PUSHALL
 
         ; Toolbar background
         mov eax, [win_id]
@@ -297,9 +349,9 @@ draw_all:
         cmp ecx, [cursor_pos]
         jne .draw_no_cursor
         ; Draw cursor (red bar at current position)
-        push ecx
-        push ebx
-        push edx
+        push rcx
+        push rbx
+        push rdx
         mov eax, [win_id]
         mov ecx, edx            ; y
         mov edx, 2              ; w
@@ -307,9 +359,9 @@ draw_all:
         mov edi, COL_CURSOR
         ; ebx already = x
         call gui_fill_rect
-        pop edx
-        pop ebx
-        pop ecx
+        pop rdx
+        pop rbx
+        pop rcx
 
 .draw_no_cursor:
         cmp byte [note_text + ecx], 0
@@ -319,9 +371,9 @@ draw_all:
         je .draw_newline
 
         ; Draw character
-        push ecx
-        push ebx
-        push edx
+        push rcx
+        push rbx
+        push rdx
         movzx eax, byte [note_text + ecx]
         mov [char_buf], al
         mov byte [char_buf + 1], 0
@@ -331,9 +383,9 @@ draw_all:
         mov edi, COL_NOTE_TEXT
         ; ebx already = x
         call gui_draw_text
-        pop edx
-        pop ebx
-        pop ecx
+        pop rdx
+        pop rbx
+        pop rcx
 
         add ebx, 8              ; advance x
         inc dword [draw_col]
@@ -363,26 +415,26 @@ draw_all:
         mov eax, [win_id]
         call gui_flip
 
-        popad
+        POPALL
         ret
 
 
 ; ─── clear_note ──────────────────────────────────────────────
 clear_note:
-        pushad
+        PUSHALL
         mov edi, note_text
         mov ecx, MAX_TEXT
         xor eax, eax
         rep stosb
         mov dword [cursor_pos], 0
-        popad
+        POPALL
         ret
 
 
 ; ─── save_note ───────────────────────────────────────────────
 ; Save note text to file "note.txt"
 save_note:
-        pushad
+        PUSHALL
         ; Calculate text length
         mov esi, note_text
         xor ecx, ecx
@@ -401,14 +453,14 @@ save_note:
         xor esi, esi             ; type = text
         int 0x80
 
-        popad
+        POPALL
         ret
 
 
 ; ─── load_note ───────────────────────────────────────────────
 ; Load note text from file "note.txt"
 load_note:
-        pushad
+        PUSHALL
         ; First clear
         call clear_note
         ; SYS_FREAD: EBX=name, ECX=buf -> EAX=bytes read
@@ -426,7 +478,7 @@ load_note:
 .load_ok:
         mov byte [note_text + eax], 0
 .load_fail:
-        popad
+        POPALL
         ret
 
 
@@ -452,3 +504,4 @@ win_id:         resd 1
 cursor_pos:     resd 1
 draw_col:       resd 1
 note_text:      resb MAX_TEXT
+clip_buf:       resb MAX_TEXT

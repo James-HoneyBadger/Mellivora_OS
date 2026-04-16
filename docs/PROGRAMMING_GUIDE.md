@@ -54,13 +54,13 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 | Register | Usage |
 | --- | --- |
-| EAX | Syscall number / return value |
-| EBX | First argument |
-| ECX | Second argument |
-| EDX | Third argument |
-| ESI | Fourth argument |
-| EDI | Fifth argument / secondary return |
-| ESP | Stack pointer (program's own stack) |
+| RAX | Syscall number / return value |
+| RBX | First argument |
+| RCX | Second argument |
+| RDX | Third argument |
+| RSI | Fourth argument |
+| RDI | Fifth argument / secondary return |
+| RSP | Stack pointer (program's own stack) |
 
 ---
 
@@ -70,17 +70,16 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 ```nasm
 ; hello.asm — Hello World for Mellivora OS
-BITS 32
-ORG 0x200000
+%include "syscalls.inc"
 
     ; Print a string
-    mov eax, 3          ; SYS_PRINT
-    mov ebx, message    ; pointer to null-terminated string
+    mov rax, 3          ; SYS_PRINT
+    mov rbx, message    ; pointer to null-terminated string
     int 0x80
 
     ; Exit cleanly
-    mov eax, 0          ; SYS_EXIT
-    xor ebx, ebx       ; exit code 0
+    mov rax, 0          ; SYS_EXIT
+    xor rbx, rbx       ; exit code 0
     int 0x80
 
 message: db "Hello, World!", 10, 0
@@ -102,10 +101,9 @@ Lair:/>
 
 ### Key Points
 
-- **`BITS 32`**: We're in 32-bit protected mode
-- **`ORG 0x200000`**: Program is loaded at this address
+- **`%include "syscalls.inc"`**: Provides `BITS 64`, `ORG 0x200000`, and all syscall constants
 - **`INT 0x80`**: All OS services go through this interrupt
-- **`SYS_EXIT` (EAX=0)**: Always exit cleanly, or the trampoline does it for you
+- **`SYS_EXIT` (RAX=0)**: Always exit cleanly, or the trampoline does it for you
 - **`-O0`**: Disable NASM optimizations (critical — prevents short jump issues)
 
 ---
@@ -115,12 +113,12 @@ Lair:/>
 Every syscall uses the same convention:
 
 ```nasm
-mov eax, SYSCALL_NUMBER
-mov ebx, arg1
-mov ecx, arg2
-mov edx, arg3
+mov rax, SYSCALL_NUMBER
+mov rbx, arg1
+mov rcx, arg2
+mov rdx, arg3
 int 0x80
-; Return value in EAX (and sometimes ECX, EDI)
+; Return value in RAX (and sometimes RCX, RDI)
 ```
 
 ### Syscall Numbers
@@ -195,6 +193,22 @@ SYS_SHMGET      equ 64
 SYS_SHMADDR     equ 65
 SYS_PROCLIST    equ 66
 SYS_MEMINFO     equ 67
+SYS_CHMOD       equ 68
+SYS_CHOWN       equ 69
+SYS_SYMLINK     equ 70
+SYS_READLINK    equ 71
+SYS_SIGNAL      equ 72
+SYS_RAISE       equ 73
+SYS_MQ_CREATE   equ 74
+SYS_MQ_SEND     equ 75
+SYS_MQ_RECV     equ 76
+SYS_MQ_CLOSE    equ 77
+SYS_STRACE      equ 78
+SYS_LISTENV     equ 79
+SYS_RENAME      equ 80
+SYS_SETENV      equ 81
+SYS_RMDIR       equ 82
+SYS_TRUNCATE    equ 83
 ```
 
 Or include the provided header:
@@ -210,8 +224,8 @@ Or include the provided header:
 ### Print a String
 
 ```nasm
-mov eax, 3          ; SYS_PRINT
-mov ebx, msg        ; pointer to null-terminated string
+mov rax, 3          ; SYS_PRINT
+mov rbx, msg        ; pointer to null-terminated string
 int 0x80
 
 msg: db "Hello!", 10, 0    ; 10 = newline
@@ -220,28 +234,28 @@ msg: db "Hello!", 10, 0    ; 10 = newline
 ### Print a Single Character
 
 ```nasm
-mov eax, 1          ; SYS_PUTCHAR
-mov ebx, 'A'        ; character to print
+mov rax, 1          ; SYS_PUTCHAR
+mov rbx, 'A'        ; character to print
 int 0x80
 ```
 
 ### Read a Character (Blocking)
 
 ```nasm
-mov eax, 2          ; SYS_GETCHAR
+mov rax, 2          ; SYS_GETCHAR
 int 0x80
-; EAX now contains the ASCII code of the key pressed
+; RAX now contains the ASCII code of the key pressed
 ```
 
 ### Read a String (Character by Character)
 
 ```nasm
 read_line:
-    mov edi, buffer
-    xor ecx, ecx       ; character count
+    mov rdi, buffer
+    xor rcx, rcx       ; character count
 
 .loop:
-    mov eax, 2          ; SYS_GETCHAR
+    mov rax, 2          ; SYS_GETCHAR
     int 0x80
 
     cmp al, 10          ; Enter?
@@ -249,19 +263,19 @@ read_line:
     cmp al, 13
     je .done
 
-    stosb               ; store char and advance EDI
-    inc ecx
+    stosb               ; store char and advance RDI
+    inc rcx
 
-    mov eax, 1          ; echo it back
-    mov ebx, eax
-    movzx ebx, al
+    mov rax, 1          ; echo it back
+    mov rbx, rax
+    movzx rbx, al
     int 0x80
 
-    cmp ecx, 255        ; buffer limit
+    cmp rcx, 255        ; buffer limit
     jb .loop
 
 .done:
-    mov byte [edi], 0   ; null-terminate
+    mov byte [rdi], 0   ; null-terminate
     ret
 
 buffer: times 256 db 0
@@ -270,36 +284,36 @@ buffer: times 256 db 0
 ### Print a Decimal Number
 
 ```nasm
-; Print the number in EAX as decimal
+; Print the number in RAX as decimal
 print_number:
-    push ebp
-    mov ebp, esp
-    sub esp, 12         ; buffer on stack
-    mov edi, ebp
-    dec edi
-    mov byte [edi], 0   ; null terminator
+    push rbp
+    mov rbp, rsp
+    sub rsp, 12         ; buffer on stack
+    mov rdi, rbp
+    dec rdi
+    mov byte [rdi], 0   ; null terminator
 
-    test eax, eax
+    test rax, rax
     jnz .convert
-    dec edi
-    mov byte [edi], '0'
+    dec rdi
+    mov byte [rdi], '0'
     jmp .print
 
 .convert:
-    mov ecx, 10
+    mov rcx, 10
 .digit:
-    test eax, eax
+    test rax, rax
     jz .print
-    xor edx, edx
-    div ecx             ; EAX/10, remainder in EDX
+    xor rdx, rdx
+    div rcx             ; RAX/10, remainder in RDX
     add dl, '0'
-    dec edi
-    mov [edi], dl
+    dec rdi
+    mov [rdi], dl
     jmp .digit
 
 .print:
-    mov eax, 3          ; SYS_PRINT
-    mov ebx, edi
+    mov rax, 3          ; SYS_PRINT
+    mov rbx, rdi
     int 0x80
     leave
     ret
@@ -314,11 +328,11 @@ print_number:
 The easiest way to read a file — one syscall, returns entire contents:
 
 ```nasm
-mov eax, 30         ; SYS_FREAD
-mov ebx, filename   ; filename (can include path: "/docs/readme")
-mov ecx, buffer     ; destination buffer
+mov rax, 30         ; SYS_FREAD
+mov rbx, filename   ; filename (can include path: "/docs/readme")
+mov rcx, buffer     ; destination buffer
 int 0x80
-; EAX = bytes read (0 if file not found)
+; RAX = bytes read (0 if file not found)
 
 filename: db "readme", 0
 buffer: times 65536 db 0
@@ -327,12 +341,12 @@ buffer: times 65536 db 0
 ### Simple File Write
 
 ```nasm
-mov eax, 31         ; SYS_FWRITE
-mov ebx, filename   ; filename
-mov ecx, data       ; source buffer
-mov edx, data_len   ; byte count
+mov rax, 31         ; SYS_FWRITE
+mov rbx, filename   ; filename
+mov rcx, data       ; source buffer
+mov rdx, data_len   ; byte count
 int 0x80
-; EAX = 0 on success, -1 on failure
+; RAX = 0 on success, -1 on failure
 
 filename: db "output.txt", 0
 data: db "Hello, file!", 10
@@ -345,30 +359,30 @@ For more control, use the fd-based API:
 
 ```nasm
 ; Open file for reading
-mov eax, 5          ; SYS_OPEN
-mov ebx, filename   ; filename
-mov ecx, 1          ; mode: 1=read, 2=write
+mov rax, 5          ; SYS_OPEN
+mov rbx, filename   ; filename
+mov rcx, 1          ; mode: 1=read, 2=write
 int 0x80
-; EAX = file descriptor (-1 on error)
-mov [fd], eax
+; RAX = file descriptor (-1 on error)
+mov [fd], rax
 
 ; Read up to 1024 bytes
-mov eax, 6          ; SYS_READ
-mov ebx, [fd]       ; file descriptor
-mov ecx, buffer     ; destination
-mov edx, 1024       ; max bytes
+mov rax, 6          ; SYS_READ
+mov rbx, [fd]       ; file descriptor
+mov rcx, buffer     ; destination
+mov rdx, 1024       ; max bytes
 int 0x80
-; EAX = bytes actually read
+; RAX = bytes actually read
 
 ; Seek to offset
-mov eax, 10         ; SYS_SEEK
-mov ebx, [fd]
-mov ecx, 0          ; offset from start
+mov rax, 10         ; SYS_SEEK
+mov rbx, [fd]
+mov rcx, 0          ; offset from start
 int 0x80
 
 ; Close file
-mov eax, 8          ; SYS_CLOSE
-mov ebx, [fd]
+mov rax, 8          ; SYS_CLOSE
+mov rbx, [fd]
 int 0x80
 
 fd: dd 0
@@ -379,24 +393,24 @@ buffer: times 1024 db 0
 ### Check if File Exists (STAT)
 
 ```nasm
-mov eax, 11         ; SYS_STAT
-mov ebx, filename   ; filename
+mov rax, 11         ; SYS_STAT
+mov rbx, filename   ; filename
 int 0x80
-; EAX = file size in bytes (-1 if not found)
-; ECX = block count
+; RAX = file size in bytes (-1 if not found)
+; RCX = block count
 
-cmp eax, -1
+cmp rax, -1
 je .not_found
-; File exists, EAX = size
+; File exists, RAX = size
 ```
 
 ### Delete a File
 
 ```nasm
-mov eax, 9          ; SYS_DELETE
-mov ebx, filename
+mov rax, 9          ; SYS_DELETE
+mov rbx, filename
 int 0x80
-; EAX = 0 success, -1 failure
+; RAX = 0 success, -1 failure
 ```
 
 ### Read Files from Other Directories
@@ -404,9 +418,9 @@ int 0x80
 `SYS_FREAD` supports full paths:
 
 ```nasm
-mov eax, 30
-mov ebx, path
-mov ecx, buffer
+mov rax, 30
+mov rbx, path
+mov rcx, buffer
 int 0x80
 
 path: db "/docs/readme", 0       ; absolute path
@@ -420,24 +434,24 @@ path: db "/docs/readme", 0       ; absolute path
 ### Clear Screen
 
 ```nasm
-mov eax, 17         ; SYS_CLEAR
+mov rax, 17         ; SYS_CLEAR
 int 0x80
 ```
 
 ### Set Cursor Position
 
 ```nasm
-mov eax, 14         ; SYS_SETCURSOR
-mov ebx, 10         ; column (0–79)
-mov ecx, 5          ; row (0–24)
+mov rax, 14         ; SYS_SETCURSOR
+mov rbx, 10         ; column (0–79)
+mov rcx, 5          ; row (0–24)
 int 0x80
 ```
 
 ### Set Text Color
 
 ```nasm
-mov eax, 18         ; SYS_SETCOLOR
-mov ebx, 0x0A       ; light green on black
+mov rax, 18         ; SYS_SETCOLOR
+mov rbx, 0x0A       ; light green on black
 int 0x80
 ```
 
@@ -451,12 +465,12 @@ For performance-critical rendering (games), write directly to VGA memory:
 VGA_BASE equ 0xB8000
 
 ; Write 'X' at column 10, row 5 in red
-mov edi, VGA_BASE
-mov eax, 5
-imul eax, 160       ; row * 80 * 2
-add eax, 20         ; col * 2
-add edi, eax
-mov word [edi], 0x0C58   ; 0x0C = red, 'X' = 0x58
+mov rdi, VGA_BASE
+mov rax, 5
+imul rax, 160       ; row * 80 * 2
+add rax, 20         ; col * 2
+add rdi, rax
+mov word [rdi], 0x0C58   ; 0x0C = red, 'X' = 0x58
 ```
 
 **Warning:** VGA writes are safe from Ring 3 because the flat memory model maps all
@@ -468,27 +482,27 @@ games and animations that must update many cells per frame.
 ```nasm
 ; Draw a 20×5 box at (10, 3) with blue background
 draw_box:
-    mov ecx, 5          ; height
-    mov edx, 3          ; start row
+    mov rcx, 5          ; height
+    mov rdx, 3          ; start row
 
 .row:
-    push ecx
-    mov eax, 14         ; SYS_SETCURSOR
-    mov ebx, 10         ; start column
-    mov ecx, edx
+    push rcx
+    mov rax, 14         ; SYS_SETCURSOR
+    mov rbx, 10         ; start column
+    mov rcx, rdx
     int 0x80
 
-    mov ecx, 20         ; width
+    mov rcx, 20         ; width
 .col:
-    mov eax, 1          ; SYS_PUTCHAR
-    mov ebx, ' '
+    mov rax, 1          ; SYS_PUTCHAR
+    mov rbx, ' '
     int 0x80
-    dec ecx
+    dec rcx
     jnz .col
 
-    inc edx
-    pop ecx
-    dec ecx
+    inc rdx
+    pop rcx
+    dec rcx
     jnz .row
     ret
 ```
@@ -500,20 +514,20 @@ draw_box:
 ### Blocking Read
 
 ```nasm
-mov eax, 2          ; SYS_GETCHAR
+mov rax, 2          ; SYS_GETCHAR
 int 0x80
-; Waits until a key is pressed, returns ASCII in EAX
+; Waits until a key is pressed, returns ASCII in RAX
 ```
 
 ### Non-Blocking Poll
 
 ```nasm
-mov eax, 4          ; SYS_READ_KEY
+mov rax, 4          ; SYS_READ_KEY
 int 0x80
-; EAX = ASCII code, or 0 if no key pending
-test eax, eax
+; RAX = ASCII code, or 0 if no key pending
+test rax, rax
 jz .no_key
-; Process key in EAX
+; Process key in RAX
 ```
 
 ### Arrow Key Codes
@@ -529,9 +543,9 @@ jz .no_key
 
 ```nasm
 poll_input:
-    mov eax, 4          ; SYS_READ_KEY
+    mov rax, 4          ; SYS_READ_KEY
     int 0x80
-    test eax, eax
+    test rax, rax
     jz .no_input
 
     cmp al, 0x80        ; Up
@@ -556,16 +570,16 @@ poll_input:
 ### Get Current Time
 
 ```nasm
-mov eax, 15         ; SYS_GETTIME
+mov rax, 15         ; SYS_GETTIME
 int 0x80
-; EAX = tick_count (100 ticks = 1 second)
+; RAX = tick_count (100 ticks = 1 second)
 ```
 
 ### Sleep
 
 ```nasm
-mov eax, 16         ; SYS_SLEEP
-mov ebx, 50         ; sleep for 50 ticks (0.5 seconds)
+mov rax, 16         ; SYS_SLEEP
+mov rbx, 50         ; sleep for 50 ticks (0.5 seconds)
 int 0x80
 ```
 
@@ -573,21 +587,21 @@ int 0x80
 
 ```nasm
 game_loop:
-    mov eax, 15         ; SYS_GETTIME
+    mov rax, 15         ; SYS_GETTIME
     int 0x80
-    mov [frame_start], eax
+    mov [frame_start], rax
 
     ; ... game logic and rendering ...
 
     ; Wait for next frame (target: 10 FPS = 10 ticks per frame)
-    mov eax, 15
+    mov rax, 15
     int 0x80
-    sub eax, [frame_start]
-    cmp eax, 10
+    sub rax, [frame_start]
+    cmp rax, 10
     jae .no_wait
-    mov ebx, 10
-    sub ebx, eax
-    mov eax, 16         ; SYS_SLEEP
+    mov rbx, 10
+    sub rbx, rax
+    mov rax, 16         ; SYS_SLEEP
     int 0x80
 .no_wait:
     jmp game_loop
@@ -598,18 +612,18 @@ frame_start: dd 0
 ### Play a Tone
 
 ```nasm
-mov eax, 24         ; SYS_BEEP
-mov ebx, 440        ; frequency in Hz (440 = A4)
-mov ecx, 20         ; duration in ticks (200ms)
+mov rax, 24         ; SYS_BEEP
+mov rbx, 440        ; frequency in Hz (440 = A4)
+mov rcx, 20         ; duration in ticks (200ms)
 int 0x80
 ```
 
 ### Stop Sound
 
 ```nasm
-mov eax, 24         ; SYS_BEEP
-xor ebx, ebx       ; frequency 0 = silence
-xor ecx, ecx
+mov rax, 24         ; SYS_BEEP
+xor rbx, rbx       ; frequency 0 = silence
+xor rcx, rcx
 int 0x80
 ```
 
@@ -618,23 +632,23 @@ int 0x80
 ```nasm
 ; Play C major scale
 play_scale:
-    mov esi, notes
-    mov ecx, 8
+    mov rsi, notes
+    mov rcx, 8
 
 .play:
-    push ecx
-    movzx ebx, word [esi]  ; frequency
-    mov eax, 24             ; SYS_BEEP
-    mov ecx, 15             ; duration
+    push rcx
+    movzx rbx, word [rsi]  ; frequency
+    mov rax, 24             ; SYS_BEEP
+    mov rcx, 15             ; duration
     int 0x80
 
-    mov eax, 16             ; SYS_SLEEP
-    mov ebx, 20             ; gap between notes
+    mov rax, 16             ; SYS_SLEEP
+    mov rbx, 20             ; gap between notes
     int 0x80
 
-    add esi, 2
-    pop ecx
-    dec ecx
+    add rsi, 2
+    pop rcx
+    dec rcx
     jnz .play
     ret
 
@@ -650,21 +664,21 @@ notes: dw 262, 294, 330, 349, 392, 440, 494, 523  ; C4 to C5
 Memory is allocated in 4 KB page granularity:
 
 ```nasm
-mov eax, 19         ; SYS_MALLOC
-mov ebx, 8192       ; request 8192 bytes (gets 2 pages = 8 KB)
+mov rax, 19         ; SYS_MALLOC
+mov rbx, 8192       ; request 8192 bytes (gets 2 pages = 8 KB)
 int 0x80
-; EAX = physical address of allocated memory (0 = failure)
-test eax, eax
+; RAX = physical address of allocated memory (0 = failure)
+test rax, rax
 jz .out_of_memory
-mov [my_buffer], eax
+mov [my_buffer], rax
 ```
 
 ### Free Memory
 
 ```nasm
-mov eax, 20         ; SYS_FREE
-mov ebx, [my_buffer]   ; address returned by SYS_MALLOC
-mov ecx, 8192          ; same size as allocated
+mov rax, 20         ; SYS_FREE
+mov rbx, [my_buffer]   ; address returned by SYS_MALLOC
+mov rcx, 8192          ; same size as allocated
 int 0x80
 ```
 
@@ -682,10 +696,10 @@ int 0x80
 ### Create a Directory
 
 ```nasm
-mov eax, 12         ; SYS_MKDIR
-mov ebx, dirname
+mov rax, 12         ; SYS_MKDIR
+mov rbx, dirname
 int 0x80
-; EAX = 0 success, -1 failure
+; RAX = 0 success, -1 failure
 
 dirname: db "mydir", 0
 ```
@@ -693,17 +707,17 @@ dirname: db "mydir", 0
 ### Change Directory
 
 ```nasm
-mov eax, 26         ; SYS_CHDIR
-mov ebx, dirname
+mov rax, 26         ; SYS_CHDIR
+mov rbx, dirname
 int 0x80
-; EAX = 0 success, -1 failure
+; RAX = 0 success, -1 failure
 ```
 
 ### Get Current Directory
 
 ```nasm
-mov eax, 27         ; SYS_GETCWD
-mov ebx, cwd_buf
+mov rax, 27         ; SYS_GETCWD
+mov rbx, cwd_buf
 int 0x80
 
 cwd_buf: times 256 db 0
@@ -713,35 +727,35 @@ cwd_buf: times 256 db 0
 
 ```nasm
 list_files:
-    xor ecx, ecx       ; entry index
+    xor rcx, rcx       ; entry index
 
 .next:
-    push ecx
-    mov eax, 13         ; SYS_READDIR
-    mov ebx, name_buf   ; buffer for entry name
+    push rcx
+    mov rax, 13         ; SYS_READDIR
+    mov rbx, name_buf   ; buffer for entry name
     int 0x80
-    ; EAX = file type (0 = end of directory)
-    ; ECX = file size
+    ; RAX = file type (0 = end of directory)
+    ; RCX = file size
 
-    test eax, eax
+    test rax, rax
     jz .done
 
     ; Print the filename
-    push eax
-    mov eax, 3          ; SYS_PRINT
-    mov ebx, name_buf
+    push rax
+    mov rax, 3          ; SYS_PRINT
+    mov rbx, name_buf
     int 0x80
-    mov eax, 1
-    mov ebx, 10         ; newline
+    mov rax, 1
+    mov rbx, 10         ; newline
     int 0x80
-    pop eax
+    pop rax
 
-    pop ecx
-    inc ecx
+    pop rcx
+    inc rcx
     jmp .next
 
 .done:
-    pop ecx
+    pop rcx
     ret
 
 name_buf: times 256 db 0
@@ -756,8 +770,8 @@ name_buf: times 256 db 0
 Useful for debugging — output appears in the host terminal (QEMU `-serial stdio`):
 
 ```nasm
-mov eax, 28         ; SYS_SERIAL
-mov ebx, debug_msg
+mov rax, 28         ; SYS_SERIAL
+mov rbx, debug_msg
 int 0x80
 
 debug_msg: db "[DEBUG] Reached checkpoint 1", 10, 0
@@ -766,9 +780,9 @@ debug_msg: db "[DEBUG] Reached checkpoint 1", 10, 0
 ### Read from Serial Port
 
 ```nasm
-mov eax, 33         ; SYS_SERIAL_IN
+mov rax, 33         ; SYS_SERIAL_IN
 int 0x80
-; EAX = character received from serial port
+; RAX = character received from serial port
 ```
 
 ---
@@ -778,10 +792,10 @@ int 0x80
 ### Get Command-Line Arguments
 
 ```nasm
-mov eax, 32         ; SYS_GETARGS
-mov ebx, args_buf   ; buffer (max 512 bytes)
+mov rax, 32         ; SYS_GETARGS
+mov rbx, args_buf   ; buffer (max 512 bytes)
 int 0x80
-; EAX = length of argument string
+; RAX = length of argument string
 ; args_buf contains everything after the program name
 
 args_buf: times 512 db 0
@@ -790,11 +804,11 @@ args_buf: times 512 db 0
 ### Get an Environment Variable
 
 ```nasm
-mov eax, 29         ; SYS_GETENV
-mov ebx, var_name
+mov rax, 29         ; SYS_GETENV
+mov rbx, var_name
 int 0x80
-; EDI = pointer to value string (inside kernel's env table)
-; If not found, EDI is undefined — check before using
+; RDI = pointer to value string (inside kernel's env table)
+; If not found, RDI is undefined — check before using
 
 var_name: db "PATH", 0
 ```
@@ -814,45 +828,45 @@ and ICMP ping. The `programs/lib/net.inc` library wraps these into convenient fu
 
 start:
         ; 1. Resolve hostname to IP
-        mov esi, hostname
-        call net_dns            ; EAX = IP address (0 = failed)
-        test eax, eax
+        mov rsi, hostname
+        call net_dns            ; RAX = IP address (0 = failed)
+        test rax, rax
         jz .error
-        mov [server_ip], eax
+        mov [server_ip], rax
 
         ; 2. Create a TCP socket
-        mov eax, NET_TCP        ; NET_TCP = 1
-        call net_socket         ; EAX = socket fd (-1 = error)
-        cmp eax, -1
+        mov rax, NET_TCP        ; NET_TCP = 1
+        call net_socket         ; RAX = socket fd (-1 = error)
+        cmp rax, -1
         je .error
-        mov [sockfd], eax
+        mov [sockfd], rax
 
         ; 3. Connect to port 80
-        mov eax, [sockfd]
-        mov ebx, [server_ip]
-        mov ecx, 80
-        call net_connect        ; EAX = 0 (success) or -1 (error)
-        cmp eax, -1
+        mov rax, [sockfd]
+        mov rbx, [server_ip]
+        mov rcx, 80
+        call net_connect        ; RAX = 0 (success) or -1 (error)
+        cmp rax, -1
         je .error
 
         ; 4. Send data
-        mov eax, [sockfd]
-        mov esi, message
+        mov rax, [sockfd]
+        mov rsi, message
         call net_send_line      ; Sends string + CRLF
 
         ; 5. Receive response
-        mov eax, [sockfd]
-        mov ebx, recv_buf
-        mov ecx, 512
-        call net_recv           ; EAX = bytes (0=no data, -1=closed)
+        mov rax, [sockfd]
+        mov rbx, recv_buf
+        mov rcx, 512
+        call net_recv           ; RAX = bytes (0=no data, -1=closed)
 
         ; 6. Close socket
-        mov eax, [sockfd]
+        mov rax, [sockfd]
         call net_close
 
 .error:
-        mov eax, SYS_EXIT
-        xor ebx, ebx
+        mov rax, SYS_EXIT
+        xor rbx, rbx
         int 0x80
 
 hostname:  db "example.com", 0
@@ -879,15 +893,15 @@ Many text protocols (HTTP, FTP, SMTP, NNTP) use CRLF-terminated lines:
 
 ```nasm
         ; net_send_line appends \r\n automatically
-        mov eax, [sockfd]
-        mov esi, helo_cmd
+        mov rax, [sockfd]
+        mov rsi, helo_cmd
         call net_send_line      ; Sends "HELO mellivora\r\n"
 
         ; net_recv_line reads until \n and null-terminates
-        mov eax, [sockfd]
-        mov edi, response_buf
-        mov ecx, 256
-        call net_recv_line      ; EAX = bytes, buffer is null-terminated
+        mov rax, [sockfd]
+        mov rdi, response_buf
+        mov rcx, 256
+        call net_recv_line      ; RAX = bytes, buffer is null-terminated
 
 helo_cmd: db "HELO mellivora", 0
 ```
@@ -895,11 +909,11 @@ helo_cmd: db "HELO mellivora", 0
 ### DNS Resolution
 
 ```nasm
-        mov esi, hostname
+        mov rsi, hostname
         call net_dns
-        test eax, eax
+        test rax, rax
         jz .dns_failed          ; 0 = resolution failed
-        ; EAX = 32-bit IP address in little-endian
+        ; RAX = 32-bit IP address in little-endian
 ```
 
 The kernel maintains an 8-entry DNS cache. Repeated lookups for the same hostname
@@ -908,24 +922,24 @@ return the cached result without a network request.
 ### ICMP Ping
 
 ```nasm
-        mov eax, [target_ip]
-        call net_ping           ; EAX = RTT in timer ticks, or -1 = timeout
-        cmp eax, -1
+        mov rax, [target_ip]
+        call net_ping           ; RAX = RTT in timer ticks, or -1 = timeout
+        cmp rax, -1
         je .timed_out
 ```
 
 ### Parsing IP Addresses
 
 ```nasm
-        mov esi, ip_string
-        call net_parse_ip       ; EAX = 32-bit IP (0 = parse error)
+        mov rsi, ip_string
+        call net_parse_ip       ; RAX = 32-bit IP (0 = parse error)
 
 ip_string: db "10.0.2.2", 0
 ```
 
 ### Networking Syscall Reference
 
-| Syscall | # | EBX | ECX | EDX | EAX Return |
+| Syscall | # | RBX | RCX | RDX | RAX Return |
 | --- | --- | --- | --- | --- | --- |
 | SYS_SOCKET | 39 | type (1/2) | — | — | fd or -1 |
 | SYS_CONNECT | 40 | fd | IP | port | 0 or -1 |
@@ -954,15 +968,15 @@ these into convenient functions.
 
 start:
         ; Create a window: x=50, y=40, w=300, h=200
-        mov eax, 50
-        mov ebx, 40
-        mov ecx, 300
-        mov edx, 200
-        mov esi, title
+        mov rax, 50
+        mov rbx, 40
+        mov rcx, 300
+        mov rdx, 200
+        mov rsi, title
         call gui_create_window
-        cmp eax, -1
+        cmp rax, -1
         je .exit
-        mov [win_id], eax
+        mov [win_id], rax
 ```
 
 ### Window Drawing
@@ -972,27 +986,27 @@ top-left corner inside the title bar and border):
 
 ```nasm
         ; Fill window background
-        mov eax, [win_id]
-        xor ebx, ebx           ; x=0
-        xor ecx, ecx           ; y=0
-        mov edx, 300            ; width
-        mov esi, 200            ; height
-        mov edi, 0x2F2F3F       ; dark blue-gray
+        mov rax, [win_id]
+        xor rbx, rbx           ; x=0
+        xor rcx, rcx           ; y=0
+        mov rdx, 300            ; width
+        mov rsi, 200            ; height
+        mov rdi, 0x2F2F3F       ; dark blue-gray
         call gui_fill_rect
 
         ; Draw text
-        mov eax, [win_id]
-        mov ebx, 10             ; x offset
-        mov ecx, 20             ; y offset
-        mov esi, label_text
-        mov edi, 0xFFFFFF       ; white
+        mov rax, [win_id]
+        mov rbx, 10             ; x offset
+        mov rcx, 20             ; y offset
+        mov rsi, label_text
+        mov rdi, 0xFFFFFF       ; white
         call gui_draw_text
 
         ; Draw single pixel
-        mov eax, [win_id]
-        mov ebx, 150            ; x
-        mov ecx, 100            ; y
-        mov esi, 0xFF0000       ; red
+        mov rax, [win_id]
+        mov rbx, 150            ; x
+        mov rcx, 100            ; y
+        mov rsi, 0xFF0000       ; red
         call gui_draw_pixel
 ```
 
@@ -1010,35 +1024,35 @@ Every GUI application follows the compose → flip → poll pattern:
 
         ; 3. Poll for events
         call gui_poll_event
-        ; EAX = event type, EBX = param1, ECX = param2
+        ; RAX = event type, RBX = param1, RCX = param2
 
-        cmp eax, EVT_CLOSE
+        cmp rax, EVT_CLOSE
         je .close
 
-        cmp eax, EVT_KEY_PRESS
+        cmp rax, EVT_KEY_PRESS
         je .handle_key
 
-        cmp eax, EVT_MOUSE_CLICK
+        cmp rax, EVT_MOUSE_CLICK
         je .handle_click
 
         ; Yield to avoid busy-waiting
-        mov eax, SYS_YIELD
+        mov rax, SYS_YIELD
         int 0x80
 
         jmp .event_loop
 
 .close:
-        mov eax, [win_id]
+        mov rax, [win_id]
         call gui_destroy_window
 .exit:
-        mov eax, SYS_EXIT
-        xor ebx, ebx
+        mov rax, SYS_EXIT
+        xor rbx, rbx
         int 0x80
 ```
 
 ### Event Types
 
-| Constant | Value | EBX | ECX |
+| Constant | Value | RBX | RCX |
 | --- | --- | --- | --- |
 | `EVT_NONE` | 0 | — | — |
 | `EVT_MOUSE_CLICK` | 1 | x position | y position |
@@ -1052,13 +1066,13 @@ Applications can read and apply themes:
 
 ```nasm
         ; Get current theme into buffer
-        mov eax, theme_buf
+        mov rax, theme_buf
         call gui_get_theme
 
         ; Set a theme (0=Blue, 1=Dark, 2=Light, 3=Amber)
-        mov eax, SYS_GUI
-        mov ebx, GUI_SET_THEME
-        mov ecx, 1              ; Dark theme
+        mov rax, SYS_GUI
+        mov rbx, GUI_SET_THEME
+        mov rcx, 1              ; Dark theme
         int 0x80
 ```
 
@@ -1067,9 +1081,9 @@ Applications can read and apply themes:
 For programs that need raw mouse coordinates without the Burrows desktop:
 
 ```nasm
-        mov eax, SYS_MOUSE     ; syscall 36
+        mov rax, SYS_MOUSE     ; syscall 36
         int 0x80
-        ; EAX = X position, EBX = Y position, ECX = button state
+        ; RAX = X position, RBX = Y position, RCX = button state
         ; Buttons: bit 0 = left, bit 1 = right, bit 2 = middle
 ```
 
@@ -1079,19 +1093,19 @@ For programs that need direct pixel access without the window manager:
 
 ```nasm
         ; Get framebuffer info
-        mov eax, SYS_FRAMEBUF  ; syscall 37
-        mov ebx, 0             ; sub-fn 0 = get info
+        mov rax, SYS_FRAMEBUF  ; syscall 37
+        mov rbx, 0             ; sub-fn 0 = get info
         int 0x80
-        ; EAX = LFB address, EBX = width, ECX = height, EDX = bpp
+        ; RAX = LFB address, RBX = width, RCX = height, RDX = bpp
 
         ; Switch to 640×480×32 mode
-        mov eax, SYS_FRAMEBUF
-        mov ebx, 1             ; sub-fn 1 = set mode
+        mov rax, SYS_FRAMEBUF
+        mov rbx, 1             ; sub-fn 1 = set mode
         int 0x80
 
         ; Restore text mode when done
-        mov eax, SYS_FRAMEBUF
-        mov ebx, 2             ; sub-fn 2 = restore text
+        mov rax, SYS_FRAMEBUF
+        mov rbx, 2             ; sub-fn 2 = restore text
         int 0x80
 ```
 
@@ -1101,24 +1115,24 @@ Programs can play audio via the SB16 driver:
 
 ```nasm
         ; Play a PCM buffer (8-bit, 11025 Hz, mono)
-        mov eax, 50             ; SYS_AUDIO_PLAY
-        mov ebx, audio_data     ; pointer to PCM data
-        mov ecx, audio_len      ; length in bytes
-        mov edx, 11025          ; format: sample rate in bits 0-15
+        mov rax, 50             ; SYS_AUDIO_PLAY
+        mov rbx, audio_data     ; pointer to PCM data
+        mov rcx, audio_len      ; length in bytes
+        mov rdx, 11025          ; format: sample rate in bits 0-15
         int 0x80
 
         ; Check playback status
-        mov eax, 52             ; SYS_AUDIO_STATUS
+        mov rax, 52             ; SYS_AUDIO_STATUS
         int 0x80
-        ; EAX = state (0=idle, 1=playing, 2=done)
-        ; EBX = sb16_present (0/1)
+        ; RAX = state (0=idle, 1=playing, 2=done)
+        ; RBX = sb16_present (0/1)
 
         ; Stop playback
-        mov eax, 51             ; SYS_AUDIO_STOP
+        mov rax, 51             ; SYS_AUDIO_STOP
         int 0x80
 ```
 
-Format flags for EDX: bits 0–15 = sample rate Hz, bit 16 = 16-bit,
+Format flags for RDX: bits 0–15 = sample rate Hz, bit 16 = 16-bit,
 bit 17 = stereo, bit 18 = signed samples.
 
 ### Inter-Process Communication
@@ -1127,29 +1141,29 @@ bit 17 = stereo, bit 18 = signed samples.
 
 ```nasm
         ; Create a pipe
-        mov eax, 60             ; SYS_PIPE_CREATE
+        mov rax, 60             ; SYS_PIPE_CREATE
         int 0x80
-        ; EAX = pipe_id (-1 on error)
-        mov [pipe_id], eax
+        ; RAX = pipe_id (-1 on error)
+        mov [pipe_id], rax
 
         ; Write to pipe
-        mov eax, 61             ; SYS_PIPE_WRITE
-        mov ebx, [pipe_id]
-        mov ecx, message        ; buffer
-        mov edx, msg_len        ; length
+        mov rax, 61             ; SYS_PIPE_WRITE
+        mov rbx, [pipe_id]
+        mov rcx, message        ; buffer
+        mov rdx, msg_len        ; length
         int 0x80
 
         ; Read from pipe
-        mov eax, 62             ; SYS_PIPE_READ
-        mov ebx, [pipe_id]
-        mov ecx, recv_buf
-        mov edx, 256            ; max bytes
+        mov rax, 62             ; SYS_PIPE_READ
+        mov rbx, [pipe_id]
+        mov rcx, recv_buf
+        mov rdx, 256            ; max bytes
         int 0x80
-        ; EAX = bytes read
+        ; RAX = bytes read
 
         ; Close pipe
-        mov eax, 63             ; SYS_PIPE_CLOSE
-        mov ebx, [pipe_id]
+        mov rax, 63             ; SYS_PIPE_CLOSE
+        mov rbx, [pipe_id]
         int 0x80
 ```
 
@@ -1157,40 +1171,40 @@ bit 17 = stereo, bit 18 = signed samples.
 
 ```nasm
         ; Get or create a shared memory region
-        mov eax, 64             ; SYS_SHMGET
-        mov ebx, 1              ; key (any integer)
-        mov ecx, 4096           ; size
+        mov rax, 64             ; SYS_SHMGET
+        mov rbx, 1              ; key (any integer)
+        mov rcx, 4096           ; size
         int 0x80
-        ; EAX = shm_id (-1 on error)
-        mov [shm_id], eax
+        ; RAX = shm_id (-1 on error)
+        mov [shm_id], rax
 
         ; Get the data pointer
-        mov eax, 65             ; SYS_SHMADDR
-        mov ebx, [shm_id]
+        mov rax, 65             ; SYS_SHMADDR
+        mov rbx, [shm_id]
         int 0x80
-        ; EAX = pointer to 4 KB region
-        mov [shm_ptr], eax
+        ; RAX = pointer to 4 KB region
+        mov [shm_ptr], rax
 ```
 
 ### Process Management
 
 ```nasm
         ; Get current PID
-        mov eax, 54             ; SYS_GETPID
+        mov rax, 54             ; SYS_GETPID
         int 0x80
-        ; EAX = current task PID
+        ; RAX = current task PID
 
         ; List tasks (slot 0–15)
-        mov eax, 66             ; SYS_PROCLIST
-        mov ebx, 0              ; slot index
-        mov ecx, task_buf       ; 16-byte buffer
+        mov rax, 66             ; SYS_PROCLIST
+        mov rbx, 0              ; slot index
+        mov rcx, task_buf       ; 16-byte buffer
         int 0x80
-        ; EAX = 0 if slot active, -1 if empty
+        ; RAX = 0 if slot active, -1 if empty
 
         ; Get memory info
-        mov eax, 67             ; SYS_MEMINFO
+        mov rax, 67             ; SYS_MEMINFO
         int 0x80
-        ; EAX = free pages, EBX = total at boot
+        ; RAX = free pages, RBX = total at boot
 ```
 
 ### Built-in Burrows Apps
@@ -1219,23 +1233,22 @@ These programs in the `programs/` directory use `gui.inc` and demonstrate GUI pa
 Here's the standard pattern used by games like Snake, Tetris, and 2048:
 
 ```nasm
-BITS 32
-ORG 0x200000
+%include "syscalls.inc"
 
 main:
     ; Initialize game state
     call init_game
 
     ; Clear screen and draw initial frame
-    mov eax, 17         ; SYS_CLEAR
+    mov rax, 17         ; SYS_CLEAR
     int 0x80
     call draw_game
 
 game_loop:
     ; 1. Handle input (non-blocking)
-    mov eax, 4          ; SYS_READ_KEY
+    mov rax, 4          ; SYS_READ_KEY
     int 0x80
-    test eax, eax
+    test rax, rax
     jz .no_input
     call handle_input
     cmp byte [game_over], 1
@@ -1249,8 +1262,8 @@ game_loop:
     call draw_game
 
     ; 4. Frame delay (10 ticks = 100ms = 10 FPS)
-    mov eax, 16         ; SYS_SLEEP
-    mov ebx, 10
+    mov rax, 16         ; SYS_SLEEP
+    mov rbx, 10
     int 0x80
 
     ; 5. Check game-over condition
@@ -1259,18 +1272,18 @@ game_loop:
 
 .exit:
     ; Restore default color
-    mov eax, 18         ; SYS_SETCOLOR
-    mov ebx, 0x07
+    mov rax, 18         ; SYS_SETCOLOR
+    mov rbx, 0x07
     int 0x80
 
     ; Print score or message
-    mov eax, 3
-    mov ebx, goodbye_msg
+    mov rax, 3
+    mov rbx, goodbye_msg
     int 0x80
 
     ; Exit
-    mov eax, 0
-    xor ebx, ebx
+    mov rax, 0
+    xor rbx, rbx
     int 0x80
 
 ; --- Data ---
@@ -1295,15 +1308,12 @@ Place your program in the `programs/` directory alongside `syscalls.inc`:
 ```nasm
 %include "syscalls.inc"
 
-BITS 32
-ORG 0x200000
-
-    mov eax, SYS_PRINT
-    mov ebx, msg
+    mov rax, SYS_PRINT
+    mov rbx, msg
     int 0x80
 
-    mov eax, SYS_EXIT
-    xor ebx, ebx
+    mov rax, SYS_EXIT
+    xor rbx, rbx
     int 0x80
 
 msg: db "It works!", 10, 0
@@ -1464,8 +1474,8 @@ The most useful debugging technique — output goes to the host terminal:
 
 ```nasm
 ; Sprinkle these throughout your code
-mov eax, 28         ; SYS_SERIAL
-mov ebx, .dbg1
+mov rax, 28         ; SYS_SERIAL
+mov rbx, .dbg1
 int 0x80
 jmp .cont1
 .dbg1: db "[DBG] Before loop", 10, 0
@@ -1475,45 +1485,53 @@ jmp .cont1
 Run QEMU with serial output:
 
 ```bash
-qemu-system-i386 -hda mellivora.img -serial stdio
+qemu-system-x86_64 -hda mellivora.img -serial stdio
 ```
 
 ### Print Register Values
 
 ```nasm
-; Print EAX as hex for debugging
+; Print RAX as hex for debugging
 debug_print_eax:
-    pushad
-    mov esi, eax
-    mov edi, hex_buf + 10
-    mov ecx, 8
+    push rbp
+    push rsi
+    push rdi
+    push rcx
+    push rax
+    mov rsi, rax
+    mov rdi, hex_buf + 10
+    mov rcx, 8
 
 .hex_loop:
-    mov eax, esi
-    and eax, 0xF
-    cmp eax, 10
+    mov rax, rsi
+    and rax, 0xF
+    cmp rax, 10
     jb .digit
-    add eax, 'A' - 10
+    add rax, 'A' - 10
     jmp .store
 .digit:
-    add eax, '0'
+    add rax, '0'
 .store:
-    dec edi
-    mov [edi], al
-    shr esi, 4
-    dec ecx
+    dec rdi
+    mov [rdi], al
+    shr rsi, 4
+    dec rcx
     jnz .hex_loop
 
-    mov eax, 3
-    mov ebx, hex_prefix
+    mov rax, 3
+    mov rbx, hex_prefix
     int 0x80
-    mov eax, 3
-    mov ebx, hex_buf + 2
+    mov rax, 3
+    mov rbx, hex_buf + 2
     int 0x80
-    mov eax, 3
-    mov ebx, newline_str
+    mov rax, 3
+    mov rbx, newline_str
     int 0x80
-    popad
+    pop rax
+    pop rcx
+    pop rdi
+    pop rsi
+    pop rbp
     ret
 
 hex_prefix: db "0x", 0
@@ -1528,20 +1546,20 @@ newline_str: db 10, 0
    trampoline catches `RET`)
 3. **Buffer overflows:** No memory protection — overwriting past your buffer corrupts
    other data or code
-4. **Clobbered registers:** Syscalls may modify EAX, ECX, EDX — save important values
+4. **Clobbered registers:** Syscalls may modify RAX, RCX, RDX — save important values
    before calling
 5. **Blocking I/O in game loops:** Use `SYS_READ_KEY` (non-blocking), not `SYS_GETCHAR`
    (blocking) in game loops
 6. **Color leaks:** Always reset color to `0x07` before exiting
-7. **Stack alignment:** ESP starts near top of program space — don't use too much stack
+7. **Stack alignment:** RSP starts near top of program space — don't use too much stack
 
 ---
 
 ## Complete Syscall Table
 
-Quick reference for all 68 syscalls (0–67):
+Quick reference for all 84 syscalls (0–83):
 
-| # | Name | EBX | ECX | EDX | Returns |
+| # | Name | RBX | RCX | RDX | Returns |
 | --- | --- | --- | --- | --- | --- |
 | 0 | EXIT | exit code | — | — | — |
 | 1 | PUTCHAR | char | — | — | 0 |
@@ -1554,9 +1572,9 @@ Quick reference for all 68 syscalls (0–67):
 | 8 | CLOSE | fd | — | — | 0 |
 | 9 | DELETE | filename | — | — | 0/-1 |
 | 10 | SEEK | fd | offset | — | new pos |
-| 11 | STAT | filename | — | — | size/-1, ECX=blocks |
+| 11 | STAT | filename | — | — | size/-1, RCX=blocks |
 | 12 | MKDIR | dirname | — | — | 0/-1 |
-| 13 | READDIR | name buf | index | — | type, ECX=size |
+| 13 | READDIR | name buf | index | — | type, RCX=size |
 | 14 | SETCURSOR | X | Y | — | 0 |
 | 15 | GETTIME | — | — | — | ticks |
 | 16 | SLEEP | ticks | — | — | 0 |
@@ -1572,14 +1590,14 @@ Quick reference for all 68 syscalls (0–67):
 | 26 | CHDIR | dirname | — | — | 0/-1 |
 | 27 | GETCWD | dest buf | — | — | 0 |
 | 28 | SERIAL | string ptr | — | — | 0 |
-| 29 | GETENV | var name | — | — | EDI=value |
+| 29 | GETENV | var name | — | — | RDI=value |
 | 30 | FREAD | filename | buffer | — | bytes |
 | 31 | FWRITE | filename | buffer | size | 0/-1 |
 | 32 | GETARGS | dest buf | — | — | length |
 | 33 | SERIAL_IN | — | — | — | char |
 | 34 | STDIN_READ | buffer | max len | — | bytes or -1 |
 | 35 | YIELD | — | — | — | 0 |
-| 36 | MOUSE | — | — | — | EAX=x, EBX=y, ECX=btns |
+| 36 | MOUSE | — | — | — | RAX=x, RBX=y, RCX=btns |
 | 37 | FRAMEBUF | sub-fn | — | — | (varies by sub-fn) |
 | 38 | GUI | sub-fn | (varies) | (varies) | (varies) |
 | 39 | SOCKET | type (1=TCP, 2=UDP) | — | — | fd or -1 |
@@ -1595,14 +1613,14 @@ Quick reference for all 68 syscalls (0–67):
 | 49 | SETDATE | 6-byte buf | century | — | 0 |
 | 50 | AUDIO_PLAY | buffer | length | format | 0/-1 |
 | 51 | AUDIO_STOP | — | — | — | 0 |
-| 52 | AUDIO_STATUS | — | — | — | state, EBX=present |
+| 52 | AUDIO_STATUS | — | — | — | state, RBX=present |
 | 53 | KILL | pid | — | — | 0/-1 |
 | 54 | GETPID | — | — | — | pid |
 | 55 | CLIP_COPY | buffer | length | — | 0 |
 | 56 | CLIP_PASTE | buffer | max len | — | bytes |
 | 57 | NOTIFY | text ptr | — | color | 0 |
-| 58 | FILE_OPEN_DLG | title | — | filter | 1/0, ECX=name |
-| 59 | FILE_SAVE_DLG | title | — | filter | 1/0, ECX=name |
+| 58 | FILE_OPEN_DLG | title | — | filter | 1/0, RCX=name |
+| 59 | FILE_SAVE_DLG | title | — | filter | 1/0, RCX=name |
 | 60 | PIPE_CREATE | — | — | — | pipe_id or -1 |
 | 61 | PIPE_WRITE | pipe_id | buffer | length | bytes |
 | 62 | PIPE_READ | pipe_id | buffer | max len | bytes |
@@ -1610,4 +1628,20 @@ Quick reference for all 68 syscalls (0–67):
 | 64 | SHMGET | key | size | — | shm_id or -1 |
 | 65 | SHMADDR | shm_id | — | — | pointer |
 | 66 | PROCLIST | slot (0–15) | 16B buf | — | 0/-1 |
-| 67 | MEMINFO | — | — | — | free pages, EBX=total |
+| 67 | MEMINFO | — | — | — | free pages, RBX=total |
+| 68 | CHMOD | filename | perms (9-bit) | — | 0/-1 |
+| 69 | CHOWN | filename | owner UID | — | 0/-1 |
+| 70 | SYMLINK | link name | target path | — | 0/-1 |
+| 71 | READLINK | link name | output buf | — | length or -1 |
+| 72 | SIGNAL | signal (1–4) | handler | — | prev handler |
+| 73 | RAISE | target PID | signal (1–4) | — | 0/-1 |
+| 74 | MQ_CREATE | key (nonzero) | — | — | mq_id or -1 |
+| 75 | MQ_SEND | mq_id | data ptr | length | 0/-1 |
+| 76 | MQ_RECV | mq_id | dest buf | max len | bytes or 0/-1 |
+| 77 | MQ_CLOSE | mq_id | — | — | 0/-1 |
+| 78 | STRACE | sub-fn (0–3) | dest/max | — | varies |
+| 79 | LISTENV | dest buf | max size | — | bytes written |
+| 80 | RENAME | old name | new name | — | 0/-1 |
+| 81 | SETENV | "NAME=VALUE" | — | — | 0 |
+| 82 | RMDIR | dirname | — | — | 0/-1 |
+| 83 | TRUNCATE | filename | new size | — | 0/-1 |

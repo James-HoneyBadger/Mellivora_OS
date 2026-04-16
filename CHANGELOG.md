@@ -1,5 +1,88 @@
 # Mellivora OS - Changelog
 
+## v4.0.0 - 64-bit Long Mode Migration
+
+Complete migration from 32-bit protected mode to 64-bit long mode across the entire
+operating system — kernel, bootloader, scheduler, all 220+ programs, and documentation.
+
+### Bootloader (`boot.asm`, `stage2.asm`)
+
+- **3-phase boot sequence**: Real mode → temporary 32-bit protected mode (selector 0x38) → 64-bit long mode.
+- **PAE + EFER.LME**: Enables Physical Address Extension and sets Long Mode Enable in MSR 0xC0000080 before enabling paging.
+- **4-level paging**: PML4 at 0x70000, PDPT at 0x71000, PD0–PD3 at 0x72000–0x75000. Identity-maps first 4 GB using 2 MB pages (flags 0x87: present + write + page-size).
+- **GDT rewritten**: 8 entries — null, kernel code64 (L=1, D=0, access 0x9A, flags 0xAF), kernel data (0x92/0xCF), user code64 (L=1, D=0, 0xFA/0xAF), user data (0xF2/0xCF), TSS low+high (16-byte descriptor), temp32 (selector 0x38).
+- **Far jmp 0x08:lmode_entry**: Transitions from compatibility sub-mode to full 64-bit mode.
+
+### Kernel — Core Architecture
+
+- **BITS 64**: All kernel include files and the main kernel.asm now assemble in 64-bit mode.
+- **PUSHALL / POPALL macros**: Replace `pushad`/`popad` (invalid in long mode) with explicit 15-register push/pop sequences (120 bytes per frame).
+- **IDT**: 16-byte 64-bit interrupt gate descriptors. ISR stubs use `iretq`.
+- **TSS**: 16-byte GDT descriptor. RSP0 updated on every context switch for ring-3 → ring-0 transitions.
+- **Pointer-width audit**: All `DD` → `DQ` for pointer tables, `eax` → `rax` / `mov` → `movabs` where pointer-width matters. ~50+ files corrected across two audit passes.
+
+### Kernel — Scheduler (`kernel/sched.inc`)
+
+- **64-byte TCB**: All fields widened to qword — RSP, KSTACK, USTACK, ENTRY, STATE, PRIORITY, WAKEUP.
+- **Context switch frame**: PUSHALL (120 bytes) + IRETQ hardware frame (40 bytes) = 160 bytes per switch.
+- **RSP0 update**: TSS RSP0 set to top of kernel stack on every task switch.
+
+### Kernel — Process Execution
+
+- **ELF64 loader**: Parses 64-bit ELF headers for program loading.
+- **IRETQ trampoline**: User-space entry via `iretq` with USER_CS=0x1B, USER_DS=0x23 on the stack.
+- **fxsave / fxrstor**: FPU/SSE state save/restore across context switches.
+
+### Kernel — New Syscalls (68–83)
+
+16 new syscalls added (68 → 84 total, numbered 0–83):
+
+| Range | Syscalls |
+| --- | --- |
+| 68–69 | `SYS_CHMOD`, `SYS_CHOWN` |
+| 70–71 | `SYS_SYMLINK`, `SYS_READLINK` |
+| 72–73 | `SYS_SIGNAL`, `SYS_RAISE` |
+| 74–77 | `SYS_MQ_CREATE`, `SYS_MQ_SEND`, `SYS_MQ_RECV`, `SYS_MQ_CLOSE` |
+| 78 | `SYS_STRACE` |
+| 79 | `SYS_LISTENV` |
+| 80 | `SYS_RENAME` |
+| 81 | `SYS_SETENV` |
+| 82 | `SYS_RMDIR` |
+| 83 | `SYS_TRUNCATE` |
+
+### Kernel — IPC Message Queues (`kernel/ipc.inc`)
+
+- 4 message queues (MQ_MAX_QUEUES=4), 8 messages per queue (MQ_MAX_MSGS=8), 256 bytes per message (MQ_MSG_SIZE=256).
+- Syscalls: `SYS_MQ_CREATE` (74), `SYS_MQ_SEND` (75), `SYS_MQ_RECV` (76), `SYS_MQ_CLOSE` (77).
+
+### Kernel — Register Width Fixes
+
+- `imul` operand widths corrected across kernel arithmetic.
+- Syscall dispatch uses 64-bit register convention: RAX=syscall number, RBX=arg1.
+- All kernel pointer arithmetic uses 64-bit registers.
+
+### Programs
+
+- All 220+ programs now assemble under `BITS 64` (via `%include "syscalls.inc"`).
+- Programs use 32-bit register shorthand (eax, ebx, esi, edi) where values fit in 32 bits — this is valid x86-64 practice (zero-extends to 64 bits).
+
+### Build & Tests
+
+- 220 files on disk, 1040 blocks.
+- Kernel binary: ~663 KB.
+- 1,600 tests passing (build + HBFS integrity).
+- 84 syscalls (0–83).
+- QEMU: `qemu-system-x86_64` replaces `qemu-system-i386`.
+
+### Documentation
+
+- All 7 documentation files fully revised for 64-bit architecture.
+- Register names updated from E*X to R*X in all API tables and calling conventions.
+- Boot sequence, paging, GDT, IDT, scheduler, and syscall sections rewritten.
+- Code examples updated with `%include "syscalls.inc"` (provides `BITS 64` and `ORG`).
+
+---
+
 ## v3.0.1 - Bug Fixes: Sleep Regression, Neofetch, Pipe Race, Permissions UI
 
 ### Kernel — Scheduler (`kernel/sched.inc`)

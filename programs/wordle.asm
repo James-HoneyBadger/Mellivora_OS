@@ -92,7 +92,7 @@ start:
 
 ;---------------------------------------
 pick_secret:
-        pushad
+        PUSHALL
         mov eax, SYS_GETTIME
         int 0x80
         xor edx, edx
@@ -120,12 +120,12 @@ pick_secret:
         mov edi, fb_buf
         mov ecx, MAX_TRIES * WORD_LEN
         rep stosb
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 get_word:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F
         int 0x80
@@ -135,10 +135,10 @@ get_word:
 
         xor ecx, ecx           ; char count
 .gw_key:
-        push ecx
+        push rcx
         mov eax, SYS_GETCHAR
         int 0x80
-        pop ecx
+        pop rcx
 
         cmp al, 'q'
         je .gw_quit_check
@@ -175,12 +175,12 @@ get_word:
         add al, 32
         mov [input_buf + ecx], al
         ; Echo uppercase
-        push ecx
+        push rcx
         sub al, 32
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ecx
+        pop rcx
         inc ecx
         jmp .gw_key
 
@@ -188,7 +188,7 @@ get_word:
         cmp ecx, 0
         jle .gw_key
         dec ecx
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 8
         int 0x80
@@ -198,7 +198,7 @@ get_word:
         mov eax, SYS_PUTCHAR
         mov ebx, 8
         int 0x80
-        pop ecx
+        pop rcx
         jmp .gw_key
 
 .gw_enter:
@@ -208,19 +208,19 @@ get_word:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        popad
+        POPALL
         ret
 
 .gw_quit_check:
         cmp ecx, 0
         jne .gw_key             ; only quit if no chars typed
         mov byte [quit_flag], 1
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 evaluate_word:
-        pushad
+        PUSHALL
         mov dword [greens], 0
 
         ; Copy to history
@@ -228,10 +228,10 @@ evaluate_word:
         shl ecx, 3             ; * 8
         lea edi, [guesses + ecx]
         mov esi, input_buf
-        push ecx
+        push rcx
         mov ecx, WORD_LEN
         rep movsb
-        pop ecx
+        pop rcx
 
         ; Track used positions
         mov dword [s_used], 0
@@ -288,12 +288,12 @@ evaluate_word:
         jmp .ew_yellow
 
 .ew_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 draw_state:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -374,14 +374,14 @@ draw_state:
 .ds_brow:
         cmp ecx, MAX_TRIES
         jge .ds_end
-        push ecx
+        push rcx
         mov eax, SYS_SETCOLOR
         mov ebx, 0x08
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, msg_blank_row
         int 0x80
-        pop ecx
+        pop rcx
         inc ecx
         jmp .ds_brow
 
@@ -395,7 +395,7 @@ draw_state:
         mov eax, SYS_PRINT
         mov ebx, msg_legend
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================

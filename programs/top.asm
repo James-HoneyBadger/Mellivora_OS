@@ -55,7 +55,7 @@ start:
 ; draw_screen - Render the full monitor display
 ;---------------------------------------
 draw_screen:
-        pushad
+        PUSHALL
 
         ; Clear screen
         mov eax, SYS_CLEAR
@@ -110,7 +110,7 @@ draw_screen:
         xor edx, edx
         mov ecx, 3600
         div ecx
-        push edx
+        push rdx
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, 'h'
@@ -120,11 +120,11 @@ draw_screen:
         int 0x80
 
         ; Minutes
-        pop eax
+        pop rax
         xor edx, edx
         mov ecx, 60
         div ecx
-        push edx
+        push rdx
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, 'm'
@@ -134,7 +134,7 @@ draw_screen:
         int 0x80
 
         ; Seconds
-        pop eax
+        pop rax
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, 's'
@@ -242,15 +242,15 @@ draw_screen:
         mov ah, 0x08           ; Dark gray
 .mem_write:
         ; Write to VGA: offset = (row*80+col)*2 + VGA_BASE
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         imul ecx, 80
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         inc ebx
         jmp .mem_bar
 .mem_bar_done:
@@ -304,8 +304,8 @@ draw_screen:
         ja .dir_skip
 
         ; Set cursor to row 8 + file_count
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         mov ecx, [file_count]
@@ -315,10 +315,10 @@ draw_screen:
         int 0x80
 
         ; Set color based on type
-        pop ecx                 ; file size
-        pop eax                 ; file type
-        push ecx
-        push eax
+        pop rcx                 ; file size
+        pop rax                 ; file type
+        push rcx
+        push rax
 
         cmp eax, 2              ; Directory
         je .dir_type_dir
@@ -360,8 +360,8 @@ draw_screen:
         mov ebx, size_open
         int 0x80
 
-        pop eax                 ; file type
-        pop ecx                 ; file size
+        pop rax                 ; file type
+        pop rcx                 ; file size
         mov eax, ecx
         call print_dec
         mov eax, SYS_PRINT
@@ -370,8 +370,8 @@ draw_screen:
         jmp .dir_skip
 
 .dir_skip_pop:
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
 
 .dir_skip:
         inc esi
@@ -406,7 +406,7 @@ draw_screen:
         mov ebx, status_right
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ; === Data ===

@@ -40,13 +40,13 @@ start:
         mov eax, SYS_GETTIME
         int 0x80
         ; EAX = tick count
-        push eax
+        push rax
 
         mov eax, SYS_PRINT
         mov ebx, msg_uptime
         int 0x80
 
-        pop eax
+        pop rax
         xor edx, edx
         mov ebx, 100
         div ebx
@@ -63,16 +63,16 @@ start:
         int 0x80
 
         ; Check if CPUID is available by toggling ID flag in EFLAGS
-        pushfd
-        pop eax
+        pushfq
+        pop rax
         mov ecx, eax
         xor eax, 0x200000       ; Toggle ID bit
-        push eax
-        popfd
-        pushfd
-        pop eax
-        push ecx
-        popfd
+        push rax
+        popfq
+        pushfq
+        pop rax
+        push rcx
+        popfq
         xor eax, ecx
         jz .no_cpuid
 
@@ -100,7 +100,7 @@ start:
         int 0x80
 
 msg_header:     db " === Mellivora System Information === ", 0x0A, 0
-msg_arch:       db "  Architecture:  i486+ (32-bit Protected Mode)", 0x0A, 0
+msg_arch:       db "  Architecture:  x86-64 (64-bit Long Mode)", 0x0A, 0
 msg_mode:       db "  Memory Model:  Flat, 4 GB address space", 0x0A, 0
 msg_addr:       db "  Program Base:  0x00200000 (2 MB)", 0x0A, 0
 msg_init:       db "  Init System:   Ratel", 0x0A, 0

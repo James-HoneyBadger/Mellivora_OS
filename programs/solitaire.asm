@@ -117,7 +117,7 @@ start:
 ;=======================================================================
 
 game_init:
-        pushad
+        PUSHALL
 
         ; Seed RNG
         mov eax, SYS_GETTIME
@@ -246,7 +246,7 @@ game_init:
 .deal_done:
         mov [stock_count], ecx
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -254,7 +254,7 @@ game_init:
 ;=======================================================================
 
 render_game:
-        pushad
+        PUSHALL
 
         ; Fill background (green felt)
         mov eax, [win_id]
@@ -338,7 +338,7 @@ render_game:
         ; Draw each card in column
         movzx edi, byte [tab_faceup + esi]
         xor ecx, ecx          ; card index
-        push ebx               ; save column X
+        push rbx               ; save column X
 .draw_tab_card:
         movzx eax, byte [tab_count + esi]
         cmp ecx, eax
@@ -351,62 +351,62 @@ render_game:
         ; Face-up: larger overlap
         sub ebx, edi
         imul ebx, CARD_OVERLAP_UP
-        push edx
+        push rdx
         mov edx, edi
         imul edx, CARD_OVERLAP
         add ebx, edx
-        pop edx
+        pop rdx
         jmp .tab_y_calc
 .tab_hidden_overlap:
         imul ebx, CARD_OVERLAP
 .tab_y_calc:
         add ebx, TAB_Y
         ; EBX = Y position, stack top = X position
-        push ecx
-        push esi
-        push edi
-        mov eax, [esp + 12]    ; Get saved column X
-        push ebx               ; save Y
+        push rcx
+        push rsi
+        push rdi
+        mov eax, [rsp + 24]    ; Get saved column X
+        push rbx               ; save Y
         mov ebx, eax           ; X
-        pop ecx                ; Y = calculated Y... wait, need to swap
+        pop rcx                ; Y = calculated Y... wait, need to swap
 
         ; Fix: EBX should be X, ECX should be Y
         ; Actually: draw_card_face wants EBX=x, ECX=y
         ; We have: eax=X from stack, ebx=Y calculated
         ; So: swap them
-        push eax
+        push rax
         mov ecx, ebx           ; Y
-        pop ebx                ; X
+        pop rbx                ; X
 
-        pop edi
-        pop esi
-        pop eax                ; eax = card index (was ecx)
+        pop rdi
+        pop rsi
+        pop rax                ; eax = card index (was ecx)
 
         cmp eax, edi           ; Compare with faceup index
         jb .tab_card_down
         ; Face up
-        push eax
+        push rax
         imul edx, esi, 20
         add edx, eax
         movzx edx, byte [tab_data + edx]
         call draw_card_face
-        pop eax
+        pop rax
         jmp .tab_card_next
 .tab_card_down:
-        push eax
-        push edx
+        push rax
+        push rdx
         mov edx, 1
         call draw_card_back
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
 .tab_card_next:
         mov ecx, eax
         inc ecx
-        mov ebx, [esp]         ; Restore column X
+        mov ebx, [rsp]         ; Restore column X
         jmp .draw_tab_card
 
 .draw_tab_col_done:
-        pop ebx                ; Clean saved column X
+        pop rbx                ; Clean saved column X
         jmp .draw_tab_next
 
 .draw_tab_empty:
@@ -437,7 +437,7 @@ render_game:
         call gui_draw_text
 
 .render_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -445,7 +445,7 @@ render_game:
 ; EBX = x, ECX = y, EDX = card byte
 ;---------------------------------------
 draw_card_face:
-        pushad
+        PUSHALL
         mov [.cf_card], edx
         mov [.cf_x], ebx
         mov [.cf_y], ecx
@@ -506,7 +506,7 @@ draw_card_face:
         dec eax                ; 0-based index
         cmp eax, NUM_RANKS
         jae .cf_skip
-        mov esi, [rank_strs + eax*4]
+        mov rsi, [rank_strs + rax*8]
         mov eax, [win_id]
         mov ebx, [.cf_x]
         add ebx, 4
@@ -518,7 +518,7 @@ draw_card_face:
         ; Draw suit symbol (below rank)
         movzx eax, byte [.cf_card]
         shr eax, 4
-        mov esi, [suit_strs + eax*4]
+        mov rsi, [suit_strs + rax*8]
         mov eax, [win_id]
         mov ebx, [.cf_x]
         add ebx, 4
@@ -531,7 +531,7 @@ draw_card_face:
         movzx eax, byte [.cf_card]
         and eax, 0x0F
         dec eax
-        mov esi, [rank_strs + eax*4]
+        mov rsi, [rank_strs + rax*8]
         mov eax, [win_id]
         mov ebx, [.cf_x]
         add ebx, 18
@@ -541,7 +541,7 @@ draw_card_face:
         call gui_draw_text
 
 .cf_skip:
-        popad
+        POPALL
         ret
 
 .cf_card:  dd 0
@@ -554,7 +554,7 @@ draw_card_face:
 ; EBX = x, ECX = y
 ;---------------------------------------
 draw_card_back:
-        pushad
+        PUSHALL
         mov [.cb_x], ebx
         mov [.cb_y], ecx
 
@@ -608,7 +608,7 @@ draw_card_back:
         mov edi, 0x000066CC    ; Lighter blue inner
         call gui_fill_rect
 
-        popad
+        POPALL
         ret
 
 .cb_x: dd 0
@@ -619,14 +619,14 @@ draw_card_back:
 ; EBX = x, ECX = y
 ;---------------------------------------
 draw_empty_slot:
-        pushad
+        PUSHALL
         ; Rounded-ish slot outline
         mov eax, [win_id]
         mov edx, CARD_W
         mov esi, CARD_H
         mov edi, COL_EMPTY_SLOT
         call gui_fill_rect
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -634,7 +634,7 @@ draw_empty_slot:
 ;=======================================================================
 
 handle_click:
-        pushad
+        PUSHALL
         mov [.hc_x], ebx
         mov [.hc_y], ecx
 
@@ -738,11 +738,11 @@ handle_click:
         jb .hc_tab_flip        ; Clicked face-down card at top of face-down stack
 
         ; Try to auto-move this card
-        push esi
-        push eax
+        push rsi
+        push rax
         call try_auto_move
-        pop eax
-        pop esi
+        pop rax
+        pop rsi
         jmp .hc_done
 
 .hc_tab_flip:
@@ -766,7 +766,7 @@ handle_click:
 .hc_done:
         ; Check win condition
         call check_win
-        popad
+        POPALL
         ret
 
 .hc_x: dd 0
@@ -778,8 +778,8 @@ handle_click:
 ; Returns: EAX = card index or -1
 ;---------------------------------------
 tab_find_card_at_y:
-        push ecx
-        push edx
+        push rcx
+        push rdx
 
         ; Calculate Y position of each card and find which was clicked
         mov ecx, ebx
@@ -789,23 +789,23 @@ tab_find_card_at_y:
         je .tfcy_none
 
         ; Calculate this card's Y offset
-        push eax
+        push rax
         cmp ecx, edi
         jb .tfcy_hidden
         mov edx, ecx
         sub edx, edi
         imul edx, CARD_OVERLAP_UP
-        push ecx
+        push rcx
         mov ecx, edi
         imul ecx, CARD_OVERLAP
         add edx, ecx
-        pop ecx
+        pop rcx
         jmp .tfcy_check
 .tfcy_hidden:
         imul edx, ecx, CARD_OVERLAP
 .tfcy_check:
         ; EDX = Y offset of this card
-        pop eax
+        pop rax
         cmp eax, edx
         jge .tfcy_found
 
@@ -814,14 +814,14 @@ tab_find_card_at_y:
 
 .tfcy_found:
         mov eax, ecx
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 
 .tfcy_none:
         mov eax, -1
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 
 ;=======================================================================
@@ -832,7 +832,7 @@ tab_find_card_at_y:
 ; stock_click - Draw from stock to waste
 ;---------------------------------------
 stock_click:
-        pushad
+        PUSHALL
         cmp dword [stock_count], 0
         je .stock_recycle
 
@@ -846,7 +846,7 @@ stock_click:
         mov [waste_data + ecx], bl
         inc dword [waste_count]
         inc dword [moves]
-        popad
+        POPALL
         ret
 
 .stock_recycle:
@@ -871,14 +871,14 @@ stock_click:
         mov dword [waste_count], 0
         inc dword [moves]
 .stock_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; waste_click - Try to move waste card
 ;---------------------------------------
 waste_click:
-        pushad
+        PUSHALL
         mov eax, [waste_count]
         cmp eax, 0
         je .wc_done
@@ -901,7 +901,7 @@ waste_click:
         dec dword [waste_count]
         inc dword [moves]
 .wc_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -909,7 +909,7 @@ waste_click:
 ; ESI = column, EAX = card index (on stack)
 ;---------------------------------------
 try_auto_move:
-        pushad
+        PUSHALL
         mov edi, esi           ; Save column
         mov ecx, eax           ; Save card index
 
@@ -925,13 +925,13 @@ try_auto_move:
         jne .tam_try_tab       ; Not top card, only try tableau
 
         ; Try foundation
-        push edx
-        push ecx
-        push edi
+        push rdx
+        push rcx
+        push rdi
         call try_move_to_foundation
-        pop edi
-        pop ecx
-        pop edx
+        pop rdi
+        pop rcx
+        pop rdx
         cmp eax, 1
         je .tam_from_tab
 
@@ -940,11 +940,11 @@ try_auto_move:
         imul eax, edi, 20
         add eax, ecx
         movzx edx, byte [tab_data + eax]
-        push ecx
-        push edi
+        push rcx
+        push rdi
         call try_move_stack_to_tableau
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         cmp eax, 1
         je .tam_stack_moved
         jmp .tam_done
@@ -974,7 +974,7 @@ try_auto_move:
         inc dword [moves]
 
 .tam_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -983,9 +983,9 @@ try_auto_move:
 ; Returns: EAX = 1 if moved, 0 if not
 ;---------------------------------------
 try_move_to_foundation:
-        push ebx
-        push ecx
-        push esi
+        push rbx
+        push rcx
+        push rsi
 
         movzx eax, dl
         shr eax, 4            ; Suit = foundation index
@@ -1018,16 +1018,16 @@ try_move_to_foundation:
         mov [found_data + eax], dl
         inc byte [found_count + esi]
         mov eax, 1
-        pop esi
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 .tmf_fail:
         xor eax, eax
-        pop esi
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -1036,10 +1036,10 @@ try_move_to_foundation:
 ; Returns: EAX = 1 if moved, 0 if not
 ;---------------------------------------
 try_move_to_tableau:
-        push ebx
-        push ecx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rsi
+        push rdi
 
         movzx ebx, dl
         and ebx, 0x0F         ; Rank
@@ -1065,21 +1065,21 @@ try_move_to_tableau:
 
         ; Get top card of this column
         dec eax
-        push ebx
+        push rbx
         imul ebx, esi, 20
         add ebx, eax
         movzx eax, byte [tab_data + ebx]
-        pop ebx
+        pop rbx
 
         ; Check: opposite color and one rank lower
         movzx ecx, al
         shr ecx, 4            ; Top card suit
         xor ecx, ecx
-        push eax
+        push rax
         movzx eax, byte [tab_data]  ; Dummy — re-derive
-        pop eax
+        pop rax
         ; Re-derive top card color
-        push edx
+        push rdx
         movzx edx, al
         shr edx, 4
         xor ecx, ecx          ; 0 = red
@@ -1087,7 +1087,7 @@ try_move_to_tableau:
         jb .tmt_top_red
         mov ecx, 1
 .tmt_top_red:
-        pop edx
+        pop rdx
 
         ; Colors must differ
         cmp ecx, edi
@@ -1102,17 +1102,17 @@ try_move_to_tableau:
 
         ; Place the card
         movzx eax, byte [tab_count + esi]
-        push ebx
+        push rbx
         imul ebx, esi, 20
         add ebx, eax
         mov [tab_data + ebx], dl
-        pop ebx
+        pop rbx
         inc byte [tab_count + esi]
         mov eax, 1
-        pop edi
-        pop esi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 .tmt_empty:
@@ -1121,17 +1121,17 @@ try_move_to_tableau:
         jne .tmt_next
         mov [tab_data + esi*1], dl  ; Wrong — need tab_data[esi*20]
         ; Fix: calculate correct offset
-        push ebx
+        push rbx
         imul ebx, esi, 20
         mov [tab_data + ebx], dl
-        pop ebx
+        pop rbx
         mov byte [tab_count + esi], 1
         mov byte [tab_faceup + esi], 0
         mov eax, 1
-        pop edi
-        pop esi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 .tmt_next:
@@ -1140,10 +1140,10 @@ try_move_to_tableau:
 
 .tmt_fail:
         xor eax, eax
-        pop edi
-        pop esi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -1152,7 +1152,7 @@ try_move_to_tableau:
 ; Returns: EAX = 1 if moved, 0 if not
 ;---------------------------------------
 try_move_stack_to_tableau:
-        pushad
+        PUSHALL
 
         ; Get the card at the start of the stack
         imul eax, edi, 20
@@ -1187,13 +1187,13 @@ try_move_stack_to_tableau:
 
         ; Get top card
         dec eax
-        push ebx
+        push rbx
         imul ebx, esi, 20
         movzx eax, byte [tab_data + ebx + eax]
-        pop ebx
+        pop rbx
 
         ; Check opposite color
-        push edx
+        push rdx
         movzx edx, al
         shr edx, 4
         xor ecx, ecx
@@ -1201,7 +1201,7 @@ try_move_stack_to_tableau:
         jb .tms_top_red
         mov ecx, 1
 .tms_top_red:
-        pop edx
+        pop rdx
         cmp ecx, edi
         je .tms_next
 
@@ -1234,11 +1234,11 @@ try_move_stack_to_tableau:
 
         ; Place in destination
         movzx eax, byte [tab_count + esi]
-        push ebx
+        push rbx
         imul ebx, esi, 20
         add ebx, eax
         mov [tab_data + ebx], dl
-        pop ebx
+        pop rbx
         inc byte [tab_count + esi]
 
         inc ecx
@@ -1270,7 +1270,7 @@ try_move_stack_to_tableau:
         mov byte [tab_faceup + edi], 0
 
 .tms_moved:
-        popad
+        POPALL
         mov eax, 1
         ret
 
@@ -1279,7 +1279,7 @@ try_move_stack_to_tableau:
         jmp .tms_loop
 
 .tms_fail:
-        popad
+        POPALL
         xor eax, eax
         ret
 
@@ -1291,7 +1291,7 @@ try_move_stack_to_tableau:
 ; check_win - Check if all foundations are full
 ;---------------------------------------
 check_win:
-        pushad
+        PUSHALL
         xor esi, esi
         xor eax, eax
 .cw_loop:
@@ -1306,7 +1306,7 @@ check_win:
         jne .cw_no
         mov byte [game_won], 1
 .cw_no:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1314,13 +1314,13 @@ check_win:
 ;=======================================================================
 
 rng_next:
-        push edx
+        push rdx
         mov eax, [rng_state]
         imul eax, 1103515245
         add eax, 12345
         mov [rng_state], eax
         shr eax, 16            ; Use upper bits
-        pop edx
+        pop rdx
         ret
 
 ;=======================================================================
@@ -1347,8 +1347,8 @@ rank_q: db "Q", 0
 rank_k: db "K", 0
 
 rank_strs:
-        dd rank_a, rank_2, rank_3, rank_4, rank_5, rank_6, rank_7
-        dd rank_8, rank_9, rank_10, rank_j, rank_q, rank_k
+        dq rank_a, rank_2, rank_3, rank_4, rank_5, rank_6, rank_7
+        dq rank_8, rank_9, rank_10, rank_j, rank_q, rank_k
 
 ; Suit strings (using single chars for simplicity)
 suit_h: db "H", 0              ; Hearts
@@ -1357,7 +1357,7 @@ suit_c: db "C", 0              ; Clubs
 suit_s: db "S", 0              ; Spades
 
 suit_strs:
-        dd suit_h, suit_d, suit_c, suit_s
+        dq suit_h, suit_d, suit_c, suit_s
 
 ;=======================================================================
 ; BSS

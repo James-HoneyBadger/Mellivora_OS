@@ -88,8 +88,8 @@ piece_J:
 
 ; Table of piece data pointers
 piece_table:
-        dd piece_I, piece_O, piece_T, piece_S
-        dd piece_Z, piece_L, piece_J
+        dq piece_I, piece_O, piece_T, piece_S
+        dq piece_Z, piece_L, piece_J
 
 ; Points per lines cleared
 score_table:
@@ -191,18 +191,18 @@ game_loop:
 
 .rotate:
         mov eax, [piece_rot]
-        push eax                ; save old rotation
+        push rax                ; save old rotation
         inc eax
         and eax, 3
         mov [piece_rot], eax
         call check_collision
         test eax, eax
         jz .rot_ok
-        pop eax
+        pop rax
         mov [piece_rot], eax    ; restore old rotation
         jmp .input_done
 .rot_ok:
-        add esp, 4              ; discard saved rotation
+        add rsp, 4              ; discard saved rotation
         jmp .input_done
 
 .soft_drop:
@@ -280,7 +280,7 @@ game_loop:
 
 ;=== Spawn a new piece at top ===
 spawn_piece:
-        pushad
+        PUSHALL
         movzx eax, byte [current_piece]
         mov [piece_type], eax
         mov dword [piece_x], 3
@@ -314,19 +314,19 @@ spawn_piece:
         jz .spawn_ok
         mov byte [game_over], 1
 .spawn_ok:
-        popad
+        POPALL
         ret
 
 ;=== Check collision: returns 0 if no collision, 1 if collision ===
 check_collision:
-        push ebx
-        push ecx
-        push edx
-        push esi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
 
         ; Get piece data pointer
         mov eax, [piece_type]
-        mov esi, [piece_table + eax * 4]
+        mov rsi, [piece_table + rax * 8]
         mov eax, [piece_rot]
         shl eax, 3              ; 8 bytes per rotation
         add esi, eax
@@ -368,18 +368,18 @@ check_collision:
 .cc_fail:
         mov eax, 1              ; collision
 .cc_done:
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;=== Lock current piece onto board ===
 lock_piece:
-        pushad
+        PUSHALL
         ; Get piece data pointer
         mov eax, [piece_type]
-        mov esi, [piece_table + eax * 4]
+        mov rsi, [piece_table + rax * 8]
         mov eax, [piece_rot]
         shl eax, 3
         add esi, eax
@@ -412,8 +412,8 @@ lock_piece:
         ; Actually store the piece color
         mov byte [board + edx], 0xFF ; mark as occupied
         ; Better: store actual color index
-        push edi
-        pop eax
+        push rdi
+        pop rax
         mov [board + edx], al
 
 .lp_next:
@@ -424,12 +424,12 @@ lock_piece:
 .lp_check_lines:
         call check_clear_lines
         call spawn_piece
-        popad
+        POPALL
         ret
 
 ;=== Check and clear completed lines ===
 check_clear_lines:
-        pushad
+        PUSHALL
         xor edi, edi            ; lines cleared this turn
 
         ; Check each row from bottom to top
@@ -460,9 +460,9 @@ check_clear_lines:
 
         ; Row is full - clear it by shifting everything down
         inc edi                 ; count cleared lines
-        push ebx
+        push rbx
         call clear_row
-        pop ebx
+        pop rbx
         ; Don't decrement ebx - re-check same row (rows shifted down)
         jmp .cl_row
 
@@ -494,12 +494,12 @@ check_clear_lines:
         mov [level], eax
 
 .cl_done:
-        popad
+        POPALL
         ret
 
 ;=== Clear row EBX by shifting rows above down ===
 clear_row:
-        pushad
+        PUSHALL
         mov ecx, ebx           ; row to clear
 .cr_shift:
         cmp ecx, 0
@@ -508,7 +508,7 @@ clear_row:
         ; Copy row ecx-1 to row ecx
         mov edx, ecx
         dec edx                 ; source row
-        push ecx
+        push rcx
         xor ebx, ebx
 .cr_copy:
         cmp ebx, BOARD_W
@@ -522,7 +522,7 @@ clear_row:
         inc ebx
         jmp .cr_copy
 .cr_next:
-        pop ecx
+        pop rcx
         dec ecx
         jmp .cr_shift
 
@@ -536,12 +536,12 @@ clear_row:
         inc ebx
         jmp .cr_clear
 .cr_done:
-        popad
+        POPALL
         ret
 
 ;=== Draw the board border ===
 draw_border:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x08           ; dark gray
         int 0x80
@@ -556,11 +556,11 @@ draw_border:
         int 0x80
         mov ecx, BOARD_W * 2
 .top_line:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0xCD           ; horizontal line
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .top_line
         mov eax, SYS_PUTCHAR
@@ -605,23 +605,23 @@ draw_border:
         int 0x80
         mov ecx, BOARD_W * 2
 .bot_line:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0xCD
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .bot_line
         mov eax, SYS_PUTCHAR
         mov ebx, 0xBC           ; bottom-right corner
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=== Draw the board contents (direct VGA for speed) ===
 draw_board:
-        pushad
+        PUSHALL
         xor edx, edx           ; row
 .db_row:
         cmp edx, BOARD_H
@@ -638,8 +638,8 @@ draw_board:
         movzx eax, byte [board + eax]
 
         ; Calculate VGA offset: ((DRAW_Y + row) * 80 + DRAW_X + col*2) * 2
-        push ecx
-        push edx
+        push rcx
+        push rdx
         add edx, DRAW_Y
         imul edx, VGA_WIDTH
         lea ebx, [ecx * 2 + DRAW_X]
@@ -662,8 +662,8 @@ draw_board:
         mov word [edx], 0x0020           ; space, black on black
         mov word [edx + 2], 0x0020
 .db_next_col:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         inc ecx
         jmp .db_col
 
@@ -672,14 +672,14 @@ draw_board:
         jmp .db_row
 
 .db_done:
-        popad
+        POPALL
         ret
 
 ;=== Draw current falling piece (direct VGA) ===
 draw_current_piece:
-        pushad
+        PUSHALL
         mov eax, [piece_type]
-        mov esi, [piece_table + eax * 4]
+        mov rsi, [piece_table + rax * 8]
         mov eax, [piece_rot]
         shl eax, 3
         add esi, eax
@@ -706,8 +706,8 @@ draw_current_piece:
         jge .dp_next
 
         ; Calculate VGA offset
-        push ecx
-        push edx
+        push rcx
+        push rdx
         add edx, DRAW_Y
         imul edx, VGA_WIDTH
         lea ebx, [eax * 2 + DRAW_X]
@@ -719,8 +719,8 @@ draw_current_piece:
         mov al, 0xDB
         mov [edx], ax
         mov [edx + 2], ax
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
 .dp_next:
         add esi, 2
@@ -728,12 +728,12 @@ draw_current_piece:
         jmp .dp_loop
 
 .dp_done:
-        popad
+        POPALL
         ret
 
 ;=== Draw next piece preview (direct VGA) ===
 draw_next_piece:
-        pushad
+        PUSHALL
 
         ; Clear 4x8 preview area (4 rows, 8 cols) with black
         xor edx, edx
@@ -759,7 +759,7 @@ draw_next_piece:
 
 .np_draw:
         movzx eax, byte [next_piece]
-        mov esi, [piece_table + eax * 4]
+        mov rsi, [piece_table + rax * 8]
 
         ; Get piece color
         movzx eax, byte [next_piece]
@@ -775,7 +775,7 @@ draw_next_piece:
         movzx edx, byte [esi+1]   ; rel y
 
         ; Calculate VGA offset
-        push ecx
+        push rcx
         add edx, NEXT_Y
         imul edx, VGA_WIDTH
         lea ebx, [eax * 2 + NEXT_X]
@@ -787,19 +787,19 @@ draw_next_piece:
         mov al, 0xDB
         mov [edx], ax
         mov [edx + 2], ax
-        pop ecx
+        pop rcx
 
         add esi, 2
         inc ecx
         jmp .np_loop
 
 .np_done:
-        popad
+        POPALL
         ret
 
 ;=== Draw sidebar (score, level, lines, controls) ===
 draw_sidebar:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F
         int 0x80
@@ -855,12 +855,12 @@ draw_sidebar:
         mov ebx, msg_controls4
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=== Draw score display ===
 draw_score:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F
         int 0x80
@@ -908,7 +908,7 @@ draw_score:
         mov ebx, msg_pad
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=== Game over screen ===
@@ -983,9 +983,9 @@ game_over_screen:
 
 ;=== Random piece generator (0-6) ===
 random_piece:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         ; Simple LCG random
         mov eax, [rand_seed]
         imul eax, 1103515245
@@ -997,9 +997,9 @@ random_piece:
         mov ebx, NUM_PIECES
         div ebx
         mov eax, edx            ; remainder = 0..6
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;=== Data ===
@@ -1108,8 +1108,8 @@ piece_J:
         db 1,0, 1,1, 1,2, 0,2
 
 piece_table:
-        dd piece_I, piece_O, piece_T, piece_S
-        dd piece_Z, piece_L, piece_J
+        dq piece_I, piece_O, piece_T, piece_S
+        dq piece_Z, piece_L, piece_J
 
 score_table:
         dd 0, 100, 300, 500, 800
@@ -1137,7 +1137,7 @@ main_loop:
 ; Init
 ; ---------------------------------------------------------------------------
 init_game:
-        pushad
+        PUSHALL
 
         ; seed random
         mov eax, SYS_GETTIME
@@ -1173,7 +1173,7 @@ init_game:
         int 0x80
         mov [last_drop_tick], eax
 
-        popad
+        POPALL
         ret
 
 ; ---------------------------------------------------------------------------
@@ -1322,7 +1322,7 @@ handle_input:
 ; Drop timer
 ; ---------------------------------------------------------------------------
 auto_drop:
-        push ebx
+        push rbx
         mov eax, SYS_GETTIME
         int 0x80
         mov ebx, [last_drop_tick]
@@ -1347,7 +1347,7 @@ auto_drop:
         call lock_piece
 
 .ad_done:
-        pop ebx
+        pop rbx
         ret
 
 ; ---------------------------------------------------------------------------
@@ -1358,26 +1358,26 @@ auto_drop:
 ; in: EAX=new_x, EBX=new_y
 ; out: EAX=1 if valid else 0
 try_place_current:
-        push edx
-        push esi
+        push rdx
+        push rsi
         mov edx, eax            ; x
         mov esi, ebx            ; y
         mov eax, [cur_type]
         mov ebx, [cur_rot]
         call can_place
-        pop esi
-        pop edx
+        pop rsi
+        pop rdx
         ret
 
 ; can_place
 ; in: EAX=piece type (0..6), EBX=rot (0..3), EDX=x, ESI=y
 ; out: EAX=1 placeable, 0 collision
 can_place:
-        push ebp
-        push edi
-        push ecx
+        push rbp
+        push rdi
+        push rcx
 
-        mov edi, [piece_table + eax * 4]
+        mov rdi, [piece_table + rax * 8]
         and ebx, 3
         shl ebx, 3              ; 8 bytes per rotation
         add edi, ebx
@@ -1418,13 +1418,13 @@ can_place:
         xor eax, eax
 
 .cp_done:
-        pop ecx
-        pop edi
-        pop ebp
+        pop rcx
+        pop rdi
+        pop rbp
         ret
 
 spawn_piece:
-        pushad
+        PUSHALL
         mov eax, [next_type]
         mov [cur_type], eax
         mov dword [cur_rot], 0
@@ -1444,15 +1444,15 @@ spawn_piece:
         jnz .sp_ok
         mov byte [game_over], 1
 .sp_ok:
-        popad
+        POPALL
         ret
 
 lock_piece:
-        pushad
+        PUSHALL
 
         ; place 4 blocks into board
         mov eax, [cur_type]
-        mov edi, [piece_table + eax * 4]
+        mov rdi, [piece_table + rax * 8]
         mov eax, [cur_rot]
         and eax, 3
         shl eax, 3
@@ -1491,11 +1491,11 @@ lock_piece:
         int 0x80
         mov [last_drop_tick], eax
 
-        popad
+        POPALL
         ret
 
 clear_lines:
-        pushad
+        PUSHALL
         xor edi, edi            ; cleared count this lock
 
         mov ebx, BOARD_H - 1    ; y
@@ -1525,9 +1525,9 @@ clear_lines:
 
         ; full -> shift everything above down
         inc edi
-        push ebx
+        push rbx
         call shift_down_from_row
-        pop ebx
+        pop rbx
         jmp .cl_row             ; re-check same row index
 
 .cl_prev:
@@ -1555,13 +1555,13 @@ clear_lines:
         mov [level], eax
 
 .cl_done:
-        popad
+        POPALL
         ret
 
 ; shift_down_from_row
 ; in: EBX = destination row to fill from rows above
 shift_down_from_row:
-        pushad
+        PUSHALL
         mov ecx, ebx            ; current row
 .sd_rows:
         cmp ecx, 0
@@ -1599,12 +1599,12 @@ shift_down_from_row:
         jmp .sd_clear_loop
 
 .sd_done:
-        popad
+        POPALL
         ret
 
 update_speed:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, DROP_BASE
         mov ebx, [level]
         cmp ebx, 10
@@ -1618,13 +1618,13 @@ update_speed:
         mov eax, 5
 .us_store:
         mov [drop_delay], eax
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 random_piece:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov eax, [rand_seed]
         imul eax, 1103515245
         add eax, 12345
@@ -1635,15 +1635,15 @@ random_piece:
         mov ebx, 7
         div ebx
         mov eax, edx            ; 0..6
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ; ---------------------------------------------------------------------------
 ; Rendering
 ; ---------------------------------------------------------------------------
 render_frame:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -1656,11 +1656,11 @@ render_frame:
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
-        popad
+        POPALL
         ret
 
 draw_border:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x08
         int 0x80
@@ -1678,11 +1678,11 @@ draw_border:
 .db_top_loop:
         cmp ecx, 0
         je .db_top_end
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, '-'
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .db_top_loop
 .db_top_end:
@@ -1728,11 +1728,11 @@ draw_border:
 .db_bot_loop:
         cmp ecx, 0
         je .db_bot_end
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, '-'
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .db_bot_loop
 .db_bot_end:
@@ -1740,11 +1740,11 @@ draw_border:
         mov ebx, '+'
         int 0x80
 
-        popad
+        POPALL
         ret
 
 draw_board:
-        pushad
+        PUSHALL
         xor edx, edx            ; y
 .dbr_row:
         cmp edx, BOARD_H
@@ -1759,8 +1759,8 @@ draw_board:
         movzx eax, byte [board + eax]
 
         ; Calculate VGA offset: ((DRAW_Y+y)*80 + DRAW_X + x*2) * 2 + VGA_BASE
-        push edx
-        push ecx
+        push rdx
+        push rcx
         add edx, DRAW_Y
         imul edx, VGA_WIDTH
         lea ebx, [ecx * 2 + DRAW_X]
@@ -1785,8 +1785,8 @@ draw_board:
         mov [edx + 2], ax
 
 .dbr_next_col:
-        pop ecx
-        pop edx
+        pop rcx
+        pop rdx
         inc ecx
         jmp .dbr_col
 
@@ -1795,13 +1795,13 @@ draw_board:
         jmp .dbr_row
 
 .dbr_done:
-        popad
+        POPALL
         ret
 
 draw_current_piece:
-        pushad
+        PUSHALL
         mov eax, [cur_type]
-        mov edi, [piece_table + eax * 4]
+        mov rdi, [piece_table + rax * 8]
         mov eax, [cur_rot]
         and eax, 3
         shl eax, 3
@@ -1826,8 +1826,8 @@ draw_current_piece:
         jge .dcp_next
 
         ; Calculate VGA offset
-        push ecx
-        push edx
+        push rcx
+        push rdx
         add edx, DRAW_Y
         imul edx, VGA_WIDTH
         lea ebx, [eax * 2 + DRAW_X]
@@ -1840,8 +1840,8 @@ draw_current_piece:
         or eax, 0xDB
         mov [edx], ax
         mov [edx + 2], ax
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
 .dcp_next:
         add edi, 2
@@ -1849,11 +1849,11 @@ draw_current_piece:
         jmp .dcp_loop
 
 .dcp_done:
-        popad
+        POPALL
         ret
 
 draw_next_piece:
-        pushad
+        PUSHALL
 
         ; Clear preview box 4 rows x 8 cols via direct VGA
         xor edx, edx
@@ -1878,7 +1878,7 @@ draw_next_piece:
 
 .dnp_draw:
         mov eax, [next_type]
-        mov edi, [piece_table + eax * 4] ; rot 0
+        mov rdi, [piece_table + rax * 8] ; rot 0
         mov eax, [next_type]
         movzx ebp, byte [piece_colors + eax]
 
@@ -1886,7 +1886,7 @@ draw_next_piece:
 .dnp_loop:
         cmp ecx, 4
         jge .dnp_done
-        push ecx
+        push rcx
         movzx eax, byte [edi]
         movzx edx, byte [edi + 1]
 
@@ -1904,17 +1904,17 @@ draw_next_piece:
         mov [edx], ax
         mov [edx + 2], ax
 
-        pop ecx
+        pop rcx
         add edi, 2
         inc ecx
         jmp .dnp_loop
 
 .dnp_done:
-        popad
+        POPALL
         ret
 
 draw_ui:
-        pushad
+        PUSHALL
 
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F
@@ -2007,7 +2007,7 @@ draw_ui:
         mov ebx, ui_ctrl4
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ; ---------------------------------------------------------------------------

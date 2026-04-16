@@ -92,7 +92,7 @@ SB_FMT_SIGNED   equ (1 << 18)
 ; Sets sb16_present=1 if found, else 0.
 ;---------------------------------------
 sb16_init:
-        pushad
+        PUSHALL
         mov byte [sb16_present], 0
         mov byte [sb16_state], SB_STATE_IDLE
 
@@ -173,13 +173,13 @@ sb16_init:
         mov esi, sb16_msg_found
         call vga_print
 
-        popad
+        POPALL
         ret
 
 .sb16_not_found:
         mov esi, sb16_msg_none
         call vga_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -187,15 +187,15 @@ sb16_init:
 ; is ready to accept a command byte.
 ;---------------------------------------
 sb16_dsp_write_wait:
-        push eax
-        push edx
+        push rax
+        push rdx
         mov edx, SB_WRITE_STATUS
 .dsp_ww:
         in al, dx
         test al, 0x80
         jnz .dsp_ww
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
         ret
 
 ;---------------------------------------
@@ -203,15 +203,15 @@ sb16_dsp_write_wait:
 ; has data ready to read.
 ;---------------------------------------
 sb16_dsp_read_wait:
-        push eax
-        push edx
+        push rax
+        push rdx
         mov edx, SB_READ_STATUS
 .dsp_rw:
         in al, dx
         test al, 0x80
         jz .dsp_rw
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
         ret
 
 ;---------------------------------------
@@ -219,13 +219,13 @@ sb16_dsp_read_wait:
 ;   AL = byte to write
 ;---------------------------------------
 sb16_dsp_write:
-        push edx
-        push eax
+        push rdx
+        push rax
         call sb16_dsp_write_wait
-        pop eax
+        pop rax
         mov edx, SB_WRITE
         out dx, al
-        pop edx
+        pop rdx
         ret
 
 ;---------------------------------------
@@ -241,7 +241,7 @@ sb16_dsp_write:
 ; a 64 KB boundary.
 ;---------------------------------------
 sb16_play:
-        pushad
+        PUSHALL
 
         cmp byte [sb16_present], 0
         je .play_done
@@ -399,14 +399,14 @@ sb16_play:
         call sb16_dsp_write     ; High byte
 
 .play_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; sb16_stop - Stop current playback
 ;---------------------------------------
 sb16_stop:
-        pushad
+        PUSHALL
         cmp byte [sb16_present], 0
         je .stop_done
         cmp byte [sb16_state], SB_STATE_PLAYING
@@ -425,7 +425,7 @@ sb16_stop:
 .stop_state:
         mov byte [sb16_state], SB_STATE_IDLE
 .stop_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -434,7 +434,7 @@ sb16_stop:
 ; marks playback as done.
 ;---------------------------------------
 irq_sb16:
-        pushad
+        PUSHALL
 
         ; Acknowledge SB16 interrupt by reading DSP status
         ; Check 16-bit first
@@ -455,8 +455,8 @@ irq_sb16:
         mov al, 0x20
         out PIC1_CMD, al
 
-        popad
-        iretd
+        POPALL
+        iretq
 
 ;---------------------------------------
 ; sys_audio_play - SYS_AUDIO_PLAY handler
@@ -470,10 +470,10 @@ sys_audio_play:
         je .sap_fail
         call sb16_play
         xor eax, eax
-        iretd
+        iretq
 .sap_fail:
         mov eax, -1
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_audio_stop - SYS_AUDIO_STOP handler
@@ -482,7 +482,7 @@ sys_audio_play:
 sys_audio_stop:
         call sb16_stop
         xor eax, eax
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_audio_status - SYS_AUDIO_STATUS
@@ -493,7 +493,7 @@ sys_audio_stop:
 sys_audio_status:
         movzx eax, byte [sb16_state]
         movzx ebx, byte [sb16_present]
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sb16_parse_wav - Parse WAV header
@@ -506,7 +506,7 @@ sys_audio_status:
 ;   CF set on error
 ;---------------------------------------
 sb16_parse_wav:
-        pushad
+        PUSHALL
 
         ; Check minimum size for WAV header (44 bytes)
         cmp ecx, 44
@@ -575,18 +575,18 @@ sb16_parse_wav:
         or edx, SB_FMT_STEREO
 .wav_not_stereo:
 
-        ; Return values via pushad frame
-        ; EAX slot at [esp+28], EBX at [esp+16], EDX at [esp+20]
-        mov [esp + 28], edi     ; EAX = PCM data pointer
-        mov [esp + 16], ecx     ; EBX = PCM data length
-        mov [esp + 20], edx     ; EDX = format word
+        ; Return values via PUSHALL frame
+        ; EAX slot at [rsp+28], EBX at [rsp+16], EDX at [rsp+20]
+        mov [rsp + FRAME_RAX], rdi     ; RAX = PCM data pointer
+        mov [rsp + FRAME_RBX], rcx     ; RBX = PCM data length
+        mov [rsp + FRAME_RDX], rdx     ; RDX = format word
 
-        popad
+        POPALL
         clc                     ; Success
         ret
 
 .wav_error:
-        popad
+        POPALL
         stc                     ; Error
         ret
 

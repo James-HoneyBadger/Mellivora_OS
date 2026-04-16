@@ -27,7 +27,7 @@ SCR_NUM_PIPES    equ 6          ; Number of concurrent pipes
 ; when timeout reached.
 ;---------------------------------------
 scr_idle_tick:
-        pushad
+        PUSHALL
 
         ; Check if any input happened this frame
         movzx eax, byte [mouse_btn_latch]
@@ -67,7 +67,7 @@ scr_idle_tick:
         mov [.scr_last_my], eax
 
 .scr_idle_done:
-        popad
+        POPALL
         ret
 
 .scr_last_mx:  dd 0
@@ -78,7 +78,7 @@ scr_idle_tick:
 ; Loops until any key/mouse press.
 ;---------------------------------------
 scr_run:
-        pushad
+        PUSHALL
 
         ; Initialize based on current mode
         movzx eax, byte [scr_mode]
@@ -110,12 +110,12 @@ scr_run:
         movzx eax, byte [scr_mode]
         cmp eax, 2
         je .scr_no_clear        ; Pipes accumulates draws
-        push eax
+        push rax
         mov edi, GUI_BACKBUF
         mov ecx, (GUI_SCREEN_W * GUI_SCREEN_H)
         xor eax, eax
         rep stosd
-        pop eax
+        pop rax
 .scr_no_clear:
 
         ; Draw active screensaver frame
@@ -159,12 +159,12 @@ scr_run:
         jnz .scr_dismiss
 
         ; Small delay (~16ms = 60fps-ish)
-        push dword [tick_count]
+        push qword [tick_count]
 .scr_wait_tick:
         mov eax, [tick_count]
-        cmp eax, [esp]
+        cmp eax, [rsp]
         je .scr_wait_tick
-        pop eax
+        pop rax
 
         jmp .scr_loop
 
@@ -172,7 +172,7 @@ scr_run:
         ; Drain any remaining keypress
         call kb_pollchar
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -180,7 +180,7 @@ scr_run:
 ;=======================================================================
 
 scr_starfield_init:
-        pushad
+        PUSHALL
         ; Initialize star positions with pseudo-random values
         mov edi, scr_star_x
         mov ecx, SCR_NUM_STARS
@@ -235,11 +235,11 @@ scr_starfield_init:
         jnz .sf_init_z
 
         mov [scr_rng_state], eax
-        popad
+        POPALL
         ret
 
 scr_starfield_frame:
-        pushad
+        PUSHALL
         mov ecx, SCR_NUM_STARS
         xor esi, esi            ; Index
 
@@ -322,7 +322,7 @@ scr_starfield_frame:
         cmp esi, SCR_NUM_STARS
         jb .sf_frame_loop
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -330,7 +330,7 @@ scr_starfield_frame:
 ;=======================================================================
 
 scr_matrix_init:
-        pushad
+        PUSHALL
         ; Initialize column drop positions to random values
         mov edi, scr_matrix_pos
         mov ecx, SCR_MATRIX_COLS
@@ -378,11 +378,11 @@ scr_matrix_init:
 
         mov [scr_rng_state], eax
         mov byte [scr_matrix_tick], 0
-        popad
+        POPALL
         ret
 
 scr_matrix_frame:
-        pushad
+        PUSHALL
 
         ; Advance tick counter
         inc byte [scr_matrix_tick]
@@ -464,16 +464,16 @@ scr_matrix_frame:
 
         ; gui_bb_draw_char: EAX=x, EBX=y, CL=char, EDX=color
         ; X = col * 8, Y = row * 16
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov eax, esi
         shl eax, 3             ; X = col * 8
         mov ebx, edi
         shl ebx, 4             ; Y = row * 16
         ; CL already has char, EDX already has color
         call gui_bb_draw_char
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
 
 .mf_next_row:
         inc edi
@@ -505,7 +505,7 @@ scr_matrix_frame:
         dec ecx
         jnz .mf_mutate
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -513,7 +513,7 @@ scr_matrix_frame:
 ;=======================================================================
 
 scr_pipes_init:
-        pushad
+        PUSHALL
         ; Clear backbuffer to black for pipe accumulation
         mov edi, GUI_BACKBUF
         mov ecx, GUI_SCREEN_W * GUI_SCREEN_H
@@ -578,11 +578,11 @@ scr_pipes_init:
         jnz .pi_loop
 
         mov dword [scr_pipe_frame], 0
-        popad
+        POPALL
         ret
 
 scr_pipes_frame:
-        pushad
+        PUSHALL
 
         inc dword [scr_pipe_frame]
 
@@ -598,15 +598,15 @@ scr_pipes_frame:
         mov ebx, [scr_pipe_y + esi*4]
 
         ; Draw a 4x4 filled square at current position
-        push esi
-        push ecx
+        push rsi
+        push rcx
         mov ecx, 4             ; Width
         mov edx, 4             ; Height
-        push dword [scr_pipe_color + esi*4]
-        pop esi                 ; Color
+        push qword [scr_pipe_color + esi*4]
+        pop rsi                 ; Color
         call gui_bb_fill_rect
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
 
         ; Advance pipe position based on direction
         movzx edx, byte [scr_pipe_dir + esi]
@@ -703,7 +703,7 @@ scr_pipes_frame:
         jnz .pf_pipe_loop
 
 .pf_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -711,16 +711,16 @@ scr_pipes_frame:
 ;=======================================================================
 
 scr_bounce_init:
-        pushad
+        PUSHALL
         mov dword [scr_bounce_x], 200
         mov dword [scr_bounce_y], 180
         mov dword [scr_bounce_dx], 2
         mov dword [scr_bounce_dy], 1
-        popad
+        POPALL
         ret
 
 scr_bounce_frame:
-        pushad
+        PUSHALL
 
         ; Move logo
         mov eax, [scr_bounce_x]
@@ -776,7 +776,7 @@ scr_bounce_frame:
         mov edx, 0x00666666    ; Gray
         call gui_bb_draw_string
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -796,7 +796,7 @@ SCR_PLASMA_W    equ 160
 SCR_PLASMA_H    equ 120
 
 scr_plasma_init:
-        pushad
+        PUSHALL
         mov dword [scr_plasma_time], 0
 
         ; Build approximate sine table (256 entries, values 0-255)
@@ -844,14 +844,14 @@ scr_plasma_init:
         cmp ecx, 256
         jb .sine_loop
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; scr_plasma_frame - Render one plasma frame
 ;---------------------------------------
 scr_plasma_frame:
-        pushad
+        PUSHALL
 
         inc dword [scr_plasma_time]
         mov ebp, [scr_plasma_time]
@@ -926,9 +926,9 @@ scr_plasma_frame:
         or edx, eax
 
         ; Write 4x4 block (scale 160x120 -> 640x480)
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
 
         ; Calculate top-left framebuffer offset: (y*4)*640 + (x*4)
         mov eax, ebx
@@ -951,9 +951,9 @@ scr_plasma_frame:
             %assign _prow _prow + 1
         %endrep
 
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
 
         inc ecx
         cmp ecx, SCR_PLASMA_W
@@ -963,7 +963,7 @@ scr_plasma_frame:
         cmp ebx, SCR_PLASMA_H
         jb .pf_row
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------

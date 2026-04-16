@@ -107,7 +107,7 @@ exit_app:
 ; Drawing
 ;=======================================================================
 draw_sheet:
-        pushad
+        PUSHALL
 
         ; Background
         mov eax, [win_id]
@@ -138,10 +138,10 @@ draw_sheet:
         mov [esi], al
         mov eax, [cur_row]
         inc eax                 ; 1-based
-        push esi
+        push rsi
         inc esi
         call itoa_to_buf        ; writes digits to esi
-        pop esi
+        pop rsi
         mov edi, COL_HEADER_TEXT
         call gui_draw_text
 
@@ -176,7 +176,7 @@ draw_sheet:
         cmp ecx, VISIBLE_COLS
         jge .draw_row_headers
 
-        push ecx
+        push rcx
         mov eax, [win_id]
         mov ebx, ecx
         imul ebx, CELL_W
@@ -186,10 +186,10 @@ draw_sheet:
         mov esi, HEADER_H
         mov edi, COL_HEADER_BG
         call gui_fill_rect
-        pop ecx
+        pop rcx
 
         ; Column letter
-        push ecx
+        push rcx
         mov eax, ecx
         add eax, [scroll_col]
         add al, 'A'
@@ -204,7 +204,7 @@ draw_sheet:
         mov esi, col_letter_buf
         mov edi, COL_HEADER_TEXT
         call gui_draw_text
-        pop ecx
+        pop rcx
 
         inc ecx
         jmp .draw_col_headers
@@ -216,7 +216,7 @@ draw_sheet:
         cmp ecx, VISIBLE_ROWS
         jge .draw_cells
 
-        push ecx
+        push rcx
         mov eax, [win_id]
         xor ebx, ebx
         mov edx, ecx
@@ -227,18 +227,18 @@ draw_sheet:
         mov esi, CELL_H
         mov edi, COL_HEADER_BG
         call gui_fill_rect
-        pop ecx
+        pop rcx
 
         ; Row number
-        push ecx
+        push rcx
         mov eax, ecx
         add eax, [scroll_row]
         inc eax                 ; 1-based
-        push ecx
+        push rcx
         mov esi, row_num_buf
         call itoa_to_buf
 
-        pop ecx
+        pop rcx
         mov eax, [win_id]
         mov ebx, 4
         mov edx, ecx
@@ -248,7 +248,7 @@ draw_sheet:
         mov esi, row_num_buf
         mov edi, COL_HEADER_TEXT
         call gui_draw_text
-        pop ecx
+        pop rcx
 
         inc ecx
         jmp .draw_row_hdrs
@@ -264,8 +264,8 @@ draw_sheet:
         cmp ecx, VISIBLE_COLS
         jge .dc_next_row
 
-        push ecx
-        push edx
+        push rcx
+        push rdx
 
         ; Calculate actual cell coords
         mov eax, ecx
@@ -348,17 +348,17 @@ draw_sheet:
         mov edi, COL_GRID
         call gui_fill_rect
 
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         inc ecx
         jmp .dc_col
 
 .dc_next_row:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ; ecx/edx are from the inner push
         ; We need to properly restore — the inner loop pushes ecx,edx
-        ; Actually the flow is: we push ecx,edx at start of per-cell, pop at .dc_text/normal_bg end
+        ; Actually the flow is: we push rcx,edx at start of per-cell, pop at .dc_text/normal_bg end
         ; When we get to .dc_next_row, ecx,edx were already popped
         inc edx
         jmp .dc_row
@@ -372,7 +372,7 @@ draw_sheet:
         mov edi, COL_STATUS
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 .tmp_x:    dd 0
@@ -408,6 +408,14 @@ handle_key:
         ; Ctrl+S = save
         cmp ebx, 0x13
         je save_csv
+
+        ; Ctrl+C = copy cell to clipboard
+        cmp ebx, 0x03
+        je .copy_cell
+
+        ; Ctrl+V = paste clipboard into cell
+        cmp ebx, 0x16
+        je .paste_cell
 
         ; Tab - move right
         cmp ebx, 0x09
@@ -452,6 +460,52 @@ handle_key:
         call adjust_scroll
         jmp main_loop
 .nav_done:
+        jmp main_loop
+
+.copy_cell:
+        PUSHALL
+        call get_cur_cell_text  ; ESI = cell text
+        ; Get length
+        xor ecx, ecx
+.cc_len:
+        cmp byte [esi + ecx], 0
+        je .cc_do
+        inc ecx
+        jmp .cc_len
+.cc_do:
+        mov ebx, esi
+        mov eax, SYS_CLIPBOARD_COPY
+        int 0x80
+        POPALL
+        jmp main_loop
+
+.paste_cell:
+        PUSHALL
+        mov ebx, clip_buf
+        mov ecx, CELL_TEXT_LEN
+        mov eax, SYS_CLIPBOARD_PASTE
+        int 0x80
+        ; Null-terminate
+        cmp eax, CELL_TEXT_LEN
+        jl .pv_ok
+        mov eax, CELL_TEXT_LEN - 1
+.pv_ok:
+        mov byte [clip_buf + eax], 0
+        ; Copy to cell
+        mov eax, [cur_col]
+        mov ebx, [cur_row]
+        call get_cell_ptr
+        mov esi, clip_buf
+        xor ecx, ecx
+.pv_copy:
+        mov al, [esi + ecx]
+        mov [edi + ecx], al
+        inc ecx
+        cmp al, 0
+        jne .pv_copy
+        call classify_cell
+        call recalc_all
+        POPALL
         jmp main_loop
 
 handle_edit_key:
@@ -548,7 +602,7 @@ handle_click:
         js main_loop
 
         ; Col = x / CELL_W + scroll_col
-        push ecx
+        push rcx
         mov eax, ebx
         xor edx, edx
         mov ecx, CELL_W
@@ -557,7 +611,7 @@ handle_click:
         cmp eax, MAX_COLS
         jge .click_oob
         mov [cur_col], eax
-        pop ecx
+        pop rcx
 
         ; Row = y / CELL_H + scroll_row
         mov eax, ecx
@@ -572,7 +626,7 @@ handle_click:
         jmp main_loop
 
 .click_oob:
-        pop ecx
+        pop rcx
         jmp main_loop
 
 
@@ -584,33 +638,33 @@ handle_click:
 ;  EAX = col, EBX = row
 ; Returns: EDI = pointer to cell text buffer
 get_cell_ptr:
-        push eax
+        push rax
         imul eax, MAX_ROWS
         add eax, ebx
         imul eax, CELL_TEXT_LEN
         lea edi, [cells + eax]
-        pop eax
+        pop rax
         ret
 
 ; get_cur_cell_text - Get ESI pointing to current cell's text
 ; Returns: ESI = pointer
 get_cur_cell_text:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, [cur_col]
         mov ebx, [cur_row]
         call get_cell_ptr
         mov esi, edi
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ; get_cell_display - Get display text for cell (col=EAX, row=EBX)
 ; Returns: ESI = display text
 get_cell_display:
-        push ecx
-        push edx
-        push eax
+        push rcx
+        push rdx
+        push rax
         imul eax, MAX_ROWS
         add eax, ebx
         ; Check type
@@ -622,9 +676,9 @@ get_cell_display:
         ; Text or empty — return raw text
         imul eax, CELL_TEXT_LEN
         lea esi, [cells + eax]
-        pop eax
-        pop edx
-        pop ecx
+        pop rax
+        pop rdx
+        pop rcx
         ret
 
 .gcd_num:
@@ -634,14 +688,14 @@ get_cell_display:
         mov esi, display_num_buf
         mov eax, edx
         call int_to_str
-        pop eax
-        pop edx
-        pop ecx
+        pop rax
+        pop rdx
+        pop rcx
         ret
 
 ; classify_cell - Determine type of current cell and compute value
 classify_cell:
-        pushad
+        PUSHALL
         mov eax, [cur_col]
         mov ebx, [cur_row]
         call get_cell_ptr
@@ -655,7 +709,7 @@ classify_cell:
         add eax, [cur_row]
         mov byte [cell_types + eax], TYPE_EMPTY
         mov dword [cell_values + eax * 4], 0
-        popad
+        POPALL
         ret
 
 .cc_not_empty:
@@ -664,9 +718,9 @@ classify_cell:
         je .cc_formula
 
         ; Try to parse as number
-        push esi
+        push rsi
         call parse_number       ; eax = number, carry = success
-        pop esi
+        pop rsi
         jc .cc_text
 
         ; It's a number
@@ -676,7 +730,7 @@ classify_cell:
         add eax, [cur_row]
         mov byte [cell_types + eax], TYPE_NUMBER
         mov [cell_values + eax * 4], edx
-        popad
+        POPALL
         ret
 
 .cc_formula:
@@ -692,7 +746,7 @@ classify_cell:
         imul eax, MAX_ROWS
         add eax, [cur_row]
         mov [cell_values + eax * 4], edx
-        popad
+        POPALL
         ret
 
 .cc_text:
@@ -700,15 +754,15 @@ classify_cell:
         imul eax, MAX_ROWS
         add eax, [cur_row]
         mov byte [cell_types + eax], TYPE_TEXT
-        popad
+        POPALL
         ret
 
 ; parse_number - Parse decimal number from ESI
 ; Returns: EAX = value, carry set on failure
 parse_number:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         xor eax, eax
         xor ecx, ecx           ; sign flag
         cmp byte [esi], '-'
@@ -733,15 +787,15 @@ parse_number:
         jz .pn_ok
         neg eax
 .pn_ok:
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         clc
         ret
 .pn_fail:
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         stc
         ret
 
@@ -749,9 +803,9 @@ parse_number:
 ; Supports: cell refs (A1), +, -, *, SUM(A1:A5)
 ; Returns: EAX = result
 eval_formula:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         ; Check for SUM(
         cmp dword [esi], 'SUM('
@@ -772,33 +826,33 @@ eval_formula:
 
 .ef_add:
         inc esi
-        push eax
+        push rax
         call eval_term
         mov ebx, eax
-        pop eax
+        pop rax
         add eax, ebx
         jmp .ef_loop
 .ef_sub:
         inc esi
-        push eax
+        push rax
         call eval_term
         mov ebx, eax
-        pop eax
+        pop rax
         sub eax, ebx
         jmp .ef_loop
 .ef_mul:
         inc esi
-        push eax
+        push rax
         call eval_term
         mov ebx, eax
-        pop eax
+        pop rax
         imul eax, ebx
         jmp .ef_loop
 
 .ef_done:
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .ef_sum:
@@ -828,14 +882,14 @@ eval_formula:
 .sum_row:
         cmp ebx, [.sum_er]
         jg .sum_next_col
-        push eax
-        push ebx
+        push rax
+        push rbx
         ; Get cell value
         imul eax, MAX_ROWS
         add eax, ebx
         add edx, [cell_values + eax * 4]
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         inc ebx
         jmp .sum_row
 .sum_next_col:
@@ -843,16 +897,16 @@ eval_formula:
         jmp .sum_col
 .sum_done:
         mov eax, edx
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .ef_sum_end:
         xor eax, eax
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .sum_sc: dd 0
@@ -926,8 +980,8 @@ parse_cell_ref:
 ; parse_inline_num - Parse number from ESI (stops at operator/end)
 ; Returns: EAX = value
 parse_inline_num:
-        push edx
-        push ecx
+        push rdx
+        push rcx
         xor eax, eax
         xor ecx, ecx
         cmp byte [esi], '-'
@@ -950,13 +1004,13 @@ parse_inline_num:
         jz .pin_pos
         neg eax
 .pin_pos:
-        pop ecx
-        pop edx
+        pop rcx
+        pop rdx
         ret
 
 ; recalc_all - Recalculate all formula cells
 recalc_all:
-        pushad
+        PUSHALL
         xor eax, eax           ; col
 .ra_col:
         cmp eax, MAX_COLS
@@ -965,8 +1019,8 @@ recalc_all:
 .ra_row:
         cmp ebx, MAX_ROWS
         jge .ra_next_col
-        push eax
-        push ebx
+        push rax
+        push rbx
         imul eax, MAX_ROWS
         add eax, ebx
         cmp byte [cell_types + eax], TYPE_FORMULA
@@ -977,23 +1031,23 @@ recalc_all:
         inc esi                 ; skip '='
         call eval_formula
         mov edx, eax
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
         imul eax, MAX_ROWS
         add eax, ebx
         mov [cell_values + eax * 4], edx
 .ra_skip:
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         inc ebx
         jmp .ra_row
 .ra_next_col:
         inc eax
         jmp .ra_col
 .ra_done:
-        popad
+        POPALL
         ret
 
 
@@ -1037,7 +1091,7 @@ adjust_scroll:
 
 ; int_to_str - Convert signed EAX to string at ESI
 int_to_str:
-        pushad
+        PUSHALL
         mov edi, esi
         test eax, eax
         jns .its_pos
@@ -1057,13 +1111,13 @@ int_to_str:
         jz .its_pop
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         jmp .its_push
 .its_pop:
         test ecx, ecx
         jz .its_end
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
@@ -1071,12 +1125,12 @@ int_to_str:
         jmp .its_pop
 .its_end:
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 ; itoa_to_buf - Convert EAX to string at ESI, NUL terminate
 itoa_to_buf:
-        pushad
+        PUSHALL
         mov edi, esi
         mov ebx, 10
         xor ecx, ecx
@@ -1090,13 +1144,13 @@ itoa_to_buf:
         jz .itb_pop
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         jmp .itb_push
 .itb_pop:
         test ecx, ecx
         jz .itb_end
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
@@ -1104,7 +1158,7 @@ itoa_to_buf:
         jmp .itb_pop
 .itb_end:
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 
@@ -1112,7 +1166,7 @@ itoa_to_buf:
 ; CSV Load/Save
 ;=======================================================================
 load_csv:
-        pushad
+        PUSHALL
         mov ebx, arg_buf
         mov ecx, csv_buf
         mov eax, SYS_FREAD
@@ -1134,11 +1188,11 @@ load_csv:
         jge .lc_done
 
         ; Get cell pointer
-        push eax
-        push ebx
+        push rax
+        push rbx
         call get_cell_ptr       ; edi = cell text ptr
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; Copy until comma, newline, or end
         xor ecx, ecx
@@ -1197,12 +1251,12 @@ load_csv:
         ; Classify all non-empty cells
         call classify_all_cells
         call recalc_all
-        popad
+        POPALL
         ret
 
 ; Classify all cells
 classify_all_cells:
-        pushad
+        PUSHALL
         xor eax, eax
 .cac_col:
         cmp eax, MAX_COLS
@@ -1211,24 +1265,24 @@ classify_all_cells:
 .cac_row:
         cmp ebx, MAX_ROWS
         jge .cac_next_col
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov [cur_col], eax
         mov [cur_row], ebx
         call classify_cell
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         inc ebx
         jmp .cac_row
 .cac_next_col:
         inc eax
         jmp .cac_col
 .cac_done:
-        popad
+        POPALL
         ret
 
 save_csv:
-        pushad
+        PUSHALL
         mov edi, csv_buf
 
         xor ebx, ebx           ; row
@@ -1241,19 +1295,19 @@ save_csv:
 .sv_check:
         cmp eax, MAX_COLS
         jge .sv_row_check
-        push eax
-        push ebx
+        push rax
+        push rbx
         call get_cell_ptr
         cmp byte [edi], 0      ; wait, edi is csv_buf here, conflict!
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ; Use a temp approach
-        push eax
+        push rax
         imul eax, MAX_ROWS
         add eax, ebx
         imul eax, CELL_TEXT_LEN
         cmp byte [cells + eax], 0
-        pop eax
+        pop rax
         je .sv_check_next
         mov ecx, 1
 .sv_check_next:
@@ -1268,12 +1322,12 @@ save_csv:
 .sv_col:
         cmp eax, MAX_COLS
         jge .sv_row_end
-        push eax
+        push rax
         imul eax, MAX_ROWS
         add eax, ebx
         imul eax, CELL_TEXT_LEN
         lea esi, [cells + eax]
-        pop eax
+        pop rax
         ; Copy cell text
 .sv_copy:
         mov cl, [esi]
@@ -1312,7 +1366,7 @@ save_csv:
         mov eax, SYS_FWRITE
         int 0x80
 
-        popad
+        POPALL
         jmp main_loop
 
 
@@ -1320,7 +1374,7 @@ save_csv:
 ; Data
 ;=======================================================================
 title_str:       db "BSheet - Spreadsheet", 0
-str_status:      db "Arrows:Navigate  Enter:Edit  Ctrl+S:Save  Del:Clear", 0
+str_status:      db "Arrows:Nav Enter:Edit ^S:Save ^C:Copy ^V:Paste Del:Clear", 0
 save_filename:   db "sheet.csv", 0
 
 win_id:          dd 0
@@ -1347,3 +1401,4 @@ cell_values:     times (MAX_COLS * MAX_ROWS) dd 0
 ; CSV buffer
 csv_buf:         times 65536 db 0
 csv_len:         dd 0
+clip_buf:        times (CELL_TEXT_LEN + 1) db 0

@@ -67,9 +67,9 @@ level3:
 
 ; Level table
 level_table:
-        dd level3               ; Level 1 (easiest)
-        dd level2               ; Level 2
-        dd level1               ; Level 3 (hardest)
+        dq level3               ; Level 1 (easiest)
+        dq level2               ; Level 2
+        dq level1               ; Level 3 (hardest)
 NUM_LEVELS      equ 3
 
 start:
@@ -79,7 +79,7 @@ start:
 load_level:
         ; Get level pointer
         mov eax, [current_level]
-        mov esi, [level_table + eax*4]
+        mov rsi, [level_table + rax*8]
 
         ; Read width, height
         movzx eax, byte [esi]
@@ -240,7 +240,7 @@ game_loop:
 
 ;=== Try to move player by offset EAX ===
 try_move:
-        pushad
+        PUSHALL
         mov [move_offset], eax
 
         ; Calculate destination position
@@ -299,13 +299,13 @@ try_move:
         inc dword [moves]
 
 .cant_move:
-        popad
+        POPALL
         ret
 
 ;=== Check win: return EAX=1 if all bricks are on spots ===
 check_win:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         xor ebx, ebx           ; count of bricks NOT on spots
         xor ecx, ecx
 .loop:
@@ -323,13 +323,13 @@ check_win:
         jnz .not_won
         mov eax, 1
 .not_won:
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;=== Draw header ===
 draw_header:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -372,12 +372,12 @@ draw_header:
         int 0x80
         mov eax, NUM_LEVELS
         call print_dec
-        popad
+        POPALL
         ret
 
 ;=== Draw the level centered on screen ===
 draw_level:
-        pushad
+        PUSHALL
 
         ; Calculate offset to center
         mov eax, VGA_WIDTH
@@ -410,12 +410,12 @@ draw_level:
         cmp edx, 9
         jg .skip
         shl edx, 1              ; *2 for char,color pair
-        push eax
-        push ebx
+        push rax
+        push rbx
         movzx ecx, byte [display_chars + edx]
         movzx edx, byte [display_chars + edx + 1]
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         mov ch, dl              ; color
         call vga_putchar_at
 
@@ -423,18 +423,18 @@ draw_level:
         inc esi
         jmp .loop
 .done:
-        popad
+        POPALL
         ret
 
 ;=== Put char at screen position (direct VGA) ===
 ; EAX = x, EBX = y, CL = char, CH = color
 vga_putchar_at:
-        pushad
+        PUSHALL
         imul ebx, VGA_WIDTH * 2
         lea edi, [VGA_BASE + ebx + eax*2]
         mov [edi], cl
         mov [edi+1], ch
-        popad
+        POPALL
         ret
 
 exit_game:

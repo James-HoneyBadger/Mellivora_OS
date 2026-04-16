@@ -393,7 +393,7 @@ start:
 ; Initialize game
 ;---------------------------------------
 init_game:
-        pushad
+        PUSHALL
         ; Clear board
         mov edi, board
         mov ecx, NUM_CELLS
@@ -413,14 +413,14 @@ init_game:
 
         call add_random_tile
         call add_random_tile
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Add random tile (2 or 4)
 ;---------------------------------------
 add_random_tile:
-        pushad
+        PUSHALL
         ; Count empty cells
         xor ecx, ecx
         xor ebx, ebx
@@ -455,14 +455,14 @@ add_random_tile:
 .art_four:
         mov dword [board + eax*4], 4
 .art_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Check game over
 ;---------------------------------------
 check_game_over:
-        pushad
+        PUSHALL
         mov byte [game_over], 0
         ; Check for any empty cell
         xor ecx, ecx
@@ -514,14 +514,14 @@ check_game_over:
         jl .cgo_row
         mov byte [game_over], 1
 .cgo_not_over:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Draw the board
 ;---------------------------------------
 draw_board:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -564,27 +564,27 @@ draw_board:
         je .db_empty
 
         ; Print number right-justified in 6 chars
-        push edx
-        push ecx
+        push rdx
+        push rcx
         call .count_digits       ; result in edi
         mov ecx, 6
         sub ecx, edi
         shr ecx, 1
-        push ecx
+        push rcx
         ; leading spaces
 .db_lead:
         cmp ecx, 0
         jle .db_pval
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop eax
+        pop rax
         dec ecx
         jmp .db_lead
 .db_pval:
         call print_dec
-        pop ecx
+        pop rcx
         mov esi, 6
         sub esi, edi
         sub esi, ecx
@@ -598,15 +598,15 @@ draw_board:
         jmp .db_trail
 
 .db_empty:
-        push edx
-        push ecx
+        push rdx
+        push rcx
         mov eax, SYS_PRINT
         mov ebx, msg_empty_cell
         int 0x80
 
 .db_colsep:
-        pop ecx
-        pop edx
+        pop rcx
+        pop rdx
         mov eax, SYS_PUTCHAR
         mov ebx, '|'
         int 0x80
@@ -636,13 +636,13 @@ draw_board:
         mov ebx, 0x07
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ; Count decimal digits of EAX -> EDI
 .count_digits:
-        push eax
-        push edx
+        push rax
+        push rdx
         xor edi, edi
         mov ebx, 10
         cmp eax, 0
@@ -657,22 +657,22 @@ draw_board:
         inc edi
         jmp .cd_loop
 .cd_done:
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
         ret
 
 ;---------------------------------------
 ; PRNG
 ;---------------------------------------
 prng:
-        push ebx
+        push rbx
         mov eax, [prng_state]
         imul eax, 1103515245
         add eax, 12345
         mov [prng_state], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop ebx
+        pop rbx
         ret
 
 ;---------------------------------------

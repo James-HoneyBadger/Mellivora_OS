@@ -84,10 +84,10 @@ start:
         cmp ecx, COL_WIDTH - 1
         jge .field_skip
         movzx ebx, al
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ecx
+        pop rcx
         inc ecx
 .field_skip:
         inc esi
@@ -97,7 +97,7 @@ start:
         ; Pad remaining width with spaces
         call .pad_field
         ; Print separator
-        push ecx
+        push rcx
         mov eax, SYS_SETCOLOR
         mov ebx, 0x08
         int 0x80
@@ -125,7 +125,7 @@ start:
         mov ebx, 0x0F
         int 0x80
 .nr_done:
-        pop ecx
+        pop rcx
         xor ecx, ecx
         inc dword [col_num]
         inc esi
@@ -134,16 +134,16 @@ start:
 .end_field:
         call .pad_field
         ; Newline
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop eax
+        pop rax
 
         ; If header row just printed, print separator line
         cmp dword [row_num], 1
         jne .ef_skip
-        push esi
+        push rsi
         mov eax, SYS_SETCOLOR
         mov ebx, 0x08
         int 0x80
@@ -162,7 +162,7 @@ start:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop esi
+        pop rsi
 .ef_skip:
         cmp byte [esi], 0x0A
         jne .done
@@ -193,19 +193,19 @@ start:
 ; Pad current field to COL_WIDTH
 ; ECX = characters printed so far
 .pad_field:
-        push ecx
+        push rcx
 .pf_loop:
         cmp ecx, COL_WIDTH
         jge .pf_done
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
         inc ecx
         jmp .pf_loop
 .pf_done:
-        pop ecx
+        pop rcx
         ret
 
 ;---------------------------------------

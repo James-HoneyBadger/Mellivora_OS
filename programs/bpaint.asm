@@ -74,13 +74,13 @@ start:
 .on_click:
         ; EBX = rel_x, ECX = rel_y (window-relative)
         ; Check if left button is currently pressed via SYS_MOUSE
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, SYS_MOUSE
         int 0x80
         test ecx, 1
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         jz .btn_release
 
         ; Button pressed
@@ -115,13 +115,13 @@ start:
         cmp byte [drawing], 0
         je .main_loop
         ; Verify button still held
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, SYS_MOUSE
         int 0x80
         test ecx, 1
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         jz .drag_end
         ; Bounds check: only draw in canvas area
         cmp ebx, 0
@@ -151,7 +151,7 @@ start:
 ; EBX = x, ECX = y (window-relative)
 ;=======================================
 add_stroke:
-        pushad
+        PUSHALL
         mov eax, [stroke_count]
         cmp eax, MAX_STROKES
         jge .as_done
@@ -163,14 +163,14 @@ add_stroke:
         mov [edi + 4], edx
         inc dword [stroke_count]
 .as_done:
-        popad
+        POPALL
         ret
 
 ;=======================================
 ; render_canvas - Draw white bg + replay strokes
 ;=======================================
 render_canvas:
-        pushad
+        PUSHALL
         ; White canvas background
         mov eax, [win_id]
         xor ebx, ebx
@@ -221,14 +221,14 @@ render_canvas:
         mov edi, 0x00FF0000
         call gui_draw_text
 .rc_end:
-        popad
+        POPALL
         ret
 
 ;=======================================
 ; render_palette - Draw color swatches
 ;=======================================
 render_palette:
-        pushad
+        PUSHALL
         ; Palette background
         mov eax, [win_id]
         xor ebx, ebx
@@ -285,7 +285,7 @@ render_palette:
         mov edi, 0x00505050
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 ; ---- Data ----

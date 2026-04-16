@@ -69,13 +69,13 @@ start:
         je .print_entry
 
         ; Match name_buf against [pattern]
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov esi, [pattern]
         mov edi, name_buf
         call glob_match
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         cmp eax, 1
         jne .next_entry
 
@@ -124,11 +124,11 @@ skip_spaces:
 ; Uses iterative backtracking (no recursion)
 ;-----------------------------------------------
 glob_match:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
 
         ; Save backtrack points
         mov dword [gm_star_pat], 0    ; no star seen yet
@@ -178,19 +178,19 @@ glob_match:
 
 .gm_yes:
         mov eax, 1
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .gm_no:
         xor eax, eax
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 msg_usage:      db "Usage: find [-name PATTERN]", 10, 0

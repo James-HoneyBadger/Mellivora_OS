@@ -73,10 +73,10 @@ VGA_WHITE       equ 0x0F
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_set_cursor:
-        push eax
+        push rax
         mov eax, SYS_SETCURSOR
         int 0x80
-        pop eax
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -85,23 +85,23 @@ vga_set_cursor:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_set_color:
-        push eax
-        push ebx
+        push rax
+        push rbx
         movzx ebx, bl
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
 ; vga_clear - Clear the screen
 ;-----------------------------------------------------------------------
 vga_clear:
-        push eax
+        push rax
         mov eax, SYS_CLEAR
         int 0x80
-        pop eax
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -110,12 +110,12 @@ vga_clear:
 ; Output: AL = combined color attribute
 ;-----------------------------------------------------------------------
 vga_make_color:
-        push ecx
+        push rcx
         movzx ecx, ah
         shl cl, 4
         and al, 0x0F
         or al, cl
-        pop ecx
+        pop rcx
         ret
 
 ;-----------------------------------------------------------------------
@@ -125,14 +125,14 @@ vga_make_color:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_put_char_at:
-        pushad
+        PUSHALL
         ; Calculate VGA offset: (row * 80 + col) * 2
         imul ecx, VGA_WIDTH
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax           ; write char + attr
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -141,13 +141,13 @@ vga_put_char_at:
 ; Output: AL = character, AH = color attribute
 ;-----------------------------------------------------------------------
 vga_get_char_at:
-        push ecx
+        push rcx
         imul ecx, VGA_WIDTH
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov ax, [ecx]
-        pop ecx
+        pop rcx
         ret
 
 ;-----------------------------------------------------------------------
@@ -156,7 +156,7 @@ vga_get_char_at:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_write_at:
-        pushad
+        PUSHALL
         ; Set cursor position
         mov eax, SYS_SETCURSOR
         int 0x80
@@ -164,7 +164,7 @@ vga_write_at:
         mov eax, SYS_PRINT
         mov ebx, esi
         int 0x80
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -173,15 +173,15 @@ vga_write_at:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_write_color:
-        pushad
+        PUSHALL
         ; Set color
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         movzx ebx, dl
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ; Set cursor
         mov eax, SYS_SETCURSOR
         int 0x80
@@ -189,7 +189,7 @@ vga_write_color:
         mov eax, SYS_PRINT
         mov ebx, esi
         int 0x80
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -198,15 +198,15 @@ vga_write_color:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_draw_hline:
-        pushad
+        PUSHALL
         mov esi, edx            ; length counter
         ; Calc VGA offset
-        push eax
+        push rax
         imul ecx, VGA_WIDTH
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
-        pop eax
+        pop rax
 .vdhl_loop:
         cmp esi, 0
         jle .vdhl_done
@@ -215,7 +215,7 @@ vga_draw_hline:
         dec esi
         jmp .vdhl_loop
 .vdhl_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -224,14 +224,14 @@ vga_draw_hline:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_draw_vline:
-        pushad
+        PUSHALL
         mov esi, edx            ; length
-        push eax
+        push rax
         imul ecx, VGA_WIDTH
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
-        pop eax
+        pop rax
 .vdvl_loop:
         cmp esi, 0
         jle .vdvl_done
@@ -240,7 +240,7 @@ vga_draw_vline:
         dec esi
         jmp .vdvl_loop
 .vdvl_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -250,7 +250,7 @@ vga_draw_vline:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_draw_box:
-        pushad
+        PUSHALL
         mov edi, esi            ; height
         mov ebp, edx            ; width
 
@@ -258,64 +258,64 @@ vga_draw_box:
         mov al, BOX_TL
         call vga_put_char_at
         ; Top-right corner
-        push ebx
+        push rbx
         add ebx, ebp
         dec ebx
         mov al, BOX_TR
         call vga_put_char_at
-        pop ebx
+        pop rbx
         ; Top horizontal line
-        push ebx
+        push rbx
         inc ebx
         sub ebp, 2             ; inner width
-        push edx
+        push rdx
         mov edx, ebp
         mov al, BOX_H
         call vga_draw_hline
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         add ebp, 2             ; restore width
 
         ; Bottom corners and line
-        push ecx
+        push rcx
         add ecx, edi
         dec ecx
         mov al, BOX_BL
         call vga_put_char_at
-        push ebx
+        push rbx
         add ebx, ebp
         dec ebx
         mov al, BOX_BR
         call vga_put_char_at
-        pop ebx
-        push ebx
+        pop rbx
+        push rbx
         inc ebx
-        push edx
+        push rdx
         mov edx, ebp
         sub edx, 2
         mov al, BOX_H
         call vga_draw_hline
-        pop edx
-        pop ebx
-        pop ecx
+        pop rdx
+        pop rbx
+        pop rcx
 
         ; Left and right vertical lines
-        push ecx
+        push rcx
         inc ecx
-        push edx
+        push rdx
         mov edx, edi
         sub edx, 2
         mov al, BOX_V
         call vga_draw_vline
-        push ebx
+        push rbx
         add ebx, ebp
         dec ebx
         call vga_draw_vline
-        pop ebx
-        pop edx
-        pop ecx
+        pop rbx
+        pop rdx
+        pop rcx
 
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -325,22 +325,22 @@ vga_draw_box:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_draw_filled:
-        pushad
+        PUSHALL
         mov edi, esi            ; rows remaining
         mov ebp, edx            ; width
 
 .vdf_row:
         cmp edi, 0
         jle .vdf_done
-        push edx
+        push rdx
         mov edx, ebp
         call vga_draw_hline
-        pop edx
+        pop rdx
         inc ecx
         dec edi
         jmp .vdf_row
 .vdf_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -349,11 +349,11 @@ vga_draw_filled:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_clear_region:
-        push eax
+        push rax
         mov al, ' '
         mov ah, COLOR_DEFAULT
         call vga_draw_filled
-        pop eax
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -362,24 +362,24 @@ vga_clear_region:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_status_bar:
-        pushad
+        PUSHALL
         ; Fill entire row with spaces in given color
-        push esi
-        push ecx
-        push edx
+        push rsi
+        push rcx
+        push rdx
         mov al, ' '
         mov ah, dl
         mov ebx, 0
         mov edx, VGA_WIDTH
         mov esi, 1
         call vga_draw_filled
-        pop edx
-        pop ecx
-        pop esi
+        pop rdx
+        pop rcx
+        pop rsi
         ; Write text at column 1
         mov ebx, 1
         call vga_write_color
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -390,7 +390,7 @@ vga_status_bar:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_progress_bar:
-        pushad
+        PUSHALL
         ; Calculate filled width: (current * width) / max
         mov ebp, edx            ; save total width
         mov eax, esi
@@ -408,21 +408,21 @@ vga_progress_bar:
         sub edi, eax            ; empty count
 
         ; Draw filled portion
-        push eax
+        push rax
         mov al, BOX_FULL
         mov edx, esi
         call vga_draw_hline
-        pop eax
+        pop rax
 
         ; Draw empty portion
-        push ebx
+        push rbx
         add ebx, esi
         mov al, BOX_SHADE_L
         mov edx, edi
         call vga_draw_hline
-        pop ebx
+        pop rbx
 
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -432,14 +432,14 @@ vga_progress_bar:
 ; Output: none
 ;-----------------------------------------------------------------------
 vga_scroll_region:
-        pushad
+        PUSHALL
         mov edi, esi
         dec edi                 ; rows to copy = height - 1
 
         ; Calculate source start = (top+1, left)
-        push ecx
+        push rcx
         inc ecx
-        push eax
+        push rax
 
         ; Each row: copy from (row, left) to (row-1, left), width words
 .vsr_row:
@@ -447,8 +447,8 @@ vga_scroll_region:
         jle .vsr_clear
 
         ; Source offset
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         imul ecx, VGA_WIDTH
         add ecx, ebx
         shl ecx, 1
@@ -459,30 +459,30 @@ vga_scroll_region:
         sub eax, VGA_WIDTH * 2
 
         ; Copy edx words
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
         mov esi, ecx
         mov edi, eax
         mov ecx, edx
         rep movsw
-        pop ecx
-        pop edi
-        pop esi
-        pop ebx
-        pop ecx
+        pop rcx
+        pop rdi
+        pop rsi
+        pop rbx
+        pop rcx
         inc ecx
         dec edi
         jmp .vsr_row
 
 .vsr_clear:
         ; Clear the bottom row
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         add ecx, esi
         dec ecx
         mov al, ' '
         call vga_draw_hline
 
-        popad
+        POPALL
         ret

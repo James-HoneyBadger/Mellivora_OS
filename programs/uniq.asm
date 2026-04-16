@@ -87,10 +87,10 @@ start:
         jge .flush_last
 
         ; Compare current line with prev_line
-        push esi
+        push rsi
         mov edi, prev_line
         call cmp_lines
-        pop esi
+        pop rsi
         cmp eax, 0
         je .same_line
 
@@ -204,8 +204,8 @@ copy_line_to_prev:
 ; Compare line at ESI with null-terminated string at EDI
 ; Returns EAX=0 if equal, 1 if different
 cmp_lines:
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov edx, edi            ; save edi
 .cloop:
         movzx eax, byte [esi]
@@ -233,35 +233,35 @@ cmp_lines:
 .cmp_neq:
         mov eax, 1
 .cmp_ret:
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ; Print decimal number in EAX
 print_number:
-        push esi
-        mov esi, esp
+        push rsi
+        mov rsi, rsp
         mov ecx, 0
         mov ebx, 10
 .pn_div:
         xor edx, edx
         div ebx
         add dl, '0'
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pn_div
 .pn_print:
         cmp ecx, 0
         je .pn_done
-        pop ebx
+        pop rbx
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jmp .pn_print
 .pn_done:
-        mov esp, esi
-        pop esi
+        mov rsp, rsi
+        pop rsi
         ret
 
 skip_spaces:

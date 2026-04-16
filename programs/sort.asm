@@ -49,7 +49,7 @@ start:
         mov eax, [line_count]
         cmp eax, MAX_LINES
         jge .parse_done
-        mov [line_ptrs + eax * 4], esi
+        mov [line_ptrs + rax * 8], rsi
         inc dword [line_count]
 
         ; Find end of line
@@ -84,17 +84,17 @@ start:
         jge .check_sorted
 
         ; Compare line[ebx] with line[ebx+1]
-        mov esi, [line_ptrs + ebx * 4]
-        mov edi, [line_ptrs + ebx * 4 + 4]
+        mov rsi, [line_ptrs + rbx * 8]
+        mov rdi, [line_ptrs + rbx * 8 + 8]
         call strcmp_nocase
         cmp eax, 0
         jle .no_swap
 
         ; Swap
-        mov eax, [line_ptrs + ebx * 4]
-        mov edx, [line_ptrs + ebx * 4 + 4]
-        mov [line_ptrs + ebx * 4], edx
-        mov [line_ptrs + ebx * 4 + 4], eax
+        mov rax, [line_ptrs + rbx * 8]
+        mov rdx, [line_ptrs + rbx * 8 + 8]
+        mov [line_ptrs + rbx * 8], rdx
+        mov [line_ptrs + rbx * 8 + 8], rax
         mov dword [sorted], 0
 
 .no_swap:
@@ -113,13 +113,13 @@ start:
         jge .done
 
         mov eax, SYS_PRINT
-        push ebx
-        mov ebx, [line_ptrs + ebx * 4]
+        push rbx
+        mov rbx, [line_ptrs + rbx * 8]
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop ebx
+        pop rbx
 
         inc ebx
         jmp .print_loop
@@ -151,10 +151,10 @@ start:
 ; Returns EAX: <0, 0, >0
 ;=======================================================================
 strcmp_nocase:
-        push ebx
-        push ecx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rsi
+        push rdi
 .sc_loop:
         movzx eax, byte [esi]
         movzx ebx, byte [edi]
@@ -179,10 +179,10 @@ strcmp_nocase:
         inc edi
         jmp .sc_loop
 .sc_done:
-        pop edi
-        pop esi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 ; Data
@@ -192,5 +192,5 @@ args_buf:       times 256 db 0
 file_size:      dd 0
 line_count:     dd 0
 sorted:         dd 0
-line_ptrs:      times MAX_LINES dd 0
+line_ptrs:      times MAX_LINES dq 0
 file_buffer:    times 32768 db 0

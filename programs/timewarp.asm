@@ -190,20 +190,20 @@ init_interpreter:
 ; DRAWING
 ;=======================================================================
 draw_all:
-        pushad
+        PUSHALL
         call draw_toolbar
         call draw_editor
         call draw_canvas
         call draw_output
         call draw_status
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Draw toolbar
 ;---------------------------------------
 draw_toolbar:
-        pushad
+        PUSHALL
         mov eax, [win_id]
         xor ebx, ebx
         xor ecx, ecx
@@ -280,14 +280,14 @@ draw_toolbar:
         mov edi, 0x00AAAAAA
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Draw editor panel
 ;---------------------------------------
 draw_editor:
-        pushad
+        PUSHALL
         ; Background
         mov eax, [win_id]
         mov ebx, ED_X
@@ -309,36 +309,36 @@ draw_editor:
         cmp eax, [num_lines]
         jge .draw_skip_line
 
-        push ecx
+        push rcx
         ; Get line pointer
-        push eax
+        push rax
         imul eax, LINE_LEN
         lea esi, [text_buf + eax]
-        pop eax
+        pop rax
 
         ; Draw line number (4 chars wide)
-        push ecx
-        push eax
+        push rcx
+        push rax
         inc eax               ; 1-based
         mov edi, line_num_buf
         call int_to_str
         mov eax, [win_id]
         mov ebx, ED_X + 2
-        pop eax                ; restore line index
-        push eax
+        pop rax                ; restore line index
+        push rax
         ; Calculate Y position
-        mov ecx, [esp + 8]    ; vis line index
+        mov ecx, [rsp + 8]    ; vis line index
         imul ecx, 16
         add ecx, ED_Y + 2
         mov esi, line_num_buf
         mov edi, COL_LINE_NUM
         call gui_draw_text
-        pop eax
-        pop ecx
-        pop ecx
+        pop rax
+        pop rcx
+        pop rcx
 
         ; Draw line text (offset by 32 pixels for line numbers)
-        push ecx
+        push rcx
         mov eax, [scroll_y]
         add eax, ecx
         imul eax, LINE_LEN
@@ -354,7 +354,7 @@ draw_editor:
         call gui_draw_text
 
 .skip_text:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .draw_line_loop
 
@@ -371,11 +371,11 @@ draw_editor:
         cmp eax, VIS_LINES
         jge .ed_done
 
-        push eax
+        push rax
         mov ebx, [cur_col]
         imul ebx, 8
         add ebx, ED_X + 34
-        pop eax
+        pop rax
         imul eax, 16
         add eax, ED_Y + 2
         mov ecx, eax
@@ -422,14 +422,14 @@ draw_editor:
         mov edi, COL_SEPARATOR
         call gui_fill_rect
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Draw turtle canvas
 ;---------------------------------------
 draw_canvas:
-        pushad
+        PUSHALL
         ; White background
         mov eax, [win_id]
         mov ebx, CV_X
@@ -462,7 +462,7 @@ draw_canvas:
 
         mov esi, stroke_buf
 .stroke_loop:
-        push ecx
+        push rcx
         ; Each stroke: word x, word y, dword color
         movzx ebx, word [esi]
         movzx edx, word [esi + 2]
@@ -473,12 +473,12 @@ draw_canvas:
         ; Draw 1-pixel dot
         mov eax, [win_id]
         mov ecx, edx
-        push esi
+        push rsi
         mov esi, edi
         call gui_draw_pixel
-        pop esi
+        pop rsi
 
-        pop ecx
+        pop rcx
         add esi, 8
         dec ecx
         jnz .stroke_loop
@@ -500,71 +500,71 @@ draw_canvas:
         ; Draw small diamond at turtle position
         add eax, CV_X
         add ebx, CV_Y
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, [win_id]
         mov ecx, ebx
         mov esi, COL_TURTLE
         call gui_draw_pixel
         ; +1,0
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
         inc eax
         mov ecx, ebx
-        push eax
+        push rax
         mov eax, [win_id]
-        pop ebx
+        pop rbx
         mov esi, COL_TURTLE
         call gui_draw_pixel
         ; -1,0
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
         dec eax
         mov ecx, ebx
-        push eax
+        push rax
         mov eax, [win_id]
-        pop ebx
+        pop rbx
         mov esi, COL_TURTLE
         call gui_draw_pixel
         ; 0,+1
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
         inc ebx
         mov ecx, ebx
         dec ebx
-        push eax
+        push rax
         mov eax, [win_id]
-        pop ebx
+        pop rbx
         dec ebx
         inc ecx
         mov esi, COL_TURTLE
         call gui_draw_pixel
         ; 0,-1
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         dec ebx
         mov ecx, ebx
-        push eax
+        push rax
         mov eax, [win_id]
-        pop ebx
+        pop rbx
         mov esi, COL_TURTLE
         call gui_draw_pixel
 
 .cv_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Draw output panel
 ;---------------------------------------
 draw_output:
-        pushad
+        PUSHALL
         ; Background
         mov eax, [win_id]
         mov ebx, OUT_X
@@ -589,7 +589,7 @@ draw_output:
         cmp ecx, OUT_LINES
         jge .out_done
 
-        push ecx
+        push rcx
         ; Calculate source line
         mov eax, [out_scroll]
         add eax, ecx
@@ -603,27 +603,27 @@ draw_output:
 
         mov eax, [win_id]
         mov ebx, OUT_X + 4
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         imul ecx, 16
         add ecx, OUT_Y + 4
         mov edi, COL_OUTPUT_TEXT
         call gui_draw_text
 
 .out_skip:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .out_line_loop
 
 .out_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Draw status bar
 ;---------------------------------------
 draw_status:
-        pushad
+        PUSHALL
         mov eax, [win_id]
         xor ebx, ebx
         mov ecx, SB_Y
@@ -689,7 +689,7 @@ draw_status:
         mov edi, 0x00CCCCCC
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -697,7 +697,7 @@ draw_status:
 ;=======================================================================
 handle_keypress:
         ; EAX = key code
-        pushad
+        PUSHALL
 
         ; F5 = Run
         cmp eax, KEY_F5
@@ -840,7 +840,7 @@ handle_keypress:
         jmp .key_done
 
 .key_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -848,7 +848,7 @@ handle_keypress:
 ;=======================================================================
 editor_insert_char:
         ; EAX = character to insert (in AL)
-        pushad
+        PUSHALL
         mov edx, [cur_line]
         imul edx, LINE_LEN
         add edx, [cur_col]
@@ -872,11 +872,11 @@ editor_insert_char:
         mov [text_buf + edx], al
         inc dword [cur_col]
 .eic_done:
-        popad
+        POPALL
         ret
 
 editor_newline:
-        pushad
+        PUSHALL
         ; Check line limit
         mov eax, [num_lines]
         cmp eax, MAX_LINES - 1
@@ -893,10 +893,10 @@ editor_newline:
         imul eax, LINE_LEN
         lea esi, [text_buf + eax]
         lea edi, [esi + LINE_LEN]
-        push ecx
+        push rcx
         mov ecx, LINE_LEN
         rep movsb
-        pop ecx
+        pop rcx
         dec ecx
         jmp .enl_shift
 
@@ -914,9 +914,9 @@ editor_newline:
         lea edi, [text_buf + eax]
         mov ecx, LINE_LEN
         sub ecx, [cur_col]
-        push esi
+        push rsi
         rep movsb
-        pop esi
+        pop rsi
 
         ; Null-terminate current line at cursor
         mov ecx, LINE_LEN
@@ -931,11 +931,11 @@ editor_newline:
         call adjust_scroll
 
 .enl_done:
-        popad
+        POPALL
         ret
 
 editor_backspace:
-        pushad
+        PUSHALL
         ; If at start of line, join with previous
         cmp dword [cur_col], 0
         jne .ebs_inline
@@ -948,11 +948,11 @@ editor_backspace:
         dec eax
         imul eax, LINE_LEN
         lea edi, [text_buf + eax]
-        push edi
+        push rdi
         mov esi, edi
         call strlen
         mov [cur_col], eax      ; cursor goes to end of prev line
-        pop edi
+        pop rdi
         add edi, eax            ; append point
 
         ; Copy current line to end of previous
@@ -973,10 +973,10 @@ editor_backspace:
         imul eax, LINE_LEN
         lea esi, [text_buf + eax]
         lea edi, [esi - LINE_LEN]
-        push ecx
+        push rcx
         mov ecx, LINE_LEN
         rep movsb
-        pop ecx
+        pop rcx
         inc ecx
         jmp .ebs_shift
 
@@ -1001,7 +1001,7 @@ editor_backspace:
         dec dword [cur_col]
 
 .ebs_done:
-        popad
+        POPALL
         ret
 
 adjust_scroll:
@@ -1037,7 +1037,7 @@ clamp_col:
 ;=======================================================================
 handle_mouse_click:
         ; EAX = x, EDX = y
-        pushad
+        PUSHALL
 
         ; Check toolbar buttons
         cmp edx, TB_H
@@ -1117,14 +1117,14 @@ handle_mouse_click:
         mov dword [cur_col], 0
 
 .mc_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; FILE I/O
 ;=======================================================================
 load_file:
-        pushad
+        PUSHALL
         mov eax, SYS_FREAD
         mov ebx, arg_buf
         mov ecx, file_buf
@@ -1159,11 +1159,11 @@ load_file:
         ; Store character
         cmp edx, LINE_LEN - 1
         jge .lf_skip_ch
-        push eax
+        push rax
         mov eax, ecx
         imul eax, LINE_LEN
         add eax, edx
-        pop ebx
+        pop rbx
         mov [text_buf + eax], bl
         inc edx
 
@@ -1186,18 +1186,18 @@ load_file:
 .lf_done:
         inc ecx
         mov [num_lines], ecx
-        popad
+        POPALL
         ret
 
 .lf_fail:
         ; Show error in output
         mov esi, str_load_err
         call output_add_line
-        popad
+        POPALL
         ret
 
 save_file:
-        pushad
+        PUSHALL
         cmp byte [has_arg], 0
         je .sf_no_name
 
@@ -1215,20 +1215,20 @@ save_file:
         lea esi, [text_buf + eax]
 
         ; Find line length
-        push ecx
-        push edx
+        push rcx
+        push rdx
         call strlen
         mov ebx, eax           ; line length
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Copy line text
-        push ecx
+        push rcx
         mov ecx, ebx
-        push esi
+        push rsi
         rep movsb
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
 
         ; Add newline
         mov byte [edi], 10
@@ -1250,44 +1250,44 @@ save_file:
 
         mov esi, str_saved
         call output_add_line
-        popad
+        POPALL
         ret
 
 .sf_no_name:
         mov esi, str_no_name
         call output_add_line
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; OUTPUT PANEL
 ;=======================================================================
 clear_output:
-        pushad
+        PUSHALL
         mov edi, output_buf
         mov ecx, OUT_LINES * OUT_LINE_LEN
         xor al, al
         rep stosb
         mov dword [out_count], 0
         mov dword [out_scroll], 0
-        popad
+        POPALL
         ret
 
 ; Add line to output panel (ESI = null-terminated string)
 output_add_line:
-        pushad
+        PUSHALL
         ; If buffer full, scroll up
         mov eax, [out_count]
         cmp eax, OUT_LINES
         jl .oal_add
 
         ; Shift lines up
-        push esi
+        push rsi
         mov esi, output_buf + OUT_LINE_LEN
         mov edi, output_buf
         mov ecx, (OUT_LINES - 1) * OUT_LINE_LEN
         rep movsb
-        pop esi
+        pop rsi
 
         mov eax, OUT_LINES - 1
         mov [out_count], eax
@@ -1319,24 +1319,24 @@ output_add_line:
         jl .oal_no_scroll
         mov [out_scroll], eax
 .oal_no_scroll:
-        popad
+        POPALL
         ret
 
 ; Output integer value (EAX = value)
 output_int:
-        pushad
+        PUSHALL
         mov edi, int_buf
         call int_to_str
         mov esi, int_buf
         call output_add_line
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; TEMAPLECODE INTERPRETER
 ;=======================================================================
 run_program:
-        pushad
+        PUSHALL
         ; Reset interpreter state
         call init_interpreter
 
@@ -1422,21 +1422,21 @@ run_program:
         call draw_all
         call gui_flip
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Collect labels from program (L:name, *name)
 ;---------------------------------------
 collect_labels:
-        pushad
+        PUSHALL
         mov dword [label_count], 0
         xor ecx, ecx           ; line index
 
 .cl_loop:
         cmp ecx, [num_lines]
         jge .cl_done
-        push ecx
+        push rcx
 
         mov eax, ecx
         imul eax, LINE_LEN
@@ -1450,8 +1450,8 @@ collect_labels:
         jne .cl_check_star
         add esi, 2
         call skip_spaces
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         call add_label          ; ESI=name, ECX=line number
         jmp .cl_next
 
@@ -1460,22 +1460,22 @@ collect_labels:
         cmp byte [esi], '*'
         jne .cl_next
         inc esi
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         call add_label
 
 .cl_next:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .cl_loop
 
 .cl_done:
-        popad
+        POPALL
         ret
 
 ; Add label: ESI=name start, ECX=line number
 add_label:
-        pushad
+        PUSHALL
         mov eax, [label_count]
         cmp eax, MAX_LABELS
         jge .al_done
@@ -1505,20 +1505,20 @@ add_label:
         mov eax, [label_count]
         imul eax, LABEL_NAME_LEN + 4
         add eax, LABEL_NAME_LEN
-        pop ecx                 ; restore from pushad - line number is in original ecx
-        push ecx
-        ; Get original ECX from pushad frame (at esp+20)
-        mov ecx, [esp + 24]    ; ECX in pushad frame
+        pop rcx                 ; restore from PUSHALL - line number is in original ecx
+        push rcx
+        ; Get original ECX from PUSHALL frame (at rsp+20)
+        mov ecx, [rsp + 96]    ; ECX in PUSHALL frame
         mov [labels + eax], ecx
 
         inc dword [label_count]
 .al_done:
-        popad
+        POPALL
         ret
 
 ; Find label: ESI=name -> EAX=line number or -1
 find_label:
-        pushad
+        PUSHALL
         xor ecx, ecx
 .fl_loop:
         cmp ecx, [label_count]
@@ -1529,11 +1529,11 @@ find_label:
         lea edi, [labels + eax]
 
         ; Compare names
-        push esi
-        push ecx
+        push rsi
+        push rcx
         call str_equal
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         cmp eax, 1
         je .fl_found
 
@@ -1545,20 +1545,20 @@ find_label:
         imul eax, LABEL_NAME_LEN + 4
         add eax, LABEL_NAME_LEN
         mov eax, [labels + eax]
-        mov [esp + 28], eax     ; return via pushad frame
-        popad
+        mov [rsp + 112], eax     ; return via PUSHALL frame
+        POPALL
         ret
 
 .fl_notfound:
-        mov dword [esp + 28], -1
-        popad
+        mov dword [rsp + 112], -1
+        POPALL
         ret
 
 ;=======================================================================
 ; EXECUTE A SINGLE LINE
 ;=======================================================================
 exec_line:
-        pushad
+        PUSHALL
         call skip_spaces
 
         ; Check for PILOT colon-commands (X:)
@@ -1603,7 +1603,7 @@ exec_line:
         call try_basic_logo
 
 .exec_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1611,7 +1611,7 @@ exec_line:
 ;=======================================================================
 try_basic_logo:
         ; ESI points to start of command
-        push esi
+        push rsi
 
         ; --- PRINT ---
         mov edi, kw_print
@@ -1619,223 +1619,223 @@ try_basic_logo:
         jc near do_print
 
         ; --- LET ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_let
         call match_keyword
         jc near do_let
 
         ; --- IF ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_if
         call match_keyword
         jc near do_if
 
         ; --- FOR ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_for
         call match_keyword
         jc near do_for
 
         ; --- NEXT ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_next
         call match_keyword
         jc near do_next
 
         ; --- GOTO ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_goto
         call match_keyword
         jc near do_goto
 
         ; --- GOSUB ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_gosub
         call match_keyword
         jc near do_gosub
 
         ; --- RETURN ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_return
         call match_keyword
         jc near do_return
 
         ; --- INPUT ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_input
         call match_keyword
         jc near do_input
 
         ; --- DIM ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_dim
         call match_keyword
         jc near do_dim
 
         ; --- END ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_end
         call match_keyword
         jc near do_end
 
         ; --- Logo: FORWARD/FD ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_forward
         call match_keyword
         jc near do_forward
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_fd
         call match_keyword
         jc near do_forward
 
         ; --- BACK/BK ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_back
         call match_keyword
         jc near do_back
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_bk
         call match_keyword
         jc near do_back
 
         ; --- LEFT/LT ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_left
         call match_keyword
         jc near do_left
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_lt
         call match_keyword
         jc near do_left
 
         ; --- RIGHT/RT ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_right
         call match_keyword
         jc near do_right
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_rt
         call match_keyword
         jc near do_right
 
         ; --- PENUP/PU ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_penup
         call match_keyword
         jc near do_penup
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_pu
         call match_keyword
         jc near do_penup
 
         ; --- PENDOWN/PD ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_pendown
         call match_keyword
         jc near do_pendown
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_pd
         call match_keyword
         jc near do_pendown
 
         ; --- HOME ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_home
         call match_keyword
         jc near do_home
 
         ; --- CLEARSCREEN/CS ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_clearscreen
         call match_keyword
         jc near do_clearscreen
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_cs
         call match_keyword
         jc near do_clearscreen
 
         ; --- SETCOLOR ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_setcolor
         call match_keyword
         jc near do_setcolor
 
         ; --- CIRCLE ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_circle
         call match_keyword
         jc near do_circle
 
         ; --- REPEAT ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_repeat
         call match_keyword
         jc near do_repeat
 
         ; --- MAKE ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_make
         call match_keyword
         jc near do_make
 
         ; --- SETXY ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, kw_setxy
         call match_keyword
         jc near do_setxy
 
         ; --- Try implicit LET (X = value) ---
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         movzx eax, byte [esi]
         cmp al, 'A'
         jl .tbl_unknown
         cmp al, 'z'
         jg .tbl_unknown
         ; Check for = sign after variable name
-        push esi
+        push rsi
         inc esi
         call skip_spaces
         cmp byte [esi], '='
-        pop esi
+        pop rsi
         jne .tbl_unknown
         ; It's an implicit LET
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         jmp do_let
 
 .tbl_unknown:
-        pop esi
+        pop rsi
         ret
 
 ;=======================================================================
@@ -1844,7 +1844,7 @@ try_basic_logo:
 
 ;----------- PRINT -----------
 do_print:
-        pop esi                 ; clean up push from try_basic_logo
+        pop rsi                 ; clean up push from try_basic_logo
         call skip_spaces
 
         ; Empty PRINT = blank line
@@ -1868,13 +1868,13 @@ do_print:
         ; Expression
         call eval_expr
         ; Convert result to string
-        push esi
+        push rsi
         mov edi, int_buf
         call int_to_str
         ; Append to print_buf
         mov esi, int_buf
         call append_print_buf
-        pop esi
+        pop rsi
         jmp .dp_loop
 
 .dp_string:
@@ -1917,12 +1917,12 @@ do_print:
         inc esi
 .dp_no_close_star:
         ; Convert and append
-        push esi
+        push rsi
         mov edi, int_buf
         call int_to_str
         mov esi, int_buf
         call append_print_buf
-        pop esi
+        pop rsi
         jmp .dp_str_ch
 
 .dp_str_end:
@@ -1943,12 +1943,12 @@ do_print:
 .dp_blank:
         mov esi, str_empty
         call output_add_line
-        pop esi
+        pop rsi
         ret
 
 ;----------- LET -----------
 do_let:
-        pop esi
+        pop rsi
         call skip_spaces
 
         ; Skip optional LET keyword
@@ -1971,7 +1971,7 @@ do_let:
         jg .dl_err
         sub al, 'A'
         movzx ebx, al
-        push ebx
+        push rbx
         inc esi
         call skip_spaces
 
@@ -1983,24 +1983,24 @@ do_let:
 
         ; Evaluate expression
         call eval_expr
-        pop ebx
+        pop rbx
         shl ebx, 2
         mov [variables + ebx], eax
         ret
 
 .dl_err2:
-        pop ebx
+        pop rbx
 .dl_err:
         ret
 
 ;----------- IF -----------
 do_if:
-        pop esi
+        pop rsi
         call skip_spaces
 
         ; Evaluate left expression
         call eval_expr
-        push eax
+        push rax
 
         call skip_spaces
 
@@ -2012,7 +2012,7 @@ do_if:
         je .if_lt_check
         cmp byte [esi], '>'
         je .if_gt_check
-        pop eax
+        pop rax
         ret
 
 .if_eq:
@@ -2049,7 +2049,7 @@ do_if:
         call skip_spaces
         call eval_expr
         mov ecx, eax           ; right side
-        pop ebx                ; left side
+        pop rbx                ; left side
 
         ; Compare
         cmp edx, 1
@@ -2106,7 +2106,7 @@ do_if:
 
 ; Execute inner line (for IF...THEN <statement>)
 exec_line_inner:
-        pushad
+        PUSHALL
         call skip_spaces
         cmp byte [esi], 0
         je .eli_done
@@ -2132,12 +2132,12 @@ exec_line_inner:
 .eli_basic:
         call try_basic_logo
 .eli_done:
-        popad
+        POPALL
         ret
 
 ;----------- FOR -----------
 do_for:
-        pop esi
+        pop rsi
         call skip_spaces
 
         ; Get variable
@@ -2155,29 +2155,29 @@ do_for:
         call skip_spaces
 
         ; Start value
-        push ebx
+        push rbx
         call eval_expr
-        pop ebx
+        pop rbx
         shl ebx, 2
         mov [variables + ebx], eax
         shr ebx, 2             ; restore var index
 
         ; Expect TO
         call skip_spaces
-        push ebx
-        push eax
+        push rbx
+        push rax
         mov edi, kw_to
         call match_keyword
-        pop eax
-        pop ebx
+        pop rax
+        pop rbx
         jnc .for_err
 
         ; End value
-        push ebx
+        push rbx
         call skip_spaces
         call eval_expr
         mov ecx, eax           ; end value
-        pop ebx
+        pop rbx
 
         ; Push FOR frame: var_index, end_value, return_line
         mov eax, [for_sp]
@@ -2197,7 +2197,7 @@ do_for:
 
 ;----------- NEXT -----------
 do_next:
-        pop esi
+        pop rsi
         cmp dword [for_sp], 0
         je .next_err
 
@@ -2232,7 +2232,7 @@ do_next:
 
 ;----------- GOTO -----------
 do_goto:
-        pop esi
+        pop rsi
         call skip_spaces
 
         ; Check if target is a label or number
@@ -2267,7 +2267,7 @@ do_goto:
 
 ;----------- GOSUB -----------
 do_gosub:
-        pop esi
+        pop rsi
         call skip_spaces
 
         ; Push return address
@@ -2306,7 +2306,7 @@ do_gosub:
 
 ;----------- RETURN -----------
 do_return:
-        pop esi
+        pop rsi
         cmp dword [gosub_sp], 0
         je .ret_err
 
@@ -2323,7 +2323,7 @@ do_return:
 
 ;----------- INPUT -----------
 do_input:
-        pop esi
+        pop rsi
         call skip_spaces
 
         ; Check for prompt string
@@ -2355,10 +2355,10 @@ do_input:
 .di_skip_sep:
         inc esi
 .di_show_prompt:
-        push esi
+        push rsi
         mov esi, print_buf
         call output_add_line
-        pop esi
+        pop rsi
         call skip_spaces
 
 .di_var:
@@ -2380,10 +2380,10 @@ do_input:
         mov byte [input_buf], 0
 
         ; Show input prompt
-        push ebx
+        push rbx
         mov esi, str_input_prompt
         call output_add_line
-        pop ebx
+        pop rbx
 
         ; Wait loop - render and poll until input is done
 .di_wait:
@@ -2443,12 +2443,12 @@ do_input:
 
 ;----------- DIM (stub) -----------
 do_dim:
-        pop esi
+        pop rsi
         ret
 
 ;----------- END -----------
 do_end:
-        pop esi
+        pop rsi
         mov byte [running], 0
         ret
 
@@ -2456,7 +2456,7 @@ do_end:
 ; LOGO TURTLE COMMANDS
 ;=======================================================================
 turtle_reset:
-        pushad
+        PUSHALL
         mov dword [turtle_x], 0
         mov dword [turtle_y], 0
         mov dword [turtle_heading], 0       ; 0 = North (up)
@@ -2464,12 +2464,12 @@ turtle_reset:
         mov byte [turtle_visible], 1
         mov dword [turtle_color], 0x00000000 ; black
         mov dword [stroke_count], 0
-        popad
+        POPALL
         ret
 
 ;----------- FORWARD -----------
 do_forward:
-        pop esi
+        pop rsi
         call skip_spaces
         call eval_expr          ; EAX = distance
 
@@ -2478,25 +2478,25 @@ do_forward:
         ; dx = distance * sin(heading)
         ; dy = distance * cos(heading)
 
-        push eax                ; save distance
+        push rax                ; save distance
         mov ecx, [turtle_heading]
 
         ; Get sin and cos (scaled by TRIG_SCALE)
-        push ecx
+        push rcx
         call get_sin            ; EAX = sin(heading) * TRIG_SCALE
         mov ebx, eax            ; EBX = sin
-        pop ecx
-        push ebx
+        pop rcx
+        push rbx
         call get_cos            ; EAX = cos(heading) * TRIG_SCALE
         mov ecx, eax            ; ECX = cos
-        pop ebx                 ; EBX = sin
+        pop rbx                 ; EBX = sin
 
-        pop eax                 ; distance
+        pop rax                 ; distance
 
         ; dx = distance * sin / TRIG_SCALE (but keep scaled)
-        push ecx
+        push rcx
         imul ebx, eax           ; EBX = distance * sin (scaled by TRIG_SCALE)
-        pop ecx
+        pop rcx
         imul ecx, eax           ; ECX = distance * cos (scaled by TRIG_SCALE)
 
         ; Old position (scaled)
@@ -2504,8 +2504,8 @@ do_forward:
         mov edx, [turtle_y]
 
         ; New position
-        push eax
-        push edx
+        push rax
+        push rdx
         add eax, ebx            ; new_x = old_x + dx (all scaled)
         add edx, ecx            ; new_y = old_y + dy
 
@@ -2514,10 +2514,10 @@ do_forward:
         je .fwd_no_draw
 
         ; Draw from old to new using Bresenham
-        pop ecx                 ; old_y (scaled)
-        pop ebx                 ; old_x (scaled)
-        push eax
-        push edx
+        pop rcx                 ; old_y (scaled)
+        pop rbx                 ; old_x (scaled)
+        push rax
+        push rdx
         ; Convert to canvas pixel coords
         sar ebx, 10             ; old_x / TRIG_SCALE
         add ebx, TURTLE_CX
@@ -2525,39 +2525,39 @@ do_forward:
         mov edi, TURTLE_CY
         sub edi, ecx            ; old_y canvas
 
-        push eax
+        push rax
         sar eax, 10
         add eax, TURTLE_CX     ; new_x canvas
-        pop edx
-        push eax
+        pop rdx
+        push rax
         mov eax, edx
 
-        pop edx                 ; new_x canvas in EDX
-        push edx
+        pop rdx                 ; new_x canvas in EDX
+        push rdx
 
         ; Now draw from (EBX, EDI) to (new_x, new_y_canvas)
-        pop edx                 ; new_x canvas
-        pop eax                 ; new_y scaled
-        push eax
+        pop rdx                 ; new_x canvas
+        pop rax                 ; new_y scaled
+        push rax
         sar eax, 10
         mov ecx, TURTLE_CY
         sub ecx, eax            ; new_y canvas
 
         ; EBX=x1, EDI=y1, EDX=x2, ECX=y2
-        push ecx
-        push edx
-        push edi
-        push ebx
+        push rcx
+        push rdx
+        push rdi
+        push rbx
         call draw_line_bresenham
-        add esp, 16
+        add rsp, 16
 
-        pop edx                 ; restore new_y
-        pop eax                 ; restore new_x
+        pop rdx                 ; restore new_y
+        pop rax                 ; restore new_x
         jmp .fwd_update
 
 .fwd_no_draw:
-        pop edx                 ; discard old_y
-        pop ebx                 ; discard old_x
+        pop rdx                 ; discard old_y
+        pop rbx                 ; discard old_x
                                 ; eax=new_x, edx=new_y already set from above
                                 ; Wait we need to recalculate:
         ; Actually eax and edx still have new_x and new_y from the adds above
@@ -2569,24 +2569,24 @@ do_forward:
 
 ;----------- BACK -----------
 do_back:
-        pop esi
+        pop rsi
         call skip_spaces
         call eval_expr
         neg eax
-        push eax
-        push esi
+        push rax
+        push rsi
         ; Reuse forward logic
-        pop esi
-        pop eax
-        push eax
-        push esi
+        pop rsi
+        pop rax
+        push rax
+        push rsi
 
         ; Negate and call forward
-        pop esi
-        pop eax
+        pop rsi
+        pop rax
         ; We need to push back onto stack properly for forward
         ; Simpler: just negate heading, go forward, restore heading
-        push dword [turtle_heading]
+        push qword [turtle_heading]
         mov ecx, [turtle_heading]
         add ecx, 180
         cmp ecx, 360
@@ -2596,20 +2596,20 @@ do_back:
         mov [turtle_heading], ecx
         neg eax
         ; Now call forward logic inline
-        push eax
+        push rax
         mov ecx, [turtle_heading]
-        push ecx
+        push rcx
         call get_sin
         mov ebx, eax
-        pop ecx
-        push ebx
+        pop rcx
+        push rbx
         call get_cos
         mov ecx, eax
-        pop ebx
-        pop eax
-        push ecx
+        pop rbx
+        pop rax
+        push rcx
         imul ebx, eax
-        pop ecx
+        pop rcx
         imul ecx, eax
         mov eax, [turtle_x]
         mov edx, [turtle_y]
@@ -2622,20 +2622,20 @@ do_back:
         je .bk_nodraw
         sar eax, 10
         add eax, TURTLE_CX
-        push eax
+        push rax
         mov eax, edx
         sar eax, 10
         mov ecx, TURTLE_CY
         sub ecx, eax
-        pop eax
+        pop rax
         call record_stroke
 .bk_nodraw:
-        pop dword [turtle_heading]
+        pop qword [turtle_heading]
         ret
 
 ;----------- LEFT -----------
 do_left:
-        pop esi
+        pop rsi
         call skip_spaces
         call eval_expr
         mov ecx, [turtle_heading]
@@ -2656,7 +2656,7 @@ do_left:
 
 ;----------- RIGHT -----------
 do_right:
-        pop esi
+        pop rsi
         call skip_spaces
         call eval_expr
         mov ecx, [turtle_heading]
@@ -2677,19 +2677,19 @@ do_right:
 
 ;----------- PENUP -----------
 do_penup:
-        pop esi
+        pop rsi
         mov byte [turtle_pen], 0
         ret
 
 ;----------- PENDOWN -----------
 do_pendown:
-        pop esi
+        pop rsi
         mov byte [turtle_pen], 1
         ret
 
 ;----------- HOME -----------
 do_home:
-        pop esi
+        pop rsi
         mov dword [turtle_x], 0
         mov dword [turtle_y], 0
         mov dword [turtle_heading], 0
@@ -2697,13 +2697,13 @@ do_home:
 
 ;----------- CLEARSCREEN -----------
 do_clearscreen:
-        pop esi
+        pop rsi
         call turtle_reset
         ret
 
 ;----------- SETCOLOR -----------
 do_setcolor:
-        pop esi
+        pop rsi
         call skip_spaces
         ; Parse color name or number
         call eval_expr
@@ -2746,10 +2746,10 @@ do_setcolor:
 
 ;----------- CIRCLE -----------
 do_circle:
-        pop esi
+        pop rsi
         call skip_spaces
         call eval_expr          ; radius in EAX
-        push eax
+        push rax
 
         ; Draw circle using midpoint algorithm
         ; Center = turtle position on canvas
@@ -2761,9 +2761,9 @@ do_circle:
         mov edx, TURTLE_CY
         sub edx, ecx            ; cy
 
-        pop eax                 ; radius
-        push ebx                ; save cx
-        push edx                ; save cy
+        pop rax                 ; radius
+        push rbx                ; save cx
+        push rdx                ; save cy
 
         ; Midpoint circle: x=0, y=radius, d=1-radius
         xor esi, esi            ; x = 0
@@ -2776,114 +2776,114 @@ do_circle:
         jg .circle_done
 
         ; Plot 8 octants
-        push ecx
-        mov eax, [esp + 8]      ; cy
-        mov ebx, [esp + 12]     ; cx
+        push rcx
+        mov eax, [rsp + 8]      ; cy
+        mov ebx, [rsp + 16]     ; cx
 
         ; (cx+x, cy+y)
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov ecx, eax
         add ecx, edi            ; cy+y
         add ebx, esi            ; cx+x becomes temp
-        push ebx
+        push rbx
         sub ebx, esi            ; restore cx
-        pop edx
+        pop rdx
         ; record (edx, ecx) = (cx+x, cy+y)
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; (cx-x, cy+y)
         mov edx, ebx
         sub edx, esi
         mov ecx, eax
         add ecx, edi
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; (cx+x, cy-y)
         mov edx, ebx
         add edx, esi
         mov ecx, eax
         sub ecx, edi
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; (cx-x, cy-y)
         mov edx, ebx
         sub edx, esi
         mov ecx, eax
         sub ecx, edi
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; (cx+y, cy+x)
         mov edx, ebx
         add edx, edi
         mov ecx, eax
         add ecx, esi
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; (cx-y, cy+x)
         mov edx, ebx
         sub edx, edi
         mov ecx, eax
         add ecx, esi
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; (cx+y, cy-x)
         mov edx, ebx
         add edx, edi
         mov ecx, eax
         sub ecx, esi
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; (cx-y, cy-x)
         mov edx, ebx
         sub edx, edi
         mov ecx, eax
         sub ecx, esi
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, edx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
-        pop edi
-        pop esi
-        pop ecx
+        pop rdi
+        pop rsi
+        pop rcx
 
         ; Update d
         cmp ecx, 0
@@ -2907,16 +2907,16 @@ do_circle:
         jmp .circle_loop
 
 .circle_done:
-        pop edx                 ; cy
-        pop ebx                 ; cx
+        pop rdx                 ; cy
+        pop rbx                 ; cx
         ret
 
 ;----------- REPEAT -----------
 do_repeat:
-        pop esi
+        pop rsi
         call skip_spaces
         call eval_expr          ; count
-        push eax
+        push rax
 
         ; Expect [ ... ]
         call skip_spaces
@@ -2950,11 +2950,11 @@ do_repeat:
         mov byte [edi], 0      ; temporarily null-terminate
         mov [repeat_end], edi
 
-        pop ecx                 ; iteration count
+        pop rcx                 ; iteration count
 .rep_exec:
         cmp ecx, 0
         jle .rep_restore
-        push ecx
+        push rcx
 
         ; Execute each command in the block
         mov esi, [repeat_body]
@@ -2964,9 +2964,9 @@ do_repeat:
         je .rep_cmd_done
 
         ; Execute one command
-        push esi
+        push rsi
         call exec_line_inner
-        pop esi
+        pop rsi
 
         ; Advance past current command (find next space or end)
         call skip_to_next_command
@@ -2974,7 +2974,7 @@ do_repeat:
         jmp .rep_cmd_loop
 
 .rep_cmd_done:
-        pop ecx
+        pop rcx
         dec ecx
         jmp .rep_exec
 
@@ -2984,12 +2984,12 @@ do_repeat:
         ret
 
 .rep_err:
-        pop eax
+        pop rax
         ret
 
 ;----------- MAKE -----------
 do_make:
-        pop esi
+        pop rsi
         call skip_spaces
         ; MAKE "varname value
         cmp byte [esi], '"'
@@ -3011,9 +3011,9 @@ do_make:
         inc esi
 .mk_val:
         call skip_spaces
-        push ebx
+        push rbx
         call eval_expr
-        pop ebx
+        pop rbx
         shl ebx, 2
         mov [variables + ebx], eax
 .mk_done:
@@ -3021,10 +3021,10 @@ do_make:
 
 ;----------- SETXY -----------
 do_setxy:
-        pop esi
+        pop rsi
         call skip_spaces
         call eval_expr          ; x
-        push eax
+        push rax
         call skip_spaces
         cmp byte [esi], ','
         jne .sxy_no_comma
@@ -3033,7 +3033,7 @@ do_setxy:
 .sxy_no_comma:
         call eval_expr          ; y
         mov edx, eax
-        pop eax
+        pop rax
 
         ; Scale and store
         shl eax, 10
@@ -3085,12 +3085,12 @@ exec_pilot_type:
         jne .pt_no_close
         inc esi
 .pt_no_close:
-        push esi
+        push rsi
         mov edi, int_buf
         call int_to_str
         mov esi, int_buf
         call append_print_buf
-        pop esi
+        pop rsi
         jmp .pt_loop
 
 .pt_done:
@@ -3098,7 +3098,7 @@ exec_pilot_type:
         mov byte [print_buf + ecx], 0
         mov esi, print_buf
         call output_add_line
-        popad
+        POPALL
         ret
 
 ;----------- A: Accept input -----------
@@ -3160,13 +3160,13 @@ exec_pilot_accept:
         shl ebx, 2
         mov [variables + ebx], eax
         mov byte [input_waiting], 0
-        popad
+        POPALL
         ret
 
 .pa_abort:
         mov byte [input_waiting], 0
         mov byte [running], 0
-        popad
+        POPALL
         ret
 
 ;----------- M: Match -----------
@@ -3182,9 +3182,9 @@ exec_pilot_match:
         call skip_spaces
         cmp byte [esi], 0
         je .pm_done
-        push esi
+        push rsi
         call eval_expr
-        pop esi
+        pop rsi
         mov ebx, [variables + 8*4]     ; variable I
         cmp eax, ebx
         jne .pm_no_match
@@ -3204,7 +3204,7 @@ exec_pilot_match:
         jmp .pm_loop
 
 .pm_done:
-        popad
+        POPALL
         ret
 
 ;----------- Y: Yes (if match) -----------
@@ -3213,7 +3213,7 @@ exec_pilot_yes:
         jne .py_skip
         call exec_line_inner
 .py_skip:
-        popad
+        POPALL
         ret
 
 ;----------- N: No (if not match) -----------
@@ -3222,7 +3222,7 @@ exec_pilot_no:
         jne .pn_skip
         call exec_line_inner
 .pn_skip:
-        popad
+        POPALL
         ret
 
 ;----------- J: Jump -----------
@@ -3238,12 +3238,12 @@ exec_pilot_jump:
         je .pj_err
         mov [jump_target], eax
         mov byte [jump_flag], 1
-        popad
+        POPALL
         ret
 .pj_err:
         mov esi, str_label_err
         call output_add_line
-        popad
+        POPALL
         ret
 
 ;----------- U: Use (set variable) -----------
@@ -3264,19 +3264,19 @@ exec_pilot_use:
         jne .pu_done
         inc esi
         call skip_spaces
-        push ebx
+        push rbx
         call eval_expr
-        pop ebx
+        pop rbx
         shl ebx, 2
         mov [variables + ebx], eax
 .pu_done:
-        popad
+        POPALL
         ret
 
 ;----------- E: End -----------
 exec_pilot_end:
         mov byte [running], 0
-        popad
+        POPALL
         ret
 
 ;----------- C: Compute -----------
@@ -3299,34 +3299,34 @@ eval_expr:
 
 eval_add_sub:
         call eval_mul_div
-        push eax
+        push rax
 .eas_loop:
         call skip_spaces
         cmp byte [esi], '+'
         je .eas_add
         cmp byte [esi], '-'
         je .eas_sub
-        pop eax
+        pop rax
         ret
 .eas_add:
         inc esi
         call eval_mul_div
-        pop ebx
+        pop rbx
         add eax, ebx
-        push eax
+        push rax
         jmp .eas_loop
 .eas_sub:
         inc esi
         call eval_mul_div
-        pop ebx
+        pop rbx
         sub ebx, eax
         mov eax, ebx
-        push eax
+        push rax
         jmp .eas_loop
 
 eval_mul_div:
         call eval_unary
-        push eax
+        push rax
 .emd_loop:
         call skip_spaces
         cmp byte [esi], '*'
@@ -3335,14 +3335,14 @@ eval_mul_div:
         je .emd_div
         cmp byte [esi], '%'
         je .emd_mod
-        pop eax
+        pop rax
         ret
 .emd_mul:
         inc esi
         call eval_unary
-        pop ebx
+        pop rbx
         imul eax, ebx
-        push eax
+        push rax
         jmp .emd_loop
 .emd_div:
         inc esi
@@ -3350,10 +3350,10 @@ eval_mul_div:
         test eax, eax
         jz .emd_divzero
         mov ecx, eax
-        pop eax
+        pop rax
         cdq
         idiv ecx
-        push eax
+        push rax
         jmp .emd_loop
 .emd_mod:
         inc esi
@@ -3361,16 +3361,16 @@ eval_mul_div:
         test eax, eax
         jz .emd_divzero
         mov ecx, eax
-        pop eax
+        pop rax
         cdq
         idiv ecx
         mov eax, edx
-        push eax
+        push rax
         jmp .emd_loop
 .emd_divzero:
-        pop eax
+        pop rax
         xor eax, eax
-        push eax
+        push rax
         jmp .emd_loop
 
 eval_unary:
@@ -3453,17 +3453,17 @@ eval_atom:
         jne .ea_rnd_plain
         inc esi
         call eval_expr
-        push eax
+        push rax
         call skip_spaces
         cmp byte [esi], ')'
         jne .ea_rnd_close
         inc esi
 .ea_rnd_close:
-        pop ecx
+        pop rcx
         ; Random 1..ecx
-        push ecx
+        push rcx
         rdtsc
-        pop ecx
+        pop rcx
         test ecx, ecx
         jz .ea_rnd_plain2
         xor edx, edx
@@ -3564,8 +3564,8 @@ to_upper_al:
 ; Match keyword: ESI=input, EDI=keyword (uppercase, null-terminated)
 ; Sets CF if match (ESI advanced past keyword+space), clears CF if no match
 match_keyword:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov ebx, esi            ; save start
 .mk_loop:
         movzx eax, byte [edi]
@@ -3610,20 +3610,20 @@ match_keyword:
         inc esi
 .mk_success:
         stc                     ; set carry = match
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 .mk_fail:
         mov esi, ebx            ; restore ESI
         clc                     ; clear carry = no match
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ; String length: ESI -> EAX
 strlen:
-        push esi
+        push rsi
         xor eax, eax
 .sl_loop:
         cmp byte [esi], 0
@@ -3632,13 +3632,13 @@ strlen:
         inc esi
         jmp .sl_loop
 .sl_done:
-        pop esi
+        pop rsi
         ret
 
 ; Compare strings ESI and EDI until null/space, return EAX=1 if equal
 str_equal:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .se_loop:
         movzx eax, byte [esi]
         movzx ebx, byte [edi]
@@ -3664,18 +3664,18 @@ str_equal:
         jne .se_fail
 .se_match:
         mov eax, 1
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 .se_fail:
         xor eax, eax
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ; Integer to string: EAX -> buffer at EDI (null-terminated)
 int_to_str:
-        pushad
+        PUSHALL
         test eax, eax
         jns .its_pos
         mov byte [edi], '-'
@@ -3688,27 +3688,27 @@ int_to_str:
 .its_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .its_push
 .its_pop:
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
         dec ecx
         jnz .its_pop
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 ; Integer to string at EDI, advance EDI past digits
 int_to_str_at:
-        push eax
-        push ebx
-        push ecx
-        push edx
+        push rax
+        push rbx
+        push rcx
+        push rdx
         test eax, eax
         jns .itsa_pos
         mov byte [edi], '-'
@@ -3720,27 +3720,27 @@ int_to_str_at:
 .itsa_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .itsa_push
 .itsa_pop:
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
         dec ecx
         jnz .itsa_pop
-        pop edx
-        pop ecx
-        pop ebx
-        pop eax
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ; Append string from ESI to print_buf
 append_print_buf:
-        push eax
-        push ecx
+        push rax
+        push rcx
 .apb_loop:
         movzx eax, byte [esi]
         test al, al
@@ -3753,13 +3753,13 @@ append_print_buf:
         inc esi
         jmp .apb_loop
 .apb_done:
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 ; Record a pixel stroke: EAX=canvas_x, ECX=canvas_y
 record_stroke:
-        pushad
+        PUSHALL
         ; Bounds check
         cmp eax, 0
         jl .rs_done
@@ -3781,15 +3781,15 @@ record_stroke:
         mov [stroke_buf + edx + 4], ebx
         inc dword [stroke_count]
 .rs_done:
-        popad
+        POPALL
         ret
 
 ; Draw line using Bresenham's algorithm
 ; Parameters on stack: x1, y1, x2, y2
 draw_line_bresenham:
-        push ebp
-        mov ebp, esp
-        pushad
+        push rbp
+        mov rbp, rsp
+        PUSHALL
 
         mov eax, [ebp + 8]      ; x1
         mov ebx, [ebp + 12]     ; y1
@@ -3834,12 +3834,12 @@ draw_line_bresenham:
 
 .bres_loop:
         ; Record pixel
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov ecx, ebx
         call record_stroke
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; Check if done
         cmp eax, [bres_x2]
@@ -3869,16 +3869,16 @@ draw_line_bresenham:
         jmp .bres_loop
 
 .bres_done:
-        popad
-        pop ebp
+        POPALL
+        pop rbp
         ret
 
 ; Trigonometry: get_sin(ECX=degrees) -> EAX = sin*1024
 ; Uses pre-computed lookup table for quadrant 1, derives rest
 get_sin:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         ; Normalize to 0-359
 .gs_norm:
@@ -3927,17 +3927,17 @@ get_sin:
         neg eax
 
 .gs_ret:
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ; get_cos(ECX=degrees) -> EAX = cos*1024
 get_cos:
-        push ecx
+        push rcx
         add ecx, 90            ; cos(x) = sin(x+90)
         call get_sin
-        pop ecx
+        pop rcx
         ret
 
 ;=======================================================================

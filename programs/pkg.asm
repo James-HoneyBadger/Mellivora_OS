@@ -1,10 +1,12 @@
 ; pkg.asm - Mellivora Package Manager
-; List, install, and remove programs from disk.
+; List, install, remove, and download programs.
 ;
 ; Usage: pkg list              - List installed programs
 ;        pkg info <name>       - Show program info
 ;        pkg size              - Show disk usage summary
 ;        pkg search <pattern>  - Search for programs by name
+;        pkg install <url>     - Download and install from HTTP URL
+;        pkg remove <name>     - Remove a file from disk
 
 %include "syscalls.inc"
 
@@ -46,6 +48,16 @@ start:
         cmp eax, 1
         je do_search
 
+        mov edi, cmd_install
+        call match_cmd
+        cmp eax, 1
+        je do_install
+
+        mov edi, cmd_remove
+        call match_cmd
+        cmp eax, 1
+        je do_remove
+
         mov edi, cmd_help
         call match_cmd
         cmp eax, 1
@@ -85,9 +97,9 @@ do_list:
         inc edi
 
         ; Print type indicator
-        push edi
-        push ebp
-        push ecx               ; ECX = file size from readdir
+        push rdi
+        push rbp
+        push rcx               ; ECX = file size from readdir
 
         ; Type character
         cmp eax, 1
@@ -139,8 +151,8 @@ do_list:
         jmp .pad_do
 .pad_done:
         ; Print size
-        pop ecx                 ; file size
-        push ecx
+        pop rcx                 ; file size
+        push rcx
         mov eax, ecx
         call print_size
 
@@ -148,10 +160,10 @@ do_list:
         mov ebx, 10
         int 0x80
 
-        pop ecx
+        pop rcx
         add [total_size], ecx
-        pop ebp
-        pop edi
+        pop rbp
+        pop rdi
 
 .list_next:
         inc ebp
@@ -201,13 +213,13 @@ do_info:
         je .info_next
 
         ; Compare name
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov edi, dirent_buf
         mov esi, [search_name]
         call str_eq
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         cmp edx, 1
         je .info_found
 
@@ -224,8 +236,8 @@ do_info:
 
 .info_found:
         ; EAX = type, ECX = size
-        push ecx
-        push eax
+        push rcx
+        push rax
 
         mov eax, SYS_PRINT
         mov ebx, msg_info_name
@@ -241,7 +253,7 @@ do_info:
         mov eax, SYS_PRINT
         mov ebx, msg_info_type
         int 0x80
-        pop eax
+        pop rax
         cmp eax, 1
         je .it_text
         cmp eax, 2
@@ -271,7 +283,7 @@ do_info:
         mov eax, SYS_PRINT
         mov ebx, msg_info_size
         int 0x80
-        pop ecx
+        pop rcx
         mov eax, ecx
         call print_decimal
         mov eax, SYS_PRINT
@@ -464,19 +476,19 @@ do_search:
         je .search_next
 
         ; Check if filename contains search string
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov edi, dirent_buf
         mov esi, [search_name]
         call str_contains
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         cmp edx, 1
         jne .search_next
 
         ; Match found
-        push ecx
-        push eax
+        push rcx
+        push rax
 
         ; Type indicator
         cmp eax, 1
@@ -509,7 +521,7 @@ do_search:
         int 0x80
 
         ; Pad to 24
-        push edi
+        push rdi
         mov esi, dirent_buf
         xor ecx, ecx
 .sr_pad:
@@ -527,10 +539,10 @@ do_search:
         inc ecx
         jmp .sr_pad_do
 .sr_pad_done:
-        pop edi
+        pop rdi
 
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         mov eax, ecx
         call print_size
         mov eax, SYS_PUTCHAR
@@ -567,6 +579,282 @@ do_search:
         int 0x80
         jmp exit
 
+;---------------------------------------
+; do_install - Download file via HTTP and save to /bin
+;---------------------------------------
+do_install:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .inst_usage
+
+        ; ESI points to URL, e.g. "192.168.1.10/prog"
+        ; Parse host and path from URL
+        mov edi, http_host
+        mov [url_start], esi
+.inst_copy_host:
+        lodsb
+        cmp al, '/'
+        je .inst_got_host
+        cmp al, ' '
+        je .inst_host_only
+        test al, al
+        jz .inst_host_only
+        stosb
+        jmp .inst_copy_host
+.inst_host_only:
+        mov byte [edi], 0
+        mov esi, http_path_root
+        jmp .inst_copy_path_start
+.inst_got_host:
+        mov byte [edi], 0
+.inst_copy_path_start:
+        mov edi, http_path
+        mov byte [edi], '/'
+        inc edi
+.inst_copy_path:
+        lodsb
+        cmp al, ' '
+        je .inst_path_done
+        test al, al
+        jz .inst_path_done
+        stosb
+        jmp .inst_copy_path
+.inst_path_done:
+        mov byte [edi], 0
+
+        ; Extract filename from path (last component)
+        mov esi, http_path
+        mov edi, esi
+.inst_find_name:
+        lodsb
+        test al, al
+        jz .inst_found_name
+        cmp al, '/'
+        jne .inst_find_name
+        mov edi, esi            ; point after last '/'
+        jmp .inst_find_name
+.inst_found_name:
+        mov [inst_filename], edi
+
+        ; Resolve host via DNS
+        mov eax, SYS_DNS
+        mov ebx, http_host
+        int 0x80
+        cmp eax, 0
+        je .inst_dns_fail
+        mov [inst_ip], eax
+
+        ; Create TCP socket
+        mov eax, SYS_SOCKET
+        mov ebx, 1              ; SOCK_STREAM
+        int 0x80
+        cmp eax, -1
+        je .inst_sock_fail
+        mov [inst_sock], eax
+
+        ; Connect to port 80
+        mov eax, SYS_CONNECT
+        mov ebx, [inst_sock]
+        mov ecx, [inst_ip]
+        mov edx, 80
+        int 0x80
+        cmp eax, 0
+        jne .inst_conn_fail
+
+        ; Build HTTP GET request
+        mov edi, http_req_buf
+        mov esi, http_get
+        call inst_strcpy
+        mov esi, http_path
+        call inst_strcpy
+        mov esi, http_ver
+        call inst_strcpy
+        mov esi, http_host_hdr
+        call inst_strcpy
+        mov esi, http_host
+        call inst_strcpy
+        mov esi, http_req_end
+        call inst_strcpy
+
+        ; Send request
+        mov eax, SYS_SEND
+        mov ebx, [inst_sock]
+        mov ecx, http_req_buf
+        mov edx, edi
+        sub edx, http_req_buf
+        int 0x80
+
+        ; Receive response
+        mov dword [inst_total], 0
+        mov edi, http_recv_buf
+.inst_recv_loop:
+        mov eax, SYS_RECV
+        mov ebx, [inst_sock]
+        mov ecx, edi
+        mov edx, 4096
+        int 0x80
+        cmp eax, 0
+        jle .inst_recv_done
+        add edi, eax
+        add [inst_total], eax
+        cmp dword [inst_total], 60000
+        jge .inst_recv_done
+        jmp .inst_recv_loop
+
+.inst_recv_done:
+        mov eax, SYS_SOCKCLOSE
+        mov ebx, [inst_sock]
+        int 0x80
+
+        cmp dword [inst_total], 0
+        je .inst_no_data
+
+        ; Find end of HTTP headers (\r\n\r\n)
+        mov esi, http_recv_buf
+        mov ecx, [inst_total]
+.inst_find_body:
+        cmp ecx, 4
+        jl .inst_no_body
+        cmp dword [esi], 0x0A0D0A0D     ; \r\n\r\n
+        je .inst_body_found
+        inc esi
+        dec ecx
+        jmp .inst_find_body
+
+.inst_body_found:
+        add esi, 4              ; skip past headers
+        mov eax, http_recv_buf
+        add eax, [inst_total]
+        sub eax, esi            ; body length
+        mov [inst_body_len], eax
+
+        ; Save to /bin/<filename>
+        mov edi, inst_path_buf
+        push rsi
+        mov esi, inst_bin_prefix
+.inst_cp_prefix:
+        lodsb
+        test al, al
+        jz .inst_cp_name
+        stosb
+        jmp .inst_cp_prefix
+.inst_cp_name:
+        mov esi, [inst_filename]
+.inst_cp_fname:
+        lodsb
+        test al, al
+        jz .inst_cp_done
+        stosb
+        jmp .inst_cp_fname
+.inst_cp_done:
+        mov byte [edi], 0
+        pop rsi
+
+        mov eax, SYS_FWRITE
+        mov ebx, inst_path_buf
+        mov ecx, esi
+        mov edx, [inst_body_len]
+        int 0x80
+
+        mov eax, SYS_PRINT
+        mov ebx, msg_installed
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, inst_path_buf
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, msg_inst_size
+        int 0x80
+        mov eax, [inst_body_len]
+        call print_decimal
+        mov eax, SYS_PRINT
+        mov ebx, msg_inst_bytes
+        int 0x80
+        jmp exit
+
+.inst_dns_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_dns_fail
+        int 0x80
+        jmp exit
+.inst_sock_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_sock_fail
+        int 0x80
+        jmp exit
+.inst_conn_fail:
+        mov eax, SYS_SOCKCLOSE
+        mov ebx, [inst_sock]
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, msg_conn_fail
+        int 0x80
+        jmp exit
+.inst_no_data:
+        mov eax, SYS_PRINT
+        mov ebx, msg_no_data
+        int 0x80
+        jmp exit
+.inst_no_body:
+        mov eax, SYS_PRINT
+        mov ebx, msg_no_body
+        int 0x80
+        jmp exit
+.inst_usage:
+        mov eax, SYS_PRINT
+        mov ebx, msg_inst_usage
+        int 0x80
+        jmp exit
+
+; Helper: copy null-terminated string from ESI to EDI
+inst_strcpy:
+        push rax
+.is_loop:
+        lodsb
+        test al, al
+        jz .is_done
+        stosb
+        jmp .is_loop
+.is_done:
+        pop rax
+        ret
+
+;---------------------------------------
+; do_remove - Delete a file from disk
+;---------------------------------------
+do_remove:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .rm_usage
+
+        mov eax, SYS_DELETE
+        mov ebx, esi
+        int 0x80
+        cmp eax, 0
+        jne .rm_fail
+
+        mov eax, SYS_PRINT
+        mov ebx, msg_removed
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, esi
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+        jmp exit
+
+.rm_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_rm_fail
+        int 0x80
+        jmp exit
+.rm_usage:
+        mov eax, SYS_PRINT
+        mov ebx, msg_rm_usage
+        int 0x80
+        jmp exit
+
 exit:
         mov eax, SYS_EXIT
         xor ebx, ebx
@@ -579,8 +867,8 @@ exit:
 ; Returns: EAX=1 if match (and ESI advanced past command), 0 if not
 ;---------------------------------------
 match_cmd:
-        push edi
-        push esi
+        push rdi
+        push rsi
 .mc_loop:
         mov al, [edi]
         cmp al, 0
@@ -605,13 +893,13 @@ match_cmd:
 .mc_skip_space:
         inc esi
 .mc_ok:
-        pop eax             ; discard saved ESI
-        pop edi
+        pop rax             ; discard saved ESI
+        pop rdi
         mov eax, 1
         ret
 .mc_fail:
-        pop esi
-        pop edi
+        pop rsi
+        pop rdi
         xor eax, eax
         ret
 
@@ -631,8 +919,8 @@ skip_spaces:
 ; Returns: EDX=1 if equal
 ;---------------------------------------
 str_eq:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .se_loop:
         mov al, [esi]
         mov ah, [edi]
@@ -645,13 +933,13 @@ str_eq:
         jmp .se_loop
 .se_yes:
         mov edx, 1
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 .se_no:
         xor edx, edx
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ;---------------------------------------
@@ -659,9 +947,9 @@ str_eq:
 ; Returns: EDX=1 if found
 ;---------------------------------------
 str_contains:
-        push esi
-        push edi
-        push ebx
+        push rsi
+        push rdi
+        push rbx
         mov ebx, esi           ; save pattern start
 .sc_outer:
         cmp byte [edi], 0
@@ -689,22 +977,22 @@ str_contains:
         jmp .sc_outer
 .sc_yes:
         mov edx, 1
-        pop ebx
-        pop edi
-        pop esi
+        pop rbx
+        pop rdi
+        pop rsi
         ret
 .sc_no:
         xor edx, edx
-        pop ebx
-        pop edi
-        pop esi
+        pop rbx
+        pop rdi
+        pop rsi
         ret
 
 ;---------------------------------------
 ; print_size - Print EAX as human-readable size
 ;---------------------------------------
 print_size:
-        pushad
+        PUSHALL
         cmp eax, 1048576
         jge .ps_mb
         cmp eax, 1024
@@ -714,7 +1002,7 @@ print_size:
         mov eax, SYS_PRINT
         mov ebx, unit_b
         int 0x80
-        popad
+        POPALL
         ret
 .ps_kb:
         add eax, 512
@@ -723,7 +1011,7 @@ print_size:
         mov eax, SYS_PRINT
         mov ebx, unit_kb
         int 0x80
-        popad
+        POPALL
         ret
 .ps_mb:
         add eax, 524288
@@ -732,20 +1020,20 @@ print_size:
         mov eax, SYS_PRINT
         mov ebx, unit_mb
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_decimal - Print EAX as decimal number
 ;---------------------------------------
 print_decimal:
-        pushad
+        PUSHALL
         cmp eax, 0
         jne .pd_nonzero
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pd_nonzero:
         xor ecx, ecx
@@ -753,18 +1041,18 @@ print_decimal:
 .pd_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pd_div
 .pd_out:
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jnz .pd_out
-        popad
+        POPALL
         ret
 
 ;=======================================
@@ -775,17 +1063,40 @@ cmd_list:       db "list", 0
 cmd_info:       db "info", 0
 cmd_size:       db "size", 0
 cmd_search:     db "search", 0
+cmd_install:    db "install", 0
+cmd_remove:     db "remove", 0
 cmd_help:       db "help", 0
 
 help_text:
-        db "Mellivora Package Manager v1.0", 10
+        db "Mellivora Package Manager v2.0", 10
         db "Usage: pkg <command> [args]", 10, 10
         db "Commands:", 10
         db "  list              List all files on disk", 10
         db "  info <name>       Show detailed file info", 10
         db "  size              Show disk usage summary", 10
         db "  search <pattern>  Search files by name", 10
+        db "  install <url>     Download & install via HTTP", 10
+        db "  remove <name>     Remove a file from disk", 10
         db "  help              Show this help", 10, 0
+
+http_get:       db "GET ", 0
+http_ver:       db " HTTP/1.1", 13, 10, 0
+http_host_hdr:  db "Host: ", 0
+http_req_end:   db 13, 10, "Connection: close", 13, 10, 13, 10, 0
+http_path_root: db "/", 0
+inst_bin_prefix: db "/bin/", 0
+msg_installed:  db "Installed: ", 0
+msg_inst_size:  db " (", 0
+msg_inst_bytes: db " bytes)", 10, 0
+msg_dns_fail:   db "Error: DNS resolution failed.", 10, 0
+msg_sock_fail:  db "Error: cannot create socket.", 10, 0
+msg_conn_fail:  db "Error: connection failed.", 10, 0
+msg_no_data:    db "Error: no data received.", 10, 0
+msg_no_body:    db "Error: invalid HTTP response.", 10, 0
+msg_inst_usage: db "Usage: pkg install <host/path>", 10, 0
+msg_removed:    db "Removed: ", 0
+msg_rm_fail:    db "Error: cannot remove file.", 10, 0
+msg_rm_usage:   db "Usage: pkg remove <filename>", 10, 0
 
 msg_list_hdr:
         db "     Name                     Size", 10
@@ -842,3 +1153,16 @@ count_exec:     dd 0
 count_dir:      dd 0
 count_batch:    dd 0
 count_other:    dd 0
+
+; Install data
+url_start:      dd 0
+inst_filename:  dd 0
+inst_sock:      dd 0
+inst_ip:        dd 0
+inst_total:     dd 0
+inst_body_len:  dd 0
+http_host:      times 128 db 0
+http_path:      times 256 db 0
+http_req_buf:   times 512 db 0
+inst_path_buf:  times 280 db 0
+http_recv_buf:  times 61440 db 0

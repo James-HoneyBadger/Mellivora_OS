@@ -13,7 +13,7 @@ start:
         mov ecx, NUM_FORTUNES
         div ecx
         ; EDX = index, save the fortune pointer
-        mov esi, [fortune_ptrs + edx * 4]
+        mov rsi, [fortune_ptrs + rdx * 8]
 
         ; Print opening quote mark
         mov eax, SYS_SETCOLOR
@@ -54,9 +54,9 @@ str_open:       db 10, "  ", 22, " ", 0    ; 22 = double-quote-ish
 str_close:      db " ", 22, 10, 10, 0
 
 fortune_ptrs:
-        dd f0, f1, f2, f3, f4, f5, f6, f7, f8, f9
-        dd f10, f11, f12, f13, f14, f15, f16, f17, f18, f19
-        dd f20, f21, f22, f23, f24, f25, f26, f27, f28, f29
+        dq f0, f1, f2, f3, f4, f5, f6, f7, f8, f9
+        dq f10, f11, f12, f13, f14, f15, f16, f17, f18, f19
+        dq f20, f21, f22, f23, f24, f25, f26, f27, f28, f29
 
 f0:     db "The best way to predict the future is to invent it. -- Alan Kay", 0
 f1:     db "Simplicity is the ultimate sophistication. -- Leonardo da Vinci", 0

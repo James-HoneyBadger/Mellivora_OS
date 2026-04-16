@@ -312,7 +312,7 @@ exit_game:
 ; INIT ENEMIES
 ;=======================================================================
 init_enemies:
-        pushad
+        PUSHALL
         mov edi, enemies
         ; Clear all
         mov ecx, MAX_ENEMIES * 8
@@ -365,14 +365,14 @@ init_enemies:
         jmp .ie_row
 
 .ie_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; INIT STARS (background)
 ;=======================================================================
 init_stars:
-        pushad
+        PUSHALL
         mov edi, stars
         mov ecx, MAX_STARS
 .is_loop:
@@ -390,14 +390,14 @@ init_stars:
         add edi, 2
         dec ecx
         jnz .is_loop
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; DRAW PLAYER SHIP
 ;=======================================================================
 draw_player:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F           ; Bright white
         int 0x80
@@ -446,14 +446,14 @@ draw_player:
         mov ebx, '^'
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; ERASE PLAYER
 ;=======================================================================
 erase_player:
-        pushad
+        PUSHALL
         mov ebx, [player_x]
         mov ecx, PLAYER_Y
         mov eax, SYS_SETCURSOR
@@ -468,14 +468,14 @@ erase_player:
         mov eax, SYS_PRINT
         mov ebx, str_erase3
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; FIRE BULLET
 ;=======================================================================
 fire_bullet:
-        pushad
+        PUSHALL
         ; Find free bullet slot
         mov edi, bullets
         mov ecx, MAX_BULLETS
@@ -502,14 +502,14 @@ fire_bullet:
         int 0x80
 
 .fb_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; UPDATE BULLETS
 ;=======================================================================
 update_bullets:
-        pushad
+        PUSHALL
         ; Only move on every other tick
         mov eax, [tick_count]
         and eax, 1
@@ -525,13 +525,13 @@ update_bullets:
         ; Erase old position
         movzx ebx, byte [edi + 1]
         movzx ecx, byte [edi + 2]
-        push ecx
+        push rcx
         mov eax, SYS_SETCURSOR
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
 
         ; Move up
         dec byte [edi + 2]
@@ -554,14 +554,14 @@ update_bullets:
         jmp .ub_done             ; simplified - just one pass
 
 .ub_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; DRAW BULLETS
 ;=======================================================================
 draw_bullets:
-        pushad
+        PUSHALL
         mov edi, bullets
         mov ecx, MAX_BULLETS
 
@@ -571,7 +571,7 @@ draw_bullets:
 
         movzx ebx, byte [edi + 1]
         movzx eax, byte [edi + 2]
-        push ecx
+        push rcx
         mov ecx, eax
         mov eax, SYS_SETCURSOR
         int 0x80
@@ -581,20 +581,20 @@ draw_bullets:
         mov eax, SYS_PUTCHAR
         mov ebx, '|'
         int 0x80
-        pop ecx
+        pop rcx
 
 .db_next:
         add edi, 8
         dec ecx
         jnz .db_loop
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; UPDATE ENEMIES
 ;=======================================================================
 update_enemies:
-        pushad
+        PUSHALL
         inc dword [enemy_tick]
         mov eax, [enemy_tick]
 
@@ -676,19 +676,19 @@ update_enemies:
         neg dword [enemy_dir]
 
 .ue_done:
-        popad
+        POPALL
         ret
 
 .ue_reached_player:
         mov byte [game_over], 1
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; ERASE ENEMIES
 ;=======================================================================
 erase_enemies:
-        pushad
+        PUSHALL
         mov edi, enemies
         mov ecx, MAX_ENEMIES
 
@@ -696,7 +696,7 @@ erase_enemies:
         cmp byte [edi], ETYPE_NONE
         je .ee_next
 
-        push ecx
+        push rcx
         movzx ebx, byte [edi + 1]
         movzx ecx, byte [edi + 2]
         mov eax, SYS_SETCURSOR
@@ -704,20 +704,20 @@ erase_enemies:
         mov eax, SYS_PRINT
         mov ebx, str_erase3
         int 0x80
-        pop ecx
+        pop rcx
 
 .ee_next:
         add edi, 8
         dec ecx
         jnz .ee_loop
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; DRAW ENEMIES
 ;=======================================================================
 draw_enemies:
-        pushad
+        PUSHALL
         mov edi, enemies
         mov ecx, MAX_ENEMIES
 
@@ -725,7 +725,7 @@ draw_enemies:
         cmp byte [edi], ETYPE_NONE
         je .de_next
 
-        push ecx
+        push rcx
         ; Set cursor
         movzx ebx, byte [edi + 1]
         movzx ecx, byte [edi + 2]
@@ -765,20 +765,20 @@ draw_enemies:
         int 0x80
 
 .de_drawn:
-        pop ecx
+        pop rcx
 
 .de_next:
         add edi, 8
         dec ecx
         jnz .de_loop
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; DRAW STARS
 ;=======================================================================
 draw_stars:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x08           ; Dark gray
         int 0x80
@@ -787,7 +787,7 @@ draw_stars:
         mov ecx, MAX_STARS
 
 .ds_loop:
-        push ecx
+        push rcx
         movzx ebx, byte [edi]
         movzx ecx, byte [edi + 1]
         mov eax, SYS_SETCURSOR
@@ -795,19 +795,19 @@ draw_stars:
         mov eax, SYS_PUTCHAR
         mov ebx, '.'
         int 0x80
-        pop ecx
+        pop rcx
 
         add edi, 2
         dec ecx
         jnz .ds_loop
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; CHECK COLLISIONS (bullets vs enemies)
 ;=======================================================================
 check_collisions:
-        pushad
+        PUSHALL
         mov esi, bullets
         mov ecx, MAX_BULLETS
 
@@ -817,7 +817,7 @@ check_collisions:
 
         ; Check against all enemies
         mov edi, enemies
-        push ecx
+        push rcx
         mov ecx, MAX_ENEMIES
 
 .cc_enemy:
@@ -842,17 +842,17 @@ check_collisions:
         mov byte [esi], 0       ; bullet gone
 
         ; Erase enemy at old position
-        push ecx
+        push rcx
         movzx ebx, byte [edi + 1]
         movzx ecx, byte [edi + 2]
-        push eax
+        push rax
         mov eax, SYS_SETCURSOR
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_erase3
         int 0x80
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
 
         ; Score based on type
         movzx eax, byte [edi]
@@ -871,12 +871,12 @@ check_collisions:
         mov byte [edi], ETYPE_NONE
 
         ; Explosion beep
-        push ecx
+        push rcx
         mov eax, SYS_BEEP
         mov ebx, 200
         mov ecx, 2
         int 0x80
-        pop ecx
+        pop rcx
 
         jmp .cc_next_bullet_pop
 
@@ -886,22 +886,22 @@ check_collisions:
         jnz .cc_enemy
 
 .cc_next_bullet_pop:
-        pop ecx
+        pop rcx
 
 .cc_next_bullet:
         add esi, 8
         dec ecx
         jnz .cc_bullet
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; COUNT REMAINING ENEMIES -> EAX
 ;=======================================================================
 count_enemies:
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov edi, enemies
         mov ecx, MAX_ENEMIES
         xor eax, eax
@@ -913,15 +913,15 @@ count_enemies:
         add edi, 8
         dec ecx
         jnz .ce_loop
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         ret
 
 ;=======================================================================
 ; DRAW HUD (heads-up display)
 ;=======================================================================
 draw_hud:
-        pushad
+        PUSHALL
         ; Top bar
         mov eax, SYS_SETCOLOR
         mov ebx, 0x1F           ; White on blue
@@ -989,23 +989,23 @@ draw_hud:
         mov ebx, 0x07
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; RANDOM NUMBER GENERATOR
 ;=======================================================================
 random:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov eax, [rand_seed]
         imul eax, 1103515245
         add eax, 12345
         mov [rand_seed], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ;=======================================================================

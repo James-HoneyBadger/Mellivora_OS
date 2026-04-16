@@ -29,14 +29,14 @@ start:
         je .show_index
 
         ; Look up command in help table
-        mov edi, help_table
+        mov rdi, help_table
 .lookup:
-        cmp dword [edi], 0       ; end of table
+        cmp qword [rdi], 0       ; end of table
         je .not_found
 
         ; Compare argument with command name
-        push esi
-        mov ebx, [edi]           ; command name pointer
+        push rsi
+        mov rbx, [rdi]           ; command name pointer
 .cmp_loop:
         mov al, [ebx]
         mov cl, [esi]
@@ -62,14 +62,14 @@ start:
         jmp .cmp_loop
 
 .cmp_mismatch:
-        pop esi
-        add edi, 8              ; next entry (name_ptr, help_ptr)
+        pop rsi
+        add rdi, 16              ; next entry (name_ptr, help_ptr)
         jmp .lookup
 
 .cmp_match:
-        pop esi
+        pop rsi
         ; Found — display help text
-        mov esi, [edi + 4]       ; help text pointer
+        mov rsi, [rdi + 8]       ; help text pointer
         call display_help
         jmp .exit
 
@@ -99,7 +99,7 @@ start:
 ; ─── display_index ───────────────────────────────────────────
 ; Show list of all available commands
 display_index:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, COL_TITLE
         int 0x80
@@ -115,10 +115,10 @@ display_index:
         int 0x80
 
         ; Print commands in columns
-        mov edi, help_table
+        mov rdi, help_table
         xor ecx, ecx            ; column counter
 .idx_loop:
-        cmp dword [edi], 0
+        cmp qword [rdi], 0
         je .idx_done
 
         ; Print command name
@@ -126,11 +126,11 @@ display_index:
         mov ebx, COL_CMD
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, [edi]
+        mov rbx, [rdi]
         int 0x80
 
         ; Pad to column width (14 chars)
-        mov esi, [edi]
+        mov rsi, [rdi]
         xor edx, edx
 .idx_len:
         cmp byte [esi + edx], 0
@@ -157,7 +157,7 @@ display_index:
         xor ecx, ecx
 
 .idx_next:
-        add edi, 8
+        add rdi, 16
         jmp .idx_loop
 
 .idx_done:
@@ -175,7 +175,7 @@ display_index:
         mov ebx, str_index_footer
         int 0x80
 
-        popad
+        POPALL
         ret
 
 
@@ -185,7 +185,7 @@ display_index:
 ;   \1 = title color, \2 = heading color, \3 = text color,
 ;   \4 = cmd color, \5 = example color
 display_help:
-        pushad
+        PUSHALL
 .dh_loop:
         movzx eax, byte [esi]
         test al, al
@@ -245,7 +245,7 @@ display_help:
         mov eax, SYS_SETCOLOR
         mov ebx, COL_TEXT
         int 0x80
-        popad
+        POPALL
         ret
 
 
@@ -265,35 +265,35 @@ str_index_footer: db '  Type "help <command>" for details.', 10, 0
 
 ; Help table: pairs of (name_ptr, help_ptr), terminated by (0, 0)
 help_table:
-        dd cmd_ls,      help_ls
-        dd cmd_cd,      help_cd
-        dd cmd_cat,     help_cat
-        dd cmd_cp,      help_cp
-        dd cmd_rm,      help_rm
-        dd cmd_mv,      help_mv
-        dd cmd_mkdir,   help_mkdir
-        dd cmd_pwd,     help_pwd
-        dd cmd_echo,    help_echo
-        dd cmd_cls,     help_cls
-        dd cmd_date,    help_date
-        dd cmd_time,    help_time
-        dd cmd_env,     help_env
-        dd cmd_set,     help_set
-        dd cmd_ping,    help_ping
-        dd cmd_net,     help_net
-        dd cmd_dhcp,    help_dhcp
-        dd cmd_arp,     help_arp
-        dd cmd_edit,    help_edit
-        dd cmd_hex,     help_hex
-        dd cmd_head,    help_head
-        dd cmd_grep,    help_grep
-        dd cmd_find,    help_find
-        dd cmd_calc,    help_calc
-        dd cmd_help,    help_help
-        dd cmd_shutdown, help_shutdown
-        dd cmd_reboot,  help_reboot
-        dd cmd_burrows, help_burrows
-        dd 0, 0
+        dq cmd_ls,      help_ls
+        dq cmd_cd,      help_cd
+        dq cmd_cat,     help_cat
+        dq cmd_cp,      help_cp
+        dq cmd_rm,      help_rm
+        dq cmd_mv,      help_mv
+        dq cmd_mkdir,   help_mkdir
+        dq cmd_pwd,     help_pwd
+        dq cmd_echo,    help_echo
+        dq cmd_cls,     help_cls
+        dq cmd_date,    help_date
+        dq cmd_time,    help_time
+        dq cmd_env,     help_env
+        dq cmd_set,     help_set
+        dq cmd_ping,    help_ping
+        dq cmd_net,     help_net
+        dq cmd_dhcp,    help_dhcp
+        dq cmd_arp,     help_arp
+        dq cmd_edit,    help_edit
+        dq cmd_hex,     help_hex
+        dq cmd_head,    help_head
+        dq cmd_grep,    help_grep
+        dq cmd_find,    help_find
+        dq cmd_calc,    help_calc
+        dq cmd_help,    help_help
+        dq cmd_shutdown, help_shutdown
+        dq cmd_reboot,  help_reboot
+        dq cmd_burrows, help_burrows
+        dq 0, 0
 
 ; Command name strings
 cmd_ls:       db 'ls', 0

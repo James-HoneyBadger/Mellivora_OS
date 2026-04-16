@@ -384,7 +384,7 @@ news> quit
 
 Ten syscalls provide the kernel networking interface:
 
-| # | Name | EBX | ECX | EDX | Returns (EAX) |
+| # | Name | RBX | RCX | RDX | Returns (RAX) |
 | --- | --- | --- | --- | --- | --- |
 | 39 | SOCKET | type (1=TCP, 2=UDP) | — | — | socket fd or -1 |
 | 40 | CONNECT | socket fd | IP address | port | 0 or -1 |
@@ -408,19 +408,19 @@ Include `programs/lib/net.inc` for convenient wrappers around the raw syscalls:
 
 | Function | Input | Output | Description |
 | --- | --- | --- | --- |
-| `net_socket` | EAX=type (1=TCP, 2=UDP) | EAX=fd (-1 error) | Create a socket |
-| `net_connect` | EAX=fd, EBX=IP, ECX=port | EAX=0/-1 | Connect to remote host |
-| `net_send` | EAX=fd, EBX=buffer, ECX=length | EAX=bytes sent | Send raw data |
-| `net_recv` | EAX=fd, EBX=buffer, ECX=max | EAX=bytes (0=none, -1=closed) | Receive data |
-| `net_close` | EAX=fd | — | Close socket |
-| `net_dns` | ESI=hostname | EAX=IP (0=fail) | Resolve hostname |
-| `net_ping` | EAX=IP | EAX=RTT ticks (-1=timeout) | ICMP echo request |
-| `net_bind` | EAX=fd, EBX=port | EAX=0/-1 | Bind to local port |
-| `net_listen` | EAX=fd | EAX=0/-1 | Start listening |
-| `net_accept` | EAX=fd | EAX=new fd (-1=timeout) | Accept connection |
-| `net_send_line` | EAX=fd, ESI=string | — | Send string + CRLF |
-| `net_recv_line` | EAX=fd, EDI=buffer, ECX=max | EAX=bytes, EDI filled | Receive line |
-| `net_parse_ip` | ESI=dotted IP string | EAX=IP (0=error) | Parse "1.2.3.4" to binary |
+| `net_socket` | RAX=type (1=TCP, 2=UDP) | RAX=fd (-1 error) | Create a socket |
+| `net_connect` | RAX=fd, RBX=IP, RCX=port | RAX=0/-1 | Connect to remote host |
+| `net_send` | RAX=fd, RBX=buffer, RCX=length | RAX=bytes sent | Send raw data |
+| `net_recv` | RAX=fd, RBX=buffer, RCX=max | RAX=bytes (0=none, -1=closed) | Receive data |
+| `net_close` | RAX=fd | — | Close socket |
+| `net_dns` | RSI=hostname | RAX=IP (0=fail) | Resolve hostname |
+| `net_ping` | RAX=IP | RAX=RTT ticks (-1=timeout) | ICMP echo request |
+| `net_bind` | RAX=fd, RBX=port | RAX=0/-1 | Bind to local port |
+| `net_listen` | RAX=fd | RAX=0/-1 | Start listening |
+| `net_accept` | RAX=fd | RAX=new fd (-1=timeout) | Accept connection |
+| `net_send_line` | RAX=fd, RSI=string | — | Send string + CRLF |
+| `net_recv_line` | RAX=fd, RDI=buffer, RCX=max | RAX=bytes, RDI filled | Receive line |
+| `net_parse_ip` | RSI=dotted IP string | RAX=IP (0=error) | Parse "1.2.3.4" to binary |
 
 ### Example: Simple HTTP Fetch
 
@@ -431,75 +431,75 @@ Include `programs/lib/net.inc` for convenient wrappers around the raw syscalls:
 
 start:
         ; Resolve hostname
-        mov esi, hostname
+        mov rsi, hostname
         call net_dns
-        test eax, eax
+        test rax, rax
         jz .dns_fail
-        mov [server_ip], eax
+        mov [server_ip], rax
 
         ; Create TCP socket
-        mov eax, NET_TCP
+        mov rax, NET_TCP
         call net_socket
-        cmp eax, -1
+        cmp rax, -1
         je .sock_fail
-        mov [sockfd], eax
+        mov [sockfd], rax
 
         ; Connect to port 80
-        mov eax, [sockfd]
-        mov ebx, [server_ip]
-        mov ecx, 80
+        mov rax, [sockfd]
+        mov rbx, [server_ip]
+        mov rcx, 80
         call net_connect
-        cmp eax, -1
+        cmp rax, -1
         je .conn_fail
 
         ; Send HTTP request
-        mov eax, [sockfd]
-        mov esi, http_request
+        mov rax, [sockfd]
+        mov rsi, http_request
         call net_send_line
 
         ; Send blank line (end of headers)
-        mov eax, [sockfd]
-        mov esi, empty_line
+        mov rax, [sockfd]
+        mov rsi, empty_line
         call net_send_line
 
         ; Receive and print response
 .recv_loop:
-        mov eax, [sockfd]
-        mov ebx, recv_buf
-        mov ecx, 1024
+        mov rax, [sockfd]
+        mov rbx, recv_buf
+        mov rcx, 1024
         call net_recv
-        cmp eax, 0
+        cmp rax, 0
         jle .done
 
         ; Null-terminate and print
-        mov byte [recv_buf + eax], 0
-        mov esi, recv_buf
-        mov eax, SYS_PRINT
-        mov ebx, esi
+        mov byte [recv_buf + rax], 0
+        mov rsi, recv_buf
+        mov rax, SYS_PRINT
+        mov rbx, rsi
         int 0x80
         jmp .recv_loop
 
 .done:
-        mov eax, [sockfd]
+        mov rax, [sockfd]
         call net_close
-        mov eax, SYS_EXIT
-        xor ebx, ebx
+        mov rax, SYS_EXIT
+        xor rbx, rbx
         int 0x80
 
 .dns_fail:
-        mov esi, msg_dns_err
+        mov rsi, msg_dns_err
         jmp .print_exit
 .sock_fail:
-        mov esi, msg_sock_err
+        mov rsi, msg_sock_err
         jmp .print_exit
 .conn_fail:
-        mov esi, msg_conn_err
+        mov rsi, msg_conn_err
 .print_exit:
-        mov eax, SYS_PRINT
-        mov ebx, esi
+        mov rax, SYS_PRINT
+        mov rbx, rsi
         int 0x80
-        mov eax, SYS_EXIT
-        mov ebx, 1
+        mov rax, SYS_EXIT
+        mov rbx, 1
         int 0x80
 
 hostname:       db "example.com", 0
@@ -524,42 +524,42 @@ recv_buf:       resb 1025
 
 start:
         ; Create listening socket on port 7
-        mov eax, NET_TCP
+        mov rax, NET_TCP
         call net_socket
-        mov [listen_fd], eax
+        mov [listen_fd], rax
 
-        mov eax, [listen_fd]
-        mov ebx, 7             ; Echo port
+        mov rax, [listen_fd]
+        mov rbx, 7             ; Echo port
         call net_bind
 
-        mov eax, [listen_fd]
+        mov rax, [listen_fd]
         call net_listen
 
 .accept_loop:
-        mov eax, [listen_fd]
+        mov rax, [listen_fd]
         call net_accept
-        cmp eax, -1
+        cmp rax, -1
         je .accept_loop
-        mov [client_fd], eax
+        mov [client_fd], rax
 
         ; Echo received data back
 .echo_loop:
-        mov eax, [client_fd]
-        mov ebx, echo_buf
-        mov ecx, 128
+        mov rax, [client_fd]
+        mov rbx, echo_buf
+        mov rcx, 128
         call net_recv
-        cmp eax, 0
+        cmp rax, 0
         jle .close_client
 
         ; Send it back
-        mov ecx, eax
-        mov eax, [client_fd]
-        mov ebx, echo_buf
+        mov rcx, rax
+        mov rax, [client_fd]
+        mov rbx, echo_buf
         call net_send
         jmp .echo_loop
 
 .close_client:
-        mov eax, [client_fd]
+        mov rax, [client_fd]
         call net_close
         jmp .accept_loop
 
@@ -578,7 +578,7 @@ echo_buf:       resb 128
 The Makefile runs QEMU with user-mode networking and an emulated RTL8139 NIC:
 
 ```bash
-qemu-system-i386 ... -netdev user,id=net0 -device rtl8139,netdev=net0
+qemu-system-x86_64 ... -netdev user,id=net0 -device rtl8139,netdev=net0
 ```
 
 This provides NAT networking where the guest can access the host network and internet
@@ -589,7 +589,7 @@ through QEMU's built-in router. No host configuration is required.
 To make a server running inside Mellivora accessible from the host, add port forwarding:
 
 ```bash
-qemu-system-i386 ... \
+qemu-system-x86_64 ... \
     -netdev user,id=net0,hostfwd=tcp::8080-:80 \
     -device rtl8139,netdev=net0
 ```
@@ -607,7 +607,7 @@ sudo ip link set tap0 up
 sudo brctl addif br0 tap0
 
 # Run QEMU with TAP
-qemu-system-i386 ... -netdev tap,id=net0,ifname=tap0 -device rtl8139,netdev=net0
+qemu-system-x86_64 ... -netdev tap,id=net0,ifname=tap0 -device rtl8139,netdev=net0
 ```
 
 ---

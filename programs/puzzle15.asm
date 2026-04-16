@@ -126,7 +126,7 @@ swap_blank:
 ; shuffle: Make 200 random moves to shuffle
 ;--------------------------------------
 shuffle:
-        pusha
+        PUSHALL
         mov ebp, 200
 .shuf_loop:
         mov eax, SYS_GETTIME
@@ -176,14 +176,14 @@ shuffle:
         jnz .shuf_loop
 
         mov dword [moves], 0
-        popa
+        POPALL
         ret
 
 ;--------------------------------------
 ; draw_board
 ;--------------------------------------
 draw_board:
-        pusha
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -221,33 +221,33 @@ draw_board:
         je .blank_cell
 
         ; Colored tile
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ebx, 0x0B
         cmp eax, [solved + esi]
         jne .wrong_pos
         mov ebx, 0x0A        ; green if in correct position
 .wrong_pos:
-        push eax
+        push rax
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop eax
+        pop rax
 
         ; Print number with padding
         cmp eax, 10
         jge .two_digit
         mov ebx, SYS_PUTCHAR
         xchg eax, ebx
-        push ebx
+        push rbx
         mov ebx, ' '
         int 0x80
-        pop ebx
+        pop rbx
         add ebx, '0'
-        push ebx
+        push rbx
         mov eax, SYS_PUTCHAR
-        mov ebx, [esp]
+        mov ebx, [rsp]
         int 0x80
-        add esp, 4
+        add rsp, 4
         jmp .after_num
 .two_digit:
         call print_dec
@@ -255,8 +255,8 @@ draw_board:
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         jmp .sep
 
 .blank_cell:
@@ -289,7 +289,7 @@ draw_board:
         mov eax, SYS_PRINT
         mov ebx, border_bot
         int 0x80
-        popa
+        POPALL
         ret
 
 ;--------------------------------------

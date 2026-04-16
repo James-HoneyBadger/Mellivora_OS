@@ -3,7 +3,7 @@
 Welcome to Mellivora OS! This guide covers everything you need to know to use the
 HB Lair shell, manage files, run programs, network, and get the most out of the system.
 
-> **Version 3.0.0** — 140 programs, 72 syscalls, full TCP/IP networking, Burrows desktop
+> **Version 4.0.0** — 140 programs, 84 syscalls, full TCP/IP networking, Burrows desktop
 
 ---
 
@@ -71,14 +71,14 @@ Press **Enter** to re-execute a recalled command.
 
 ## Directory Structure
 
-Mellivora organizes 169 files into subdirectories:
+Mellivora organizes 220 files into subdirectories:
 
 ```text
 /
-├── bin/          119 utility and tool programs (edit, grep, tcc, httpd, ...)
-├── games/         21 games (snake, tetris, chess, rogue, galaga, ...)
-├── samples/       17 sample scripts (11 C, 6 Perl)
-├── docs/          10 text files (readme, license, notes, todo, poem, man pages)
+├── bin/          147 utility and tool programs (edit, grep, tcc, httpd, ...)
+├── games/         28 games (snake, tetris, chess, rogue, galaga, ...)
+├── samples/       22 sample scripts (11 C, 6 Perl, 5 docs)
+├── docs/          21 text files (readme, license, notes, todo, poem, man pages)
 ├── script.bat    Example batch script
 └── welcome.bat   System highlights and quick-start tips
 ```
@@ -1009,7 +1009,7 @@ Lair:/> dhcp && ping 8.8.8.8         # Get IP, then ping Google DNS
   forwarding configuration.
 - **No file permissions**: All files are accessible to all operations.
 - **Case-sensitive filenames**: `README.txt` and `readme.txt` are different files.
-- **128 MB RAM limit**: Physical memory manager identity-maps up to 128 MB.
+- **4 GB RAM ceiling**: Current physical memory manager identity-maps up to 4 GB.
 - **Root: 455 files, Subdirs: 224 files**: Directory entry limits per directory.
 - **16-level directory nesting**: Maximum subdirectory depth.
 - **Tab completion**: Completes filenames in the current directory only (not PATH-aware).

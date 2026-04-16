@@ -1,8 +1,8 @@
 ;
-; Mellivora OS - 32-bit Protected Mode Kernel
+; Mellivora OS - 64-bit Long Mode Kernel
 ;
 ; Loaded at 0x00100000 (1MB) by stage 2.
-; Flat memory model, full 4GB address space.
+; 64-bit long mode, identity-mapped 4GB.
 ;
 ; Components:
 ;   Mellivora  - Kernel (this file + kernel/*.inc)
@@ -23,10 +23,10 @@
 ;   - Syscall interface via INT 0x80
 ;   - Interactive command shell
 ;
-; Target: i486+
+; Target: Core 2 Duo+
 ;
 
-[BITS 32]
+[BITS 64]
 [ORG 0x00100000]
 
 ;=======================================================================
@@ -35,11 +35,13 @@
 
 ; Memory layout
 KERNEL_BASE         equ 0x00100000
-KERNEL_STACK        equ 0x009FC00       ; Top of conventional memory for kernel stack
+KERNEL_STACK        equ 0x003FF000      ; 4KB-aligned kernel stack below heap
 PROGRAM_BASE        equ 0x00200000      ; Programs load at 2MB
 PROGRAM_MAX_SIZE    equ 0x00100000      ; Max 1MB per program
 HEAP_BASE           equ 0x00400000      ; Kernel heap starts at 4MB
 PMM_BITMAP          equ 0x00300000      ; Physical memory bitmap at 3MB
+BUDDY_ORDER         equ 0x00320000      ; Buddy order array at 3.125MB (256KB)
+BUDDY_MAX_ORDER     equ 10             ; Max block = 2^10 pages = 4MB
 
 ; Boot info passed by stage 2 at 0x500
 BOOTINFO_DRIVE      equ 0x500
@@ -98,11 +100,28 @@ ATA_CMD_WRITE       equ 0x34           ; WRITE SECTORS EXT (LBA48)
 ATA_CMD_IDENTIFY    equ 0xEC
 ATA_CMD_FLUSH       equ 0xE7
 
+; ATA DMA constants
+ATA_CMD_READ_DMA    equ 0x25           ; READ DMA EXT (LBA48)
+ATA_CMD_WRITE_DMA   equ 0x35           ; WRITE DMA EXT (LBA48)
+BM_CMD_REG          equ 0              ; Bus Master Command register offset
+BM_STATUS_REG       equ 2              ; Bus Master Status register offset
+BM_PRD_REG          equ 4              ; Bus Master PRD Table Address offset
+BM_CMD_START        equ 0x01           ; Start DMA
+BM_CMD_WRITE        equ 0x08           ; DMA direction: 1=device→mem (read)
+BM_STATUS_IRQ       equ 0x04           ; Interrupt bit
+BM_STATUS_ERR       equ 0x02           ; Error bit
+BM_STATUS_ACT       equ 0x01           ; Active bit
+PCI_CONFIG_ADDR     equ 0xCF8
+PCI_CONFIG_DATA     equ 0xCFC
+
 ; Arrow key codes (returned by keyboard driver)
 KEY_UP              equ 0x80
 KEY_DOWN            equ 0x81
 KEY_LEFT            equ 0x82
 KEY_RIGHT           equ 0x83
+KEY_HOME            equ 0x8F
+KEY_END             equ 0x90
+KEY_DELETE          equ 0x91
 
 ; ATA status bits
 ATA_SR_BSY          equ 0x80
@@ -123,14 +142,14 @@ HBFS_ROOT_DIR_SECTS  equ HBFS_ROOT_DIR_BLOCKS * HBFS_SECTORS_PER_BLK ; 256 secto
 HBFS_ROOT_DIR_SIZE   equ HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE      ; 131072 bytes
 HBFS_MAX_FILES       equ HBFS_ROOT_DIR_SIZE / HBFS_DIR_ENTRY_SIZE    ; 455 entries
 HBFS_SUBDIR_BLOCKS   equ 16           ; Subdirectories get 16 blocks (224 entries each)
-HBFS_SUPERBLOCK_LBA  equ 417           ; After kernel area (LBA 33 + 384 sectors)
-HBFS_BITMAP_START    equ 418           ; Block allocation bitmap start
+HBFS_SUPERBLOCK_LBA  equ 2081          ; After kernel area (LBA 33 + 2048 sectors = 1MB)
+HBFS_BITMAP_START    equ 2082          ; Block allocation bitmap start
 HBFS_BITMAP_BLOCKS   equ 16            ; 16 blocks for bitmap (covers 524288 blocks)
 HBFS_BITMAP_SECTS    equ HBFS_BITMAP_BLOCKS * HBFS_SECTORS_PER_BLK ; 128 sectors
 HBFS_BITMAP_SIZE     equ HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE       ; 65536 bytes
 HBFS_TOTAL_BLOCKS    equ 524288        ; Total filesystem blocks (2 GB)
-HBFS_ROOT_DIR_START  equ 546           ; Root directory (256 sectors = 32 blocks)
-HBFS_DATA_START      equ 802           ; Data blocks start here
+HBFS_ROOT_DIR_START  equ 2210          ; Root directory (256 sectors = 32 blocks)
+HBFS_DATA_START      equ 2466          ; Data blocks start here
 
 ; File types (stored at byte 253 of directory entry)
 FTYPE_FREE          equ 0
@@ -257,11 +276,11 @@ FD_FLAG_CLOSED      equ 0
 FD_FLAG_READ        equ 1
 FD_FLAG_WRITE       equ 2
 
-; ELF constants
+; ELF constants (64-bit)
 ELF_MAGIC           equ 0x464C457F
 ELF_PT_LOAD         equ 1
-ELF_EHDR_SIZE       equ 52
-ELF_PHDR_SIZE       equ 32
+ELF_EHDR_SIZE       equ 64
+ELF_PHDR_SIZE       equ 56
 
 ; Environment
 ENV_MAX             equ 16
@@ -280,24 +299,106 @@ TSS_SEL             equ 0x28
 PROGRAM_EXIT_ADDR   equ PROGRAM_BASE + PROGRAM_MAX_SIZE - 16
 
 ;=======================================================================
+; PUSHALL / IRETQ stack frame offsets
+;
+; PUSHALL pushes 15 registers (RAX..R15) = 120 bytes.
+; After PUSHALL, an interrupt/IRETQ frame sits above:
+;   RSP+0:   R15  (first to pop)
+;   RSP+8:   R14
+;   RSP+16:  R13        RSP+24:  R12
+;   RSP+32:  R11        RSP+40:  R10
+;   RSP+48:  R9         RSP+56:  R8
+;   RSP+64:  RBP        RSP+72:  RDI
+;   RSP+80:  RSI        RSP+88:  RDX
+;   RSP+96:  RCX        RSP+104: RBX
+;   RSP+112: RAX  (return value slot)
+;   RSP+120: RIP  (IRETQ frame)
+;   RSP+128: CS
+;   RSP+136: RFLAGS
+;   RSP+144: RSP3 (ring-3 stack)
+;   RSP+152: SS3
+;=======================================================================
+FRAME_R15    equ 0
+FRAME_R14    equ 8
+FRAME_R13    equ 16
+FRAME_R12    equ 24
+FRAME_R11    equ 32
+FRAME_R10    equ 40
+FRAME_R9     equ 48
+FRAME_R8     equ 56
+FRAME_RBP    equ 64
+FRAME_RDI    equ 72
+FRAME_RSI    equ 80
+FRAME_RDX    equ 88
+FRAME_RCX    equ 96
+FRAME_RBX    equ 104
+FRAME_RAX    equ 112
+FRAME_RIP    equ 120
+FRAME_CS     equ 128
+FRAME_RFLAGS equ 136
+FRAME_RSP3   equ 144
+FRAME_SS3    equ 152
+
+; 4-level page table base (set by stage2, never overwritten)
+PML4_BASE    equ 0x70000
+
+;=======================================================================
 ; KERNEL ENTRY POINT
 ;=======================================================================
+
+; 64-bit replacements for pushad/popad (not available in long mode)
+%macro PUSHALL 0
+        push rax
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        push rbp
+        push r8
+        push r9
+        push r10
+        push r11
+        push r12
+        push r13
+        push r14
+        push r15
+%endmacro
+
+%macro POPALL 0
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rbp
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
+%endmacro
+
 kernel_entry:
-        ; Set up 32-bit segments and stack
+        ; Set up 64-bit segments and stack
         mov ax, 0x10            ; Flat data selector
         mov ds, ax
         mov es, ax
         mov fs, ax
         mov gs, ax
         mov ss, ax
-        mov esp, KERNEL_STACK
+        mov rsp, KERNEL_STACK
 
         ; Initialize BSS (zero out kernel data)
-        mov edi, bss_start
-        mov ecx, (bss_end - bss_start)
-        shr ecx, 2             ; Dword count
-        xor eax, eax
-        rep stosd
+        mov rdi, bss_start
+        mov rcx, (bss_end - bss_start)
+        shr rcx, 3             ; Qword count
+        xor eax, eax            ; Clears RAX (zero-extended)
+        rep stosq
 
         ; Initialize current directory to root
         mov dword [current_dir_lba], HBFS_ROOT_DIR_START
@@ -316,6 +417,7 @@ kernel_entry:
         call serial_init
         call tss_init
         call sched_init
+        call fpu_init
         call ipc_init
         call net_init
         call paging_init

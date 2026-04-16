@@ -60,9 +60,9 @@ start:
         cmp ecx, CODE_LEN
         jge .show_code_end
         movzx eax, byte [secret + ecx]
-        push ecx
+        push rcx
         call print_color_char
-        pop ecx
+        pop rcx
         inc ecx
         jmp .show_code
 .show_code_end:
@@ -99,7 +99,7 @@ start:
 
 ;---------------------------------------
 generate_code:
-        pushad
+        PUSHALL
         mov eax, SYS_GETTIME
         int 0x80
         mov [rng], eax
@@ -115,22 +115,22 @@ generate_code:
         mov [rng], eax
         shr eax, 16
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, NUM_COLORS
         div ecx
-        pop ecx
+        pop rcx
         mov [secret + ecx], dl
         inc ecx
         jmp .gc_loop
 .gc_done:
         mov byte [quit_flag], 0
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 get_guess:
         ; Reads 4 color chars from user
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F
         int 0x80
@@ -143,10 +143,10 @@ get_guess:
         cmp ecx, CODE_LEN
         jge .gg_done
 .gg_key:
-        push ecx
+        push rcx
         mov eax, SYS_GETCHAR
         int 0x80
-        pop ecx
+        pop rcx
         ; Check quit
         cmp al, 'q'
         je .gg_quit
@@ -161,28 +161,28 @@ get_guess:
         sub al, 32
 .gg_check:
         ; Validate color
-        push ecx
-        push eax
+        push rcx
+        push rax
         call color_index
         cmp eax, -1
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         je .gg_key
 
         ; Store and echo
-        push eax
-        push ecx
+        push rax
+        push rcx
         call color_index
         mov edx, eax
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         mov [cur_guess + ecx], dl
         ; Echo
-        push ecx
+        push rcx
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ecx
+        pop rcx
         inc ecx
         jmp .gg_char
 
@@ -190,12 +190,12 @@ get_guess:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        popad
+        POPALL
         ret
 
 .gg_quit:
         mov byte [quit_flag], 1
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -231,7 +231,7 @@ color_index:
 ;---------------------------------------
 evaluate_guess:
         ; Compare cur_guess with secret, set exact and misplaced
-        pushad
+        PUSHALL
         mov dword [exact], 0
         mov dword [misplaced], 0
 
@@ -297,12 +297,12 @@ evaluate_guess:
         mov al, [misplaced]
         mov [hist_mispl + ecx], al
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 draw_state:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -329,7 +329,7 @@ draw_state:
         jge .ds_done
 
         ; Guess number
-        push esi
+        push rsi
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
@@ -349,15 +349,15 @@ draw_state:
 .ds_gc:
         cmp ecx, CODE_LEN
         jge .ds_fb
-        push ecx
-        push eax
+        push rcx
+        push rax
         movzx eax, byte [history + eax + ecx]
         call print_color_char
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         inc ecx
         jmp .ds_gc
 
@@ -374,11 +374,11 @@ draw_state:
 .ds_fb_ex:
         cmp ecx, 0
         jle .ds_fb_mis
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, '*'
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .ds_fb_ex
 
@@ -387,11 +387,11 @@ draw_state:
 .ds_fb_m:
         cmp ecx, 0
         jle .ds_fb_end
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, '+'
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .ds_fb_m
 
@@ -399,7 +399,7 @@ draw_state:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop esi
+        pop rsi
         inc esi
         jmp .ds_hist
 
@@ -407,13 +407,13 @@ draw_state:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 print_color_char:
         ; EAX = color index 0-5, prints colored letter
-        pushad
+        PUSHALL
         cmp eax, 0
         je .pcc_r
         cmp eax, 1
@@ -472,7 +472,7 @@ print_color_char:
         mov ebx, 'O'
         int 0x80
 .pcc_done:
-        popad
+        POPALL
         ret
 
 ;=======================================

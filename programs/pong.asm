@@ -147,7 +147,7 @@ check_input_pong:
 
 ;---------------------------------------
 move_cpu:
-        pushad
+        PUSHALL
         ; Simple AI: track ball y
         mov eax, [ball_y]
         mov ebx, [p2_y]
@@ -170,12 +170,12 @@ move_cpu:
         jge .mc_done
         inc dword [p2_y]
 .mc_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 move_ball:
-        pushad
+        PUSHALL
         ; Move ball
         mov eax, [ball_x]
         add eax, [ball_dx]
@@ -300,12 +300,12 @@ move_ball:
 .mb_gameover:
         mov byte [game_over], 1
 .mb_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 draw_board:
-        pushad
+        PUSHALL
 
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
@@ -485,7 +485,7 @@ draw_board:
         mov ebx, msg_controls
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================

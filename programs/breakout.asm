@@ -176,7 +176,7 @@ start:
 ;=======================================================================
 
 game_init:
-        pushad
+        PUSHALL
         ; Reset state
         mov dword [game_state], STATE_PLAY
         mov dword [score], 0
@@ -193,22 +193,22 @@ game_init:
         ; Init bricks
         call init_bricks
 
-        popad
+        POPALL
         ret
 
 reset_ball:
-        pushad
+        PUSHALL
         mov eax, [pad_x]
         add eax, PAD_W / 2 - BALL_SIZE / 2
         mov [ball_x], eax
         mov dword [ball_y], PAD_Y - BALL_SIZE - 1
         mov dword [ball_dx], BALL_INIT_DX
         mov dword [ball_dy], BALL_INIT_DY
-        popad
+        POPALL
         ret
 
 init_bricks:
-        pushad
+        PUSHALL
         mov dword [bricks_left], MAX_BRICKS
         mov edi, bricks
         xor ecx, ecx           ; Row
@@ -227,7 +227,7 @@ init_bricks:
         inc ecx
         jmp .ib_row
 .ib_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -235,7 +235,7 @@ init_bricks:
 ;=======================================================================
 
 game_update:
-        pushad
+        PUSHALL
 
         ; Move ball
         mov eax, [ball_dx]
@@ -343,14 +343,14 @@ game_update:
 .win_game:
         mov dword [game_state], STATE_WIN
 .gu_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; check_brick_collision
 ;---------------------------------------
 check_brick_collision:
-        pushad
+        PUSHALL
         ; Check each alive brick
         xor ecx, ecx           ; Row
         mov esi, bricks
@@ -416,7 +416,7 @@ check_brick_collision:
         inc ecx
         jmp .cb_row
 .cb_done:
-        popad
+        POPALL
         ret
 
 .cb_bx: dd 0
@@ -427,7 +427,7 @@ check_brick_collision:
 ;=======================================================================
 
 game_render:
-        pushad
+        PUSHALL
 
         ; Clear play area
         mov eax, [win_id]
@@ -568,14 +568,14 @@ game_render:
         call gui_draw_text
 
 .render_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_bricks
 ;---------------------------------------
 draw_bricks:
-        pushad
+        PUSHALL
         xor ecx, ecx           ; Row
         mov esi, bricks
 .db_row:
@@ -589,8 +589,8 @@ draw_bricks:
         je .db_next             ; Dead brick
 
         ; Calculate position
-        push ecx
-        push edx
+        push rcx
+        push rdx
 
         ; Brick x
         mov eax, edx
@@ -613,17 +613,17 @@ draw_bricks:
         mov eax, [brick_colors + eax*4]
 
         ; Draw it
-        push eax               ; Color
+        push rax               ; Color
         mov eax, [win_id]
         mov ebx, [.db_bx]
         mov ecx, [.db_by]
         mov edx, BRICK_W
         mov esi, BRICK_H
-        pop edi                 ; Color
+        pop rdi                 ; Color
         call gui_fill_rect
 
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
 .db_next:
         inc esi
@@ -633,7 +633,7 @@ draw_bricks:
         inc ecx
         jmp .db_row
 .db_done:
-        popad
+        POPALL
         ret
 
 .db_bx: dd 0
@@ -646,26 +646,26 @@ draw_bricks:
 ; itoa - Convert unsigned integer to decimal string
 ; EAX = number → num_buf filled
 itoa:
-        pushad
+        PUSHALL
         mov edi, num_buf
         mov ecx, 0              ; Digit count
         mov ebx, 10
 .itoa_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .itoa_div
 .itoa_write:
-        pop edx
+        pop rdx
         add dl, '0'
         mov [edi], dl
         inc edi
         dec ecx
         jnz .itoa_write
         mov byte [edi], 0       ; Null terminate
-        popad
+        POPALL
         ret
 
 ;=======================================================================

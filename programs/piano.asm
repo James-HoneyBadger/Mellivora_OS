@@ -152,7 +152,7 @@ start:
 ; ECX = number of notes
 ;---------------------------------------
 play_sequence:
-        pushad
+        PUSHALL
 .ps_loop:
         cmp ecx, 0
         je .ps_done
@@ -160,10 +160,10 @@ play_sequence:
         cmp ebx, 0
         je .ps_rest
         mov eax, SYS_BEEP
-        push ecx
+        push rcx
         mov ecx, 25
         int 0x80
-        pop ecx
+        pop rcx
         jmp .ps_next
 .ps_rest:
         mov eax, SYS_SLEEP
@@ -177,7 +177,7 @@ play_sequence:
         dec ecx
         jmp .ps_loop
 .ps_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------

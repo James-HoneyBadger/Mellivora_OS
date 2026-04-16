@@ -4,10 +4,10 @@ populate.py - Populate a Mellivora OS disk image with sample files.
 
 Writes files directly into the HBFS filesystem on the disk image.
 This understands the on-disk HBFS layout:
-  - Superblock at LBA 417
-  - Block allocation bitmap at LBA 418 (128 sectors = 16 blocks)
-  - Root directory at LBA 426 (128 sectors = 16 blocks)
-  - Data area starts at LBA 554
+  - Superblock at LBA 2081
+  - Block allocation bitmap at LBA 2082 (128 sectors = 16 blocks)
+  - Root directory at LBA 2210 (256 sectors = 32 blocks)
+  - Data area starts at LBA 2466
 
 Each data block is 4096 bytes (8 sectors).
 Each directory entry is 288 bytes.
@@ -24,13 +24,13 @@ SECTOR_SIZE = 512
 BLOCK_SIZE = 4096
 SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE  # 8
 HBFS_MAGIC = 0x48424653  # 'HBFS'
-HBFS_SUPERBLOCK_LBA = 417
-HBFS_BITMAP_START = 418
-HBFS_ROOT_DIR_START = 546
+HBFS_SUPERBLOCK_LBA = 2081
+HBFS_BITMAP_START = 2082
+HBFS_ROOT_DIR_START = 2210
 HBFS_ROOT_DIR_BLOCKS = 32
 HBFS_ROOT_DIR_SECTS = HBFS_ROOT_DIR_BLOCKS * SECTORS_PER_BLOCK
 HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE
-HBFS_DATA_START = 802
+HBFS_DATA_START = 2466
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
 HBFS_MAX_FILENAME = 252
@@ -323,7 +323,7 @@ Welcome to Mellivora OS, a 32-bit protected mode operating system
 built from scratch in x86 assembly language.
 
 Features:
-  * i486+ 32-bit protected mode
+  * Core 2 Duo+ 32-bit protected mode
   * Flat 4 GB memory model with bitmap page allocator
   * ATA PIO disk driver with LBA48 (up to 128 PB)
   * HBFS filesystem with 252-character filenames
@@ -359,9 +359,9 @@ Serial Console (COM1):
   transfer, and remote control.
 
   QEMU quick-start:
-    qemu-system-i386 ... -serial tcp::4555,server=on,wait=off
+    qemu-system-x86_64 ... -serial tcp::4555,server=on,wait=off
   Then on the host:  nc localhost 4555
-  Or for a PTY:      qemu-system-i386 ... -serial pty
+  Or for a PTY:      qemu-system-x86_64 ... -serial pty
 
   Shell utility (in /bin):
     serial              Interactive serial terminal (Esc to quit)
@@ -423,11 +423,11 @@ Memory Map:
 Disk Layout:
   LBA 0:       Boot sector (512 bytes)
   LBA 1-32:    Stage 2 loader (16KB)
-  LBA 33-416:  Kernel (384 sectors, 192KB)
-  LBA 417:     HBFS Superblock
-  LBA 418-545: Block allocation bitmap (64KB, 16 blocks)
-  LBA 546-801: Root directory (128KB, 32 blocks, 455 entries)
-  LBA 802+:    Data blocks (4KB each)
+  LBA 33-2080:  Kernel (up to 2048 sectors, 1MB)
+  LBA 2081:     HBFS Superblock
+  LBA 2082-2209: Block allocation bitmap (64KB, 16 blocks)
+  LBA 2210-2465: Root directory (128KB, 32 blocks, 455 entries)
+  LBA 2466+:    Data blocks (4KB each)
 
 Syscall Interface (INT 0x80):
   EAX = syscall number
@@ -626,8 +626,11 @@ BUILT-IN COMMANDS
 NAVIGATION
     Tab         Complete filename
     Up/Down     Browse command history
+    Left/Right  Move cursor within line
+    Home/Ctrl+A Move cursor to start of line
+    End/Ctrl+E  Move cursor to end of line
+    Delete      Delete character at cursor
     Ctrl+C      Abort running program
-    Ctrl+L      Clear screen
 
 SEE ALSO
     man syscalls, man editor, man fs, man asm
@@ -742,10 +745,10 @@ DISK LAYOUT
     LBA 0        Boot sector (512 bytes)
     LBA 1-32     Stage 2 loader
     LBA 33+      Kernel image
-    LBA 417      Superblock (magic: "HBFS")
-    LBA 418-545  Block allocation bitmap (64KB)
-    LBA 546-801  Root directory (128KB, 455 entries)
-    LBA 802+     Data blocks (4KB each)
+    LBA 2081     Superblock (magic: "HBFS")
+    LBA 2082-2209  Block allocation bitmap (64KB)
+    LBA 2210-2465  Root directory (128KB, 455 entries)
+    LBA 2466+    Data blocks (4KB each)
 
 DIRECTORY ENTRIES
     Each entry is 288 bytes:
@@ -832,14 +835,475 @@ READING STDIN (pipes)
 SEE ALSO
     man syscalls, man shell
 """,
+
+    "man-networking.txt": """\
+NETWORKING(7)            Mellivora Manual            NETWORKING(7)
+
+NAME
+    networking - TCP/IP networking overview
+
+SYNOPSIS
+    Programs use syscalls 39-48 for networking.
+
+DESCRIPTION
+    Mellivora includes a full TCP/IP stack: Ethernet, ARP, IPv4,
+    ICMP, UDP, TCP, DHCP, and DNS. The RTL8139 NIC driver
+    provides hardware support.
+
+NETWORK SYSCALLS
+    SYS_SOCKET (39)    Create TCP or UDP socket
+    SYS_CONNECT (40)   Connect to remote host:port
+    SYS_SEND (41)      Send data on connected socket
+    SYS_RECV (42)      Receive data from socket
+    SYS_BIND (43)      Bind socket to local port
+    SYS_LISTEN (44)    Listen for connections
+    SYS_ACCEPT (45)    Accept incoming connection
+    SYS_DNS (46)       Resolve hostname to IP
+    SYS_SOCKCLOSE (47) Close socket
+    SYS_PING (48)      Send ICMP echo request
+
+PROGRAMS
+    ftp         FTP client
+    gopher      Gopher browser
+    forager     Web browser (HTTP)
+    wget        Download files via HTTP
+    httpd       Simple HTTP server
+    irc         IRC chat client
+    ping        Network connectivity test
+    ifconfig    Network interface configuration
+
+SEE ALSO
+    man syscalls, man shell
+""",
+
+    "man-compression.txt": """\
+COMPRESSION(1)           Mellivora Manual           COMPRESSION(1)
+
+NAME
+    compression - file compression utilities
+
+SYNOPSIS
+    gzip <file>          Compress file (LZ77)
+    gzip -d <file.gz>    Decompress to stdout
+    lzss <file>          LZSS compress to stdout
+    lzss -d <file>       LZSS decompress to stdout
+    tar c <archive> <files..>  Create archive
+    tar x <archive>            Extract archive
+    tar t <archive>            List archive contents
+
+DESCRIPTION
+    Mellivora includes three compression/archiving tools:
+
+    gzip    LZ77-based compression with MZIP format. Creates
+            .gz files with integrity checksums. Use -t to test.
+
+    lzss    Lightweight LZSS compression. 4KB sliding window,
+            12-bit offsets, 4-bit match lengths.
+
+    tar     MTAR tape archive format. Bundle up to 32 files
+            into a single archive for distribution or backup.
+
+SEE ALSO
+    man shell, man fs
+""",
+
+    "man-crypto.txt": """\
+CRYPTO(1)                Mellivora Manual                CRYPTO(1)
+
+NAME
+    crypto - cryptography and hashing tools
+
+SYNOPSIS
+    sha256 <file>          SHA-256 hash of file
+    sha256 -s <string>     SHA-256 hash of string
+    md5sum <file>          MD5 hash of file
+    md5sum -s <string>     MD5 hash of string
+    encrypt -k <key> <file>  Encrypt file (RC4)
+    encrypt -d -k <key> <file>  Decrypt file
+
+DESCRIPTION
+    sha256  Computes the SHA-256 cryptographic hash. Use for
+            file integrity verification.
+
+    md5sum  Computes MD5 checksums (RFC 1321). Useful for
+            quick file comparison.
+
+    encrypt RC4 stream cipher encryption. Symmetric key -- same
+            command encrypts and decrypts. Use -d flag or just
+            run encrypt again with the same key.
+
+SEE ALSO
+    man shell
+""",
+
+    "man-games.txt": """\
+GAMES(6)                 Mellivora Manual                 GAMES(6)
+
+NAME
+    games - available games in Mellivora OS
+
+SYNOPSIS
+    Games are in /games. Run by name from the shell.
+
+GAMES
+    2048        Sliding tile number puzzle
+    blackjack   Card game (21)
+    breakout    Brick-breaking arcade game
+    chess       Chess with AI opponent
+    connect4    Four-in-a-row
+    doom        Text-mode raycaster FPS
+    freecell    Solitaire card game
+    galaga      Space shooter
+    guess       Number guessing game
+    hangman     Word guessing game
+    life        Conway's Game of Life
+    mastermind  Code-breaking logic game
+    mines       Minesweeper
+    pong        Classic paddle game
+    puzzle15    15-puzzle sliding tiles
+    simon       Memory pattern game
+    snake       Classic snake game
+    sokoban     Box-pushing puzzle
+    sudoku      9x9 number puzzle
+    tetris      Falling block puzzle
+    tictactoe   Tic-tac-toe
+    wordle      5-letter word guess
+    worm        Worm game
+
+SEE ALSO
+    man shell
+""",
+
+    "man-admin.txt": """\
+ADMIN(8)                 Mellivora Manual                 ADMIN(8)
+
+NAME
+    admin - system administration tools
+
+SYNOPSIS
+    syslog              View system log
+    syslog -w <msg>     Write log entry
+    syslog -c           Clear log
+    syslog -f           Follow log (tail)
+    cron                Start cron daemon (background)
+    backup <src> <dst>  Copy directory tree
+    pkg list|info|size|search|install|remove
+
+DESCRIPTION
+    syslog  System logging to /var/log/syslog. Timestamped
+            entries. Use -f to follow in real-time (Q to quit).
+
+    cron    Task scheduler daemon. Reads /etc/crontab for jobs
+            in format: MM HH command. Run with 'cron &' to
+            start in background.
+
+    backup  Recursive directory copy. Use -v for verbose output.
+            Preserves file types. Creates destination if needed.
+
+    pkg     Package manager v2.0. List/search local files,
+            show info and disk usage, install from HTTP server,
+            or remove files. See 'pkg help' for details.
+
+SEE ALSO
+    man shell, man fs
+""",
+
+    "man-texttools.txt": """\
+TEXTTOOLS(1)             Mellivora Manual             TEXTTOOLS(1)
+
+NAME
+    texttools - text processing utilities
+
+SYNOPSIS
+    awk <pattern> [file]         Pattern-action processor
+    json [-c|-v] <file>          JSON pretty-printer
+    markdown <file.md>           Render Markdown with colors
+    strace <program> [args]      Trace syscalls
+
+DESCRIPTION
+    awk      Pattern-action text processor. Matches lines
+             containing <pattern> and prints them. Supports
+             field extraction with -f flag and -c count mode.
+
+    json     Recursive-descent JSON parser. Default: pretty-
+             print with indentation. -c for compact, -v to
+             validate only.
+
+    markdown Terminal Markdown renderer. Colorizes headers,
+             bold, italic, code, blockquotes, lists, and rules
+             using VGA color attributes.
+
+    strace   Syscall tracer. Runs a program and displays all
+             INT 0x80 system calls with arguments.
+
+SEE ALSO
+    man shell, man asm
+""",
+
+    "man-gui.txt": """\
+GUI(1)                   Mellivora Manual                   GUI(1)
+
+NAME
+    gui - Burrows desktop and GUI applications
+
+SYNOPSIS
+    bhive               Launch Burrows desktop environment
+    bedit [file]        GUI text editor
+    bnotes              GUI sticky notes
+    bsheet [file.csv]   GUI spreadsheet
+    bpaint              GUI paint program
+    bview <image>       GUI image viewer
+    bplayer <file>      GUI audio player
+    bsysmon             GUI system monitor
+    bsettings           GUI settings
+    bterm               GUI terminal emulator
+
+DESCRIPTION
+    The Burrows desktop (bhive) provides a 640x480x32
+    windowed environment with mouse support, taskbar, and
+    window management.
+
+WINDOWING
+    Windows support drag, resize, close, and z-order.
+    Taskbar at bottom shows open windows and clock.
+    Alt+Tab cycles between windows.
+    Screensaver activates after idle timeout.
+
+KEYBOARD SHORTCUTS (in GUI apps)
+    Ctrl+C      Copy to clipboard
+    Ctrl+V      Paste from clipboard
+    Ctrl+S      Save (bedit, bsheet)
+    Ctrl+Q      Quit / close window
+    Ctrl+N      New file (bedit)
+    Escape      Close dialog / cancel
+
+CLIPBOARD
+    System clipboard is shared across all GUI apps.
+    Supported in: bedit, bnotes, bsheet, bterm.
+
+CUSTOMIZATION
+    bsettings   Change theme colors, wallpaper,
+                screensaver, and font settings.
+
+SEE ALSO
+    man shell, man editor
+""",
+
+    "man-debugging.txt": """\
+DEBUGGING(1)             Mellivora Manual             DEBUGGING(1)
+
+NAME
+    debugging - debugging and diagnostic tools
+
+SYNOPSIS
+    debug [program]     Interactive debugger
+    strace <program>    System call tracer
+    hexedit <file>      Interactive hex file viewer
+    hexdump <file>      Hex dump of file contents
+    strings <file>      Extract printable strings
+
+DESCRIPTION
+    debug    Interactive machine-level debugger. Supports:
+               d <addr> [len]   Dump memory (hex + ASCII)
+               u <addr> [len]   Unassemble (disassemble)
+               r                Display registers
+               g [addr]         Go (run from address)
+               bp <addr>        Set breakpoint
+               bc <n>           Clear breakpoint
+               bl               List breakpoints
+               t                Single step (trace)
+               s <addr> <str>   Search memory for string
+               f <a> <b> <val>  Fill memory range
+               c <a1> <a2> <n>  Compare memory ranges
+               e <expr>         Evaluate hex expression
+               q                Quit
+
+    strace   Traces all INT 0x80 syscalls made by a program.
+             Shows syscall number, arguments, and return value.
+
+    hexedit  Interactive hex viewer with scrolling.
+             Navigation: Up/Down, PgUp/PgDn, Home/End.
+
+    hexdump  Prints file in hex + ASCII format to stdout.
+
+    strings  Extracts sequences of printable characters
+             (4+ bytes) from binary files.
+
+MEMORY LAYOUT
+    0x00000000  Real-mode IVT and BIOS data
+    0x00100000  Kernel code and data (1MB+)
+    0x01000000  User program load address (16MB)
+    0x02000000  Heap / dynamic allocation area
+    0xB8000     VGA text mode framebuffer
+    0xFD000000  VBE linear framebuffer
+
+SEE ALSO
+    man syscalls, man asm
+""",
+
+    "man-scripting.txt": """\
+SCRIPTING(1)             Mellivora Manual             SCRIPTING(1)
+
+NAME
+    scripting - batch scripts and embedded languages
+
+SYNOPSIS
+    <script>.bat        Batch script execution
+    basic <file.bas>    BASIC interpreter
+    forth               Forth interactive interpreter
+    perl <file.pl>      Perl-like scripting language
+
+DESCRIPTION
+    BATCH SCRIPTS
+      Files ending in .bat are executed line-by-line by the
+      shell. Supported constructs:
+
+        echo TEXT          Print text
+        if X == Y CMD      Conditional execution
+        if exist FILE CMD  File existence test
+        goto :LABEL        Jump to label
+        :LABEL             Define label
+        for %%V in (LIST) do CMD
+                           Loop over items
+        call script.bat    Call sub-script
+        rem COMMENT        Comment line
+        set VAR=VAL        Set variable
+        pause              Wait for keypress
+        sleep N            Sleep N seconds
+
+      Batch scripts can use pipes, redirection, and all
+      shell features including $VAR expansion.
+
+    BASIC
+      Line-numbered BASIC interpreter supporting:
+        PRINT, INPUT, LET, IF/THEN, GOTO, GOSUB/RETURN,
+        FOR/NEXT, REM, END, DIM, arrays, string functions.
+
+    FORTH
+      Interactive Forth environment with standard words:
+        DUP, DROP, SWAP, OVER, ROT, +, -, *, /, MOD,
+        . (print), CR, EMIT, : (define), ; (end), IF/THEN/ELSE,
+        DO/LOOP, BEGIN/UNTIL, VARIABLE, CONSTANT, @, !
+
+    PERL
+      Perl-like scripting language with:
+        Variables ($scalar, @array), print, if/elsif/else,
+        while, for, foreach, subroutines, string ops.
+
+SEE ALSO
+    man shell, man texttools
+""",
+
+    "man-ipc.txt": """\
+IPC(2)                   Mellivora Manual                   IPC(2)
+
+NAME
+    ipc - inter-process communication
+
+SYNOPSIS
+    Pipes, shared memory, message queues, and signals.
+
+DESCRIPTION
+    PIPES
+      cmd1 | cmd2       Shell pipe (connects stdout to stdin)
+      SYS_PIPE_CREATE   Create pipe pair (read_fd, write_fd)
+      SYS_PIPE_WRITE    Write to pipe: EBX=fd, ECX=buf, EDX=len
+      SYS_PIPE_READ     Read from pipe: EBX=fd, ECX=buf, EDX=max
+
+      Up to 16 simultaneous pipes. Pipe buffer: 4KB each.
+
+    SHARED MEMORY
+      SYS_SHM_CREATE    Create: EBX=key, ECX=size -> EAX=addr
+      SYS_SHM_ATTACH    Attach: EBX=key -> EAX=addr
+      SYS_SHM_DETACH    Detach: EBX=key
+
+      Shared memory regions are visible to all tasks that
+      attach with the same integer key.
+
+    MESSAGE QUEUES
+      SYS_MQ_OPEN       Open: EBX=name -> EAX=mqid
+      SYS_MQ_SEND       Send: EBX=mqid, ECX=buf, EDX=len
+      SYS_MQ_RECV       Recv: EBX=mqid, ECX=buf, EDX=max
+
+      Fixed-size messages (256 bytes max), FIFO ordering.
+
+    SIGNALS
+      SYS_SIGNAL        Register handler: EBX=signum, ECX=handler
+      SYS_KILL          Send signal: EBX=pid, ECX=signum
+
+      Signals: SIGTERM(15), SIGKILL(9), SIGUSR1(10), SIGUSR2(12)
+      SIGKILL cannot be caught or ignored.
+
+    CLIPBOARD
+      SYS_CLIPBOARD_COPY   Copy: EBX=buf, ECX=len
+      SYS_CLIPBOARD_PASTE  Paste: EBX=buf, ECX=max -> EAX=len
+
+      System-wide clipboard buffer (4KB). Used by GUI apps.
+
+SEE ALSO
+    man syscalls, man admin
+""",
+
+    "man-multimedia.txt": """\
+MULTIMEDIA(1)            Mellivora Manual            MULTIMEDIA(1)
+
+NAME
+    multimedia - audio, graphics, and media tools
+
+SYNOPSIS
+    bplayer <file>      GUI audio player (SB16)
+    piano               Terminal piano keyboard
+    bpaint              GUI paint program
+    bview <file>        GUI image viewer
+    figlet <text>       ASCII art text generator
+    banner <text>       Large banner text
+    cowsay <text>       ASCII cow speech bubble
+    lolcat              Rainbow text colorizer
+    mandel              Mandelbrot fractal viewer
+    doomfire            Doom fire effect
+    rain                Matrix digital rain
+    starfield           Star field animation
+
+DESCRIPTION
+    AUDIO
+      bplayer plays audio files through the Sound Blaster 16
+      chipset. Supports raw PCM audio. Volume control via
+      up/down arrows during playback.
+
+      piano provides a keyboard-mapped piano. Keys A-L map
+      to notes C4-C5. Number keys select octave.
+
+    GRAPHICS
+      bpaint is a mouse-driven paint program with color
+      palette, brush sizes, and fill tool.
+
+      bview displays image files in the GUI window.
+
+      mandel renders the Mandelbrot set with keyboard zoom
+      and pan controls.
+
+    TEXT ART
+      figlet renders text in large ASCII art fonts.
+      banner prints oversized block-letter text.
+      cowsay wraps text in an ASCII cow speech bubble.
+      lolcat reads stdin and colorizes output rainbow.
+
+    ANIMATIONS
+      doomfire, rain, and starfield are fullscreen terminal
+      animations. Press any key or Ctrl+C to exit.
+
+SEE ALSO
+    man gui, man games
+""",
 }
 
-# Classify programs into categories for subdirectories
 GAME_PROGRAMS = {
     '2048', 'galaga', 'guess', 'life', 'maze', 'mine',
     'snake', 'sokoban', 'tetris', 'piano', 'tictactoe',
     'puzzle15', 'hanoi', 'connect4', 'wordle', 'mastermind',
     'pong', 'blackjack', 'hangman', 'worm', 'simon',
+    'sudoku', 'mines', 'doom', 'chess', 'freecell',
+    'breakout', 'adventure',
 }
 
 # Everything else in programs/ goes to /bin

@@ -58,22 +58,22 @@ start:
         je .newline
 
         ; Set color from rainbow table
-        push ecx
-        push esi
+        push rcx
+        push rsi
         movzx ebx, byte [colors + ebp]
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
 
         ; Print character
-        push ecx
-        push esi
+        push rcx
+        push rsi
         movzx ebx, byte [esi]
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
 
         ; Advance color
         inc ebp
@@ -86,13 +86,13 @@ start:
         jmp .print_loop
 
 .newline:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ; Shift color offset on new line
         inc ebp
         cmp ebp, NUM_COLORS
@@ -130,11 +130,11 @@ interactive_mode:
         je .i_newline
 
         ; Set rainbow color
-        push eax
+        push rax
         movzx ebx, byte [colors + ebp]
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop eax
+        pop rax
 
         ; Echo char
         movzx ebx, al

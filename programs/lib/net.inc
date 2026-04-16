@@ -29,13 +29,13 @@ net_socket:
 ; Returns: EAX = 0 success, -1 error
 ;---------------------------------------
 net_connect:
-        push edx
+        push rdx
         mov edx, ecx            ; port
         mov ecx, ebx            ; IP
         mov ebx, eax            ; fd
         mov eax, SYS_CONNECT
         int 0x80
-        pop edx
+        pop rdx
         ret
 
 ;---------------------------------------
@@ -46,13 +46,13 @@ net_connect:
 ; Returns: EAX = bytes sent (-1 on error)
 ;---------------------------------------
 net_send:
-        push edx
+        push rdx
         mov edx, ecx            ; length
         mov ecx, ebx            ; buffer
         mov ebx, eax            ; fd
         mov eax, SYS_SEND
         int 0x80
-        pop edx
+        pop rdx
         ret
 
 ;---------------------------------------
@@ -63,13 +63,13 @@ net_send:
 ; Returns: EAX = bytes received (0=no data, -1=error/closed)
 ;---------------------------------------
 net_recv:
-        push edx
+        push rdx
         mov edx, ecx            ; max length
         mov ecx, ebx            ; buffer
         mov ebx, eax            ; fd
         mov eax, SYS_RECV
         int 0x80
-        pop edx
+        pop rdx
         ret
 
 ;---------------------------------------
@@ -145,9 +145,9 @@ net_accept:
 ;  ESI = string
 ;---------------------------------------
 net_send_line:
-        push eax
-        push ecx
-        push esi
+        push rax
+        push rcx
+        push rsi
         ; Get string length
         mov ebx, esi
         xor ecx, ecx
@@ -161,19 +161,19 @@ net_send_line:
         mov ebx, esi
         call net_send
         ; Send CRLF
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov ebx, .crlf
         mov ecx, 2
-        pop esi
-        push esi
-        push eax
+        pop rsi
+        push rsi
+        push rax
         mov eax, [esp + 12]     ; original fd
         call net_send
-        pop eax
-        pop esi
-        pop ecx
-        pop eax
+        pop rax
+        pop rsi
+        pop rcx
+        pop rax
         ret
 .crlf: db 0x0D, 0x0A
 
@@ -185,11 +185,11 @@ net_send_line:
 ; Returns: EAX = bytes received, EDI buffer null-terminated
 ;---------------------------------------
 net_recv_line:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
         mov [.nrl_fd], eax
         mov [.nrl_buf], edi
         mov [.nrl_max], ecx
@@ -235,11 +235,11 @@ net_recv_line:
         add edi, [.nrl_pos]
         mov byte [edi], 0
         mov eax, [.nrl_pos]
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .nrl_fd:   dd 0
@@ -254,9 +254,9 @@ net_recv_line:
 ; Returns: EAX = IP (little-endian, 0 on error)
 ;---------------------------------------
 net_parse_ip:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         xor eax, eax
         xor ebx, ebx
         xor ecx, ecx
@@ -290,13 +290,13 @@ net_parse_ip:
         jne .npi_fail
         bswap ebx
         mov eax, ebx
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .npi_fail:
         xor eax, eax
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret

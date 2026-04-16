@@ -1,270 +1,488 @@
 ;=======================================================================
-; PHYSICAL MEMORY MANAGER (Bitmap Allocator)
+; PHYSICAL MEMORY MANAGER (Buddy Allocator)
+;=======================================================================
+; O(1) single-page alloc, O(log n) multi-page, automatic buddy merging.
+; Free-list node links stored in the free pages themselves (identity-
+; mapped), order tracking at BUDDY_ORDER (128KB array, 1 byte/page).
+; Bitmap at PMM_BITMAP retained for pmm_count_free compatibility.
+;
+; Data structures:
+;   PMM_BITMAP      - 128KB bitmap (1 bit per page), 0=free, 1=used
+;   BUDDY_ORDER     - 128KB array (1 byte per page), order of free block
+;                     or 0xFF if page is allocated / not tracked
+;   buddy_free_list - 11 qwords: head pointers for orders 0..10
+;                     Each free block stores [next, prev] at its phys addr
 ;=======================================================================
 
+;-----------------------------------------------------------------------
+; pmm_init — Initialise PMM from E820 memory map
+;-----------------------------------------------------------------------
 pmm_init:
-        pushad
+        PUSHALL
 
-        ; First, mark all memory as used
+        ; Mark all memory as used in bitmap
         mov edi, PMM_BITMAP
-        mov ecx, 0x20000 / 4   ; 128KB bitmap = covers 4GB (128K * 8 * 4096)
+        mov ecx, 0x20000 / 4           ; 128KB bitmap
         mov eax, 0xFFFFFFFF
         rep stosd
 
-        ; Now parse E820 memory map and free usable regions
+        ; Clear buddy order array (0xFF = not free)
+        mov edi, BUDDY_ORDER
+        mov ecx, 0x40000 / 4           ; 256KB (1 byte/page, covers 1GB)
+        mov eax, 0xFFFFFFFF
+        rep stosd
+
+        ; Clear buddy free list heads
+        mov edi, buddy_free_list
+        mov ecx, BUDDY_MAX_ORDER + 1
+        xor eax, eax
+        rep stosq
+
+        ; Parse E820 memory map and free usable regions
         mov ecx, [BOOTINFO_MMAP_CNT]
         mov esi, [BOOTINFO_MMAP_PTR]
         or ecx, ecx
         jz .no_map
 
 .map_loop:
-        ; E820 entry: base(8), length(8), type(4), [acpi(4)]
-        mov eax, [esi + 16]     ; Type
-        cmp eax, 1              ; Type 1 = usable
+        mov eax, [esi + 16]            ; Type
+        cmp eax, 1                     ; Type 1 = usable
         jne .next
 
-        ; Get base and length (use lower 32 bits only for now)
-        mov eax, [esi]          ; Base low
-        mov ebx, [esi + 8]     ; Length low
+        mov eax, [esi]                 ; Base low
+        mov ebx, [esi + 8]            ; Length low
 
-        ; Skip memory below 4MB (reserved for kernel/drivers)
+        ; Skip memory below 4MB (reserved for kernel)
         cmp eax, 0x00400000
         jge .free_region
-        ; Adjust if region overlaps 4MB
         mov edx, 0x00400000
         sub edx, eax
         cmp edx, ebx
-        jge .next              ; Entire region below 4MB
+        jge .next
         sub ebx, edx
         mov eax, 0x00400000
 
 .free_region:
-        ; Free pages from EAX with length EBX
-        call pmm_free_region
+        call buddy_free_region
 
 .next:
         add esi, 24
         loop .map_loop
 
 .no_map:
-        ; Count free pages
         call pmm_count_free
         mov [total_free_pages], eax
 
-        popad
+        POPALL
         ret
 
-; Free a region: EAX = base address, EBX = length in bytes
-pmm_free_region:
-        pushad
-        shr eax, 12             ; Convert to page number
-        shr ebx, 12             ; Convert to page count
+;-----------------------------------------------------------------------
+; buddy_free_region — Break a region into buddy-aligned blocks
+; EAX = base address (page-aligned), EBX = length in bytes
+;-----------------------------------------------------------------------
+buddy_free_region:
+        PUSHALL
+
+        ; Align base up and length down to page boundaries
+        add eax, 0xFFF
+        and eax, 0xFFFFF000
+        and ebx, 0xFFFFF000
         or ebx, ebx
-        jz .done
+        jz .bfr_done
 
-.loop:
-        ; Clear bit in bitmap (page_num / 8 = byte, page_num % 8 = bit)
-        mov ecx, eax
-        shr ecx, 3              ; Byte offset
-        mov edx, eax
-        and edx, 7              ; Bit offset
+.bfr_loop:
+        cmp ebx, 0x1000
+        jb .bfr_done
 
-        mov edi, PMM_BITMAP
-        add edi, ecx
-
-        ; Create mask to clear the bit
-        mov cl, dl
-        mov ch, 1
-        shl ch, cl
-        not ch
-        and [edi], ch            ; Clear the bit = free
-
-        inc eax
-        dec ebx
-        jnz .loop
-
-.done:
-        popad
-        ret
-
-; Allocate a physical page
-; Returns: EAX = physical address (0 = out of memory)
-pmm_alloc_page:
-        pushad
-        mov esi, PMM_BITMAP
-        mov ecx, 0x20000        ; Scan 128KB of bitmap
-
-.scan:
-        mov al, [esi]
-        cmp al, 0xFF            ; All used?
-        je .next_byte
-        ; Find first zero bit
-        mov edx, 0
-.find_bit:
-        bt eax, edx
-        jnc .found
-        inc edx
-        cmp edx, 8
-        jl .find_bit
-
-.next_byte:
-        inc esi
-        loop .scan
-
-        ; Out of memory
-        popad
-        xor eax, eax
-        ret
-
-.found:
-        ; Set the bit (mark as used)
-        bts dword [esi], edx
-
-        ; Calculate page address
-        sub esi, PMM_BITMAP
-        shl esi, 3              ; Byte offset * 8
-        add esi, edx            ; + bit offset = page number
-        shl esi, 12             ; * 4096 = physical address
-
-        mov [esp + 28], esi     ; Return via EAX in pushad frame
-        popad
-        ret
-
-; Free a physical page
-; EAX = physical address
-pmm_free_page:
-        pushad
-        shr eax, 12             ; Page number
-        mov ecx, eax
-        shr ecx, 3              ; Byte offset
-        and eax, 7              ; Bit offset
-
-        mov edi, PMM_BITMAP
-        add edi, ecx
-        mov cl, al
-        mov ch, 1
-        shl ch, cl
-        not ch
-        and [edi], ch            ; Clear bit = free
-
-        popad
-        ret
-
-; Allocate N contiguous physical pages
-; ECX = number of pages to allocate
-; Returns: EAX = physical address of first page (0 = failure)
-pmm_alloc_pages:
-        pushad
-        cmp ecx, 0
-        je .ap_fail
-        mov ebp, ecx            ; EBP = pages needed
-        mov esi, PMM_BITMAP
-        mov ecx, 0x20000        ; Scan 128KB bitmap
-        xor ebx, ebx            ; EBX = current page number
-
-.ap_scan:
-        movzx eax, byte [esi]
-        cmp al, 0xFF
-        je .ap_skip_byte
-
-        ; Check each bit in this byte
-        xor edx, edx
-.ap_check_bit:
-        bt eax, edx
-        jc .ap_bit_used
-
-        ; This bit is free - check if we can get EBP contiguous from here
-        push esi
-        push edx
-        push ebx
-        mov ecx, ebp            ; Need this many contiguous
-        ; Current page = (esi - PMM_BITMAP)*8 + edx
-        sub esi, PMM_BITMAP
-        shl esi, 3
-        add esi, edx            ; ESI = starting page number
-        mov edi, esi            ; EDI = starting page number
-
-.ap_contig_check:
-        cmp ecx, 0
-        je .ap_found
-        ; Check if page ESI is free
-        mov eax, esi
-        shr eax, 3              ; Byte index
-        push ecx
-        mov ecx, esi
-        and ecx, 7              ; Bit index
-        bt dword [PMM_BITMAP + eax], ecx
-        pop ecx
-        jc .ap_contig_fail
-        inc esi
+        ; Find largest order that fits and is properly aligned
+        mov ecx, BUDDY_MAX_ORDER
+.bfr_find:
+        mov edx, 1
+        shl edx, cl                    ; 2^order pages
+        shl edx, 12                    ; block size in bytes
+        cmp edx, ebx
+        ja .bfr_smaller
+        ; Alignment check: addr & (block_size - 1) == 0
+        mov edi, edx
+        dec edi
+        test eax, edi
+        jz .bfr_add
+.bfr_smaller:
         dec ecx
-        jmp .ap_contig_check
+        jns .bfr_find
+        jmp .bfr_done                  ; shouldn't reach here
+
+.bfr_add:
+        ; ECX = order, EAX = block base, EDX = block size
+        push rax
+        push rbx
+        push rcx
+        push rdx
+
+        ; Clear bitmap bits for all pages in this block
+        mov ebp, 1
+        shl ebp, cl                    ; page count
+        push rax
+        shr eax, 12                    ; start page number
+.bfr_clear:
+        push rax
+        mov ecx, eax
+        shr ecx, 3                     ; byte offset
+        and eax, 7                     ; bit offset
+        mov dl, 1
+        push rcx
+        mov cl, al
+        shl dl, cl
+        pop rcx
+        not dl
+        and [PMM_BITMAP + ecx], dl     ; clear bit = free
+        pop rax
+        inc eax
+        dec ebp
+        jnz .bfr_clear
+        pop rax
+
+        ; Set buddy_order for the base page of this block
+        pop rdx
+        pop rcx
+        push rcx
+        push rdx
+        push rax
+        shr eax, 12
+        mov [BUDDY_ORDER + eax], cl
+        pop rax
+
+        ; Add to free list at order ECX
+        call buddy_list_add
+
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
+
+        ; Advance past this block
+        add eax, edx
+        sub ebx, edx
+        jmp .bfr_loop
+
+.bfr_done:
+        POPALL
+        ret
+
+;-----------------------------------------------------------------------
+; buddy_list_add — Insert block at head of free list
+; EAX = physical address, ECX = order
+;-----------------------------------------------------------------------
+buddy_list_add:
+        PUSHALL
+        mov ebx, [buddy_free_list + rcx * 8]
+        mov dword [eax], ebx           ; next = old head
+        mov dword [eax + 4], 0         ; prev = NULL
+        or ebx, ebx
+        jz .bla_skip
+        mov [ebx + 4], eax             ; old_head->prev = us
+.bla_skip:
+        mov [buddy_free_list + rcx * 8], eax
+        POPALL
+        ret
+
+;-----------------------------------------------------------------------
+; buddy_list_remove — Remove block from its free list
+; EAX = physical address, ECX = order
+;-----------------------------------------------------------------------
+buddy_list_remove:
+        PUSHALL
+        mov ebx, [eax]                 ; next
+        mov edx, [eax + 4]            ; prev
+        or edx, edx
+        jz .blr_head
+        mov [edx], ebx                ; prev->next = next
+        jmp .blr_fix
+.blr_head:
+        mov [buddy_free_list + rcx * 8], ebx
+.blr_fix:
+        or ebx, ebx
+        jz .blr_done
+        mov [ebx + 4], edx            ; next->prev = prev
+.blr_done:
+        POPALL
+        ret
+
+;-----------------------------------------------------------------------
+; pmm_alloc_page — Allocate one physical page
+; Returns: EAX = physical address (0 = out of memory)
+;-----------------------------------------------------------------------
+pmm_alloc_page:
+        PUSHALL
+        xor ecx, ecx                  ; start at order 0
+
+.ap_find:
+        cmp ecx, BUDDY_MAX_ORDER
+        ja .ap_fail
+        mov eax, [buddy_free_list + rcx * 8]
+        or eax, eax
+        jnz .ap_found
+        inc ecx
+        jmp .ap_find
 
 .ap_found:
-        ; Mark all pages [EDI..EDI+EBP-1] as used
-        mov ecx, ebp
-        mov esi, edi
-.ap_mark:
-        mov eax, esi
-        shr eax, 3
-        push ecx
-        mov ecx, esi
-        and ecx, 7
-        bts dword [PMM_BITMAP + eax], ecx
-        pop ecx
-        inc esi
-        loop .ap_mark
+        ; Remove from free list
+        call buddy_list_remove
 
-        ; Return address = EDI * 4096
-        shl edi, 12
-        pop ebx
-        pop edx
-        pop esi
-        mov [esp + 28], edi     ; Return via EAX in pushad frame
-        popad
-        ret
-
-.ap_contig_fail:
-        pop ebx
-        pop edx
-        pop esi
-
-.ap_bit_used:
-        inc edx
-        cmp edx, 8
-        jl .ap_check_bit
-
-.ap_skip_byte:
-        inc esi
-        add ebx, 8
+        ; Split down to order 0
+.ap_split:
+        cmp ecx, 0
+        je .ap_done
         dec ecx
-        jnz .ap_scan
+
+        ; Upper half becomes a free buddy at order ECX
+        mov edx, 1
+        shl edx, cl
+        shl edx, 12                   ; half-block size in bytes
+        lea rbx, [rax + rdx]          ; upper half address
+
+        ; Set order for upper half
+        push rax
+        mov eax, ebx
+        shr eax, 12
+        mov [BUDDY_ORDER + eax], cl
+        pop rax
+
+        ; Add upper half to free list
+        push rax
+        push rcx
+        mov eax, ebx
+        call buddy_list_add
+        pop rcx
+        pop rax
+        jmp .ap_split
+
+.ap_done:
+        ; Mark page used in bitmap
+        push rax
+        shr eax, 12
+        mov byte [BUDDY_ORDER + eax], 0xFF
+        mov ecx, eax
+        shr ecx, 3
+        and eax, 7
+        mov edx, 1
+        push rcx
+        mov cl, al
+        shl edx, cl
+        pop rcx
+        or [PMM_BITMAP + ecx], dl      ; set bit = used
+        pop rax
+
+        mov [rsp + FRAME_RAX], rax            ; return via RAX in PUSHALL frame
+        POPALL
+        ret
 
 .ap_fail:
-        popad
+        POPALL
         xor eax, eax
         ret
 
-; Count free pages
+;-----------------------------------------------------------------------
+; pmm_free_page — Free one physical page, merge with buddy if possible
+; EAX = physical address
+;-----------------------------------------------------------------------
+pmm_free_page:
+        PUSHALL
+
+        ; Clear bitmap bit
+        push rax
+        shr eax, 12
+        mov ecx, eax
+        shr ecx, 3
+        and eax, 7
+        mov edx, 1
+        push rcx
+        mov cl, al
+        shl edx, cl
+        pop rcx
+        not dl
+        and [PMM_BITMAP + ecx], dl     ; clear bit = free
+        pop rax
+
+        ; Try buddy merge from order 0 upward
+        xor ecx, ecx                  ; current order
+
+.fp_merge:
+        cmp ecx, BUDDY_MAX_ORDER
+        jge .fp_add
+
+        ; Calculate buddy address: addr XOR block_size
+        mov edx, 1
+        shl edx, cl
+        shl edx, 12                   ; block_size in bytes
+        mov ebx, eax
+        xor ebx, edx                  ; buddy address
+
+        ; Check buddy is within addressable range
+        push rax
+        mov eax, ebx
+        shr eax, 12
+        cmp eax, 0x40000              ; 256K page limit (1GB)
+        jge .fp_no_merge_pop
+
+        ; Check if buddy is free at the same order
+        cmp byte [BUDDY_ORDER + eax], cl
+        pop rax
+        jne .fp_add
+
+        ; Buddy is free and same order — merge!
+        push rax
+        push rcx
+        mov eax, ebx
+        call buddy_list_remove
+        pop rcx
+        pop rax
+
+        ; Use the lower address as the merged block
+        cmp eax, ebx
+        jb .fp_lower
+        mov eax, ebx
+.fp_lower:
+        inc ecx
+        jmp .fp_merge
+
+.fp_no_merge_pop:
+        pop rax
+
+.fp_add:
+        ; Set order and add to free list
+        push rax
+        shr eax, 12
+        mov [BUDDY_ORDER + eax], cl
+        pop rax
+        call buddy_list_add
+
+        POPALL
+        ret
+
+;-----------------------------------------------------------------------
+; pmm_alloc_pages — Allocate N contiguous pages (power-of-2 rounding)
+; ECX = number of pages needed
+; Returns: EAX = physical address of first page (0 = failure)
+;-----------------------------------------------------------------------
+pmm_alloc_pages:
+        PUSHALL
+        or ecx, ecx
+        jz .aps_fail
+
+        ; Find order = ceil(log2(ecx))
+        mov ebx, ecx
+        xor edx, edx                  ; order
+        mov eax, 1
+.aps_order:
+        cmp eax, ebx
+        jge .aps_found
+        shl eax, 1
+        inc edx
+        cmp edx, BUDDY_MAX_ORDER
+        jbe .aps_order
+        jmp .aps_fail                  ; request too large
+
+.aps_found:
+        mov ecx, edx                  ; required order
+        mov ebp, edx                  ; save it
+
+        ; Find a block of this order or higher
+.aps_scan:
+        cmp ecx, BUDDY_MAX_ORDER
+        ja .aps_fail
+        mov eax, [buddy_free_list + rcx * 8]
+        or eax, eax
+        jnz .aps_got
+        inc ecx
+        jmp .aps_scan
+
+.aps_got:
+        call buddy_list_remove
+
+        ; Split down to required order
+.aps_split:
+        cmp ecx, ebp
+        je .aps_mark
+        dec ecx
+        mov edx, 1
+        shl edx, cl
+        shl edx, 12                   ; half-block bytes
+        lea rbx, [rax + rdx]
+
+        push rax
+        push rcx
+        mov eax, ebx
+        push rax
+        shr eax, 12
+        mov [BUDDY_ORDER + eax], cl
+        pop rax
+        call buddy_list_add
+        pop rcx
+        pop rax
+        jmp .aps_split
+
+.aps_mark:
+        ; Mark all pages as used
+        push rax
+        mov ecx, ebp
+        mov ebx, 1
+        shl ebx, cl                   ; page count
+        mov ecx, ebx
+        shr eax, 12
+.aps_mark_loop:
+        mov byte [BUDDY_ORDER + eax], 0xFF
+        push rax
+        push rcx
+        mov edx, eax
+        shr edx, 3
+        and eax, 7
+        mov ecx, eax
+        mov ebx, 1
+        shl ebx, cl
+        or [PMM_BITMAP + edx], bl      ; set bit = used
+        pop rcx
+        pop rax
+        inc eax
+        loop .aps_mark_loop
+        pop rax
+
+        mov [rsp + FRAME_RAX], rax
+        POPALL
+        ret
+
+.aps_fail:
+        POPALL
+        xor eax, eax
+        ret
+
+;-----------------------------------------------------------------------
+; pmm_free_region — Legacy wrapper (called during pmm_init)
+;-----------------------------------------------------------------------
+pmm_free_region:
+        jmp buddy_free_region
+
+;-----------------------------------------------------------------------
+; pmm_count_free — Count free pages via bitmap
 ; Returns: EAX = number of free pages
+;-----------------------------------------------------------------------
 pmm_count_free:
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         xor eax, eax
         mov esi, PMM_BITMAP
-        mov ecx, 0x20000        ; 128KB bitmap
+        mov ecx, 0x20000               ; 128KB bitmap
 
 .loop:
         movzx edx, byte [esi]
         not dl
-        ; Count set bits in DL (inverted = free pages)
 .count:
         test dl, dl
         jz .next
         mov dh, dl
         dec dh
-        and dl, dh              ; Clear lowest set bit
+        and dl, dh                     ; clear lowest set bit
         inc eax
         jmp .count
 
@@ -272,7 +490,7 @@ pmm_count_free:
         inc esi
         loop .loop
 
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
         ret

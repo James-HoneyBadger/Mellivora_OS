@@ -109,7 +109,7 @@ start:
 ; TITLE SCREEN
 ;=======================================================================
 show_title:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -157,17 +157,17 @@ show_title:
         mov edx, 7
         mov ecx, 7
 .art_loop:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_SETCURSOR
         mov ebx, 28
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, [esi]
+        mov rbx, [rsi]
         int 0x80
-        add esi, 4
-        pop edx
-        pop ecx
+        add rsi, 8
+        pop rdx
+        pop rcx
         inc ecx
         dec edx
         jnz .art_loop
@@ -236,14 +236,14 @@ show_title:
         mov ecx, 5
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; HOW TO PLAY
 ;=======================================================================
 show_howto:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -266,17 +266,17 @@ show_howto:
         mov ecx, 2
         mov edx, 18
 .howto_loop:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, [esi]
+        mov rbx, [rsi]
         int 0x80
-        add esi, 4
-        pop edx
-        pop ecx
+        add rsi, 8
+        pop rdx
+        pop rcx
         inc ecx
         dec edx
         jnz .howto_loop
@@ -294,14 +294,14 @@ show_howto:
         mov eax, SYS_GETCHAR
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; INTRO
 ;=======================================================================
 show_intro:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -313,22 +313,22 @@ show_intro:
         mov edx, 12
         xor ecx, ecx
 .intro_loop:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_SETCURSOR
         mov ebx, 5
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, [esi]
+        mov rbx, [rsi]
         int 0x80
-        add esi, 4
+        add rsi, 8
 
         mov eax, SYS_SLEEP
         mov ebx, 25
         int 0x80
 
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         inc ecx
         dec edx
         jnz .intro_loop
@@ -351,14 +351,14 @@ show_intro:
         mov eax, SYS_GETCHAR
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; GAME INITIALIZATION
 ;=======================================================================
 init_game:
-        pushad
+        PUSHALL
         mov dword [population], START_POP
         mov dword [food], START_FOOD
         mov dword [land], START_LAND
@@ -370,7 +370,7 @@ init_game:
         mov dword [land_price], 20
         mov dword [harvest_yield], 3
         mov dword [plague_flag], 0
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -418,7 +418,7 @@ year_loop:
 ; STATUS REPORT
 ;=======================================================================
 show_status:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -633,16 +633,16 @@ show_status:
         mov ecx, 16
         int 0x80
         mov eax, [last_event]
-        imul eax, 4
-        mov ebx, [event_msg_table + eax]
+        imul eax, 8
+        mov rbx, [event_msg_table + rax]
         cmp ebx, 0
         je .no_event_msg
         mov eax, SYS_SETCOLOR
         mov ebx, C_LRED
         int 0x80
         mov eax, [last_event]
-        imul eax, 4
-        mov ebx, [event_msg_table + eax]
+        imul eax, 8
+        mov rbx, [event_msg_table + rax]
         mov eax, SYS_PRINT
         int 0x80
 .no_event_msg:
@@ -702,14 +702,14 @@ show_status:
         mov eax, SYS_GETCHAR
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_mini_bar: EAX=value, EBX=scale (value/scale = bars, max 20)
 ;---------------------------------------
 draw_mini_bar:
-        pushad
+        PUSHALL
         ; bars = min(value / scale, 20)
         xor edx, edx
         div ebx
@@ -733,14 +733,14 @@ draw_mini_bar:
         mov eax, SYS_SETCOLOR
         mov ebx, C_LGRAY
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; PHASE 1: BUY/SELL LAND
 ;=======================================================================
 phase_land:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -914,14 +914,14 @@ phase_land:
         int 0x80
 
 .land_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; PHASE 2: FEED COLONISTS
 ;=======================================================================
 phase_feed:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -1026,14 +1026,14 @@ phase_feed:
         mov ecx, 2
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; PHASE 3: PLANT CROPS
 ;=======================================================================
 phase_plant:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -1187,14 +1187,14 @@ phase_plant:
         mov ecx, 2
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; SIMULATE YEAR
 ;=======================================================================
 simulate_year:
-        pushad
+        PUSHALL
 
         ; --- Harvest ---
         ; Yield = 1-6 food per hectare planted
@@ -1234,7 +1234,7 @@ simulate_year:
         ; Calculate starvation percentage for catastrophe check
         cmp dword [population], 0
         je .skip_pct
-        push eax
+        push rax
         imul eax, 100
         xor edx, edx
         mov ebx, [population]
@@ -1243,17 +1243,17 @@ simulate_year:
         jle .pct_not_max
         mov [max_starved_pct], eax
 .pct_not_max:
-        pop eax
+        pop rax
 
         ; If > 45% starve in one year, people revolt
         cmp eax, 0
         je .skip_pct
-        push eax
+        push rax
         imul eax, 100
         xor edx, edx
         mov ebx, [population]
         div ebx
-        pop eax                 ; restore starved count (not pct)
+        pop rax                 ; restore starved count (not pct)
         cmp eax, 45
         jl .skip_pct
         ; Revolt! (handled later, just flag)
@@ -1324,14 +1324,14 @@ simulate_year:
         ; --- Show year results ---
         call show_year_results
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; RANDOM EVENTS
 ;=======================================================================
 random_event:
-        pushad
+        PUSHALL
 
         ; 40% chance of an event
         call random
@@ -1436,14 +1436,14 @@ random_event:
 .no_event:
         mov dword [last_event], EVT_NONE
 .evt_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; YEAR RESULTS SCREEN
 ;=======================================================================
 show_year_results:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -1505,8 +1505,8 @@ show_year_results:
         mov ebx, str_event_lbl
         int 0x80
         mov eax, [last_event]
-        imul eax, 4
-        mov ebx, [event_msg_table + eax]
+        imul eax, 8
+        mov rbx, [event_msg_table + rax]
         mov eax, SYS_PRINT
         int 0x80
         mov ecx, 8
@@ -1575,7 +1575,7 @@ show_year_results:
 .res_no_plague:
 
         ; Final stats
-        push ecx
+        push rcx
         add ecx, 2
         mov eax, SYS_SETCURSOR
         mov ebx, 5
@@ -1586,7 +1586,7 @@ show_year_results:
         mov eax, SYS_PRINT
         mov ebx, str_separator
         int 0x80
-        pop ecx
+        pop rcx
 
         add ecx, 3
         mov eax, SYS_SETCURSOR
@@ -1651,7 +1651,7 @@ show_year_results:
         mov eax, SYS_GETCHAR
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -2020,7 +2020,7 @@ game_exit:
 ; draw_phase_header - Blue status band
 ;---------------------------------------
 draw_phase_header:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, C_WHITE | 0x10
         int 0x80
@@ -2060,14 +2060,14 @@ draw_phase_header:
         mov eax, SYS_SETCOLOR
         mov ebx, C_LGRAY
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; read_number - Read a decimal number from user, return in EAX
 ;---------------------------------------
 read_number:
-        pushad
+        PUSHALL
         mov edi, input_buf
         xor ecx, ecx
 
@@ -2109,7 +2109,7 @@ read_number:
         cmp ecx, 0
         je .rn_loop
         dec ecx
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
@@ -2119,7 +2119,7 @@ read_number:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
-        pop ecx
+        pop rcx
         jmp .rn_loop
 
 .rn_done:
@@ -2145,7 +2145,7 @@ read_number:
 
 .rn_conv_done:
         mov [tmp_result], eax
-        popad
+        POPALL
         mov eax, [tmp_result]
         ret
 
@@ -2153,13 +2153,13 @@ read_number:
 ; print_number - Print EAX as decimal
 ;---------------------------------------
 print_number:
-        pushad
+        PUSHALL
         cmp eax, 0
         jne .pn_nonzero
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pn_nonzero:
         mov ecx, 0
@@ -2167,37 +2167,37 @@ print_number:
 .pn_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pn_div
 .pn_print:
-        pop edx
+        pop rdx
         add edx, '0'
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, edx
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .pn_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; random - LCG PRNG, result in EAX
 ;---------------------------------------
 random:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov eax, [rand_seed]
         imul eax, 1103515245
         add eax, 12345
         mov [rand_seed], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ;=======================================================================
@@ -2223,7 +2223,7 @@ p_art5: db "       '  *  '", 0
 p_art6: db "      *       *", 0
 p_art7: db "         * *", 0
 
-planet_art: dd p_art1, p_art2, p_art3, p_art4, p_art5, p_art6, p_art7
+planet_art: dq p_art1, p_art2, p_art3, p_art4, p_art5, p_art6, p_art7
 
 ; === How to Play ===
 str_howto_title: db "=== HOW TO PLAY ===", 0
@@ -2247,8 +2247,8 @@ ht16: db "Random events -- dust storms, plagues, supply ships, alien", 0
 ht17: db "artifacts -- will test your leadership. Good luck, Commander.", 0
 ht18: db " ", 0
 
-howto_lines: dd ht1, ht2, ht3, ht4, ht5, ht6, ht7, ht8, ht9
-             dd ht10, ht11, ht12, ht13, ht14, ht15, ht16, ht17, ht18
+howto_lines: dq ht1, ht2, ht3, ht4, ht5, ht6, ht7, ht8, ht9
+             dq ht10, ht11, ht12, ht13, ht14, ht15, ht16, ht17, ht18
 
 ; === Intro ===
 intro1:  db " ", 0
@@ -2264,8 +2264,8 @@ intro10: db " ", 0
 intro11: db "The colony must survive 10 years until the next supply", 0
 intro12: db "fleet can reach you. Every decision matters, Commander.", 0
 
-intro_lines: dd intro1, intro2, intro3, intro4, intro5, intro6
-             dd intro7, intro8, intro9, intro10, intro11, intro12
+intro_lines: dq intro1, intro2, intro3, intro4, intro5, intro6
+             dq intro7, intro8, intro9, intro10, intro11, intro12
 
 str_press_begin: db "Press any key to begin Year 1...", 0
 str_press_key:   db "Press any key to continue...", 0
@@ -2355,9 +2355,9 @@ evt_msg_pests:  db "Alien pests infested the food storage silos!", 0
 evt_msg_disc:   db "Scientists discovered a new crop cultivation technique!", 0
 
 event_msg_table:
-        dd evt_msg_none, evt_msg_dust, evt_msg_plague, evt_msg_flare
-        dd evt_msg_artifact, evt_msg_bount, evt_msg_supply, evt_msg_pests
-        dd evt_msg_disc
+        dq evt_msg_none, evt_msg_dust, evt_msg_plague, evt_msg_flare
+        dq evt_msg_artifact, evt_msg_bount, evt_msg_supply, evt_msg_pests
+        dq evt_msg_disc
 
 ; === Game Over ===
 str_dead_title: db "*** COLONY LOST ***", 0

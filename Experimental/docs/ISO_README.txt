@@ -31,7 +31,7 @@ Quick start in a VM
 
 **Manual QEMU (both the ISO and the disk image must be present):**
 
-  qemu-system-i386 -cpu 486 -m 128 \
+  qemu-system-x86_64 -cpu qemu64 -m 2048 \
     -cdrom mellivora.iso \
     -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
     -boot d -no-shutdown \
@@ -39,7 +39,7 @@ Quick start in a VM
     -netdev user,id=net0 -device rtl8139,netdev=net0
 
 VirtualBox / VMware / UTM:
-  1. Create a VM with Legacy BIOS boot, 128 MB RAM, i486/i686 CPU.
+  1. Create a VM with Legacy BIOS boot, 1024 MB+ RAM (2048 MB recommended), x86-64 CPU.
   2. Attach the ISO as the optical drive.
   3. Also attach /boot/mellivora.img as the primary IDE hard disk
      (extract it from the ISO first with xorriso, 7z, or bsdtar).

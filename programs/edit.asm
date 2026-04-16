@@ -295,10 +295,10 @@ start:
 
 ; get_line_ptr: EAX=line# -> ESI=pointer
 get_line_ptr:
-        push edx
+        push rdx
         imul eax, MAX_LINE_LEN
         lea esi, [text_buf + eax]
-        pop edx
+        pop rdx
         ret
 
 ; get_line_len: EAX=line# -> EAX=length
@@ -318,29 +318,29 @@ get_line_len:
 
 ; line_len: -> EAX=length of cursor_y line
 line_len:
-        push edx
+        push rdx
         mov eax, [cursor_y]
         call get_line_len
-        pop edx
+        pop rdx
         ret
 
 ; clamp_x: clamp cursor_x to <= current line length
 clamp_x:
-        push eax
-        push edx
+        push rax
+        push rdx
         call line_len
         cmp [cursor_x], eax
         jle .cx_ok
         mov [cursor_x], eax
 .cx_ok:
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
         ret
 
 ; adjust_scroll_y
 adjust_scroll_y:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, [cursor_y]
         cmp eax, [scroll_y]
         jge .asy_down
@@ -354,14 +354,14 @@ adjust_scroll_y:
         sub eax, EDIT_ROWS - 1
         mov [scroll_y], eax
 .asy_done:
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ; adjust_scroll_x
 adjust_scroll_x:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, [cursor_x]
         cmp eax, [scroll_x]
         jge .asx_right
@@ -376,8 +376,8 @@ adjust_scroll_x:
         sub ebx, 79
         mov [scroll_x], ebx
 .asx_done:
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 full_redraw:
@@ -389,7 +389,7 @@ full_redraw:
 
 ; draw_header: SYS_SETCURSOR EBX=col, ECX=row
 draw_header:
-        pushad
+        PUSHALL
         mov edi, line_buf
         mov al, ' '
         mov ecx, 80
@@ -419,12 +419,12 @@ draw_header:
         mov eax, SYS_PRINT
         mov ebx, line_buf
         int 0x80
-        popad
+        POPALL
         ret
 
 ; draw_text_area: render all EDIT_ROWS text lines
 draw_text_area:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         mov ecx, TEXT_START
@@ -440,8 +440,8 @@ draw_text_area:
         add eax, edx
         cmp eax, [num_lines]
         jge .dta_empty
-        push edx
-        push eax
+        push rdx
+        push rax
         call get_line_ptr
         add esi, [scroll_x]
         mov edi, line_buf
@@ -469,8 +469,8 @@ draw_text_area:
         rep stosb
         jmp .dta_print
 .dta_empty:
-        push edx
-        push eax
+        push rdx
+        push rax
         mov edi, line_buf
         mov byte [edi], '~'
         inc edi
@@ -482,17 +482,17 @@ draw_text_area:
         mov eax, SYS_PRINT
         mov ebx, line_buf
         int 0x80
-        pop eax
-        pop edx
+        pop rax
+        pop rdx
         inc edx
         jmp .dta_row
 .dta_done:
-        popad
+        POPALL
         ret
 
 ; draw_cur_line: redraw only the cursor_y line
 draw_cur_line:
-        pushad
+        PUSHALL
         mov ecx, [cursor_y]
         sub ecx, [scroll_y]
         cmp ecx, 0
@@ -538,12 +538,12 @@ draw_cur_line:
         mov ebx, line_buf
         int 0x80
 .dcl_skip:
-        popad
+        POPALL
         ret
 
 ; draw_status: render status bar at row 24
 draw_status:
-        pushad
+        PUSHALL
         mov edi, line_buf
         mov al, ' '
         mov ecx, 80
@@ -583,12 +583,12 @@ draw_status:
         mov eax, SYS_SETCOLOR
         mov ebx, COL_TEXT
         int 0x80
-        popad
+        POPALL
         ret
 
 ; draw_quit_prompt
 draw_quit_prompt:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         mov ecx, STATUS_ROW
@@ -602,12 +602,12 @@ draw_quit_prompt:
         mov eax, SYS_SETCOLOR
         mov ebx, COL_TEXT
         int 0x80
-        popad
+        POPALL
         ret
 
 ; set_hw_cursor: position hardware cursor
 set_hw_cursor:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         mov ebx, [cursor_x]
         sub ebx, [scroll_x]
@@ -615,12 +615,12 @@ set_hw_cursor:
         sub ecx, [scroll_y]
         add ecx, TEXT_START
         int 0x80
-        popad
+        POPALL
         ret
 
 ; insert_char: insert AL at cursor position
 insert_char:
-        pushad
+        PUSHALL
         mov bl, al
         mov eax, [cursor_y]
         call get_line_ptr
@@ -633,7 +633,7 @@ insert_char:
         jge .ic_full
         jmp .ic_len
 .ic_full:
-        popad
+        POPALL
         ret
 .ic_got_len:
         mov edx, [cursor_x]
@@ -649,12 +649,12 @@ insert_char:
         inc dword [cursor_x]
         mov byte [modified], 1
         call adjust_scroll_x
-        popad
+        POPALL
         ret
 
 ; delete_at_cursor
 delete_at_cursor:
-        pushad
+        PUSHALL
         mov eax, [cursor_y]
         call get_line_ptr
         xor ecx, ecx
@@ -677,12 +677,12 @@ delete_at_cursor:
 .dac_done:
         mov byte [modified], 1
 .dac_exit:
-        popad
+        POPALL
         ret
 
 ; split_line: Enter key
 split_line:
-        pushad
+        PUSHALL
         cmp dword [num_lines], MAX_LINES - 1
         jge .sl_done
         mov eax, [num_lines]
@@ -690,13 +690,13 @@ split_line:
 .sl_shift:
         cmp eax, [cursor_y]
         jle .sl_copy
-        push eax
+        push rax
         call get_line_ptr
         mov edi, esi
         add edi, MAX_LINE_LEN
         mov ecx, MAX_LINE_LEN
         rep movsb
-        pop eax
+        pop rax
         dec eax
         jmp .sl_shift
 .sl_copy:
@@ -723,12 +723,12 @@ split_line:
         mov byte [modified], 1
         call adjust_scroll_y
 .sl_done:
-        popad
+        POPALL
         ret
 
 ; join_up: backspace at col 0
 join_up:
-        pushad
+        PUSHALL
         mov eax, [cursor_y]
         dec eax
         call get_line_ptr
@@ -761,12 +761,12 @@ join_up:
         mov byte [modified], 1
         call adjust_scroll_y
         call adjust_scroll_x
-        popad
+        POPALL
         ret
 
 ; join_down: del at EOL
 join_down:
-        pushad
+        PUSHALL
         mov eax, [cursor_y]
         call get_line_ptr
         xor ecx, ecx
@@ -796,23 +796,23 @@ join_down:
         call delete_cur_line
         dec dword [cursor_y]
         mov byte [modified], 1
-        popad
+        POPALL
         ret
 
 ; kill_line: Ctrl+K
 kill_line:
-        pushad
+        PUSHALL
         mov eax, [cursor_y]
         call get_line_ptr
         mov edx, [cursor_x]
         mov byte [esi + edx], 0
         mov byte [modified], 1
-        popad
+        POPALL
         ret
 
 ; delete_cur_line
 delete_cur_line:
-        pushad
+        PUSHALL
         mov edx, [cursor_y]
 .dcl2_loop:
         mov ebx, [num_lines]
@@ -839,12 +839,12 @@ delete_cur_line:
         jge .dcl2_done
         mov dword [num_lines], 1
 .dcl2_done:
-        popad
+        POPALL
         ret
 
 ; load_file
 load_file:
-        pushad
+        PUSHALL
         mov eax, SYS_FREAD
         mov ebx, filename
         mov ecx, file_io_buf
@@ -868,33 +868,33 @@ load_file:
         je .lf_newline
         cmp ebx, MAX_LINE_LEN - 2
         jge .lf_parse
-        push eax
+        push rax
         mov eax, edx
         imul eax, MAX_LINE_LEN
         lea edi, [text_buf + eax + ebx]
-        pop eax
+        pop rax
         mov [edi], al
         inc ebx
         jmp .lf_parse
 .lf_newline:
-        push eax
+        push rax
         mov eax, edx
         imul eax, MAX_LINE_LEN
         lea edi, [text_buf + eax + ebx]
         mov byte [edi], 0
-        pop eax
+        pop rax
         inc edx
         xor ebx, ebx
         cmp edx, MAX_LINES - 1
         jge .lf_parse_done
         jmp .lf_parse
 .lf_parse_done:
-        push eax
+        push rax
         mov eax, edx
         imul eax, MAX_LINE_LEN
         lea edi, [text_buf + eax + ebx]
         mov byte [edi], 0
-        pop eax
+        pop rax
         inc edx
         cmp edx, 1
         jge .lf_set_count
@@ -905,12 +905,12 @@ load_file:
 .lf_empty:
         mov dword [num_lines], 1
 .lf_done:
-        popad
+        POPALL
         ret
 
 ; save_file
 save_file:
-        pushad
+        PUSHALL
         mov edi, file_io_buf
         xor edx, edx
 .sf_loop:
@@ -953,7 +953,7 @@ save_file:
         mov eax, SYS_SLEEP
         mov ebx, 80
         int 0x80
-        popad
+        POPALL
         ret
 
 ; strcat_edi: append ESI string to [EDI], advance EDI
@@ -969,8 +969,8 @@ strcat_edi:
 
 ; fmt_dec: write EAX as decimal digits at [EDI], advance EDI
 fmt_dec:
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         mov ebx, 10
         xor ecx, ecx
         test eax, eax
@@ -981,20 +981,20 @@ fmt_dec:
 .fd_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .fd_push
 .fd_pop:
-        pop edx
+        pop rdx
         add dl, '0'
         mov [edi], dl
         inc edi
         dec ecx
         jnz .fd_pop
 .fd_done:
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         ret
 
 section .data

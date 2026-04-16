@@ -121,7 +121,7 @@ start:
 ; print_size_mb - Print EAX as right-justified 8-wide MB value
 ;---------------------------------------
 print_size_mb:
-        pushad
+        PUSHALL
         mov [.val], eax
         ; Count digits
         xor ecx, ecx
@@ -143,11 +143,11 @@ print_size_mb:
         sub edx, ecx
         jle .psm_val
 .psm_sp:
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop edx
+        pop rdx
         dec edx
         jg .psm_sp
 .psm_val:
@@ -156,7 +156,7 @@ print_size_mb:
         mov eax, SYS_PRINT
         mov ebx, str_mb
         int 0x80
-        popad
+        POPALL
         ret
 .val:   dd 0
 
@@ -164,7 +164,7 @@ print_size_mb:
 ; print_pct - Print EAX as right-justified percentage
 ;---------------------------------------
 print_pct:
-        pushad
+        PUSHALL
         mov [.pval], eax
         xor ecx, ecx
         cmp eax, 0
@@ -185,11 +185,11 @@ print_pct:
         sub edx, ecx
         jle .pp_val
 .pp_sp:
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop edx
+        pop rdx
         dec edx
         jg .pp_sp
 .pp_val:
@@ -198,7 +198,7 @@ print_pct:
         mov eax, SYS_PUTCHAR
         mov ebx, '%'
         int 0x80
-        popad
+        POPALL
         ret
 .pval:  dd 0
 
@@ -206,8 +206,8 @@ print_pct:
 ; print_padded - Print EAX right-justified to 8 wide
 ;---------------------------------------
 print_padded:
-        pushad
-        push eax
+        PUSHALL
+        push rax
         xor ecx, ecx
         cmp eax, 0
         jne .pp2_cnt
@@ -226,30 +226,30 @@ print_padded:
         sub edx, ecx
         jle .pp2_val
 .pp2_sp:
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop edx
+        pop rdx
         dec edx
         jg .pp2_sp
 .pp2_val:
-        pop eax
+        pop rax
         call print_decimal
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_decimal
 ;---------------------------------------
 print_decimal:
-        pushad
+        PUSHALL
         cmp eax, 0
         jne .pd_nz
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pd_nz:
         xor ecx, ecx
@@ -257,18 +257,18 @@ print_decimal:
 .pd_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pd_div
 .pd_out:
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jnz .pd_out
-        popad
+        POPALL
         ret
 
 ;=======================================

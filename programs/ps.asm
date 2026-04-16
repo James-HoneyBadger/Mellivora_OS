@@ -77,7 +77,7 @@ start:
         mov ebx, str_spaces
         int 0x80
 
-        mov eax, [task_info + 8]
+        mov eax, [task_info + 8]        ; entry point (low 32 bits of qword)
         call print_hex
 
         ; Print ESP
@@ -85,7 +85,7 @@ start:
         mov ebx, str_spaces
         int 0x80
 
-        mov eax, [task_info + 12]
+        mov eax, [task_info + 16]       ; rsp (low 32 bits of qword)
         call print_hex
 
         ; Newline
@@ -116,10 +116,10 @@ start:
 ; print_padded_num - Print EAX as right-justified 4-wide decimal
 ;---------------------------------------
 print_padded_num:
-        pushad
+        PUSHALL
         ; Count digits
         mov ecx, 0
-        push eax
+        push rax
         cmp eax, 0
         jne .ppn_count
         mov ecx, 1
@@ -138,30 +138,30 @@ print_padded_num:
         sub edx, ecx
         jle .ppn_print
 .ppn_sp:
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop edx
+        pop rdx
         dec edx
         jg .ppn_sp
 .ppn_print:
-        pop eax
+        pop rax
         call print_decimal
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_decimal
 ;---------------------------------------
 print_decimal:
-        pushad
+        PUSHALL
         cmp eax, 0
         jne .pd_nz
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pd_nz:
         xor ecx, ecx
@@ -169,25 +169,25 @@ print_decimal:
 .pd_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pd_div
 .pd_out:
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jnz .pd_out
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_hex - Print EAX as 8-digit hex
 ;---------------------------------------
 print_hex:
-        pushad
+        PUSHALL
         mov ecx, 8
         mov edx, eax
 .ph_loop:
@@ -201,16 +201,16 @@ print_hex:
 .ph_digit:
         add eax, '0'
 .ph_out:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         dec ecx
         jnz .ph_loop
-        popad
+        POPALL
         ret
 
 ;=======================================
@@ -225,4 +225,4 @@ str_spaces:     db "  ", 0
 msg_tasks:      db " active task(s)", 10, 0
 
 ; BSS
-task_info:      times 16 db 0
+task_info:      times 24 db 0

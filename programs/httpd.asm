@@ -1,5 +1,6 @@
-; httpd.asm - Simple HTTP/1.0 Server for Mellivora OS
+; httpd.asm - HTTP/1.1 Server for Mellivora OS
 ; Serves files from the filesystem with directory listing.
+; Supports: GET, HEAD, Host header, keep-alive, content-type detection
 ; Usage: httpd [port]
 ; Default port: 8080
 
@@ -12,6 +13,7 @@ MAX_FILE_SIZE   equ 32768
 MAX_RESP_HDR    equ 512
 MAX_DIR_RESP    equ 8192
 MAX_PATH        equ 128
+MAX_REQUESTS    equ 100         ; max requests per keep-alive connection
 
 start:
         ; Parse optional port argument
@@ -84,6 +86,11 @@ server_loop:
         je .accept_retry
         mov [client_fd], eax
 
+        ; Keep-alive request loop
+        mov dword [keep_alive], 1
+        mov dword [req_count], 0
+
+.request_loop:
         ; Receive request
         mov eax, [client_fd]
         mov ebx, req_buf
@@ -98,13 +105,21 @@ server_loop:
         ; Log the request (first line)
         call log_request
 
-        ; Parse the request
+        ; Parse the request (also parses headers for keep-alive)
         call parse_request
         test eax, eax
         jz .send_400
 
         ; Route the request
         call handle_request
+
+        ; Check keep-alive
+        inc dword [req_count]
+        mov eax, [req_count]
+        cmp eax, MAX_REQUESTS
+        jge .close_client
+        cmp dword [keep_alive], 1
+        je .request_loop
 
 .close_client:
         mov eax, [client_fd]
@@ -182,7 +197,6 @@ parse_request:
         inc ecx
         jmp .pr_path
 .pr_skip_query:
-        ; Skip query string
 .pr_skip_path:
         lodsb
         cmp al, ' '
@@ -192,6 +206,108 @@ parse_request:
         jmp .pr_skip_path
 .pr_got_path:
         mov byte [edi + ecx], 0
+
+        ; Skip past HTTP version line (to CRLF)
+.pr_skip_ver:
+        lodsb
+        cmp al, 0x0A
+        je .pr_headers
+        cmp al, 0
+        je .pr_headers_done
+        jmp .pr_skip_ver
+
+        ; Parse headers for Connection: and Host:
+.pr_headers:
+        ; Default: keep-alive for HTTP/1.1
+        mov dword [keep_alive], 1
+        mov byte [req_host], 0
+
+.pr_hdr_line:
+        cmp byte [esi], 0x0D
+        je .pr_blank_line
+        cmp byte [esi], 0x0A
+        je .pr_blank_line
+        cmp byte [esi], 0
+        je .pr_headers_done
+
+        ; Check "Connection:"
+        cmp byte [esi], 'C'
+        jne .pr_check_host
+        cmp byte [esi + 1], 'o'
+        jne .pr_check_host
+        cmp byte [esi + 2], 'n'
+        jne .pr_check_host
+        cmp byte [esi + 3], 'n'
+        jne .pr_check_host
+        ; Scan for "close"
+        push rsi
+.pr_conn_scan:
+        lodsb
+        cmp al, 0x0A
+        je .pr_conn_end
+        cmp al, 0
+        je .pr_conn_end
+        cmp al, 'c'
+        jne .pr_conn_scan
+        cmp byte [esi], 'l'
+        jne .pr_conn_scan
+        ; Found "cl" — assume "close"
+        mov dword [keep_alive], 0
+.pr_conn_end:
+        pop rsi
+        jmp .pr_hdr_skip
+
+.pr_check_host:
+        ; Check "Host:"
+        cmp byte [esi], 'H'
+        jne .pr_hdr_skip
+        cmp byte [esi + 1], 'o'
+        jne .pr_hdr_skip
+        cmp byte [esi + 2], 's'
+        jne .pr_hdr_skip
+        cmp byte [esi + 3], 't'
+        jne .pr_hdr_skip
+        ; Copy host value
+        push rsi
+        add esi, 4              ; past "Host"
+        cmp byte [esi], ':'
+        jne .pr_host_end
+        inc esi
+        cmp byte [esi], ' '
+        jne .pr_host_copy
+        inc esi
+.pr_host_copy:
+        mov edi, req_host
+        xor ecx, ecx
+.pr_host_ch:
+        lodsb
+        cmp al, 0x0D
+        je .pr_host_term
+        cmp al, 0x0A
+        je .pr_host_term
+        cmp al, 0
+        je .pr_host_term
+        cmp ecx, 63
+        jge .pr_host_ch
+        mov [edi + ecx], al
+        inc ecx
+        jmp .pr_host_ch
+.pr_host_term:
+        mov byte [edi + ecx], 0
+.pr_host_end:
+        pop rsi
+
+.pr_hdr_skip:
+        ; Skip to next line
+        lodsb
+        cmp al, 0x0A
+        je .pr_hdr_line
+        cmp al, 0
+        je .pr_headers_done
+        jmp .pr_hdr_skip
+
+.pr_blank_line:
+.pr_headers_done:
         mov eax, 1
         ret
 .pr_bad:
@@ -202,14 +318,30 @@ parse_request:
 ; handle_request - Route and serve the request
 ;---------------------------------------
 handle_request:
-        pushad
-        ; Only support GET
+        PUSHALL
+        ; Check for HEAD method
+        mov byte [head_only], 0
+        cmp byte [req_method], 'H'
+        jne .hr_check_get
+        cmp byte [req_method + 1], 'E'
+        jne .hr_405
+        cmp byte [req_method + 2], 'A'
+        jne .hr_405
+        cmp byte [req_method + 3], 'D'
+        jne .hr_405
+        mov byte [head_only], 1
+        jmp .hr_route
+
+.hr_check_get:
+        ; Check GET
         cmp byte [req_method], 'G'
         jne .hr_405
         cmp byte [req_method + 1], 'E'
         jne .hr_405
         cmp byte [req_method + 2], 'T'
         jne .hr_405
+
+.hr_route:
 
         ; Check if requesting root "/"
         cmp byte [req_path], '/'
@@ -229,31 +361,31 @@ handle_request:
         ; File exists — serve it
         mov [file_size], eax
         call serve_file
-        popad
+        POPALL
         ret
 
 .serve_directory:
         call serve_dir_listing
-        popad
+        POPALL
         ret
 
 .hr_404:
         mov esi, resp_404
         call send_string
-        popad
+        POPALL
         ret
 
 .hr_405:
         mov esi, resp_405
         call send_string
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; serve_file - Read file and send HTTP response
 ;---------------------------------------
 serve_file:
-        pushad
+        PUSHALL
 
         ; Read file into file_buf
         lea ebx, [req_path + 1]
@@ -269,13 +401,13 @@ serve_file:
 
         ; Build response header
         mov edi, resp_hdr_buf
-        ; "HTTP/1.0 200 OK\r\n"
+        ; "HTTP/1.1 200 OK\r\n"
         mov esi, http_200
         call copy_str
         ; "Content-Type: xxx\r\n"
         mov esi, hdr_content_type
         call copy_str
-        mov esi, [content_type_ptr]
+        mov rsi, [content_type_ptr]
         call copy_str
         mov esi, crlf
         call copy_str
@@ -288,9 +420,19 @@ serve_file:
         call copy_str
         mov esi, crlf
         call copy_str
-        ; "Connection: close\r\n\r\n"
+        ; "Server: httpd/1.1 Mellivora\r\n"
+        mov esi, hdr_server
+        call copy_str
+        ; Connection header based on keep-alive state
+        cmp dword [keep_alive], 1
+        jne .sf_conn_close
+        mov esi, hdr_conn_alive
+        call copy_str
+        jmp .sf_conn_done
+.sf_conn_close:
         mov esi, hdr_conn_close
         call copy_str
+.sf_conn_done:
         mov esi, crlf
         call copy_str
 
@@ -301,26 +443,29 @@ serve_file:
         mov esi, resp_hdr_buf
         call send_string
 
-        ; Send file body
+        ; Send file body (unless HEAD-only)
+        cmp byte [head_only], 1
+        je .sf_head_skip
         mov eax, [client_fd]
         mov ebx, file_buf
         mov ecx, [file_size]
         call net_send
+.sf_head_skip:
 
-        popad
+        POPALL
         ret
 
 .sf_fail:
         mov esi, resp_500
         call send_string
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; serve_dir_listing - Generate and send directory listing
 ;---------------------------------------
 serve_dir_listing:
-        pushad
+        PUSHALL
 
         ; Build HTML directory listing into dir_buf
         mov edi, dir_buf
@@ -330,18 +475,18 @@ serve_dir_listing:
         ; Enumerate files
         xor ecx, ecx           ; entry index
 .sdl_loop:
-        push ecx
+        push rcx
         mov eax, SYS_READDIR
         mov ebx, dir_name_buf
         int 0x80
-        pop ecx
+        pop rcx
 
         cmp eax, -1
         je .sdl_done
         cmp eax, 0
         je .sdl_next            ; free slot
-        push ecx
-        push eax                ; save type
+        push rcx
+        push rax                ; save type
         ; Save file size 
         mov [.sdl_fsize], ecx
 
@@ -370,7 +515,7 @@ serve_dir_listing:
         ; "<td>type</td></tr>\n"
         mov esi, dir_td_start
         call copy_str
-        pop eax                 ; type
+        pop rax                 ; type
         cmp eax, FTYPE_EXEC
         je .sdl_type_exec
         cmp eax, FTYPE_DIR
@@ -386,7 +531,7 @@ serve_dir_listing:
         call copy_str
         mov esi, dir_td_end_row
         call copy_str
-        pop ecx
+        pop rcx
 
 .sdl_next:
         inc ecx
@@ -422,8 +567,17 @@ serve_dir_listing:
         call copy_str
         mov esi, crlf
         call copy_str
+        mov esi, hdr_server
+        call copy_str
+        cmp dword [keep_alive], 1
+        jne .sdl_conn_close
+        mov esi, hdr_conn_alive
+        call copy_str
+        jmp .sdl_conn_done
+.sdl_conn_close:
         mov esi, hdr_conn_close
         call copy_str
+.sdl_conn_done:
         mov esi, crlf
         call copy_str
         mov byte [edi], 0
@@ -431,12 +585,17 @@ serve_dir_listing:
         ; Send header + body
         mov esi, resp_hdr_buf
         call send_string
+
+        ; Send body (unless HEAD-only)
+        cmp byte [head_only], 1
+        je .sdl_head_skip
         mov eax, [client_fd]
         mov ebx, dir_buf
         mov ecx, [file_size]
         call net_send
+.sdl_head_skip:
 
-        popad
+        POPALL
         ret
 
 .sdl_fsize: dd 0
@@ -471,6 +630,12 @@ detect_content_type:
         je .dct_check_bmp
         cmp al, 'c'
         je .dct_check_css
+        cmp al, 'j'
+        je .dct_check_js
+        cmp al, 'p'
+        je .dct_check_png
+        cmp al, 'g'
+        je .dct_check_gz
         jmp .dct_default
 
 .dct_check_htm:
@@ -478,31 +643,66 @@ detect_content_type:
         or al, 0x20
         cmp al, 't'
         jne .dct_default
-        mov dword [content_type_ptr], ct_html
+        mov qword [content_type_ptr], ct_html
         ret
 .dct_text:
         mov al, [edx + 1]
         or al, 0x20
         cmp al, 'x'
         jne .dct_default
-        mov dword [content_type_ptr], ct_text
+        mov qword [content_type_ptr], ct_text
         ret
 .dct_check_bmp:
         mov al, [edx + 1]
         or al, 0x20
         cmp al, 'm'
         jne .dct_default
-        mov dword [content_type_ptr], ct_bmp
+        mov qword [content_type_ptr], ct_bmp
         ret
 .dct_check_css:
         mov al, [edx + 1]
         or al, 0x20
         cmp al, 's'
         jne .dct_default
-        mov dword [content_type_ptr], ct_css
+        mov qword [content_type_ptr], ct_css
+        ret
+.dct_check_js:
+        mov al, [edx + 1]
+        or al, 0x20
+        cmp al, 's'
+        jne .dct_check_json
+        cmp byte [edx + 2], 0   ; .js (2 chars)
+        je .dct_js_ok
+        cmp byte [edx + 2], '.'
+        je .dct_js_ok
+        jmp .dct_check_json
+.dct_js_ok:
+        mov qword [content_type_ptr], ct_js
+        ret
+.dct_check_json:
+        cmp byte [edx + 1], 's'
+        jne .dct_default
+        ; Could be "json" — just check 'o','n'
+        cmp byte [edx + 2], 'o'
+        jne .dct_default
+        mov qword [content_type_ptr], ct_json
+        ret
+.dct_check_png:
+        mov al, [edx + 1]
+        or al, 0x20
+        cmp al, 'n'
+        jne .dct_default
+        mov qword [content_type_ptr], ct_png
+        ret
+.dct_check_gz:
+        mov al, [edx + 1]
+        or al, 0x20
+        cmp al, 'z'
+        jne .dct_default
+        mov qword [content_type_ptr], ct_gz
         ret
 .dct_default:
-        mov dword [content_type_ptr], ct_octet
+        mov qword [content_type_ptr], ct_octet
         ret
 
 ;---------------------------------------
@@ -510,9 +710,9 @@ detect_content_type:
 ; ESI = string
 ;---------------------------------------
 send_string:
-        push eax
-        push ecx
-        push ebx
+        push rax
+        push rcx
+        push rbx
         ; Get length
         mov ebx, esi
         xor ecx, ecx
@@ -525,16 +725,16 @@ send_string:
         mov eax, [client_fd]
         mov ebx, esi
         call net_send
-        pop ebx
-        pop ecx
-        pop eax
+        pop rbx
+        pop rcx
+        pop rax
         ret
 
 ;---------------------------------------
 ; copy_str - Copy null-terminated string from ESI to EDI, advance EDI
 ;---------------------------------------
 copy_str:
-        push eax
+        push rax
 .cs_loop:
         lodsb
         test al, al
@@ -542,14 +742,14 @@ copy_str:
         stosb
         jmp .cs_loop
 .cs_done:
-        pop eax
+        pop rax
         ret
 
 ;---------------------------------------
 ; log_request - Print first line of request to console
 ;---------------------------------------
 log_request:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0A           ; green
         int 0x80
@@ -575,17 +775,17 @@ log_request:
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; int_to_str - Convert EAX to decimal string in num_buf
 ;---------------------------------------
 int_to_str:
-        push ebx
-        push ecx
-        push edx
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rdi
         mov edi, num_buf + 15
         mov byte [edi], 0
         dec edi
@@ -614,10 +814,10 @@ int_to_str:
         stosb
         test al, al
         jnz .its_copy
-        pop edi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -645,19 +845,19 @@ parse_decimal:
 ; print_number - Print EAX as decimal
 ;---------------------------------------
 print_number:
-        push eax
+        push rax
         call int_to_str
         mov eax, SYS_PRINT
         mov ebx, num_buf
         int 0x80
-        pop eax
+        pop rax
         ret
 
 ;=======================================
 ; Data
 ;=======================================
 
-banner_str:     db "Mellivora HTTP Server v1.0", 0x0D, 0x0A
+banner_str:     db "Mellivora HTTP Server v2.0 (HTTP/1.1)", 0x0D, 0x0A
                 db "Listening on port: ", 0
 msg_listening:  db "Waiting for connections...", 0x0D, 0x0A, 0
 msg_sock_fail:  db "Error: Could not create socket", 0x0D, 0x0A, 0
@@ -666,31 +866,33 @@ msg_listen_fail: db "Error: Could not listen", 0x0D, 0x0A, 0
 newline:        db 0x0D, 0x0A, 0
 
 ; HTTP response templates
-http_200:       db "HTTP/1.0 200 OK", 0x0D, 0x0A, 0
+http_200:       db "HTTP/1.1 200 OK", 0x0D, 0x0A, 0
 hdr_content_type: db "Content-Type: ", 0
 hdr_content_len:  db "Content-Length: ", 0
 hdr_conn_close:   db "Connection: close", 0x0D, 0x0A, 0
+hdr_conn_alive:   db "Connection: keep-alive", 0x0D, 0x0A, 0
+hdr_server:       db "Server: httpd/2.0 Mellivora", 0x0D, 0x0A, 0
 crlf:           db 0x0D, 0x0A, 0
 
-resp_400:       db "HTTP/1.0 400 Bad Request", 0x0D, 0x0A
+resp_400:       db "HTTP/1.1 400 Bad Request", 0x0D, 0x0A
                 db "Content-Type: text/plain", 0x0D, 0x0A
                 db "Content-Length: 11", 0x0D, 0x0A
                 db "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A
                 db "Bad Request", 0
 
-resp_404:       db "HTTP/1.0 404 Not Found", 0x0D, 0x0A
+resp_404:       db "HTTP/1.1 404 Not Found", 0x0D, 0x0A
                 db "Content-Type: text/html", 0x0D, 0x0A
                 db "Content-Length: 52", 0x0D, 0x0A
                 db "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A
                 db "<h1>404 Not Found</h1><p>File not found.</p>", 0
 
-resp_405:       db "HTTP/1.0 405 Method Not Allowed", 0x0D, 0x0A
+resp_405:       db "HTTP/1.1 405 Method Not Allowed", 0x0D, 0x0A
                 db "Content-Type: text/plain", 0x0D, 0x0A
                 db "Content-Length: 18", 0x0D, 0x0A
                 db "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A
                 db "Method Not Allowed", 0
 
-resp_500:       db "HTTP/1.0 500 Internal Server Error", 0x0D, 0x0A
+resp_500:       db "HTTP/1.1 500 Internal Server Error", 0x0D, 0x0A
                 db "Content-Type: text/plain", 0x0D, 0x0A
                 db "Content-Length: 21", 0x0D, 0x0A
                 db "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A
@@ -701,6 +903,10 @@ ct_html:        db "text/html", 0
 ct_text:        db "text/plain", 0
 ct_bmp:         db "image/bmp", 0
 ct_css:         db "text/css", 0
+ct_js:          db "application/javascript", 0
+ct_json:        db "application/json", 0
+ct_png:         db "image/png", 0
+ct_gz:          db "application/gzip", 0
 ct_octet:       db "application/octet-stream", 0
 
 ; File type names for directory listing
@@ -726,7 +932,7 @@ dir_td_end:     db "</td>", 0
 dir_td_end_row: db "</td></tr>", 0x0A, 0
 
 dir_html_footer:
-        db "</table><hr><em>httpd/1.0 on Mellivora OS</em></body></html>", 0
+        db "</table><hr><em>httpd/2.0 on Mellivora OS</em></body></html>", 0
 
 ;=======================================
 ; BSS
@@ -736,12 +942,16 @@ server_fd:      dd 0
 client_fd:      dd 0
 listen_port:    dd 0
 file_size:      dd 0
-content_type_ptr: dd ct_octet
+content_type_ptr: dq ct_octet
+keep_alive:     dd 0
+req_count:      dd 0
+head_only:      db 0
 
 arg_buf:        times 64 db 0
 req_buf:        times MAX_REQ_SIZE db 0
 req_method:     times 8 db 0
 req_path:       times MAX_PATH db 0
+req_host:       times 64 db 0
 num_buf:        times 16 db 0
 dir_name_buf:   times 64 db 0
 resp_hdr_buf:   times MAX_RESP_HDR db 0

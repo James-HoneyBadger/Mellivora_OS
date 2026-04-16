@@ -129,17 +129,17 @@ start:
         jge .idle
 
         ; Check for monster at (eax,edx)
-        push eax
-        push edx
+        push rax
+        push rdx
         call find_monster_at    ; EAX=idx or -1
         cmp eax, -1
         jne .combat
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
 
         ; Check tile walkability
-        push eax
-        push edx
+        push rax
+        push rdx
         imul edx, MAP_W
         add edx, eax
         movzx eax, byte [map + edx]
@@ -148,8 +148,8 @@ start:
         cmp al, TILE_VOID
         je .blocked
 
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
         mov [player_x], eax
         mov [player_y], edx
 
@@ -160,14 +160,14 @@ start:
         jmp .idle
 
 .blocked:
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
         jmp .idle
 
 .combat:
         ; EAX = monster index
-        pop edx                 ; discard
-        pop edx
+        pop rdx                 ; discard
+        pop rdx
         call attack_monster
         call full_redraw
 
@@ -231,7 +231,7 @@ start:
 ; Generate dungeon level
 ;=======================================
 generate_dungeon:
-        pushad
+        PUSHALL
 
         ; Clear map to void
         mov edi, map
@@ -362,14 +362,14 @@ generate_dungeon:
         ; Place items
         call populate_items
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; place_room - Carve walls+floor into map
 ;---------------------------------------
 place_room:
-        pushad
+        PUSHALL
         mov eax, [room_count]
         shl eax, 4             ; *16 for room record
         lea edi, [rooms + eax]
@@ -398,7 +398,7 @@ place_room:
         jge .pr_next_row
 
         ; Edge = wall, interior = floor
-        push edx
+        push rdx
         mov eax, ecx
         cmp eax, [tmp_y]
         je .pr_wall
@@ -420,7 +420,7 @@ place_room:
         imul eax, MAP_W
         add eax, ebx
         mov byte [map + eax], TILE_FLOOR
-        pop edx
+        pop rdx
         jmp .pr_next_col
 .pr_wall:
         mov eax, ecx
@@ -432,7 +432,7 @@ place_room:
         je .pr_skip_wall
         mov byte [map + eax], TILE_WALL
 .pr_skip_wall:
-        pop edx
+        pop rdx
 .pr_next_col:
         inc ebx
         jmp .pr_col
@@ -440,17 +440,17 @@ place_room:
         inc ecx
         jmp .pr_row
 .pr_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; check_room_overlap - returns EAX=1 if overlapping
 ;---------------------------------------
 check_room_overlap:
-        push ebx
-        push ecx
-        push edx
-        push esi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
 
         xor esi, esi
 .co_loop:
@@ -501,17 +501,17 @@ check_room_overlap:
 .co_ok:
         xor eax, eax
 .co_ret:
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; get_room_center: EAX=room_index -> EAX=cx, EDX=cy
 ;---------------------------------------
 get_room_center:
-        push ebx
+        push rbx
         shl eax, 4
         lea ebx, [rooms + eax]
         mov eax, [ebx]          ; rx
@@ -519,19 +519,19 @@ get_room_center:
         shr edx, 1
         add eax, edx
         mov edx, [ebx + 4]      ; ry
-        push eax
+        push rax
         mov eax, [ebx + 12]     ; rh
         shr eax, 1
         add edx, eax
-        pop eax
-        pop ebx
+        pop rax
+        pop rbx
         ret
 
 ;---------------------------------------
 ; dig_corridor: connects (tmp_x,tmp_y) to (tmp_w,tmp_h)
 ;---------------------------------------
 dig_corridor:
-        pushad
+        PUSHALL
         ; Horizontal first, then vertical
         mov ebx, [tmp_x]
         mov ecx, [tmp_y]
@@ -582,14 +582,14 @@ dig_corridor:
         inc ecx
         jmp .dc_vloop
 .dc_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; populate_monsters
 ;---------------------------------------
 populate_monsters:
-        pushad
+        PUSHALL
         xor esi, esi            ; monster slot
         mov edi, [depth]        ; difficulty scales with depth
 
@@ -623,7 +623,7 @@ populate_monsters:
         mov [mon_y + esi*4], edx
 
         ; Random monster type scaled by depth
-        push esi
+        push rsi
         call rand
         xor edx, edx
         mov ecx, edi            ; max type = depth (capped at 6)
@@ -634,7 +634,7 @@ populate_monsters:
         inc ecx
         div ecx
         inc edx
-        pop esi
+        pop rsi
         mov [mon_type + esi], dl
 
         ; HP = type * 3 + depth
@@ -647,14 +647,14 @@ populate_monsters:
         dec dword [tmp_x]
         jmp .pm_loop
 .pm_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; populate_items
 ;---------------------------------------
 populate_items:
-        pushad
+        PUSHALL
         xor esi, esi
         mov ecx, 5              ; 5 items per level
 .pi_loop:
@@ -671,28 +671,28 @@ populate_items:
         mov [item_y + esi*4], edx
 
         ; Random item type
-        push ecx
+        push rcx
         call rand
         xor edx, edx
         mov ecx, 4
         div ecx
         inc edx
-        pop ecx
+        pop rcx
         mov [item_type + esi], dl
 
         inc esi
         dec ecx
         jmp .pi_loop
 .pi_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; rand_floor_pos: find random floor tile -> EAX=x, EDX=y (or EAX=-1 if fail)
 ;---------------------------------------
 rand_floor_pos:
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         mov ecx, 100            ; attempts
 .rfp_loop:
         dec ecx
@@ -700,10 +700,10 @@ rand_floor_pos:
 
         call rand
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, MAP_W * MAP_H
         div ecx
-        pop ecx
+        pop rcx
         ; EDX = offset
         movzx eax, byte [map + edx]
         cmp al, TILE_FLOOR
@@ -712,19 +712,19 @@ rand_floor_pos:
         ; Convert offset to x,y
         mov eax, edx
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, MAP_W
         div ecx
-        pop ecx
+        pop rcx
         ; EAX=y, EDX=x
         xchg eax, edx
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         ret
 .rfp_fail:
         mov eax, -1
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         ret
 
 ;=======================================
@@ -732,7 +732,7 @@ rand_floor_pos:
 ;=======================================
 attack_monster:
         ; EAX = monster index
-        pushad
+        PUSHALL
         mov esi, eax
 
         ; Player attacks
@@ -789,15 +789,15 @@ attack_monster:
         sub [player_hp], eax
 
 .am_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; find_monster_at: (EAX=x, EDX=y) -> EAX=index or -1
 ;---------------------------------------
 find_monster_at:
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         xor ecx, ecx
 .fma_loop:
         cmp ecx, MAX_MONSTERS
@@ -809,23 +809,23 @@ find_monster_at:
         cmp [mon_y + ecx*4], edx
         jne .fma_next
         mov eax, ecx
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         ret
 .fma_next:
         inc ecx
         jmp .fma_loop
 .fma_none:
         mov eax, -1
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         ret
 
 ;---------------------------------------
 ; pickup_item
 ;---------------------------------------
 pickup_item:
-        pushad
+        PUSHALL
         xor ecx, ecx
 .pu_loop:
         cmp ecx, MAX_ITEMS
@@ -872,14 +872,14 @@ pickup_item:
         inc ecx
         jmp .pu_loop
 .pu_done:
-        popad
+        POPALL
         ret
 
 ;=======================================
 ; Rendering
 ;=======================================
 full_redraw:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -950,15 +950,15 @@ full_redraw:
         mov ah, 0x00
 .draw_put:
         ; Write directly to VGA
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         imul ecx, MAP_W
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         inc ebx
         jmp .draw_col
 
@@ -1014,14 +1014,14 @@ full_redraw:
         mov al, '['
         mov ah, 0x03            ; Cyan
 .de_iput:
-        push ecx
+        push rcx
         mov ecx, [item_y + esi*4]
         imul ecx, MAP_W
         add ecx, [item_x + esi*4]
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ecx
+        pop rcx
 .de_inext:
         inc esi
         jmp .de_items
@@ -1081,14 +1081,14 @@ full_redraw:
             mov ah, 0x04
 
 .de_mput:
-        push ecx
+        push rcx
         mov ecx, [mon_y + esi*4]
         imul ecx, MAP_W
         add ecx, [mon_x + esi*4]
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ecx
+        pop rcx
 .de_mnext:
         inc esi
         jmp .de_mloop
@@ -1194,14 +1194,14 @@ full_redraw:
         mov ebx, msg_buf
         int 0x80
 .no_msg:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_help
 ;---------------------------------------
 draw_help:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
         mov eax, SYS_SETCOLOR
@@ -1221,7 +1221,7 @@ draw_help:
         int 0x80
         mov esi, help_lines
         mov ecx, 5
-.hl:    push ecx
+.hl:    push rcx
         mov eax, SYS_SETCURSOR
         mov ebx, 15
         int 0x80
@@ -1232,18 +1232,18 @@ draw_help:
         lodsb
         test al, al
         jnz .hl_scan
-        pop ecx
+        pop rcx
         inc ecx
         cmp ecx, 18
         jl .hl
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_death
 ;---------------------------------------
 draw_death:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
         mov eax, SYS_SETCOLOR
@@ -1283,34 +1283,34 @@ draw_death:
         mov eax, SYS_PRINT
         mov ebx, death_str5
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; set_message - inline string after CALL
 ;---------------------------------------
 set_message:
-        pop esi                 ; return addr = string ptr
+        pop rsi                 ; return addr = string ptr
         mov edi, msg_buf
 .sm_copy:
         lodsb
         stosb
         test al, al
         jnz .sm_copy
-        push esi                ; fixup return to after string
+        push rsi                ; fixup return to after string
         ret
 
 ;---------------------------------------
 ; print_num - print EAX decimal
 ;---------------------------------------
 print_num:
-        pushad
+        PUSHALL
         test eax, eax
         jnz .pn_nz
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pn_nz:
         xor ecx, ecx
@@ -1320,20 +1320,20 @@ print_num:
         jz .pn_pop
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         jmp .pn_push
 .pn_pop:
         test ecx, ecx
         jz .pn_done
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jmp .pn_pop
 .pn_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------

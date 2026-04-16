@@ -123,14 +123,14 @@ start:
 
 .star_draw:
         ; Write to VGA at (ebx, edx)
-        push esi
+        push rsi
         mov ecx, edx
         imul ecx, SCREEN_W
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop esi
+        pop rsi
         jmp .star_next
 
 .star_oob:
@@ -162,9 +162,9 @@ start:
 ; init_star - Initialize star[esi] with random position
 ;---------------------------------------
 init_star:
-        push eax
-        push ecx
-        push edx
+        push rax
+        push rcx
+        push rdx
 
         ; Random X: -100 to +100
         call rand
@@ -185,21 +185,21 @@ init_star:
         ; Z starts at max
         mov dword [star_z + esi*4], MAX_Z
 
-        pop edx
-        pop ecx
-        pop eax
+        pop rdx
+        pop rcx
+        pop rax
         ret
 
 ;---------------------------------------
 ; clear_screen - Fill VGA buffer with black spaces
 ;---------------------------------------
 clear_screen:
-        pushad
+        PUSHALL
         mov edi, VGA_BASE
         mov eax, 0x00200020     ; Two black spaces
         mov ecx, SCREEN_W * SCREEN_H / 2
         rep stosd
-        popad
+        POPALL
         ret
 
 ;---------------------------------------

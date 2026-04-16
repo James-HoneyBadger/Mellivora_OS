@@ -8,22 +8,22 @@
 
 [release]: https://img.shields.io/github/v/release/James-HoneyBadger/Mellivora_OS?display_name=tag
 [license]: https://img.shields.io/github/license/James-HoneyBadger/Mellivora_OS
-[platform]: https://img.shields.io/badge/platform-i486%2B%20%7C%20QEMU-blue
-[language]: https://img.shields.io/badge/language-NASM%20x86-informational
-[tests]: https://img.shields.io/badge/tests-1160%2F1160%20pass-brightgreen
+[platform]: https://img.shields.io/badge/platform-Core%202%20Duo%2B%20%7C%20QEMU-blue
+[language]: https://img.shields.io/badge/language-NASM%20x86--64-informational
+[tests]: https://img.shields.io/badge/tests-1600-brightgreen
 
-**A bare-metal 32-bit x86 operating system written entirely in NASM assembly.**
+**A bare-metal 64-bit x86-64 operating system written entirely in NASM assembly.**
 
 Mellivora OS is a from-scratch hobby operating system that boots
-on real i486+ hardware or in QEMU. It features a three-stage
+on real Core 2 Duo+ hardware or in QEMU. It features a three-stage
 bootloader, a custom HBFS filesystem with directory caching and
 real-time timestamps, preemptive multitasking (16 tasks) with
-ring 0/3 privilege separation, virtual memory with paging, a
+ring 0/3 privilege separation, 4-level paging with 2 MB pages, a
 full TCP/IP networking stack with RTL8139 driver, Sound Blaster 16
 audio, a windowed desktop environment with screensavers, IPC
-(pipes and shared memory), an in-OS C compiler, 140 bundled
-assembly programs, and 17 sample scripts — all written in x86
-assembly.
+(pipes, shared memory, and message queues), an in-OS C compiler,
+140 bundled assembly programs, and 17 sample scripts — all
+written in x86-64 assembly.
 
 > New to the project? Start with the
 > [Installation Guide](docs/INSTALL.md),
@@ -36,7 +36,7 @@ assembly.
 
 | | |
 | --- | --- |
-| **Boot** | 3-stage BIOS boot → protected mode, paging |
+| **Boot** | 3-stage BIOS boot → 64-bit long mode, 4-level paging |
 | **Shell** | 64 commands, pipes, redirection, globs, scripting |
 | **Programs** | 140 asm programs + 17 samples (11 C, 6 Perl) |
 | **Networking** | TCP/IP — ARP, IP, ICMP, UDP, TCP, DHCP, DNS |
@@ -44,8 +44,8 @@ assembly.
 | **Filesystem** | HBFS — 4 KB blocks, subdirs, symlinks, dir caching |
 | **Audio** | Sound Blaster 16 + PC speaker |
 | **Languages** | TCC, BASIC, FORTH, Perl — in-OS |
-| **Syscalls** | 68 via `INT 0x80` (files, net, GUI, audio, IPC, mem) |
-| **Tests** | 1,160 regression tests (build checks + HBFS integrity) |
+| **Syscalls** | 84 via `INT 0x80` (files, net, GUI, audio, IPC, mem) |
+| **Tests** | 1,600 regression tests (build checks + HBFS integrity) |
 
 ---
 
@@ -53,20 +53,20 @@ assembly.
 
 ### Kernel & Architecture
 
-- **32-bit protected mode** with flat 4 GB address space
-  and identity-mapped paging (128 MB)
+- **64-bit long mode** with 4-level paging (PML4), identity-mapped
+  4 GB via 2 MB pages
 - **Ring 0 / Ring 3** privilege separation — user programs run in unprivileged mode
-- **68 syscalls** via `INT 0x80`: file I/O, networking,
+- **84 syscalls** via `INT 0x80`: file I/O, networking,
   GUI, audio, IPC, memory allocation, process control, serial, date/time
 - **Preemptive multitasking** — round-robin scheduler,
   100 ms quantum, up to 16 tasks, per-task kernel stacks
 - **Physical memory manager** — bitmap allocator with `malloc`/`free` for user programs
 - **Page fault handler** with graceful recovery to shell prompt
-- **ELF32 loader** — supports flat binaries and ELF executables
-- **Inter-process communication** — 8 pipes + 8 shared memory regions
+- **ELF64 loader** — supports flat binaries and ELF executables
+- **Inter-process communication** — 8 pipes + 8 shared memory regions + message queues
 - **Sound Blaster 16 driver** — DMA playback, WAV parsing, ISA DMA
 - **Three-stage boot**: MBR → Stage 2
-  (A20, E820 memory map, GDT, protected mode) → Kernel
+  (A20, E820 memory map, GDT, long mode) → Kernel
 
 ### TCP/IP Networking
 
@@ -420,10 +420,10 @@ Mellivora_OS/
 │   ├── burrows.inc         Burrows desktop environment
 │   ├── hbfs.inc            HBFS filesystem driver
 │   ├── data.inc            BSS data, string constants, scan tables
-│   ├── syscall.inc         INT 0x80 dispatcher (68 syscalls)
+│   ├── syscall.inc         INT 0x80 dispatcher (84 syscalls)
 │   ├── vbe.inc             Bochs VBE/BGA framebuffer driver
 │   ├── ata.inc             ATA PIO disk driver (LBA48)
-│   ├── paging.inc          Virtual memory (identity-mapped 128 MB)
+│   ├── paging.inc          4-level paging (PML4, 2 MB pages)
 │   ├── sched.inc           Preemptive round-robin scheduler
 │   ├── mouse.inc           PS/2 mouse driver (IRQ12)
 │   ├── isr.inc             Interrupt service routines
@@ -434,7 +434,7 @@ Mellivora_OS/
 │   ├── vga.inc             VGA text mode driver
 │   ├── filesearch.inc      Global file search across directories
 │   ├── sb16.inc            Sound Blaster 16 audio driver
-│   ├── ipc.inc             Inter-process communication (pipes, shared memory)
+│   ├── ipc.inc             Inter-process communication (pipes, shared memory, MQ)
 │   └── screensaver.inc     Screensaver modes (starfield, matrix, pipes, bounce, plasma)
 ├── programs/               User-space programs (140 .asm files)
 │   ├── syscalls.inc        Syscall numbers and macros
@@ -450,7 +450,7 @@ Mellivora_OS/
 ├── samples/                Sample scripts for in-OS compilers (11 C, 6 Perl)
 ├── tests/                  Regression test suite
 │   ├── test_build.sh       Build-time validation (45 checks)
-│   └── test_hbfs.py        HBFS filesystem integrity (1,115 checks)
+│   └── test_hbfs.py        HBFS filesystem integrity (1,555 checks)
 ├── docs/                   Documentation (7 guides)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator
@@ -463,10 +463,10 @@ Mellivora_OS/
 
 ```text
 /
-├── bin/          119 utility and tool programs
-├── games/         21 games
-├── samples/       17 sample scripts (11 C, 6 Perl)
-├── docs/          10 text files (readme, license, notes, todo, poem, man pages)
+├── bin/          147 utility and tool programs
+├── games/         28 games
+├── samples/       22 sample scripts (11 C, 6 Perl, 5 docs)
+├── docs/          21 text files (readme, license, notes, todo, poem, man pages)
 ├── script.bat    Example batch script
 └── welcome.bat   System highlights and quick-start tips
 ```
@@ -487,7 +487,7 @@ Programs in `/bin` and `/games` are in the default
 | **[API Reference](docs/API_REFERENCE.md)** | Complete syscall and library function reference |
 | **[Technical Reference](docs/TECHNICAL_REFERENCE.md)** | OS internals: boot, memory, filesystem, drivers, scheduler |
 | **[Networking Guide](docs/NETWORKING_GUIDE.md)** | TCP/IP stack architecture, socket API, protocol details |
-| **[Changelog](CHANGELOG.md)** | Full version history from v1.0 to v3.0.0 |
+| **[Changelog](CHANGELOG.md)** | Full version history from v1.0 to v4.0.0 |
 
 ---
 
@@ -496,13 +496,13 @@ Programs in `/bin` and `/games` are in the default
 | Command | Description |
 | --------- | ------------- |
 | `make full` | Full build: boot + kernel + programs + FS |
-| `make run` | Launch in QEMU (i486 CPU, 128 MB RAM, networking, host-aware audio backend) |
+| `make run` | Launch in QEMU (default: qemu64 CPU, 2048 MB RAM, networking, host-aware audio backend) |
 | `make debug` | Launch with QEMU monitor on stdio for debugging |
 | `make iso` | Create bootable ISO image (~2.1 GiB) with documentation |
 | `make iso-lite` | Create smaller ISO (~65 MiB) with truncated disk image |
 | `make iso-verify` | Validate El Torito boot record in the ISO |
 | `make run-iso` | Boot the ISO in QEMU (CD-ROM + IDE disk) |
-| `make check` | Run the full regression suite (1,160 tests) |
+| `make check` | Run the full regression suite (1,600 tests) |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Show component and ISO binary sizes |
 
@@ -512,13 +512,13 @@ Programs in `/bin` and `/games` are in the default
 
 ### Emulation (Recommended)
 
-- QEMU 6.0+ with `qemu-system-i386`
+- QEMU 6.0+ with `qemu-system-x86_64`
 - Any host OS — Linux, macOS, Windows (with WSL)
 
 ### Real Hardware
 
-- i486 or newer x86 CPU
-- 1 MB RAM minimum (128 MB recommended)
+- Core 2 Duo or newer x86 CPU
+- 1 MB RAM minimum (1024 MB recommended)
 - IDE/SATA hard disk or USB drive (BIOS legacy boot)
 - VGA-compatible display
 - PS/2 keyboard
@@ -531,15 +531,15 @@ Programs in `/bin` and `/games` are in the default
 | Metric | Value |
 | -------- | ------- |
 | Kernel source | ~28,800 lines across 22 modules |
-| Kernel binary | ~550 KB |
+| Kernel binary | ~663 KB |
 | Program source | ~81,500 lines across 140 programs |
 | User libraries | ~4,400 lines across 8 modules |
-| Syscalls | 68 (via `INT 0x80`) |
+| Syscalls | 84 (via `INT 0x80`) |
 | Shell commands | 64 built-in |
 | Programs | 140 assembly + 17 samples (11 C, 6 Perl) |
 | Disk image | 2 GB with HBFS filesystem |
-| Files on disk | 169 files across 4 subdirectories |
-| Test coverage | 1,160 regression and integrity checks |
+| Files on disk | 220 files across 4 subdirectories |
+| Test coverage | 1,600 regression and integrity checks |
 | Networking protocols | Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP, DNS |
 | GUI windows | Up to 16 simultaneous |
 

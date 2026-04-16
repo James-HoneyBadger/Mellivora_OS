@@ -27,7 +27,7 @@ vga_clear:
 
 ; Print single character in AL
 vga_putchar:
-        pushad
+        PUSHALL
 
         cli                             ; Protect redirection state from interrupts
         cmp byte [stdout_redir_active], 1
@@ -51,7 +51,7 @@ vga_putchar:
 
 .vp_redir_done:
         sti
-        popad
+        POPALL
         ret
 
 .vp_normal:
@@ -140,12 +140,12 @@ vga_putchar:
 
 .done:
         call vga_update_cursor
-        popad
+        POPALL
         ret
 
 ; Scroll screen up one line
 vga_scroll:
-        pushad
+        PUSHALL
         ; Copy lines 1..24 to lines 0..23
         mov esi, VGA_BASE + VGA_WIDTH * 2
         mov edi, VGA_BASE
@@ -158,12 +158,12 @@ vga_scroll:
         mov al, ' '
         mov ecx, VGA_WIDTH
         rep stosw
-        popad
+        POPALL
         ret
 
 ; Update hardware cursor position
 vga_update_cursor:
-        pushad
+        PUSHALL
         mov eax, [vga_cursor_y]
         imul eax, VGA_WIDTH
         add eax, [vga_cursor_x]
@@ -182,20 +182,20 @@ vga_update_cursor:
         mov dx, 0x3D5
         mov al, ch
         out dx, al
-        popad
+        POPALL
         ret
 
 ; Print a newline character (0x0A)
 vga_newline:
-        push eax
+        push rax
         mov al, 0x0A
         call vga_putchar
-        pop eax
+        pop rax
         ret
 
 ; Print null-terminated string at ESI
 vga_print:
-        pushad
+        PUSHALL
 .loop:
         lodsb
         or al, al
@@ -203,7 +203,7 @@ vga_print:
         call vga_putchar
         jmp .loop
 .done:
-        popad
+        POPALL
         ret
 
 ; Print string at ESI with color prefix byte
@@ -215,7 +215,7 @@ vga_print_color:
 
 ; Print 32-bit hex value in EAX
 vga_print_hex:
-        pushad
+        PUSHALL
         mov ecx, 8              ; 8 hex digits
         mov ebx, eax
 .loop:
@@ -231,12 +231,12 @@ vga_print_hex:
 .print:
         call vga_putchar
         loop .loop
-        popad
+        POPALL
         ret
 
 ; Print 32-bit decimal value in EAX
 vga_print_dec:
-        pushad
+        PUSHALL
         mov ecx, 0              ; Digit counter
         mov ebx, 10
 
@@ -250,25 +250,25 @@ vga_print_dec:
 .push_digits:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .push_digits
 
 .pop_digits:
-        pop eax
+        pop rax
         add al, '0'
         call vga_putchar
         loop .pop_digits
 
 .done:
-        popad
+        POPALL
         ret
 
 ; Print 32-bit decimal value in EAX, right-aligned in field of EDX chars
 ; EAX = number, EDX = field width (0 = no padding)
 vga_print_dec_width:
-        pushad
+        PUSHALL
         mov [.vpdw_width], edx
         ; First count digits
         mov ecx, 0
@@ -299,7 +299,7 @@ vga_print_dec_width:
         ; Now print the actual number
         mov eax, [.vpdw_val]
         call vga_print_dec
-        popad
+        POPALL
         ret
 .vpdw_val:   dd 0
 .vpdw_width: dd 0

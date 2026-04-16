@@ -133,9 +133,9 @@ skip_spaces:
 ;=======================================
 sysname:    db "Mellivora", 0
 nodename:   db "honeybadger", 0
-release:    db "3.0.0", 0
-version:    db "#1 SMP i486", 0
-machine:    db "i486", 0
+release:    db "4.0.0", 0
+version:    db "#1 SMP x86_64", 0
+machine:    db "x86_64", 0
 
 usage_str:  db "Usage: uname [-a|-s|-n|-r|-m]", 10
             db "  -s  OS name", 10

@@ -101,7 +101,7 @@ start:
 
 ; ─── init_game ───────────────────────────────────────────────
 init_game:
-        pushad
+        PUSHALL
         ; Clear all
         mov edi, free_cells
         mov ecx, 4
@@ -160,14 +160,14 @@ init_game:
         mov ecx, 51
 .shuffle:
         ; Random index 0..ecx
-        push ecx
+        push rcx
         call random
-        pop ecx
+        pop rcx
         xor edx, edx
-        push ecx
+        push rcx
         inc ecx
         div ecx
-        pop ecx
+        pop rcx
         ; edx = random index 0..ecx
         ; Swap deck[ecx] and deck[edx]
         movzx eax, byte [deck + ecx]
@@ -196,10 +196,10 @@ init_game:
         jge .deal_next
         mov eax, ecx
         imul eax, MAX_CASCADE
-        push edx
+        push rdx
         mov dl, [deck + esi]
         mov [cascades + eax + ebx], dl
-        pop edx
+        pop rdx
         inc esi
         inc ebx
         jmp .deal_card
@@ -208,7 +208,7 @@ init_game:
         jmp .deal_cascade
 .deal_done:
 
-        popad
+        POPALL
         ret
 
 
@@ -226,7 +226,7 @@ random:
 ; ─── process_click ───────────────────────────────────────────
 ; EBX=x, ECX=y
 process_click:
-        pushad
+        PUSHALL
         mov [click_x], ebx
         mov [click_y], ecx
 
@@ -243,10 +243,10 @@ process_click:
         mov eax, ebx
         sub eax, FREE_X
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, (CARD_W + 8)
         div ecx
-        pop ecx
+        pop rcx
         cmp eax, 4
         jge .check_foundations
         ; Clicked free cell [eax]
@@ -270,10 +270,10 @@ process_click:
         mov eax, ebx
         sub eax, FOUND_X
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, (CARD_W + 8)
         div ecx
-        pop ecx
+        pop rcx
         cmp eax, 4
         jge .pc_done
         ; Clicked foundation [eax]
@@ -290,10 +290,10 @@ process_click:
         mov eax, ebx
         sub eax, CASCADE_X
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, CASCADE_GAP
         div ecx
-        pop ecx
+        pop rcx
         cmp eax, 8
         jge .pc_done
         ; Clicked cascade [eax]
@@ -314,14 +314,14 @@ process_click:
         jmp .pc_done
 
 .pc_done:
-        popad
+        POPALL
         ret
 
 
 ; ─── place_in_free ───────────────────────────────────────────
 ; EAX = free cell index to place into
 place_in_free:
-        pushad
+        PUSHALL
         cmp byte [free_cells + eax], CARD_NONE
         jne .pif_cancel          ; slot not empty
 
@@ -335,18 +335,18 @@ place_in_free:
         call remove_selected_card
         mov byte [selected], 0
         inc dword [moves]
-        popad
+        POPALL
         ret
 .pif_cancel:
         mov byte [selected], 0
-        popad
+        POPALL
         ret
 
 
 ; ─── place_in_foundation ─────────────────────────────────────
 ; EAX = foundation index
 place_in_foundation:
-        pushad
+        PUSHALL
         mov [.pifn_idx], al
 
         call get_selected_card   ; -> BL = card
@@ -387,11 +387,11 @@ place_in_foundation:
         call remove_selected_card
         mov byte [selected], 0
         inc dword [moves]
-        popad
+        POPALL
         ret
 .pifn_cancel:
         mov byte [selected], 0
-        popad
+        POPALL
         ret
 .pifn_idx: db 0
 
@@ -399,7 +399,7 @@ place_in_foundation:
 ; ─── place_on_cascade ────────────────────────────────────────
 ; EAX = cascade index to place onto
 place_on_cascade:
-        pushad
+        PUSHALL
         mov [.poc_idx], al
 
         call get_selected_card   ; -> BL = card
@@ -457,11 +457,11 @@ place_on_cascade:
         call remove_selected_card
         mov byte [selected], 0
         inc dword [moves]
-        popad
+        POPALL
         ret
 .poc_cancel:
         mov byte [selected], 0
-        popad
+        POPALL
         ret
 .poc_idx: db 0
 .poc_top_card: db 0
@@ -509,18 +509,18 @@ remove_selected_card:
 ; ─── card_is_red ─────────────────────────────────────────────
 ; AL = card. Sets CF if red (Hearts or Diamonds)
 card_is_red:
-        push eax
+        push rax
         shr al, 6
         cmp al, SUIT_HEARTS
         je .red
         cmp al, SUIT_DIAMONDS
         je .red
         clc
-        pop eax
+        pop rax
         ret
 .red:
         stc
-        pop eax
+        pop rax
         ret
 
 
@@ -542,7 +542,7 @@ check_win:
 
 ; ─── draw_all ────────────────────────────────────────────────
 draw_all:
-        pushad
+        PUSHALL
 
         ; Green background
         mov eax, [win_id]
@@ -558,34 +558,34 @@ draw_all:
 .draw_free:
         cmp ecx, 4
         jge .draw_foundations
-        push ecx
+        push rcx
         mov ebx, ecx
         imul ebx, (CARD_W + 8)
         add ebx, FREE_X
         mov ecx, FREE_Y
         movzx eax, byte [free_cells]
         ; Get actual card for this cell
-        pop edx
-        push edx
+        pop rdx
+        push rdx
         movzx eax, byte [free_cells + edx]
         ; Draw slot background
-        push eax
-        push ebx
-        push ecx
+        push rax
+        push rbx
+        push rcx
         mov eax, [win_id]
         mov edx, CARD_W
         mov esi, CARD_H
         mov edi, COL_SLOT_BG
         call gui_fill_rect
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         ; Draw card if present
         cmp al, CARD_NONE
         je .free_next
         call draw_card
 .free_next:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .draw_free
 
@@ -594,36 +594,36 @@ draw_all:
 .draw_found:
         cmp ecx, 4
         jge .draw_cascades
-        push ecx
+        push rcx
         mov ebx, ecx
         imul ebx, (CARD_W + 8)
         add ebx, FOUND_X
         mov ecx, FOUND_Y
         ; Draw slot
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, [win_id]
         mov edx, CARD_W
         mov esi, CARD_H
         mov edi, COL_SLOT_BG
         call gui_fill_rect
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ; Draw top card if foundation has cards
-        pop edx
-        push edx
+        pop rdx
+        push rdx
         movzx eax, byte [foundations + edx]
         test al, al
         jz .found_next
         ; Build card: suit=edx, rank=eax
-        push edx
+        push rdx
         mov ah, dl
         shl ah, 6
         or al, ah
-        pop edx
+        pop rdx
         call draw_card
 .found_next:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .draw_found
 
@@ -632,7 +632,7 @@ draw_all:
 .draw_casc:
         cmp ecx, 8
         jge .draw_hud
-        push ecx
+        push rcx
 
         movzx esi, byte [cascade_len + ecx]
         test esi, esi
@@ -644,28 +644,28 @@ draw_all:
         cmp edx, esi
         jge .casc_done
 
-        push edx
-        push esi
+        push rdx
+        push rsi
         mov eax, ecx
         imul eax, MAX_CASCADE
         movzx eax, byte [cascades + eax + edx]
         mov ebx, ecx
         imul ebx, CASCADE_GAP
         add ebx, CASCADE_X
-        push ecx
+        push rcx
         mov ecx, edx
         imul ecx, CARD_OVERLAP
         add ecx, CASCADE_Y
         ; Highlight if selected and this is top card
-        pop edi                  ; cascade index (was ecx)
-        push edi
-        pop ecx
-        pop esi
-        pop edx
+        pop rdi                  ; cascade index (was ecx)
+        push rdi
+        pop rcx
+        pop rsi
+        pop rdx
 
-        push edx
-        push esi
-        push ecx
+        push rdx
+        push rsi
+        push rcx
         ; Recalc position
         mov ebx, ecx
         imul ebx, CASCADE_GAP
@@ -674,16 +674,16 @@ draw_all:
         imul ecx, CARD_OVERLAP
         add ecx, CASCADE_Y
         call draw_card
-        pop ecx
-        pop esi
-        pop edx
+        pop rcx
+        pop rsi
+        pop rdx
 
         inc edx
         jmp .draw_casc_card
 
 .casc_empty:
         ; Draw empty slot
-        push ecx
+        push rcx
         mov ebx, ecx
         imul ebx, CASCADE_GAP
         add ebx, CASCADE_X
@@ -693,10 +693,10 @@ draw_all:
         mov esi, CARD_H
         mov edi, COL_SLOT_BG
         call gui_fill_rect
-        pop ecx
+        pop rcx
 
 .casc_done:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .draw_casc
 
@@ -743,14 +743,14 @@ draw_all:
         mov eax, [win_id]
         call gui_flip
 
-        popad
+        POPALL
         ret
 
 
 ; ─── draw_card ───────────────────────────────────────────────
 ; AL = card byte, EBX = x, ECX = y
 draw_card:
-        pushad
+        PUSHALL
         mov [.dc_card], al
         mov [.dc_x], ebx
         mov [.dc_y], ecx
@@ -813,7 +813,7 @@ draw_card:
         call gui_draw_text
 
 .dc_done:
-        popad
+        POPALL
         ret
 
 .dc_card:     db 0
@@ -826,7 +826,7 @@ draw_card:
 
 ; ─── itoa ────────────────────────────────────────────────────
 itoa:
-        pushad
+        PUSHALL
         mov edi, num_buf + 11
         mov byte [edi], 0
         mov ebx, 10
@@ -845,7 +845,7 @@ itoa:
         stosb
         test al, al
         jnz .itoa_cp
-        popad
+        POPALL
         ret
 
 

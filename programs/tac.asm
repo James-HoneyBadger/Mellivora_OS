@@ -93,7 +93,7 @@ start:
 ;---------------------------------------
 print_n:
         ; EBX = pointer, ECX = count
-        pushad
+        PUSHALL
         mov esi, ebx
         mov edi, ecx
         xor ecx, ecx
@@ -106,7 +106,7 @@ print_n:
         inc ecx
         jmp .pn_loop
 .pn_done:
-        popad
+        POPALL
         ret
 
 ;=======================================

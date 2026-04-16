@@ -36,9 +36,9 @@
 ;         ECX = number of digits parsed (0 = invalid)
 ;-----------------------------------------------------------------------
 math_parse_int:
-        push ebx
-        push edx
-        push esi
+        push rbx
+        push rdx
+        push rsi
         xor eax, eax
         xor ecx, ecx
         mov ebx, 10
@@ -67,9 +67,9 @@ math_parse_int:
         jmp .mpi_loop
 
 .mpi_done:
-        pop esi
-        pop edx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -79,9 +79,9 @@ math_parse_int:
 ;         ECX = number of chars parsed
 ;-----------------------------------------------------------------------
 math_parse_signed:
-        push ebx
-        push edx
-        push esi
+        push rbx
+        push rdx
+        push rsi
         xor edx, edx           ; sign flag
 
         ; Skip whitespace
@@ -131,9 +131,9 @@ math_parse_signed:
         neg eax
         inc ecx                 ; count sign char
 .mps_positive:
-        pop esi
-        pop edx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -143,9 +143,9 @@ math_parse_signed:
 ;         ECX = number of hex digits parsed
 ;-----------------------------------------------------------------------
 math_parse_hex:
-        push ebx
-        push edx
-        push esi
+        push rbx
+        push rdx
+        push rsi
         xor eax, eax
         xor ecx, ecx
 
@@ -199,9 +199,9 @@ math_parse_hex:
         jmp .mph_loop
 
 .mph_done:
-        pop esi
-        pop edx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -210,11 +210,11 @@ math_parse_hex:
 ; Output: ECX = string length
 ;-----------------------------------------------------------------------
 math_int_to_str:
-        push eax
-        push ebx
-        push edx
-        push edi
-        push esi
+        push rax
+        push rbx
+        push rdx
+        push rdi
+        push rsi
 
         mov esi, edi            ; save start
         mov ebx, 10
@@ -231,14 +231,14 @@ math_int_to_str:
 .mits_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .mits_push
 
         mov edx, ecx           ; save count
 .mits_pop:
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
@@ -248,11 +248,11 @@ math_int_to_str:
         ; ECX already holds length
 
 .mits_end:
-        pop esi
-        pop edi
-        pop edx
-        pop ebx
-        pop eax
+        pop rsi
+        pop rdi
+        pop rdx
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -262,7 +262,7 @@ math_int_to_str:
 ; Output: none (string written to EDI)
 ;-----------------------------------------------------------------------
 math_hex_to_str:
-        pushad
+        PUSHALL
         mov esi, eax            ; save value
         mov edx, ecx            ; min digits
 
@@ -308,7 +308,7 @@ math_hex_to_str:
         dec edi
         dec edx
         jnz .mhts_loop
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -318,7 +318,7 @@ math_hex_to_str:
 ; Output: none (string written to EDI)
 ;-----------------------------------------------------------------------
 math_bin_to_str:
-        pushad
+        PUSHALL
         mov edx, ecx           ; bit count
         add edi, ecx
         mov byte [edi], 0
@@ -340,7 +340,7 @@ math_bin_to_str:
         jmp .mbts_loop
 
 .mbts_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -417,8 +417,8 @@ math_sign:
 ; Output: EAX = random value
 ;-----------------------------------------------------------------------
 math_random:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov eax, [_math_seed]
         mov ebx, 1103515245
         imul eax, ebx
@@ -427,8 +427,8 @@ math_random:
         ; Improve distribution: use bits 16-30
         shr eax, 16
         and eax, 0x7FFF
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -437,9 +437,9 @@ math_random:
 ; Output: EAX = random value in [min, max]
 ;-----------------------------------------------------------------------
 math_random_range:
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         mov esi, eax            ; save min
         sub ebx, eax
         inc ebx                 ; range = max - min + 1
@@ -451,9 +451,9 @@ math_random_range:
         div ebx                 ; EDX = EAX % range
         mov eax, edx
         add eax, esi
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
         ret
 
 ;-----------------------------------------------------------------------
@@ -471,7 +471,7 @@ math_seed_random:
 ; Output: EAX = rounded quotient
 ;-----------------------------------------------------------------------
 math_div_round:
-        push edx
+        push rdx
         xor edx, edx
         div ebx
         ; Check if remainder >= divisor/2
@@ -480,7 +480,7 @@ math_div_round:
         jb .mdr_done
         inc eax
 .mdr_done:
-        pop edx
+        pop rdx
         ret
 
 ;-----------------------------------------------------------------------
@@ -490,15 +490,15 @@ math_div_round:
 ;         Carry flag set on overflow
 ;-----------------------------------------------------------------------
 math_mul_safe:
-        push edx
+        push rdx
         mul ebx
         test edx, edx
         jnz .mms_overflow
-        pop edx
+        pop rdx
         clc
         ret
 .mms_overflow:
-        pop edx
+        pop rdx
         stc
         ret
 
@@ -508,9 +508,9 @@ math_mul_safe:
 ; Output: EAX = result
 ;-----------------------------------------------------------------------
 math_power:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         mov ebx, eax            ; base
         mov eax, 1              ; result
 
@@ -523,18 +523,18 @@ math_power:
         mul ebx                 ; result *= base
 
 .mpow_square:
-        push eax
+        push rax
         mov eax, ebx
         mul ebx
         mov ebx, eax            ; base *= base
-        pop eax
+        pop rax
         shr ecx, 1
         jnz .mpow_loop
 
 .mpow_done:
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -543,7 +543,7 @@ math_power:
 ; Output: EAX = gcd(a, b)
 ;-----------------------------------------------------------------------
 math_gcd:
-        push edx
+        push rdx
 .mgcd_loop:
         test ebx, ebx
         jz .mgcd_done
@@ -553,7 +553,7 @@ math_gcd:
         mov ebx, edx
         jmp .mgcd_loop
 .mgcd_done:
-        pop edx
+        pop rdx
         ret
 
 ;-----------------------------------------------------------------------
@@ -562,9 +562,9 @@ math_gcd:
 ; Output: EAX = floor(sqrt(value))
 ;-----------------------------------------------------------------------
 math_sqrt:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         test eax, eax
         jz .msqrt_done
@@ -592,9 +592,9 @@ math_sqrt:
 .msqrt_converged:
         mov eax, ebx            ; return guess
 .msqrt_done:
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -605,10 +605,10 @@ math_sqrt:
 math_log2:
         test eax, eax
         jz .ml2_zero
-        push ecx
+        push rcx
         bsr ecx, eax            ; bit scan reverse
         mov eax, ecx
-        pop ecx
+        pop rcx
         ret
 .ml2_zero:
         mov eax, -1
@@ -620,9 +620,9 @@ math_log2:
 ; Output: EAX = number of digits
 ;-----------------------------------------------------------------------
 math_digits:
-        push ebx
-        push edx
-        push ecx
+        push rbx
+        push rdx
+        push rcx
         mov ecx, 1
         mov ebx, 10
 .md_loop:
@@ -634,9 +634,9 @@ math_digits:
         jmp .md_loop
 .md_done:
         mov eax, ecx
-        pop ecx
-        pop edx
-        pop ebx
+        pop rcx
+        pop rdx
+        pop rbx
         ret
 
 ;=======================================================================

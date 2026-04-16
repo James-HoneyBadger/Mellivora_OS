@@ -360,38 +360,37 @@ Let's write a simple program directly on the OS, then a more complete one on the
 Create `programs/greet.asm` on your host machine:
 
 ```nasm
-BITS 32
-ORG 0x200000
+%include "syscalls.inc"
 
     ; Clear screen
-    mov eax, 17
+    mov rax, 17
     int 0x80
 
     ; Set color to green
-    mov eax, 18
-    mov ebx, 0x0A
+    mov rax, 18
+    mov rbx, 0x0A
     int 0x80
 
     ; Print greeting
-    mov eax, 3
-    mov ebx, msg
+    mov rax, 3
+    mov rbx, msg
     int 0x80
 
     ; Wait for keypress
-    mov eax, 3
-    mov ebx, prompt
+    mov rax, 3
+    mov rbx, prompt
     int 0x80
-    mov eax, 2
+    mov rax, 2
     int 0x80
 
     ; Reset color
-    mov eax, 18
-    mov ebx, 0x07
+    mov rax, 18
+    mov rbx, 0x07
     int 0x80
 
     ; Exit
-    mov eax, 0
-    xor ebx, ebx
+    mov rax, 0
+    xor rbx, rbx
     int 0x80
 
 msg:    db "=== Welcome to Mellivora OS! ===", 10, 10
@@ -425,10 +424,10 @@ Lair:/> enter
 Filename: tiny
 Enter hex bytes (empty line to end):
 B8 03 00 00 00 BB xx xx xx xx CD 80 B8 00 00 00 00 31 DB CD 80
-(hex for: mov eax,3 / mov ebx,msg / int 0x80 / mov eax,0 / xor ebx,ebx / int 0x80)
+(hex for: mov rax,3 / mov rbx,msg / int 0x80 / mov rax,0 / xor rbx,rbx / int 0x80)
 ```
 
-This is mainly useful for testing — for real programs, use NASM on the host.
+Note: hex entry creates raw flat binaries — the bytes must be valid x86-64 machine code.
 
 ---
 

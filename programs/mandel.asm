@@ -115,8 +115,8 @@ start:
 
 .put_char:
         ; Set color based on iteration
-        push ecx
-        push edi
+        push rcx
+        push rdi
         cmp ecx, MAX_ITER
         je .color_black
         ; Map iterations to colors
@@ -131,8 +131,8 @@ start:
 .set_color:
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
 
         ; Put the character
         cmp ecx, MAX_ITER

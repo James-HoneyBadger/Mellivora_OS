@@ -112,47 +112,47 @@ start:
         jl .emit_char
 
         ; Wrap: insert newline
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         xor edx, edx
 
 .emit_char:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         inc edx
         inc esi
         dec ecx
         jmp .fold_loop
 
 .emit_newline:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop ecx
+        pop rcx
         xor edx, edx
         inc esi
         dec ecx
         jmp .fold_loop
 
 .emit_tab:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x09
         int 0x80
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ; Advance to next tab stop (8)
         add edx, 8
         and edx, ~7

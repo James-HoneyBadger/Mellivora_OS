@@ -88,16 +88,16 @@ start:
         cmp ebx, [min_len]
         jl .reset
         mov byte [edi + ebx], 0
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov eax, SYS_PRINT
         mov ebx, str_buf
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
 .reset:
         xor ebx, ebx
         jmp .scan

@@ -175,24 +175,24 @@ start:
 .show_result:
         mov [result], eax
         ; Print "= "
-        push eax
+        push rax
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0B           ; cyan
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, msg_equals
         int 0x80
-        pop eax
+        pop rax
 
         ; Check if negative
         test eax, eax
         jns .positive
         ; Print minus sign
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '-'
         int 0x80
-        pop eax
+        pop rax
         neg eax
 .positive:
         call print_dec
@@ -287,7 +287,7 @@ skip_ws:
 
 ;=== Print hex value in EAX ===
 print_hex:
-        pushad
+        PUSHALL
         mov ecx, 8
         mov ebx, eax
 .ph_loop:
@@ -301,16 +301,16 @@ print_hex:
 .ph_digit:
         add eax, '0'
 .ph_put:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         dec ecx
         jnz .ph_loop
-        popad
+        POPALL
         ret
 
 ;=== Data ===

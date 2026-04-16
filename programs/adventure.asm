@@ -211,8 +211,8 @@ do_down:
 
 do_go:
         ; Parse direction from noun
-        mov esi, [noun_ptr]
-        cmp esi, 0
+        mov rsi, [noun_ptr]
+        cmp rsi, 0
         je .go_where
         call parse_direction    ; Returns direction in EAX, or -1
         cmp eax, -1
@@ -237,31 +237,31 @@ do_go_dir:
         je .cant_go
 
         ; Check if the destination room is locked
-        push eax
+        push rax
         imul eax, ROOM_SIZE
         add eax, rooms
         test byte [eax + 8], ROOM_LOCKED
-        pop eax
+        pop rax
         jnz .locked
 
         ; Move player
         mov [player_room], eax
         ; Mark as visited
-        push eax
+        push rax
         imul eax, ROOM_SIZE
         add eax, rooms
         or byte [eax + 8], ROOM_VISITED
-        pop eax
+        pop rax
 
         ; Check on_enter event
-        push eax
+        push rax
         imul eax, ROOM_SIZE
         add eax, rooms
         mov ebx, [eax + 36]    ; on_enter_ptr
-        pop eax
+        pop rax
         cmp ebx, 0
         je .no_event
-        call ebx
+        call rbx
 .no_event:
         call describe_room
         jmp game_loop
@@ -281,8 +281,8 @@ do_go_dir:
         jmp game_loop
 
 do_take:
-        mov esi, [noun_ptr]
-        cmp esi, 0
+        mov rsi, [noun_ptr]
+        cmp rsi, 0
         je .take_what
         ; Find item in current room matching noun
         call find_room_item     ; EAX = item index, or -1
@@ -331,8 +331,8 @@ do_take:
         jmp game_loop
 
 do_drop:
-        mov esi, [noun_ptr]
-        cmp esi, 0
+        mov rsi, [noun_ptr]
+        cmp rsi, 0
         je .drop_what
         ; Find item in inventory matching noun
         call find_inv_item      ; EAX = item index, or -1
@@ -380,18 +380,18 @@ do_inventory:
         test byte [esi + 8], ITEM_CARRIED
         jz .inv_next
         ; Print item name
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov esi, str_bullet
         call print_str
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov esi, [esi + 0]     ; name_ptr
         call print_str
         mov esi, str_newline
         call print_str
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
 .inv_next:
         add esi, ITEM_SIZE
         inc ecx
@@ -403,8 +403,8 @@ do_inventory:
         jmp game_loop
 
 do_examine:
-        mov esi, [noun_ptr]
-        cmp esi, 0
+        mov rsi, [noun_ptr]
+        cmp rsi, 0
         je .exam_what
         ; Check inventory first, then room
         call find_inv_item
@@ -443,8 +443,8 @@ do_examine:
         jmp game_loop
 
 do_use:
-        mov esi, [noun_ptr]
-        cmp esi, 0
+        mov rsi, [noun_ptr]
+        cmp rsi, 0
         je .use_what
         ; Must have item in inventory
         call find_inv_item
@@ -456,9 +456,9 @@ do_use:
         mov ecx, [ebx + 12]    ; use_handler_ptr
         cmp ecx, 0
         je .use_nothing
-        push eax
-        call ecx
-        pop eax
+        push rax
+        call rcx
+        pop rax
         jmp game_loop
 .use_what:
         mov al, C_ERROR
@@ -497,13 +497,13 @@ do_attack:
         test byte [esi + 8], ITEM_CARRIED
         jz .atk_check_next
         ; Check if item name matches "sword"
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov esi, [esi + 0]
         mov edi, str_sword_name
         call str_equal
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         cmp eax, 1
         je .atk_has_it
 .atk_check_next:
@@ -603,7 +603,7 @@ game_victory:
 ;=======================================================================
 
 describe_room:
-        pushad
+        PUSHALL
         ; Print room name
         mov al, C_TITLE
         call set_color
@@ -654,26 +654,26 @@ describe_room:
         ; First item? Print header
         cmp dword [.dr_found_items], 0
         jne .dr_item_print
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov esi, str_items_here
         call print_str
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         mov dword [.dr_found_items], 1
 .dr_item_print:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov esi, str_bullet
         call print_str
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov esi, [esi + 0]     ; name_ptr
         call print_str
         mov esi, str_newline
         call print_str
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
 .dr_item_next:
         add esi, ITEM_SIZE
         inc ecx
@@ -749,16 +749,16 @@ describe_room:
         call print_str
         mov al, C_DEFAULT
         call set_color
-        popad
+        POPALL
         ret
 
 .dr_sep:
         cmp dword [.dr_first_exit], 1
         je .dr_is_first
-        push esi
+        push rsi
         mov esi, str_comma
         call print_str
-        pop esi
+        pop rsi
         ret
 .dr_is_first:
         mov dword [.dr_first_exit], 0
@@ -772,7 +772,7 @@ describe_room:
 ;=======================================================================
 
 read_input:
-        pushad
+        PUSHALL
         ; Read a line of text from keyboard
         mov edi, input_buf
         xor ecx, ecx           ; Character count
@@ -797,11 +797,11 @@ read_input:
         mov [edi + ecx], al
         inc ecx
         ; Echo character
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         movzx ebx, al
         int 0x80
-        pop ecx
+        pop rcx
         jmp .ri_loop
 .ri_bs:
         cmp ecx, 0
@@ -809,7 +809,7 @@ read_input:
         dec ecx
         mov byte [edi + ecx], 0
         ; Echo backspace
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
@@ -819,7 +819,7 @@ read_input:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
-        pop ecx
+        pop rcx
         jmp .ri_loop
 .ri_done:
         mov byte [edi + ecx], 0
@@ -827,14 +827,14 @@ read_input:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        popad
+        POPALL
         ret
 
 parse_input:
-        pushad
+        PUSHALL
         mov esi, input_buf
         mov dword [verb_id], VERB_UNKNOWN
-        mov dword [noun_ptr], 0
+        mov qword [noun_ptr], 0
 
         ; Skip leading spaces
 .pi_skip:
@@ -865,7 +865,7 @@ parse_input:
         cmp al, 0
         je .pi_match
         dec esi
-        mov [noun_ptr], esi     ; Point to start of noun text
+        mov [noun_ptr], rsi     ; Point to start of noun text
         jmp .pi_match
 .pi_word_end:
         mov byte [edi], 0
@@ -1105,16 +1105,16 @@ parse_input:
         jne .pi_done
         mov dword [verb_id], VERB_DOWN
 .pi_done:
-        popad
+        POPALL
         ret
 
 ; parse_direction - Parse direction from noun text
 ; ESI = text pointer
 ; Returns: EAX = direction index, or -1
 parse_direction:
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         mov edi, str_north
         call str_equal
         cmp eax, 1
@@ -1173,9 +1173,9 @@ parse_direction:
         jmp .pd_ret
 .pd_d:  mov eax, DIR_DOWN
 .pd_ret:
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ;=======================================================================
@@ -1186,10 +1186,10 @@ parse_direction:
 ; ESI = noun text; must be preserved across calls
 ; Returns: EAX = item index, or -1
 find_room_item:
-        push ebx
-        push ecx
-        push edx
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rdi
         mov edx, esi            ; Save noun ptr
         xor ecx, ecx
         mov ebx, items
@@ -1219,20 +1219,20 @@ find_room_item:
 .fri_none:
         mov eax, -1
 .fri_ret:
-        pop edi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ; find_inv_item - Find item in player inventory matching noun
 ; ESI = noun text (from [noun_ptr])
 ; Returns: EAX = item index, or -1
 find_inv_item:
-        push ebx
-        push ecx
-        push edx
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rdi
         mov edx, esi
         xor ecx, ecx
         mov ebx, items
@@ -1256,10 +1256,10 @@ find_inv_item:
 .fii_none:
         mov eax, -1
 .fii_ret:
-        pop edi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;=======================================================================
@@ -1270,10 +1270,10 @@ find_inv_item:
 ; ESI = string A, EDI = string B
 ; Returns: EAX = 1 if equal, 0 if not
 str_equal:
-        push ebx
-        push ecx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rsi
+        push rdi
 .se_loop:
         lodsb
         mov cl, [edi]
@@ -1302,64 +1302,64 @@ str_equal:
 .se_ne:
         xor eax, eax
 .se_ret:
-        pop edi
-        pop esi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 ; print_str - Print null-terminated string
 ; ESI = string pointer
 print_str:
-        pushad
+        PUSHALL
         mov ebx, esi
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 ; print_number - Print unsigned decimal number
 ; EAX = number
 print_number:
-        pushad
+        PUSHALL
         mov ecx, 0              ; Digit count
         mov ebx, 10
 .pn_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pn_div
 .pn_print:
-        pop edx
+        pop rdx
         add dl, '0'
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         movzx ebx, dl
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .pn_print
-        popad
+        POPALL
         ret
 
 ; set_color - Set text color
 ; AL = color byte
 set_color:
-        pushad
+        PUSHALL
         movzx ebx, al
         mov eax, SYS_SETCOLOR
         int 0x80
-        popad
+        POPALL
         ret
 
 ; wait_key - Wait for a keypress
 wait_key:
-        pushad
+        PUSHALL
         mov eax, SYS_GETCHAR
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1367,7 +1367,7 @@ wait_key:
 ;=======================================================================
 
 game_init:
-        pushad
+        PUSHALL
         ; Initialize player state
         mov dword [player_room], 0
         mov dword [player_hp], HP_START
@@ -1612,7 +1612,7 @@ game_init:
         mov edi, esi
         rep stosb
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1960,7 +1960,7 @@ inv_count:      dd 0
 monster_room:   dd 0
 monster_hp:     dd 0
 verb_id:        dd 0
-noun_ptr:       dd 0
+noun_ptr:       dq 0
 go_dir:         dd 0
 color:          db 0
 

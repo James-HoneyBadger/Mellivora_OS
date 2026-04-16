@@ -14,7 +14,7 @@
 ; Returns: EAX = window id (0-15) or -1
 ;---------------------------------------
 gui_create_window:
-        pushad
+        PUSHALL
         ; Pack x|y into ECX, w|h into EDX
         shl eax, 16
         and ebx, 0xFFFF
@@ -27,8 +27,8 @@ gui_create_window:
         mov eax, SYS_GUI
         mov ebx, GUI_CREATE_WINDOW
         int 0x80
-        mov [esp + 28], eax ; Return window id via pushad frame
-        popad
+        mov [esp + 28], eax ; Return window id via PUSHALL frame
+        POPALL
         ret
 
 ;---------------------------------------
@@ -36,14 +36,14 @@ gui_create_window:
 ; EAX = window id
 ;---------------------------------------
 gui_destroy_window:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, eax
         mov eax, SYS_GUI
         mov ebx, GUI_DESTROY_WINDOW
         int 0x80
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -51,10 +51,10 @@ gui_destroy_window:
 ; EAX = win_id, EBX = x, ECX = y, EDX = w, ESI = h, EDI = color
 ;---------------------------------------
 gui_fill_rect:
-        pushad
+        PUSHALL
         ; Pack args
-        push edi             ; color
-        push eax             ; win_id
+        push rdi             ; color
+        push rax             ; win_id
         shl ebx, 16
         and ecx, 0xFFFF
         or ebx, ecx         ; EDX_new = x|y
@@ -63,12 +63,12 @@ gui_fill_rect:
         or edx, esi          ; ESI_new = w|h
         mov esi, edx         ; ESI = w|h
         mov edx, ebx         ; EDX = x|y
-        pop ecx              ; ECX = win_id
-        pop edi              ; EDI = color
+        pop rcx              ; ECX = win_id
+        pop rdi              ; EDI = color
         mov eax, SYS_GUI
         mov ebx, GUI_FILL_RECT
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -76,19 +76,19 @@ gui_fill_rect:
 ; EAX = win_id, EBX = x, ECX = y, ESI = text, EDI = color
 ;---------------------------------------
 gui_draw_text:
-        pushad
-        push edi             ; color
-        push eax             ; win_id
+        PUSHALL
+        push rdi             ; color
+        push rax             ; win_id
         shl ebx, 16
         and ecx, 0xFFFF
         or ebx, ecx         ; EDX_new = x|y
         mov edx, ebx
-        pop ecx              ; ECX = win_id
-        pop edi              ; EDI = color
+        pop rcx              ; ECX = win_id
+        pop rdi              ; EDI = color
         mov eax, SYS_GUI
         mov ebx, GUI_DRAW_TEXT
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -96,17 +96,17 @@ gui_draw_text:
 ; EAX = win_id, EBX = x, ECX = y, ESI = color
 ;---------------------------------------
 gui_draw_pixel:
-        pushad
-        push eax             ; win_id
+        PUSHALL
+        push rax             ; win_id
         shl ebx, 16
         and ecx, 0xFFFF
         or ebx, ecx
         mov edx, ebx         ; EDX = x|y
-        pop ecx              ; ECX = win_id
+        pop rcx              ; ECX = win_id
         mov eax, SYS_GUI
         mov ebx, GUI_DRAW_PIXEL
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -114,37 +114,37 @@ gui_draw_pixel:
 ; Returns: EAX = event type, EBX = param1, ECX = param2
 ;---------------------------------------
 gui_poll_event:
-        push edx
+        push rdx
         mov eax, SYS_GUI
         mov ebx, GUI_POLL_EVENT
         int 0x80
-        pop edx
+        pop rdx
         ret
 
 ;---------------------------------------
 ; gui_compose - Compose desktop (bg + windows + taskbar) to backbuffer
 ;---------------------------------------
 gui_compose:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, SYS_GUI
         mov ebx, GUI_COMPOSE
         int 0x80
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ;---------------------------------------
 ; gui_flip - Draw cursor and flip backbuffer to screen
 ;---------------------------------------
 gui_flip:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, SYS_GUI
         mov ebx, GUI_FLIP
         int 0x80
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ;---------------------------------------
@@ -152,14 +152,14 @@ gui_flip:
 ; EAX = destination buffer (48 bytes)
 ;---------------------------------------
 gui_get_theme:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, eax
         mov eax, SYS_GUI
         mov ebx, GUI_GET_THEME
         int 0x80
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -167,12 +167,12 @@ gui_get_theme:
 ; EAX = source buffer (48 bytes)
 ;---------------------------------------
 gui_set_theme:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, eax
         mov eax, SYS_GUI
         mov ebx, GUI_SET_THEME
         int 0x80
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret

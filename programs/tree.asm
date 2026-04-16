@@ -108,8 +108,8 @@ start:
 ; Uses READDIR to enumerate entries
 ;---------------------------------------
 list_tree:
-        push eax
-        push ebp
+        push rax
+        push rbp
         mov ebp, eax            ; EBP = depth
 
         cmp ebp, MAX_DEPTH
@@ -119,14 +119,14 @@ list_tree:
         xor ecx, ecx           ; index
         xor edx, edx           ; count
 .count_loop:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_READDIR
         mov ebx, entry_buf
         ; ECX = index (already set)
         int 0x80
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         cmp eax, -1            ; -1 = end of directory
         je .count_done
         cmp eax, 0             ; 0 = free/empty slot
@@ -144,19 +144,19 @@ list_tree:
         xor ecx, ecx           ; index
         mov dword [printed], 0
 .print_loop:
-        push ecx
+        push rcx
         mov eax, SYS_READDIR
         mov ebx, entry_buf
         int 0x80
-        pop ecx
+        pop rcx
         cmp eax, -1
         je .lt_ret
         cmp eax, 0             ; free slot
         je .print_skip
 
         ; EAX = file type, ECX preserved as index
-        push ecx
-        push eax               ; save type
+        push rcx
+        push rax               ; save type
 
         inc dword [printed]
 
@@ -202,8 +202,8 @@ list_tree:
 
 .print_name:
         ; Set color based on type
-        pop eax                 ; type
-        push eax
+        pop rax                 ; type
+        push rax
         cmp eax, 3              ; FTYPE_EXEC
         je .clr_exec
         cmp eax, 2              ; FTYPE_DIR  (readdir returns dirent type)
@@ -235,8 +235,8 @@ list_tree:
         mov ebx, entry_buf
         int 0x80
 
-        pop eax                 ; type again
-        push eax
+        pop rax                 ; type again
+        push rax
 
         ; If directory, append /
         cmp eax, 2
@@ -250,15 +250,15 @@ list_tree:
         int 0x80
 
         ; If directory, recurse into it
-        pop eax
-        pop ecx                 ; restore index
+        pop rax
+        pop rcx                 ; restore index
         cmp eax, 2
         jne .not_dir
 
         inc dword [dir_count]
 
         ; Save CWD, cd into subdir, recurse, cd back
-        push ecx
+        push rcx
         mov eax, SYS_CHDIR
         mov ebx, entry_buf
         int 0x80
@@ -274,7 +274,7 @@ list_tree:
         mov ebx, str_dotdot
         int 0x80
 .recurse_fail:
-        pop ecx
+        pop rcx
         jmp .print_skip
 
 .not_dir:
@@ -288,8 +288,8 @@ list_tree:
         jmp .print_loop
 
 .lt_ret:
-        pop ebp
-        pop eax
+        pop rbp
+        pop rax
         ret
 
 ;---------------------------------------

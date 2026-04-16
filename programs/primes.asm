@@ -69,9 +69,9 @@ start:
         inc ebx                 ; Count primes
         inc edx                 ; Column
 
-        push ecx
-        push ebx
-        push edx
+        push rcx
+        push rbx
+        push rdx
 
         mov eax, ecx
         call print_dec_padded
@@ -81,23 +81,23 @@ start:
         mov ebx, ' '
         int 0x80
 
-        pop edx
-        pop ebx
-        pop ecx
+        pop rdx
+        pop rbx
+        pop rcx
 
         ; Newline every 10 primes
         cmp edx, 10
         jl .not_prime
         xor edx, edx
-        push ecx
-        push ebx
-        push edx
+        push rcx
+        push rbx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop edx
-        pop ebx
-        pop ecx
+        pop rdx
+        pop rbx
+        pop rcx
 
 .not_prime:
         inc ecx
@@ -106,28 +106,28 @@ start:
 .print_done:
         ; Print count
         mov eax, SYS_PUTCHAR
-        push ebx
+        push rbx
         mov ebx, 0x0A
         int 0x80
         int 0x80
-        pop ebx
+        pop rbx
 
         mov eax, SYS_SETCOLOR
-        push ebx
+        push rbx
         mov ebx, 0x0A           ; Green
         int 0x80
-        pop ebx
+        pop rbx
 
         mov eax, SYS_PRINT
-        push ebx
+        push rbx
         mov ebx, msg_found
         int 0x80
-        pop ebx
+        pop rbx
 
         mov eax, ebx
         call print_dec
 
-        push ebx
+        push rbx
         mov eax, SYS_PRINT
         mov ebx, msg_primes
         int 0x80
@@ -135,16 +135,16 @@ start:
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
-        pop ebx
+        pop rbx
 
         mov eax, SYS_EXIT
         int 0x80
 
 ; Print EAX as right-aligned decimal (padded to 5 chars)
 print_dec_padded:
-        pushad
+        PUSHALL
         ; First count digits
-        push eax
+        push rax
         xor ecx, ecx
         mov ebx, 10
         test eax, eax
@@ -170,9 +170,9 @@ print_dec_padded:
         dec edx
         jnz .pad_loop
 .no_pad:
-        pop eax
+        pop rax
         call print_dec
-        popad
+        POPALL
         ret
 
 msg_header:     db "=== Prime Sieve (2 to 1000) ===", 0x0A, 0x0A, 0

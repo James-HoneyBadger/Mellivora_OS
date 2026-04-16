@@ -48,7 +48,7 @@ start:
 .build_cmd:
         ; Copy COMMAND into exec_buf
         mov edi, exec_buf
-        push esi
+        push rsi
         mov esi, cmd_buf
         mov ecx, [cmd_len]
 .copy_cmd:
@@ -62,7 +62,7 @@ start:
         ; Add space separator
         mov byte [edi], ' '
         inc edi
-        pop esi
+        pop rsi
 
         ; Copy stdin argument (until newline or null)
 .copy_arg:
@@ -84,7 +84,7 @@ start:
         mov byte [edi], 0
 
         ; Print the constructed command
-        push esi
+        push rsi
         mov eax, SYS_PRINT
         mov ebx, exec_buf
         int 0x80
@@ -106,7 +106,7 @@ start:
         jmp .pn_copy
 .pn_done:
         mov byte [edi], 0
-        pop esi
+        pop rsi
 
         ; Unfortunately SYS_EXEC replaces the current process,
         ; so we can only execute the last line.

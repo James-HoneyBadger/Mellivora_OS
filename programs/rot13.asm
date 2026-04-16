@@ -50,13 +50,13 @@ start:
         jle .done
         movzx eax, byte [esi]
         call rot13_char
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         inc esi
         dec ecx
         jmp .process

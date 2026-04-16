@@ -164,7 +164,7 @@ start:
 ; Sets [match_pos] to position of first match
 ;=======================================================================
 search_pattern:
-        pushad
+        PUSHALL
         mov esi, line_buf
         xor ebx, ebx           ; position in line
 
@@ -201,13 +201,13 @@ search_pattern:
 
 .sp_found:
         mov [match_pos], ebx
-        mov [esp + 28], dword 1 ; EAX in pushad frame
-        popad
+        mov [rsp + 112], dword 1 ; EAX in PUSHALL frame
+        POPALL
         ret
 
 .sp_not_found:
-        mov [esp + 28], dword 0
-        popad
+        mov [rsp + 112], dword 0
+        POPALL
         ret
 
 ;=======================================================================
@@ -226,7 +226,7 @@ to_lower_al:
 ; Print line with pattern highlighted
 ;=======================================================================
 print_highlighted_line:
-        pushad
+        PUSHALL
         mov esi, line_buf
         xor ecx, ecx           ; position
 
@@ -245,7 +245,7 @@ print_highlighted_line:
         int 0x80
 
         ; Print pattern length chars
-        push ecx
+        push rcx
         mov edi, pattern
         xor edx, edx
 .phl_highlight:
@@ -263,7 +263,7 @@ print_highlighted_line:
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
-        add esp, 4             ; discard saved ecx
+        add rsp, 4             ; discard saved ecx
         jmp .phl_loop
 
 .phl_normal:
@@ -277,7 +277,7 @@ print_highlighted_line:
         jmp .phl_loop
 
 .phl_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================

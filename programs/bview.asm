@@ -169,7 +169,7 @@ start:
 ; ─── render_bmp ──────────────────────────────────────────────
 ; Render the loaded BMP file to the GUI window pixel by pixel
 render_bmp:
-        pushad
+        PUSHALL
 
         ; Background
         mov eax, [win_id]
@@ -244,13 +244,13 @@ render_bmp:
         mov [pixel_color], eax
 
         ; Draw pixel
-        push esi
+        push rsi
         mov eax, [win_id]
         mov ebx, [draw_x]
         mov ecx, [draw_y]
         mov esi, [pixel_color]
         call gui_draw_pixel
-        pop esi
+        pop rsi
 
         inc dword [draw_x]
         jmp .render_col
@@ -266,7 +266,7 @@ render_bmp:
         mov eax, [win_id]
         call gui_flip
 
-        popad
+        POPALL
         ret
 
 

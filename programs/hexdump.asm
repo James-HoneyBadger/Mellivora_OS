@@ -188,7 +188,7 @@ start:
 ; Print EAX as 8-digit hex
 ;=======================================================================
 print_hex_dword:
-        pushad
+        PUSHALL
         mov ecx, 8
         mov edx, eax
 .phd_loop:
@@ -207,14 +207,14 @@ print_hex_dword:
         int 0x80
         dec ecx
         jnz .phd_loop
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; Print AL as 2-digit hex
 ;=======================================================================
 print_hex_byte:
-        pushad
+        PUSHALL
         mov edx, eax
         ; High nibble
         shr eax, 4
@@ -242,7 +242,7 @@ print_hex_byte:
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
-        popad
+        POPALL
         ret
 
 ; Data

@@ -134,21 +134,21 @@ start:
         sub ecx, GRID_Y
         js .main_loop
         ; Col = ebx / CELL_SIZE, Row = ecx / CELL_SIZE
-        push edx
+        push rdx
         mov eax, ebx
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, CELL_SIZE
         div ecx
         mov ebx, eax             ; col
-        pop eax
+        pop rax
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, CELL_SIZE
         div ecx
         mov ecx, eax             ; row
-        pop edx
-        pop edx
+        pop rdx
+        pop rdx
 
         ; Bounds check
         cmp ebx, GRID_COLS
@@ -182,7 +182,7 @@ start:
 
 ; ─── init_game ───────────────────────────────────────────────
 init_game:
-        pushad
+        PUSHALL
         ; Clear grid
         mov edi, grid_pipes
         mov ecx, GRID_COLS * GRID_ROWS
@@ -230,15 +230,15 @@ init_game:
         ; Generate first piece
         call gen_next_piece
 
-        popad
+        POPALL
         ret
 
 
 ; ─── gen_next_piece ──────────────────────────────────────────
 gen_next_piece:
-        push eax
-        push ecx
-        push edx
+        push rax
+        push rcx
+        push rdx
         mov eax, SYS_GETTIME
         int 0x80
         xor edx, edx
@@ -246,16 +246,16 @@ gen_next_piece:
         div ecx
         movzx eax, byte [piece_types + edx]
         mov [next_piece], al
-        pop edx
-        pop ecx
-        pop eax
+        pop rdx
+        pop rcx
+        pop rax
         ret
 
 
 ; ─── advance_flow ────────────────────────────────────────────
 ; Advance water one cell. Called each frame.
 advance_flow:
-        pushad
+        PUSHALL
         ; Flow speed: advance every 15 frames
         inc dword [flow_timer]
         cmp dword [flow_timer], 15
@@ -362,7 +362,7 @@ advance_flow:
         mov dword [game_state], STATE_LOSE
 
 .af_done:
-        popad
+        POPALL
         ret
 
 
@@ -390,7 +390,7 @@ invert_dir:
 
 ; ─── draw_all ────────────────────────────────────────────────
 draw_all:
-        pushad
+        PUSHALL
 
         ; Background
         mov eax, [win_id]
@@ -467,17 +467,17 @@ draw_all:
         add eax, edi
 
         ; Draw cell border
-        push eax
-        push esi
-        push edi
+        push rax
+        push rsi
+        push rdi
         mov ebx, edi
         imul ebx, CELL_SIZE
         add ebx, GRID_X
         mov ecx, esi
         imul ecx, CELL_SIZE
         add ecx, GRID_Y
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         ; Cell outline
         mov eax, [win_id]
         mov edx, CELL_SIZE
@@ -485,8 +485,8 @@ draw_all:
         mov edi, COL_GRID_LINE
         call gui_fill_rect
         ; Inner cell (1px border)
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         inc ebx
         inc ecx
         mov eax, [win_id]
@@ -494,15 +494,15 @@ draw_all:
         mov esi, CELL_SIZE - 2
         mov edi, COL_GRID_BG
         call gui_fill_rect
-        pop edi
-        pop esi
-        pop eax
+        pop rdi
+        pop rsi
+        pop rax
 
         ; Draw pipe in cell
         cmp byte [grid_state + eax], CELL_EMPTY
         je .draw_cell_done
 
-        push eax
+        push rax
         movzx eax, byte [grid_pipes + eax]
         mov ebx, edi
         imul ebx, CELL_SIZE
@@ -512,7 +512,7 @@ draw_all:
         add ecx, GRID_Y
         mov edx, CELL_SIZE
         ; Check if cell index is source or drain for special color
-        mov ebp, [esp]          ; get cell index
+        mov ebp, [rsp]          ; get cell index
         cmp byte [grid_state + ebp], CELL_SOURCE
         je .draw_source_cell
         cmp byte [grid_state + ebp], CELL_DRAIN
@@ -522,8 +522,8 @@ draw_all:
         call draw_pipe_at
         jmp .draw_cell_popped
 .draw_source_cell:
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov eax, [win_id]
         add ebx, 2
         add ecx, 2
@@ -531,12 +531,12 @@ draw_all:
         mov esi, CELL_SIZE - 4
         mov edi, COL_SOURCE
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         jmp .draw_cell_popped
 .draw_drain_cell:
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov eax, [win_id]
         add ebx, 2
         add ecx, 2
@@ -544,23 +544,23 @@ draw_all:
         mov esi, CELL_SIZE - 4
         mov edi, COL_DRAIN
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         jmp .draw_cell_popped
 .draw_filled_cell:
-        push eax
-        mov eax, [esp+4]        ; cell index
-        push ebx
-        push ecx
+        push rax
+        mov eax, [rsp+4]        ; cell index
+        push rbx
+        push rcx
         movzx eax, byte [grid_pipes + eax]
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         mov edx, CELL_SIZE
         call draw_pipe_filled_at
-        pop eax
+        pop rax
         jmp .draw_cell_popped
 .draw_cell_popped:
-        pop eax
+        pop rax
 
 .draw_cell_done:
         inc edi
@@ -601,7 +601,7 @@ draw_all:
         mov eax, [win_id]
         call gui_flip
 
-        popad
+        POPALL
         ret
 
 
@@ -609,7 +609,7 @@ draw_all:
 ; Draw a pipe piece (unfilled)
 ; EAX = pipe type (NESW bits), EBX = x, ECX = y, EDX = cell size
 draw_pipe_at:
-        pushad
+        PUSHALL
         mov [.dp_type], al
         mov [.dp_x], ebx
         mov [.dp_y], ecx
@@ -639,14 +639,14 @@ draw_pipe_at:
         shl ebp, 1
         mov ecx, [.dp_y]
         mov edx, ebp             ; width
-        push esi
+        push rsi
         mov esi, [.dp_size]
         shr esi, 1               ; height = half cell
-        push edi
+        push rdi
         mov edi, COL_PIPE
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dp_size]
         shr ebp, 2
 .dp_no_n:
@@ -661,14 +661,14 @@ draw_pipe_at:
         shl ebp, 1
         mov ecx, edi             ; center_y
         mov edx, ebp             ; width
-        push esi
+        push rsi
         mov esi, [.dp_size]
         shr esi, 1               ; height
-        push edi
+        push rdi
         mov edi, COL_PIPE
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dp_size]
         shr ebp, 2
 .dp_no_s:
@@ -682,15 +682,15 @@ draw_pipe_at:
         shr ebp, 1
         add ecx, ebp
         shl ebp, 1
-        push esi
+        push rsi
         mov edx, [.dp_size]
         shr edx, 1               ; width = half cell
         mov esi, ebp             ; height
-        push edi
+        push rdi
         mov edi, COL_PIPE
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dp_size]
         shr ebp, 2
 .dp_no_e:
@@ -704,19 +704,19 @@ draw_pipe_at:
         shr ebp, 1
         add ecx, ebp
         shl ebp, 1
-        push esi
+        push rsi
         mov edx, [.dp_size]
         shr edx, 1
         mov esi, ebp
-        push edi
+        push rdi
         mov edi, COL_PIPE
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dp_size]
         shr ebp, 2
 .dp_no_w:
-        popad
+        POPALL
         ret
 
 .dp_type:  db 0
@@ -728,7 +728,7 @@ draw_pipe_at:
 ; ─── draw_pipe_filled_at ─────────────────────────────────────
 ; Same as draw_pipe_at but in blue (filled with water)
 draw_pipe_filled_at:
-        pushad
+        PUSHALL
         mov [.dpf_type], al
         mov [.dpf_x], ebx
         mov [.dpf_y], ecx
@@ -753,14 +753,14 @@ draw_pipe_filled_at:
         shl ebp, 1
         mov ecx, [.dpf_y]
         mov edx, ebp
-        push esi
+        push rsi
         mov esi, [.dpf_size]
         shr esi, 1
-        push edi
+        push rdi
         mov edi, COL_PIPE_FILL
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dpf_size]
         shr ebp, 2
 .dpf_no_n:
@@ -774,14 +774,14 @@ draw_pipe_filled_at:
         shl ebp, 1
         mov ecx, edi
         mov edx, ebp
-        push esi
+        push rsi
         mov esi, [.dpf_size]
         shr esi, 1
-        push edi
+        push rdi
         mov edi, COL_PIPE_FILL
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dpf_size]
         shr ebp, 2
 .dpf_no_s:
@@ -794,15 +794,15 @@ draw_pipe_filled_at:
         shr ebp, 1
         add ecx, ebp
         shl ebp, 1
-        push esi
+        push rsi
         mov edx, [.dpf_size]
         shr edx, 1
         mov esi, ebp
-        push edi
+        push rdi
         mov edi, COL_PIPE_FILL
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dpf_size]
         shr ebp, 2
 .dpf_no_e:
@@ -815,19 +815,19 @@ draw_pipe_filled_at:
         shr ebp, 1
         add ecx, ebp
         shl ebp, 1
-        push esi
+        push rsi
         mov edx, [.dpf_size]
         shr edx, 1
         mov esi, ebp
-        push edi
+        push rdi
         mov edi, COL_PIPE_FILL
         call gui_fill_rect
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         mov ebp, [.dpf_size]
         shr ebp, 2
 .dpf_no_w:
-        popad
+        POPALL
         ret
 
 .dpf_type:  db 0
@@ -839,7 +839,7 @@ draw_pipe_filled_at:
 ; ─── itoa ────────────────────────────────────────────────────
 ; Convert EAX to decimal string in num_buf
 itoa:
-        pushad
+        PUSHALL
         mov edi, num_buf + 11
         mov byte [edi], 0
         mov ebx, 10
@@ -859,7 +859,7 @@ itoa:
         stosb
         test al, al
         jnz .itoa_copy
-        popad
+        POPALL
         ret
 
 

@@ -171,13 +171,13 @@ start:
         mov esi, err_nodata
 
 .show_err:
-        push esi
+        push rsi
         mov eax, SYS_CLEAR
         int 0x80
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0C
         int 0x80
-        pop ebx
+        pop rbx
         mov eax, SYS_PRINT
         int 0x80
         mov eax, SYS_SETCOLOR
@@ -210,7 +210,7 @@ start:
 ;   Connection: close\r\n\r\n
 ;=======================================================================
 build_request:
-        pushad
+        PUSHALL
         mov edi, request_buf
 
         ; "GET /"
@@ -239,7 +239,7 @@ build_request:
         mov eax, edi
         sub eax, request_buf
         mov [request_len], eax
-        popad
+        POPALL
         ret
 
 .strcpy:
@@ -255,7 +255,7 @@ build_request:
 ; recv_response - Receive HTTP response, extract body into body_buf
 ;=======================================================================
 recv_response:
-        pushad
+        PUSHALL
         mov dword [body_len], 0
         mov byte [in_headers], 1
         mov dword [retry_count], 0
@@ -333,7 +333,7 @@ recv_response:
         mov edi, body_buf
         add edi, [body_len]
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -341,7 +341,7 @@ recv_response:
 ;   Handles: degree sign, arrows, dashes; strips other non-ASCII
 ;=======================================================================
 clean_body:
-        pushad
+        PUSHALL
         mov esi, body_buf
         mov edi, body_buf       ; in-place (output <= input)
 
@@ -441,14 +441,14 @@ clean_body:
         sub eax, body_buf
         dec eax
         mov [body_len], eax
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; detect_weather - Scan body for condition keywords, set weather_type
 ;=======================================================================
 detect_weather:
-        pushad
+        PUSHALL
         mov dword [weather_type], W_CLEAR
 
         mov esi, body_buf
@@ -491,14 +491,14 @@ detect_weather:
 .dw_snow:
         mov dword [weather_type], W_SNOW
 .dw_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; draw_dashboard - Render weather display with title/status bars
 ;=======================================================================
 draw_dashboard:
-        pushad
+        PUSHALL
 
         ; Clear VGA to black
         mov edi, VGA_BASE
@@ -543,11 +543,11 @@ draw_dashboard:
         movzx eax, byte [cur_hours]
         cmp eax, 10
         jge .no_hpad
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        pop eax
+        pop rax
 .no_hpad:
         call print_dec
         mov eax, SYS_PUTCHAR
@@ -556,11 +556,11 @@ draw_dashboard:
         movzx eax, byte [cur_mins]
         cmp eax, 10
         jge .no_mpad
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        pop eax
+        pop rax
 .no_mpad:
         call print_dec
 
@@ -630,14 +630,14 @@ draw_dashboard:
         ; === Weather animation overlay ===
         call animate_weather
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; animate_weather - Scatter rain/snow particles in content area
 ;=======================================================================
 animate_weather:
-        pushad
+        PUSHALL
         cmp dword [weather_type], W_RAIN
         je .anim_rain
         cmp dword [weather_type], W_SNOW
@@ -647,7 +647,7 @@ animate_weather:
 .anim_rain:
         mov ecx, 12
 .rain_loop:
-        push ecx
+        push rcx
         call rand
         xor edx, edx
         mov ecx, 76
@@ -669,7 +669,7 @@ animate_weather:
         mov byte [ecx], '|'
         mov byte [ecx + 1], 0x09
 .rain_skip:
-        pop ecx
+        pop rcx
         dec ecx
         jnz .rain_loop
         jmp .anim_done
@@ -677,7 +677,7 @@ animate_weather:
 .anim_snow:
         mov ecx, 8
 .snow_loop:
-        push ecx
+        push rcx
         call rand
         xor edx, edx
         mov ecx, 76
@@ -699,12 +699,12 @@ animate_weather:
         mov byte [ecx], '*'
         mov byte [ecx + 1], 0x0F
 .snow_skip:
-        pop ecx
+        pop rcx
         dec ecx
         jnz .snow_loop
 
 .anim_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================

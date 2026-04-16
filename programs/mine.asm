@@ -88,15 +88,15 @@ new_game:
         ; Get row/col
         mov eax, ecx
         xor ebx, ebx           ; remainder
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ebx, MAP_W
         xor edx, edx
         div ebx                 ; eax=row, edx=col
         mov esi, eax            ; row
         mov edi, edx            ; col
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Check all 8 neighbors
         ; Up (row-1)
@@ -371,7 +371,7 @@ cursor_to_index:
 FLOOD_STACK_MAX equ MAP_SIZE   ; max entries
 
 flood_reveal:
-        pushad
+        PUSHALL
         ; Initialize stack pointer
         mov dword [flood_sp], 0
 
@@ -400,13 +400,13 @@ flood_reveal:
         jge .flood_loop
 
         ; Calculate index: idx = y * MAP_W + x
-        push eax
-        push ebx
+        push rax
+        push rbx
         imul ebx, MAP_W
         add ebx, eax
         mov edx, ebx            ; EDX = index
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
 
         ; Already revealed or flagged?
         cmp byte [map_visible + edx], 0
@@ -498,12 +498,12 @@ flood_reveal:
         jmp .flood_loop
 
 .flood_done:
-        popad
+        POPALL
         ret
 
 ;=== Reveal all mines (game over) ===
 reveal_all_mines:
-        pushad
+        PUSHALL
         xor ecx, ecx
 .loop:
         cmp ecx, MAP_SIZE
@@ -515,12 +515,12 @@ reveal_all_mines:
         inc ecx
         jmp .loop
 .done:
-        popad
+        POPALL
         ret
 
 ;=== Draw header ===
 draw_header:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         mov ebx, MAP_OFFSET_X
         xor ecx, ecx
@@ -542,12 +542,12 @@ draw_header:
         mov eax, SYS_PRINT
         mov ebx, msg_controls
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=== Draw the entire field ===
 draw_field:
-        pushad
+        PUSHALL
         xor ecx, ecx           ; cell index
 .loop:
         cmp ecx, MAP_SIZE
@@ -559,7 +559,7 @@ draw_field:
         mov ebx, MAP_W
         div ebx                 ; eax=row, edx=col
 
-        push ecx
+        push rcx
         mov ebx, eax            ; row -> y
         mov eax, edx            ; col -> x
 
@@ -567,8 +567,8 @@ draw_field:
         add eax, MAP_OFFSET_X
         add ebx, MAP_OFFSET_Y
 
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
 
         ; Determine what to display
         cmp byte [map_visible + ecx], 1
@@ -614,16 +614,16 @@ draw_field:
 .draw:
         ; EAX=screen_x, EBX=screen_y already set above
         call vga_putchar_at
-        pop ecx
+        pop rcx
         inc ecx
         jmp .loop
 .done:
-        popad
+        POPALL
         ret
 
 ;=== Draw cursor (highlight current cell) ===
 draw_cursor:
-        pushad
+        PUSHALL
         mov ecx, [cursor_y]
         imul ecx, MAP_W
         add ecx, [cursor_x]
@@ -666,12 +666,12 @@ draw_cursor:
         mov ch, COL_CURSOR
 .put:
         call vga_putchar_at
-        popad
+        POPALL
         ret
 
 ;=== Erase cursor (redraw cell normally) ===
 erase_cursor:
-        pushad
+        PUSHALL
         ; Just redraw the cell at current cursor pos
         mov ecx, [cursor_y]
         imul ecx, MAP_W
@@ -715,7 +715,7 @@ erase_cursor:
         mov ch, COL_FLAG
 .put:
         call vga_putchar_at
-        popad
+        POPALL
         ret
 
 ;=== Draw cell at cursor position ===
@@ -725,7 +725,7 @@ draw_cell_at_cursor:
 
 ;=== Draw restart message ===
 draw_restart_msg:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         mov ebx, MAP_OFFSET_X + MAP_W / 2 - 14
         mov ecx, MAP_OFFSET_Y + MAP_H + 1
@@ -736,7 +736,7 @@ draw_restart_msg:
         mov eax, SYS_PRINT
         mov ebx, msg_restart
         int 0x80
-        popad
+        POPALL
         ret
 
 exit_game:
@@ -751,26 +751,26 @@ exit_game:
 ;=== Put char at screen position (direct VGA) ===
 ; EAX = x, EBX = y, CL = char, CH = color
 vga_putchar_at:
-        pushad
+        PUSHALL
         imul ebx, VGA_WIDTH * 2
         lea edi, [VGA_BASE + ebx + eax*2]
         mov [edi], cl
         mov [edi+1], ch
-        popad
+        POPALL
         ret
 
 ;=== Simple PRNG ===
 rand:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, [rand_seed]
         imul eax, 1103515245
         add eax, 12345
         mov [rand_seed], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;=== Data ===
