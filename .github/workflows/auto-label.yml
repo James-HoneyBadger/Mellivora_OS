@@ -1,0 +1,88 @@
+name: Auto-Label PR
+
+# Automatically apply labels to PRs based on files changed
+# Requires the "pull_request" event with "synchronize" action
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v42
+        with:
+          files: |
+            **/*.asm
+            kernel/**
+            programs/**
+            boot.asm
+            stage2.asm
+            kernel.asm
+            Makefile
+            populate.py
+            tests/**
+            docs/**
+            README.md
+            CONTRIBUTING.md
+            ROADMAP.md
+
+      - name: Apply labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+            
+            // Get the list of changed files
+            const changedFiles = process.env.CHANGED_FILES.split('\n').filter(f => f);
+            
+            const labelsToAdd = new Set();
+            
+            // Kernel changes
+            if (changedFiles.some(f => f.includes('kernel/') || f.includes('boot.asm') || f.includes('stage2.asm'))) {
+              labelsToAdd.add('kernel');
+            }
+            
+            // Program changes
+            if (changedFiles.some(f => f.includes('programs/'))) {
+              labelsToAdd.add('programs');
+            }
+            
+            // Test changes
+            if (changedFiles.some(f => f.includes('tests/'))) {
+              labelsToAdd.add('testing');
+            }
+            
+            // Documentation changes
+            if (changedFiles.some(f => f.includes('docs/') || f.includes('README') || f.includes('.md'))) {
+              labelsToAdd.add('documentation');
+            }
+            
+            // Build system changes
+            if (changedFiles.some(f => f.includes('Makefile') || f.includes('populate.py'))) {
+              labelsToAdd.add('build');
+            }
+            
+            // Apply labels
+            if (labelsToAdd.size > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: Array.from(labelsToAdd)
+              });
+              console.log('Applied labels:', Array.from(labelsToAdd));
+            }
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
