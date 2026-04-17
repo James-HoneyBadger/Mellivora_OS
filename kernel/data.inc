@@ -108,7 +108,7 @@ banner_str:
         db "    | |  | |  __/ | | |\ V / (_) | | | (_| || |_| |___) |                ", 0x0A
         db "    |_|  |_|\___|_|_|_| \_/ \___/|_|  \__,_| \___/|____/                 ", 0x0A
         db "                                                                          ", 0x0A
-        db "       HB Lair v2.2 - Honey Badger Lair  |  64-bit x86-64                ", 0x0A, 0
+        db "       HB Lair v3.0 - Honey Badger Lair  |  The Titan Release             ", 0x0A, 0
 
 motd_str:
         db 0x0A
@@ -118,10 +118,10 @@ msg_boot_time:  db "  Boot complete in ", 0
 msg_boot_suf:   db "s", 0x0A, 0x0A, 0
 
 version_text:
-        db "Mellivora OS v3.0.0", 0x0A
-        db "  Kernel:        Mellivora (64-bit long mode, ring 0/3)", 0x0A
+        db "Mellivora OS v4.0.0 - The Titan Release", 0x0A
+        db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
-        db "  Shell:         HB Lair (Honey Badger Lair)", 0x0A
+        db "  Shell:         HB Lair v3.0 (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
         db "  Disk:          ATA PIO, LBA48 (up to 128 PB)", 0x0A
@@ -137,12 +137,14 @@ version_text:
         db "  Serial:        COM1 at 115200 baud", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
         db "  Audio:         Sound Blaster 16 (ISA DMA)", 0x0A
-        db "  Syscalls:      INT 0x80 (68 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (80 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
-        db "  Shell:         Tab completion, history, Ctrl+C abort", 0x0A
+        db "  Scheduler:     Priority-based preemptive (64 tasks, 4 levels)", 0x0A
+        db "  Signals:       POSIX-style (INT/KILL/TERM/TSTP/CONT/USR1/USR2)", 0x0A
+        db "  Shell:         Tab, history, Ctrl+A/E/U/W/K/L/C", 0x0A
         db "  Programs:      Flat binary + ELF32 (ring 3)", 0x0A
         db "  Arguments:     Command-line args via SYS_GETARGS", 0x0A
-        db "  Env vars:      set/unset with $VAR expansion", 0x0A
+        db "  Env vars:      set/unset with $VAR expansion (32 vars)", 0x0A
         db "  File I/O:      open/read/write/close/seek (fd)", 0x0A
         db "  IPC:           Pipes (8) + shared memory (4)", 0x0A
         db "  Networking:    TCP/IP (RTL8139, ARP, DHCP, DNS)", 0x0A
@@ -224,6 +226,38 @@ cmd_fsck_str:   db "fsck", 0
 cmd_ln_str:     db "ln", 0
 cmd_chmod_str:  db "chmod", 0
 cmd_chown_str:  db "chown", 0
+; v4.0 commands
+cmd_jobs_str:   db "jobs", 0
+cmd_kill_str:   db "kill", 0
+cmd_ps_str:     db "ps", 0
+cmd_bg_str:     db "bg", 0
+cmd_fg_str:     db "fg", 0
+cmd_nice_str:   db "nice", 0
+cmd_export_str: db "export", 0
+cmd_source_str: db "source", 0
+cmd_dotcmd_str: db ".", 0
+
+; v4.0 process/signal messages
+msg_no_jobs:    db "  No background jobs.", 0x0A, 0
+msg_job_hdr:    db "  PID  STATE     PRIO   NAME", 0x0A, 0
+msg_running:    db "RUNNING  ", 0
+msg_ready:      db "READY    ", 0
+msg_blocked:    db "BLOCKED  ", 0
+msg_stopped:    db "STOPPED  ", 0
+msg_free:       db "FREE     ", 0
+msg_prio_high:  db "HIGH  ", 0
+msg_prio_norm:  db "NORM  ", 0
+msg_prio_low:   db "LOW   ", 0
+msg_prio_idle:  db "IDLE  ", 0
+msg_kill_ok:    db "  Killed.", 0x0A, 0
+msg_kill_fail:  db "  kill: no such process", 0x0A, 0
+msg_kill_usage: db "  Usage: kill <pid> [signal]", 0x0A, 0
+msg_nice_usage: db "  Usage: nice <priority> <command>", 0x0A
+                db "    0=HIGH 1=NORMAL 2=LOW 3=IDLE", 0x0A, 0
+msg_export_usage: db "  Usage: export NAME=VALUE", 0x0A, 0
+
+; Default task name
+default_task_name: db "user", 0
 
 ; Screensaver strings
 msg_scrsaver_set:  db "  Screensaver mode set to: ", 0
@@ -314,8 +348,8 @@ help_help_gui:
         db "Enter Burrows desktop (640x480 graphical mode). Press any key to exit.", 0x0A, 0
 
 help_text:
-        db "HB Lair Commands:", 0x0A
-        db "  help       - Show this help", 0x0A
+        db "HB Lair v3.0 Commands:", 0x0A
+        db "  help       - Show this help (help <cmd> for details)", 0x0A
         db "  ver        - System information", 0x0A
         db "  clear/cls  - Clear screen", 0x0A
         db "  dir/ls [-l]- List files (-l for long format)", 0x0A
@@ -326,15 +360,12 @@ help_text:
         db "  more [-n N] F   - Page through file (-n N page size)", 0x0A
         db "  wc [-lwc] [F]   - Line/word/byte count", 0x0A
         db "  find [-ic] P F - Search pattern P in file F", 0x0A
-        db "             (-i case-insensitive, -c count only)", 0x0A
         db "  write F    - Write text to file (end with empty line)", 0x0A
         db "  append F   - Append text to existing file", 0x0A
         db "  touch F    - Create empty file", 0x0A
         db "  hex [-n N] F   - Hexdump a file (-n N byte limit)", 0x0A
         db "  del/rm [-v] F  - Delete a file (-v verbose)", 0x0A
-        db "             (wildcards: * and ? supported)", 0x0A
         db "  copy [-v] S D  - Copy file (-v verbose)", 0x0A
-        db "             (wildcards in S; use * in D for multi-match)", 0x0A
         db "  ren O N    - Rename file O to N", 0x0A
         db "  mv/move    - Alias for ren", 0x0A
         db "  run FILE   - Execute a program", 0x0A
@@ -343,11 +374,7 @@ help_text:
         db "  date       - Show current date and time", 0x0A
         db "  beep       - Play a beep", 0x0A
         db "  batch F    - Execute script file", 0x0A
-        db "    :LABEL   - Define label for goto", 0x0A
-        db "    goto LABEL - Jump to label in script", 0x0A
-        db "    if [not] errorlevel N cmd - Conditional exec", 0x0A
-        db "    rem comment - Batch comment (skipped)", 0x0A
-        db "    @cmd       - Execute silently (no echo)", 0x0A
+        db "  source/. F - Execute script in current shell", 0x0A
         db "  mkdir D    - Create directory", 0x0A
         db "  cd DIR     - Change directory (cd - for previous)", 0x0A
         db "  pwd        - Print working directory", 0x0A
@@ -356,8 +383,9 @@ help_text:
         db "  dirs       - Show directory stack", 0x0A
         db "  set N V    - Set environment variable", 0x0A
         db "  unset N    - Remove environment variable", 0x0A
+        db "  export N=V - Export environment variable", 0x0A
         db "  shutdown   - Shut down the system", 0x0A
-        db "  format     - Format filesystem (WARNING: erases all data)", 0x0A
+        db "  format     - Format filesystem (WARNING: erases all)", 0x0A
         db "  mem        - Memory information", 0x0A
         db "  disk       - Disk information", 0x0A
         db "  df         - Filesystem usage", 0x0A
@@ -365,11 +393,10 @@ help_text:
         db "  net        - Show network interface status", 0x0A
         db "  diff F1 F2 - Compare two files line by line", 0x0A
         db "  uniq [-cd] [F] - Remove adjacent duplicates", 0x0A
-        db "             (-c count, -d duplicates only)", 0x0A
         db "  rev [F]    - Reverse each line", 0x0A
         db "  tac [F]    - Print file in reverse line order", 0x0A
         db "  alias [N C]- Define alias N for command C", 0x0A
-        db "  history    - Show command history", 0x0A
+        db "  history    - Show command history (128 entries)", 0x0A
         db "  which N    - Show if N is built-in or program", 0x0A
         db "  sleep N    - Sleep N seconds", 0x0A
         db "  color FG [BG] - Set text color (hex 0-F)", 0x0A
@@ -377,16 +404,26 @@ help_text:
         db "  strings F  - Extract printable strings from file", 0x0A
         db "  mouse      - Show PS/2 mouse status", 0x0A
         db "  burrows    - Enter Burrows desktop (640x480)", 0x0A
-        db "  <name>     - Run program (searches PATH)", 0x0A
-        db "  >, >>, <   - Redirect output/input to files", 0x0A
-        db "  cmd1 | cmd2- Pipe one command into another", 0x0A
-        db "  cmd1 && cmd2 - Run cmd2 only if cmd1 succeeds", 0x0A
-        db "  cmd1 || cmd2 - Run cmd2 only if cmd1 fails", 0x0A
+        db " Process Management (v4.0):", 0x0A
+        db "  ps         - List all running tasks", 0x0A
+        db "  jobs       - List background jobs", 0x0A
+        db "  kill PID [SIG] - Send signal to task", 0x0A
+        db "  bg PID     - Resume stopped task in background", 0x0A
+        db "  fg PID     - Resume stopped task in foreground", 0x0A
+        db "  nice P CMD - Run command at priority (0-3)", 0x0A
+        db " Shortcuts:", 0x0A
         db "  Tab        - Auto-complete filename", 0x0A
         db "  Ctrl+C     - Cancel current input", 0x0A
+        db "  Ctrl+A/E   - Move cursor to start/end", 0x0A
+        db "  Ctrl+U     - Kill line (clear input)", 0x0A
+        db "  Ctrl+W     - Delete previous word", 0x0A
+        db "  Ctrl+L     - Clear screen, redraw prompt", 0x0A
+        db "  >, >>, <   - Redirect output/input to files", 0x0A
+        db "  cmd1 | cmd2- Pipe commands", 0x0A
+        db "  cmd1 && cmd2 - Run cmd2 if cmd1 succeeds", 0x0A
+        db "  cmd1 || cmd2 - Run cmd2 if cmd1 fails", 0x0A
         db 0x0A
-        db "PATH: set PATH /bin:/games to search directories.", 0x0A
-        db "      Programs in PATH dirs run from any directory.", 0x0A, 0
+        db "PATH: set PATH /bin:/games to search directories.", 0x0A, 0
 
 ; Messages
 msg_exception:  db "*** CPU EXCEPTION ***", 0x0A, 0
@@ -655,6 +692,7 @@ ctrl_c_flag:    resb 1
 program_entry:  resd 1
 program_exit_code: resd 1
 shell_last_status: resd 1
+nice_priority:    resd 1           ; v4.0: Priority for next spawned task
 
 ; TSS structure (104 bytes)
 tss_struct:     resb 104
@@ -780,7 +818,8 @@ gff_cwd_stack:    resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 task_current:     resd 1                              ; Index of current running task
 task_count:       resd 1                              ; Number of active tasks
 sched_tick:       resd 1                              ; Tick counter for current time slice
-task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array
+task_create_name: resb 16                             ; v4.0: Name for next task to create
+task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (64 * 64 = 4096 bytes)
 
 ; Networking state (RTL8139 NIC)
 net_state:        resd 1          ; NET_STATE_NONE / FOUND / UP

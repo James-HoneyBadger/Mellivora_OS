@@ -87,6 +87,33 @@ SYS_CHOWN       equ 69          ; Change owner: EBX=filename ECX=uid -> EAX=0/-1
 SYS_SYMLINK     equ 70          ; Create link: EBX=linkname ECX=target -> EAX=0/-1
 SYS_READLINK    equ 71          ; Read link: EBX=linkname ECX=buf -> EAX=len/-1
 
+; v4.0 syscalls
+SYS_SETPRIORITY equ 72          ; Set priority: EBX=pid(0=self) ECX=prio -> EAX=0/-1
+SYS_GETPRIORITY equ 73          ; Get priority: EBX=pid(0=self) -> EAX=prio/-1
+SYS_SIGNAL      equ 74          ; Send signal: EBX=pid ECX=signum -> EAX=0/-1
+SYS_SETPGID     equ 75          ; Set PGID: EBX=pid(0=self) ECX=pgid -> EAX=0/-1
+SYS_GETPGID     equ 76          ; Get PGID: EBX=pid(0=self) -> EAX=pgid/-1
+SYS_SIGMASK     equ 77          ; Signal mask: EBX=op ECX=mask -> EAX=old/-1
+SYS_TASKNAME    equ 78          ; Set task name: EBX=name_ptr -> EAX=0
+SYS_REALLOC     equ 79          ; Realloc: EBX=ptr ECX=new_size EDX=old_size -> EAX=ptr/0
+
+; v4.0 Priority levels
+PRIO_HIGH       equ 0
+PRIO_NORMAL     equ 1
+PRIO_LOW        equ 2
+PRIO_IDLE       equ 3
+
+; v4.0 Signal numbers
+SIGINT          equ 2
+SIGKILL         equ 9
+SIGUSR1         equ 10
+SIGUSR2         equ 12
+SIGALRM         equ 14
+SIGTERM         equ 15
+SIGCHLD         equ 17
+SIGTSTP         equ 20
+SIGCONT         equ 25
+
 ; Audio format flags (for SYS_AUDIO_PLAY EDX)
 SB_FMT_16BIT    equ (1 << 16)
 SB_FMT_STEREO   equ (1 << 17)

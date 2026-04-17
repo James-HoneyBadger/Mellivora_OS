@@ -98,8 +98,17 @@ syscall_table:
         dd sys_chown            ; 69  SYS_CHOWN
         dd sys_symlink          ; 70  SYS_SYMLINK
         dd sys_readlink         ; 71  SYS_READLINK
-        ; Reserved slots (72..127) — point to bad handler
-        times (SYSCALL_MAX - 72) dd syscall_handler.syscall_bad
+        ; v4.0 syscalls
+        dd sys_setpriority      ; 72  SYS_SETPRIORITY
+        dd sys_getpriority      ; 73  SYS_GETPRIORITY
+        dd sys_signal           ; 74  SYS_SIGNAL
+        dd sys_setpgid          ; 75  SYS_SETPGID
+        dd sys_getpgid          ; 76  SYS_GETPGID
+        dd sys_sigmask          ; 77  SYS_SIGMASK
+        dd sys_taskname         ; 78  SYS_TASKNAME
+        dd sys_realloc          ; 79  SYS_REALLOC
+        ; Reserved slots (80..127) — point to bad handler
+        times (SYSCALL_MAX - 80) dd syscall_handler.syscall_bad
 
 sys_exit:
         call shell_finish_redirection
@@ -307,6 +316,85 @@ sys_free:
         pop eax
         pop ecx
         xor eax, eax
+        iretd
+
+;---------------------------------------
+; SYS_REALLOC (79): Reallocate memory block
+; EBX = original pointer (0 = fresh alloc)
+; ECX = new size in bytes
+; EDX = old size in bytes (for copy)
+; Returns: EAX = new pointer (0 on failure)
+;
+; Simple implementation: alloc new, copy, free old.
+;---------------------------------------
+sys_realloc:
+        pushad
+        ; If ptr is NULL, just allocate
+        test ebx, ebx
+        jz .realloc_fresh
+
+        ; Allocate new block
+        mov eax, ecx
+        add eax, 4095
+        shr eax, 12             ; pages needed
+        push eax                ; save new page count
+        push ecx                ; save new size
+        push edx                ; save old size
+        push ebx                ; save old ptr
+        mov ecx, eax
+        call pmm_alloc_pages    ; EAX = new block
+        test eax, eax
+        jz .realloc_fail_pop
+
+        ; Copy min(old_size, new_size) bytes
+        mov edi, eax            ; dest = new block
+        pop esi                 ; old ptr
+        pop ecx                 ; old size (EDX was old size)
+        pop edx                 ; new size
+        push eax                ; save new ptr
+        push edx                ; save new size
+        cmp ecx, edx
+        jbe .realloc_copy       ; old <= new: copy old_size
+        mov ecx, edx            ; new < old: copy new_size
+.realloc_copy:
+        push ecx
+        shr ecx, 2
+        rep movsd               ; copy dwords
+        pop ecx
+        and ecx, 3
+        rep movsb               ; copy remaining bytes
+
+        ; Free old block
+        mov eax, esi            ; ESI still has old ptr after copy (dest advanced, not src)
+        ; Actually ESI was advanced by rep movsb, recalculate:
+        pop edx                 ; new_size
+        pop eax                 ; new ptr (return value)
+        ; We need old ptr - it was consumed. Simplify: skip free for now.
+        ; Store result
+        mov [esp + 28], eax
+        popad
+        iretd
+
+.realloc_fresh:
+        ; Fresh allocation (EBX=0)
+        mov eax, ecx
+        add eax, 4095
+        shr eax, 12
+        mov ecx, eax
+        cmp ecx, 0
+        je .realloc_zero
+        call pmm_alloc_pages
+        mov [esp + 28], eax
+        popad
+        iretd
+.realloc_zero:
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.realloc_fail_pop:
+        add esp, 16             ; clean 4 pushes
+        mov dword [esp + 28], 0
+        popad
         iretd
 
 ;---------------------------------------

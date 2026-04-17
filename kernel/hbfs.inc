@@ -562,6 +562,7 @@ hbfs_create_file:
 
         ; Write file data to disk
         ; LBA = HBFS_DATA_START + block_number * HBFS_SECTORS_PER_BLK
+        mov eax, [edi + 260]    ; Reload first block from dir entry
         mov ecx, [.save_blocks]
         shl eax, 3              ; first_block * 8 sectors
         add eax, HBFS_DATA_START ; + data area start = LBA

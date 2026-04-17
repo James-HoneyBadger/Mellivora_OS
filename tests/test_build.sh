@@ -113,6 +113,49 @@ check "Root dir contains 'bin' directory" "[[ $BIN_FOUND -gt 0 ]]"
 
 echo ""
 
+# ---------- Filesystem persistence across full rebuild ----------
+echo "[Filesystem persistence]"
+PERSIST_OK=$(python3 - <<'PY' | tail -1
+import struct
+import subprocess
+import sys
+from populate import FSImage
+
+marker = '__persist_regression__'
+fs = FSImage('mellivora.img')
+fs.create_subdir('bin')
+fs.add_file(marker, b'keep\n', directory='bin')
+fs.finalize()
+
+subprocess.run(['make', 'full'], stdout=subprocess.DEVNULL,
+               stderr=subprocess.DEVNULL, check=True)
+
+with open('mellivora.img', 'rb') as f:
+    f.seek(546 * 512)
+    root = f.read(32 * 4096)
+
+bin_start = None
+for i in range(len(root) // 288):
+    off = i * 288
+    if root[off + 253] == 2 and root[off:off + 3] == b'bin':
+        bin_start = struct.unpack_from('<I', root, off + 260)[0]
+        break
+
+if bin_start is None:
+    print('no')
+    raise SystemExit(0)
+
+with open('mellivora.img', 'rb') as f:
+    f.seek((802 + bin_start * 8) * 512)
+    data = f.read(16 * 4096)
+
+print('yes' if marker.encode('ascii') + b'\x00' in data else 'no')
+PY
+)
+check "Guest-created files survive make full" "[[ '$PERSIST_OK' == 'yes' ]]"
+
+echo ""
+
 # ---------- Program binaries ----------
 echo "[Program binaries]"
 for prog in hello fibonacci primes snake tetris sokoban guess mine colors banner sysinfo edit; do

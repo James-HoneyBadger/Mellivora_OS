@@ -842,8 +842,52 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 33 | `SYS_SERIAL_IN` | — | EAX=char from serial port |
 | 34 | `SYS_STDIN_READ` | EBX=buf | EAX=bytes read (-1 if no piped input) |
 | 35 | `SYS_YIELD` | — | EAX=0 (cooperative yield) |
+| 36 | `SYS_MOUSE` | — | EAX=x, EBX=y, ECX=buttons |
+| 37 | `SYS_FRAMEBUF` | EBX=sub (0=info,1=set,2=restore) | varies |
+| 38 | `SYS_GUI` | EBX=sub-function | varies |
+| 39 | `SYS_SOCKET` | EBX=type (1=TCP,2=UDP) | EAX=fd |
+| 40 | `SYS_CONNECT` | EBX=fd, ECX=ip, EDX=port | EAX=0/-1 |
+| 41 | `SYS_SEND` | EBX=fd, ECX=buf, EDX=len | EAX=bytes |
+| 42 | `SYS_RECV` | EBX=fd, ECX=buf, EDX=maxlen | EAX=bytes |
+| 43 | `SYS_BIND` | EBX=fd, ECX=port | EAX=0/-1 |
+| 44 | `SYS_LISTEN` | EBX=fd | EAX=0/-1 |
+| 45 | `SYS_ACCEPT` | EBX=fd | EAX=new_fd |
+| 46 | `SYS_DNS` | EBX=hostname | EAX=ip |
+| 47 | `SYS_SOCKCLOSE` | EBX=fd | EAX=0 |
+| 48 | `SYS_PING` | EBX=ip | EAX=rtt/-1 |
+| 49 | `SYS_SETDATE` | EBX=buf, ECX=century | EAX=0 |
+| 50 | `SYS_AUDIO_PLAY` | EBX=buf, ECX=len, EDX=fmt | EAX=0/-1 |
+| 51 | `SYS_AUDIO_STOP` | — | EAX=0 |
+| 52 | `SYS_AUDIO_STATUS` | — | EAX=state, EBX=present |
+| 53 | `SYS_KILL` | EBX=pid | EAX=0/-1 |
+| 54 | `SYS_GETPID` | — | EAX=pid |
+| 55 | `SYS_CLIPBOARD_COPY` | EBX=buf, ECX=len | EAX=0 |
+| 56 | `SYS_CLIPBOARD_PASTE` | EBX=buf, ECX=maxlen | EAX=len |
+| 57 | `SYS_NOTIFY` | EBX=text, EDX=color | EAX=0 |
+| 58 | `SYS_FILE_OPEN_DLG` | EBX=title, EDX=filter | EAX=1/0, ECX=name |
+| 59 | `SYS_FILE_SAVE_DLG` | EBX=title, EDX=filter | EAX=1/0, ECX=name |
+| 60 | `SYS_PIPE_CREATE` | — | EAX=pipe_id |
+| 61 | `SYS_PIPE_WRITE` | EBX=id, ECX=buf, EDX=len | EAX=written |
+| 62 | `SYS_PIPE_READ` | EBX=id, ECX=buf, EDX=max | EAX=read |
+| 63 | `SYS_PIPE_CLOSE` | EBX=id | EAX=0 |
+| 64 | `SYS_SHMGET` | EBX=key, ECX=size | EAX=shm_id |
+| 65 | `SYS_SHMADDR` | EBX=shm_id | EAX=ptr |
+| 66 | `SYS_PROCLIST` | EBX=slot, ECX=buf (48 bytes) | EAX=0/-1 |
+| 67 | `SYS_MEMINFO` | — | EAX=free_pages, EBX=total |
+| 68 | `SYS_CHMOD` | EBX=filename, ECX=perms | EAX=0/-1 |
+| 69 | `SYS_CHOWN` | EBX=filename, ECX=uid | EAX=0/-1 |
+| 70 | `SYS_SYMLINK` | EBX=linkname, ECX=target | EAX=0/-1 |
+| 71 | `SYS_READLINK` | EBX=linkname, ECX=buf | EAX=len/-1 |
+| 72 | `SYS_SETPRIORITY` | EBX=pid (0=self), ECX=prio | EAX=0/-1 |
+| 73 | `SYS_GETPRIORITY` | EBX=pid (0=self) | EAX=priority/-1 |
+| 74 | `SYS_SIGNAL` | EBX=pid, ECX=signal | EAX=0/-1 |
+| 75 | `SYS_SETPGID` | EBX=pid (0=self), ECX=pgid | EAX=0/-1 |
+| 76 | `SYS_GETPGID` | EBX=pid (0=self) | EAX=pgid/-1 |
+| 77 | `SYS_SIGMASK` | EBX=op (0-3), ECX=mask | EAX=old_mask/-1 |
+| 78 | `SYS_TASKNAME` | EBX=name ptr (max 15 chars) | EAX=0 |
+| 79 | `SYS_REALLOC` | EBX=ptr, ECX=new_size, EDX=old_size | EAX=new_ptr (0=fail) |
 
-**Total: 36 syscalls (0–35).**
+**Total: 80 syscalls (0–79).**
 
 ---
 
@@ -869,9 +913,14 @@ The 38 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
 | --- | --- |
 | Printable chars | Insert at cursor position |
 | Backspace | Delete before cursor |
-| Up/Down | Browse command history |
+| Up/Down | Browse command history (128 entries) |
 | Tab | Filename auto-complete |
 | Ctrl+C | Cancel current input |
+| Ctrl+A | Move cursor to beginning of line |
+| Ctrl+E | Move cursor to end of line |
+| Ctrl+U | Kill entire input line |
+| Ctrl+W | Delete previous word |
+| Ctrl+L | Clear screen, redraw prompt and input |
 | Enter | Execute command |
 
 ---
@@ -882,7 +931,7 @@ The 38 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
 
 | Property | Value |
 | --- | --- |
-| Max variables | 16 (`ENV_MAX`) |
+| Max variables | 32 (`ENV_MAX`) |
 | Entry size | 128 bytes (`ENV_ENTRY_SIZE`) |
 | Table size | 2048 bytes (2 KB) |
 | Format | `NAME=value\0` (null-terminated) |

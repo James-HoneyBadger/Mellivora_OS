@@ -117,15 +117,19 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "  Boot sector:  $(BOOT_BIN)"
 	@echo "  Stage 2:      $(STAGE2_BIN)"
 	@echo "  Kernel:       $(KERNEL_BIN)"
-	# Create empty 2GB disk image
-	$(DD) if=/dev/zero of=$(IMAGE) bs=1M count=$(IMAGE_SIZE_MB) status=none
+	@if [ ! -f $(IMAGE) ]; then \
+		echo "  Creating empty $(IMAGE_SIZE_MB)GB disk image"; \
+		$(DD) if=/dev/zero of=$(IMAGE) bs=1M count=$(IMAGE_SIZE_MB) status=none; \
+	else \
+		echo "  Preserving existing HBFS contents in $(IMAGE)"; \
+	fi
 	# Write boot sector at LBA 0
 	$(DD) if=$(BOOT_BIN) of=$(IMAGE) bs=512 count=1 conv=notrunc status=none
 	# Write stage 2 at LBA 1
 	$(DD) if=$(STAGE2_BIN) of=$(IMAGE) bs=512 seek=1 conv=notrunc status=none
 	# Write kernel at LBA 33
 	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
-	@echo "=== $(IMAGE) created ($(IMAGE_SIZE_MB) MB) ==="
+	@echo "=== $(IMAGE) updated ($(IMAGE_SIZE_MB) MB) ==="
 	@ls -la $(IMAGE)
 
 # Run in QEMU with i486 CPU

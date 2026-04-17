@@ -1,5 +1,82 @@
 # Mellivora OS - Changelog
 
+## v4.0.0 - The Titan Release
+
+### Kernel — Priority Scheduler (`kernel/sched.inc`)
+
+- **Priority-based scheduling**: Replaced round-robin with 4-level priority scheduling (HIGH, NORMAL, LOW, IDLE). Higher priority tasks are selected first; equal priority tasks use round-robin for fairness.
+- **64 tasks max**: Doubled from 32 to 64 concurrent tasks (`MAX_TASKS`).
+- **Expanded TCB**: Task Control Block expanded from 32 to 64 bytes with new fields:
+  - `TCB_NAME` (16 bytes): Human-readable task name
+  - `TCB_SIG_PEND` / `TCB_SIG_MASK`: Signal pending/mask bitmasks
+  - `TCB_PGID`: Process group ID
+  - `TCB_EXIT_CODE`: Task exit code
+- **TASK_STOPPED state**: New state (4) for signal-stopped tasks (SIGTSTP/Ctrl+Z).
+- **`sys_proclist` expanded**: Output buffer expanded from 16 to 48 bytes, now includes priority, PGID, pending signals, exit code, and task name.
+
+### Kernel — Signals (`kernel/sched.inc`)
+
+- **POSIX-style signals**: 9 signal types implemented: SIGINT (2), SIGKILL (9), SIGUSR1 (10), SIGUSR2 (12), SIGALRM (14), SIGTERM (15), SIGCHLD (17), SIGTSTP (20), SIGCONT (25).
+- **`SYS_SIGNAL` (#74)**: Send any signal to a task by PID. SIGKILL forcibly terminates, SIGTSTP stops, SIGCONT resumes, SIGINT/SIGTERM terminate.
+- **`SYS_SIGMASK` (#77)**: Get/set/block/unblock signal mask. 4 operations: get, set, block (OR), unblock (AND NOT).
+- **Signal masking**: Tasks can mask signals via bitmask; masked signals are queued as pending.
+
+### Kernel — New Syscalls (`kernel/syscall.inc`)
+
+- 8 new syscalls (72–79), bringing total to 80:
+  - `SYS_SETPRIORITY` (#72): Set task priority by PID
+  - `SYS_GETPRIORITY` (#73): Get task priority by PID
+  - `SYS_SIGNAL` (#74): Send signal to task
+  - `SYS_SETPGID` (#75): Set process group ID
+  - `SYS_GETPGID` (#76): Get process group ID
+  - `SYS_SIGMASK` (#77): Signal mask operations
+  - `SYS_TASKNAME` (#78): Set task name string
+  - `SYS_REALLOC` (#79): Reallocate memory block
+
+### Kernel — Memory (`kernel/syscall.inc`)
+
+- **`SYS_REALLOC` (#79)**: New syscall for reallocating memory — allocates new block, copies data, returns new pointer. Supports NULL pointer (fresh allocation).
+
+### Shell — Enhanced Line Editing (`kernel/shell.inc`)
+
+- **Ctrl+A**: Move cursor to beginning of line
+- **Ctrl+E**: Move cursor to end of line
+- **Ctrl+U**: Kill entire input line
+- **Ctrl+W**: Delete previous word (skip spaces, then delete word)
+- **Ctrl+L**: Clear screen and redraw prompt with current input
+- **128 history entries**: Doubled from 64
+
+### Shell — New Commands (`kernel/shell.inc`)
+
+- **`ps`**: List all running tasks with PID, state, priority, and name
+- **`jobs`**: List background jobs (alias for ps)
+- **`kill <pid> [signal]`**: Send signal to task (default: SIGTERM)
+- **`bg <pid>`**: Resume stopped task in background (sends SIGCONT)
+- **`fg <pid>`**: Resume stopped task in foreground (sends SIGCONT)
+- **`nice <priority> <command>`**: Run command at specified priority level (0=HIGH, 1=NORMAL, 2=LOW, 3=IDLE)
+- **`export NAME=VALUE`**: Export environment variable (synonym for set)
+- **`source <file>`** / **`. <file>`**: Execute batch script in current shell context
+
+### Shell — Capacity Increases
+
+- **32 environment variables**: Doubled from 16
+- **128 history entries**: Doubled from 64
+
+### Programs — Userland Updates (`programs/syscalls.inc`)
+
+- All 8 new v4.0 syscall numbers added to shared header
+- Priority level constants (PRIO_HIGH through PRIO_IDLE)
+- Signal number constants (SIGINT through SIGCONT)
+
+### Version & Branding
+
+- Version bumped to v4.0.0 "The Titan Release"
+- Shell version bumped to HB Lair v3.0
+- Updated `ver` output: 80 syscalls, priority scheduler, signal info, enhanced shell shortcuts
+- Updated `help` text with all new commands and shortcuts
+
+---
+
 ## v3.0.1 - Bug Fixes: Sleep Regression, Neofetch, Pipe Race, Permissions UI
 
 ### Kernel — Scheduler (`kernel/sched.inc`)

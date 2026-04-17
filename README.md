@@ -2,9 +2,9 @@
 
 ![Release](https://img.shields.io/github/v/release/James-HoneyBadger/Mellivora_OS?display_name=tag) ![License](https://img.shields.io/github/license/James-HoneyBadger/Mellivora_OS) ![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20QEMU-blue) ![Language](https://img.shields.io/badge/language-NASM%20x86__64-informational)
 
-**A bare-metal 64-bit x86-64 operating system written in NASM assembly.**
+**A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86-64 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell, 36 syscalls, an in-OS Tiny C Compiler, 56 bundled assembly programs, and 11 C samples.
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 80 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 56+ bundled assembly programs, and 11 C samples.
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
@@ -21,12 +21,15 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86-64 hardware or in
 
 ### Kernel & Architecture
 
-- **64-bit long mode** with flat memory model
+- **32-bit protected mode** with flat memory model
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **36 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, ...)
-- **ELF64 loader** — supports flat binaries and ELF executables
-- **Physical memory manager** with bitmap allocator (malloc/free for user programs)
-- **Three-stage boot**: MBR → Stage 2 (A20, memory map, long mode) → Kernel
+- **80 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
+- **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 64 concurrent tasks
+- **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD
+- **Process groups** — PGID support for job control
+- **ELF32 loader** — supports flat binaries and ELF executables
+- **Physical memory manager** with bitmap allocator (malloc/free/realloc for user programs)
+- **Three-stage boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
 ### Ratel Init System
 
@@ -34,14 +37,17 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86-64 hardware or in
 - **Filesystem mount** — HBFS detection, validation, and auto-format
 - **Shell handoff** — drops into HB Lair interactive prompt after init completes
 
-### HB Lair Shell
+### HB Lair Shell (v3.0)
 
-- **40+ built-in shell commands** with aliases: file management, text processing, system info, and more
-- **Tab completion**, **command history** (Up/Down arrows), **Ctrl+C** hard-abort with proper cleanup
+- **50+ built-in shell commands** with aliases: file management, text processing, system info, process control
+- **Tab completion**, **command history** (128 entries), **Ctrl+C** hard-abort with proper cleanup
+- **Enhanced line editing** — Ctrl+A/E (home/end), Ctrl+U (kill line), Ctrl+W (delete word), Ctrl+L (clear+redraw)
+- **Process management** — `ps`, `jobs`, `kill`, `bg`, `fg`, `nice` for task control
 - **Pipes, redirection, and chaining** — `|`, `>`, `>>`, `<`, `&&`, and `||` for shell workflows
 - **Alias system** — define custom command shortcuts
-- **Environment variables** with `$VAR` expansion in echo and batch scripts
+- **32 environment variables** with `$VAR` expansion in echo and batch scripts
 - **Batch scripting** — execute `.bat` files with sequential command processing
+- **`source` / `.`** — execute scripts in current shell context
 - **PATH-based program search** — run programs from any directory
 - **Full path support** — `cat /docs/readme`, `run /bin/hello`, `diff /docs/a /docs/b`
 - **Multi-level subdirectories** — up to 16 levels deep with `cd`, `mkdir`, `pwd`

@@ -134,6 +134,20 @@ shell_main:
         cmp al, CTRL_C_CODE     ; Ctrl+C - cancel
         je .ctrl_c
 
+        ; v4.0: Enhanced line editing shortcuts
+        cmp al, 0x01            ; Ctrl+A - move to beginning of line
+        je .ctrl_a
+        cmp al, 0x05            ; Ctrl+E - move to end of line
+        je .ctrl_e
+        cmp al, 0x0B            ; Ctrl+K - kill from cursor to end of line
+        je .ctrl_k
+        cmp al, 0x15            ; Ctrl+U - kill from cursor to beginning of line
+        je .ctrl_u
+        cmp al, 0x17            ; Ctrl+W - delete previous word
+        je .ctrl_w
+        cmp al, 0x0C            ; Ctrl+L - clear screen, redraw prompt
+        je .ctrl_l
+
         ; Store character if buffer not full
         cmp ecx, LINE_BUFFER_SIZE - 1
         jge .read_loop
@@ -141,6 +155,109 @@ shell_main:
         inc ecx
         ; Echo character
         call vga_putchar
+        jmp .read_loop
+
+; v4.0: Ctrl+A - cursor to beginning of line (visually backspace to prompt)
+.ctrl_a:
+        or ecx, ecx
+        jz .read_loop
+.ctrl_a_loop:
+        cmp ecx, 0
+        je .read_loop
+        push ecx
+        mov al, 0x08
+        call vga_putchar
+        pop ecx
+        dec edi
+        dec ecx
+        jmp .ctrl_a_loop
+
+; v4.0: Ctrl+E - cursor to end (no-op in simple append mode, but redraws line)
+.ctrl_e:
+        ; In append-only mode, cursor is always at end; just continue
+        jmp .read_loop
+
+; v4.0: Ctrl+K - kill from cursor to end of line
+.ctrl_k:
+        ; Save killed text to kill buffer for potential Ctrl+Y
+        ; In append mode, cursor is at end, so nothing to kill
+        ; (future: support mid-line editing)
+        jmp .read_loop
+
+; v4.0: Ctrl+U - kill from beginning to cursor (erase whole line)
+.ctrl_u:
+        or ecx, ecx
+        jz .read_loop
+        ; Backspace all characters
+        call .erase_input
+        mov edi, line_buffer
+        xor ecx, ecx
+        jmp .read_loop
+
+; v4.0: Ctrl+W - delete previous word
+.ctrl_w:
+        or ecx, ecx
+        jz .read_loop
+        ; Skip trailing spaces
+.ctrl_w_spaces:
+        cmp ecx, 0
+        je .read_loop
+        cmp byte [edi - 1], ' '
+        jne .ctrl_w_word
+        dec edi
+        dec ecx
+        push ecx
+        mov al, 0x08
+        call vga_putchar
+        pop ecx
+        jmp .ctrl_w_spaces
+.ctrl_w_word:
+        ; Delete non-space characters
+        cmp ecx, 0
+        je .read_loop
+        cmp byte [edi - 1], ' '
+        je .read_loop
+        dec edi
+        dec ecx
+        push ecx
+        mov al, 0x08
+        call vga_putchar
+        pop ecx
+        jmp .ctrl_w_word
+
+; v4.0: Ctrl+L - clear screen and redraw prompt + current input
+.ctrl_l:
+        push ecx
+        push edi
+        call vga_clear
+        ; Redraw prompt
+        mov byte [vga_color], COLOR_PROMPT
+        mov esi, shell_prompt_pre
+        call vga_print
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, path_search_buf
+        call vga_print
+        mov esi, shell_prompt_post
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        ; Redraw current input
+        pop edi
+        pop ecx
+        push ecx
+        mov esi, line_buffer
+        mov edx, ecx
+.ctrl_l_redraw:
+        cmp edx, 0
+        je .ctrl_l_done
+        lodsb
+        push edx
+        call vga_putchar
+        pop edx
+        dec edx
+        jmp .ctrl_l_redraw
+.ctrl_l_done:
+        pop ecx
         jmp .read_loop
 
 .backspace:
@@ -321,7 +438,7 @@ shell_main:
 ;---------------------------------------
 ; Save current line_buffer to history ring
 ;---------------------------------------
-HIST_MAX        equ 64
+HIST_MAX        equ 128
 HIST_ENTRY_SIZE equ 256
 
 shell_save_history:
@@ -1122,6 +1239,43 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_chown
 
+        ; v4.0 commands
+        mov edi, cmd_jobs_str
+        call str_starts_with
+        jc .cmd_jobs
+
+        mov edi, cmd_kill_str
+        call str_starts_with
+        jc .cmd_kill
+
+        mov edi, cmd_ps_str
+        call str_starts_with
+        jc .cmd_ps
+
+        mov edi, cmd_bg_str
+        call str_starts_with
+        jc .cmd_bg
+
+        mov edi, cmd_fg_str
+        call str_starts_with
+        jc .cmd_fg
+
+        mov edi, cmd_nice_str
+        call str_starts_with
+        jc .cmd_nice
+
+        mov edi, cmd_export_str
+        call str_starts_with
+        jc .cmd_export
+
+        mov edi, cmd_source_str
+        call str_starts_with
+        jc .cmd_source
+
+        mov edi, cmd_dotcmd_str
+        call str_starts_with
+        jc .cmd_source
+
         ; Unknown command - try to execute as program
         mov esi, line_buffer
         call cmd_exec_program
@@ -1687,6 +1841,166 @@ shell_dispatch_core:
 .cmd_chown:
         call cmd_chown
         ret
+
+;---- v4.0 command implementations ----
+
+.cmd_ps:
+        call cmd_ps_impl
+        ret
+
+.cmd_jobs:
+        call cmd_ps_impl           ; jobs = ps for now (same view)
+        ret
+
+.cmd_kill:
+        ; Parse: kill <pid> [signal]
+        mov esi, line_buffer
+        mov edi, cmd_kill_str
+        call str_starts_with
+        call skip_spaces
+        cmp byte [esi], 0
+        je .kill_usage
+        ; Parse PID
+        call parse_decimal
+        test eax, eax
+        jz .kill_usage
+        mov ebx, eax            ; EBX = PID
+        ; Check for optional signal number
+        call skip_spaces
+        cmp byte [esi], 0
+        je .kill_default
+        call parse_decimal
+        mov ecx, eax            ; ECX = signal number
+        jmp .kill_send
+.kill_default:
+        mov ecx, SIGTERM         ; Default signal = SIGTERM
+.kill_send:
+        mov eax, SYS_SIGNAL
+        int 0x80
+        cmp eax, 0
+        jne .kill_failed
+        mov esi, msg_kill_ok
+        call vga_print
+        ret
+.kill_failed:
+        mov esi, msg_kill_fail
+        call vga_print
+        call shell_status_fail
+        ret
+.kill_usage:
+        mov esi, msg_kill_usage
+        call vga_print
+        ret
+
+.cmd_bg:
+        ; bg <pid> - resume a stopped task in background
+        mov esi, line_buffer
+        mov edi, cmd_bg_str
+        call str_starts_with
+        call skip_spaces
+        cmp byte [esi], 0
+        je .bg_usage
+        call parse_decimal
+        mov ebx, eax
+        mov ecx, SIGCONT
+        mov eax, SYS_SIGNAL
+        int 0x80
+        ret
+.bg_usage:
+        mov esi, msg_kill_usage
+        call vga_print
+        ret
+
+.cmd_fg:
+        ; fg <pid> - resume a stopped task (same as bg for now)
+        mov esi, line_buffer
+        mov edi, cmd_fg_str
+        call str_starts_with
+        call skip_spaces
+        cmp byte [esi], 0
+        je .bg_usage
+        call parse_decimal
+        mov ebx, eax
+        mov ecx, SIGCONT
+        mov eax, SYS_SIGNAL
+        int 0x80
+        ret
+
+.cmd_nice:
+        ; nice <priority> <command> - run command with given priority
+        mov esi, line_buffer
+        mov edi, cmd_nice_str
+        call str_starts_with
+        call skip_spaces
+        cmp byte [esi], 0
+        je .nice_usage
+        ; Parse priority (0-3)
+        call parse_decimal
+        cmp eax, 3
+        ja .nice_usage
+        mov [nice_priority], eax
+        ; Rest of line is the command to run
+        call skip_spaces
+        cmp byte [esi], 0
+        je .nice_usage
+        ; Copy rest to line_buffer and re-dispatch
+        push esi
+        mov edi, line_buffer
+        call str_copy
+        pop esi
+        ; The program will inherit this priority via task_create
+        mov esi, line_buffer
+        call cmd_exec_program
+        ret
+.nice_usage:
+        mov esi, msg_nice_usage
+        call vga_print
+        ret
+
+.cmd_export:
+        ; export NAME=VALUE (synonym for set)
+        mov esi, line_buffer
+        mov edi, cmd_export_str
+        call str_starts_with
+        call skip_spaces
+        cmp byte [esi], 0
+        je .export_usage
+        ; Treat as env_set_str
+        call env_set_str
+        ret
+.export_usage:
+        mov esi, msg_export_usage
+        call vga_print
+        ret
+
+.cmd_source:
+        ; source <file> or . <file> - run batch script
+        mov esi, line_buffer
+        ; Skip command name
+        cmp byte [esi], '.'
+        je .source_dot
+        mov edi, cmd_source_str
+        call str_starts_with
+        jmp .source_run
+.source_dot:
+        inc esi
+.source_run:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .source_usage
+        ; Copy filename to line_buffer so cmd_exec_batch can find it
+        mov edi, line_buffer
+        call str_copy
+        mov esi, line_buffer
+        call cmd_exec_batch
+        ret
+.source_usage:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .source_usage_str
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        ret
+.source_usage_str: db "Usage: source <script>", 0x0A, 0
 
 .cmd_ping:
         call cmd_ping
@@ -6266,3 +6580,137 @@ cmd_chown:
 .chown_done:   db "Owner updated.", 0x0A, 0
 .chown_err:    db "chown: file not found.", 0x0A, 0
 .chown_usage_s: db "Usage: chown <uid> <filename>", 0x0A, 0
+
+;=======================================================================
+; v4.0: cmd_ps_impl - List all tasks (ps / jobs command)
+;=======================================================================
+cmd_ps_impl:
+        pushad
+        mov esi, msg_job_hdr
+        call vga_print
+
+        xor ebp, ebp            ; slot index
+.ps_loop:
+        cmp ebp, MAX_TASKS
+        jge .ps_done
+
+        ; Calculate TCB address
+        mov eax, ebp
+        imul eax, TCB_SIZE
+        lea edi, [task_table + eax]
+
+        ; Skip free slots
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .ps_next
+
+        ; Print "  " indent
+        mov al, ' '
+        call vga_putchar
+        call vga_putchar
+
+        ; Print PID (decimal, right-padded to 5)
+        mov eax, [edi + TCB_PID]
+        call vga_print_dec
+        mov al, ' '
+        call vga_putchar
+        call vga_putchar
+
+        ; Print state
+        push edi
+        mov eax, [edi + TCB_STATE]
+        cmp eax, TASK_RUNNING
+        je .ps_st_running
+        cmp eax, TASK_READY
+        je .ps_st_ready
+        cmp eax, TASK_BLOCKED
+        je .ps_st_blocked
+        cmp eax, TASK_STOPPED
+        je .ps_st_stopped
+        mov esi, msg_free
+        jmp .ps_st_print
+.ps_st_running:
+        mov esi, msg_running
+        jmp .ps_st_print
+.ps_st_ready:
+        mov esi, msg_ready
+        jmp .ps_st_print
+.ps_st_blocked:
+        mov esi, msg_blocked
+        jmp .ps_st_print
+.ps_st_stopped:
+        mov esi, msg_stopped
+.ps_st_print:
+        call vga_print
+        pop edi
+
+        ; Print priority
+        push edi
+        mov eax, [edi + TCB_PRIORITY]
+        cmp eax, PRIO_HIGH
+        je .ps_pr_high
+        cmp eax, PRIO_NORMAL
+        je .ps_pr_norm
+        cmp eax, PRIO_LOW
+        je .ps_pr_low
+        mov esi, msg_prio_idle
+        jmp .ps_pr_print
+.ps_pr_high:
+        mov esi, msg_prio_high
+        jmp .ps_pr_print
+.ps_pr_norm:
+        mov esi, msg_prio_norm
+        jmp .ps_pr_print
+.ps_pr_low:
+        mov esi, msg_prio_low
+.ps_pr_print:
+        call vga_print
+        pop edi
+
+        ; Print task name
+        push edi
+        lea esi, [edi + TCB_NAME]
+        cmp byte [esi], 0
+        je .ps_no_name
+        call vga_print
+        jmp .ps_name_done
+.ps_no_name:
+        mov al, '-'
+        call vga_putchar
+.ps_name_done:
+        pop edi
+
+        call vga_newline
+.ps_next:
+        inc ebp
+        jmp .ps_loop
+.ps_done:
+        ; If no tasks, print message
+        cmp dword [task_count], 0
+        jne .ps_ret
+        mov esi, msg_no_jobs
+        call vga_print
+.ps_ret:
+        popad
+        ret
+
+;---------------------------------------
+; parse_decimal - Parse decimal number from string at ESI
+;   ESI = pointer to string (advanced past digits)
+;   Returns: EAX = parsed value
+;---------------------------------------
+parse_decimal:
+        xor eax, eax
+.pd_loop:
+        movzx edx, byte [esi]
+        cmp dl, '0'
+        jb .pd_done
+        cmp dl, '9'
+        ja .pd_done
+        imul eax, 10
+        sub dl, '0'
+        movzx edx, dl
+        add eax, edx
+        inc esi
+        jmp .pd_loop
+.pd_done:
+        ret

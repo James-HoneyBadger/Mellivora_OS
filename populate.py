@@ -5,13 +5,13 @@ populate.py - Populate a Mellivora OS disk image with sample files.
 Writes files directly into the HBFS filesystem on the disk image.
 This understands the on-disk HBFS layout:
   - Superblock at LBA 417
-  - Block allocation bitmap at LBA 418 (8 sectors = 1 block)
-  - Root directory at LBA 426 (128 sectors = 16 blocks)
-  - Data area starts at LBA 554
+  - Block allocation bitmap at LBA 418 (128 sectors = 16 blocks)
+  - Root directory at LBA 546 (256 sectors = 32 blocks)
+  - Data area starts at LBA 802
 
 Each data block is 4096 bytes (8 sectors).
 Each directory entry is 288 bytes.
-14 entries per directory block, 227 entries total.
+14 entries per directory block, 455 entries total.
 """
 
 import struct
@@ -25,15 +25,17 @@ SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE  # 8
 HBFS_MAGIC = 0x48424653  # 'HBFS'
 HBFS_SUPERBLOCK_LBA = 417
 HBFS_BITMAP_START = 418
-HBFS_ROOT_DIR_START = 426
-HBFS_ROOT_DIR_BLOCKS = 16
-HBFS_ROOT_DIR_SECTS = HBFS_ROOT_DIR_BLOCKS * SECTORS_PER_BLOCK
-HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE
-HBFS_DATA_START = 554
+HBFS_BITMAP_BLOCKS = 16
+HBFS_BITMAP_SIZE = HBFS_BITMAP_BLOCKS * BLOCK_SIZE   # 65536 bytes
+HBFS_ROOT_DIR_START = 546
+HBFS_ROOT_DIR_BLOCKS = 32
+HBFS_ROOT_DIR_SECTS = HBFS_ROOT_DIR_BLOCKS * SECTORS_PER_BLOCK  # 256
+HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE          # 131072
+HBFS_DATA_START = 802
 HBFS_DIR_ENTRY_SIZE = 288
-HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
+HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE      # 455
 HBFS_MAX_FILENAME = 252
-TOTAL_BLOCKS = 32768
+TOTAL_BLOCKS = 524288
 
 # File types
 FTYPE_FREE = 0
@@ -117,9 +119,10 @@ def create_dir_entry(filename, ftype, size, start_block,
     return entry
 
 
-HBFS_SUBDIR_BLOCKS = 4                 # Blocks per subdirectory
+HBFS_SUBDIR_BLOCKS = 16                 # Blocks per subdirectory
 HBFS_SUBDIR_SIZE = HBFS_SUBDIR_BLOCKS * BLOCK_SIZE
-HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 56
+HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 227
+HBFS_BITMAP_SECTS = HBFS_BITMAP_BLOCKS * SECTORS_PER_BLOCK
 
 
 class FSImage:
@@ -128,18 +131,85 @@ class FSImage:
     def __init__(self, image_path):
         self.image_path = image_path
         self.img = open(image_path, 'r+b')
-        self.bitmap = bytearray(BLOCK_SIZE)
+        self.bitmap = bytearray(HBFS_BITMAP_SIZE)
         self.root_dir = bytearray(HBFS_ROOT_DIR_SIZE)
         self.next_block = 0
         self.total_files = 0
-        # Track subdirectories:
-        # name -> (start_block, dir_data bytearray, entry_count)
+        self.preserve_mode = False
+        # name -> {start_block, data, entry_count, data_lba}
         self.subdirs = {}
 
-        # Write fresh superblock
+        # If a valid HBFS already exists, preserve its contents.
+        self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
+        existing_sb = self.img.read(SECTOR_SIZE)
+        if len(existing_sb) == SECTOR_SIZE:
+            magic = struct.unpack_from('<I', existing_sb, 0)[0]
+            version = struct.unpack_from('<I', existing_sb, 4)[0]
+            if magic == HBFS_MAGIC and version >= 1:
+                self.preserve_mode = True
+                self.sb = bytearray(existing_sb)
+
+                self.img.seek(lba_to_offset(HBFS_BITMAP_START))
+                self.bitmap = bytearray(self.img.read(HBFS_BITMAP_SIZE))
+
+                self.img.seek(lba_to_offset(HBFS_ROOT_DIR_START))
+                self.root_dir = bytearray(self.img.read(HBFS_ROOT_DIR_SIZE))
+
+                self.next_block = self._find_next_block()
+                return
+
+        # No filesystem yet: initialize a fresh one.
         self.sb = create_superblock()
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
         self.img.write(self.sb)
+
+    @staticmethod
+    def _entry_name(directory_buf, off):
+        end = off
+        limit = off + HBFS_MAX_FILENAME + 1
+        while end < limit and directory_buf[end] != 0:
+            end += 1
+        return bytes(directory_buf[off:end]).decode('ascii', errors='ignore')
+
+    @staticmethod
+    def _entry_used(directory_buf, off):
+        return directory_buf[off + 253] != FTYPE_FREE and directory_buf[off] != 0
+
+    def _find_next_block(self):
+        """Return the next free block after the highest used one."""
+        for block in range(TOTAL_BLOCKS - 1, -1, -1):
+            byte_idx = block // 8
+            bit_idx = block % 8
+            if self.bitmap[byte_idx] & (1 << bit_idx):
+                return block + 1
+        return 0
+
+    def _find_entry_slot(self, directory_buf, max_entries, name):
+        """Find an existing filename in a directory buffer."""
+        for i in range(max_entries):
+            off = i * HBFS_DIR_ENTRY_SIZE
+            if self._entry_used(directory_buf, off):
+                if self._entry_name(directory_buf, off) == name:
+                    return i
+        return None
+
+    def _find_free_slot(self, directory_buf, max_entries):
+        """Find a free slot in a directory buffer."""
+        for i in range(max_entries):
+            off = i * HBFS_DIR_ENTRY_SIZE
+            if (directory_buf[off + 253] == FTYPE_FREE
+                    and directory_buf[off] == 0):
+                return i
+        return None
+
+    def _count_entries(self, directory_buf, max_entries):
+        """Count live directory entries."""
+        count = 0
+        for i in range(max_entries):
+            off = i * HBFS_DIR_ENTRY_SIZE
+            if self._entry_used(directory_buf, off):
+                count += 1
+        return count
 
     def _alloc_blocks(self, count):
         """Allocate contiguous blocks, returns start block number."""
@@ -161,23 +231,41 @@ class FSImage:
         return data_lba
 
     def create_subdir(self, dirname):
-        """Create a subdirectory in the root directory."""
+        """Create a subdirectory in the root directory if missing."""
+        existing_slot = self._find_entry_slot(self.root_dir, HBFS_MAX_FILES,
+                                              dirname)
+        if existing_slot is not None:
+            off = existing_slot * HBFS_DIR_ENTRY_SIZE
+            if self.root_dir[off + 253] == FTYPE_DIR:
+                block_num = struct.unpack_from('<I', self.root_dir,
+                                               off + 260)[0]
+                block_count = struct.unpack_from('<I', self.root_dir,
+                                                 off + 264)[0]
+                data_lba = HBFS_DATA_START + block_num * SECTORS_PER_BLOCK
+                self.img.seek(lba_to_offset(data_lba))
+                raw = self.img.read(block_count * BLOCK_SIZE)
+                data = bytearray(raw[:HBFS_SUBDIR_SIZE].ljust(
+                    HBFS_SUBDIR_SIZE, b'\x00'))
+                self.subdirs[dirname] = {
+                    'start_block': block_num,
+                    'data': data,
+                    'entry_count': self._count_entries(
+                        data, HBFS_SUBDIR_MAX_FILES),
+                    'data_lba': data_lba,
+                }
+                print(f"  [DIR] /{dirname:18s}         preserved")
+                return block_num
+
         block_num = self._alloc_blocks(HBFS_SUBDIR_BLOCKS)
         data_lba = HBFS_DATA_START + block_num * SECTORS_PER_BLOCK
 
-        # Write zeroed directory data to disk
         zeroed = b'\x00' * HBFS_SUBDIR_SIZE
         self.img.seek(lba_to_offset(data_lba))
         self.img.write(zeroed)
 
-        # Create directory entry in root
-        root_entry_count = 0
-        for i in range(HBFS_MAX_FILES):
-            off = i * HBFS_DIR_ENTRY_SIZE
-            if (self.root_dir[off + 253] == FTYPE_FREE
-                    and self.root_dir[off] == 0):
-                root_entry_count = i
-                break
+        root_slot = self._find_free_slot(self.root_dir, HBFS_MAX_FILES)
+        if root_slot is None:
+            raise RuntimeError(f"Root directory full, cannot create /{dirname}")
 
         entry = create_dir_entry(
             filename=dirname,
@@ -187,7 +275,7 @@ class FSImage:
             block_count=HBFS_SUBDIR_BLOCKS,
             timestamp=900
         )
-        off = root_entry_count * HBFS_DIR_ENTRY_SIZE
+        off = root_slot * HBFS_DIR_ENTRY_SIZE
         self.root_dir[off:off + HBFS_DIR_ENTRY_SIZE] = entry
 
         self.subdirs[dirname] = {
@@ -201,7 +289,7 @@ class FSImage:
         return block_num
 
     def add_file(self, filename, data, directory=None, ftype=None):
-        """Add a file to root or a subdirectory."""
+        """Add or update a file in root or a subdirectory."""
         if ftype is None:
             if filename.endswith('.txt') or filename.endswith('.c'):
                 ftype = FTYPE_TEXT
@@ -225,26 +313,26 @@ class FSImage:
 
         if directory and directory in self.subdirs:
             sd = self.subdirs[directory]
-            if sd['entry_count'] >= HBFS_SUBDIR_MAX_FILES:
+            slot = self._find_entry_slot(sd['data'], HBFS_SUBDIR_MAX_FILES,
+                                         filename)
+            if slot is None:
+                slot = self._find_free_slot(sd['data'], HBFS_SUBDIR_MAX_FILES)
+            if slot is None:
                 print(f"  WARNING: /{directory} full, skipping {filename}")
                 return
-            off = sd['entry_count'] * HBFS_DIR_ENTRY_SIZE
+            off = slot * HBFS_DIR_ENTRY_SIZE
             sd['data'][off:off + HBFS_DIR_ENTRY_SIZE] = entry
-            sd['entry_count'] += 1
+            sd['entry_count'] = max(sd['entry_count'], slot + 1)
             path_display = f"/{directory}/{filename}"
         else:
-            # Find free slot in root
-            root_slot = None
-            for i in range(HBFS_MAX_FILES):
-                off = i * HBFS_DIR_ENTRY_SIZE
-                if (self.root_dir[off + 253] == FTYPE_FREE
-                        and self.root_dir[off] == 0):
-                    root_slot = i
-                    break
-            if root_slot is None:
+            slot = self._find_entry_slot(self.root_dir, HBFS_MAX_FILES,
+                                         filename)
+            if slot is None:
+                slot = self._find_free_slot(self.root_dir, HBFS_MAX_FILES)
+            if slot is None:
                 print(f"  WARNING: Root full, skipping {filename}")
                 return
-            off = root_slot * HBFS_DIR_ENTRY_SIZE
+            off = slot * HBFS_DIR_ENTRY_SIZE
             self.root_dir[off:off + HBFS_DIR_ENTRY_SIZE] = entry
             path_display = f"/{filename}"
 
@@ -256,23 +344,19 @@ class FSImage:
 
     def finalize(self):
         """Write all directory structures and bitmap to disk."""
-        # Write subdirectory data to disk
         for _dirname, sd in self.subdirs.items():
             self.img.seek(lba_to_offset(sd['data_lba']))
             self.img.write(sd['data'])
 
-        # Update superblock free count
-        used = self.next_block
+        used = self._find_next_block()
         free = TOTAL_BLOCKS - used
         struct.pack_into('<I', self.sb, 12, free)
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
         self.img.write(self.sb)
 
-        # Write bitmap
         self.img.seek(lba_to_offset(HBFS_BITMAP_START))
         self.img.write(self.bitmap)
 
-        # Write root directory
         self.img.seek(lba_to_offset(HBFS_ROOT_DIR_START))
         self.img.write(self.root_dir)
 
@@ -289,29 +373,32 @@ class FSImage:
 
 TEXT_FILES = {
     "readme.txt": """\
-Mellivora OS - 64-bit Operating System
+Mellivora OS v4.0 - The Titan Release
 ==========================================
 
-Welcome to Mellivora OS, a 64-bit long mode operating system
-built from scratch in x86-64 assembly language.
+Welcome to Mellivora OS, a 32-bit protected mode operating system
+built from scratch in x86 assembly language.
 
 Features:
-  * x86-64 long mode
-  * Flat memory model with bitmap page allocator
+  * 32-bit protected mode with flat memory model
+  * Bitmap page allocator (malloc/free/realloc)
   * ATA PIO disk driver with LBA48 (up to 128 PB)
   * HBFS filesystem with 252-character filenames
   * VGA 80x25 text mode with 16 colors and scrolling
   * PS/2 keyboard with scancode translation
-  * PIT timer at 100 Hz
-  * Syscall interface via INT 0x80 (36 system calls)
-  * Interactive command shell with 50+ commands
-  * Program execution (flat 64-bit & ELF binaries)
-  * Ring 3 user mode with TSS
-  * PATH-based program search across directories
-  * Command-line argument passing
-  * Serial console output (COM1)
-  * File descriptor I/O (open/read/write/close)
-  * Tab completion, command history, Ctrl+C abort
+  * PIT timer at 100 Hz with preemptive multitasking
+  * 80 syscalls via INT 0x80
+  * Priority-based scheduler (4 levels, 64 tasks)
+  * POSIX-style signals (SIGINT, SIGKILL, SIGTERM, etc.)
+  * Process groups and job control
+  * Interactive shell with 50+ commands
+  * Enhanced line editing (Ctrl+A/E/U/W/L)
+  * Tab completion, 128-entry history, Ctrl+C abort
+  * Program execution (flat 32-bit & ELF binaries)
+  * Ring 0/Ring 3 privilege separation with TSS
+  * Full TCP/IP networking stack (RTL8139)
+  * Burrows desktop GUI (640x480x32)
+  * TCC C compiler (compile & run C programs)
   * Batch file / script execution
   * Full-screen text editor (edit)
   * Calendar, calculator, and games

@@ -1,37 +1,65 @@
 ;=======================================================================
 ; sched.inc - Preemptive task scheduler
 ;
-; Provides TCB management, round-robin scheduling, SYS_YIELD, and
+; Provides TCB management, priority-based scheduling, SYS_YIELD, and
 ; preemptive time-slicing via the PIT timer (100 Hz).
 ;
 ; The PIT IRQ handler (irq_timer in isr.inc) counts ticks per task.
-; When SCHED_QUANTUM ticks elapse, the current ring-3 task is preempted
-; and the next READY task runs.  Programs can also call SYS_YIELD for
-; cooperative yielding.
+; When the quantum expires, the current ring-3 task is preempted
+; and the highest-priority READY task runs.  Programs can also call
+; SYS_YIELD for cooperative yielding.
+;
+; v4.0: Priority-based scheduling (4 levels), 64 tasks max,
+;       task names, signal delivery, process groups.
 ;=======================================================================
 
 ; Task states
 TASK_FREE    equ 0
 TASK_READY   equ 1
 TASK_RUNNING equ 2
-TASK_BLOCKED equ 3          ; v3.0: Blocked (sleeping / waiting on I/O)
+TASK_BLOCKED equ 3          ; Blocked (sleeping / waiting on I/O)
+TASK_STOPPED equ 4          ; v4.0: Stopped by signal (SIGTSTP / Ctrl+Z)
+
+; Priority levels (v4.0)
+PRIO_HIGH    equ 0           ; System tasks, real-time — 4x quantum
+PRIO_NORMAL  equ 1           ; Default for user programs — 2x quantum
+PRIO_LOW     equ 2           ; Background tasks — 1x quantum
+PRIO_IDLE    equ 3           ; Idle tasks — only run when nothing else ready
 
 ; Preemptive scheduling quantum (in PIT ticks, 100 Hz)
-; 10 ticks = 100 ms per time slice
-SCHED_QUANTUM equ 10
+; Base quantum = 5 ticks (50 ms); scaled by priority
+SCHED_QUANTUM_BASE equ 5
+SCHED_QUANTUM equ 10          ; Kept for backward compat (NORMAL = 2x base)
 
-; TCB field offsets (32 bytes per entry)
+; Signal numbers (v4.0)
+SIGINT       equ 2            ; Interrupt (Ctrl+C)
+SIGKILL      equ 9            ; Kill (non-catchable)
+SIGUSR1      equ 10           ; User-defined 1
+SIGUSR2      equ 12           ; User-defined 2
+SIGALRM      equ 14           ; Timer alarm
+SIGTERM      equ 15           ; Termination request
+SIGCHLD      equ 17           ; Child process terminated
+SIGTSTP      equ 20           ; Terminal stop (Ctrl+Z)
+SIGCONT      equ 25           ; Continue stopped process
+NUM_SIGNALS  equ 32           ; Total signal bits
+
+; TCB field offsets (64 bytes per entry — v4.0 expanded)
 TCB_ESP      equ 0          ; Saved kernel-mode ESP (pushad+iretd frame)
-TCB_STATE    equ 4          ; Task state (FREE / READY / RUNNING / BLOCKED)
+TCB_STATE    equ 4          ; Task state (FREE / READY / RUNNING / BLOCKED / STOPPED)
 TCB_KSTACK   equ 8          ; Kernel stack top (for TSS ESP0)
 TCB_USTACK   equ 12         ; User-mode stack top
 TCB_ENTRY    equ 16         ; Program entry point
 TCB_PID      equ 20         ; Task ID
-TCB_PRIORITY equ 24         ; v3.0: Task priority (0=highest, 3=lowest)
-TCB_WAKEUP   equ 28         ; v3.0: Wakeup tick count (for sys_sleep)
-TCB_SIZE     equ 32
+TCB_PRIORITY equ 24         ; Priority level (PRIO_HIGH..PRIO_IDLE)
+TCB_WAKEUP   equ 28         ; Wakeup tick count (for sys_sleep)
+TCB_NAME     equ 32         ; Task name (16 bytes, null-terminated)
+TCB_SIG_PEND equ 48         ; Pending signal bitmask (32 bits)
+TCB_SIG_MASK equ 52         ; Signal mask (blocked signals, 32 bits)
+TCB_PGID     equ 56         ; Process group ID (v4.0)
+TCB_EXIT_CODE equ 60        ; Exit code (v4.0)
+TCB_SIZE     equ 64
 
-MAX_TASKS    equ 32          ; v3.0: Doubled from 16
+MAX_TASKS    equ 64          ; v4.0: Doubled from 32
 
 ;---------------------------------------
 ; sched_init - Initialize the scheduler
@@ -137,6 +165,32 @@ sched_create_task:
         mov [edi + TCB_USTACK], ecx
         mov [edi + TCB_ENTRY], ebx
         mov [edi + TCB_PID], edx
+        mov [edi + TCB_PRIORITY], dword PRIO_NORMAL
+        mov [edi + TCB_SIG_PEND], dword 0
+        mov [edi + TCB_SIG_MASK], dword 0
+        mov [edi + TCB_PGID], edx        ; Default PGID = own PID
+        mov [edi + TCB_EXIT_CODE], dword 0
+
+        ; Copy task name from task_create_name (set by caller, or default)
+        push edi
+        push esi
+        lea edi, [edi + TCB_NAME]
+        mov esi, task_create_name
+        mov ecx, 15             ; Max 15 chars + null
+.copy_name:
+        lodsb
+        stosb
+        cmp al, 0
+        je .name_done
+        dec ecx
+        jnz .copy_name
+        mov byte [edi], 0       ; Force null-terminate
+.name_done:
+        pop esi
+        pop edi
+
+        ; Restore task count increment with correct ECX
+        mov ecx, [edi + TCB_USTACK]  ; Restore ECX clobbered by name copy
 
         inc dword [task_count]
 
@@ -230,27 +284,57 @@ sys_yield:
         ; Mark as READY
         mov dword [edi + TCB_STATE], TASK_READY
 
-        ; Round-robin: scan forward from current+1
-        mov ecx, MAX_TASKS          ; iteration limit
-        mov esi, edx                ; start index
-.yld_scan:
+        ; v4.0: Priority-based scheduling with round-robin within same level
+        ; Find highest-priority (lowest number) READY task, preferring
+        ; tasks after current index for fairness within same priority.
+        mov dword [.best_slot], -1
+        mov dword [.best_prio], PRIO_IDLE + 1  ; Worse than worst
+        mov ecx, MAX_TASKS
+        mov esi, edx                ; start from current slot + 1
+.yld_prio_scan:
         inc esi
         cmp esi, MAX_TASKS
-        jb .yld_check
+        jb .yld_prio_check
         xor esi, esi                ; wrap to 0
-.yld_check:
-        ; Calculate TCB offset for slot ESI
+.yld_prio_check:
+        cmp esi, edx               ; back to starting point?
+        je .yld_prio_done
+        ; Calculate TCB address
         mov eax, esi
         imul eax, TCB_SIZE
         lea ebx, [task_table + eax]
         cmp dword [ebx + TCB_STATE], TASK_READY
-        je .yld_switch
+        jne .yld_prio_next
+        ; Compare priority: lower number = higher priority
+        mov eax, [ebx + TCB_PRIORITY]
+        cmp eax, [.best_prio]
+        jge .yld_prio_next         ; Not better — skip (>= keeps round-robin fairness)
+        mov [.best_prio], eax
+        mov [.best_slot], esi
+.yld_prio_next:
         dec ecx
-        jnz .yld_scan
+        jnz .yld_prio_scan
 
+.yld_prio_done:
+        ; Check if we found a candidate
+        mov esi, [.best_slot]
+        cmp esi, -1
+        je .yld_no_switch
+
+        ; Calculate TCB for best candidate
+        mov eax, esi
+        imul eax, TCB_SIZE
+        lea ebx, [task_table + eax]
+        jmp .yld_switch
+
+.yld_no_switch:
         ; No other ready task found — re-mark self as RUNNING
         mov dword [edi + TCB_STATE], TASK_RUNNING
         jmp .yld_abort
+
+; Local temporaries (in .data-ish section within code)
+.best_slot: dd 0
+.best_prio: dd 0
 
 .yld_switch:
         ; EBX = pointer to new task's TCB, ESI = new task index
@@ -346,8 +430,11 @@ sys_kill:
 ;---------------------------------------
 ; sys_proclist - Get task info for a scheduler slot
 ; EBX = slot index (0..MAX_TASKS-1)
-; ECX = pointer to 16-byte output buffer
-; Output buffer: [state(4), pid(4), entry(4), esp(4)]
+; ECX = pointer to 48-byte output buffer (v4.0 expanded)
+; Output buffer:
+;   [state(4), pid(4), entry(4), esp(4),
+;    priority(4), pgid(4), sig_pending(4), exit_code(4),
+;    name(16)]
 ; Returns: EAX=0 on success, -1 if invalid slot
 ;---------------------------------------
 sys_proclist:
@@ -367,6 +454,28 @@ sys_proclist:
         mov [ecx + 8], eax
         mov eax, [edi + TCB_ESP]
         mov [ecx + 12], eax
+        ; v4.0 extended fields
+        mov eax, [edi + TCB_PRIORITY]
+        mov [ecx + 16], eax
+        mov eax, [edi + TCB_PGID]
+        mov [ecx + 20], eax
+        mov eax, [edi + TCB_SIG_PEND]
+        mov [ecx + 24], eax
+        mov eax, [edi + TCB_EXIT_CODE]
+        mov [ecx + 28], eax
+        ; Copy 16-byte name
+        push esi
+        lea esi, [edi + TCB_NAME]
+        lea edi, [ecx + 32]
+        mov eax, [esi]
+        mov [edi], eax
+        mov eax, [esi + 4]
+        mov [edi + 4], eax
+        mov eax, [esi + 8]
+        mov [edi + 8], eax
+        mov eax, [esi + 12]
+        mov [edi + 12], eax
+        pop esi
         mov dword [esp + 28], 0
         popad
         iretd
@@ -494,3 +603,390 @@ sched_wake_sleepers:
         jmp .wake_loop
 .wake_done:
         ret
+
+;=======================================================================
+; v4.0 NEW SYSCALLS - Priority, Signals, Process Groups
+;=======================================================================
+
+;---------------------------------------
+; sys_setpriority - Set task priority
+;   EBX = PID (or 0 for self)
+;   ECX = new priority (PRIO_HIGH..PRIO_IDLE)
+; Returns: EAX = 0 on success, -1 on fail
+;---------------------------------------
+sys_setpriority:
+        pushad
+        ; Validate priority
+        cmp ecx, PRIO_IDLE
+        ja .spri_fail
+        ; Find task by PID (0 = self = RUNNING task)
+        test ebx, ebx
+        jnz .spri_by_pid
+        ; Find RUNNING task
+        mov edi, task_table
+        xor edx, edx
+.spri_find_run:
+        cmp edx, MAX_TASKS
+        jge .spri_fail
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .spri_set
+        add edi, TCB_SIZE
+        inc edx
+        jmp .spri_find_run
+.spri_by_pid:
+        mov edi, task_table
+        xor edx, edx
+.spri_find_pid:
+        cmp edx, MAX_TASKS
+        jge .spri_fail
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .spri_skip
+        cmp [edi + TCB_PID], ebx
+        je .spri_set
+.spri_skip:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .spri_find_pid
+.spri_set:
+        mov [edi + TCB_PRIORITY], ecx
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.spri_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_getpriority - Get task priority
+;   EBX = PID (or 0 for self)
+; Returns: EAX = priority level, or -1
+;---------------------------------------
+sys_getpriority:
+        pushad
+        test ebx, ebx
+        jnz .gpri_by_pid
+        ; Find RUNNING task
+        mov edi, task_table
+        xor edx, edx
+.gpri_find_run:
+        cmp edx, MAX_TASKS
+        jge .gpri_fail
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .gpri_get
+        add edi, TCB_SIZE
+        inc edx
+        jmp .gpri_find_run
+.gpri_by_pid:
+        mov edi, task_table
+        xor edx, edx
+.gpri_find_pid:
+        cmp edx, MAX_TASKS
+        jge .gpri_fail
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .gpri_skip
+        cmp [edi + TCB_PID], ebx
+        je .gpri_get
+.gpri_skip:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .gpri_find_pid
+.gpri_get:
+        mov eax, [edi + TCB_PRIORITY]
+        mov [esp + 28], eax
+        popad
+        iretd
+.gpri_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_signal - Send signal to a task
+;   EBX = target PID
+;   ECX = signal number (0..31)
+; Returns: EAX = 0 on success, -1 on fail
+;---------------------------------------
+sys_signal:
+        pushad
+        ; Validate signal number
+        cmp ecx, NUM_SIGNALS
+        jge .sig_fail
+        ; Find task by PID
+        mov edi, task_table
+        xor edx, edx
+.sig_find:
+        cmp edx, MAX_TASKS
+        jge .sig_fail
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .sig_next
+        cmp [edi + TCB_PID], ebx
+        je .sig_found
+.sig_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .sig_find
+.sig_found:
+        ; SIGKILL is always delivered — forcibly terminate
+        cmp ecx, SIGKILL
+        je .sig_kill
+        ; SIGCONT wakes stopped tasks
+        cmp ecx, SIGCONT
+        je .sig_cont
+        ; SIGTSTP stops the task
+        cmp ecx, SIGTSTP
+        je .sig_stop
+        ; Check signal mask
+        mov eax, 1
+        shl eax, cl              ; bit for this signal
+        test [edi + TCB_SIG_MASK], eax
+        jnz .sig_masked          ; Masked — don't deliver
+        ; Set pending bit
+        or [edi + TCB_SIG_PEND], eax
+        ; For SIGINT/SIGTERM on running/ready tasks: terminate
+        cmp ecx, SIGINT
+        je .sig_terminate
+        cmp ecx, SIGTERM
+        je .sig_terminate
+        ; Other signals: just set pending bit (checked at task switch)
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sig_terminate:
+        ; Terminate the task (same as kill)
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .sig_clear
+        sub eax, 4096
+        call pmm_free_page
+.sig_clear:
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_ESP], 0
+        mov dword [edi + TCB_KSTACK], 0
+        dec dword [task_count]
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sig_kill:
+        ; Forcible kill — free kernel stack, clear TCB
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .sigk_clear
+        sub eax, 4096
+        call pmm_free_page
+.sigk_clear:
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_ESP], 0
+        mov dword [edi + TCB_KSTACK], 0
+        dec dword [task_count]
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sig_stop:
+        ; Stop the task (Ctrl+Z)
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .sig_fail
+        mov dword [edi + TCB_STATE], TASK_STOPPED
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sig_cont:
+        ; Continue a stopped task
+        cmp dword [edi + TCB_STATE], TASK_STOPPED
+        jne .sig_ok              ; Not stopped, just succeed
+        mov dword [edi + TCB_STATE], TASK_READY
+.sig_ok:
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sig_masked:
+        ; Signal is masked — set pending but don't deliver
+        mov eax, 1
+        shl eax, cl
+        or [edi + TCB_SIG_PEND], eax
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sig_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_setpgid - Set process group ID
+;   EBX = PID (0 = self)
+;   ECX = new PGID (0 = use own PID)
+; Returns: EAX = 0 on success, -1 fail
+;---------------------------------------
+sys_setpgid:
+        pushad
+        test ebx, ebx
+        jnz .spg_by_pid
+        ; Self
+        mov edi, task_table
+        xor edx, edx
+.spg_find_run:
+        cmp edx, MAX_TASKS
+        jge .spg_fail
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .spg_found
+        add edi, TCB_SIZE
+        inc edx
+        jmp .spg_find_run
+.spg_by_pid:
+        mov edi, task_table
+        xor edx, edx
+.spg_find:
+        cmp edx, MAX_TASKS
+        jge .spg_fail
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .spg_skip
+        cmp [edi + TCB_PID], ebx
+        je .spg_found
+.spg_skip:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .spg_find
+.spg_found:
+        ; ECX=0 means use task's own PID
+        test ecx, ecx
+        jnz .spg_set
+        mov ecx, [edi + TCB_PID]
+.spg_set:
+        mov [edi + TCB_PGID], ecx
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.spg_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_getpgid - Get process group ID
+;   EBX = PID (0 = self)
+; Returns: EAX = PGID, or -1
+;---------------------------------------
+sys_getpgid:
+        pushad
+        test ebx, ebx
+        jnz .ggp_by_pid
+        mov edi, task_table
+        xor edx, edx
+.ggp_find_run:
+        cmp edx, MAX_TASKS
+        jge .ggp_fail
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .ggp_get
+        add edi, TCB_SIZE
+        inc edx
+        jmp .ggp_find_run
+.ggp_by_pid:
+        mov edi, task_table
+        xor edx, edx
+.ggp_find:
+        cmp edx, MAX_TASKS
+        jge .ggp_fail
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .ggp_skip
+        cmp [edi + TCB_PID], ebx
+        je .ggp_get
+.ggp_skip:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .ggp_find
+.ggp_get:
+        mov eax, [edi + TCB_PGID]
+        mov [esp + 28], eax
+        popad
+        iretd
+.ggp_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_sigmask - Set/get signal mask
+;   EBX = 0: get mask, 1: set mask, 2: block signals, 3: unblock signals
+;   ECX = new mask (for set/block/unblock)
+; Returns: EAX = previous mask, or -1
+;---------------------------------------
+sys_sigmask:
+        pushad
+        ; Find RUNNING task
+        mov edi, task_table
+        xor edx, edx
+.smk_find:
+        cmp edx, MAX_TASKS
+        jge .smk_fail
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .smk_found
+        add edi, TCB_SIZE
+        inc edx
+        jmp .smk_find
+.smk_found:
+        mov eax, [edi + TCB_SIG_MASK]  ; Old mask
+        cmp ebx, 0
+        je .smk_ret              ; Just get
+        cmp ebx, 1
+        je .smk_set
+        cmp ebx, 2
+        je .smk_block
+        cmp ebx, 3
+        je .smk_unblock
+        jmp .smk_fail
+.smk_set:
+        mov [edi + TCB_SIG_MASK], ecx
+        jmp .smk_ret
+.smk_block:
+        or [edi + TCB_SIG_MASK], ecx
+        jmp .smk_ret
+.smk_unblock:
+        not ecx
+        and [edi + TCB_SIG_MASK], ecx
+.smk_ret:
+        mov [esp + 28], eax
+        popad
+        iretd
+.smk_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_taskname - Set name of current task
+;   EBX = pointer to name string (max 15 chars)
+; Returns: EAX = 0
+;---------------------------------------
+sys_taskname:
+        pushad
+        ; Find RUNNING task
+        mov edi, task_table
+        xor edx, edx
+.stn_find:
+        cmp edx, MAX_TASKS
+        jge .stn_done
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .stn_set
+        add edi, TCB_SIZE
+        inc edx
+        jmp .stn_find
+.stn_set:
+        push edi
+        lea edi, [edi + TCB_NAME]
+        mov esi, ebx
+        mov ecx, 15
+.stn_copy:
+        lodsb
+        stosb
+        cmp al, 0
+        je .stn_pad
+        dec ecx
+        jnz .stn_copy
+        mov byte [edi], 0
+.stn_pad:
+        pop edi
+.stn_done:
+        mov dword [esp + 28], 0
+        popad
+        iretd

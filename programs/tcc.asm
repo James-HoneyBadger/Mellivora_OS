@@ -2,16 +2,21 @@
 ; Compiles a minimal subset of C to flat 64-bit x86-64 binary
 ;
 ; Supported C subset:
-;   - int variables (global)
+;   - int and char variables (global and local)
 ;   - int main() { ... }
 ;   - int functions with up to 4 params
-;   - if/else, while, for
+;   - if/else, while, for, do-while, break, continue
+;   - switch/case statements
 ;   - return statement
 ;   - +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||, !
-;   - putchar(), getchar(), exit() builtins
-;   - printf() with %d and string literals
-;   - Integer constants, char constants ('x')
-;   - Assignment (=, +=, -=, *=, /=)
+;   - Bitwise: &, |, ^, ~, <<, >>
+;   - Ternary: a ? b : c
+;   - putchar(), getchar(), exit(), puts(), strlen(),
+;     atoi(), malloc(), free(), abs() builtins
+;   - printf() with %d, %c, %s, %x and string literals
+;   - Integer constants (decimal, 0xHex, 0Octal), char constants
+;   - Assignment (=, +=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=)
+;   - Pointers: int *p, *p, &x
 ;   - // and /* */ comments
 ;
 ; Usage: tcc source.c output
@@ -71,6 +76,27 @@ TOK_INC         equ 54
 TOK_DEC         equ 55
 TOK_LBRACKET    equ 56          ; [
 TOK_RBRACKET    equ 57          ; ]
+TOK_AMPERSAND   equ 58          ; & (single, for address-of or bitwise)
+TOK_PIPE        equ 59          ; | (single, for bitwise)
+TOK_CARET       equ 60          ; ^
+TOK_TILDE       equ 61          ; ~
+TOK_SHL         equ 62          ; <<
+TOK_SHR         equ 63          ; >>
+TOK_PERCENTEQ   equ 64          ; %=
+TOK_AMPEQ       equ 65          ; &=
+TOK_PIPEEQ      equ 66          ; |=
+TOK_CARETEQ     equ 67          ; ^=
+TOK_SHLEQ       equ 68          ; <<=
+TOK_SHREQ       equ 69          ; >>=
+TOK_QUESTION    equ 70          ; ?
+TOK_COLON       equ 71          ; :
+TOK_BREAK       equ 72
+TOK_CONTINUE    equ 73
+TOK_DO          equ 74
+TOK_SWITCH      equ 75
+TOK_CASE        equ 76
+TOK_DEFAULT     equ 77
+TOK_CHAR_TYPE   equ 78          ; char keyword
 
 ; Symbol types
 SYM_VAR         equ 1
@@ -351,12 +377,76 @@ next_token:
         jmp .nt_bc
 
 .nt_not_comment:
-        ; Number
+        ; Number (decimal, hex 0x..., octal 0...)
         cmp al, '0'
         jl .nt_not_num
         cmp al, '9'
         jg .nt_not_num
-        ; Parse number
+        ; Check for hex/octal prefix
+        cmp al, '0'
+        jne .nt_decimal
+        ; Peek next char
+        cmp byte [esi + 1], 'x'
+        je .nt_hex
+        cmp byte [esi + 1], 'X'
+        je .nt_hex
+        ; Check if octal (0 followed by digit)
+        movzx eax, byte [esi + 1]
+        cmp al, '0'
+        jl .nt_decimal
+        cmp al, '7'
+        jg .nt_decimal
+        ; Octal number
+        inc esi
+        inc dword [src_pos]
+        xor edx, edx
+.nt_octal:
+        movzx eax, byte [esi]
+        cmp al, '0'
+        jl .nt_num_done
+        cmp al, '7'
+        jg .nt_num_done
+        shl edx, 3
+        sub al, '0'
+        add edx, eax
+        inc esi
+        inc dword [src_pos]
+        jmp .nt_octal
+.nt_hex:
+        ; Skip 0x prefix
+        add esi, 2
+        add dword [src_pos], 2
+        xor edx, edx
+.nt_hex_loop:
+        movzx eax, byte [esi]
+        cmp al, '0'
+        jl .nt_num_done
+        cmp al, '9'
+        jle .nt_hex_digit
+        cmp al, 'A'
+        jl .nt_hex_lc
+        cmp al, 'F'
+        jle .nt_hex_uc
+.nt_hex_lc:
+        cmp al, 'a'
+        jl .nt_num_done
+        cmp al, 'f'
+        jg .nt_num_done
+        sub al, 'a' - 10
+        jmp .nt_hex_add
+.nt_hex_uc:
+        sub al, 'A' - 10
+        jmp .nt_hex_add
+.nt_hex_digit:
+        sub al, '0'
+.nt_hex_add:
+        shl edx, 4
+        add edx, eax
+        inc esi
+        inc dword [src_pos]
+        jmp .nt_hex_loop
+.nt_decimal:
+        ; Parse decimal number
         xor edx, edx
 .nt_num:
         movzx eax, byte [esi]
@@ -397,7 +487,7 @@ next_token:
         inc esi
         inc dword [src_pos]
         movzx edx, byte [esi]
-        cmp dl, '\'
+        cmp dl, 0x5C            ; backslash
         jne .nt_char_ok
         ; Escape sequence
         inc esi
@@ -409,8 +499,56 @@ next_token:
         jmp .nt_char_ok
 .nt_esc_not_n:
         cmp dl, 't'
-        jne .nt_char_ok
+        jne .nt_esc_not_t
         mov edx, 9
+        jmp .nt_char_ok
+.nt_esc_not_t:
+        cmp dl, 'r'
+        jne .nt_esc_not_r
+        mov edx, 13
+        jmp .nt_char_ok
+.nt_esc_not_r:
+        cmp dl, '0'
+        jne .nt_esc_not_0
+        mov edx, 0
+        jmp .nt_char_ok
+.nt_esc_not_0:
+        cmp dl, 0x5C            ; backslash
+        jne .nt_esc_not_bs
+        mov edx, 0x5C
+        jmp .nt_char_ok
+.nt_esc_not_bs:
+        cmp dl, 0x27            ; single quote
+        jne .nt_esc_not_sq
+        mov edx, 0x27
+        jmp .nt_char_ok
+.nt_esc_not_sq:
+        cmp dl, 'x'
+        jne .nt_char_ok         ; unknown escape, use literal
+        ; Hex escape \xNN
+        inc esi
+        inc dword [src_pos]
+        xor edx, edx
+        ; First hex digit
+        movzx eax, byte [esi]
+        call hex_digit_val
+        cmp eax, -1
+        je .nt_char_ok
+        mov edx, eax
+        inc esi
+        inc dword [src_pos]
+        ; Second hex digit (optional)
+        movzx eax, byte [esi]
+        call hex_digit_val
+        cmp eax, -1
+        je .nt_char_hex_done
+        shl edx, 4
+        or edx, eax
+        inc esi
+        inc dword [src_pos]
+.nt_char_hex_done:
+        dec esi
+        dec dword [src_pos]
 .nt_char_ok:
         inc esi
         inc dword [src_pos]
@@ -441,21 +579,76 @@ next_token:
         je .nt_str_done
         cmp al, 0
         je .nt_str_done
-        cmp al, '\'
+        cmp al, 0x5C            ; backslash
         jne .nt_str_normal
         ; Escape
         inc esi
         inc dword [src_pos]
         movzx eax, byte [esi]
         cmp al, 'n'
-        jne .nt_str_esc2
+        jne .nt_str_esc_not_n
         mov al, 10
         jmp .nt_str_normal
-.nt_str_esc2:
+.nt_str_esc_not_n:
         cmp al, 't'
-        jne .nt_str_normal
+        jne .nt_str_esc_not_t
         mov al, 9
+        jmp .nt_str_normal
+.nt_str_esc_not_t:
+        cmp al, 'r'
+        jne .nt_str_esc_not_r
+        mov al, 13
+        jmp .nt_str_normal
+.nt_str_esc_not_r:
+        cmp al, '0'
+        jne .nt_str_esc_not_0
+        mov al, 0
+        jmp .nt_str_normal
+.nt_str_esc_not_0:
+        cmp al, 0x5C            ; backslash
+        jne .nt_str_esc_not_bs
+        mov al, 0x5C
+        jmp .nt_str_normal
+.nt_str_esc_not_bs:
+        cmp al, '"'
+        jne .nt_str_esc_not_dq
+        mov al, '"'
+        jmp .nt_str_normal
+.nt_str_esc_not_dq:
+        cmp al, 'x'
+        jne .nt_str_normal       ; unknown escape, use literal
+        ; Hex escape \xNN
+        inc esi
+        inc dword [src_pos]
+        push ecx
+        push edi
+        movzx eax, byte [esi]
+        call hex_digit_val
+        cmp eax, -1
+        je .nt_str_hex_restore
+        mov ebx, eax
+        inc esi
+        inc dword [src_pos]
+        movzx eax, byte [esi]
+        call hex_digit_val
+        cmp eax, -1
+        je .nt_str_hex_one
+        shl ebx, 4
+        or ebx, eax
+        inc esi
+        inc dword [src_pos]
+.nt_str_hex_one:
+        mov eax, ebx
+        pop edi
+        pop ecx
+        jmp .nt_str_store
+.nt_str_hex_restore:
+        pop edi
+        pop ecx
+        mov al, 'x'             ; restore 'x' if no valid hex
+        jmp .nt_str_normal
 .nt_str_normal:
+.nt_str_store:
         mov [edi + ecx], al
         inc ecx
         inc esi
@@ -483,7 +676,7 @@ next_token:
         cmp al, '/'
         je .nt_slash
         cmp al, '%'
-        je .nt_single_tok
+        je .nt_percent
         cmp al, '='
         je .nt_assign
         cmp al, '!'
@@ -496,6 +689,14 @@ next_token:
         je .nt_amp
         cmp al, '|'
         je .nt_pipe
+        cmp al, '^'
+        je .nt_caret
+        cmp al, '~'
+        je .nt_tilde
+        cmp al, '?'
+        je .nt_question
+        cmp al, ':'
+        je .nt_colon
         cmp al, ';'
         je .nt_single_tok
         cmp al, ','
@@ -508,14 +709,12 @@ next_token:
         je .nt_single_tok
         cmp al, '}'
         je .nt_single_tok
+        cmp al, '['
+        je .nt_single_tok
+        cmp al, ']'
+        je .nt_single_tok
 
         ; Unknown character - skip
-                cmp al, '['
-                je .nt_single_tok
-                cmp al, ']'
-                je .nt_single_tok
-
-                ; Unknown character - skip
         inc esi
         inc dword [src_pos]
         jmp .nt_restart
@@ -630,10 +829,30 @@ next_token:
         inc esi
         inc dword [src_pos]
         cmp byte [esi], '='
-        jne .nt_lt_only
+        je .nt_le
+        cmp byte [esi], '<'
+        je .nt_shl
+        mov dword [tok_type], TOK_LT
+        popad
+        ret
+.nt_le:
         inc esi
         inc dword [src_pos]
         mov dword [tok_type], TOK_LE
+        popad
+        ret
+.nt_shl:
+        inc esi
+        inc dword [src_pos]
+        cmp byte [esi], '='
+        jne .nt_shl_only
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_SHLEQ
+        popad
+        ret
+.nt_shl_only:
+        mov dword [tok_type], TOK_SHL
         popad
         ret
 .nt_lt_only:
@@ -645,14 +864,30 @@ next_token:
         inc esi
         inc dword [src_pos]
         cmp byte [esi], '='
-        jne .nt_gt_only
+        je .nt_ge
+        cmp byte [esi], '>'
+        je .nt_shr
+        mov dword [tok_type], TOK_GT
+        popad
+        ret
+.nt_ge:
         inc esi
         inc dword [src_pos]
         mov dword [tok_type], TOK_GE
         popad
         ret
-.nt_gt_only:
-        mov dword [tok_type], TOK_GT
+.nt_shr:
+        inc esi
+        inc dword [src_pos]
+        cmp byte [esi], '='
+        jne .nt_shr_only
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_SHREQ
+        popad
+        ret
+.nt_shr_only:
+        mov dword [tok_type], TOK_SHR
         popad
         ret
 
@@ -660,11 +895,22 @@ next_token:
         inc esi
         inc dword [src_pos]
         cmp byte [esi], '&'
-        jne .nt_amp_single
+        je .nt_logical_and
+        cmp byte [esi], '='
+        je .nt_ampeq
+        mov dword [tok_type], TOK_AMPERSAND  ; single & (address-of or bitwise AND)
+        popad
+        ret
+.nt_logical_and:
         inc esi
         inc dword [src_pos]
-.nt_amp_single:
-        mov dword [tok_type], TOK_AND
+        mov dword [tok_type], TOK_AND        ; && (logical AND)
+        popad
+        ret
+.nt_ampeq:
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_AMPEQ      ; &=
         popad
         ret
 
@@ -672,11 +918,73 @@ next_token:
         inc esi
         inc dword [src_pos]
         cmp byte [esi], '|'
-        jne .nt_pipe_single
+        je .nt_logical_or
+        cmp byte [esi], '='
+        je .nt_pipeeq
+        mov dword [tok_type], TOK_PIPE       ; single | (bitwise OR)
+        popad
+        ret
+.nt_logical_or:
         inc esi
         inc dword [src_pos]
-.nt_pipe_single:
-        mov dword [tok_type], TOK_OR
+        mov dword [tok_type], TOK_OR         ; || (logical OR)
+        popad
+        ret
+.nt_pipeeq:
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_PIPEEQ     ; |=
+        popad
+        ret
+
+.nt_caret:
+        inc esi
+        inc dword [src_pos]
+        cmp byte [esi], '='
+        jne .nt_caret_only
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_CARETEQ    ; ^=
+        popad
+        ret
+.nt_caret_only:
+        mov dword [tok_type], TOK_CARET      ; ^
+        popad
+        ret
+
+.nt_tilde:
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_TILDE      ; ~
+        popad
+        ret
+
+.nt_question:
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_QUESTION   ; ?
+        popad
+        ret
+
+.nt_colon:
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_COLON      ; :
+        popad
+        ret
+
+.nt_percent:
+        inc esi
+        inc dword [src_pos]
+        cmp byte [esi], '='
+        jne .nt_percent_only
+        inc esi
+        inc dword [src_pos]
+        mov dword [tok_type], TOK_PERCENTEQ  ; %=
+        popad
+        ret
+.nt_percent_only:
+        mov dword [tok_type], TOK_PERCENT    ; %
         popad
         ret
 
@@ -684,8 +992,6 @@ next_token:
         ; Map character to token type
         inc esi
         inc dword [src_pos]
-        cmp al, '%'
-        je .nt_is_percent
         cmp al, ';'
         je .nt_is_semi
         cmp al, ','
@@ -696,23 +1002,19 @@ next_token:
         je .nt_is_rparen
         cmp al, '{'
         je .nt_is_lbrace
-                cmp al, '['
-                je .nt_is_lbracket
-                cmp al, ']'
-                je .nt_is_rbracket
+        cmp al, '['
+        je .nt_is_lbracket
+        cmp al, ']'
+        je .nt_is_rbracket
         mov dword [tok_type], TOK_RBRACE
         popad
         ret
-        .nt_is_lbracket:
-                mov dword [tok_type], TOK_LBRACKET
-                popad
-                ret
-        .nt_is_rbracket:
-                mov dword [tok_type], TOK_RBRACKET
-                popad
-                ret
-.nt_is_percent:
-        mov dword [tok_type], TOK_PERCENT
+.nt_is_lbracket:
+        mov dword [tok_type], TOK_LBRACKET
+        popad
+        ret
+.nt_is_rbracket:
+        mov dword [tok_type], TOK_RBRACKET
         popad
         ret
 .nt_is_semi:
@@ -790,6 +1092,27 @@ next_token:
         mov edi, kw_c_void
         call str_eq
         jc .nt_kw_void
+        mov edi, kw_c_break
+        call str_eq
+        jc .nt_kw_break
+        mov edi, kw_c_continue
+        call str_eq
+        jc .nt_kw_continue
+        mov edi, kw_c_do
+        call str_eq
+        jc .nt_kw_do
+        mov edi, kw_c_switch
+        call str_eq
+        jc .nt_kw_switch
+        mov edi, kw_c_case
+        call str_eq
+        jc .nt_kw_case
+        mov edi, kw_c_default
+        call str_eq
+        jc .nt_kw_default
+        mov edi, kw_c_char
+        call str_eq
+        jc .nt_kw_char
         pop esi
         mov dword [tok_type], TOK_ID
         popad
@@ -828,6 +1151,41 @@ next_token:
 .nt_kw_void:
         pop esi
         mov dword [tok_type], TOK_VOID
+        popad
+        ret
+.nt_kw_break:
+        pop esi
+        mov dword [tok_type], TOK_BREAK
+        popad
+        ret
+.nt_kw_continue:
+        pop esi
+        mov dword [tok_type], TOK_CONTINUE
+        popad
+        ret
+.nt_kw_do:
+        pop esi
+        mov dword [tok_type], TOK_DO
+        popad
+        ret
+.nt_kw_switch:
+        pop esi
+        mov dword [tok_type], TOK_SWITCH
+        popad
+        ret
+.nt_kw_case:
+        pop esi
+        mov dword [tok_type], TOK_CASE
+        popad
+        ret
+.nt_kw_default:
+        pop esi
+        mov dword [tok_type], TOK_DEFAULT
+        popad
+        ret
+.nt_kw_char:
+        pop esi
+        mov dword [tok_type], TOK_CHAR_TYPE
         popad
         ret
 
@@ -971,18 +1329,17 @@ compile_function:
         mov [main_addr], eax
 .cf_not_main:
 
-        ; Function prologue: push rbp; mov rbp, rsp (64-bit)
-        mov al, 0x55            ; push rbp (64-bit by default in long mode)
+        ; Function prologue: push ebp; mov ebp, esp
+        mov al, 0x55            ; push ebp
         call emit_byte
-        call emit_rex_w         ; REX.W prefix for 64-bit mov
         mov al, 0x89
         call emit_byte
-        mov al, 0xE5            ; mov rbp, rsp
+        mov al, 0xE5            ; mov ebp, esp
         call emit_byte
 
         ; Parse parameters: int p1, int p2, ...
         call next_token          ; skip '('
-        mov dword [param_offset], 16  ; first param at [rbp+16] (8 ret + 8 saved rbp)
+        mov dword [param_offset], 8   ; first param at [ebp+8] (4 ret + 4 saved ebp)
 .cf_params:
         cmp dword [tok_type], TOK_RPAREN
         je .cf_params_done
@@ -994,7 +1351,7 @@ compile_function:
         cmp dword [tok_type], TOK_ID
         jne .cf_err
         call add_param_sym
-        add dword [param_offset], 8     ; 64-bit: 8 bytes per param
+        add dword [param_offset], 4     ; 32-bit: 4 bytes per param
         call next_token
         cmp dword [tok_type], TOK_COMMA
         je .cf_param_comma
@@ -1078,9 +1435,19 @@ compile_statement:
         je .cs_while
         cmp dword [tok_type], TOK_FOR
         je .cs_for
+        cmp dword [tok_type], TOK_DO
+        je .cs_do
+        cmp dword [tok_type], TOK_SWITCH
+        je .cs_switch
+        cmp dword [tok_type], TOK_BREAK
+        je .cs_break
+        cmp dword [tok_type], TOK_CONTINUE
+        je .cs_continue
         cmp dword [tok_type], TOK_RETURN
         je .cs_return
         cmp dword [tok_type], TOK_INT
+        je .cs_local_var
+        cmp dword [tok_type], TOK_CHAR_TYPE
         je .cs_local_var
         cmp dword [tok_type], TOK_LBRACE
         je .cs_block
@@ -1114,6 +1481,22 @@ compile_statement:
 
 .cs_for:
         call compile_for
+        jmp .cs_done
+
+.cs_do:
+        call compile_do_while
+        jmp .cs_done
+
+.cs_switch:
+        call compile_switch
+        jmp .cs_done
+
+.cs_break:
+        call compile_break
+        jmp .cs_done
+
+.cs_continue:
+        call compile_continue
         jmp .cs_done
 
 .cs_return:
@@ -1531,6 +1914,332 @@ compile_for:
         ret
 
 ;=======================================================================
+; COMPILE DO-WHILE
+; do { body } while (cond);
+;=======================================================================
+compile_do_while:
+        pushad
+        call next_token          ; skip 'do'
+
+        ; Save current loop context
+        mov eax, [loop_start]
+        push eax
+        mov eax, [loop_exit]
+        push eax
+
+        mov eax, [out_pos]
+        mov [loop_start], eax    ; loop start for continue
+
+        ; Placeholder for break exit - will be set after condition
+        mov dword [loop_exit], 0
+
+        call compile_statement   ; compile body
+
+        ; Expect 'while'
+        cmp dword [tok_type], TOK_WHILE
+        jne .cdw_err
+        call next_token
+
+        ; Expect '('
+        cmp dword [tok_type], TOK_LPAREN
+        jne .cdw_err
+        call next_token
+
+        call compile_expression
+
+        cmp dword [tok_type], TOK_RPAREN
+        jne .cdw_err
+        call next_token
+
+        ; Expect ';'
+        cmp dword [tok_type], TOK_SEMI
+        jne .cdw_err
+        call next_token
+
+        ; test eax, eax; jnz loop_start
+        mov al, 0x85
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0x85             ; jnz
+        call emit_byte
+        mov eax, [loop_start]
+        sub eax, [out_pos]
+        sub eax, 4
+        call emit_dword
+
+        ; Record exit point for any break fixups
+        mov eax, [out_pos]
+        mov ecx, [break_fixup_count]
+.cdw_fix_breaks:
+        cmp ecx, 0
+        je .cdw_fix_done
+        dec ecx
+        mov ebx, [break_fixups + ecx * 4]
+        mov edx, eax
+        sub edx, ebx
+        sub edx, 4
+        mov [out_buffer + ebx], edx
+        jmp .cdw_fix_breaks
+.cdw_fix_done:
+        mov dword [break_fixup_count], 0
+
+        ; Restore loop context
+        pop eax
+        mov [loop_exit], eax
+        pop eax
+        mov [loop_start], eax
+
+        popad
+        ret
+
+.cdw_err:
+        pop eax
+        mov [loop_exit], eax
+        pop eax
+        mov [loop_start], eax
+        mov byte [compile_error], 1
+        popad
+        ret
+
+;=======================================================================
+; COMPILE BREAK
+;=======================================================================
+compile_break:
+        pushad
+        call next_token          ; skip 'break'
+
+        cmp dword [tok_type], TOK_SEMI
+        jne .cb_err
+        call next_token
+
+        ; Emit jump placeholder for break
+        mov al, 0xE9             ; jmp rel32
+        call emit_byte
+        mov eax, [out_pos]
+        ; Record fixup position
+        mov ecx, [break_fixup_count]
+        mov [break_fixups + ecx * 4], eax
+        inc dword [break_fixup_count]
+        mov eax, 0
+        call emit_dword
+
+        popad
+        ret
+
+.cb_err:
+        mov byte [compile_error], 1
+        popad
+        ret
+
+;=======================================================================
+; COMPILE CONTINUE
+;=======================================================================
+compile_continue:
+        pushad
+        call next_token          ; skip 'continue'
+
+        cmp dword [tok_type], TOK_SEMI
+        jne .cc_err
+        call next_token
+
+        ; Jump to loop_start
+        mov eax, [loop_start]
+        cmp eax, 0
+        je .cc_err               ; continue outside loop
+
+        mov al, 0xE9             ; jmp rel32
+        call emit_byte
+        mov eax, [loop_start]
+        sub eax, [out_pos]
+        sub eax, 4
+        call emit_dword
+
+        popad
+        ret
+
+.cc_err:
+        mov byte [compile_error], 1
+        popad
+        ret
+
+;=======================================================================
+; COMPILE SWITCH
+; switch (expr) { case N: ... default: ... }
+;=======================================================================
+compile_switch:
+        pushad
+        call next_token          ; skip 'switch'
+
+        ; Save current loop context (for break)
+        mov eax, [loop_exit]
+        push eax
+        mov eax, [break_fixup_count]
+        push eax
+        mov dword [break_fixup_count], 0
+
+        cmp dword [tok_type], TOK_LPAREN
+        jne .csw_err
+        call next_token
+
+        call compile_expression  ; switch value in RAX
+
+        cmp dword [tok_type], TOK_RPAREN
+        jne .csw_err
+        call next_token
+
+        ; Save switch value: push rax
+        mov al, 0x50
+        call emit_byte
+
+        cmp dword [tok_type], TOK_LBRACE
+        jne .csw_err
+        call next_token
+
+        ; Parse cases
+        mov dword [switch_case_count], 0
+
+.csw_cases:
+        cmp dword [tok_type], TOK_RBRACE
+        je .csw_end
+        cmp dword [tok_type], TOK_EOF
+        je .csw_err
+        cmp byte [compile_error], 0
+        jne .csw_err
+
+        cmp dword [tok_type], TOK_CASE
+        je .csw_case
+        cmp dword [tok_type], TOK_DEFAULT
+        je .csw_default
+
+        ; Statement in case body
+        call compile_statement
+        jmp .csw_cases
+
+.csw_case:
+        call next_token          ; skip 'case'
+        cmp dword [tok_type], TOK_NUM
+        jne .csw_err
+        mov edx, [tok_value]     ; case value
+        call next_token
+        cmp dword [tok_type], TOK_COLON
+        jne .csw_err
+        call next_token
+
+        ; Emit: cmp [rsp], edx; jne next_case
+        ; Load switch value: mov rax, [rsp]
+        call emit_rex_w
+        mov al, 0x8B
+        call emit_byte
+        mov al, 0x04             ; mov rax, [rsp]
+        call emit_byte
+        mov al, 0x24
+        call emit_byte
+        ; cmp rax, imm32
+        call emit_rex_w
+        mov al, 0x3D             ; cmp rax, imm32
+        call emit_byte
+        mov eax, edx
+        call emit_dword
+        ; je case_body (skip the jmp)
+        mov al, 0x74             ; je rel8
+        call emit_byte
+        mov al, 5                ; skip jmp rel32
+        call emit_byte
+        ; jmp next_case (placeholder)
+        mov al, 0xE9
+        call emit_byte
+        mov eax, [out_pos]
+        mov ecx, [switch_case_count]
+        mov [switch_case_fixups + ecx * 4], eax
+        inc dword [switch_case_count]
+        mov eax, 0
+        call emit_dword
+
+        jmp .csw_cases
+
+.csw_default:
+        call next_token          ; skip 'default'
+        cmp dword [tok_type], TOK_COLON
+        jne .csw_err
+        call next_token
+        ; Patch previous case jumps to skip to here
+        mov ecx, [switch_case_count]
+.csw_patch_cases:
+        cmp ecx, 0
+        je .csw_patch_done
+        dec ecx
+        mov ebx, [switch_case_fixups + ecx * 4]
+        mov eax, [out_pos]
+        sub eax, ebx
+        sub eax, 4
+        mov [out_buffer + ebx], eax
+        jmp .csw_patch_cases
+.csw_patch_done:
+        mov dword [switch_case_count], 0
+        jmp .csw_cases
+
+.csw_end:
+        call next_token          ; skip '}'
+
+        ; Patch remaining case jumps to exit
+        mov ecx, [switch_case_count]
+.csw_patch_exit:
+        cmp ecx, 0
+        je .csw_patch_exit_done
+        dec ecx
+        mov ebx, [switch_case_fixups + ecx * 4]
+        mov eax, [out_pos]
+        sub eax, ebx
+        sub eax, 4
+        mov [out_buffer + ebx], eax
+        jmp .csw_patch_exit
+.csw_patch_exit_done:
+
+        ; Pop switch value: add rsp, 8
+        call emit_rex_w
+        mov al, 0x83
+        call emit_byte
+        mov al, 0xC4
+        call emit_byte
+        mov al, 8
+        call emit_byte
+
+        ; Patch break jumps
+        mov ecx, [break_fixup_count]
+.csw_fix_breaks:
+        cmp ecx, 0
+        je .csw_breaks_done
+        dec ecx
+        mov ebx, [break_fixups + ecx * 4]
+        mov eax, [out_pos]
+        sub eax, ebx
+        sub eax, 4
+        mov [out_buffer + ebx], eax
+        jmp .csw_fix_breaks
+.csw_breaks_done:
+
+        ; Restore context
+        pop eax
+        mov [break_fixup_count], eax
+        pop eax
+        mov [loop_exit], eax
+
+        popad
+        ret
+
+.csw_err:
+        pop eax
+        mov [break_fixup_count], eax
+        pop eax
+        mov [loop_exit], eax
+        mov byte [compile_error], 1
+        popad
+        ret
+
+;=======================================================================
 ; COMPILE RETURN
 ;=======================================================================
 compile_return:
@@ -1566,17 +2275,16 @@ compile_local_decl:
         cmp dword [tok_type], TOK_ID
         jne .cld_err
 
-        ; Add as local variable (using stack offset from rbp)
-        sub dword [local_offset], 8     ; 64-bit: 8 bytes per local
+        ; Add as local variable (using stack offset from ebp)
+        sub dword [local_offset], 4     ; 32-bit: 4 bytes per local
         call add_local_sym      ; register in symbol table using tok_ident
 
-        ; sub rsp, 8 (REX.W + 83 EC 08)
-        call emit_rex_w
+        ; sub esp, 4
         mov al, 0x83
         call emit_byte
         mov al, 0xEC
         call emit_byte
-        mov al, 8
+        mov al, 4
         call emit_byte
 
         call next_token
@@ -1588,8 +2296,7 @@ compile_local_decl:
         call next_token
         call compile_expression
 
-        ; mov [rbp + offset], rax (REX.W + 89 45 offset)
-        call emit_rex_w
+        ; mov [ebp + offset], eax
         mov al, 0x89
         call emit_byte
         mov al, 0x45
@@ -1725,14 +2432,14 @@ compile_expression:
         ; Check for store: arr[i] = val
         cmp dword [tok_type], TOK_ASSIGN
         je .ce_arr_store
-        ; Array load: RAX = arr[index]
-        ; imul rax,rax,8 (REX.W + 6B C0 08)
+        ; Array load: EAX = arr[index]
+        ; imul eax,eax,4
         call emit_rex_w
         mov al, 0x6B
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        mov al, 8                  ; 8 bytes per element (64-bit)
+        mov al, 4                  ; 4 bytes per int element
         call emit_byte
         ; add rax, base (REX.W + 05 imm32)
         call emit_rex_w
@@ -1750,13 +2457,13 @@ compile_expression:
         jmp .ce_arr_load_binop
 .ce_arr_store:
         ; arr[i] = val: compute element address, store
-        ; imul rax,rax,8 (REX.W + 6B C0 08)
+        ; imul eax,eax,4
         call emit_rex_w
         mov al, 0x6B
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        mov al, 8                  ; 8 bytes per element (64-bit)
+        mov al, 4                  ; 4 bytes per int element
         call emit_byte
         ; add rax, base (REX.W + 05 imm32)
         call emit_rex_w
@@ -1809,7 +2516,7 @@ compile_or_expr:
         call compile_and_expr
 .or_loop:
         cmp dword [tok_type], TOK_OR
-        jne .or_done
+        jne .or_check_ternary
         call next_token
         ; push rax (left)
         mov al, 0x50
@@ -1824,6 +2531,56 @@ compile_or_expr:
         mov al, 0xD8
         call emit_byte
         jmp .or_loop
+
+.or_check_ternary:
+        ; Check for ternary operator: expr ? true_expr : false_expr
+        cmp dword [tok_type], TOK_QUESTION
+        jne .or_done
+        call next_token          ; skip '?'
+        ; test rax, rax; jz false_branch
+        call emit_rex_w
+        mov al, 0x85
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0x84             ; jz rel32
+        call emit_byte
+        mov eax, [out_pos]
+        push eax                 ; save false branch fixup
+        mov eax, 0
+        call emit_dword
+        ; Compile true expression
+        call compile_or_expr
+        ; jmp end
+        mov al, 0xE9
+        call emit_byte
+        mov eax, [out_pos]
+        push eax                 ; save end fixup
+        mov eax, 0
+        call emit_dword
+        ; Fixup false branch
+        pop edx                  ; end fixup
+        pop ebx                  ; false branch fixup
+        push edx                 ; re-push end fixup
+        mov eax, [out_pos]
+        sub eax, ebx
+        sub eax, 4
+        mov [out_buffer + ebx], eax
+        ; Expect ':'
+        cmp dword [tok_type], TOK_COLON
+        jne .or_done             ; error, but let it slide
+        call next_token
+        ; Compile false expression
+        call compile_or_expr
+        ; Fixup end
+        pop ebx
+        mov eax, [out_pos]
+        sub eax, ebx
+        sub eax, 4
+        mov [out_buffer + ebx], eax
+
 .or_done:
         popad
         ret
@@ -1833,7 +2590,7 @@ compile_or_expr:
 ;-----------------------------------------------------------------------
 compile_and_expr:
         pushad
-        call compile_eq_expr
+        call compile_bitor_expr
 .and_loop:
         cmp dword [tok_type], TOK_AND
         jne .and_done
@@ -1841,14 +2598,50 @@ compile_and_expr:
         ; push rax (left)
         mov al, 0x50
         call emit_byte
-        call compile_eq_expr
-        ; pop rbx; and rax, rbx (64-bit)
-        mov al, 0x5B             ; pop rbx
+        call compile_bitor_expr
+        ; Logical AND: convert both to boolean, then AND
+        ; test rax, rax; setne al; movzx eax, al
+        call emit_rex_w
+        mov al, 0x85
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0x95             ; setne al
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        ; movzx ecx, al
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0xB6
+        call emit_byte
+        mov al, 0xC8
+        call emit_byte
+        ; pop rax; test rax, rax; setne al; movzx eax, al; and eax, ecx
+        mov al, 0x58
         call emit_byte
         call emit_rex_w
-        mov al, 0x21             ; and rax, rbx
+        mov al, 0x85
         call emit_byte
-        mov al, 0xD8
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0x95
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0xB6
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x21             ; and eax, ecx
+        call emit_byte
+        mov al, 0xC8
         call emit_byte
         jmp .and_loop
 .and_done:
@@ -1856,7 +2649,82 @@ compile_and_expr:
         ret
 
 ;-----------------------------------------------------------------------
-; Precedence level 3: == !=
+; Precedence level 3: | (bitwise OR)
+;-----------------------------------------------------------------------
+compile_bitor_expr:
+        pushad
+        call compile_bitxor_expr
+.bitor_loop:
+        cmp dword [tok_type], TOK_PIPE
+        jne .bitor_done
+        call next_token
+        mov al, 0x50
+        call emit_byte
+        call compile_bitxor_expr
+        mov al, 0x5B             ; pop rbx
+        call emit_byte
+        call emit_rex_w
+        mov al, 0x09             ; or rax, rbx
+        call emit_byte
+        mov al, 0xD8
+        call emit_byte
+        jmp .bitor_loop
+.bitor_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Precedence level 4: ^ (bitwise XOR)
+;-----------------------------------------------------------------------
+compile_bitxor_expr:
+        pushad
+        call compile_bitand_expr
+.bitxor_loop:
+        cmp dword [tok_type], TOK_CARET
+        jne .bitxor_done
+        call next_token
+        mov al, 0x50
+        call emit_byte
+        call compile_bitand_expr
+        mov al, 0x5B             ; pop rbx
+        call emit_byte
+        call emit_rex_w
+        mov al, 0x31             ; xor rax, rbx
+        call emit_byte
+        mov al, 0xD8
+        call emit_byte
+        jmp .bitxor_loop
+.bitxor_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Precedence level 5: & (bitwise AND)
+;-----------------------------------------------------------------------
+compile_bitand_expr:
+        pushad
+        call compile_eq_expr
+.bitand_loop:
+        cmp dword [tok_type], TOK_AMPERSAND
+        jne .bitand_done
+        call next_token
+        mov al, 0x50
+        call emit_byte
+        call compile_eq_expr
+        mov al, 0x5B             ; pop rbx
+        call emit_byte
+        call emit_rex_w
+        mov al, 0x21             ; and rax, rbx
+        call emit_byte
+        mov al, 0xD8
+        call emit_byte
+        jmp .bitand_loop
+.bitand_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Precedence level 6: == !=
 ;-----------------------------------------------------------------------
 compile_eq_expr:
         pushad
@@ -1896,11 +2764,11 @@ compile_eq_expr:
         ret
 
 ;-----------------------------------------------------------------------
-; Precedence level 4: < > <= >=
+; Precedence level 7: < > <= >=
 ;-----------------------------------------------------------------------
 compile_rel_expr:
         pushad
-        call compile_add_expr
+        call compile_shift_expr
 .rel_loop:
         cmp dword [tok_type], TOK_LT
         je .lt_op
@@ -1960,13 +2828,13 @@ compile_rel_expr:
         popad
         ret
 
-; Helper: emit push rax, call next_level (rel calls add), pop + cmp (64-bit)
+; Helper: emit push rax, call next_level, pop + cmp (64-bit)
 ; Used by eq_expr and rel_expr
 cmp_emit_push_rhs_cmp:
         call next_token
         mov al, 0x50             ; push rax
         call emit_byte
-        call compile_add_expr
+        call compile_shift_expr
         call emit_rex_w          ; REX.W for mov rcx, rax
         mov al, 0x89
         call emit_byte
@@ -1993,7 +2861,64 @@ cmp_emit_movzx:
         ret
 
 ;-----------------------------------------------------------------------
-; Precedence level 5: + -  (left-to-right)
+; Precedence level 8: << >> (shift)
+;-----------------------------------------------------------------------
+compile_shift_expr:
+        pushad
+        call compile_add_expr
+.shift_loop:
+        cmp dword [tok_type], TOK_SHL
+        je .shl_op
+        cmp dword [tok_type], TOK_SHR
+        je .shr_op
+        jmp .shift_done
+
+.shl_op:
+        call next_token
+        mov al, 0x50             ; push rax (left)
+        call emit_byte
+        call compile_add_expr
+        ; mov rcx, rax; pop rax; shl rax, cl
+        call emit_rex_w
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC1             ; mov rcx, rax
+        call emit_byte
+        mov al, 0x58             ; pop rax
+        call emit_byte
+        call emit_rex_w
+        mov al, 0xD3             ; shl rax, cl
+        call emit_byte
+        mov al, 0xE0
+        call emit_byte
+        jmp .shift_loop
+
+.shr_op:
+        call next_token
+        mov al, 0x50             ; push rax (left)
+        call emit_byte
+        call compile_add_expr
+        ; mov rcx, rax; pop rax; sar rax, cl (arithmetic shift)
+        call emit_rex_w
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC1             ; mov rcx, rax
+        call emit_byte
+        mov al, 0x58             ; pop rax
+        call emit_byte
+        call emit_rex_w
+        mov al, 0xD3             ; sar rax, cl
+        call emit_byte
+        mov al, 0xF8
+        call emit_byte
+        jmp .shift_loop
+
+.shift_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Precedence level 9: + -  (left-to-right)
 ;-----------------------------------------------------------------------
 compile_add_expr:
         pushad
@@ -2136,7 +3061,7 @@ compile_mul_expr:
         ret
 
 ;-----------------------------------------------------------------------
-; Unary: ! and unary minus
+; Unary: !, ~, and unary minus
 ;-----------------------------------------------------------------------
 compile_unary:
         pushad
@@ -2145,6 +3070,8 @@ compile_unary:
         je .un_not
         cmp dword [tok_type], TOK_MINUS
         je .un_neg
+        cmp dword [tok_type], TOK_TILDE
+        je .un_bitnot
 
         ; Not a unary operator - fall through to primary
         call compile_primary
@@ -2184,6 +3111,18 @@ compile_unary:
         mov al, 0xF7
         call emit_byte
         mov al, 0xD8
+        call emit_byte
+        popad
+        ret
+
+.un_bitnot:
+        call next_token
+        call compile_unary
+        ; not rax (REX.W + F7 D0)
+        call emit_rex_w
+        mov al, 0xF7
+        call emit_byte
+        mov al, 0xD0
         call emit_byte
         popad
         ret
@@ -2326,14 +3265,14 @@ compile_primary:
         cmp dword [tok_type], TOK_RBRACKET
         jne .cp_arr_err2
         call next_token            ; skip ']'
-        ; Array load: RAX = arr[index]
-        ; imul rax,rax,8 (REX.W + 6B C0 08)
+        ; Array load: EAX = arr[index]
+        ; imul eax,eax,4
         call emit_rex_w
         mov al, 0x6B
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        mov al, 8                  ; 8 bytes per element (64-bit)
+        mov al, 4                  ; 4 bytes per int element
         call emit_byte
         ; add rax, base (REX.W + 05 imm32)
         call emit_rex_w
@@ -2381,6 +3320,24 @@ compile_func_call:
         mov edi, kw_c_printf
         call str_eq
         jc .cfc_printf
+        mov edi, kw_c_puts
+        call str_eq
+        jc .cfc_puts
+        mov edi, kw_c_strlen
+        call str_eq
+        jc .cfc_strlen
+        mov edi, kw_c_malloc
+        call str_eq
+        jc .cfc_malloc
+        mov edi, kw_c_free
+        call str_eq
+        jc .cfc_free
+        mov edi, kw_c_abs
+        call str_eq
+        jc .cfc_abs
+        mov edi, kw_c_atoi
+        call str_eq
+        jc .cfc_atoi
 
         ; User function call: look up in symbol table and emit call
         push esi                 ; save function name pointer
@@ -2424,17 +3381,15 @@ compile_func_call:
         sub eax, [out_pos]
         sub eax, 4
         call emit_dword
-        ; Caller cleanup: add rsp, ecx*8 (64-bit: 8 bytes per arg)
+        ; Caller cleanup: add esp, ecx*4 (32-bit: 4 bytes per arg)
         cmp ecx, 0
         je .cfc_udone
-        call emit_rex_w          ; REX.W for add rsp, imm8
         mov al, 0x83
         call emit_byte
         mov al, 0xC4
         call emit_byte
         mov eax, ecx
-        shl eax, 3               ; multiply by 8 (not 4)
-        shl eax, 2
+        shl eax, 2               ; multiply by 4 (32-bit stack slots)
         call emit_byte
 .cfc_udone:
         popad
@@ -2558,6 +3513,248 @@ compile_func_call:
 .cfc_printf_expr:
         call compile_expression
         call emit_print_dec_inline
+        cmp dword [tok_type], TOK_RPAREN
+        jne .cfc_err
+        call next_token
+        popad
+        ret
+
+.cfc_puts:
+        ; puts(str) - print string and newline
+        call compile_expression
+        ; mov ebx, eax (string addr)
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC3
+        call emit_byte
+        ; mov eax, SYS_PRINT; int 0x80
+        mov al, 0xB8
+        call emit_byte
+        mov eax, SYS_PRINT
+        call emit_dword
+        mov al, 0xCD
+        call emit_byte
+        mov al, 0x80
+        call emit_byte
+        ; putchar('\n'): mov ebx, 10; mov eax, SYS_PUTCHAR; int 0x80
+        mov al, 0xBB
+        call emit_byte
+        mov eax, 10
+        call emit_dword
+        mov al, 0xB8
+        call emit_byte
+        mov eax, SYS_PUTCHAR
+        call emit_dword
+        mov al, 0xCD
+        call emit_byte
+        mov al, 0x80
+        call emit_byte
+        cmp dword [tok_type], TOK_RPAREN
+        jne .cfc_err
+        call next_token
+        popad
+        ret
+
+.cfc_strlen:
+        ; strlen(str) -> length in rax
+        call compile_expression
+        ; Inline strlen: mov rdi, rax; xor rcx, rcx; dec rcx; xor al, al; repne scasb; not rcx; dec rcx; mov rax, rcx
+        call emit_rex_w
+        mov al, 0x89             ; mov rdi, rax
+        call emit_byte
+        mov al, 0xC7
+        call emit_byte
+        call emit_rex_w
+        mov al, 0x31             ; xor rcx, rcx
+        call emit_byte
+        mov al, 0xC9
+        call emit_byte
+        call emit_rex_w
+        mov al, 0xFF             ; dec rcx
+        call emit_byte
+        mov al, 0xC9
+        call emit_byte
+        mov al, 0x30             ; xor al, al
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0xF2             ; repne scasb
+        call emit_byte
+        mov al, 0xAE
+        call emit_byte
+        call emit_rex_w
+        mov al, 0xF7             ; not rcx
+        call emit_byte
+        mov al, 0xD1
+        call emit_byte
+        call emit_rex_w
+        mov al, 0xFF             ; dec rcx
+        call emit_byte
+        mov al, 0xC9
+        call emit_byte
+        call emit_rex_w
+        mov al, 0x89             ; mov rax, rcx
+        call emit_byte
+        mov al, 0xC8
+        call emit_byte
+        cmp dword [tok_type], TOK_RPAREN
+        jne .cfc_err
+        call next_token
+        popad
+        ret
+
+.cfc_malloc:
+        ; malloc(size) -> pointer in rax
+        call compile_expression
+        ; mov ebx, eax (size); mov eax, SYS_MALLOC; int 0x80
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC3
+        call emit_byte
+        mov al, 0xB8
+        call emit_byte
+        mov eax, SYS_MALLOC
+        call emit_dword
+        mov al, 0xCD
+        call emit_byte
+        mov al, 0x80
+        call emit_byte
+        cmp dword [tok_type], TOK_RPAREN
+        jne .cfc_err
+        call next_token
+        popad
+        ret
+
+.cfc_free:
+        ; free(ptr)
+        call compile_expression
+        ; mov ebx, eax (ptr); mov eax, SYS_FREE; int 0x80
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC3
+        call emit_byte
+        mov al, 0xB8
+        call emit_byte
+        mov eax, SYS_FREE
+        call emit_dword
+        mov al, 0xCD
+        call emit_byte
+        mov al, 0x80
+        call emit_byte
+        cmp dword [tok_type], TOK_RPAREN
+        jne .cfc_err
+        call next_token
+        popad
+        ret
+
+.cfc_abs:
+        ; abs(n) -> absolute value in rax
+        call compile_expression
+        ; Inline abs: test rax, rax; jns .pos; neg rax; .pos:
+        call emit_rex_w
+        mov al, 0x85             ; test rax, rax
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 0x79             ; jns +3 (skip neg)
+        call emit_byte
+        mov al, 3
+        call emit_byte
+        call emit_rex_w
+        mov al, 0xF7             ; neg rax
+        call emit_byte
+        mov al, 0xD8
+        call emit_byte
+        cmp dword [tok_type], TOK_RPAREN
+        jne .cfc_err
+        call next_token
+        popad
+        ret
+
+.cfc_atoi:
+        ; atoi(str) -> integer in rax
+        call compile_expression
+        ; Inline atoi: mov rsi, rax; xor rax, rax; xor rcx, rcx; .loop: movzx rdx, byte [rsi]; test dl, dl; jz .done; sub dl, '0'; js .done; cmp dl, 9; ja .done; imul rax, 10; add rax, rdx; inc rsi; jmp .loop; .done:
+        ; mov rsi, rax
+        call emit_rex_w
+        mov al, 0x89
+        call emit_byte
+        mov al, 0xC6
+        call emit_byte
+        ; xor rax, rax
+        call emit_rex_w
+        mov al, 0x31
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        ; .loop (offset 0): movzx rdx, byte [rsi] (REX.W 0F B6 16)
+        call emit_rex_w
+        mov al, 0x0F
+        call emit_byte
+        mov al, 0xB6
+        call emit_byte
+        mov al, 0x16
+        call emit_byte
+        ; test dl, dl
+        mov al, 0x84
+        call emit_byte
+        mov al, 0xD2
+        call emit_byte
+        ; jz .done (+23 bytes from here)
+        mov al, 0x74
+        call emit_byte
+        mov al, 23
+        call emit_byte
+        ; sub dl, '0'
+        mov al, 0x80
+        call emit_byte
+        mov al, 0xEA
+        call emit_byte
+        mov al, '0'
+        call emit_byte
+        ; js .done (+17)
+        mov al, 0x78
+        call emit_byte
+        mov al, 17
+        call emit_byte
+        ; cmp dl, 9
+        mov al, 0x80
+        call emit_byte
+        mov al, 0xFA
+        call emit_byte
+        mov al, 9
+        call emit_byte
+        ; ja .done (+11)
+        mov al, 0x77
+        call emit_byte
+        mov al, 11
+        call emit_byte
+        ; imul rax, rax, 10
+        call emit_rex_w
+        mov al, 0x6B
+        call emit_byte
+        mov al, 0xC0
+        call emit_byte
+        mov al, 10
+        call emit_byte
+        ; add rax, rdx
+        call emit_rex_w
+        mov al, 0x01
+        call emit_byte
+        mov al, 0xD0
+        call emit_byte
+        ; inc rsi
+        call emit_rex_w
+        mov al, 0xFF
+        call emit_byte
+        mov al, 0xC6
+        call emit_byte
+        ; jmp .loop (-35 bytes)
+        mov al, 0xEB
+        call emit_byte
+        mov al, 256-35
+        call emit_byte
+        ; .done: (result in rax)
         cmp dword [tok_type], TOK_RPAREN
         jne .cfc_err
         call next_token
@@ -2754,11 +3951,7 @@ emit_qword:
         ret
 
 emit_rex_w:
-        ; Emit REX.W prefix (0x48) for 64-bit operand size
-        push eax
-        mov al, 0x48
-        call emit_byte
-        pop eax
+        ; 32-bit target: old x86-64 prefixes must not be emitted
         ret
 
 emit_jmp_placeholder:
@@ -2805,11 +3998,10 @@ add_global_var:
         mov eax, BASE_ADDR
         add eax, [out_pos]
         mov [edi + 4], eax
-        ; Emit 8 bytes of zero (global var storage, 64-bit)
+        ; Emit 4 bytes of zero (global int storage)
         push eax
         mov eax, 0
-        xor edx, edx
-        call emit_qword
+        call emit_dword
         pop eax
         inc dword [sym_count]
 .agv_full:
@@ -2849,14 +4041,13 @@ add_global_array:
         add eax, [out_pos]
         mov [edi + 4], eax
 
-        ; Emit N qwords of zero (64-bit)
+        ; Emit N dwords of zero (32-bit ints)
         mov ecx, edx
         xor eax, eax
-        xor edx, edx
 .aga_emit:
         cmp ecx, 0
         je .aga_count_done
-        call emit_qword
+        call emit_dword
         dec ecx
         jmp .aga_emit
 
@@ -3057,6 +4248,42 @@ str_copy_local:
         jne str_copy_local
         ret
 
+; hex_digit_val: Convert hex char in AL to value (0-15), or -1 if invalid
+; Returns in EAX
+hex_digit_val:
+        cmp al, '0'
+        jb .hdv_invalid
+        cmp al, '9'
+        jbe .hdv_digit
+        cmp al, 'a'
+        jb .hdv_check_upper
+        cmp al, 'f'
+        jbe .hdv_lower
+        jmp .hdv_invalid
+.hdv_check_upper:
+        cmp al, 'A'
+        jb .hdv_invalid
+        cmp al, 'F'
+        jbe .hdv_upper
+        jmp .hdv_invalid
+.hdv_digit:
+        sub al, '0'
+        movzx eax, al
+        ret
+.hdv_lower:
+        sub al, 'a'
+        add al, 10
+        movzx eax, al
+        ret
+.hdv_upper:
+        sub al, 'A'
+        add al, 10
+        movzx eax, al
+        ret
+.hdv_invalid:
+        mov eax, -1
+        ret
+
 ;=======================================================================
 ; DATA
 ;=======================================================================
@@ -3074,6 +4301,22 @@ kw_c_putchar:   db "putchar", 0
 kw_c_getchar:   db "getchar", 0
 kw_c_exit_fn:   db "exit", 0
 kw_c_printf:    db "printf", 0
+kw_c_break:     db "break", 0
+kw_c_continue:  db "continue", 0
+kw_c_do:        db "do", 0
+kw_c_switch:    db "switch", 0
+kw_c_case:      db "case", 0
+kw_c_default:   db "default", 0
+kw_c_char:      db "char", 0
+kw_c_puts:      db "puts", 0
+kw_c_gets:      db "gets", 0
+kw_c_strlen:    db "strlen", 0
+kw_c_strcmp:    db "strcmp", 0
+kw_c_strcpy:    db "strcpy", 0
+kw_c_atoi:      db "atoi", 0
+kw_c_malloc:    db "malloc", 0
+kw_c_free:      db "free", 0
+kw_c_abs:       db "abs", 0
 
 ; Messages
 msg_usage:      db "Tiny C Compiler for Mellivora OS", 0x0A
@@ -3131,6 +4374,21 @@ for_inc_kind:   dd 0
 for_inc_value:  dd 0
 ; lexer position saved for assignment lookahead in compile_expression
 expr_probe_pos: dd 0
+
+; Loop control for break/continue
+loop_start:     dd 0            ; address of loop start (for continue)
+loop_exit:      dd 0            ; address of loop exit (for break)
+break_fixup_count: dd 0
+break_fixups:   times 64 dd 0   ; fixup addresses for break statements
+continue_fixup_count: dd 0
+continue_fixups: times 64 dd 0  ; fixup addresses for continue statements
+
+; Switch statement state
+switch_expr_val: dd 0           ; value of switch expression (for case matching)
+switch_case_count: dd 0
+switch_default_fixup: dd 0      ; fixup for default label
+switch_end_fixup: dd 0          ; fixup for switch end
+switch_case_fixups: times 64 dd 0  ; fixup addresses for case jumps
 
 ; Fixups
 fixup_count:    dd 0

@@ -250,6 +250,16 @@ SYS_CHOWN           equ 69      ; Change owner: EBX=filename ECX=uid -> EAX=0/-1
 SYS_SYMLINK         equ 70      ; Create symlink: EBX=linkname ECX=target -> EAX=0/-1
 SYS_READLINK        equ 71      ; Read link: EBX=linkname ECX=buf -> EAX=len/-1
 
+; v4.0 syscalls
+SYS_SETPRIORITY     equ 72      ; Set priority: EBX=pid(0=self) ECX=prio -> EAX=0/-1
+SYS_GETPRIORITY     equ 73      ; Get priority: EBX=pid(0=self) -> EAX=prio/-1
+SYS_SIGNAL          equ 74      ; Send signal: EBX=pid ECX=signum -> EAX=0/-1
+SYS_SETPGID         equ 75      ; Set PGID: EBX=pid(0=self) ECX=pgid(0=own) -> EAX=0/-1
+SYS_GETPGID         equ 76      ; Get PGID: EBX=pid(0=self) -> EAX=pgid/-1
+SYS_SIGMASK         equ 77      ; Signal mask: EBX=op ECX=mask -> EAX=old_mask/-1
+SYS_TASKNAME        equ 78      ; Set task name: EBX=name_ptr -> EAX=0
+SYS_REALLOC         equ 79      ; Realloc: EBX=ptr ECX=new_size -> EAX=new_ptr/0
+
 ; File descriptor constants
 FD_MAX              equ 8
 FD_ENTRY_SIZE       equ 32
@@ -264,7 +274,7 @@ ELF_EHDR_SIZE       equ 52
 ELF_PHDR_SIZE       equ 32
 
 ; Environment
-ENV_MAX             equ 16
+ENV_MAX             equ 32
 ENV_ENTRY_SIZE      equ 128
 
 ; Ctrl+C / Tab
