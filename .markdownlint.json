@@ -1,4 +1,12 @@
 {
+  "MD013": {
+    "line_length": 500,
+    "heading_line_length": 500,
+    "code_blocks": false,
+    "tables": false,
+    "headings": false,
+    "stern": false
+  },
   "MD024": {
     "siblings_only": true
   }
