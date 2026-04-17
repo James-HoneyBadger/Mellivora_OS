@@ -85,11 +85,11 @@ start:
         jge .f1_remaining
 
         ; Compare current lines
-        push esi
-        push edi
+        push rsi
+        push rdi
         call compare_lines
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         cmp eax, 0
         je .lines_same
 
@@ -101,9 +101,9 @@ start:
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        push esi
+        push rsi
         call print_line
-        pop esi
+        pop rsi
 
         ; Print "> " + line from file2
         mov eax, SYS_PUTCHAR
@@ -112,9 +112,9 @@ start:
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        push edi
+        push rdi
         call print_line_edi
-        pop edi
+        pop rdi
 
 .lines_same:
         ; Advance both pointers past current line
@@ -134,9 +134,9 @@ start:
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        push esi
+        push rsi
         call print_line
-        pop esi
+        pop rsi
         call advance_esi
         jmp .f1_remaining
 
@@ -151,9 +151,9 @@ start:
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        push edi
+        push rdi
         call print_line_edi
-        pop edi
+        pop rdi
         call advance_edi
         jmp .check_f2_remaining
 
@@ -179,8 +179,8 @@ start:
 
 ; Compare lines at ESI and EDI, return EAX=0 if equal
 compare_lines:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .cl_loop:
         movzx eax, byte [esi]
         movzx ebx, byte [edi]
@@ -206,13 +206,13 @@ compare_lines:
         jmp .cl_neq
 .cl_eq:
         xor eax, eax
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 .cl_neq:
         mov eax, 1
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ; Print line at ESI (until newline), then newline

@@ -105,7 +105,7 @@ start:
 ; init_board - Set up starting position
 ;=======================================
 init_board:
-        pushad
+        PUSHALL
         ; Clear board
         mov edi, board
         mov ecx, 64
@@ -149,14 +149,14 @@ init_board:
         mov byte [turn], 0     ; White starts
         mov dword [move_count], 0
 
-        popad
+        POPALL
         ret
 
 ;=======================================
 ; draw_board - Display the chess board
 ;=======================================
 draw_board:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -185,15 +185,15 @@ draw_board:
         call io_putchar
 
         ; 8 squares
-        push ecx
+        push rcx
         xor edx, edx           ; column
 .db_col:
         cmp edx, 8
         jge .db_next_col
 
         ; Determine square color
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, ecx
         add eax, edx
         and eax, 1
@@ -205,25 +205,25 @@ draw_board:
 .db_dark_sq:
         mov byte [sq_bg], 0x20  ; Green bg (dark square)
 .db_sq_color_done:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Get piece
-        push ecx
+        push rcx
         imul ecx, 8
         add ecx, edx
         movzx eax, byte [board + ecx]
-        pop ecx
+        pop rcx
 
         ; Determine piece character and color
         test eax, eax
         jz .db_empty_sq
 
-        push eax
+        push rax
         mov ebx, eax
         and ebx, PIECE_MASK
         and eax, COLOR_MASK
-        push eax                ; color
+        push rax                ; color
 
         ; Piece char
         dec ebx
@@ -231,7 +231,7 @@ draw_board:
         mov [sq_char], bl
 
         ; Piece color: white pieces = bright white, black = black
-        pop eax
+        pop rax
         cmp eax, WHITE
         jne .db_black_piece
         movzx eax, byte [sq_bg]
@@ -247,7 +247,7 @@ draw_board:
         movzx eax, byte [sq_bg]
 
 .db_set_sq:
-        push edx
+        push rdx
         mov eax, SYS_SETCOLOR
         movzx ebx, byte [sq_bg]
         cmp byte [sq_char], ' '
@@ -256,16 +256,16 @@ draw_board:
         movzx ebx, byte [board + ecx*0]  ; We need to redo this
 .db_empty_color:
         ; Just use sq_bg for empty
-        pop edx
+        pop rdx
 
         ; Simpler: construct color attribute
-        push ecx
+        push rcx
         imul ecx, 8
         add ecx, edx
         movzx eax, byte [board + ecx]
-        pop ecx
+        pop rcx
 
-        push edx
+        push rdx
         mov ebx, eax
         and ebx, COLOR_MASK
         movzx edx, byte [sq_bg]
@@ -285,7 +285,7 @@ draw_board:
         mov eax, SYS_SETCOLOR
         movzx ebx, dl
         int 0x80
-        pop edx
+        pop rdx
 
         ; Print: space, piece char, space (3 chars per square)
         mov al, ' '
@@ -304,7 +304,7 @@ draw_board:
         mov ebx, COLOR_DEFAULT
         int 0x80
         call io_newline
-        pop ecx
+        pop rcx
         dec ecx
         jmp .db_row
 
@@ -324,15 +324,15 @@ draw_board:
         mov esi, info_str
         call io_println
 
-        popad
+        POPALL
         ret
 
 ;=======================================
 ; parse_move: ESI=input -> sets from/to, EAX=0 ok
 ;=======================================
 parse_move:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
 
         ; Expected format: a-h digit a-h digit (4 chars)
         movzx eax, byte [esi]
@@ -360,20 +360,20 @@ parse_move:
         mov [to_row], eax
 
         xor eax, eax
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 .pm_err:
         mov eax, 1
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;=======================================
 ; validate_move - Check if move is legal, EAX=0 ok
 ;=======================================
 validate_move:
-        pushad
+        PUSHALL
 
         ; Get source piece
         mov eax, [from_row]
@@ -452,13 +452,13 @@ validate_move:
         cmp ecx, 2
         jne .vm_illegal
         ; Check intermediate square empty
-        push ebx
+        push rbx
         mov eax, [from_row]
         inc eax
         imul eax, 8
         add eax, [from_col]
         cmp byte [board + eax], 0
-        pop ebx
+        pop rbx
         jne .vm_illegal
 .vm_pawn_forward_ok:
         ; Destination must be empty for forward move
@@ -479,13 +479,13 @@ validate_move:
         jne .vm_illegal
 .vm_pawn_cap_ok:
         ; Must have enemy piece at destination
-        push ebx
+        push rbx
         mov eax, [to_row]
         imul eax, 8
         add eax, [to_col]
         movzx ebx, byte [board + eax]
         test ebx, ebx
-        pop ebx
+        pop rbx
         jz .vm_illegal
         jmp .vm_legal
 
@@ -499,13 +499,13 @@ validate_move:
         jne .vm_illegal
         cmp ecx, -2
         jne .vm_illegal
-        push ebx
+        push rbx
         mov eax, [from_row]
         dec eax
         imul eax, 8
         add eax, [from_col]
         cmp byte [board + eax], 0
-        pop ebx
+        pop rbx
         jne .vm_illegal
 .vm_bpawn_forward_ok:
         mov eax, [to_row]
@@ -523,13 +523,13 @@ validate_move:
         cmp eax, -1
         jne .vm_illegal
 .vm_bpc_ok:
-        push ebx
+        push rbx
         mov eax, [to_row]
         imul eax, 8
         add eax, [to_col]
         movzx ebx, byte [board + eax]
         test ebx, ebx
-        pop ebx
+        pop rbx
         jz .vm_illegal
         jmp .vm_legal
 
@@ -601,11 +601,11 @@ validate_move:
         jmp .vm_legal
 
 .vm_legal:
-        popad
+        POPALL
         xor eax, eax
         ret
 .vm_illegal:
-        popad
+        POPALL
         mov eax, 1
         ret
 
@@ -613,10 +613,10 @@ validate_move:
 ; check_straight: returns EAX=0 if valid straight line move with clear path
 ;---------------------------------------
 check_straight:
-        push ebx
-        push ecx
-        push edx
-        push esi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
 
         mov eax, [to_col]
         sub eax, [from_col]
@@ -667,13 +667,13 @@ check_straight:
         xor eax, eax
         jmp .cs_ret
 .cs_check_sq:
-        push eax
-        push ecx
+        push rax
+        push rcx
         imul ecx, 8
         add ecx, eax
         cmp byte [board + ecx], 0
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         jnz .cs_fail
         add eax, edx
         add ecx, esi
@@ -682,20 +682,20 @@ check_straight:
 .cs_fail:
         mov eax, 1
 .cs_ret:
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; check_diagonal: returns EAX=0 if valid diagonal with clear path
 ;---------------------------------------
 check_diagonal:
-        push ebx
-        push ecx
-        push edx
-        push esi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
 
         mov eax, [to_col]
         sub eax, [from_col]    ; dx
@@ -747,13 +747,13 @@ check_diagonal:
         xor eax, eax
         jmp .cd_ret
 .cd_check:
-        push eax
-        push ecx
+        push rax
+        push rcx
         imul ecx, 8
         add ecx, eax
         cmp byte [board + ecx], 0
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         jnz .cd_fail
         add eax, edx
         add ecx, esi
@@ -762,17 +762,17 @@ check_diagonal:
 .cd_fail:
         mov eax, 1
 .cd_ret:
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;=======================================
 ; make_move - Execute the move
 ;=======================================
 make_move:
-        pushad
+        PUSHALL
         ; Get source
         mov eax, [from_row]
         imul eax, 8
@@ -806,7 +806,7 @@ make_move:
 
 .mm_done:
         inc dword [move_count]
-        popad
+        POPALL
         ret
 
 ; === Data ===

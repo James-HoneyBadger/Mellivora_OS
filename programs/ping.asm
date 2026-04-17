@@ -58,11 +58,11 @@ start:
 
         ; Got reply
         inc dword [success]
-        push eax
+        push rax
         mov eax, SYS_PRINT
         mov ebx, msg_reply
         int 0x80
-        pop eax
+        pop rax
 
         ; Print RTT (ticks * 10 = ms)
         imul eax, 10
@@ -132,8 +132,8 @@ start:
 ; print_ip - Print IP from EAX
 ;---------------------------------------
 print_ip:
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov ecx, eax
         movzx eax, cl
         call print_dec
@@ -153,8 +153,8 @@ print_ip:
         int 0x80
         movzx eax, ch
         call print_dec
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 ; Strings

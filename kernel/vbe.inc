@@ -54,7 +54,7 @@ VBE_LFB_FALLBACK        equ 0xFD000000
 ; Sets vbe_available = 1 if found.
 ;---------------------------------------
 vbe_init:
-        pushad
+        PUSHALL
 
         ; Read BGA ID register
         mov dx, VBE_DISPI_IOPORT_INDEX
@@ -81,7 +81,7 @@ vbe_init:
         and eax, 0xFFFFFFF0             ; Mask BAR type bits
         cmp eax, 0x10000                ; Sanity check
         jb .try_bga_fb_addr
-        mov [vbe_lfb_addr], eax
+        mov [vbe_lfb_addr], rax
         jmp .done
 
 .try_bga_fb_addr:
@@ -95,17 +95,17 @@ vbe_init:
         shl eax, 16                     ; Reported as top 16 bits of address
         cmp eax, 0x10000                 ; Sanity check
         jb .use_fallback
-        mov [vbe_lfb_addr], eax
+        mov [vbe_lfb_addr], rax
         jmp .done
 
 .use_fallback:
-        mov dword [vbe_lfb_addr], VBE_LFB_FALLBACK
+        mov qword [vbe_lfb_addr], VBE_LFB_FALLBACK
         jmp .done
 
 .no_vbe:
         mov byte [vbe_available], 0
 .done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -113,7 +113,7 @@ vbe_init:
 ; EAX = width, EBX = height, ECX = bpp
 ;---------------------------------------
 vbe_set_mode:
-        pushad
+        PUSHALL
         mov [vbe_width], eax
         mov [vbe_height], ebx
         mov [vbe_bpp], ecx
@@ -175,28 +175,28 @@ vbe_set_mode:
 
         ; Map 8 MB of framebuffer into virtual address space
         ; Map LFB physical pages starting at vbe_lfb_addr
-        mov eax, [vbe_lfb_addr]         ; Start virtual = physical (identity map)
-        mov ebx, eax                    ; Physical address
+        mov rax, [vbe_lfb_addr]         ; Start virtual = physical (identity map)
+        mov rbx, rax                    ; Physical address
         mov ecx, 2048                   ; 2048 pages = 8 MB
 .map_fb_loop:
-        push ecx
+        push rcx
         mov ecx, 0x03                   ; PG_PRESENT | PG_WRITABLE
         call paging_map_page
-        pop ecx
+        pop rcx
         add eax, 4096
         add ebx, 4096
         dec ecx
         jnz .map_fb_loop
 
         mov byte [vbe_active], 1
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; vbe_restore_text - Switch back to 80x25 text mode
 ;---------------------------------------
 vbe_restore_text:
-        pushad
+        PUSHALL
 
         ; Disable BGA
         mov dx, VBE_DISPI_IOPORT_INDEX
@@ -319,19 +319,22 @@ vbe_restore_text:
         call vbe_restore_vga_font
 .skip_font_restore:
 
+        ; Restore standard VGA DAC palette (fixes garbled colours)
+        call vbe_restore_dac_palette
+
         ; Reset VGA cursor
         mov dword [vga_cursor_x], 0
         mov dword [vga_cursor_y], 0
         call vga_update_cursor
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; vbe_save_vga_font - Read font from VGA plane 2
 ;---------------------------------------
 vbe_save_vga_font:
-        pushad
+        PUSHALL
         ; Select plane 2 for reading via GC register 4 (Read Map Select)
         mov dx, 0x3CE
         mov al, 0x04
@@ -367,14 +370,14 @@ vbe_save_vga_font:
         mov dx, 0x3C5
         mov al, 0x02            ; odd/even mode
         out dx, al
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; vbe_restore_vga_font - Write font back to VGA plane 2
 ;---------------------------------------
 vbe_restore_vga_font:
-        pushad
+        PUSHALL
         ; Sequencer: Map Mask = plane 2 only
         mov dx, 0x3C4
         mov al, 0x02
@@ -435,7 +438,28 @@ vbe_restore_vga_font:
         mov dx, 0x3CF
         mov al, 0x0E            ; odd/even + map at B8000
         out dx, al
-        popad
+        POPALL
+        ret
+
+;---------------------------------------
+; vbe_restore_dac_palette - Program standard VGA 16-color DAC
+; Writes the classic EGA/VGA palette to DAC indices 0-15
+; via ports 0x3C8 (index) and 0x3C9 (RGB triplets, 6-bit)
+;---------------------------------------
+vbe_restore_dac_palette:
+        PUSHALL
+        mov dx, 0x3C8
+        xor al, al              ; Start at DAC index 0
+        out dx, al
+        mov esi, vbe_dac_palette
+        mov ecx, 16 * 3         ; 16 colours x 3 components
+        mov dx, 0x3C9
+.dac_loop:
+        lodsb
+        out dx, al
+        dec ecx
+        jnz .dac_loop
+        POPALL
         ret
 
 ; Standard mode 3 CRTC register values (indices 0-24)
@@ -453,19 +477,39 @@ vbe_ac_mode3:
         db 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
         db 0x0C, 0x00, 0x0F, 0x08, 0x00
 
+; Standard VGA DAC palette (16 colours, 6-bit RGB triplets)
+; Matches the classic EGA/VGA text-mode palette
+vbe_dac_palette:
+        db 0x00, 0x00, 0x00     ; 0  black
+        db 0x00, 0x00, 0x2A     ; 1  blue
+        db 0x00, 0x2A, 0x00     ; 2  green
+        db 0x00, 0x2A, 0x2A     ; 3  cyan
+        db 0x2A, 0x00, 0x00     ; 4  red
+        db 0x2A, 0x00, 0x2A     ; 5  magenta
+        db 0x2A, 0x15, 0x00     ; 6  brown
+        db 0x2A, 0x2A, 0x2A     ; 7  light gray
+        db 0x15, 0x15, 0x15     ; 8  dark gray
+        db 0x15, 0x15, 0x3F     ; 9  light blue
+        db 0x15, 0x3F, 0x15     ; 10 light green
+        db 0x15, 0x3F, 0x3F     ; 11 light cyan
+        db 0x3F, 0x15, 0x15     ; 12 light red
+        db 0x3F, 0x15, 0x3F     ; 13 light magenta
+        db 0x3F, 0x3F, 0x15     ; 14 yellow
+        db 0x3F, 0x3F, 0x3F     ; 15 white
+
 ;---------------------------------------
 ; vbe_putpixel - Draw a pixel
 ; EAX = x, EBX = y, ECX = colour (32-bit ARGB)
 ;---------------------------------------
 vbe_putpixel:
-        pushad
+        PUSHALL
         ; offset = y * pitch + x * Bpp
         imul ebx, [vbe_pitch]
         imul eax, [vbe_Bpp]
         add ebx, eax
-        add ebx, [vbe_lfb_addr]
-        mov [ebx], ecx
-        popad
+        add rbx, [vbe_lfb_addr]
+        mov [rbx], ecx
+        POPALL
         ret
 
 ;---------------------------------------
@@ -473,7 +517,7 @@ vbe_putpixel:
 ; EAX = x, EBX = y, ECX = width, EDX = height, ESI = colour
 ;---------------------------------------
 vbe_fill_rect:
-        pushad
+        PUSHALL
         mov [.fr_x], eax
         mov [.fr_w], ecx
         mov [.fr_color], esi
@@ -485,14 +529,14 @@ vbe_fill_rect:
 .fr_col:
         cmp ecx, 0
         je .fr_next_row
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         mov ecx, [.fr_color]
         call vbe_putpixel
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         inc eax
         dec ecx
         jmp .fr_col
@@ -501,7 +545,7 @@ vbe_fill_rect:
         dec edx
         jmp .fr_row
 .fr_done:
-        popad
+        POPALL
         ret
 .fr_x: dd 0
 .fr_w: dd 0
@@ -512,12 +556,12 @@ vbe_fill_rect:
 ; EAX = colour (32-bit ARGB)
 ;---------------------------------------
 vbe_clear:
-        pushad
-        mov edi, [vbe_lfb_addr]
+        PUSHALL
+        mov rdi, [vbe_lfb_addr]
         mov ecx, [vbe_width]
         imul ecx, [vbe_height]
         rep stosd
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -534,18 +578,18 @@ sys_framebuf:
         je .fb_setmode
         cmp ebx, 2
         je .fb_restore
-        mov dword [esp + 28], -1
+        mov qword [rsp + FRAME_RAX], -1
         ret
 
 .fb_info:
-        mov eax, [vbe_lfb_addr]
-        mov [esp + 28], eax             ; EAX
+        mov rax, [vbe_lfb_addr]
+        mov [rsp + FRAME_RAX], rax             ; RAX
         mov eax, [vbe_width]
-        mov [esp + 16], eax             ; EBX
+        mov [rsp + FRAME_RBX], rax             ; RBX
         mov eax, [vbe_height]
-        mov [esp + 24], eax             ; ECX
+        mov [rsp + FRAME_RCX], rax             ; RCX
         mov eax, [vbe_bpp]
-        mov [esp + 20], eax             ; EDX
+        mov [rsp + FRAME_RDX], rax             ; RDX
         ret
 
 .fb_setmode:
@@ -555,16 +599,16 @@ sys_framebuf:
         mov ebx, edx                   ; height
         mov ecx, esi                   ; bpp
         call vbe_set_mode
-        mov dword [esp + 28], 0
+        mov qword [rsp + FRAME_RAX], 0
         ret
 
 .fb_restore:
         call vbe_restore_text
-        mov dword [esp + 28], 0
+        mov qword [rsp + FRAME_RAX], 0
         ret
 
 .fb_novbe:
-        mov dword [esp + 28], -1
+        mov qword [rsp + FRAME_RAX], -1
         ret
 
 ;---------------------------------------
@@ -573,7 +617,7 @@ sys_framebuf:
 ; show mouse cursor, exit on keypress.
 ;---------------------------------------
 cmd_gui_demo:
-        pushad
+        PUSHALL
         cmp byte [vbe_available], 0
         je .gui_no_vbe
 
@@ -603,13 +647,13 @@ cmd_gui_demo:
         mov ecx, [.gui_colors + esi * 4]
 
         ; Draw bar: x, y=0, w=80, h=480
-        push esi
+        push rsi
         mov ebx, 0
         mov edx, 480
         mov esi, ecx
         mov ecx, 80
         call vbe_fill_rect
-        pop esi
+        pop rsi
 
         inc esi
         jmp .gui_bar
@@ -636,10 +680,10 @@ cmd_gui_demo:
         ; Draw cursor (small white cross)
         mov ecx, 8
         mov edx, 8
-        push esi
+        push rsi
         mov esi, 0x00FFFFFF
         call vbe_fill_rect
-        pop esi
+        pop rsi
 
         ; Check for keypress
         call kb_pollchar
@@ -649,7 +693,7 @@ cmd_gui_demo:
         ; Restore text mode
         call vbe_restore_text
 
-        popad
+        POPALL
         ret
 
 .gui_no_vbe:
@@ -657,7 +701,7 @@ cmd_gui_demo:
         mov esi, msg_vbe_no
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ; Colour bar table (8 colours)
@@ -675,7 +719,7 @@ cmd_gui_demo:
 vbe_available:  db 0
 vbe_active:     db 0
                 dw 0            ; padding
-vbe_lfb_addr:   dd 0
+vbe_lfb_addr:   dq 0
 vbe_width:      dd 0
 vbe_height:     dd 0
 vbe_bpp:        dd 0

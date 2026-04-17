@@ -42,7 +42,7 @@ new_game:
 
 ;---------------------------------------
 shuffle_deck:
-        pushad
+        PUSHALL
         ; Initialize deck: 0-51 (suit*13 + rank)
         xor ecx, ecx
 .sd_init:
@@ -79,7 +79,7 @@ shuffle_deck:
 
 .sd_done:
         mov dword [deck_pos], 0
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -93,7 +93,7 @@ draw_card:
 ;---------------------------------------
 card_value:
         ; Input: AL = card (0-51), returns value in EAX
-        pushad
+        PUSHALL
         movzx eax, al
         xor edx, edx
         mov ecx, 13
@@ -104,29 +104,29 @@ card_value:
         jge .cv_face
         ; Pip card: value = rank + 1
         inc edx
-        mov [esp + 28], edx    ; return via EAX in pushad frame
-        popad
+        mov [rsp + 112], edx    ; return via EAX in PUSHALL frame
+        POPALL
         ret
 .cv_face:
-        mov dword [esp + 28], 10
-        popad
+        mov dword [rsp + 112], 10
+        POPALL
         ret
 .cv_ace:
-        mov dword [esp + 28], 11
-        popad
+        mov dword [rsp + 112], 11
+        POPALL
         ret
 
 ;---------------------------------------
 hand_total:
         ; Input: ESI=hand array, ECX=count. Returns EAX=total (with ace adjustment)
-        pushad
+        PUSHALL
         xor edi, edi            ; total
         xor ebp, ebp            ; ace count
         xor ebx, ebx
 .ht_loop:
         cmp ebx, ecx
         jge .ht_adj
-        push ecx
+        push rcx
         movzx eax, byte [esi + ebx]
         call card_value
         add edi, eax
@@ -139,7 +139,7 @@ hand_total:
         jne .ht_notace
         inc ebp
 .ht_notace:
-        pop ecx
+        pop rcx
         inc ebx
         jmp .ht_loop
 .ht_adj:
@@ -153,13 +153,13 @@ hand_total:
         dec ebp
         jmp .ht_adj_loop
 .ht_done:
-        mov [esp + 28], edi
-        popad
+        mov [rsp + 112], edi
+        POPALL
         ret
 
 ;---------------------------------------
 deal_initial:
-        pushad
+        PUSHALL
         mov byte [player_bust], 0
         mov dword [p_count], 0
         mov dword [d_count], 0
@@ -183,12 +183,12 @@ deal_initial:
         mov [d_hand + ecx], al
         inc dword [d_count]
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 player_turn:
-        pushad
+        PUSHALL
 .pt_loop:
         call display_table
         ; Show prompt
@@ -241,11 +241,11 @@ player_turn:
 
 .pt_bust:
         mov byte [player_bust], 1
-        popad
+        POPALL
         ret
 
 .pt_stand:
-        popad
+        POPALL
         ret
 
 .pt_quit:
@@ -258,7 +258,7 @@ player_turn:
 
 ;---------------------------------------
 dealer_turn:
-        pushad
+        PUSHALL
 .dt_loop:
         mov esi, d_hand
         mov ecx, [d_count]
@@ -276,12 +276,12 @@ dealer_turn:
         jmp .dt_loop
 
 .dt_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 display_table:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -354,10 +354,10 @@ display_table:
 .dt_ploop:
         cmp ecx, [p_count]
         jge .dt_ptotal
-        push ecx
+        push rcx
         movzx eax, byte [p_hand + ecx]
         call print_card
-        pop ecx
+        pop rcx
         inc ecx
         jmp .dt_ploop
 
@@ -371,7 +371,7 @@ display_table:
         mov esi, p_hand
         mov ecx, [p_count]
         call hand_total
-        push eax
+        push rax
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, ')'
@@ -379,15 +379,15 @@ display_table:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop eax
+        pop rax
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 display_table_final:
         ; Show everything (dealer's hand revealed)
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -438,10 +438,10 @@ display_table_final:
 .dtf_dloop:
         cmp ecx, [d_count]
         jge .dtf_dtotal
-        push ecx
+        push rcx
         movzx eax, byte [d_hand + ecx]
         call print_card
-        pop ecx
+        pop rcx
         inc ecx
         jmp .dtf_dloop
 .dtf_dtotal:
@@ -476,10 +476,10 @@ display_table_final:
 .dtf_ploop:
         cmp ecx, [p_count]
         jge .dtf_ptotal
-        push ecx
+        push rcx
         movzx eax, byte [p_hand + ecx]
         call print_card
-        pop ecx
+        pop rcx
         inc ecx
         jmp .dtf_ploop
 .dtf_ptotal:
@@ -500,12 +500,12 @@ display_table_final:
         mov ebx, 10
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 show_result:
-        pushad
+        PUSHALL
         call display_table_final
 
         mov esi, p_hand
@@ -570,7 +570,7 @@ show_result:
         int 0x80
 
 .sr_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -591,14 +591,14 @@ prompt_continue:
 ;---------------------------------------
 print_card:
         ; Input: AL = card index (0-51)
-        pushad
+        PUSHALL
         movzx eax, al
         xor edx, edx
         mov ecx, 13
         div ecx                 ; EAX=suit(0-3), EDX=rank(0-12)
 
         ; Print rank
-        push eax
+        push rax
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F           ; white
         int 0x80
@@ -645,7 +645,7 @@ print_card:
         int 0x80
 
 .pc_suit:
-        pop eax
+        pop rax
         ; Print suit symbol
         cmp eax, 0
         je .pc_spade
@@ -689,7 +689,7 @@ print_card:
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================

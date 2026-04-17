@@ -175,7 +175,7 @@ BROADCAST_IP    equ 0xFFFFFFFF  ; 255.255.255.255
 ; net_init - Scan PCI bus and initialize RTL8139
 ;---------------------------------------
 net_init:
-        pushad
+        PUSHALL
         mov dword [net_state], NET_STATE_NONE
 
         ; Scan PCI bus 0, all 32 devices, all 8 functions
@@ -208,9 +208,9 @@ net_init:
         mov [net_pci_func], dl
 
         ; Read BAR0 (PCI register 0x10)
-        push edx
-        push ecx
-        push ebx
+        push rdx
+        push rcx
+        push rbx
         mov eax, 0x80000000
         movzx esi, bl
         shl esi, 16
@@ -218,28 +218,28 @@ net_init:
         movzx esi, cl
         shl esi, 11
         or eax, esi
-        pop ebx
-        pop ecx
-        pop edx
-        push edx
+        pop rbx
+        pop rcx
+        pop rdx
+        push rdx
         movzx esi, dl
         shl esi, 8
         or eax, esi
         or eax, 0x10
-        push edx
+        push rdx
         mov dx, PCI_CONFIG_ADDR
         out dx, eax
         mov dx, PCI_CONFIG_DATA
         in eax, dx
-        pop edx
-        pop edx
+        pop rdx
+        pop rdx
         and eax, 0xFFFFFFFC
         mov [net_io_base], eax
 
         ; Read PCI interrupt line (register 0x3C, byte 0)
-        push edx
-        push ecx
-        push ebx
+        push rdx
+        push rcx
+        push rbx
         mov eax, 0x80000000
         movzx esi, bl
         shl esi, 16
@@ -247,28 +247,28 @@ net_init:
         movzx esi, cl
         shl esi, 11
         or eax, esi
-        pop ebx
-        pop ecx
-        pop edx
-        push edx
+        pop rbx
+        pop rcx
+        pop rdx
+        push rdx
         movzx esi, dl
         shl esi, 8
         or eax, esi
         or eax, 0x3C
-        push edx
+        push rdx
         mov dx, PCI_CONFIG_ADDR
         out dx, eax
         mov dx, PCI_CONFIG_DATA
         in eax, dx
-        pop edx
-        pop edx
+        pop rdx
+        pop rdx
         and eax, 0xFF
         mov [net_irq], al
 
         ; Enable PCI bus mastering (register 0x04, set bit 2)
-        push edx
-        push ecx
-        push ebx
+        push rdx
+        push rcx
+        push rbx
         mov eax, 0x80000000
         movzx esi, bl
         shl esi, 16
@@ -276,30 +276,30 @@ net_init:
         movzx esi, cl
         shl esi, 11
         or eax, esi
-        pop ebx
-        pop ecx
-        pop edx
-        push edx
+        pop rbx
+        pop rcx
+        pop rdx
+        push rdx
         movzx esi, dl
         shl esi, 8
         or eax, esi
         or eax, 0x04
-        push edx
-        push eax
+        push rdx
+        push rax
         mov dx, PCI_CONFIG_ADDR
         out dx, eax
         mov dx, PCI_CONFIG_DATA
         in eax, dx
         or eax, 0x04           ; Set bus master bit
         mov ecx, eax
-        pop eax
+        pop rax
         mov dx, PCI_CONFIG_ADDR
         out dx, eax
         mov dx, PCI_CONFIG_DATA
         mov eax, ecx
         out dx, eax
-        pop edx
-        pop edx
+        pop rdx
+        pop rdx
 
         call net_read_mac
         mov dword [net_state], NET_STATE_FOUND
@@ -324,7 +324,7 @@ net_init:
         mov dword [net_dns], 0x0302000A        ; 10.0.2.3 LE
         mov word [net_ephemeral_port], EPHEMERAL_START
 .init_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -332,7 +332,7 @@ net_init:
 ;  EBX=bus ECX=device EDX=function -> EAX=config dword 0
 ;---------------------------------------
 pci_read_config_word0:
-        push edx
+        push rdx
         mov eax, 0x80000000
         movzx esi, bl
         shl esi, 16
@@ -347,28 +347,28 @@ pci_read_config_word0:
         out dx, eax
         mov dx, PCI_CONFIG_DATA
         in eax, dx
-        pop edx
+        pop rdx
         ret
 
 ;---------------------------------------
 ; net_read_mac - Read 6-byte MAC from NIC
 ;---------------------------------------
 net_read_mac:
-        pushad
+        PUSHALL
         mov edx, [net_io_base]
         in eax, dx
         mov [net_mac], eax
         add edx, 4
         in eax, dx
         mov [net_mac + 4], ax
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; net_rtl8139_init - Initialize RTL8139
 ;---------------------------------------
 net_rtl8139_init:
-        pushad
+        PUSHALL
         mov ebx, [net_io_base]
 
         ; Power on
@@ -395,7 +395,7 @@ net_rtl8139_init:
         call pmm_alloc_pages
         test eax, eax
         jz .init_fail
-        mov [net_rx_buf], eax
+        mov [net_rx_buf], rax
 
         ; Tell NIC the RX buffer address
         mov ecx, eax
@@ -406,17 +406,17 @@ net_rtl8139_init:
         ; Allocate TX buffers (4 pages, one per descriptor)
         mov ecx, 4
 .alloc_tx:
-        push ecx
+        push rcx
         call pmm_alloc_page
         test eax, eax
         jz .init_fail_pop
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         neg ecx
         add ecx, 5             ; descriptor index: 4-ecx
         dec ecx
-        mov [net_tx_bufs + ecx*4], eax
-        pop ecx
+        mov [net_tx_bufs + rcx*8], rax
+        pop rcx
         dec ecx
         jnz .alloc_tx
 
@@ -424,7 +424,7 @@ net_rtl8139_init:
         call pmm_alloc_page
         test eax, eax
         jz .init_fail
-        mov [net_pkt_buf], eax
+        mov [net_pkt_buf], rax
 
         ; Set IMR: enable ROK and TOK interrupts
         lea edx, [ebx + RTL_IMR]
@@ -450,20 +450,20 @@ net_rtl8139_init:
         call net_read_mac
         mov dword [net_state], NET_STATE_UP
         mov dword [net_tx_desc], 0
-        popad
+        POPALL
         ret
 
 .init_fail_pop:
-        pop ecx
+        pop rcx
 .init_fail:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; net_install_irq - Hook NIC IRQ in IDT and unmask PIC
 ;---------------------------------------
 net_install_irq:
-        pushad
+        PUSHALL
         movzx eax, byte [net_irq]
 
         ; Calculate INT vector: IRQ 0-7 -> 0x20-0x27, IRQ 8-15 -> 0x28-0x2F
@@ -472,10 +472,10 @@ net_install_irq:
         ; PIC2 IRQ
         mov ecx, eax
         add ecx, 0x20           ; INT vector
-        push eax
+        push rax
         mov eax, irq_net
         call idt_set_gate
-        pop eax
+        pop rax
 
         ; Unmask on PIC2
         sub eax, 8
@@ -496,10 +496,10 @@ net_install_irq:
 .irq_pic1:
         mov ecx, eax
         add ecx, 0x20
-        push eax
+        push rax
         mov eax, irq_net
         call idt_set_gate
-        pop eax
+        pop rax
 
         ; Unmask on PIC1
         mov cl, al
@@ -511,14 +511,14 @@ net_install_irq:
         out PIC1_DATA, al
 
 .irq_installed:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; irq_net - RTL8139 interrupt handler
 ;---------------------------------------
 irq_net:
-        pushad
+        PUSHALL
 
         mov ebx, [net_io_base]
 
@@ -546,7 +546,7 @@ irq_net:
         jnz .irq_net_eoi
 
         ; Read packet header at rx_buf + rx_offset
-        mov esi, [net_rx_buf]
+        mov rsi, [net_rx_buf]
         add esi, [net_rx_offset]
 
         ; Header: [status:16] [length:16]
@@ -567,22 +567,22 @@ irq_net:
 
         ; Copy packet to processing buffer (skip 4-byte header)
         sub ecx, 4             ; Remove CRC from length
-        push ecx
+        push rcx
         add esi, 4             ; Skip RX header
-        mov edi, [net_pkt_buf]
+        mov rdi, [net_pkt_buf]
         cld
         rep movsb
-        pop ecx
+        pop rcx
 
         ; Process the Ethernet frame
-        push ebx
-        mov esi, [net_pkt_buf]
+        push rbx
+        mov rsi, [net_pkt_buf]
         call net_process_frame
-        pop ebx
+        pop rbx
 
 .rx_skip:
         ; Advance RX offset: (offset + length + 4 header + 3) & ~3
-        mov esi, [net_rx_buf]
+        mov rsi, [net_rx_buf]
         add esi, [net_rx_offset]
         mov eax, [esi]
         shr eax, 16            ; length
@@ -619,8 +619,8 @@ irq_net:
         mov al, 0x20
         out PIC1_CMD, al
 
-        popad
-        iretd
+        POPALL
+        iretq
 
 ;---------------------------------------
 ; net_send_frame - Transmit an Ethernet frame
@@ -629,7 +629,7 @@ irq_net:
 ; Returns: CF=0 success, CF=1 failure
 ;---------------------------------------
 net_send_frame:
-        pushad
+        PUSHALL
         cmp dword [net_state], NET_STATE_UP
         jne .send_fail
         cmp ecx, NET_TX_BUF_SIZE
@@ -641,7 +641,7 @@ net_send_frame:
 
         ; Wait for descriptor to be available (OWN bit set = NIC done)
         mov ebx, [net_io_base]
-        push eax
+        push rax
         shl eax, 2
         lea edx, [ebx + RTL_TXSTATUS0]
         add edx, eax
@@ -655,43 +655,43 @@ net_send_frame:
         jz .tx_ready
         dec ebp
         jnz .wait_tx
-        pop eax
+        pop rax
         jmp .send_fail
 .tx_ready:
-        pop eax
+        pop rax
 
         ; Copy frame to TX buffer
-        push ecx
-        mov edi, [net_tx_bufs + eax*4]
+        push rcx
+        mov rdi, [net_tx_bufs + rax*8]
         cld
         rep movsb
-        pop ecx
+        pop rcx
 
         ; Pad to minimum 60 bytes (Ethernet minimum)
         cmp ecx, 60
         jge .tx_no_pad
-        push ecx
-        mov edi, [net_tx_bufs + eax*4]
+        push rcx
+        mov rdi, [net_tx_bufs + rax*8]
         add edi, ecx
         mov ebp, 60
         sub ebp, ecx
         xchg ecx, ebp
         xor al, al
         rep stosb
-        pop ecx
+        pop rcx
         mov ecx, 60
 .tx_no_pad:
 
         ; Write TX buffer address
-        push ecx
+        push rcx
         shl eax, 2
         lea edx, [ebx + RTL_TXADDR0]
         add edx, eax
         shr eax, 2
-        mov esi, [net_tx_bufs + eax*4]
+        mov rsi, [net_tx_bufs + rax*8]
         mov eax, esi
         out dx, eax
-        pop ecx
+        pop rcx
 
         ; Write TX status (length, clear OWN to start TX)
         mov eax, [net_tx_desc]
@@ -705,11 +705,11 @@ net_send_frame:
         ; Advance descriptor
         inc dword [net_tx_desc]
 
-        popad
+        POPALL
         clc
         ret
 .send_fail:
-        popad
+        POPALL
         stc
         ret
 
@@ -724,7 +724,7 @@ net_send_frame:
 ;  ECX = frame length (without CRC)
 ;---------------------------------------
 net_process_frame:
-        pushad
+        PUSHALL
         cmp ecx, ETH_HLEN
         jb .pf_done
 
@@ -752,7 +752,7 @@ net_process_frame:
         jmp .pf_done
 
 .pf_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -763,19 +763,19 @@ net_process_frame:
 ; Uses net_frame_buf for assembly
 ;---------------------------------------
 eth_build_frame:
-        pushad
+        PUSHALL
 
         ; Build frame in net_frame_buf
-        push esi
-        push ecx
+        push rsi
+        push rcx
 
         mov edi, [edi]          ; This won't work - need to pass MAC ptr differently
         ; Actually, let's fix the calling convention:
         ; On entry: stack has dest MAC ptr pushed before call
         ; Let's use a simpler approach - caller pre-builds in net_frame_buf
-        pop ecx
-        pop esi
-        popad
+        pop rcx
+        pop rsi
+        POPALL
         ret
 
 ;---------------------------------------
@@ -785,12 +785,12 @@ eth_build_frame:
 ;  ESI = payload, ECX = payload length
 ;---------------------------------------
 net_send_packet:
-        pushad
+        PUSHALL
         mov edi, net_frame_buf
 
         ; Copy destination MAC
-        push esi
-        push ecx
+        push rsi
+        push rcx
         mov esi, net_frame_dst_mac
         mov ecx, 6
         cld
@@ -806,18 +806,18 @@ net_send_packet:
         stosw
 
         ; Copy payload
-        pop ecx
-        pop esi
-        push ecx
+        pop rcx
+        pop rsi
+        push rcx
         rep movsb
-        pop ecx
+        pop rcx
 
         ; Total frame length = 14 + payload
         add ecx, ETH_HLEN
         mov esi, net_frame_buf
         call net_send_frame
 
-        popad
+        POPALL
         ret
 
 
@@ -831,7 +831,7 @@ net_send_packet:
 ;  ECX = length
 ;---------------------------------------
 arp_handle:
-        pushad
+        PUSHALL
         cmp ecx, 28
         jb .arp_h_done
 
@@ -870,7 +870,7 @@ arp_handle:
         jmp .arp_h_done
 
 .arp_h_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -878,7 +878,7 @@ arp_handle:
 ;  ESI = incoming ARP packet (we reply to its sender)
 ;---------------------------------------
 arp_send_reply:
-        pushad
+        PUSHALL
         mov edi, net_arp_buf
 
         ; Hardware type = 1 (Ethernet), big-endian
@@ -895,27 +895,27 @@ arp_send_reply:
         mov byte [edi+7], 2
 
         ; Sender hardware address = our MAC
-        push esi
+        push rsi
         lea edi, [edi]
         add edi, 8
         mov esi, net_mac
         mov ecx, 6
         cld
         rep movsb
-        pop esi
+        pop rsi
 
         ; Sender protocol address = our IP
         mov eax, [net_ip]
         mov [net_arp_buf + 14], eax
 
         ; Target hardware address = requester's MAC
-        push esi
+        push rsi
         add esi, 8
         mov edi, net_arp_buf + 18
         mov ecx, 6
         cld
         rep movsb
-        pop esi
+        pop rsi
 
         ; Target protocol address = requester's IP
         mov eax, [esi + 14]
@@ -923,19 +923,19 @@ arp_send_reply:
 
         ; Send via Ethernet
         ; Set destination MAC to requester's MAC
-        push esi
+        push rsi
         add esi, 8
         mov edi, net_frame_dst_mac
         mov ecx, 6
         cld
         rep movsb
-        pop esi
+        pop rsi
 
         mov word [net_frame_ethertype], 0x0608  ; ARP = 0x0806 big-endian
         mov esi, net_arp_buf
         mov ecx, 28
         call net_send_packet
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -943,7 +943,7 @@ arp_send_reply:
 ;  EAX = target IP (little-endian)
 ;---------------------------------------
 arp_request:
-        pushad
+        PUSHALL
         mov [net_arp_target_ip], eax
         mov edi, net_arp_buf
 
@@ -990,7 +990,7 @@ arp_request:
         mov esi, net_arp_buf
         mov ecx, 28
         call net_send_packet
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -999,7 +999,7 @@ arp_request:
 ;  EBX = pointer to 6-byte MAC
 ;---------------------------------------
 arp_cache_add:
-        pushad
+        PUSHALL
         mov edi, net_arp_cache
         mov ecx, ARP_CACHE_SIZE
 
@@ -1026,18 +1026,18 @@ arp_cache_add:
 
 .arp_update:
         mov [edi + ARP_ENTRY_IP], eax
-        push esi
+        push rsi
         mov esi, ebx
         lea edi, [edi + ARP_ENTRY_MAC]
-        push edi
+        push rdi
         mov ecx, 6
         cld
         rep movsb
-        pop edi
+        pop rdi
         sub edi, ARP_ENTRY_MAC
         mov byte [edi + ARP_ENTRY_STATE], 2  ; resolved
-        pop esi
-        popad
+        pop rsi
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1047,9 +1047,9 @@ arp_cache_add:
 ; Returns: CF=0 found, CF=1 not found (ARP request sent)
 ;---------------------------------------
 arp_lookup:
-        push ebx
-        push ecx
-        push esi
+        push rbx
+        push rcx
+        push rsi
 
         ; Broadcast IP -> broadcast MAC
         cmp eax, BROADCAST_IP
@@ -1069,7 +1069,7 @@ arp_lookup:
 
 .arp_direct:
         ; Search ARP cache
-        push edi
+        push rdi
         mov edi, net_arp_cache
         mov ecx, ARP_CACHE_SIZE
 .arp_lk:
@@ -1081,40 +1081,40 @@ arp_lookup:
         add edi, ARP_ENTRY_SIZE
         dec ecx
         jnz .arp_lk
-        pop edi
+        pop rdi
 
         ; Not found - send ARP request
         call arp_request
-        pop esi
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rcx
+        pop rbx
         stc
         ret
 
 .arp_lk_found:
         lea esi, [edi + ARP_ENTRY_MAC]
-        pop edi
-        push edi
+        pop rdi
+        push rdi
         mov ecx, 6
         cld
         rep movsb
-        pop edi
-        pop esi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rbx
         clc
         ret
 
 .arp_bcast:
-        push edi
+        push rdi
         mov esi, BROADCAST_MAC
         mov ecx, 6
         cld
         rep movsb
-        pop edi
-        pop esi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rbx
         clc
         ret
 
@@ -1128,7 +1128,7 @@ arp_lookup:
 ;  ESI = IP header, ECX = length
 ;---------------------------------------
 ip_handle:
-        pushad
+        PUSHALL
         cmp ecx, IP_HLEN
         jb .ip_h_done
 
@@ -1173,11 +1173,11 @@ ip_handle:
         mov dl, [esi + 3]      ; total length (big-endian)
 
         ; Payload = ESI + header_len, length = total - header_len
-        push edx
+        push rdx
         sub edx, ecx
         add esi, ecx
         mov ecx, edx
-        pop edx
+        pop rdx
 
         cmp eax, IP_PROTO_ICMP
         je .ip_icmp
@@ -1197,7 +1197,7 @@ ip_handle:
         call tcp_handle
         jmp .ip_h_done
 .ip_h_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1207,10 +1207,10 @@ ip_handle:
 ;  DL  = protocol (ICMP=1, TCP=6, UDP=17)
 ;---------------------------------------
 ip_send:
-        pushad
+        PUSHALL
         mov [net_ip_dst], eax
         mov [net_ip_proto], dl
-        mov [net_ip_payload], esi
+        mov [net_ip_payload], rsi
         mov [net_ip_payload_len], ecx
 
         ; Build IP header in net_ip_buf
@@ -1248,21 +1248,21 @@ ip_send:
         mov [edi+16], eax
 
         ; Compute IP header checksum
-        push edi
+        push rdi
         mov esi, edi
         mov ecx, IP_HLEN
         call inet_checksum
-        pop edi
+        pop rdi
         mov [edi+10], ax
 
         ; Append payload after IP header
-        mov esi, [net_ip_payload]
+        mov rsi, [net_ip_payload]
         mov ecx, [net_ip_payload_len]
-        push ecx
+        push rcx
         lea edi, [edi + IP_HLEN]
         cld
         rep movsb
-        pop ecx
+        pop rcx
 
         ; Resolve destination MAC via ARP
         mov eax, [net_ip_dst]
@@ -1278,7 +1278,7 @@ ip_send:
         mov ecx, [net_ip_payload_len]
         add ecx, IP_HLEN
         call net_send_packet
-        popad
+        POPALL
         ret
 
 .ip_send_arp_wait:
@@ -1292,20 +1292,20 @@ ip_send:
         mov eax, [net_ip_dst]
         ; Check if on different subnet, use gateway
         mov ebx, eax
-        push ecx
+        push rcx
         mov ecx, [net_mask]
         and ebx, ecx
         mov edx, [net_ip]
         and edx, ecx
-        pop ecx
+        pop rcx
         cmp ebx, edx
         je .arp_check_direct
         mov eax, [net_gateway]
 .arp_check_direct:
-        push edi
+        push rdi
         mov edi, net_frame_dst_mac
         call arp_lookup
-        pop edi
+        pop rdi
         jc .arp_wait_loop
 
         ; ARP resolved, send the packet
@@ -1314,11 +1314,11 @@ ip_send:
         mov ecx, [net_ip_payload_len]
         add ecx, IP_HLEN
         call net_send_packet
-        popad
+        POPALL
         ret
 
 .ip_send_fail:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1327,10 +1327,10 @@ ip_send:
 ; Returns: AX = checksum (one's complement)
 ;---------------------------------------
 inet_checksum:
-        push ebx
-        push ecx
-        push edx
-        push esi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
         xor edx, edx
         mov ebx, ecx
         shr ecx, 1
@@ -1356,10 +1356,10 @@ inet_checksum:
         add edx, eax
         not dx
         mov ax, dx
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 
@@ -1373,7 +1373,7 @@ inet_checksum:
 ;  [net_recv_src_ip] = source IP
 ;---------------------------------------
 icmp_handle:
-        pushad
+        PUSHALL
         cmp ecx, 8
         jb .icmp_done
 
@@ -1392,20 +1392,20 @@ icmp_handle:
         mov byte [edi+1], 0    ; code
         mov word [edi+2], 0    ; checksum placeholder
         ; Copy rest of ICMP data (ID, seq, data)
-        push ecx
+        push rcx
         sub ecx, 4
         lea esi, [esi + 4]
         lea edi, [edi + 4]
         cld
         rep movsb
-        pop ecx
+        pop rcx
 
         ; Compute ICMP checksum
         mov esi, net_icmp_buf
-        push ecx
+        push rcx
         call inet_checksum
         mov [net_icmp_buf + 2], ax
-        pop ecx
+        pop rcx
 
         ; Send via IP
         mov esi, net_icmp_buf
@@ -1426,7 +1426,7 @@ icmp_handle:
         jmp .icmp_done
 
 .icmp_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1434,7 +1434,7 @@ icmp_handle:
 ;  EAX = destination IP
 ;---------------------------------------
 icmp_send_echo:
-        pushad
+        PUSHALL
         mov [net_ping_dst_ip], eax
 
         mov edi, net_icmp_buf
@@ -1467,7 +1467,7 @@ icmp_send_echo:
         mov eax, [net_ping_dst_ip]
         mov dl, IP_PROTO_ICMP
         call ip_send
-        popad
+        POPALL
         ret
 
 
@@ -1481,7 +1481,7 @@ icmp_send_echo:
 ;  [net_recv_src_ip] = source IP
 ;---------------------------------------
 udp_handle:
-        pushad
+        PUSHALL
         cmp ecx, 8
         jb .udp_h_done
 
@@ -1508,13 +1508,13 @@ udp_handle:
         je .udp_dns
 
         ; Find matching socket
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov eax, ebx           ; destination port
         mov dl, SOCK_UDP
         call sock_find_by_port
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         cmp eax, -1
         je .udp_h_done
 
@@ -1530,13 +1530,13 @@ udp_handle:
         ; Append to recv buffer
         mov edx, [edi + SOCK_RECV_LEN]
         add ebx, edx
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov edi, ebx
         cld
         rep movsb
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         add [edi + SOCK_RECV_LEN], ecx
 
         ; Store sender info for recvfrom
@@ -1553,7 +1553,7 @@ udp_handle:
         call dns_handle_response
         jmp .udp_h_done
 .udp_h_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1564,11 +1564,11 @@ udp_handle:
 ;  DX = source port (host byte order)
 ;---------------------------------------
 udp_send:
-        pushad
+        PUSHALL
         mov [net_udp_dst_ip], eax
         mov [net_udp_dst_port], bx
         mov [net_udp_local_port], dx
-        mov [net_udp_payload], esi
+        mov [net_udp_payload], rsi
         mov [net_udp_payload_len], ecx
 
         ; Build UDP header in net_udp_buf
@@ -1592,7 +1592,7 @@ udp_send:
         stosw
 
         ; Copy payload
-        mov esi, [net_udp_payload]
+        mov rsi, [net_udp_payload]
         mov ecx, [net_udp_payload_len]
         cld
         rep movsb
@@ -1609,7 +1609,7 @@ udp_send:
         mov eax, [net_udp_dst_ip]
         mov dl, IP_PROTO_UDP
         call ip_send
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1621,7 +1621,7 @@ udp_send:
 ; Returns: AX = checksum (network byte order)
 ;---------------------------------------
 udp_compute_checksum:
-        pushad
+        PUSHALL
         xor edx, edx           ; 32-bit accumulator
 
         ; Add pseudo-header fields
@@ -1654,13 +1654,12 @@ udp_compute_checksum:
         dec ecx
         jnz .udp_cksum_loop
 .udp_cksum_odd:
-        ; Handle odd byte
+        ; Handle odd trailing byte (same LE convention as inet_checksum)
         mov ecx, [net_udp_payload_len]
         add ecx, 8
         test ecx, 1
         jz .udp_cksum_fold
         movzx eax, byte [esi]
-        shl eax, 8             ; pad with zero on right
         add edx, eax
 
 .udp_cksum_fold:
@@ -1682,8 +1681,8 @@ udp_compute_checksum:
         jnz .udp_cksum_ok
         mov dx, 0xFFFF
 .udp_cksum_ok:
-        mov [esp + 28], edx    ; Return in EAX via pushad frame
-        popad
+        mov [rsp + FRAME_RAX], rdx    ; Return in RAX via PUSHALL frame
+        POPALL
         ret
 
 
@@ -1697,7 +1696,7 @@ udp_compute_checksum:
 ;  [net_recv_src_ip] = source IP
 ;---------------------------------------
 tcp_handle:
-        pushad
+        PUSHALL
         cmp ecx, 20
         jb .tcp_h_done
 
@@ -1733,13 +1732,13 @@ tcp_handle:
         mov [net_tcp_flags], al
 
         ; Find socket by dest port
-        push esi
-        push ecx
+        push rsi
+        push rcx
         movzx eax, word [net_tcp_dst_port]
         mov dl, SOCK_TCP
         call sock_find_by_port
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         cmp eax, -1
         je .tcp_h_done
 
@@ -1785,8 +1784,8 @@ tcp_handle:
         test byte [net_tcp_flags], TCP_SYN
         jnz .tcp_state_listen   ; New SYN → handle in LISTEN state
         ; Non-SYN packet → search for child socket matching src IP/port
-        push esi
-        push ecx
+        push rsi
+        push rcx
         mov edi, net_sock_table
         xor edx, edx
 .tcp_child_scan:
@@ -1821,12 +1820,12 @@ tcp_handle:
 .tcp_child_found:
         ; Use child socket instead
         mov ebp, edi
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         jmp .tcp_dispatch_state
 .tcp_child_not_found:
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         jmp .tcp_h_done
 
 ;---------------------------------------
@@ -1858,13 +1857,13 @@ tcp_handle:
 
         ; v3.0: Allocate a child socket for this connection
         ; so the parent stays in LISTEN for more connections.
-        push esi
-        push ecx
+        push rsi
+        push rcx
 
         ; Save parent socket index
         mov eax, ebp
         sub eax, net_sock_table
-        push eax                ; save parent offset
+        push rax                ; save parent offset
 
         ; Allocate new TCP socket
         mov eax, SOCK_TCP
@@ -1874,8 +1873,8 @@ tcp_handle:
 
         ; EAX = child socket index
         mov ecx, eax
-        imul eax, SOCK_SIZE
-        lea edi, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rdi, [net_sock_table + rax]
 
         ; Copy local port from parent
         mov ax, [ebp + SOCK_LOCAL_PORT]
@@ -1897,14 +1896,14 @@ tcp_handle:
         mov [edi + SOCK_SEQ], eax
 
         ; Store parent reference
-        pop eax                 ; parent offset
-        push eax
+        pop rax                 ; parent offset
+        push rax
         ; Convert offset to index
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, SOCK_SIZE
         div ecx
-        pop ecx
+        pop rcx
         mov [edi + SOCK_PARENT], eax
 
         ; Child enters SYN_RCVD and defers SYN-ACK
@@ -1912,16 +1911,16 @@ tcp_handle:
         mov byte [edi + SOCK_PENDING], TCP_SYN | TCP_ACK
 
         ; Parent stays in LISTEN
-        pop eax                 ; discard parent offset
-        pop ecx
-        pop esi
+        pop rax                 ; discard parent offset
+        pop rcx
+        pop rsi
         jmp .tcp_h_done
 
 .tcp_listen_no_slot:
         ; No free socket — drop the SYN
-        pop eax
-        pop ecx
-        pop esi
+        pop rax
+        pop rcx
+        pop rsi
         jmp .tcp_h_done
 
 .tcp_state_syn_sent:
@@ -1997,13 +1996,13 @@ tcp_handle:
         jle .tcp_copy_ok
         mov ecx, edx            ; Truncate to available space
 .tcp_copy_ok:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         add esi, [net_tcp_hdr_len]
         cld
         rep movsb
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         add [ebp + SOCK_RECV_LEN], ecx
 
         ; Update our ACK
@@ -2074,7 +2073,7 @@ tcp_handle:
         jmp .tcp_h_done
 
 .tcp_h_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2131,7 +2130,7 @@ tcp_flush_pending:
 ;  Sends with current SEQ/ACK, no data
 ;---------------------------------------
 tcp_send_flags:
-        pushad
+        PUSHALL
         mov [net_tcp_send_flags], al
 
         mov edi, net_tcp_buf
@@ -2188,7 +2187,7 @@ tcp_send_flags:
         mov eax, [ebp + SOCK_REMOTE_IP]
         mov dl, IP_PROTO_TCP
         call ip_send
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2197,24 +2196,24 @@ tcp_send_flags:
 ;  ESI = data, ECX = data length
 ;---------------------------------------
 tcp_send_data:
-        pushad
-        mov [net_tcp_data_ptr], esi
+        PUSHALL
+        mov [net_tcp_data_ptr], rsi
         mov [net_tcp_data_len], ecx
 
         ; Save data to send buffer for retransmission
         mov edi, [ebp + SOCK_SEND_BUF]
         test edi, edi
         jz .tsd_no_save
-        push ecx
-        push esi
+        push rcx
+        push rsi
         cmp ecx, SOCK_BUF_SIZE
         jle .tsd_save_ok
         mov ecx, SOCK_BUF_SIZE
 .tsd_save_ok:
         cld
         rep movsb
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ; Record retransmission state
         mov eax, [ebp + SOCK_SEQ]
         mov [ebp + SOCK_RETX_SEQ], eax
@@ -2256,13 +2255,13 @@ tcp_send_data:
         mov word [edi+18], 0
 
         ; Copy data after header
-        push edi
+        push rdi
         add edi, 20
-        mov esi, [net_tcp_data_ptr]
+        mov rsi, [net_tcp_data_ptr]
         mov ecx, [net_tcp_data_len]
         cld
         rep movsb
-        pop edi
+        pop rdi
 
         ; Compute TCP checksum (header + data)
         mov esi, edi
@@ -2283,7 +2282,7 @@ tcp_send_data:
         mov eax, [ebp + SOCK_REMOTE_IP]
         mov dl, IP_PROTO_TCP
         call ip_send
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2294,11 +2293,11 @@ tcp_send_data:
 ; Returns: AX = checksum
 ;---------------------------------------
 tcp_checksum:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
 
         mov [net_tcp_ck_dst], eax
         mov [net_tcp_ck_len], ecx
@@ -2332,11 +2331,11 @@ tcp_checksum:
         add ecx, 12             ; pseudo-header is 12 bytes
         call inet_checksum
 
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 
@@ -2348,16 +2347,16 @@ tcp_checksum:
 ; dhcp_discover - Send DHCPDISCOVER
 ;---------------------------------------
 dhcp_discover:
-        pushad
+        PUSHALL
         mov edi, net_dhcp_buf
 
         ; Zero 300 bytes for basic DHCP packet
-        push edi
+        push rdi
         mov ecx, 75             ; 75 dwords = 300 bytes
         xor eax, eax
         cld
         rep stosd
-        pop edi
+        pop rdi
 
         ; op=1 (BOOTREQUEST), htype=1 (Ethernet), hlen=6, hops=0
         mov byte [edi], 1
@@ -2430,12 +2429,12 @@ dhcp_discover:
         ; Set state BEFORE sending to avoid race: QEMU may deliver the
         ; OFFER response (and fire the RX interrupt) before udp_send returns.
         mov byte [net_dhcp_state], 1  ; Discover sent
-        push dword [net_ip]
+        push qword [net_ip]
         mov dword [net_ip], 0
         call udp_send
-        pop dword [net_ip]
+        pop qword [net_ip]
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2444,7 +2443,7 @@ dhcp_discover:
 ;  ECX = length
 ;---------------------------------------
 dhcp_handle:
-        pushad
+        PUSHALL
         cmp ecx, 240
         jb .dhcp_done
 
@@ -2590,23 +2589,23 @@ dhcp_handle:
         jmp .dhcp_done
 
 .dhcp_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; dhcp_request - Send DHCPREQUEST
 ;---------------------------------------
 dhcp_request:
-        pushad
+        PUSHALL
         mov edi, net_dhcp_buf
 
         ; Zero 300 bytes for DHCP packet
-        push edi
+        push rdi
         mov ecx, 75             ; 75 dwords = 300 bytes
         xor eax, eax
         cld
         rep stosd
-        pop edi
+        pop rdi
 
         ; op=1, htype=1, hlen=6
         mov byte [edi], 1
@@ -2664,12 +2663,12 @@ dhcp_request:
         mov eax, BROADCAST_IP
         mov bx, DHCP_SERVER_PORT
         mov dx, DHCP_CLIENT_PORT
-        push dword [net_ip]
+        push qword [net_ip]
         mov dword [net_ip], 0
         call udp_send
-        pop dword [net_ip]
+        pop qword [net_ip]
 
-        popad
+        POPALL
         ret
 
 
@@ -2681,26 +2680,22 @@ dhcp_request:
 ; dns_resolve - Resolve hostname to IP via DNS
 ;  ESI = null-terminated hostname
 ; Returns: EAX = IP address (0 on failure)
-; Blocks up to ~5 seconds (two 2.5s attempts with retry)
+; Blocks for up to 5 seconds
 ;---------------------------------------
 dns_resolve:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
 
         ; Check DNS cache first
         call dns_cache_lookup
         test eax, eax
         jnz .dns_cached
 
-        ; Fail immediately if NIC is not initialised
-        cmp dword [net_state], NET_STATE_UP
-        jne .dns_fail
-
         ; Build DNS query
-        mov [net_dns_query_name], esi
+        mov [net_dns_query_name], rsi
         mov edi, net_dns_buf
 
         ; Transaction ID
@@ -2720,7 +2715,7 @@ dns_resolve:
         add edi, 12
 
         ; Encode hostname as DNS name (labels)
-        mov esi, [net_dns_query_name]
+        mov rsi, [net_dns_query_name]
 .dns_encode:
         mov ebx, edi            ; save label length position
         inc edi                 ; skip length byte
@@ -2749,82 +2744,56 @@ dns_resolve:
         mov byte [edi+3], 1
         add edi, 4
 
-        ; Calculate and save query length for retry
+        ; Calculate query length
         mov ecx, edi
         sub ecx, net_dns_buf
-        mov [net_dns_query_len], cx
 
-        ; --- ATTEMPT 1 ---
+        ; Send DNS query via UDP to dns server on port 53
         mov byte [net_dns_resolved], 0
         mov dword [net_dns_result_ip], 0
         mov esi, net_dns_buf
         mov eax, [net_dns]
         mov bx, DNS_PORT
+        ; Use an ephemeral source port
         mov dx, [net_ephemeral_port]
         inc word [net_ephemeral_port]
         call udp_send
 
-        ; Wait up to 2.5 seconds for first response
-        mov ecx, 250
-.dns_wait1:
+        ; Wait for response (up to 5 seconds)
+        mov ecx, 500
+.dns_wait:
         hlt
         cmp byte [net_dns_resolved], 1
         je .dns_got_response
         dec ecx
-        jnz .dns_wait1
+        jnz .dns_wait
 
-        ; --- ATTEMPT 2: retry with a fresh transaction ID ---
-        mov ax, [net_dns_id]
-        inc word [net_dns_id]
-        xchg al, ah
-        mov word [net_dns_buf], ax    ; patch TxID in already-built query
-
-        mov byte [net_dns_resolved], 0
-        mov dword [net_dns_result_ip], 0
-        mov esi, net_dns_buf
-        mov eax, [net_dns]
-        mov bx, DNS_PORT
-        mov dx, [net_ephemeral_port]
-        inc word [net_ephemeral_port]
-        movzx ecx, word [net_dns_query_len]
-        call udp_send
-
-        ; Wait up to 2.5 seconds for retry response
-        mov ecx, 250
-.dns_wait2:
-        hlt
-        cmp byte [net_dns_resolved], 1
-        je .dns_got_response
-        dec ecx
-        jnz .dns_wait2
-
-.dns_fail:
-        ; All attempts timed out (or NIC not up)
+        ; Timeout
         xor eax, eax
         jmp .dns_return
 
 .dns_got_response:
         mov eax, [net_dns_result_ip]
         ; Cache the result
-        push eax
-        mov esi, [net_dns_query_name]
+        push rax
+        mov rsi, [net_dns_query_name]
         call dns_cache_add
-        pop eax
+        pop rax
 
 .dns_return:
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .dns_cached:
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -2832,7 +2801,7 @@ dns_resolve:
 ;  ESI = DNS response data, ECX = length
 ;---------------------------------------
 dns_handle_response:
-        pushad
+        PUSHALL
         cmp ecx, 12
         jb .dns_hr_done
 
@@ -2933,7 +2902,7 @@ dns_handle_response:
         jmp .dns_parse_answer
 
 .dns_hr_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2942,16 +2911,16 @@ dns_handle_response:
 ; Returns: EAX = IP (0 if not found)
 ;---------------------------------------
 dns_cache_lookup:
-        pushad
+        PUSHALL
         mov edi, net_dns_cache
         mov ecx, 8              ; DNS_CACHE_SIZE
 .dns_cl:
         cmp dword [edi + 28], 0 ; IP field
         je .dns_cl_next
         ; Compare hostname
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
         mov ecx, 28
 .dns_cl_cmp:
         mov al, [esi]
@@ -2965,25 +2934,25 @@ dns_cache_lookup:
         dec ecx
         jnz .dns_cl_cmp
 .dns_cl_match:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
         mov eax, [edi + 28]
-        mov [esp + 28], eax     ; return in EAX
-        popad
+        mov [rsp + FRAME_RAX], rax     ; return in RAX
+        POPALL
         ret
 .dns_cl_mismatch:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
 .dns_cl_next:
         add edi, 32             ; DNS_ENTRY_SIZE
         dec ecx
         jnz .dns_cl
         ; Not found
         xor eax, eax
-        mov [esp + 28], eax
-        popad
+        mov [rsp + FRAME_RAX], rax
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2991,7 +2960,7 @@ dns_cache_lookup:
 ;  ESI = hostname, EAX = IP
 ;---------------------------------------
 dns_cache_add:
-        pushad
+        PUSHALL
         mov ebx, eax
         ; Find free slot or overwrite oldest
         mov edi, net_dns_cache
@@ -3006,7 +2975,7 @@ dns_cache_add:
         mov edi, net_dns_cache
 .dns_ca_write:
         ; Copy hostname (up to 27 chars + null)
-        push ebx
+        push rbx
         mov ecx, 27
 .dns_ca_copy:
         lodsb
@@ -3024,9 +2993,9 @@ dns_cache_add:
         xor al, al
         rep stosb
 .dns_ca_ip:
-        pop ebx
+        pop rbx
         mov [edi], ebx          ; IP address
-        popad
+        POPALL
         ret
 
 
@@ -3040,9 +3009,9 @@ dns_cache_add:
 ; Returns: EAX = socket index (0-7), or -1 on failure
 ;---------------------------------------
 sock_alloc:
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         mov ebx, eax
 
         mov edi, net_sock_table
@@ -3058,24 +3027,24 @@ sock_alloc:
 
 .sa_found:
         ; Clear the socket structure
-        push ecx
-        push edi
-        push ebx
+        push rcx
+        push rdi
+        push rbx
         mov ecx, SOCK_SIZE / 4
         xor eax, eax
         cld
         rep stosd
-        pop ebx
-        pop edi
-        pop ecx
+        pop rbx
+        pop rdi
+        pop rcx
 
         ; Set type
         mov [edi + SOCK_TYPE], ebx
 
         ; Allocate recv buffer
-        push ecx
+        push rcx
         call pmm_alloc_page
-        pop ecx
+        pop rcx
         test eax, eax
         jz .sa_fail
         mov [edi + SOCK_RECV_BUF], eax
@@ -3083,25 +3052,25 @@ sock_alloc:
         ; Allocate send buffer (TCP only)
         cmp ebx, SOCK_TCP
         jne .sa_no_send_buf
-        push ecx
+        push rcx
         call pmm_alloc_page
-        pop ecx
+        pop rcx
         test eax, eax
         jz .sa_fail
         mov [edi + SOCK_SEND_BUF], eax
 .sa_no_send_buf:
 
         mov eax, ecx
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 .sa_fail:
         mov eax, -1
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -3109,11 +3078,11 @@ sock_alloc:
 ;  EAX = socket index
 ;---------------------------------------
 sock_free:
-        pushad
+        PUSHALL
         cmp eax, MAX_SOCKETS
         jge .sf_done
-        imul eax, SOCK_SIZE
-        lea edi, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rdi, [net_sock_table + rax]
 
         ; Free recv buffer
         mov eax, [edi + SOCK_RECV_BUF]
@@ -3135,7 +3104,7 @@ sock_free:
         rep stosd
 
 .sf_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3145,9 +3114,9 @@ sock_free:
 ; Returns: EAX = socket index, or -1 if not found
 ;---------------------------------------
 sock_find_by_port:
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         mov ebx, eax
         movzx ecx, dl
 
@@ -3166,16 +3135,16 @@ sock_find_by_port:
         jmp .sfp_loop
 
 .sfp_found:
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 .sfp_fail:
         mov eax, -1
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -3203,7 +3172,7 @@ net_alloc_port:
 sys_socket:
         mov eax, ebx
         call sock_alloc
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_connect - Connect to remote host
@@ -3211,12 +3180,12 @@ sys_socket:
 ; Returns: EAX = 0 success, -1 error
 ;---------------------------------------
 sys_connect:
-        pushad
+        PUSHALL
         cmp ebx, MAX_SOCKETS
         jge .sconn_fail
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea ebp, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rbp, [net_sock_table + rax]
 
         cmp dword [ebp + SOCK_TYPE], SOCK_TCP
         jne .sconn_udp
@@ -3240,8 +3209,14 @@ sys_connect:
         mov al, TCP_SYN
         call tcp_send_flags
 
-        ; Wait for ESTABLISHED (up to 5 seconds)
-        mov ecx, 500
+        ; Wait for ESTABLISHED with SYN retransmit (up to 3 attempts)
+        ; Each attempt waits ~3 seconds (300 ticks), with exponential backoff
+        mov dword [ebp + SOCK_RETX_COUNT], 0
+        mov eax, [tick_count]
+        add eax, 300            ; First timeout: 3 seconds
+        mov [ebp + SOCK_RETX_TIMER], eax
+
+        mov ecx, 1500           ; Total 15-second outer timeout (1500 * hlt)
 .sconn_wait:
         hlt
         call tcp_flush_pending    ; Send deferred ACK from non-ISR context
@@ -3249,16 +3224,40 @@ sys_connect:
         je .sconn_ok
         cmp dword [ebp + SOCK_STATE], TCP_CLOSED
         je .sconn_fail_pop
+
+        ; Check SYN retransmit timer
+        mov eax, [tick_count]
+        cmp eax, [ebp + SOCK_RETX_TIMER]
+        jb .sconn_no_retx
+        ; Timer expired — retransmit SYN (max 3 attempts)
+        cmp dword [ebp + SOCK_RETX_COUNT], 3
+        jge .sconn_timeout
+        inc dword [ebp + SOCK_RETX_COUNT]
+        ; Resend SYN (decrement SEQ since tcp_send_flags increments it)
+        dec dword [ebp + SOCK_SEQ]
+        mov al, TCP_SYN
+        call tcp_send_flags
+        ; Exponential backoff: 3s, 6s, 12s
+        mov eax, [tick_count]
+        push rcx
+        mov ecx, [ebp + SOCK_RETX_COUNT]
+        mov edx, 300
+        shl edx, cl
+        add eax, edx
+        pop rcx
+        mov [ebp + SOCK_RETX_TIMER], eax
+.sconn_no_retx:
         dec ecx
         jnz .sconn_wait
+.sconn_timeout:
         ; Timeout - reset
         mov dword [ebp + SOCK_STATE], TCP_CLOSED
         jmp .sconn_fail_pop
 
 .sconn_ok:
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sconn_udp:
         ; UDP "connect" - just save remote info
@@ -3266,15 +3265,15 @@ sys_connect:
         mov [ebp + SOCK_REMOTE_PORT], dx
         call net_alloc_port
         mov [ebp + SOCK_LOCAL_PORT], ax
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sconn_fail_pop:
 .sconn_fail:
-        popad
+        POPALL
         mov eax, -1
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_send - Send data on socket
@@ -3282,12 +3281,12 @@ sys_connect:
 ; Returns: EAX = bytes sent, -1 error
 ;---------------------------------------
 sys_send:
-        pushad
+        PUSHALL
         cmp ebx, MAX_SOCKETS
         jge .ssend_fail
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea ebp, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rbp, [net_sock_table + rax]
 
         cmp dword [ebp + SOCK_TYPE], SOCK_TCP
         je .ssend_tcp
@@ -3311,17 +3310,17 @@ sys_send:
         call tcp_send_data
 
         ; Wait briefly for ACK
-        push edx
+        push rdx
         mov ecx, 50
 .ssend_wait_ack:
         hlt
         dec ecx
         jnz .ssend_wait_ack
-        pop edx
+        pop rdx
 
-        popad
+        POPALL
         mov eax, edx            ; return bytes sent
-        iretd
+        iretq
 
 .ssend_udp:
         mov esi, ecx
@@ -3329,25 +3328,25 @@ sys_send:
         mov eax, [ebp + SOCK_REMOTE_IP]
         movzx ebx, word [ebp + SOCK_REMOTE_PORT]
         movzx edx, word [ebp + SOCK_LOCAL_PORT]
-        push edx
+        push rdx
         mov bx, bx
-        pop edx
+        pop rdx
         xchg ebx, edx          ; ebx=src_port(dx), edx=dst_port(bx)
         ; Actually: udp_send wants EAX=dst_ip, BX=dst_port, DX=src_port
         mov eax, [ebp + SOCK_REMOTE_IP]
         mov bx, [ebp + SOCK_REMOTE_PORT]
         mov dx, [ebp + SOCK_LOCAL_PORT]
-        push dword [esp + 8]    ; save original EDX (length)
+        push qword [rsp + FRAME_RDX]    ; save original EDX (length)
         call udp_send
-        pop eax                 ; recover length for return
-        popad
+        pop rax                 ; recover length for return
+        POPALL
         mov eax, edx            ; return bytes "sent"
-        iretd
+        iretq
 
 .ssend_fail:
-        popad
+        POPALL
         mov eax, -1
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_recv - Receive data from socket
@@ -3355,12 +3354,12 @@ sys_send:
 ; Returns: EAX = bytes received (0=no data, -1=error/closed)
 ;---------------------------------------
 sys_recv:
-        pushad
+        PUSHALL
         cmp ebx, MAX_SOCKETS
         jge .srecv_fail
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea ebp, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rbp, [net_sock_table + rax]
 
         cmp dword [ebp + SOCK_TYPE], 0
         je .srecv_fail
@@ -3390,7 +3389,7 @@ sys_recv:
         jle .srecv_copy
         mov eax, edx
 .srecv_copy:
-        push eax               ; save count
+        push rax               ; save count
         mov esi, [ebp + SOCK_RECV_BUF]
         mov edi, ecx
         mov ecx, eax
@@ -3398,8 +3397,8 @@ sys_recv:
         rep movsb
 
         ; Shift remaining data forward
-        pop eax
-        push eax
+        pop rax
+        push rax
         mov ecx, [ebp + SOCK_RECV_LEN]
         sub ecx, eax
         mov esi, [ebp + SOCK_RECV_BUF]
@@ -3409,27 +3408,27 @@ sys_recv:
         rep movsb
 
         ; Update recv len
-        pop eax
+        pop rax
         sub [ebp + SOCK_RECV_LEN], eax
 
-        mov [esp + 28], eax    ; return byte count in EAX
-        popad
-        iretd
+        mov [rsp + FRAME_RAX], rax    ; return byte count in RAX
+        POPALL
+        iretq
 
 .srecv_empty:
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .srecv_closed:
-        popad
+        POPALL
         mov eax, -1
-        iretd
+        iretq
 
 .srecv_fail:
-        popad
+        POPALL
         mov eax, -1
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_bind - Bind socket to local port
@@ -3437,42 +3436,42 @@ sys_recv:
 ; Returns: EAX = 0 success, -1 error
 ;---------------------------------------
 sys_bind:
-        pushad
+        PUSHALL
         cmp ebx, MAX_SOCKETS
         jge .sbind_fail
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea edi, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rdi, [net_sock_table + rax]
         mov [edi + SOCK_LOCAL_PORT], cx
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 .sbind_fail:
-        popad
+        POPALL
         mov eax, -1
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_listen - Set socket to listening state
 ;  EBX = fd
 ;---------------------------------------
 sys_listen:
-        pushad
+        PUSHALL
         cmp ebx, MAX_SOCKETS
         jge .slisten_fail
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea edi, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rdi, [net_sock_table + rax]
         cmp dword [edi + SOCK_TYPE], SOCK_TCP
         jne .slisten_fail
         mov dword [edi + SOCK_STATE], TCP_LISTEN
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 .slisten_fail:
-        popad
+        POPALL
         mov eax, -1
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_accept - Accept incoming connection
@@ -3485,12 +3484,12 @@ sys_listen:
 ; connections.
 ;---------------------------------------
 sys_accept:
-        pushad
+        PUSHALL
         cmp ebx, MAX_SOCKETS
         jge .saccept_fail
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea ebp, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rbp, [net_sock_table + rax]
         cmp dword [ebp + SOCK_STATE], TCP_LISTEN
         jne .saccept_fail
 
@@ -3501,7 +3500,7 @@ sys_accept:
         call tcp_flush_pending    ; Send deferred SYN-ACK from non-ISR context
 
         ; Scan socket table for child socket that has our index as parent
-        push ecx
+        push rcx
         mov edi, net_sock_table
         xor edx, edx
 .saccept_scan:
@@ -3521,7 +3520,7 @@ sys_accept:
         jmp .saccept_scan
 
 .saccept_scan_done:
-        pop ecx
+        pop rcx
         dec ecx
         jnz .saccept_wait
         jmp .saccept_fail
@@ -3530,15 +3529,15 @@ sys_accept:
         ; EDX = child socket index
         ; Clear parent reference (connection is now independent)
         mov dword [edi + SOCK_PARENT], -1
-        pop ecx                 ; balance push ecx
-        mov [esp + 28], edx     ; return child socket fd in EAX
-        popad
-        iretd
+        pop rcx                 ; balance push rcx
+        mov [rsp + FRAME_RAX], rdx     ; return child socket fd in RAX
+        POPALL
+        iretq
 
 .saccept_fail:
-        popad
+        POPALL
         mov eax, -1
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_dns - Resolve hostname
@@ -3548,19 +3547,19 @@ sys_accept:
 sys_dns:
         mov esi, ebx
         call dns_resolve
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_sockclose - Close socket
 ;  EBX = fd
 ;---------------------------------------
 sys_sockclose:
-        pushad
+        PUSHALL
         cmp ebx, MAX_SOCKETS
         jge .sclose_done
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea ebp, [net_sock_table + eax]
+        imul rax, SOCK_SIZE
+        lea rbp, [net_sock_table + rax]
 
         cmp dword [ebp + SOCK_TYPE], SOCK_TCP
         jne .sclose_free
@@ -3608,9 +3607,9 @@ sys_sockclose:
         mov eax, ebx
         call sock_free
 .sclose_done:
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 ;---------------------------------------
 ; sys_ping - Send ICMP ping and wait for reply
@@ -3618,8 +3617,8 @@ sys_sockclose:
 ; Returns: EAX = RTT in ticks (-1 on timeout)
 ;---------------------------------------
 sys_ping:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, ebx
         call icmp_send_echo
 
@@ -3634,16 +3633,16 @@ sys_ping:
 
         ; Timeout
         mov eax, -1
-        pop ecx
-        pop ebx
-        iretd
+        pop rcx
+        pop rbx
+        iretq
 
 .sp_got_reply:
         mov eax, [net_ping_recv_tick]
         sub eax, [net_ping_send_tick]
-        pop ecx
-        pop ebx
-        iretd
+        pop rcx
+        pop rbx
+        iretq
 
 
 ;=======================================================================
@@ -3654,7 +3653,7 @@ sys_ping:
 ; cmd_net_status - Enhanced "net" command
 ;---------------------------------------
 cmd_net_status:
-        pushad
+        PUSHALL
 
         mov byte [vga_color], COLOR_HEADER
         mov esi, msg_net_header
@@ -3747,7 +3746,7 @@ cmd_net_status:
 
 .ns_end:
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3755,7 +3754,7 @@ cmd_net_status:
 ;  ESI = rest of command line (hostname or IP)
 ;---------------------------------------
 cmd_ping:
-        pushad
+        PUSHALL
         call skip_spaces
         cmp byte [esi], 0
         je .ping_usage
@@ -3766,9 +3765,9 @@ cmd_ping:
         jnz .ping_have_ip
 
         ; Try DNS resolution
-        push esi
+        push rsi
         call dns_resolve
-        pop esi
+        pop rsi
         test eax, eax
         jz .ping_dns_fail
 
@@ -3776,14 +3775,14 @@ cmd_ping:
         mov [net_ping_target], eax
 
         ; Print "Pinging x.x.x.x..."
-        push esi
+        push rsi
         mov esi, msg_ping_start
         call vga_print
         mov eax, [net_ping_target]
         call vga_print_ip
         mov esi, msg_ping_dots
         call vga_print
-        pop esi
+        pop rsi
 
         ; Send 4 pings
         mov dword [net_ping_count], 0
@@ -3859,44 +3858,105 @@ cmd_ping:
         mov esi, msg_ping_dns_fail
         call vga_print
 .ping_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; cmd_ifconfig - "ifconfig" shell command
+; Usage: ifconfig                   (show status)
+;        ifconfig IP [MASK [GW [DNS]]]
+; Sets static IP configuration.
 ;---------------------------------------
 cmd_ifconfig:
-        pushad
+        PUSHALL
         call skip_spaces
         cmp byte [esi], 0
         je .ifc_show
 
-        ; Parse: ifconfig ip mask gateway dns
-        ; For simplicity, just set IP if one arg given
+        ; Parse IP address
         call parse_ip
         test eax, eax
-        jz .ifc_show
+        jz .ifc_usage
         mov [net_ip], eax
+
+        ; Try to parse subnet mask
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ifc_set_defaults
+
+        call parse_ip
+        test eax, eax
+        jz .ifc_show_result
+        mov [net_mask], eax
+
+        ; Try to parse gateway
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ifc_show_result
+
+        call parse_ip
+        test eax, eax
+        jz .ifc_show_result
+        mov [net_gateway], eax
+
+        ; Try to parse DNS server
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ifc_show_result
+
+        call parse_ip
+        test eax, eax
+        jz .ifc_show_result
+        mov [net_dns], eax
+        jmp .ifc_show_result
+
+.ifc_set_defaults:
+        ; If only IP given, set sensible defaults:
+        ; mask = 255.255.255.0, gateway = IP with .1, DNS = gateway
+        mov dword [net_mask], 0x00FFFFFF     ; 255.255.255.0 LE
+        mov eax, [net_ip]
+        and eax, 0x00FFFFFF                  ; Clear last octet
+        or eax, 0x01000000                   ; Set .1 as gateway
+        mov [net_gateway], eax
+        mov [net_dns], eax                   ; DNS = gateway
+
+.ifc_show_result:
         mov esi, msg_ifc_set
         call vga_print
         mov eax, [net_ip]
+        call vga_print_ip
+        mov esi, msg_ifc_mask
+        call vga_print
+        mov eax, [net_mask]
+        call vga_print_ip
+        mov esi, msg_ifc_gw
+        call vga_print
+        mov eax, [net_gateway]
+        call vga_print_ip
+        mov esi, msg_ifc_dns
+        call vga_print
+        mov eax, [net_dns]
         call vga_print_ip
         mov al, 0x0A
         call vga_putchar
         jmp .ifc_done
 
+.ifc_usage:
+        mov esi, msg_ifc_usage
+        call vga_print
+
 .ifc_show:
         ; Just call net status (which shows IP info)
         call cmd_net_status
 .ifc_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; cmd_dhcp_shell - "dhcp" shell command
 ;---------------------------------------
 cmd_dhcp_shell:
-        pushad
+        PUSHALL
         cmp dword [net_state], NET_STATE_UP
         jne .dhcp_no_nic
 
@@ -3924,6 +3984,8 @@ cmd_dhcp_shell:
 
         mov esi, msg_dhcp_fail
         call vga_print
+        mov esi, msg_dhcp_hint
+        call vga_print
         jmp .dhcp_sh_done
 
 .dhcp_send_request:
@@ -3943,14 +4005,14 @@ cmd_dhcp_shell:
         mov esi, msg_dhcp_no_nic
         call vga_print
 .dhcp_sh_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; cmd_arp_show - "arp" shell command
 ;---------------------------------------
 cmd_arp_show:
-        pushad
+        PUSHALL
         mov byte [vga_color], COLOR_HEADER
         mov esi, msg_arp_header
         call vga_print
@@ -3970,8 +4032,8 @@ cmd_arp_show:
         call vga_print
 
         ; Print MAC
-        push ecx
-        push edi
+        push rcx
+        push rdi
         lea esi, [edi + ARP_ENTRY_MAC]
         xor ebx, ebx
 .arp_mac_loop:
@@ -3986,15 +4048,15 @@ cmd_arp_show:
 .arp_mac_done:
         mov al, 0x0A
         call vga_putchar
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
 
 .arp_show_next:
         add edi, ARP_ENTRY_SIZE
         dec ecx
         jnz .arp_show_loop
 
-        popad
+        POPALL
         ret
 
 
@@ -4006,8 +4068,8 @@ cmd_arp_show:
 ; vga_print_ip - Print IP address from EAX (little-endian)
 ;---------------------------------------
 vga_print_ip:
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov ecx, eax
 
         movzx eax, cl
@@ -4026,15 +4088,15 @@ vga_print_ip:
         movzx eax, ch
         call vga_print_dec
 
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 ;---------------------------------------
 ; print_mac_address - Print MAC from net_mac
 ;---------------------------------------
 print_mac_address:
-        pushad
+        PUSHALL
         mov esi, net_mac
         xor ebx, ebx
 .pma_loop:
@@ -4047,23 +4109,23 @@ print_mac_address:
         call vga_putchar
         jmp .pma_loop
 .pma_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; vga_print_hex_byte - Print AL as 2 hex digits
 ;---------------------------------------
 vga_print_hex_byte:
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov cl, al
         shr al, 4
         call .hex_nibble
         mov al, cl
         and al, 0x0F
         call .hex_nibble
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 .hex_nibble:
         cmp al, 10
@@ -4083,9 +4145,9 @@ vga_print_hex_byte:
 ; ESI advanced past IP
 ;---------------------------------------
 parse_ip:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         xor eax, eax
         xor ebx, ebx            ; result IP
         xor ecx, ecx            ; octet count
@@ -4125,16 +4187,16 @@ parse_ip:
         ; Convert from big-endian construction to little-endian
         bswap ebx
         mov eax, ebx
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .pip_fail:
         xor eax, eax
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 
@@ -4168,11 +4230,16 @@ msg_ping_recv_str: db " packets received", 0x0A, 0
 msg_ping_usage: db "Usage: ping <host>", 0x0A, 0
 msg_ping_dns_fail: db "DNS resolution failed", 0x0A, 0
 
-msg_ifc_set:    db "IP set to ", 0
+msg_ifc_set:    db "  IP: ", 0
+msg_ifc_mask:   db "  Mask: ", 0
+msg_ifc_gw:     db "  Gateway: ", 0
+msg_ifc_dns:    db "  DNS: ", 0
+msg_ifc_usage:  db "Usage: ifconfig IP [MASK [GATEWAY [DNS]]]", 0x0A, 0
 
 msg_dhcp_start: db "Sending DHCP Discover...", 0x0A, 0
 msg_dhcp_ok:    db "DHCP configured: ", 0
 msg_dhcp_fail:  db "DHCP timeout", 0x0A, 0
+msg_dhcp_hint:  db "  Hint: use 'ifconfig IP MASK GATEWAY DNS' for static config", 0x0A, 0
 msg_dhcp_no_nic: db "No NIC available", 0x0A, 0
 
 msg_arp_header: db "ARP Cache:", 0x0A, 0

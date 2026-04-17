@@ -114,7 +114,7 @@ start:
 ; assemble_line - parse input_buf and emit bytes
 ;=======================================
 assemble_line:
-        pushad
+        PUSHALL
 
         ; Reset output
         mov dword [out_len], 0
@@ -149,7 +149,7 @@ assemble_line:
         ; ESI now points to operands
 
         ; Save operand start
-        mov [operand_ptr], esi
+        mov [operand_ptr], rsi
 
         ; Try to match mnemonic
         ; --- NOP ---
@@ -229,7 +229,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_push
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_number       ; EAX=number
         jc .error
         mov byte [out_bytes], 0xCD
@@ -244,7 +244,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_pop
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32
         jc .error
         add al, 0x50            ; PUSH r32 = 50+rd
@@ -259,7 +259,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_inc
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32
         jc .error
         add al, 0x58            ; POP r32 = 58+rd
@@ -274,7 +274,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_dec
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32
         jc .error
         add al, 0x40            ; INC r32 = 40+rd
@@ -289,7 +289,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_mov
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32
         jc .error
         add al, 0x48            ; DEC r32 = 48+rd
@@ -304,17 +304,17 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_add
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32        ; destination
         jc .error
         mov [dest_reg], al
         call skip_comma
         ; Try register second operand
-        push esi
+        push rsi
         call parse_reg32
         jc .mov_imm
         ; MOV reg, reg: opcode 89 /r (MOV r/m32, r32)
-        add esp, 4              ; discard saved esi
+        add rsp, 4              ; discard saved esi
         mov cl, al              ; source reg
         mov byte [out_bytes], 0x89
         ; ModR/M: mod=11, reg=src, r/m=dest
@@ -326,7 +326,7 @@ assemble_line:
         jmp .emit
 
 .mov_imm:
-        pop esi                 ; restore before comma parsed position
+        pop rsi                 ; restore before comma parsed position
         call skip_comma
         call parse_number
         jc .error
@@ -348,23 +348,23 @@ assemble_line:
         jge .try_xchg
 
         mov eax, mnemonic_buf
-        mov ebx, [alu_names + ebp*4]
+        mov rbx, [alu_names + rbp*8]
         call str_icmp
         test eax, eax
         jnz .alu_next
 
         ; Matched ALU op
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32
         jc .error
         mov [dest_reg], al
         call skip_comma
 
         ; Try reg
-        push esi
+        push rsi
         call parse_reg32
         jc .alu_imm
-        add esp, 4
+        add rsp, 4
         ; ALU r/m32, r32: opcode = alu_opcodes[ebp] + 01
         mov cl, [alu_opcodes + ebp]
         add cl, 1               ; r/m32, r32 form
@@ -379,7 +379,7 @@ assemble_line:
         jmp .emit
 
 .alu_imm:
-        pop esi
+        pop rsi
         call skip_comma
         call parse_number
         jc .error
@@ -405,7 +405,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_shl
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32
         jc .error
         mov [dest_reg], al
@@ -454,7 +454,7 @@ assemble_line:
         jnz .try_jmp
         mov byte [shift_dir], 5     ; SHR /5
 .do_shift:
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_reg32
         jc .error
         mov [dest_reg], al
@@ -490,7 +490,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_call
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_number
         jc .error
         mov byte [out_bytes], 0xEB    ; JMP rel8
@@ -504,7 +504,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_jz
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_number
         jc .error
         mov byte [out_bytes], 0xE8    ; CALL rel32
@@ -518,7 +518,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_jnz
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_number
         jc .error
         mov byte [out_bytes], 0x74
@@ -532,7 +532,7 @@ assemble_line:
         call str_icmp
         test eax, eax
         jnz .try_syscall
-        mov esi, [operand_ptr]
+        mov rsi, [operand_ptr]
         call parse_number
         jc .error
         mov byte [out_bytes], 0x75
@@ -625,7 +625,7 @@ assemble_line:
         int 0x80
 
 .done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -634,9 +634,9 @@ assemble_line:
 ; CF set on failure
 ;---------------------------------------
 parse_reg32:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         call skip_spaces
 
@@ -671,11 +671,11 @@ parse_reg32:
         cmp ecx, 8
         jge .pr_fail
 
-        push ecx
+        push rcx
         mov eax, reg_buf
-        mov ebx, [reg_names + ecx*4]
+        mov rbx, [reg_names + rcx*8]
         call str_icmp
-        pop ecx
+        pop rcx
         test eax, eax
         jz .pr_found
         inc ecx
@@ -684,16 +684,16 @@ parse_reg32:
 .pr_found:
         mov eax, ecx
         clc
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .pr_fail:
         stc
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -701,9 +701,9 @@ parse_reg32:
 ; Hex if starts with 0x. Returns EAX. CF set on failure.
 ;---------------------------------------
 parse_number:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         call skip_spaces
 
@@ -775,23 +775,23 @@ parse_number:
 
 .pn_ok:
         clc
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; print_hex_byte - print AL as 2 hex digits
 ;---------------------------------------
 print_hex_byte:
-        pushad
+        PUSHALL
         mov cl, al
         shr al, 4
         call .hex_digit
         mov al, cl
         and al, 0x0F
         call .hex_digit
-        popad
+        POPALL
         ret
 .hex_digit:
         cmp al, 10
@@ -915,7 +915,7 @@ mn_jnz:         db "JNZ", 0
 mn_syscall:     db "SYSCALL", 0
 
 ; ALU operation table
-alu_names:      dd mn_add, mn_sub, mn_and, mn_or, mn_xor, mn_cmp
+alu_names:      dq mn_add, mn_sub, mn_and, mn_or, mn_xor, mn_cmp
 alu_opcodes:    db 0x00, 0x28, 0x20, 0x08, 0x30, 0x38  ; base opcodes
 alu_digits:     db 0, 5, 4, 1, 6, 7                      ; /digit for 81 form
 
@@ -928,13 +928,13 @@ rn_esp: db "ESP", 0
 rn_ebp: db "EBP", 0
 rn_esi: db "ESI", 0
 rn_edi: db "EDI", 0
-reg_names:      dd rn_eax, rn_ecx, rn_edx, rn_ebx, rn_esp, rn_ebp, rn_esi, rn_edi
+reg_names:      dq rn_eax, rn_ecx, rn_edx, rn_ebx, rn_esp, rn_ebp, rn_esi, rn_edi
 
 ; BSS
 input_buf:      times 128 db 0
 mnemonic_buf:   times 16 db 0
 reg_buf:        times 4 db 0
-operand_ptr:    dd 0
+operand_ptr:    dq 0
 dest_reg:       db 0
 shift_dir:      db 0
 out_bytes:      times MAX_BYTES db 0

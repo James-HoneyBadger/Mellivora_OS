@@ -5,7 +5,7 @@
 ;   serial              - Send greeting, then echo serial input to screen
 ;   serial send <text>  - Send text out the serial port
 ;
-; Connect with: qemu-system-i386 ... -serial tcp::4555,server,nowait
+; Connect with: qemu-system-x86_64 ... -serial tcp::4555,server,nowait
 ; Then:         nc localhost 4555
 ;
 %include "syscalls.inc"
@@ -67,20 +67,20 @@ start:
 
         ; User typed on keyboard - send it over serial
         movzx ebx, al
-        push ebx
+        push rbx
         ; Echo char to screen with color
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0A          ; Green = outgoing
         int 0x80
-        pop ebx
-        push ebx
+        pop rbx
+        push rbx
         mov eax, SYS_PUTCHAR
         int 0x80
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
         ; Send to serial (need null-terminated string)
-        pop eax
+        pop rax
         mov [char_buf], al
         mov byte [char_buf + 1], 0
         mov eax, SYS_SERIAL
@@ -96,11 +96,11 @@ start:
         je .no_serial_data
 
         ; Got a byte from serial - display it
-        push eax
+        push rax
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0B          ; Cyan = incoming from serial
         int 0x80
-        pop ebx
+        pop rbx
         mov eax, SYS_PUTCHAR
         int 0x80
         mov eax, SYS_SETCOLOR

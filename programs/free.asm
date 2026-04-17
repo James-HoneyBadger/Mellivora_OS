@@ -95,15 +95,15 @@ start:
 ; print_rj8 - Print EAX KB value right-justified in 10 chars
 ;---------------------------------------
 print_rj8:
-        pushad
-        push eax
+        PUSHALL
+        push rax
         ; Convert KB to appropriate unit
         cmp eax, 1048576
         jge .pr_gb
         cmp eax, 1024
         jge .pr_mb
         ; KB
-        pop eax
+        pop rax
         call count_digits
         add ecx, 3             ; " KB"
         mov edx, 10
@@ -113,70 +113,70 @@ print_rj8:
         mov eax, SYS_PRINT
         mov ebx, unit_kb
         int 0x80
-        popad
+        POPALL
         ret
 .pr_mb:
-        pop eax
+        pop rax
         shr eax, 10
-        push eax
+        push rax
         call count_digits
         add ecx, 3
         mov edx, 10
         sub edx, ecx
         call print_spaces
-        pop eax
+        pop rax
         call print_decimal
         mov eax, SYS_PRINT
         mov ebx, unit_mb
         int 0x80
-        popad
+        POPALL
         ret
 .pr_gb:
-        pop eax
+        pop rax
         shr eax, 20
-        push eax
+        push rax
         call count_digits
         add ecx, 3
         mov edx, 10
         sub edx, ecx
         call print_spaces
-        pop eax
+        pop rax
         call print_decimal
         mov eax, SYS_PRINT
         mov ebx, unit_gb
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_rj6pct - Print EAX as 6-wide right-justified percentage
 ;---------------------------------------
 print_rj6pct:
-        pushad
-        push eax
+        PUSHALL
+        push rax
         call count_digits
         inc ecx             ; %
         mov edx, 8
         sub edx, ecx
         call print_spaces
-        pop eax
+        pop rax
         call print_decimal
         mov eax, SYS_PUTCHAR
         mov ebx, '%'
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 count_digits:
         ; EAX -> ECX = number of digits
-        pushad
+        PUSHALL
         xor ecx, ecx
         cmp eax, 0
         jne .cd_lp
         mov ecx, 1
-        mov [esp + 24], ecx    ; ECX in pushad frame
-        popad
+        mov [rsp + 96], ecx    ; ECX in PUSHALL frame
+        POPALL
         ret
 .cd_lp:
         cmp eax, 0
@@ -187,8 +187,8 @@ count_digits:
         inc ecx
         jmp .cd_lp
 .cd_done:
-        mov [esp + 24], ecx
-        popad
+        mov [rsp + 96], ecx
+        POPALL
         ret
 
 print_spaces:
@@ -196,24 +196,24 @@ print_spaces:
         cmp edx, 0
         jle .psp_done
 .psp_loop:
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop edx
+        pop rdx
         dec edx
         jg .psp_loop
 .psp_done:
         ret
 
 print_decimal:
-        pushad
+        PUSHALL
         cmp eax, 0
         jne .pd_nz
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pd_nz:
         xor ecx, ecx
@@ -221,18 +221,18 @@ print_decimal:
 .pd_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pd_div
 .pd_out:
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jnz .pd_out
-        popad
+        POPALL
         ret
 
 ;=======================================

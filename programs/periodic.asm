@@ -101,7 +101,7 @@ start:
 ; draw_table - Render the periodic table
 ;=======================================
 draw_table:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -137,15 +137,15 @@ draw_table:
         jz .dt_empty
 
         ; We have an element
-        push eax
+        push rax
         dec eax                 ; 0-indexed for symbol lookup
 
         ; Get category color
-        push eax
+        push rax
         inc eax
         call get_category_color ; returns AH = color attr
         mov dl, ah
-        pop eax
+        pop rax
 
         ; Check if cursor is on this cell
         cmp esi, [cursor_x]
@@ -157,7 +157,7 @@ draw_table:
 .dt_not_sel:
 
         ; Position: col*4+1, row*2+2
-        push edx
+        push rdx
         mov eax, SYS_SETCURSOR
         mov ebx, esi
         shl ebx, 2
@@ -166,7 +166,7 @@ draw_table:
         shl ecx, 1
         add ecx, 2
         int 0x80
-        pop edx
+        pop rdx
 
         ; Set color
         mov eax, SYS_SETCOLOR
@@ -174,16 +174,16 @@ draw_table:
         int 0x80
 
         ; Print symbol (2 chars)
-        pop eax                 ; element number (1-based)
+        pop rax                 ; element number (1-based)
         dec eax
         shl eax, 1             ; *2 for 2-char symbols
         lea ebx, [symbols + eax]
-        push ebx
+        push rbx
         ; Print first char
         movzx ebx, byte [ebx]
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ebx
+        pop rbx
         movzx ebx, byte [ebx + 1]
         cmp bl, ' '
         je .dt_skip_2nd
@@ -213,7 +213,7 @@ draw_table:
         test eax, eax
         jz .dt_no_info
 
-        push eax
+        push rax
         ; Display element info bar (row 21)
         mov eax, SYS_SETCURSOR
         mov ebx, 2
@@ -223,19 +223,19 @@ draw_table:
         mov ebx, 0x0F
         int 0x80
 
-        pop eax
-        push eax
+        pop rax
+        push rax
         ; Print: "Element #N: Xx"
         mov eax, SYS_PRINT
         mov ebx, lbl_elem
         int 0x80
-        pop eax
-        push eax
+        pop rax
+        push rax
         call print_dec
         mov eax, SYS_PRINT
         mov ebx, lbl_colon
         int 0x80
-        pop eax
+        pop rax
         dec eax
         shl eax, 1
         lea ebx, [symbols + eax]
@@ -267,14 +267,14 @@ draw_table:
         mov ebx, status_str
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; get_category_color: EAX = element# (1-based) -> AH = color attribute
 ;---------------------------------------
 get_category_color:
-        push ebx
+        push rbx
         dec eax
         cmp eax, 118
         jge .gcc_def
@@ -302,44 +302,44 @@ get_category_color:
         je .gcc_actin
 .gcc_def:
         mov ah, 0x07
-        pop ebx
+        pop rbx
         ret
 .gcc_alkali:    mov ah, 0x0C    ; Light red
-                pop ebx
+                pop rbx
                 ret
 .gcc_alkaline:  mov ah, 0x0E    ; Yellow
-                pop ebx
+                pop rbx
                 ret
 .gcc_trans:     mov ah, 0x0B    ; Light cyan
-                pop ebx
+                pop rbx
                 ret
 .gcc_basic:     mov ah, 0x09    ; Light blue
-                pop ebx
+                pop rbx
                 ret
 .gcc_semi:      mov ah, 0x0A    ; Light green
-                pop ebx
+                pop rbx
                 ret
 .gcc_nonmetal:  mov ah, 0x0F    ; Bright white
-                pop ebx
+                pop rbx
                 ret
 .gcc_halogen:   mov ah, 0x0D    ; Light magenta
-                pop ebx
+                pop rbx
                 ret
 .gcc_noble:     mov ah, 0x03    ; Cyan
-                pop ebx
+                pop rbx
                 ret
 .gcc_lanth:     mov ah, 0x06    ; Brown/orange
-                pop ebx
+                pop rbx
                 ret
 .gcc_actin:     mov ah, 0x04    ; Red
-                pop ebx
+                pop rbx
                 ret
 
 ;---------------------------------------
 ; show_detail: popup detail for selected element
 ;---------------------------------------
 show_detail:
-        pushad
+        PUSHALL
         mov eax, [cursor_y]
         imul eax, TABLE_COLS
         add eax, [cursor_x]
@@ -428,14 +428,14 @@ show_detail:
         test eax, eax
         jz .sd_wait
 .sd_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; get_name_ptr: EAX=index(0-based) -> EBX=ptr to name string
 ;---------------------------------------
 get_name_ptr:
-        push ecx
+        push rcx
         mov ebx, elem_names
         mov ecx, eax
         test ecx, ecx
@@ -451,7 +451,7 @@ get_name_ptr:
 .gnp_found:
         inc ebx
 .gnp_done:
-        pop ecx
+        pop rcx
         ret
 
 ; === Layout Data ===

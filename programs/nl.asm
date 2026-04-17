@@ -77,7 +77,7 @@ start:
 ;---------------------------------------
 print_num_padded:
         ; Print EAX right-justified in 6-char field
-        pushad
+        PUSHALL
         ; Count digits
         mov ecx, 0
         mov ebx, eax
@@ -95,19 +95,19 @@ print_num_padded:
         sub edx, ecx
         jle .pnp_num
 .pnp_space:
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop edx
+        pop rdx
         dec edx
         jnz .pnp_space
 
 .pnp_num:
         ; Re-get original number from stack
-        mov eax, [esp + 28]    ; original EAX from pushad
+        mov eax, [rsp + 112]    ; original EAX from PUSHALL
         call print_dec
-        popad
+        POPALL
         ret
 
 ;=======================================

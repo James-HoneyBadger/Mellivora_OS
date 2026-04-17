@@ -171,7 +171,7 @@ start:
 ; Runs a single typing lesson
 ; Uses [lesson_num] and [difficulty] to pick text
 run_lesson:
-        pushad
+        PUSHALL
 
         ; Clear screen
         mov eax, SYS_CLEAR
@@ -447,11 +447,11 @@ run_lesson:
         mov eax, SYS_GETCHAR
         int 0x80
 
-        popad
+        POPALL
         ret
 
 .lesson_abort:
-        popad
+        POPALL
         ret
 
 .backspace:
@@ -478,46 +478,46 @@ run_lesson:
 get_lesson_text:
         mov eax, [difficulty]
         dec eax                        ; 0-2
-        imul eax, NUM_LESSONS * 4      ; offset into difficulty table
+        imul eax, NUM_LESSONS * 8      ; offset into difficulty table
         mov ecx, [lesson_num]
-        lea esi, [lesson_table + eax + ecx * 4]
-        mov esi, [esi]
+        lea rsi, [lesson_table + rax + rcx * 8]
+        mov rsi, [rsi]
         ret
 
 
 ; ─── print_number ────────────────────────────────────────────
 ; Print unsigned integer in EAX as decimal
 print_number:
-        pushad
+        PUSHALL
         mov ecx, 0                     ; digit count
         mov ebx, 10
 .pn_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .pn_div
 .pn_print:
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jnz .pn_print
-        popad
+        POPALL
         ret
 
 
 ; ─── print_newline ───────────────────────────────────────────
 print_newline:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 
@@ -601,14 +601,14 @@ les_a10: db 'gcc -m32 -ffreestanding -nostdlib -o kernel.bin kernel.c -T link.ld
 ; Lesson pointer tables (10 entries per difficulty)
 lesson_table:
         ; Beginner (difficulty 1)
-        dd les_b1, les_b2, les_b3, les_b4, les_b5
-        dd les_b6, les_b7, les_b8, les_b9, les_b10
+        dq les_b1, les_b2, les_b3, les_b4, les_b5
+        dq les_b6, les_b7, les_b8, les_b9, les_b10
         ; Intermediate (difficulty 2)
-        dd les_i1, les_i2, les_i3, les_i4, les_i5
-        dd les_i6, les_i7, les_i8, les_i9, les_i10
+        dq les_i1, les_i2, les_i3, les_i4, les_i5
+        dq les_i6, les_i7, les_i8, les_i9, les_i10
         ; Advanced (difficulty 3)
-        dd les_a1, les_a2, les_a3, les_a4, les_a5
-        dd les_a6, les_a7, les_a8, les_a9, les_a10
+        dq les_a1, les_a2, les_a3, les_a4, les_a5
+        dq les_a6, les_a7, les_a8, les_a9, les_a10
 
 ; ═════════════════════════════════════════════════════════════
 ; BSS SECTION

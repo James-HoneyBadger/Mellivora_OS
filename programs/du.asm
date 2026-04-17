@@ -76,8 +76,8 @@ list_all:
         je .next
 
         ; EAX = type, EBX = name ptr, ECX = size
-        push ebp
-        push ecx
+        push rbp
+        push rcx
 
         ; Print size
         mov eax, ecx
@@ -98,8 +98,8 @@ list_all:
         mov ebx, 10
         int 0x80
 
-        pop ecx
-        pop ebp
+        pop rcx
+        pop rbp
         add [total_size], ecx
 
 .next:

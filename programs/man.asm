@@ -19,7 +19,7 @@ start:
         mov edi, path_buf
 
         ; Copy prefix
-        push esi
+        push rsi
         mov esi, path_prefix
 .cp_pfx:
         lodsb
@@ -28,7 +28,7 @@ start:
         stosb
         jmp .cp_pfx
 .pfx_done:
-        pop esi
+        pop rsi
 
         ; Copy topic name
 .cp_topic:
@@ -74,27 +74,27 @@ start:
         je .newline
 
         ; Print character
-        push ecx
+        push rcx
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ecx
+        pop rcx
         inc esi
         jmp .print_char
 
 .newline:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop ecx
+        pop rcx
         inc esi
         inc ecx
         cmp ecx, PAGE_LINES
         jl .page_loop
 
         ; Show pager prompt
-        push esi
+        push rsi
         mov eax, SYS_SETCOLOR
         mov ebx, 0x70           ; Inverse video
         int 0x80
@@ -108,7 +108,7 @@ start:
         ; Wait for key
         mov eax, SYS_GETCHAR
         int 0x80
-        pop esi
+        pop rsi
         cmp al, 'q'
         je .quit
         cmp al, 'Q'
@@ -117,7 +117,7 @@ start:
         je .quit
 
         ; Clear prompt line
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0D
         int 0x80
@@ -127,7 +127,7 @@ start:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0D
         int 0x80
-        pop eax
+        pop rax
 
         cmp al, ' '
         je .next_page
@@ -174,7 +174,11 @@ start:
 ; Data
 path_prefix:    db "/docs/man-", 0
 msg_usage:      db "Usage: man <topic>", 0x0A
-                db "Topics: shell, syscalls, editor, fs, asm", 0x0A, 0
+                db "Topics: shell, syscalls, editor, fs, asm,", 0x0A
+                db "        networking, compression, crypto,", 0x0A
+                db "        games, admin, texttools, gui,", 0x0A
+                db "        debugging, scripting, ipc,", 0x0A
+                db "        multimedia", 0x0A, 0
 msg_no_entry:   db "No manual entry for ", 0
 msg_more:       db " -- MANUAL -- (Space=page, q=quit) ", 0
 msg_blank:      db "                                      ", 0

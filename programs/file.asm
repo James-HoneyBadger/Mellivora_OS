@@ -243,7 +243,7 @@ msg_usage:      db "Usage: file <filename>", 0x0A, 0
 msg_colon:      db ": ", 0
 msg_not_found:  db "cannot open (No such file)", 0x0A, 0
 msg_empty:      db "empty", 0x0A, 0
-msg_elf:        db "ELF 32-bit executable", 0
+msg_elf:        db "ELF 64-bit executable", 0
 msg_bmp:        db "BMP image", 0
 msg_png:        db "PNG image", 0
 msg_gif:        db "GIF image", 0

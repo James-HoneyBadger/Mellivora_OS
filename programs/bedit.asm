@@ -71,6 +71,10 @@ start:
         je .key_save
         cmp bl, 15              ; Ctrl+O
         je .key_open
+        cmp bl, 3               ; Ctrl+C (copy line)
+        je .key_copy
+        cmp bl, 22              ; Ctrl+V (paste)
+        je .key_paste
         cmp bl, 32
         jl .main_loop
         cmp bl, 126
@@ -183,6 +187,51 @@ start:
 .dlg_open_title: db "Open File", 0
 .dlg_save_title: db "Save As", 0
 
+.key_copy:
+        ; Copy current line to clipboard via SYS_CLIPBOARD_COPY
+        mov eax, [cur_line]
+        imul eax, LINE_LEN
+        lea ebx, [text_buf + eax]
+        ; Find line length
+        mov esi, ebx
+        xor ecx, ecx
+.kc_len:
+        cmp byte [esi + ecx], 0
+        je .kc_do
+        inc ecx
+        cmp ecx, LINE_LEN
+        jl .kc_len
+.kc_do:
+        mov eax, SYS_CLIPBOARD_COPY
+        int 0x80
+        jmp .main_loop
+
+.key_paste:
+        ; Paste from clipboard into current line at cursor position
+        mov eax, SYS_CLIPBOARD_PASTE
+        mov ebx, clip_paste_buf
+        mov ecx, LINE_LEN
+        int 0x80
+        ; EAX = bytes pasted
+        test eax, eax
+        jz .main_loop
+        ; Insert each character
+        mov esi, clip_paste_buf
+        mov ecx, eax
+.kp_loop:
+        cmp ecx, 0
+        jle .main_loop
+        mov bl, [esi]
+        cmp bl, 0
+        je .main_loop
+        cmp bl, 10             ; skip newlines
+        je .kp_skip
+        call insert_char
+.kp_skip:
+        inc esi
+        dec ecx
+        jmp .kp_loop
+
 .close:
         mov eax, [win_id]
         call gui_destroy_window
@@ -195,7 +244,7 @@ start:
 ; draw_editor
 ;---------------------------------------
 draw_editor:
-        pushad
+        PUSHALL
         ; Background
         mov eax, [win_id]
         mov ebx, 0
@@ -232,7 +281,7 @@ draw_editor:
         cmp eax, [num_lines]
         jge .draw_cursor
 
-        push ecx
+        push rcx
         ; Get line
         imul eax, LINE_LEN
         lea esi, [text_buf + eax]
@@ -244,7 +293,7 @@ draw_editor:
         add ecx, 4
         mov edi, 0x00000000
         call gui_draw_text
-        pop ecx
+        pop rcx
         inc ecx
         jmp .draw_line
 
@@ -257,12 +306,12 @@ draw_editor:
         cmp eax, VISIBLE_LINES
         jge .draw_end
 
-        push eax
+        push rax
         mov eax, [win_id]
         mov ebx, [cur_col]
         shl ebx, 3             ; * 8
         add ebx, 8
-        pop eax
+        pop rax
         imul eax, 16
         add eax, 4
         mov ecx, eax
@@ -272,14 +321,14 @@ draw_editor:
         call gui_fill_rect
 
 .draw_end:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; insert_char - Insert BL at cursor position
 ;---------------------------------------
 insert_char:
-        pushad
+        PUSHALL
         mov eax, [cur_line]
         imul eax, LINE_LEN
         add eax, [cur_col]
@@ -305,14 +354,14 @@ insert_char:
         mov [edi], bl
         inc dword [cur_col]
 .ic_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; delete_char - Backspace at cursor
 ;---------------------------------------
 delete_char:
-        pushad
+        PUSHALL
         cmp dword [cur_col], 0
         je .dc_done
         dec dword [cur_col]
@@ -331,14 +380,14 @@ delete_char:
         inc edi
         jmp .dc_shift
 .dc_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; insert_newline
 ;---------------------------------------
 insert_newline:
-        pushad
+        PUSHALL
         mov eax, [num_lines]
         cmp eax, MAX_LINES - 1
         jge .nl_done
@@ -364,14 +413,14 @@ insert_newline:
         cmp ecx, 0
         jle .nl_no_shift
         ; Copy one line (LINE_LEN bytes)
-        push ecx
-        push esi
-        push edi
+        push rcx
+        push rsi
+        push rdi
         mov ecx, LINE_LEN / 4
         rep movsd
-        pop edi
-        pop esi
-        pop ecx
+        pop rdi
+        pop rsi
+        pop rcx
         sub esi, LINE_LEN
         sub edi, LINE_LEN
         dec ecx
@@ -386,17 +435,17 @@ insert_newline:
         ; New line = cur_line + 1
         lea edi, [text_buf + eax + LINE_LEN]
         ; Clear new line first
-        push edi
-        push eax
+        push rdi
+        push rax
         xor eax, eax
         mov ecx, LINE_LEN / 4
         rep stosd
-        pop eax
-        pop edi
+        pop rax
+        pop rdi
 
         ; Copy text from cur_col onward to new line
         mov ecx, [cur_col]
-        push esi
+        push rsi
         add esi, ecx            ; src = cur_line + cur_col
         mov ecx, LINE_LEN
         sub ecx, [cur_col]     ; bytes to copy
@@ -408,7 +457,7 @@ insert_newline:
         dec ecx
         jmp .nl_copy
 .nl_copy_done:
-        pop esi                 ; restore current line base
+        pop rsi                 ; restore current line base
 
         ; Null out text after cur_col on current line
         mov edi, esi
@@ -423,14 +472,14 @@ insert_newline:
         mov dword [cur_col], 0
         call adjust_scroll
 .nl_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; adjust_scroll
 ;---------------------------------------
 adjust_scroll:
-        pushad
+        PUSHALL
         mov eax, [cur_line]
         cmp eax, [scroll_y]
         jge .check_bottom
@@ -445,14 +494,14 @@ adjust_scroll:
         sub ebx, VISIBLE_LINES - 1
         mov [scroll_y], ebx
 .as_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; load_file
 ;---------------------------------------
 load_file:
-        pushad
+        PUSHALL
         mov eax, SYS_FREAD
         mov ebx, arg_buf
         mov ecx, file_buf
@@ -477,27 +526,27 @@ load_file:
         jmp .lf_parse
 .lf_newline:
         ; Pad rest of line with zeros
-        push ecx
+        push rcx
         mov eax, LINE_LEN
         sub eax, ecx
         mov ecx, eax
         xor al, al
         rep stosb
-        pop ecx
+        pop rcx
         xor ecx, ecx
         inc dword [num_lines]
         cmp dword [num_lines], MAX_LINES
         jge .lf_done
         jmp .lf_parse
 .lf_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; save_file
 ;---------------------------------------
 save_file:
-        pushad
+        PUSHALL
         ; Check if we have a filename
         cmp byte [arg_buf], 0
         je .sf_done
@@ -509,8 +558,8 @@ save_file:
 .sf_line:
         cmp ecx, [num_lines]
         jge .sf_write
-        push ecx
-        push esi
+        push rcx
+        push rsi
         ; Find line end (skip trailing zeros)
         mov ebx, LINE_LEN - 1
 .sf_find_end:
@@ -525,14 +574,14 @@ save_file:
         mov byte [edi], 10
         inc edi
         inc edx
-        pop esi
+        pop rsi
         add esi, LINE_LEN
-        pop ecx
+        pop rcx
         inc ecx
         jmp .sf_line
 .sf_copy:
         inc ebx                ; length
-        push ecx
+        push rcx
         mov ecx, ebx
 .sf_cp:
         lodsb
@@ -540,14 +589,14 @@ save_file:
         inc edx
         dec ecx
         jnz .sf_cp
-        pop ecx
+        pop rcx
         ; Add newline
         mov byte [edi], 10
         inc edi
         inc edx
-        pop esi
+        pop rsi
         add esi, LINE_LEN
-        pop ecx
+        pop rcx
         inc ecx
         jmp .sf_line
 .sf_write:
@@ -559,14 +608,14 @@ save_file:
         xor esi, esi            ; type = text
         int 0x80
 .sf_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; strlen - Length of string at ESI
 ;---------------------------------------
 strlen:
-        push esi
+        push rsi
         xor eax, eax
 .sl:
         cmp byte [esi], 0
@@ -575,14 +624,14 @@ strlen:
         inc esi
         jmp .sl
 .sl_done:
-        pop esi
+        pop rsi
         ret
 
 ;---------------------------------------
 ; strlen_from - Length of string at EDI
 ;---------------------------------------
 strlen_from:
-        push edi
+        push rdi
         xor eax, eax
 .sf:
         cmp byte [edi], 0
@@ -591,12 +640,12 @@ strlen_from:
         inc edi
         jmp .sf
 .sf_done:
-        pop edi
+        pop rdi
         ret
 
 ; Data
 title_str:      db "BEdit", 0
-status_str:     db "^O:Open ^S:Save  ESC:Exit  Arrows:Move", 0
+status_str:     db "^O:Open ^S:Save ^C:Copy ^V:Paste  ESC:Exit", 0
 
 win_id:         dd 0
 cur_line:       dd 0
@@ -605,5 +654,6 @@ scroll_y:       dd 0
 num_lines:      dd 1
 
 arg_buf:        times 64 db 0
+clip_paste_buf: times 128 db 0
 file_buf:       times 8192 db 0
 text_buf:       times MAX_LINES * LINE_LEN db 0

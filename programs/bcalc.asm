@@ -79,20 +79,20 @@ start:
         jl .main_loop
 
         ; Calculate row/col
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         xor edx, edx
         mov eax, ecx
         mov ecx, BTN_H + BTN_PAD
         div ecx
         mov [click_row], eax
-        pop ebx
+        pop rbx
         xor edx, edx
         mov eax, ebx
         mov ecx, BTN_W + BTN_PAD
         div ecx
         mov [click_col], eax
-        pop ecx
+        pop rcx
 
         ; Validate
         cmp dword [click_row], ROWS
@@ -228,7 +228,7 @@ start:
 ; do_pending_op
 ;---------------------------------------
 do_pending_op:
-        pushad
+        PUSHALL
         cmp byte [op], 0
         je .dpo_first
         cmp byte [op], '+'
@@ -272,14 +272,14 @@ do_pending_op:
         mov [current], eax
 .dpo_done:
         call update_display
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; update_display - Convert current to string
 ;---------------------------------------
 update_display:
-        pushad
+        PUSHALL
         mov eax, [current]
         mov edi, display
         ; Handle negative
@@ -295,12 +295,12 @@ update_display:
 .ud_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .ud_push
 .ud_pop:
-        pop edx
+        pop rdx
         add dl, '0'
         mov [edi], dl
         inc edi
@@ -311,14 +311,14 @@ update_display:
         mov eax, edi
         sub eax, display
         mov [disp_len], eax
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_calc
 ;---------------------------------------
 draw_calc:
-        pushad
+        PUSHALL
         ; Background
         mov eax, [win_id]
         mov ebx, 0
@@ -371,12 +371,12 @@ draw_calc:
         jge .draw_end
 
         ; Calculate position
-        push ecx
+        push rcx
         mov eax, ecx
         shr eax, 2             ; row
         and ecx, 3             ; col
 
-        push eax
+        push rax
         ; X = 8 + col * (BTN_W + BTN_PAD)
         imul ecx, BTN_W + BTN_PAD
         add ecx, 8
@@ -385,20 +385,20 @@ draw_calc:
         add eax, 60
 
         ; Draw button bg
-        push ecx
-        push eax
+        push rcx
+        push rax
         mov eax, [win_id]
         mov ebx, ecx
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         mov edx, BTN_W
         mov esi, BTN_H
         ; Color depends on button type
-        pop ecx
-        pop ebx
-        push ebx
-        push ecx
-        mov eax, [esp + 12]    ; button index
+        pop rcx
+        pop rbx
+        push rbx
+        push rcx
+        mov eax, [rsp + 24]    ; button index
         cmp eax, 3
         je .btn_op_color
         cmp eax, 7
@@ -417,25 +417,25 @@ draw_calc:
 .btn_eq_color:
         mov edi, 0x003060A0    ; blue equals
 .btn_draw:
-        pop ecx
-        pop ebx
-        push ebx
-        push ecx
+        pop rcx
+        pop rbx
+        push rbx
+        push rcx
         mov eax, [win_id]
         mov edx, BTN_W
         mov esi, BTN_H
         call gui_fill_rect
 
         ; Draw button label
-        pop ecx
-        pop eax
-        push eax
-        push ecx
+        pop rcx
+        pop rax
+        push rax
+        push rcx
         add ecx, 4             ; adjust for text offset
         mov eax, [win_id]
         add ebx, 20
         ; Get label
-        mov edx, [esp + 12]    ; button index
+        mov edx, [rsp + 24]    ; button index
         movzx edx, byte [btn_labels + edx]
         mov [tmp_char], dl
         mov byte [tmp_char+1], 0
@@ -447,16 +447,16 @@ draw_calc:
 .btn_txt:
         call gui_draw_text
 
-        pop ecx
-        pop eax
-        pop eax              ; discard saved row
-        pop ecx              ; restore button index
+        pop rcx
+        pop rax
+        pop rax              ; discard saved row
+        pop rcx              ; restore button index
 
         inc ecx
         jmp .draw_btn
 
 .draw_end:
-        popad
+        POPALL
         ret
 
 click_row: dd 0

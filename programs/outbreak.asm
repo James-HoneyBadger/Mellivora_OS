@@ -380,17 +380,17 @@ show_howto:
         mov ecx, 1             ; starting row
         mov edx, 18            ; number of lines
 .howto_loop:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, [esi]
+        mov rbx, [rsi]
         int 0x80
-        add esi, 4
-        pop edx
-        pop ecx
+        add rsi, 8
+        pop rdx
+        pop rcx
         inc ecx
         dec edx
         jnz .howto_loop
@@ -533,10 +533,10 @@ show_settings:
         int 0x80
         ; Print difficulty name
         mov eax, [set_diff]
-        imul eax, 4
-        mov ebx, [diff_names + eax]
+        imul eax, 8
+        mov rbx, [diff_names + rax]
         mov eax, SYS_SETCOLOR
-        push ebx
+        push rbx
         ; Color code difficulty
         mov eax, [set_diff]
         cmp eax, 0
@@ -553,7 +553,7 @@ show_settings:
 .diff_col_set:
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop ebx
+        pop rbx
         mov eax, SYS_PRINT
         int 0x80
 
@@ -2586,7 +2586,7 @@ exit_game:
 ; draw_game_screen - Main game display
 ;---------------------------------------
 draw_game_screen:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -2977,14 +2977,14 @@ draw_game_screen:
         mov ebx, str_separator
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_action_menu
 ;---------------------------------------
 draw_action_menu:
-        pushad
+        PUSHALL
 
         mov eax, SYS_SETCURSOR
         mov ebx, 2
@@ -3064,14 +3064,14 @@ draw_action_menu:
         mov ebx, str_act_rest
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_month_summary
 ;---------------------------------------
 draw_month_summary:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -3250,14 +3250,14 @@ draw_month_summary:
         int 0x80
         call print_random_tip
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; show_event_screen
 ;---------------------------------------
 show_event_screen:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         mov ebx, 4
         mov ecx, 18
@@ -3288,15 +3288,15 @@ show_event_screen:
         mov eax, SYS_PRINT
         mov ebx, str_sep_short
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_event_msg - EBX = message string
 ;---------------------------------------
 print_event_msg:
-        pushad
-        push ebx
+        PUSHALL
+        push rbx
         mov eax, SYS_SETCURSOR
         mov ebx, 5
         mov ecx, 20
@@ -3304,17 +3304,17 @@ print_event_msg:
         mov eax, SYS_SETCOLOR
         mov ebx, C_WHITE
         int 0x80
-        pop ebx
+        pop rbx
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_pop_segment - Draw EAX people as blocks (scaled to 66 chars = 200 people)
 ;---------------------------------------
 draw_pop_segment:
-        pushad
+        PUSHALL
         ; chars = (people * 66) / 200
         imul eax, 66
         xor edx, edx
@@ -3330,14 +3330,14 @@ draw_pop_segment:
         dec ecx
         jnz .seg_loop
 .seg_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_morale_bar - Visual morale meter
 ;---------------------------------------
 draw_morale_bar:
-        pushad
+        PUSHALL
         mov eax, [morale]
         ; Choose color based on morale level
         cmp eax, 60
@@ -3352,10 +3352,10 @@ draw_morale_bar:
 .mor_yellow:
         mov ebx, C_YELLOW
 .mor_draw:
-        push eax
+        push rax
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop eax
+        pop rax
 
         ; Draw bar: morale/5 filled chars out of 20
         mov ecx, eax
@@ -3368,11 +3368,11 @@ draw_morale_bar:
         cmp ecx, 0
         jle .mor_empty
 .mor_fill:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0xDB
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .mor_fill
 .mor_empty:
@@ -3381,17 +3381,17 @@ draw_morale_bar:
         sub ecx, edx
         cmp ecx, 0
         jle .mor_done
-        push ecx
+        push rcx
         mov eax, SYS_SETCOLOR
         mov ebx, C_DGRAY
         int 0x80
-        pop ecx
+        pop rcx
 .mor_dim:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0xB0           ; Light shade
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .mor_dim
 .mor_done:
@@ -3407,14 +3407,14 @@ draw_morale_bar:
         mov eax, SYS_PUTCHAR
         mov ebx, '%'
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_preparedness_bar - Visual readiness meter
 ;---------------------------------------
 draw_preparedness_bar:
-        pushad
+        PUSHALL
         mov eax, [preparedness]
         cmp eax, 70
         jge .prep_green
@@ -3428,10 +3428,10 @@ draw_preparedness_bar:
 .prep_cyan:
         mov ebx, C_LCYAN
 .prep_draw:
-        push eax
+        push rax
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop eax
+        pop rax
 
         mov ecx, eax
         shr ecx, 2
@@ -3443,11 +3443,11 @@ draw_preparedness_bar:
         cmp ecx, 0
         jle .prep_empty
 .prep_fill:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0xDB
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .prep_fill
 .prep_empty:
@@ -3455,17 +3455,17 @@ draw_preparedness_bar:
         sub ecx, edx
         cmp ecx, 0
         jle .prep_done
-        push ecx
+        push rcx
         mov eax, SYS_SETCOLOR
         mov ebx, C_DGRAY
         int 0x80
-        pop ecx
+        pop rcx
 .prep_dim:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0xB0
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .prep_dim
 .prep_done:
@@ -3480,14 +3480,14 @@ draw_preparedness_bar:
         mov eax, SYS_PUTCHAR
         mov ebx, '%'
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_threat_meter - Show current alert stage
 ;---------------------------------------
 draw_threat_meter:
-        pushad
+        PUSHALL
         mov eax, [threat_level]
         cmp eax, 1
         je .threat_1
@@ -3549,11 +3549,11 @@ draw_threat_meter:
 .fill_loop:
         cmp ecx, 0
         jle .empty_setup
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, '!'
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .fill_loop
 .empty_setup:
@@ -3562,25 +3562,25 @@ draw_threat_meter:
 .empty_loop:
         cmp ecx, 0
         jle .close_bar
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, '.'
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .empty_loop
 .close_bar:
         mov eax, SYS_PUTCHAR
         mov ebx, ']'
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_advisor_line - Dynamic strategic guidance
 ;---------------------------------------
 print_advisor_line:
-        pushad
+        PUSHALL
         mov eax, [infected]
         mov ebx, [healthy]
         shr ebx, 1
@@ -3640,21 +3640,21 @@ print_advisor_line:
         mov eax, SYS_PRINT
         mov ebx, esi
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_timeline - Show month progress
 ;---------------------------------------
 draw_timeline:
-        pushad
+        PUSHALL
         mov ecx, 1             ; month counter
 .tl_loop:
         mov eax, [set_months]
         inc eax
         cmp ecx, eax
         jge .tl_done
-        push ecx
+        push rcx
 
         ; Color based on relation to current month
         cmp ecx, [month]
@@ -3695,7 +3695,7 @@ draw_timeline:
         mov ebx, '-'
         int 0x80
 
-        pop ecx
+        pop rcx
         inc ecx
         jmp .tl_loop
 .tl_done:
@@ -3706,14 +3706,14 @@ draw_timeline:
         mov eax, SYS_PRINT
         mov ebx, str_tl_labels
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_final_stats
 ;---------------------------------------
 draw_final_stats:
-        pushad
+        PUSHALL
         mov edi, [stats_base_row]
         ; Row 1: Survivors
         mov eax, SYS_SETCURSOR
@@ -3814,14 +3814,14 @@ draw_final_stats:
         mov eax, [outbreaks_survived]
         call print_number
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; calc_rating - Calculate and display performance rating
 ;---------------------------------------
 calc_rating:
-        pushad
+        PUSHALL
 
         mov eax, SYS_SETCURSOR
         mov ebx, 15
@@ -3875,7 +3875,7 @@ calc_rating:
 
 .rate_s:
         ; Check if actual herd immunity was achieved (70%+ of survivors immune)
-        push eax
+        push rax
         mov eax, [vaccinated]
         add eax, [recovered]
         imul eax, 100
@@ -3887,7 +3887,7 @@ calc_rating:
         cmp eax, 70
         jge .rate_s_herd
 .rate_s_lead:
-        pop eax
+        pop rax
         mov eax, SYS_SETCOLOR
         mov ebx, C_YELLOW
         int 0x80
@@ -3896,7 +3896,7 @@ calc_rating:
         int 0x80
         jmp .rate_done
 .rate_s_herd:
-        pop eax
+        pop rax
         mov eax, SYS_SETCOLOR
         mov ebx, C_YELLOW
         int 0x80
@@ -3936,7 +3936,7 @@ calc_rating:
         mov ebx, str_rate_d
         int 0x80
 .rate_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -3947,23 +3947,23 @@ calc_rating:
 ; random - LCG PRNG, result in EAX (0-32767)
 ;---------------------------------------
 random:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov eax, [rand_seed]
         imul eax, 1103515245
         add eax, 12345
         mov [rand_seed], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; print_number - Print EAX as decimal
 ;---------------------------------------
 print_number:
-        pushad
+        PUSHALL
         mov ecx, 0              ; digit count
         mov ebx, 10
         cmp eax, 0
@@ -3972,36 +3972,36 @@ print_number:
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pn_nonzero:
         ; Extract digits
 .pn_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pn_div
         ; Print digits
 .pn_print:
-        pop edx
+        pop rdx
         add edx, '0'
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, edx
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .pn_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; calc_difficulty - Escalates outbreak pressure and sets alert level
 ;---------------------------------------
 calc_difficulty:
-        pushad
+        PUSHALL
         mov eax, [month]
         dec eax
         cmp eax, 0
@@ -4093,16 +4093,16 @@ calc_difficulty:
 .threat_4:
         mov dword [threat_level], 4
 .done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; calc_infection_rate - Returns new infections in EAX
 ;---------------------------------------
 calc_infection_rate:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         ; === Difficulty-dependent base infection rate ===
         mov ebx, [set_diff]
@@ -4214,7 +4214,7 @@ calc_infection_rate:
         div ecx                         ; EAX = new infections
 
         ; === Random variance: stage-biased swing ===
-        push eax
+        push rax
         call random
         xor edx, edx
         mov ecx, 7
@@ -4223,7 +4223,7 @@ calc_infection_rate:
         mov ecx, [threat_level]
         add edx, ecx                    ; Higher threat biases upward
         mov ebx, edx
-        pop eax
+        pop rax
         add eax, ebx
 
         cmp eax, 0
@@ -4231,9 +4231,9 @@ calc_infection_rate:
         xor eax, eax
 .inf_nonneg:
 
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -4268,7 +4268,7 @@ clamp_preparedness:
 ; monthly_decay - Resource spoilage, attrition, and breakthrough infections
 ;---------------------------------------
 monthly_decay:
-        pushad
+        PUSHALL
         ; --- Vaccine spoilage ---
         mov eax, [set_diff]
         cmp eax, 0
@@ -4365,61 +4365,61 @@ monthly_decay:
         sub [vaccinated], eax
         add [infected], eax
 .no_breakthrough:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_month_name - Wrap long campaigns safely across the 12-month table
 ;---------------------------------------
 print_month_name:
-        pushad
+        PUSHALL
         mov eax, [month]
         dec eax
         xor edx, edx
         mov ecx, 12
         div ecx
         mov eax, edx
-        imul eax, 4
-        mov ebx, [month_names + eax]
+        imul eax, 8
+        mov rbx, [month_names + rax]
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; pause_message - Brief pause for reading
 ;---------------------------------------
 pause_message:
-        pushad
+        PUSHALL
         mov eax, SYS_SLEEP
         mov ebx, 60
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_random_tip - Print an educational vaccination fact
 ;---------------------------------------
 print_random_tip:
-        pushad
+        PUSHALL
         call random
         xor edx, edx
         mov ebx, 10
         div ebx
         ; EDX = tip index 0-9
         mov eax, edx
-        imul eax, 4
-        mov ebx, [tip_table + eax]
+        imul eax, 8
+        mov rbx, [tip_table + rax]
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; play_title_melody - Catchy intro tune
 ;---------------------------------------
 play_title_melody:
-        pushad
+        PUSHALL
         ; C E G C' (ascending)
         mov eax, SYS_BEEP
         mov ebx, 523
@@ -4437,14 +4437,14 @@ play_title_melody:
         mov ebx, 1047
         mov ecx, 6
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; play_victory_melody
 ;---------------------------------------
 play_victory_melody:
-        pushad
+        PUSHALL
         mov eax, SYS_BEEP
         mov ebx, 523
         mov ecx, 3
@@ -4473,7 +4473,7 @@ play_victory_melody:
         mov ebx, 1319
         mov ecx, 8
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -4546,7 +4546,7 @@ diff_name_normal: db "Normal", 0
 diff_name_hard:  db "Hard", 0
 
 diff_names:
-        dd diff_name_easy, diff_name_normal, diff_name_hard
+        dq diff_name_easy, diff_name_normal, diff_name_hard
 
 ; --- How To Play ---
 str_howto_title: db "=== HOW TO PLAY ===", 0
@@ -4571,11 +4571,11 @@ howto_line17:    db "  * Alert levels make supply runs and random events more dr
 howto_line18:    db "  * Keep the threat meter low to truly contain the outbreak!", 0
 
 howto_lines:
-        dd howto_line1, howto_line2, howto_line3, howto_line4
-        dd howto_line5, howto_line6, howto_line7, howto_line8
-        dd howto_line9, howto_line10, howto_line11, howto_line12
-        dd howto_line13, howto_line14, howto_line15, howto_line16
-        dd howto_line17, howto_line18
+        dq howto_line1, howto_line2, howto_line3, howto_line4
+        dq howto_line5, howto_line6, howto_line7, howto_line8
+        dq howto_line9, howto_line10, howto_line11, howto_line12
+        dq howto_line13, howto_line14, howto_line15, howto_line16
+        dq howto_line17, howto_line18
 
 str_press_any:   db "Press any key to return...", 0
 
@@ -4747,8 +4747,8 @@ tip_9:  db "Community vaccination rates above 90% create herd immunity.", 0
 tip_10: db "The WHO estimates vaccines prevent 3.5-5 million deaths yearly.", 0
 
 tip_table:
-        dd tip_1, tip_2, tip_3, tip_4, tip_5
-        dd tip_6, tip_7, tip_8, tip_9, tip_10
+        dq tip_1, tip_2, tip_3, tip_4, tip_5
+        dq tip_6, tip_7, tip_8, tip_9, tip_10
 
 ; Month names
 month_jan: db "January", 0, 0, 0
@@ -4765,9 +4765,9 @@ month_nov: db "November", 0, 0
 month_dec: db "December", 0, 0
 
 month_names:
-        dd month_jan, month_feb, month_mar, month_apr
-        dd month_may, month_jun, month_jul, month_aug
-        dd month_sep, month_oct, month_nov, month_dec
+        dq month_jan, month_feb, month_mar, month_apr
+        dq month_may, month_jun, month_jul, month_aug
+        dq month_sep, month_oct, month_nov, month_dec
 
 ;=======================================================================
 ; BSS - Game State Variables

@@ -10,6 +10,9 @@
 ;   [20-23] Bitmap start block
 ;   [24-27] Data start block
 ;   [28-31] Block size (4096)
+;   [32]    Journal dirty flag (0=clean, 1=dirty)
+;   [33-35] Reserved
+;   [36-63] Reserved for journal
 ;
 ; Directory Entry (288 bytes):
 ;   [0-252]   Filename (null-terminated, 252 chars max)
@@ -29,7 +32,7 @@
 ;=======================================================================
 
 hbfs_init:
-        pushad
+        PUSHALL
 
         cmp byte [ata_present], 0
         je .no_disk
@@ -49,28 +52,31 @@ hbfs_init:
         mov esi, msg_hbfs_found
         call vga_print
 
+        ; Check journal dirty flag and replay if needed
+        call hbfs_journal_check
+
         ; Load root directory
         call hbfs_load_root_dir
 
-        popad
+        POPALL
         ret
 
 .format_new:
         mov esi, msg_hbfs_format
         call vga_print
         call hbfs_format
-        popad
+        POPALL
         ret
 
 .no_disk:
         mov esi, msg_hbfs_nodisk
         call vga_print
-        popad
+        POPALL
         ret
 
 ; Format: create fresh filesystem
 hbfs_format:
-        pushad
+        PUSHALL
 
         ; Build superblock in buffer
         mov edi, hbfs_super_buf
@@ -131,13 +137,13 @@ hbfs_format:
         mov esi, msg_hbfs_formatted
         call vga_print
 
-        popad
+        POPALL
         ret
 
 ; Load current directory into memory (with cache)
 ; Returns: CF set on read error
 hbfs_load_root_dir:
-        pushad
+        PUSHALL
         ; Check if the directory buffer already has this directory cached
         mov eax, [current_dir_lba]
         cmp eax, [dir_cache_lba]
@@ -146,7 +152,7 @@ hbfs_load_root_dir:
         cmp eax, [dir_cache_sects]
         jne .hlrd_miss
         ; Cache hit — buffer is already valid
-        popad
+        POPALL
         clc
         ret
 .hlrd_miss:
@@ -167,51 +173,51 @@ hbfs_load_root_dir:
         mov [dir_cache_lba], eax
         mov eax, [current_dir_sects]
         mov [dir_cache_sects], eax
-        popad
+        POPALL
         clc
         ret
 .hlrd_err:
         mov esi, msg_hbfs_dir_read_err
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
 ; Load bitmap from disk into hbfs_bitmap_buf
 ; Returns: CF set on read error
 hbfs_load_bitmap:
-        pushad
+        PUSHALL
         mov eax, HBFS_BITMAP_START
         mov ecx, HBFS_BITMAP_SECTS
         mov edi, hbfs_bitmap_buf
         call ata_read_sectors
         jc .hlb_err
-        popad
+        POPALL
         clc
         ret
 .hlb_err:
         mov esi, msg_hbfs_bitmap_err
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
 ; Save current directory to disk
 ; Returns: CF set on write error
 hbfs_save_root_dir:
-        pushad
+        PUSHALL
         mov eax, [current_dir_lba]
         mov ecx, [current_dir_sects]
         mov esi, hbfs_dir_buf
         call ata_write_sectors
         jc .hsrd_err
-        popad
+        POPALL
         clc
         ret
 .hsrd_err:
         mov esi, msg_hbfs_dir_write_err
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
@@ -221,17 +227,17 @@ hbfs_get_max_entries:
         mov eax, [current_dir_sects]
         shl eax, 9              ; sectors * 512 = bytes
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, HBFS_DIR_ENTRY_SIZE
         div ecx                 ; bytes / 288 = max entries
-        pop ecx
+        pop rcx
         ret
 
 ; Find file in current directory
 ; ESI = filename to find
 ; Returns: EDI = pointer to dir entry (in hbfs_dir_buf), CF set if not found
 hbfs_find_file:
-        pushad
+        PUSHALL
         mov edi, hbfs_dir_buf
         call hbfs_get_max_entries
         mov ecx, eax
@@ -241,9 +247,9 @@ hbfs_find_file:
         je .next
 
         ; Compare filename
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
 .cmp_loop:
         mov al, [esi]
         mov ah, [edi]
@@ -256,23 +262,23 @@ hbfs_find_file:
         jmp .cmp_loop
 
 .no_match:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
 .next:
         add edi, HBFS_DIR_ENTRY_SIZE
         loop .search
 
-        popad
+        POPALL
         stc
         ret
 
 .match:
-        pop ecx
-        pop edi                 ; EDI = dir entry start
-        pop esi
-        mov [esp], edi          ; Update EDI in pushad frame (EDI is at offset 0)
-        popad
+        pop rcx
+        pop rdi                 ; EDI = dir entry start
+        pop rsi
+        mov [rsp + FRAME_RDI], rdi ; Update RDI in PUSHALL frame
+        POPALL
         clc
         ret
 
@@ -280,7 +286,7 @@ hbfs_find_file:
 ; ECX = number of blocks needed
 ; Returns: EAX = first block number (relative to data start), CF set if full
 hbfs_alloc_blocks:
-        pushad
+        PUSHALL
         mov [.blocks_needed], ecx
 
         ; Read bitmap
@@ -305,38 +311,38 @@ hbfs_alloc_blocks:
         jc .occupied
 
         ; This block is free — check if N contiguous blocks from here
-        push edx                ; save start candidate
+        push rdx                ; save start candidate
         mov esi, 1              ; count of free found so far
 .check_run:
         cmp esi, [.blocks_needed]
         jge .found_run
-        push edx
+        push rdx
         add edx, esi
         cmp edx, ecx
-        pop edx
+        pop rdx
         jge .run_fail           ; past end of bitmap
 
         ; Check block (start + esi)
         mov eax, edx
         add eax, esi
-        push eax
+        push rax
         shr eax, 3
         mov ebx, edx
         add ebx, esi
         and ebx, 7
         bt dword [hbfs_bitmap_buf + eax], ebx
-        pop eax
+        pop rax
         jc .run_fail
         inc esi
         jmp .check_run
 
 .run_fail:
-        pop edx                 ; restore start candidate
+        pop rdx                 ; restore start candidate
         inc edx
         jmp .scan_start
 
 .found_run:
-        pop edx                 ; EDX = first free block
+        pop rdx                 ; EDX = first free block
 
         ; Mark all N blocks as used in bitmap
         mov esi, 0
@@ -345,41 +351,40 @@ hbfs_alloc_blocks:
         jge .mark_done
         mov eax, edx
         add eax, esi
-        push eax
+        push rax
         shr eax, 3
         mov ebx, edx
         add ebx, esi
         and ebx, 7
         bts dword [hbfs_bitmap_buf + eax], ebx
-        pop eax
+        pop rax
         inc esi
         jmp .mark_loop
 .mark_done:
 
+        ; Begin journal transaction (marks superblock dirty)
+        push rdx
+        call hbfs_journal_begin
+        pop rdx
+
         ; Write bitmap back
-        push edx
+        push rdx
         mov eax, HBFS_BITMAP_START
         mov ecx, HBFS_BITMAP_SECTS
         mov esi, hbfs_bitmap_buf
         call ata_write_sectors
-        pop edx
+        pop rdx
 
-        ; Update superblock free_blocks counter
-        push edx
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov edi, hbfs_super_buf
-        call ata_read_sectors
+        ; Update superblock free_blocks counter in buffer
+        push rdx
         mov eax, [.blocks_needed]
         sub [hbfs_super_buf + 12], eax   ; free_blocks -= allocated
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov esi, hbfs_super_buf
-        call ata_write_sectors
-        pop edx
+        ; Commit journal (clears dirty flag + writes superblock)
+        call hbfs_journal_commit
+        pop rdx
 
-        mov [esp + 28], edx    ; Return first block number via EAX
-        popad
+        mov [rsp + FRAME_RAX], rdx    ; Return first block number via RAX
+        POPALL
         clc
         ret
 
@@ -388,7 +393,7 @@ hbfs_alloc_blocks:
         jmp .scan_start
 
 .no_space:
-        popad
+        POPALL
         stc
         ret
 
@@ -397,16 +402,16 @@ hbfs_alloc_blocks:
 ; Allocate a single data block (convenience wrapper)
 ; Returns: EAX = block number, CF set if full
 hbfs_alloc_block:
-        push ecx
+        push rcx
         mov ecx, 1
         call hbfs_alloc_blocks
-        pop ecx
+        pop rcx
         ret
 
 ; Free N contiguous data blocks
 ; EAX = first block number, ECX = block count
 hbfs_free_blocks:
-        pushad
+        PUSHALL
         mov [.free_start], eax
         mov [.free_count], ecx
 
@@ -437,25 +442,22 @@ hbfs_free_blocks:
         jmp .free_loop
 .free_done:
 
+        ; Begin journal transaction (marks superblock dirty)
+        call hbfs_journal_begin
+
         ; Write back
         mov eax, HBFS_BITMAP_START
         mov ecx, HBFS_BITMAP_SECTS
         mov esi, hbfs_bitmap_buf
         call ata_write_sectors
 
-        ; Update superblock free_blocks counter
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov edi, hbfs_super_buf
-        call ata_read_sectors
+        ; Update superblock free_blocks counter in buffer
         mov eax, [.free_count]
         add [hbfs_super_buf + 12], eax   ; free_blocks += freed
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov esi, hbfs_super_buf
-        call ata_write_sectors
+        ; Commit journal (clears dirty flag + writes superblock)
+        call hbfs_journal_commit
 
-        popad
+        POPALL
         ret
 
 .free_start: dd 0
@@ -464,17 +466,17 @@ hbfs_free_blocks:
 ; Free a single data block (convenience wrapper)
 ; EAX = block number
 hbfs_free_block:
-        push ecx
+        push rcx
         mov ecx, 1
         call hbfs_free_blocks
-        pop ecx
+        pop rcx
         ret
 
 ; Create a file
 ; ESI = filename, ECX = size, EDI = data pointer, EDX = file type (FTYPE_*)
 ; Returns: CF set on error
 hbfs_create_file:
-        pushad
+        PUSHALL
         ; Save parameters to local variables
         mov [.save_size], ecx
         mov [.save_data], edi
@@ -501,13 +503,13 @@ hbfs_create_file:
         loop .find_free
 
         ; Directory full
-        popad
+        POPALL
         stc
         ret
 
 .found_slot:
         ; Copy filename into directory entry (max 252 chars + null)
-        push edi                ; Save entry start
+        push rdi                ; Save entry start
         mov esi, [.save_name]
         mov ecx, HBFS_MAX_FILENAME ; 252 chars max
 .copy_name:
@@ -520,7 +522,7 @@ hbfs_create_file:
         xor al, al              ; Force null terminator if name too long
         stosb
 .name_done:
-        pop edi                 ; Restore entry start
+        pop rdi                 ; Restore entry start
 
         ; Set type from caller's EDX
         mov al, [.save_type]
@@ -538,9 +540,9 @@ hbfs_create_file:
         mov [.save_blocks], ecx
 
         ; Allocate contiguous blocks
-        push edi
+        push rdi
         call hbfs_alloc_blocks
-        pop edi
+        pop rdi
         jc .alloc_fail
 
         ; EAX = first allocated block number
@@ -570,13 +572,13 @@ hbfs_create_file:
         call ata_write_sectors
         jc .write_fail
 
-        popad
+        POPALL
         clc
         ret
 
 .alloc_fail:
 .write_fail:
-        popad
+        POPALL
         stc
         ret
 
@@ -589,7 +591,7 @@ hbfs_create_file:
 
 ; Delete file entry (EDI already points to entry in hbfs_dir_buf)
 hbfs_delete_file_entry:
-        pushad
+        PUSHALL
         ; Free ALL data blocks (contiguous)
         mov eax, [edi + 260]    ; Start block
         mov ecx, [edi + 264]    ; Block count
@@ -600,20 +602,20 @@ hbfs_delete_file_entry:
 
         ; Zero the directory entry
         mov ecx, HBFS_DIR_ENTRY_SIZE / 4
-        push edi
+        push rdi
         xor eax, eax
         rep stosd
-        pop edi
+        pop rdi
 
         call hbfs_save_root_dir
-        popad
+        POPALL
         ret
 
 ; Create a subdirectory in the current directory
 ; ESI = directory name (null-terminated)
 ; Returns: CF=0 success, CF=1 error
 hbfs_mkdir:
-        pushad
+        PUSHALL
         mov [.hm_name], esi
 
         call hbfs_load_root_dir
@@ -631,23 +633,23 @@ hbfs_mkdir:
 .hm_zero:
         cmp ebx, 0
         je .hm_zero_done
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov edi, hbfs_block_buf
         mov ecx, HBFS_BLOCK_SIZE / 4
         xor eax, eax
         rep stosd
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
         shl eax, 3
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, hbfs_block_buf
         call ata_write_sectors
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         inc eax
         dec ebx
         jmp .hm_zero
@@ -665,14 +667,14 @@ hbfs_mkdir:
         jmp .hm_fail
 
 .hm_slot:
-        push edi
+        push rdi
         mov esi, [.hm_name]
 .hm_cpn:
         lodsb
         stosb
         test al, al
         jnz .hm_cpn
-        pop edi
+        pop rdi
 
         mov eax, [.hm_block]
         mov byte [edi + DIRENT_TYPE], FTYPE_DIR
@@ -684,17 +686,117 @@ hbfs_mkdir:
         mov [edi + DIRENT_MODIFIED], eax
         call hbfs_save_root_dir
 
-        popad
+        POPALL
         clc
         ret
 
 .hm_fail:
-        popad
+        POPALL
         stc
         ret
 
 .hm_name:  dd 0
 .hm_block: dd 0
+
+;=======================================================================
+; HBFS JOURNAL - Write-Ahead Log for crash recovery
+;
+; Uses superblock byte [32] as a dirty flag. Before any metadata write
+; (bitmap + free_blocks update), the dirty flag is set and flushed.
+; After the writes complete, the flag is cleared. On boot, if the flag
+; is set, recovery recounts free blocks from the bitmap to restore
+; consistency.
+;=======================================================================
+
+; hbfs_journal_begin - Mark filesystem as dirty before metadata writes
+; Reads current superblock, sets dirty flag, writes back.
+hbfs_journal_begin:
+        PUSHALL
+        ; Read current superblock
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov edi, hbfs_super_buf
+        call ata_read_sectors
+        ; Set dirty flag
+        mov byte [hbfs_super_buf + 32], 1
+        ; Write back
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov esi, hbfs_super_buf
+        call ata_write_sectors
+        POPALL
+        ret
+
+; hbfs_journal_commit - Clear dirty flag after successful metadata writes
+; Caller must have already updated free_blocks in hbfs_super_buf.
+hbfs_journal_commit:
+        PUSHALL
+        ; Clear dirty flag
+        mov byte [hbfs_super_buf + 32], 0
+        ; Write superblock with updated free_blocks and clean flag
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov esi, hbfs_super_buf
+        call ata_write_sectors
+        POPALL
+        ret
+
+; hbfs_journal_check - On boot, check dirty flag and recover if needed
+; Called after superblock is loaded into hbfs_super_buf.
+; If dirty, recounts free blocks from bitmap and fixes superblock.
+hbfs_journal_check:
+        PUSHALL
+        cmp byte [hbfs_super_buf + 32], 0
+        je .jc_clean
+
+        ; Recovery needed
+        mov esi, msg_hbfs_journal_recover
+        call vga_print
+
+        ; Read bitmap
+        mov eax, HBFS_BITMAP_START
+        mov ecx, HBFS_BITMAP_SECTS
+        mov edi, hbfs_bitmap_buf
+        call ata_read_sectors
+
+        ; Count used blocks by iterating bitmap bytes (Kernighan popcount)
+        xor edx, edx           ; used count
+        xor ecx, ecx           ; byte index
+.jc_count:
+        cmp ecx, HBFS_BITMAP_SIZE
+        jge .jc_count_done
+        movzx eax, byte [hbfs_bitmap_buf + ecx]
+        ; Popcount this byte
+.jc_pop:
+        test al, al
+        jz .jc_pop_done
+        lea ebx, [eax - 1]
+        and eax, ebx
+        inc edx
+        jmp .jc_pop
+.jc_pop_done:
+        inc ecx
+        jmp .jc_count
+.jc_count_done:
+        ; EDX = total used blocks, free = total - used
+        mov eax, HBFS_TOTAL_BLOCKS
+        sub eax, edx
+        mov [hbfs_super_buf + 12], eax
+
+        ; Clear dirty flag
+        mov byte [hbfs_super_buf + 32], 0
+
+        ; Write fixed superblock
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov esi, hbfs_super_buf
+        call ata_write_sectors
+
+        mov esi, msg_hbfs_journal_fixed
+        call vga_print
+.jc_clean:
+        POPALL
+        ret
 
 ;=======================================================================
 ; v3.0 FILESYSTEM EXTENSIONS
@@ -707,7 +809,7 @@ hbfs_mkdir:
 ; Returns: EAX = 0 on success, -1 on failure
 ;---------------------------------------
 sys_chmod:
-        pushad
+        PUSHALL
         mov esi, ebx
         call hbfs_load_root_dir
         call hbfs_find_file
@@ -719,13 +821,13 @@ sys_chmod:
         call rtc_get_timestamp
         mov [edi + DIRENT_MODIFIED], eax
         call hbfs_save_root_dir
-        mov dword [esp + 28], 0
-        popad
-        iretd
+        mov qword [rsp + FRAME_RAX], 0
+        POPALL
+        iretq
 .chmod_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
+        mov qword [rsp + FRAME_RAX], -1
+        POPALL
+        iretq
 
 ;---------------------------------------
 ; sys_chown - Change file owner
@@ -734,7 +836,7 @@ sys_chmod:
 ; Returns: EAX = 0 on success, -1 on failure
 ;---------------------------------------
 sys_chown:
-        pushad
+        PUSHALL
         mov esi, ebx
         call hbfs_load_root_dir
         call hbfs_find_file
@@ -745,13 +847,13 @@ sys_chown:
         call rtc_get_timestamp
         mov [edi + DIRENT_MODIFIED], eax
         call hbfs_save_root_dir
-        mov dword [esp + 28], 0
-        popad
-        iretd
+        mov qword [rsp + FRAME_RAX], 0
+        POPALL
+        iretq
 .chown_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
+        mov qword [rsp + FRAME_RAX], -1
+        POPALL
+        iretq
 
 ;---------------------------------------
 ; sys_symlink - Create a symbolic link
@@ -763,7 +865,7 @@ sys_chown:
 ; data content is the target path string.
 ;---------------------------------------
 sys_symlink:
-        pushad
+        PUSHALL
         ; Calculate target path length
         mov esi, ecx
         xor edx, edx
@@ -777,20 +879,19 @@ sys_symlink:
         ; Create file with FTYPE_LINK
         mov esi, ebx            ; link name
         mov ecx, edx            ; size = target length
-        ; Retrieve original ECX (target path pointer) from pushad frame
-        ; pushad layout: [esp+0]=EDI [esp+4]=ESI [esp+8]=EBP [esp+12]=ESP
-        ;                [esp+16]=EBX [esp+20]=EDX [esp+24]=ECX [esp+28]=EAX
-        mov edi, [esp + 24]     ; original ECX = target path pointer
+        ; Retrieve original ECX (target path pointer) from PUSHALL frame
+        ; New 64-bit PUSHALL layout: RSP+96=RCX, RSP+112=RAX (see FRAME_* constants)
+        mov rdi, [rsp + FRAME_RCX]     ; original RCX = target path pointer
         mov edx, FTYPE_LINK
         call hbfs_create_file
         jc .symlink_fail
-        mov dword [esp + 28], 0
-        popad
-        iretd
+        mov qword [rsp + FRAME_RAX], 0
+        POPALL
+        iretq
 .symlink_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
+        mov qword [rsp + FRAME_RAX], -1
+        POPALL
+        iretq
 
 ;---------------------------------------
 ; sys_readlink - Read symbolic link target
@@ -799,7 +900,7 @@ sys_symlink:
 ; Returns: EAX = target path length, -1 on failure
 ;---------------------------------------
 sys_readlink:
-        pushad
+        PUSHALL
         mov esi, ebx
         call hbfs_load_root_dir
         call hbfs_find_file
@@ -809,25 +910,25 @@ sys_readlink:
         jne .readlink_fail
         ; Read the link data (target path) from disk
         mov eax, [edi + DIRENT_START_BLOCK]
-        push ecx                ; save output buffer
-        push dword [edi + DIRENT_SIZE]  ; save size
+        push rcx                ; save output buffer
+        push qword [edi + DIRENT_SIZE]  ; save size
         ; Convert block to LBA
         imul eax, HBFS_SECTORS_PER_BLK
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
         call ata_read_sectors
-        pop edx                 ; EDX = size
-        pop edi                 ; EDI = output buffer
+        pop rdx                 ; EDX = size
+        pop rdi                 ; EDI = output buffer
         jc .readlink_fail
         ; Copy target path to output buffer
         mov esi, hbfs_block_buf
         mov ecx, edx
         rep movsb
-        mov [esp + 28], edx     ; Return length in EAX
-        popad
-        iretd
+        mov [rsp + FRAME_RAX], rdx     ; Return length in RAX
+        POPALL
+        iretq
 .readlink_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
+        mov qword [rsp + FRAME_RAX], -1
+        POPALL
+        iretq

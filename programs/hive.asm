@@ -253,7 +253,7 @@ other_cwd:
 ; get_sel_name — put selected filename in tmp_name, ESI = tmp_name
 ;=======================================================================
 get_sel_name:
-        pushad
+        PUSHALL
         call cur_ptr
         mov ecx, [eax]
         cmp byte [active], 0
@@ -266,7 +266,7 @@ get_sel_name:
         mov esi, eax
         mov edi, tmp_name
         call str_copy
-        popad
+        POPALL
         mov esi, tmp_name
         ret
 
@@ -274,23 +274,23 @@ get_sel_name:
 ; get_sel_type — return file type in AL
 ;=======================================================================
 get_sel_type:
-        push ebx
+        push rbx
         call cur_ptr
         mov ebx, [eax]
         cmp byte [active], 0
         je .l
         movzx eax, byte [r_types + ebx]
-        pop ebx
+        pop rbx
         ret
 .l:     movzx eax, byte [l_types + ebx]
-        pop ebx
+        pop rbx
         ret
 
 ;=======================================================================
 ; load_left / load_right — scan directory
 ;=======================================================================
 load_left:
-        pushad
+        PUSHALL
         mov esi, l_cwd
         call io_dir_change
         lea eax, [l_names]
@@ -306,11 +306,11 @@ load_left:
         call load_panel_impl
         mov dword [l_cursor], 0
         mov dword [l_scroll], 0
-        popad
+        POPALL
         ret
 
 load_right:
-        pushad
+        PUSHALL
         mov esi, r_cwd
         call io_dir_change
         lea eax, [r_names]
@@ -326,14 +326,14 @@ load_right:
         call load_panel_impl
         mov dword [r_cursor], 0
         mov dword [r_scroll], 0
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
 ; load_panel_impl — uses _lp_* variables
 ;-----------------------------------------------------------------------
 load_panel_impl:
-        pushad
+        PUSHALL
         mov dword [_lp_n], 0
 
         ; Add ".." unless at root
@@ -357,17 +357,17 @@ load_panel_impl:
 .next:
         mov edi, tmp_name
         mov ecx, esi
-        push esi
+        push rsi
         call io_dir_read
-        pop esi
+        pop rsi
         cmp eax, -1
         je .done
         cmp eax, 0
         je .skip
 
-        push esi
-        push eax                        ; type
-        push ecx                        ; size
+        push rsi
+        push rax                        ; type
+        push rcx                        ; size
 
         mov edx, [_lp_n]
         cmp edx, MAX_ENTRIES
@@ -376,7 +376,7 @@ load_panel_impl:
         ; Copy name
         imul edi, edx, FNAME_SZ
         add edi, [_lp_names]
-        push edi
+        push rdi
         mov esi, tmp_name
         mov ecx, FNAME_SZ - 1
 .cpn:   lodsb
@@ -387,9 +387,9 @@ load_panel_impl:
         jnz .cpn
 .pad:   mov byte [edi], 0
 
-        pop edi                         ; discard saved edi
-        pop ecx                         ; size
-        pop eax                         ; type
+        pop rdi                         ; discard saved edi
+        pop rcx                         ; size
+        pop rax                         ; type
 
         ; Store type
         mov edi, [_lp_types]
@@ -400,33 +400,33 @@ load_panel_impl:
         mov [edi + edx * 4], ecx
 
         inc dword [_lp_n]
-        pop esi
+        pop rsi
 .skip:
         inc esi
         jmp .next
 
 .pop_done:
-        pop ecx
-        pop eax
-        pop esi
+        pop rcx
+        pop rax
+        pop rsi
 .done:
         mov eax, [_lp_count]
         mov ecx, [_lp_n]
         mov [eax], ecx
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; reload_both / reload_active
 ;=======================================================================
 reload_both:
-        pushad
+        PUSHALL
         call load_left
         call load_right
         call cwd_ptr
         mov esi, eax
         call io_dir_change
-        popad
+        POPALL
         ret
 
 reload_active:
@@ -438,7 +438,7 @@ reload_active:
 ; full_redraw
 ;=======================================================================
 full_redraw:
-        pushad
+        PUSHALL
         call vga_hide_cursor
 
         ; Blue background
@@ -489,14 +489,14 @@ full_redraw:
 
         call draw_headers
         call draw_fkeys
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; draw_headers — paths in row 1
 ;=======================================================================
 draw_headers:
-        pushad
+        PUSHALL
         ; Clear header area
         mov ebx, 1
         mov ecx, 1
@@ -536,14 +536,14 @@ draw_headers:
 .r_off: mov dl, C_HDR
 .r_draw:
         call vga_write_color
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; draw_files — render both panels' file lists
 ;=======================================================================
 draw_files:
-        pushad
+        PUSHALL
 
         ;--- Left panel ---
         mov ebx, 1
@@ -617,7 +617,7 @@ draw_files:
         jmp .rrow
 
 .done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -625,7 +625,7 @@ draw_files:
 ; Input: [_df_idx] = file index, [_df_side] = 0/1
 ;-----------------------------------------------------------------------
 build_line:
-        pushad
+        PUSHALL
 
         ; Fill line_buf with 38 spaces + null
         mov edi, line_buf
@@ -713,7 +713,7 @@ build_line:
         jmp .bl_cs
 
 .bl_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -722,7 +722,7 @@ build_line:
 ; Output: [_df_color]
 ;-----------------------------------------------------------------------
 pick_color:
-        pushad
+        PUSHALL
 
         ; Get type
         mov eax, [_df_idx]
@@ -780,45 +780,45 @@ pick_color:
 
 .pc_store:
         mov [_df_color], al
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
 ; uint_to_buf — EAX -> decimal string in size_buf
 ;-----------------------------------------------------------------------
 uint_to_buf:
-        pushad
+        PUSHALL
         mov edi, size_buf
         cmp eax, 0
         jne .nz
         mov byte [edi], '0'
         mov byte [edi + 1], 0
-        popad
+        POPALL
         ret
 .nz:
         xor ecx, ecx
         mov ebx, 10
 .push:  xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .push
-.pop:   pop edx
+.pop:   pop rdx
         add dl, '0'
         mov [edi], dl
         inc edi
         dec ecx
         jnz .pop
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; draw_info — selected file info on row 23
 ;=======================================================================
 draw_info:
-        pushad
+        PUSHALL
         mov esi, s_blank
         mov ecx, 23
         mov dl, C_INFO
@@ -878,14 +878,14 @@ draw_info:
         mov dl, C_INFO
         call vga_write_color
 
-.done:  popad
+.done:  POPALL
         ret
 
 ;=======================================================================
 ; draw_fkeys — row 24
 ;=======================================================================
 draw_fkeys:
-        pushad
+        PUSHALL
         mov esi, s_blank
         mov ecx, 24
         mov dl, C_FKEY
@@ -937,14 +937,14 @@ draw_fkeys:
         mov dl, C_FKEY
         call vga_write_color
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; place_cursor
 ;=======================================================================
 place_cursor:
-        pushad
+        PUSHALL
         call vga_show_cursor
         call cur_ptr
         mov ecx, [eax]
@@ -957,14 +957,14 @@ place_cursor:
         jmp .set
 .left:  mov ebx, 1
 .set:   call vga_set_cursor
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; do_enter — open dir or run/view
 ;=======================================================================
 do_enter:
-        pushad
+        PUSHALL
         call cnt_ptr
         cmp dword [eax], 0
         je .ret
@@ -1006,14 +1006,14 @@ do_enter:
         ; If we get here, exec failed — redraw
         call full_redraw
 
-.ret:   popad
+.ret:   POPALL
         ret
 
 ;=======================================================================
 ; do_view — F3 / Enter on text: inline viewer
 ;=======================================================================
 do_view:
-        pushad
+        PUSHALL
         call cnt_ptr
         cmp dword [eax], 0
         je .ret
@@ -1021,11 +1021,11 @@ do_view:
         cmp al, FTYPE_DIR
         je .ret
         call do_view_impl
-.ret:   popad
+.ret:   POPALL
         ret
 
 do_view_impl:
-        pushad
+        PUSHALL
         call cwd_ptr
         mov esi, eax
         call io_dir_change
@@ -1061,14 +1061,14 @@ do_view_impl:
         call io_println
         mov eax, SYS_GETCHAR
         int 0x80
-.ret:   popad
+.ret:   POPALL
         ret
 
 ;=======================================================================
 ; do_copy — F5: copy to other panel dir
 ;=======================================================================
 do_copy:
-        pushad
+        PUSHALL
         call cnt_ptr
         cmp dword [eax], 0
         je .ret
@@ -1104,14 +1104,14 @@ do_copy:
         ; Restore and reload
         call reload_both
 
-.ret:   popad
+.ret:   POPALL
         ret
 
 ;=======================================================================
 ; do_mkdir — F7: create directory
 ;=======================================================================
 do_mkdir:
-        pushad
+        PUSHALL
         call draw_dialog
         mov esi, s_mkdir
         mov ebx, 22
@@ -1141,14 +1141,14 @@ do_mkdir:
         call io_dir_create
         call reload_active
 
-.ret:   popad
+.ret:   POPALL
         ret
 
 ;=======================================================================
 ; do_delete — F8: with confirmation
 ;=======================================================================
 do_delete:
-        pushad
+        PUSHALL
         call cnt_ptr
         cmp dword [eax], 0
         je .ret
@@ -1191,14 +1191,14 @@ do_delete:
         call io_file_delete
         call reload_active
 
-.ret:   popad
+.ret:   POPALL
         ret
 
 ;=======================================================================
 ; draw_dialog — centered box
 ;=======================================================================
 draw_dialog:
-        pushad
+        PUSHALL
         mov ebx, 20
         mov ecx, 9
         mov edx, 40
@@ -1212,18 +1212,18 @@ draw_dialog:
         mov esi, 8
         mov ah, C_DIALOG
         call vga_draw_box
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; vga_hide_cursor / vga_show_cursor — not in lib, implement locally
 ;=======================================================================
 vga_hide_cursor:
-        pushad
+        PUSHALL
         mov ebx, 79
         mov ecx, 25                    ; Off-screen row
         call vga_set_cursor
-        popad
+        POPALL
         ret
 
 vga_show_cursor:

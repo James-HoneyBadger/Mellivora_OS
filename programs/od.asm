@@ -85,11 +85,11 @@ start:
 
 ; Print byte in BL as two hex digits
 print_hex_byte:
-        push ebx
+        push rbx
         mov al, bl
         shr al, 4
         call print_hex_digit
-        pop ebx
+        pop rbx
         mov al, bl
         and al, 0x0F
         call print_hex_digit

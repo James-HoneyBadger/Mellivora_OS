@@ -71,7 +71,7 @@ start:
 ; Each pixel samples the pixel below (with random decay)
 ;---------------------------------------
 fire_spread:
-        pushad
+        PUSHALL
         ; Process rows 0..(FIRE_H-2), each pixel looks at row below
         mov edx, 0              ; Y = 0
 .fs_row:
@@ -121,14 +121,14 @@ fire_spread:
         inc edx
         jmp .fs_row
 .fs_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; fire_render - Draw fire buffer to screen
 ;---------------------------------------
 fire_render:
-        pushad
+        PUSHALL
         xor edx, edx           ; Y = 0
 .fr_row:
         cmp edx, FIRE_H
@@ -151,16 +151,16 @@ fire_render:
         movzx eax, byte [fire_buf + eax]
 
         ; Look up color and character
-        push ecx
-        push edx
+        push rcx
+        push rdx
         movzx ebx, byte [palette_color + eax]
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, edx
         imul eax, FIRE_W
         add eax, ecx
@@ -168,8 +168,8 @@ fire_render:
         movzx ebx, byte [palette_char + eax]
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         inc ecx
         jmp .fr_col
@@ -177,7 +177,7 @@ fire_render:
         inc edx
         jmp .fr_row
 .fr_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -185,14 +185,14 @@ fire_render:
 ; Simple LCG: state = state * 1103515245 + 12345
 ;---------------------------------------
 rand_small:
-        push ebx
+        push rbx
         mov eax, [rand_state]
         imul eax, 1103515245
         add eax, 12345
         mov [rand_state], eax
         shr eax, 16
         and eax, 1
-        pop ebx
+        pop rbx
         ret
 
 ; Fire intensity palette

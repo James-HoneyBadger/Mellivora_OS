@@ -1,9 +1,11 @@
 ;=======================================================================
-; ATA PIO DISK DRIVER (LBA48 - supports up to 128 PB)
+; ATA DISK DRIVER (PIO + DMA, LBA48 - supports up to 128 PB)
 ;=======================================================================
 
 ata_init:
-        pushad
+        PUSHALL
+        mov byte [ata_dma_capable], 0   ; default: no DMA
+
         ; Identify primary master drive
         mov dx, ATA_DRIVE
         mov al, 0xA0            ; Select master
@@ -88,20 +90,23 @@ ata_init:
         mov esi, msg_mb
         call vga_print
 
-        popad
+        ; Probe for Bus Master IDE DMA support via PCI
+        call ata_dma_probe
+
+        POPALL
         ret
 
 .no_drive:
         mov byte [ata_present], 0
         mov esi, msg_ata_none
         call vga_print
-        popad
+        POPALL
         ret
 
 ; Wait for ATA drive ready
 ; Returns: CF set on timeout
 ata_wait_ready:
-        push ecx
+        push rcx
         mov ecx, 0x100000       ; Timeout counter
 .loop:
         mov dx, ATA_STATUS
@@ -110,21 +115,21 @@ ata_wait_ready:
         jz .ready
         loop .loop
         stc                     ; Timeout
-        pop ecx
+        pop rcx
         ret
 .ready:
         clc
-        pop ecx
+        pop rcx
         ret
 
 ; Read sectors using LBA48 (raw, no retry)
 ; EAX = LBA low 32 bits, ECX = sector count (1-256), EDI = destination buffer
 ; Returns: CF set on error
 ata_read_sectors_raw:
-        pushad
+        PUSHALL
 
-        push eax                ; Save LBA
-        push ecx                ; Save count
+        push rax                ; Save LBA
+        push rcx                ; Save count
 
         ; Select drive (master, LBA mode) and wait ready
         mov dx, ATA_DRIVE
@@ -135,14 +140,14 @@ ata_read_sectors_raw:
 
         ; Send high bytes first (LBA48 requires two writes)
         ; Sector count high byte
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         mov dx, ATA_SECCOUNT
         mov al, ch              ; High byte of sector count (LBA48 16-bit)
         out dx, al
 
         ; LBA48 high bytes: byte 3 = EAX[24:31], bytes 4-5 = 0
-        mov eax, [esp + 4]      ; get saved LBA from stack
+        mov eax, [rsp + 8]      ; get saved LBA from stack
         shr eax, 24             ; extract bits 24-31
         mov dx, ATA_LBA_LO
         out dx, al              ; LBA byte 3
@@ -153,17 +158,17 @@ ata_read_sectors_raw:
         out dx, al              ; LBA byte 5 = 0
 
         ; Now send low bytes
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         mov dx, ATA_SECCOUNT
         mov al, cl              ; Sector count low
         out dx, al
 
         ; LBA bytes 0-2
-        pop ecx
-        pop eax                 ; Restore LBA
+        pop rcx
+        pop rax                 ; Restore LBA
 
-        push ecx                ; Save count again
+        push rcx                ; Save count again
         mov dx, ATA_LBA_LO
         out dx, al              ; LBA[0:7]
         mov dx, ATA_LBA_MID
@@ -178,10 +183,10 @@ ata_read_sectors_raw:
         mov al, ATA_CMD_READ
         out dx, al
 
-        pop ecx                 ; Sector count
+        pop rcx                 ; Sector count
 
 .read_loop:
-        push ecx
+        push rcx
         call ata_wait_ready
         jc .error
 
@@ -196,23 +201,23 @@ ata_read_sectors_raw:
         mov dx, ATA_DATA
         rep insw
 
-        pop ecx
+        pop rcx
         loop .read_loop
 
-        popad
+        POPALL
         clc
         ret
 
 .error:
-        pop ecx
-        popad
+        pop rcx
+        POPALL
         stc
         ret
 
 .error_setup:
-        pop ecx                 ; Clean up pushed count
-        pop eax                 ; Clean up pushed LBA
-        popad
+        pop rcx                 ; Clean up pushed count
+        pop rax                 ; Clean up pushed LBA
+        POPALL
         stc
         ret
 
@@ -220,10 +225,10 @@ ata_read_sectors_raw:
 ; EAX = LBA low 32 bits, ECX = sector count, ESI = source buffer
 ; Returns: CF set on error
 ata_write_sectors_raw:
-        pushad
+        PUSHALL
 
-        push eax
-        push ecx
+        push rax
+        push rcx
 
         ; Select drive and wait for it to be ready
         mov dx, ATA_DRIVE
@@ -233,13 +238,13 @@ ata_write_sectors_raw:
         jc .werror_setup        ; Drive not ready
 
         ; High bytes - sector count high byte
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         mov dx, ATA_SECCOUNT
         mov al, ch              ; High byte of sector count (LBA48)
         out dx, al
         ; LBA48 high bytes: byte 3 = EAX[24:31], bytes 4-5 = 0
-        mov eax, [esp + 4]      ; get saved LBA from stack
+        mov eax, [rsp + 8]      ; get saved LBA from stack
         shr eax, 24             ; extract bits 24-31
         mov dx, ATA_LBA_LO
         out dx, al              ; LBA byte 3
@@ -250,15 +255,15 @@ ata_write_sectors_raw:
         out dx, al              ; LBA byte 5 = 0
 
         ; Low bytes
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         mov dx, ATA_SECCOUNT
         mov al, cl
         out dx, al
 
-        pop ecx
-        pop eax
-        push ecx
+        pop rcx
+        pop rax
+        push rcx
 
         mov dx, ATA_LBA_LO
         out dx, al
@@ -274,10 +279,10 @@ ata_write_sectors_raw:
         mov al, ATA_CMD_WRITE
         out dx, al
 
-        pop ecx
+        pop rcx
 
 .write_loop:
-        push ecx
+        push rcx
         call ata_wait_ready
         jc .werror
 
@@ -292,7 +297,7 @@ ata_write_sectors_raw:
         mov dx, ATA_DATA
         rep outsw
 
-        pop ecx
+        pop rcx
         loop .write_loop
 
         ; Flush cache once after all sectors written
@@ -301,20 +306,20 @@ ata_write_sectors_raw:
         out dx, al
         call ata_wait_ready
 
-        popad
+        POPALL
         clc
         ret
 
 .werror:
-        pop ecx
-        popad
+        pop rcx
+        POPALL
         stc
         ret
 
 .werror_setup:
-        pop ecx                 ; Clean up pushed count
-        pop eax                 ; Clean up pushed LBA
-        popad
+        pop rcx                 ; Clean up pushed count
+        pop rax                 ; Clean up pushed LBA
+        POPALL
         stc
         ret
 
@@ -325,14 +330,20 @@ ata_write_sectors_raw:
 
 ; ata_read_sectors_retry: EAX=LBA, ECX=count, EDI=dest, CF on error
 ata_read_sectors:
-        push ecx
-        push eax
-        push edi
+        ; Try DMA first if available
+        cmp byte [ata_dma_capable], 1
+        jne .arsr_pio
+        call ata_dma_read
+        jnc .arsr_ret_ok
+.arsr_pio:
+        push rcx
+        push rax
+        push rdi
         mov dword [.arsr_tries], 3
 .arsr_loop:
-        mov eax, [esp + 4]      ; LBA
-        mov ecx, [esp + 8]      ; count
-        mov edi, [esp]           ; dest
+        mov eax, [rsp + 8]      ; LBA
+        mov ecx, [rsp + 16]     ; count
+        mov edi, [rsp]           ; dest
         call ata_read_sectors_raw
         jnc .arsr_ok
         ; ATA soft reset: pulse SRST then wait
@@ -350,29 +361,36 @@ ata_read_sectors:
         ; All retries failed
         mov esi, msg_ata_read_err
         call vga_print
-        pop edi
-        pop eax
-        pop ecx
+        pop rdi
+        pop rax
+        pop rcx
         stc
         ret
 .arsr_ok:
-        pop edi
-        pop eax
-        pop ecx
+        pop rdi
+        pop rax
+        pop rcx
+.arsr_ret_ok:
         clc
         ret
 .arsr_tries: dd 0
 
 ; ata_write_sectors_retry: EAX=LBA, ECX=count, ESI=src, CF on error
 ata_write_sectors:
-        push ecx
-        push eax
-        push esi
+        ; Try DMA first if available
+        cmp byte [ata_dma_capable], 1
+        jne .awsr_pio
+        call ata_dma_write
+        jnc .awsr_ret_ok
+.awsr_pio:
+        push rcx
+        push rax
+        push rsi
         mov dword [.awsr_tries], 3
 .awsr_loop:
-        mov eax, [esp + 4]      ; LBA
-        mov ecx, [esp + 8]      ; count
-        mov esi, [esp]           ; src
+        mov eax, [rsp + 8]      ; LBA
+        mov ecx, [rsp + 16]     ; count
+        mov esi, [rsp]           ; src
         call ata_write_sectors_raw
         jnc .awsr_ok
         ; ATA soft reset
@@ -389,15 +407,374 @@ ata_write_sectors:
         jnz .awsr_loop
         mov esi, msg_ata_write_err
         call vga_print
-        pop esi
-        pop eax
-        pop ecx
+        pop rsi
+        pop rax
+        pop rcx
         stc
         ret
 .awsr_ok:
-        pop esi
-        pop eax
-        pop ecx
+        pop rsi
+        pop rax
+        pop rcx
+.awsr_ret_ok:
         clc
         ret
 .awsr_tries: dd 0
+
+;=======================================================================
+; ATA DMA SUPPORT
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; ata_dma_probe — Detect Bus Master IDE via PCI (bus 0, dev 1, fn 1)
+;-----------------------------------------------------------------------
+ata_dma_probe:
+        PUSHALL
+
+        ; Read PCI config: bus 0, device 1, function 1, offset 0x00 (vendor/device)
+        ; PCI address = 0x80000000 | (bus << 16) | (dev << 11) | (fn << 8) | (off & 0xFC)
+        mov eax, 0x80000900     ; bus=0, dev=1, fn=1, off=0x00
+        mov dx, PCI_CONFIG_ADDR
+        out dx, eax
+        mov dx, PCI_CONFIG_DATA
+        in eax, dx
+
+        cmp eax, 0xFFFFFFFF    ; No device
+        je .dma_no
+        cmp ax, 0              ; Invalid vendor
+        je .dma_no
+
+        ; Read class code at offset 0x08 (rev[7:0], progif[15:8], subclass[23:16], class[31:24])
+        mov eax, 0x80000908     ; offset 0x08
+        mov dx, PCI_CONFIG_ADDR
+        out dx, eax
+        mov dx, PCI_CONFIG_DATA
+        in eax, dx
+
+        ; Check class=0x01 (mass storage), subclass=0x01 (IDE)
+        shr eax, 16
+        cmp al, 0x01            ; subclass = IDE
+        jne .dma_no
+        shr eax, 8
+        cmp al, 0x01            ; class = mass storage
+        jne .dma_no
+
+        ; Read BAR4 at offset 0x20 — Bus Master IDE base address
+        mov eax, 0x80000920     ; offset 0x20
+        mov dx, PCI_CONFIG_ADDR
+        out dx, eax
+        mov dx, PCI_CONFIG_DATA
+        in eax, dx
+
+        test eax, 1             ; Bit 0 = I/O space indicator
+        jz .dma_no
+        and eax, 0xFFFC         ; Mask off lower 2 bits
+        cmp eax, 0
+        je .dma_no
+        mov [ata_bm_base], ax
+
+        ; Enable bus mastering in PCI command register (offset 0x04)
+        mov eax, 0x80000904     ; offset 0x04
+        mov dx, PCI_CONFIG_ADDR
+        out dx, eax
+        mov dx, PCI_CONFIG_DATA
+        in eax, dx
+        or eax, 0x04            ; Set Bus Master bit
+        push rax
+        mov eax, 0x80000904
+        mov dx, PCI_CONFIG_ADDR
+        out dx, eax
+        pop rax
+        mov dx, PCI_CONFIG_DATA
+        out dx, eax
+
+        mov byte [ata_dma_capable], 1
+        mov esi, msg_ata_dma
+        call vga_print
+        POPALL
+        ret
+
+.dma_no:
+        POPALL
+        ret
+
+;-----------------------------------------------------------------------
+; ata_dma_read — Read sectors using DMA
+; EAX = LBA, ECX = sector count (max 128), EDI = destination buffer
+; Returns: CF set on error
+;-----------------------------------------------------------------------
+ata_dma_read:
+        PUSHALL
+
+        ; Build PRD table: one entry pointing to destination buffer
+        ; PRD entry: [base_addr(4)] [byte_count(2)] [0x8000=EOT(2)]
+        mov [ata_prd_table], edi            ; physical address (identity mapped)
+        mov edx, ecx
+        shl edx, 9                          ; sector_count * 512 = byte count
+        test edx, edx
+        jz .dma_rd_zeros
+        mov [ata_prd_table + 4], dx         ; byte count (0 means 64KB)
+        jmp .dma_rd_prd_ok
+.dma_rd_zeros:
+        mov word [ata_prd_table + 4], 0     ; 0 = 64KB
+.dma_rd_prd_ok:
+        mov word [ata_prd_table + 6], 0x8000 ; EOT flag
+
+        ; Stop any prior DMA
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, 0
+        out dx, al
+
+        ; Clear status (write 1 to clear IRQ and error bits)
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        mov al, BM_STATUS_IRQ | BM_STATUS_ERR
+        out dx, al
+
+        ; Set PRD table address
+        movzx edx, word [ata_bm_base]
+        add edx, BM_PRD_REG
+        mov eax, ata_prd_table
+        out dx, eax
+
+        ; Setup ATA command (LBA48 READ DMA EXT)
+        mov eax, [rsp + FRAME_RAX]             ; original EAX (LBA) from PUSHALL
+        mov ecx, [rsp + FRAME_RCX]      ; original ECX (count) from PUSHALL
+
+        push rax
+        push rcx
+
+        mov dx, ATA_DRIVE
+        mov al, 0x40
+        out dx, al
+        call ata_wait_ready
+        jc .dma_rd_fail
+
+        ; High bytes
+        pop rcx
+        push rcx
+        mov dx, ATA_SECCOUNT
+        mov al, ch
+        out dx, al
+        mov eax, [rsp + 8]             ; saved LBA
+        shr eax, 24
+        mov dx, ATA_LBA_LO
+        out dx, al
+        xor al, al
+        mov dx, ATA_LBA_MID
+        out dx, al
+        mov dx, ATA_LBA_HI
+        out dx, al
+
+        ; Low bytes
+        pop rcx
+        push rcx
+        mov dx, ATA_SECCOUNT
+        mov al, cl
+        out dx, al
+        pop rcx
+        pop rax
+        mov dx, ATA_LBA_LO
+        out dx, al
+        shr eax, 8
+        mov dx, ATA_LBA_MID
+        out dx, al
+        shr eax, 8
+        mov dx, ATA_LBA_HI
+        out dx, al
+
+        ; Send READ DMA EXT command
+        mov dx, ATA_CMD
+        mov al, ATA_CMD_READ_DMA
+        out dx, al
+
+        ; Start DMA (direction = read = device-to-memory, bit 3 = 1)
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, BM_CMD_START | BM_CMD_WRITE
+        out dx, al
+
+        ; Poll for completion
+        mov ecx, 0x200000               ; timeout
+.dma_rd_poll:
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        in al, dx
+        test al, BM_STATUS_ERR
+        jnz .dma_rd_err
+        test al, BM_STATUS_IRQ
+        jnz .dma_rd_ok
+        loop .dma_rd_poll
+        jmp .dma_rd_err
+
+.dma_rd_ok:
+        ; Stop DMA
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, 0
+        out dx, al
+        ; Clear status
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        mov al, BM_STATUS_IRQ | BM_STATUS_ERR
+        out dx, al
+        POPALL
+        clc
+        ret
+
+.dma_rd_fail:
+        pop rcx
+        pop rax
+.dma_rd_err:
+        ; Stop DMA
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, 0
+        out dx, al
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        mov al, BM_STATUS_IRQ | BM_STATUS_ERR
+        out dx, al
+        POPALL
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; ata_dma_write — Write sectors using DMA
+; EAX = LBA, ECX = sector count, ESI = source buffer
+; Returns: CF set on error
+;-----------------------------------------------------------------------
+ata_dma_write:
+        PUSHALL
+
+        ; Build PRD table
+        mov [ata_prd_table], esi
+        mov edx, ecx
+        shl edx, 9
+        test edx, edx
+        jz .dma_wr_zeros
+        mov [ata_prd_table + 4], dx
+        jmp .dma_wr_prd_ok
+.dma_wr_zeros:
+        mov word [ata_prd_table + 4], 0
+.dma_wr_prd_ok:
+        mov word [ata_prd_table + 6], 0x8000
+
+        ; Stop prior DMA, clear status
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, 0
+        out dx, al
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        mov al, BM_STATUS_IRQ | BM_STATUS_ERR
+        out dx, al
+
+        ; Set PRD table
+        movzx edx, word [ata_bm_base]
+        add edx, BM_PRD_REG
+        mov eax, ata_prd_table
+        out dx, eax
+
+        ; Setup ATA command
+        mov eax, [rsp + FRAME_RAX]
+        mov ecx, [rsp + FRAME_RCX]
+
+        push rax
+        push rcx
+
+        mov dx, ATA_DRIVE
+        mov al, 0x40
+        out dx, al
+        call ata_wait_ready
+        jc .dma_wr_fail
+
+        pop rcx
+        push rcx
+        mov dx, ATA_SECCOUNT
+        mov al, ch
+        out dx, al
+        mov eax, [rsp + 8]
+        shr eax, 24
+        mov dx, ATA_LBA_LO
+        out dx, al
+        xor al, al
+        mov dx, ATA_LBA_MID
+        out dx, al
+        mov dx, ATA_LBA_HI
+        out dx, al
+
+        pop rcx
+        push rcx
+        mov dx, ATA_SECCOUNT
+        mov al, cl
+        out dx, al
+        pop rcx
+        pop rax
+        mov dx, ATA_LBA_LO
+        out dx, al
+        shr eax, 8
+        mov dx, ATA_LBA_MID
+        out dx, al
+        shr eax, 8
+        mov dx, ATA_LBA_HI
+        out dx, al
+
+        ; Send WRITE DMA EXT
+        mov dx, ATA_CMD
+        mov al, ATA_CMD_WRITE_DMA
+        out dx, al
+
+        ; Start DMA (direction = write = memory-to-device, bit 3 = 0)
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, BM_CMD_START
+        out dx, al
+
+        ; Poll for completion
+        mov ecx, 0x200000
+.dma_wr_poll:
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        in al, dx
+        test al, BM_STATUS_ERR
+        jnz .dma_wr_err
+        test al, BM_STATUS_IRQ
+        jnz .dma_wr_ok
+        loop .dma_wr_poll
+        jmp .dma_wr_err
+
+.dma_wr_ok:
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, 0
+        out dx, al
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        mov al, BM_STATUS_IRQ | BM_STATUS_ERR
+        out dx, al
+        ; Flush cache
+        mov dx, ATA_CMD
+        mov al, ATA_CMD_FLUSH
+        out dx, al
+        call ata_wait_ready
+        POPALL
+        clc
+        ret
+
+.dma_wr_fail:
+        pop rcx
+        pop rax
+.dma_wr_err:
+        movzx edx, word [ata_bm_base]
+        add edx, BM_CMD_REG
+        mov al, 0
+        out dx, al
+        movzx edx, word [ata_bm_base]
+        add edx, BM_STATUS_REG
+        mov al, BM_STATUS_IRQ | BM_STATUS_ERR
+        out dx, al
+        POPALL
+        stc
+        ret

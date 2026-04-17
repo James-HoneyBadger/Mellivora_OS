@@ -1,145 +1,68 @@
 ;=======================================================================
-; paging.inc - Virtual Memory / Paging
+; paging.inc - Virtual Memory / Paging (64-bit Long Mode)
 ;
-; Sets up identity-mapped page tables for the first 128MB of physical
-; memory, then enables the CR0 paging bit.  With identity mapping,
-; virtual addresses == physical addresses so all existing code continues
-; to work unchanged — but the MMU is now active, providing the
-; foundation for per-process address spaces, COW fork, and guard pages.
+; Stage2 builds a 4-level page table hierarchy at PML4_BASE (0x70000)
+; that identity-maps the first 4 GB using 2 MB pages.  This module
+; installs the page-fault handler and provides paging_map_page() to
+; add fine-grained 4 KB mappings within the existing hierarchy.
 ;
-; Memory consumed:
-;   Page directory:  4 KB  (at PAGE_DIR_ADDR)
-;   32 page tables:  128 KB total (at PAGE_TABLE_BASE)
-;   Each page table maps 4 MB (1024 entries × 4 KB each).
-;   32 tables × 4 MB = 128 MB identity-mapped.
+; Page table layout (set by stage2):
+;   PML4  @ 0x70000  (1 entry  → PDPT)
+;   PDPT  @ 0x71000  (4 entries → PD0-PD3)
+;   PD0-3 @ 0x72000-0x75000  (512×2 MB pages each = 4 GB)
 ;
-; A page-fault ISR (INT 14) is installed that prints the faulting
-; address (CR2) and error code, then recovers to the shell.
+; paging_map_page can split a 2 MB page into a 4 KB page table on
+; demand, allocating new page tables from the PMM as needed.
 ;=======================================================================
-
-; Addresses for paging structures — placed after the PMM bitmap (0x300000)
-; and below the heap (0x400000).  We'll use 0x380000–0x3A0000.
-PAGE_DIR_ADDR    equ 0x00380000     ; Page directory (4 KB)
-PAGE_TABLE_BASE  equ 0x00381000     ; First page table (128 KB for 32 tables)
-PAGING_MAP_MB    equ 128            ; How many MB to identity-map
-PAGING_MAP_TABLES equ PAGING_MAP_MB / 4  ; 32 page tables
 
 ; Page entry flags
 PG_PRESENT       equ 0x01
 PG_WRITABLE      equ 0x02
 PG_USER          equ 0x04
 PG_WRITE_THROUGH equ 0x08
+PG_PAGE_SIZE     equ 0x80       ; PS bit — 2 MB page in PD level
 
 ;---------------------------------------
-; paging_init - Build page tables and
-;               enable paging.
+; paging_init - Install page-fault handler.
+; Stage2 already built 4-level tables and
+; loaded CR3 = PML4_BASE.  We do NOT
+; rebuild or overwrite them.
 ;---------------------------------------
 paging_init:
-        pushad
+        PUSHALL
 
-        ;-----------------------------------
-        ; Step 1: Zero the page directory
-        ;-----------------------------------
-        mov edi, PAGE_DIR_ADDR
-        xor eax, eax
-        mov ecx, 1024          ; 1024 dword entries
-        rep stosd
-
-        ;-----------------------------------
-        ; Step 2: Build identity-map page
-        ;         tables for 0..128 MB
-        ;-----------------------------------
-        ; Outer loop: one iteration per 4 MB region
-        xor ebx, ebx           ; table index (0..31)
-        mov esi, PAGE_TABLE_BASE
-.build_tables:
-        cmp ebx, PAGING_MAP_TABLES
-        jge .fill_dir
-
-        ; Fill 1024 page-table entries for this 4 MB region
-        mov edi, esi            ; current page table
-        mov eax, ebx
-        shl eax, 22             ; base phys address = index × 4 MB
-        or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
-        mov ecx, 1024
-.fill_pt:
-        stosd                   ; write PTE
-        add eax, 0x1000         ; next 4 KB page
-        loop .fill_pt
-
-        ; Advance to next page table
-        add esi, 4096
-        inc ebx
-        jmp .build_tables
-
-.fill_dir:
-        ;-----------------------------------
-        ; Step 3: Point PD entries at the
-        ;         page tables we just built
-        ;-----------------------------------
-        mov edi, PAGE_DIR_ADDR
-        mov esi, PAGE_TABLE_BASE
-        xor ecx, ecx
-.fill_pde:
-        cmp ecx, PAGING_MAP_TABLES
-        jge .enable
-
-        mov eax, esi
-        or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
-        mov [edi], eax
-
-        add edi, 4
-        add esi, 4096
-        inc ecx
-        jmp .fill_pde
-
-.enable:
-        ;-----------------------------------
-        ; Step 4: Install page-fault handler
-        ;-----------------------------------
-        mov ecx, 14             ; INT 14 = Page Fault
+        ; Install page-fault handler (INT 14 = Page Fault)
+        mov ecx, 14
         mov eax, isr_page_fault
         call idt_set_gate
 
-        ;-----------------------------------
-        ; Step 5: Load CR3 and enable paging
-        ;-----------------------------------
-        mov eax, PAGE_DIR_ADDR
-        mov cr3, eax
-
-        mov eax, cr0
-        or  eax, 0x80000000     ; Set PG bit (bit 31)
-        mov cr0, eax
-
-        ; A JMP flushes the prefetch queue (good practice)
-        jmp .paging_on
-.paging_on:
-
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; isr_page_fault - INT 14 handler
 ;
-; Stack on entry (with error code):
-;   [ESP+0]  error code
-;   [ESP+4]  EIP
-;   [ESP+8]  CS
-;   [ESP+12] EFLAGS
+; 64-bit long mode stack on entry (with error code):
+;   [RSP+0]  error code  (8 bytes, pushed by CPU)
+;   [RSP+8]  RIP         (8 bytes)
+;   [RSP+16] CS          (8 bytes)
+;   [RSP+24] RFLAGS      (8 bytes)
+;   [RSP+32] RSP3        (8 bytes)
+;   [RSP+40] SS3         (8 bytes)
 ;---------------------------------------
 isr_page_fault:
-        ; Save error code and faulting EIP
-        push eax
-        mov eax, [esp + 4]      ; error code (at ESP+4 after our push)
-        mov [pf_errcode], eax
-        mov eax, [esp + 8]      ; faulting EIP (at ESP+8)
-        mov [pf_eip], eax
+        ; Save error code, faulting RIP, and CR2
+        push rax
+        mov rax, [rsp + 8]      ; error code (at RSP+8 after our push)
+        mov [pf_errcode], rax
+        mov rax, [rsp + 16]     ; faulting RIP (at RSP+16)
+        mov [pf_rip], rax
         ; Read faulting address from CR2
-        mov eax, cr2
-        mov [pf_addr], eax
-        pop eax
+        mov rax, cr2
+        mov [pf_addr], rax
+        pop rax
 
-        pushad
+        PUSHALL
 
         ; If we're in GUI mode, restore text mode first so errors are visible
         cmp byte [gui_desktop_active], 0
@@ -156,9 +79,9 @@ isr_page_fault:
         call vga_print
         mov eax, [pf_addr]
         call vga_print_hex
-        mov esi, msg_pf_eip
+        mov esi, msg_pf_rip
         call vga_print
-        mov eax, [pf_eip]
+        mov eax, [pf_rip]
         call vga_print_hex
         mov esi, msg_pf_err
         call vga_print
@@ -208,86 +131,157 @@ isr_page_fault:
         call vga_putchar
 
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
 
         ; Remove error code from stack and recover to shell
-        add esp, 4              ; pop error code
-        mov esp, KERNEL_STACK
+        add rsp, 8              ; pop 8-byte error code (64-bit)
+        mov rsp, KERNEL_STACK
         sti
         jmp shell_main
 
 ;---------------------------------------
-; paging_map_page - Map a single virtual
-;                   page to a physical page
+; paging_map_page - Map a single 4 KB virtual page
+;                   in the 4-level page table hierarchy.
+;
 ; EAX = virtual address (page-aligned)
 ; EBX = physical address (page-aligned)
 ; ECX = flags (PG_PRESENT | PG_WRITABLE etc.)
+;
+; Navigates PML4 → PDPT → PD → PT.
+; If the PD entry is a 2 MB large page (PS bit), this function
+; splits it into a new 4 KB page table first.
+; Allocates new page tables from PMM as needed.
 ;---------------------------------------
 paging_map_page:
-        pushad
+        PUSHALL
 
-        ; Compute PD index: virt >> 22
+        ; Save original virtual address for TLB invalidation
+        mov r8d, eax            ; R8 = original vaddr
+
+        ; ---- Compute indices at each level ----
+        ; PML4 index: bits 39-47 (virt >> 39) & 0x1FF
+        ; PDPT index: bits 30-38 (virt >> 30) & 0x1FF
+        ; PD index:   bits 21-29 (virt >> 21) & 0x1FF
+        ; PT index:   bits 12-20 (virt >> 12) & 0x1FF
+
+        ; We only identity-map < 4 GB, so PML4 index = 0 always
+        ; PDPT index
         mov edx, eax
-        shr edx, 22
-        ; Compute PT index: (virt >> 12) & 0x3FF
+        shr edx, 30
+        and edx, 0x1FF          ; EDX = PDPT index (0-3 for first 4GB)
+
+        ; PD index
         mov esi, eax
-        shr esi, 12
-        and esi, 0x3FF
+        shr esi, 21
+        and esi, 0x1FF          ; ESI = PD index
 
-        ; Check if PDE exists
-        mov edi, PAGE_DIR_ADDR
-        mov eax, [edi + edx*4]
+        ; PT index
+        mov edi, eax
+        shr edi, 12
+        and edi, 0x1FF          ; EDI = PT index
+
+        ; ---- Walk the hierarchy ----
+        ; PML4[0] → PDPT (always exists from stage2)
+        mov rax, [PML4_BASE]
+        and eax, 0xFFFFF000     ; mask flags → PDPT base
+        ; PDPT[edx] → PD
+        mov rax, [rax + rdx*8]
         test eax, PG_PRESENT
-        jnz .have_pt
+        jz .map_fail            ; PDPT entry missing — shouldn't happen for < 4GB
+        and eax, 0xFFFFF000     ; mask flags → PD base
+        mov r9d, eax            ; R9 = PD base
 
-        ; Need to allocate a new page table
-        push ebx
-        push ecx
-        push edx
-        push esi
-        call pmm_alloc_page     ; EAX = new page table phys addr
+        ; ---- Check PD entry ----
+        mov rax, [r9 + rsi*8]
+        test eax, PG_PRESENT
+        jz .need_new_pt         ; PD entry not present — allocate PT
+
+        ; Check if it's a 2 MB large page (PS bit set)
+        test eax, PG_PAGE_SIZE
+        jnz .split_large_page
+
+        ; PD entry points to a PT — just write the PTE
+        and eax, 0xFFFFF000     ; mask flags → PT base
+        jmp .write_pte
+
+.split_large_page:
+        ; The PD entry is a 2 MB page.  Split it into 512 × 4 KB entries.
+        ; Save the 2 MB-aligned physical base from the PD entry.
+        mov r10d, eax
+        and r10d, 0xFFE00000    ; 2 MB aligned base address
+
+        ; Allocate a new 4 KB page table
+        call pmm_alloc_page     ; EAX = new page
+        test eax, eax
+        jz .map_fail
+        mov r11d, eax           ; R11 = new PT address
+
+        ; Fill 512 PTEs mapping the same 2 MB region at 4 KB granularity
+        push rdi
+        push rcx
+        mov edi, r11d
+        mov eax, r10d
+        or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
+        mov ecx, 512
+.split_fill:
+        mov [rdi], eax
+        mov dword [rdi + 4], 0  ; high 32 bits = 0
+        add eax, 0x1000         ; next 4 KB page
+        add rdi, 8              ; next PTE (8 bytes)
+        dec ecx
+        jnz .split_fill
+        pop rcx
+        pop rdi
+
+        ; Install the new PT in the PD entry (replace 2 MB page)
+        mov eax, r11d
+        or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
+        mov [r9 + rsi*8], eax
+        mov dword [r9 + rsi*8 + 4], 0  ; high 32 bits
+        mov eax, r11d           ; EAX = PT base
+        jmp .write_pte
+
+.need_new_pt:
+        ; Allocate a new page table, zero it, install in PD
+        call pmm_alloc_page
         test eax, eax
         jz .map_fail
 
         ; Zero the new page table
-        push eax
+        push rdi
+        push rcx
+        push rax
         mov edi, eax
         xor eax, eax
-        mov ecx, 1024
-        rep stosd
-        pop eax
+        mov ecx, 512            ; 512 qword entries
+        rep stosq
+        pop rax
+        pop rcx
+        pop rdi
 
-        pop esi
-        pop edx
-        ; Install PDE
-        mov edi, PAGE_DIR_ADDR
-        mov ebx, eax
-        or  ebx, PG_PRESENT | PG_WRITABLE | PG_USER
-        mov [edi + edx*4], ebx
-        mov edi, eax             ; EDI = page table base
-        pop ecx
-        pop ebx
-        jmp .write_pte
-
-.have_pt:
-        and eax, 0xFFFFF000     ; mask flags to get PT base address
-        mov edi, eax
+        ; Install PD entry
+        mov r11d, eax
+        or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
+        mov [r9 + rsi*8], eax
+        mov dword [r9 + rsi*8 + 4], 0
+        mov eax, r11d           ; EAX = PT base
+        ; fall through to write_pte
 
 .write_pte:
-        ; Write the PTE: physical address | flags
-        mov eax, ebx
-        or  eax, ecx
-        mov [edi + esi*4], eax
+        ; EAX = PT base, EDI = PT index, EBX = phys addr, ECX = flags
+        mov edx, ebx
+        or  edx, ecx
+        mov [rax + rdi*8], edx
+        mov dword [rax + rdi*8 + 4], 0  ; high 32 bits
 
         ; Invalidate TLB entry for this virtual address
-        mov eax, [esp + 28]      ; original virtual address from pushad EAX slot
-        invlpg [eax]
+        invlpg [r8]
 
 .map_fail:
-        popad
+        POPALL
         ret
 
-; BSS data for page fault handler
-pf_addr:    dd 0
-pf_eip:     dd 0
-pf_errcode: dd 0
+; BSS data for page fault handler (64-bit values)
+pf_addr:    dq 0
+pf_rip:     dq 0
+pf_errcode: dq 0

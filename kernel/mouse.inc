@@ -19,7 +19,7 @@ MOUSE_PKT_SIZE  equ 3          ; Standard PS/2 mouse packet is 3 bytes
 ; mouse_init - Enable PS/2 mouse
 ;---------------------------------------
 mouse_init:
-        pushad
+        PUSHALL
 
         ; Wait for 8042 input buffer to be clear
         call mouse_wait_write
@@ -35,12 +35,12 @@ mouse_init:
         call mouse_wait_read
         in al, 0x60
         or al, 0x02             ; Set bit 1: enable IRQ12 (aux interrupt)
-        push eax
+        push rax
         call mouse_wait_write
         mov al, 0x60            ; Command: write command byte
         out 0x64, al
         call mouse_wait_write
-        pop eax
+        pop rax
         out 0x60, al
 
         ; Send "set defaults" to mouse
@@ -76,7 +76,7 @@ mouse_init:
         and al, ~(1 << 2)       ; Clear bit 2 to unmask cascade
         out PIC1_DATA, al
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -85,7 +85,7 @@ mouse_init:
 ; updates mouse_x, mouse_y, mouse_buttons
 ;---------------------------------------
 irq_mouse:
-        pushad
+        PUSHALL
 
         ; Read the byte from port 0x60
         in al, 0x60
@@ -194,15 +194,15 @@ irq_mouse:
         out PIC2_CMD, al
         out PIC1_CMD, al
 
-        popad
-        iretd
+        POPALL
+        iretq
 
 ;---------------------------------------
 ; mouse_wait_write - Wait for 8042 input buffer clear
 ;---------------------------------------
 mouse_wait_write:
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov ecx, 100000
 .mww:
         in al, 0x64
@@ -211,16 +211,16 @@ mouse_wait_write:
         dec ecx
         jnz .mww
 .mww_ok:
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 ;---------------------------------------
 ; mouse_wait_read - Wait for 8042 output buffer full
 ;---------------------------------------
 mouse_wait_read:
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov ecx, 100000
 .mwr:
         in al, 0x64
@@ -229,8 +229,8 @@ mouse_wait_read:
         dec ecx
         jnz .mwr
 .mwr_ok:
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 ;---------------------------------------
@@ -238,25 +238,25 @@ mouse_wait_read:
 ; AL = byte to send
 ;---------------------------------------
 mouse_write_byte:
-        push eax
-        push eax               ; Save data byte
+        push rax
+        push rax               ; Save data byte
         call mouse_wait_write
         mov al, 0xD4            ; Command: write to aux device
         out 0x64, al
         call mouse_wait_write
-        pop eax                 ; Restore data byte
+        pop rax                 ; Restore data byte
         out 0x60, al
-        pop eax
+        pop rax
         ret
 
 ;---------------------------------------
 ; mouse_read_ack - Wait for and discard ACK (0xFA)
 ;---------------------------------------
 mouse_read_ack:
-        push eax
+        push rax
         call mouse_wait_read
         in al, 0x60             ; Read and discard (should be 0xFA)
-        pop eax
+        pop rax
         ret
 
 ;---------------------------------------
@@ -270,7 +270,7 @@ sys_mouse:
         mov eax, [mouse_x]
         mov ebx, [mouse_y]
         movzx ecx, byte [mouse_buttons]
-        iretd
+        iretq
 
 ; BSS data for mouse driver
 mouse_present:  db 0

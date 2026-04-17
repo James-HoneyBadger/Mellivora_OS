@@ -144,7 +144,7 @@ seed_grid:
 ; Step one generation: grid_a -> grid_b, then copy back
 ;---------------------------------------
 step_generation:
-        pushad
+        PUSHALL
         ; Clear grid_b
         mov edi, grid_b
         mov ecx, GRID_SZ
@@ -165,28 +165,28 @@ step_generation:
         mov esi, ecx
         dec esi
         js .sg_no_tl
-        push eax
+        push rax
         imul eax, GRID_W
         add eax, esi
         add bl, [grid_a + eax]
-        pop eax
+        pop rax
 .sg_no_tl:
         ; top
-        push eax
+        push rax
         imul eax, GRID_W
         add eax, ecx
         add bl, [grid_a + eax]
-        pop eax
+        pop rax
         ; top-right
         mov esi, ecx
         inc esi
         cmp esi, GRID_W
         jge .sg_skip_top
-        push eax
+        push rax
         imul eax, GRID_W
         add eax, esi
         add bl, [grid_a + eax]
-        pop eax
+        pop rax
 .sg_skip_top:
         ; left
         mov esi, ecx
@@ -216,28 +216,28 @@ step_generation:
         mov esi, ecx
         dec esi
         js .sg_no_bl
-        push eax
+        push rax
         imul eax, GRID_W
         add eax, esi
         add bl, [grid_a + eax]
-        pop eax
+        pop rax
 .sg_no_bl:
         ; bottom
-        push eax
+        push rax
         imul eax, GRID_W
         add eax, ecx
         add bl, [grid_a + eax]
-        pop eax
+        pop rax
         ; bottom-right
         mov esi, ecx
         inc esi
         cmp esi, GRID_W
         jge .sg_skip_bot
-        push eax
+        push rax
         imul eax, GRID_W
         add eax, esi
         add bl, [grid_a + eax]
-        pop eax
+        pop rax
 .sg_skip_bot:
         ; Apply rules
         mov eax, edx
@@ -272,7 +272,7 @@ step_generation:
         mov edi, grid_a
         mov ecx, GRID_SZ
         rep movsb
-        popad
+        POPALL
         ret
 
 ;---------------------------------------

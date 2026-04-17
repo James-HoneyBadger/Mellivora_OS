@@ -4,18 +4,18 @@
 
 ; Default handler for unregistered interrupts
 isr_default:
-        iretd
+        iretq
 
 ; Exception handler for exceptions WITHOUT error code
 isr_exception_noerr:
-        ; Stack: [EIP] [CS] [EFLAGS]
-        ; Save the faulting EIP for display
-        push eax
-        mov eax, [esp + 4]      ; EIP is at esp+4 (after our push eax)
-        mov [exc_eip], eax
-        pop eax
+        ; 64-bit stack: [RIP(8)] [CS(8)] [RFLAGS(8)] [RSP(8)] [SS(8)]
+        ; Save the faulting RIP for display
+        push rax
+        mov rax, [rsp + 8]      ; RIP is at rsp+8 (after our push rax)
+        mov [exc_rip], rax
+        pop rax
 
-        pushad
+        PUSHALL
         ; Restore text mode if in GUI so errors are visible
         cmp byte [gui_desktop_active], 0
         je .exc_noerr_text_ok
@@ -25,31 +25,31 @@ isr_exception_noerr:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_exception
         call vga_print
-        ; Print faulting EIP
+        ; Print faulting RIP
         mov esi, msg_exc_eip
         call vga_print
-        mov eax, [exc_eip]
+        mov eax, [exc_rip]
         call vga_print_hex
         mov al, 0x0A
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ; Recover to shell
-        mov esp, KERNEL_STACK
+        mov rsp, KERNEL_STACK
         sti
         jmp shell_main
 
 ; Exception handler for exceptions WITH error code
 isr_exception_err:
-        ; Stack: [ErrorCode] [EIP] [CS] [EFLAGS]
-        push eax
-        mov eax, [esp + 8]      ; EIP is at esp+8 (errcode + push eax)
-        mov [exc_eip], eax
-        mov eax, [esp + 4]      ; Error code at esp+4
-        mov [exc_errcode], eax
-        pop eax
+        ; 64-bit stack: [ErrCode(8)] [RIP(8)] [CS(8)] [RFLAGS(8)] [RSP(8)] [SS(8)]
+        push rax
+        mov rax, [rsp + 16]     ; RIP is at rsp+16 (errcode + push rax)
+        mov [exc_rip], rax
+        mov rax, [rsp + 8]      ; Error code at rsp+8
+        mov [exc_errcode], rax
+        pop rax
 
-        pushad
+        PUSHALL
         ; Restore text mode if in GUI so errors are visible
         cmp byte [gui_desktop_active], 0
         je .exc_err_text_ok
@@ -59,10 +59,10 @@ isr_exception_err:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_exception
         call vga_print
-        ; Print faulting EIP
+        ; Print faulting RIP
         mov esi, msg_exc_eip
         call vga_print
-        mov eax, [exc_eip]
+        mov eax, [exc_rip]
         call vga_print_hex
         ; Print error code
         mov esi, msg_exc_err
@@ -72,34 +72,86 @@ isr_exception_err:
         mov al, 0x0A
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
-        popad
-        ; Recover to shell
-        mov esp, KERNEL_STACK
+        POPALL
+        ; Remove 8-byte error code and recover to shell
+        add rsp, 8
+        mov rsp, KERNEL_STACK
         sti
         jmp shell_main
 
+;---------------------------------------
+; isr_fpu_nm - Exception 7: Device Not Available (#NM)
+; Triggered when a task uses FPU instructions while CR0.TS is set.
+; Implements lazy FPU context switching:
+;   1. Save previous owner's FPU state (if any)
+;   2. Restore current task's FPU state
+;   3. Clear TS bit so FPU instructions proceed
+;---------------------------------------
+isr_fpu_nm:
+        PUSHALL
+
+        ; Clear the TS bit so FPU instructions work after we return
+        clts
+
+        ; Find current running task index
+        mov esi, [task_current]
+
+        ; Check if this task already owns the FPU
+        cmp [fpu_owner], esi
+        je .fpu_nm_done         ; Already owns it — just needed TS cleared
+
+        ; Save the previous owner's FPU state (if there was one)
+        mov eax, [fpu_owner]
+        cmp eax, -1
+        je .fpu_nm_no_save      ; No previous owner
+        ; Calculate address: fpu_state_table + owner * FPU_STATE_SIZE
+        imul rax, FPU_STATE_SIZE
+        add rax, fpu_state_table
+        fxsave [rax]            ; Save FPU/SSE state (512 bytes)
+
+.fpu_nm_no_save:
+        ; Restore current task's FPU state
+        mov eax, esi
+        imul rax, FPU_STATE_SIZE
+        add rax, fpu_state_table
+        ; Check if this slot has been initialized (first dword non-zero)
+        cmp dword [rax], 0
+        jne .fpu_nm_restore
+        ; First FPU use by this task — just FNINIT
+        fninit
+        jmp .fpu_nm_set_owner
+.fpu_nm_restore:
+        fxrstor [rax]           ; Restore 512-byte FPU/SSE state
+
+.fpu_nm_set_owner:
+        mov [fpu_owner], esi
+
+.fpu_nm_done:
+        POPALL
+        iretq
+
 irq_stub:
-        pushad
+        PUSHALL
         ; Send EOI to PIC1 only (for IRQs 2-7)
         mov al, 0x20
         out PIC1_CMD, al
-        popad
-        iretd
+        POPALL
+        iretq
 
 ; IRQ stub for PIC2 IRQs (8-15) - send EOI to both PICs
 irq_stub_pic2:
-        pushad
+        PUSHALL
         mov al, 0x20
         out PIC2_CMD, al
         out PIC1_CMD, al
-        popad
-        iretd
+        POPALL
+        iretq
 
 ; IRQ0: PIT Timer interrupt (100 Hz)
 ; Also handles preemptive multitasking: when a user-mode task is
 ; running, counts ticks and switches on quantum expiry.
 irq_timer:
-        pushad
+        PUSHALL
         inc dword [tick_count]
 
         ; Send EOI first (so PIC isn't held up during context switch)
@@ -115,8 +167,8 @@ irq_timer:
         je .timer_done
 
         ; Check if we interrupted a ring-3 task (CS on stack has RPL=3)
-        ; Stack layout after pushad: ESP+32 = EIP, ESP+36 = CS
-        mov eax, [esp + 36]     ; CS from interrupt frame
+        ; Stack layout after PUSHALL (15×8=120 bytes): RSP+120=RIP, RSP+128=CS
+        mov eax, [rsp + FRAME_CS]  ; CS from interrupt frame
         and eax, 3              ; RPL bits
         cmp eax, 3
         jne .timer_done         ; Not ring 3 — don't preempt kernel code
@@ -143,8 +195,8 @@ irq_timer:
         jmp .timer_find_cur
 
 .timer_save:
-        ; Save kernel ESP (points to pushad frame + iretd frame)
-        mov [edi + TCB_ESP], esp
+        ; Save kernel RSP (points to PUSHALL frame + iretq frame)
+        mov [edi + TCB_RSP], rsp
         mov dword [edi + TCB_STATE], TASK_READY
 
         ; Round-robin scan for next READY task
@@ -156,9 +208,9 @@ irq_timer:
         jb .timer_check
         xor esi, esi
 .timer_check:
-        mov eax, esi
-        imul eax, TCB_SIZE
-        lea ebx, [task_table + eax]
+        mov rax, rsi
+        imul rax, TCB_SIZE
+        lea rbx, [task_table + rax]
         cmp dword [ebx + TCB_STATE], TASK_READY
         je .timer_switch
         dec ecx
@@ -180,35 +232,62 @@ irq_timer:
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
 
-        ; Update TSS ESP0 for future ring-3 → ring-0 transitions
-        mov eax, [ebx + TCB_KSTACK]
-        mov [tss_struct + 4], eax
+        ; Update TSS RSP0 for future ring-3 → ring-0 transitions
+        mov rax, [rbx + TCB_KSTACK]
+        mov [tss_struct + 4], rax
 
-        ; Load the new task's saved kernel ESP
-        mov esp, [ebx + TCB_ESP]
+        ; Load the new task's saved kernel RSP
+        mov rsp, [rbx + TCB_RSP]
 
-        ; Restore GP regs and IRETD to new task's ring-3 context
-        ; (IRETD restores EFLAGS which re-enables IF for user mode)
-        popad
-        iretd
+        ; Deliver any pending signals to the new task
+        ; (may modify the IRETQ frame to redirect to signal handler)
+        call sched_deliver_signals
+
+        ; Set CR0.TS so the next FPU instruction triggers #NM for lazy FPU switching
+        mov rax, cr0
+        or eax, (1 << 3)       ; Set TS bit
+        mov cr0, rax
+
+        ; Restore GP regs and IRETQ to new task's ring-3 context
+        ; (IRETQ restores RFLAGS which re-enables IF for user mode)
+        POPALL
+        iretq
 
 .timer_done:
-        popad
-        iretd
+        POPALL
+        iretq
 
 ; IRQ1: Keyboard interrupt
 irq_keyboard:
-        pushad
+        PUSHALL
 
         ; Read scancode from keyboard controller
         in al, KB_DATA
+
+        ; Check for E0 extended key prefix
+        cmp al, 0xE0
+        je .e0_prefix
 
         ; Check if it's a key release (bit 7 set)
         test al, 0x80
         jnz .key_up
 
-        ; Key press: check for modifier keys first
+        ; Key press: check if previous was E0 prefix
         movzx ebx, al
+        cmp byte [kb_e0_flag], 0
+        je .normal_key
+
+        ; Extended key press — clear flag and translate
+        mov byte [kb_e0_flag], 0
+        cmp bl, 0x47
+        je .e0_home
+        cmp bl, 0x4F
+        je .e0_end
+        cmp bl, 0x53
+        je .e0_delete
+        ; Other E0 keys (arrows, Right Ctrl/Alt): fall through
+
+.normal_key:
         cmp ebx, 128
         jge .eoi
 
@@ -272,7 +351,7 @@ irq_keyboard:
         mov al, 0x20
         out PIC1_CMD, al
         ; Hard-abort to shell — clean up redirection state
-        mov esp, KERNEL_STACK
+        mov rsp, KERNEL_STACK
         call shell_redir_reset
         mov byte [vga_color], COLOR_DEFAULT
         sti
@@ -305,6 +384,7 @@ irq_keyboard:
         jmp .eoi
 
 .key_up:
+        mov byte [kb_e0_flag], 0    ; Clear E0 flag on any release
         and al, 0x7F            ; Remove release bit
         cmp al, 0x1D
         je .ctrl_off
@@ -330,5 +410,21 @@ irq_keyboard:
 .eoi:
         mov al, 0x20
         out PIC1_CMD, al
-        popad
-        iretd
+        POPALL
+        iretq
+
+.e0_prefix:
+        mov byte [kb_e0_flag], 1
+        jmp .eoi
+
+.e0_home:
+        mov al, KEY_HOME
+        jmp .store_key
+
+.e0_end:
+        mov al, KEY_END
+        jmp .store_key
+
+.e0_delete:
+        mov al, KEY_DELETE
+        jmp .store_key

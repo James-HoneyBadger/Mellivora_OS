@@ -231,7 +231,7 @@ game_loop:
 
 ;=== Draw border ===
 draw_border:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0B           ; cyan
         int 0x80
@@ -307,12 +307,12 @@ draw_border:
         mov ebx, VGA_HEIGHT - 1
         call vga_putchar_at
 
-        popad
+        POPALL
         ret
 
 ;=== Draw snake ===
 draw_snake:
-        pushad
+        PUSHALL
         ; Draw head
         mov eax, [snake_x]
         mov ebx, [snake_y]
@@ -333,12 +333,12 @@ draw_snake:
         inc edx
         jmp .body_loop
 .body_done:
-        popad
+        POPALL
         ret
 
 ;=== Place food at random location ===
 place_food:
-        pushad
+        PUSHALL
 .retry:
         ; Random X: 1 to BOARD_W
         call rand
@@ -371,12 +371,12 @@ place_food:
         inc ecx
         jmp .check_snake
 .food_ok:
-        popad
+        POPALL
         ret
 
 ;=== Draw score ===
 draw_score:
-        pushad
+        PUSHALL
         ; Put score in top-right area of border
         mov eax, SYS_SETCURSOR
         mov ebx, 2
@@ -393,12 +393,12 @@ draw_score:
         mov eax, SYS_PRINT
         mov ebx, msg_space
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=== Show game over ===
 show_game_over:
-        pushad
+        PUSHALL
         ; Draw "GAME OVER" centered
         mov eax, SYS_SETCURSOR
         mov ebx, 30
@@ -449,7 +449,7 @@ show_game_over:
         ; Clear and restart
         mov eax, SYS_CLEAR
         int 0x80
-        popad
+        POPALL
         ret
 
 exit_game:
@@ -464,29 +464,29 @@ exit_game:
 ;=== Put char at screen position (direct VGA) ===
 ; EAX = x, EBX = y, CL = char, CH = color attribute
 vga_putchar_at:
-        pushad
+        PUSHALL
         imul ebx, VGA_WIDTH * 2
         lea edi, [VGA_BASE + ebx + eax*2]
         mov [edi], cl
         mov [edi+1], ch
-        popad
+        POPALL
         ret
 
 ;=== Put space at screen position ===
 ; EAX = x, EBX = y
 vga_put_space:
-        pushad
+        PUSHALL
         imul ebx, VGA_WIDTH * 2
         lea edi, [VGA_BASE + ebx + eax*2]
         mov byte [edi], ' '
         mov byte [edi+1], 0x00 ; black on black
-        popad
+        POPALL
         ret
 
 ;=== Simple PRNG (LCG) ===
 rand:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, [rand_seed]
         mov ecx, 1103515245
         imul eax, ecx
@@ -494,8 +494,8 @@ rand:
         mov [rand_seed], eax
         shr eax, 16             ; use upper bits (better distribution)
         and eax, 0x7FFF
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;=== Data ===

@@ -34,37 +34,37 @@ start:
         jle .done_nl
 
         ; Check if ecx*ecx > eax
-        push eax
+        push rax
         mov eax, ecx
         imul eax, ecx
-        cmp eax, [esp]
-        pop eax
+        cmp eax, [rsp]
+        pop rax
         jg .last_factor
 
         ; Try dividing
-        push ecx
+        push rcx
         xor edx, edx
         div ecx
-        pop ecx
+        pop rcx
         cmp edx, 0
         jne .not_divisible
 
         ; ecx divides eax. Print factor.
-        push eax
+        push rax
         mov eax, ecx
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop eax
+        pop rax
         jmp .factor_loop       ; try same divisor again
 
 .not_divisible:
         ; Restore eax = eax*ecx + edx (undo the division)
-        push ecx
+        push rcx
         imul eax, ecx
         add eax, edx
-        pop ecx
+        pop rcx
         ; Next divisor
         cmp ecx, 2
         jne .odd_inc
@@ -103,7 +103,7 @@ start:
 ;---------------------------------------
 parse_int:
         ; ESI = string, returns EAX = value
-        pushad
+        PUSHALL
         xor eax, eax
         xor ecx, ecx
 .pi_loop:
@@ -122,8 +122,8 @@ parse_int:
         inc ecx
         jmp .pi_loop
 .pi_done:
-        mov [esp + 28], eax
-        popad
+        mov [rsp + 112], eax
+        POPALL
         ret
 
 ;=======================================

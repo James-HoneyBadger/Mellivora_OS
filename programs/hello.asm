@@ -34,4 +34,4 @@ start:
         int 0x80
 
 msg_hello:      db "Hello, World! Welcome to Mellivora OS!", 0x0A, 0
-msg_running:    db "This program is running in 32-bit protected mode.", 0x0A, 0
+msg_running:    db "This program is running in 64-bit long mode.", 0x0A, 0

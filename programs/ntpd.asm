@@ -196,13 +196,13 @@ start:
 ; Rest: zeros
 ;---------------------------------------
 build_ntp_request:
-        pushad
+        PUSHALL
         mov edi, ntp_packet
         mov ecx, NTP_PACKET_SIZE / 4
         xor eax, eax
         rep stosd
         mov byte [ntp_packet], 0x1B     ; LI=0, VN=3, Mode=3
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -240,7 +240,7 @@ parse_ntp_response:
 ; Fills date_buf[sec, min, hour, day, month, year2] and century
 ;---------------------------------------
 ntp_to_datetime:
-        pushad
+        PUSHALL
 
         ; Convert to Unix epoch
         sub eax, NTP_UNIX_DELTA
@@ -278,10 +278,10 @@ ntp_to_datetime:
 .year_loop:
         ; Days in this year
         mov ecx, 365
-        push eax
+        push rax
         mov eax, [.year]
         call .is_leap
-        pop eax
+        pop rax
         cmp edx, 1
         jne .not_leap_y
         inc ecx
@@ -294,23 +294,23 @@ ntp_to_datetime:
 
 .month_loop:
         ; Days in current month
-        push eax
+        push rax
         mov ecx, [.month]
         dec ecx
         movzx ecx, byte [.month_days + ecx]
         ; Feb special handling for leap
         cmp dword [.month], 2
         jne .not_feb
-        push ecx
+        push rcx
         mov eax, [.year]
         call .is_leap
-        pop ecx
+        pop rcx
         cmp edx, 1
         jne .not_feb
         inc ecx
 .not_feb:
         mov edx, ecx           ; days in this month
-        pop eax
+        pop rax
         cmp eax, edx
         jl .done_date
         sub eax, edx
@@ -344,55 +344,55 @@ ntp_to_datetime:
         mov [century], al
         mov [date_buf + 5], dl
 
-        popad
+        POPALL
         ret
 
 ; is_leap: EAX=year, returns EDX=1 if leap
 .is_leap:
-        push eax
-        push ecx
+        push rax
+        push rcx
         xor edx, edx
         mov ecx, eax
-        push eax
+        push rax
         xor edx, edx
         mov eax, ecx
-        push ecx
+        push rcx
         mov ecx, 4
         div ecx
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         cmp edx, 0
         jne .not_leap
         ; Divisible by 4 - check 100
-        push eax
+        push rax
         xor edx, edx
         mov eax, ecx
-        push ecx
+        push rcx
         mov ecx, 100
         div ecx
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         cmp edx, 0
         jne .is_leap_yes
         ; Divisible by 100 - check 400
-        push eax
+        push rax
         xor edx, edx
         mov eax, ecx
-        push ecx
+        push rcx
         mov ecx, 400
         div ecx
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         cmp edx, 0
         jne .not_leap
 .is_leap_yes:
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         mov edx, 1
         ret
 .not_leap:
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         xor edx, edx
         ret
 
@@ -412,7 +412,7 @@ ntp_to_datetime:
 ; Returns: EAX = IP (network byte order), 0 on failure
 ;---------------------------------------
 parse_ip:
-        pushad
+        PUSHALL
         xor edi, edi            ; result IP
         xor ecx, ecx           ; octet count
 .pi_octet:
@@ -443,22 +443,22 @@ parse_ip:
         jne .pi_fail
         ; Convert to little-endian for our stack
         bswap edi
-        mov [esp + 28], edi     ; return in EAX
-        popad
+        mov [rsp + 112], edi     ; return in EAX
+        POPALL
         ret
 .pi_fail:
-        mov dword [esp + 28], 0
-        popad
+        mov dword [rsp + 112], 0
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_ip - Print IP address in EAX
 ;---------------------------------------
 print_ip:
-        pushad
+        PUSHALL
         mov edi, eax
         ; Byte 0 (lowest)
-        movzx eax, byte [esp + 28]      ; byte 0 from original EAX
+        movzx eax, byte [rsp + 112]      ; byte 0 from original EAX
         ; Actually let's just pull from edi
         mov eax, edi
         and eax, 0xFF
@@ -484,20 +484,20 @@ print_ip:
         shr eax, 24
         and eax, 0xFF
         call print_decimal
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_decimal - Print EAX as decimal
 ;---------------------------------------
 print_decimal:
-        pushad
+        PUSHALL
         cmp eax, 0
         jne .pd_nonzero
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pd_nonzero:
         mov ecx, 0             ; digit count
@@ -505,25 +505,25 @@ print_decimal:
 .pd_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pd_div
 .pd_print:
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jnz .pd_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_datetime - Print date and time
 ;---------------------------------------
 print_datetime:
-        pushad
+        PUSHALL
         ; Year
         movzx eax, byte [century]
         imul eax, 100
@@ -563,25 +563,25 @@ print_datetime:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        popad
+        POPALL
         ret
 
 ; Print EAX as 2-digit zero-padded
 print_2digit:
-        pushad
+        PUSHALL
         cmp eax, 10
         jge .p2_two
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        pop eax
+        pop rax
         call print_decimal
-        popad
+        POPALL
         ret
 .p2_two:
         call print_decimal
-        popad
+        POPALL
         ret
 
 ;=======================================

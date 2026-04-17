@@ -27,15 +27,15 @@ start:
         cmp byte [esi], 0
         je .use_default
 
-        mov [str_ptr], esi
+        mov [str_ptr], rsi
         jmp .output_loop
 
 .use_default:
-        mov dword [str_ptr], default_str
+        mov qword [str_ptr], default_str
 
 .output_loop:
         ; Print string char by char
-        mov esi, [str_ptr]
+        mov rsi, [str_ptr]
 .print_loop:
         cmp byte [esi], 0
         je .newline
@@ -61,4 +61,4 @@ default_str:    db "y", 0
 
 section .bss
 args_buf:       resb 256
-str_ptr:        resd 1
+str_ptr:        resq 1

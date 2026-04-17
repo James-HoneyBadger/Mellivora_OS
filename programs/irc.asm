@@ -261,11 +261,11 @@ main_loop:
         inc dword [input_len]
 
         ; Echo character
-        push eax
+        push rax
         mov ebx, COL_PROMPT
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop eax
+        pop rax
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
@@ -501,10 +501,10 @@ main_loop:
         jmp .input_done
 .part_named:
         mov edi, send_buf
-        push esi
+        push rsi
         mov esi, str_part_irc
         call strcpy_append
-        pop esi
+        pop rsi
         call strcpy_append
         mov word [edi], 0x0A0D
         add edi, 2
@@ -548,10 +548,10 @@ main_loop:
         je .input_done
         ; Get target
         mov edi, send_buf
-        push esi
+        push rsi
         mov esi, str_privmsg
         call strcpy_append
-        pop esi
+        pop rsi
         ; Copy target
 .cm_target:
         mov al, [esi]
@@ -583,14 +583,14 @@ main_loop:
         je .no_channel
         ; Build ACTION CTCP
         mov edi, send_buf
-        push esi
+        push rsi
         mov esi, str_privmsg
         call strcpy_append
         mov esi, current_chan
         call strcpy_append
         mov esi, str_action_pre
         call strcpy_append
-        pop esi
+        pop rsi
         call strcpy_append
         mov byte [edi], 0x01   ; CTCP delimiter
         inc edi
@@ -707,7 +707,7 @@ irc_conn_fail:
 ;  line_parse_buf contains the line
 ;=======================================================================
 parse_irc_line:
-        pushad
+        PUSHALL
         mov esi, line_parse_buf
 
         ; PING handler
@@ -731,7 +731,7 @@ parse_irc_line:
         mov word [edi], 0x0A0D
         add edi, 2
         call irc_send_buf
-        popad
+        POPALL
         ret
 
 .not_ping:
@@ -824,7 +824,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .show_msg:
@@ -850,7 +850,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .not_privmsg:
@@ -881,7 +881,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .not_join:
@@ -907,7 +907,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .not_part:
@@ -926,7 +926,7 @@ parse_irc_line:
         mov ebx, msg_has_quit
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .not_quit:
@@ -953,7 +953,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .not_nick_change:
@@ -983,7 +983,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .not_notice:
@@ -1019,7 +1019,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .show_raw:
@@ -1033,7 +1033,7 @@ parse_irc_line:
         mov ebx, str_newline
         mov eax, SYS_PRINT
         int 0x80
-        popad
+        POPALL
         ret
 
 .no_prefix:
@@ -1041,7 +1041,7 @@ parse_irc_line:
         jmp .show_raw
 
 .parse_done:
-        popad
+        POPALL
         ret
 
 
@@ -1051,7 +1051,7 @@ parse_irc_line:
 
 ; strcpy_append - Copy string at ESI to EDI, advance EDI past end
 strcpy_append:
-        push eax
+        push rax
 .sc_loop:
         lodsb
         test al, al
@@ -1059,26 +1059,26 @@ strcpy_append:
         stosb
         jmp .sc_loop
 .sc_done:
-        pop eax
+        pop rax
         ret
 
 ; irc_send_buf - Send contents of send_buf (EDI = end pointer)
 irc_send_buf:
-        pushad
+        PUSHALL
         mov ecx, edi
         sub ecx, send_buf      ; length
         mov eax, [sock_fd]
         mov ebx, send_buf
         call net_send
-        popad
+        POPALL
         ret
 
 ; cmd_match - Check if input starts with command name
 ;  ESI = input (after '/'), EDI = command string
 ; Returns: carry set if match, ESI advanced past command
 cmd_match:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov ebx, esi            ; save start
 .cm_loop:
         mov al, [edi]
@@ -1104,13 +1104,13 @@ cmd_match:
         je .cm_yes
 .cm_no:
         mov esi, ebx            ; restore
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         clc
         ret
 .cm_yes:
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         stc
         ret
 
@@ -1126,22 +1126,22 @@ skip_cmd_space:
 
 ; print_strip_ctcp - Print ESI string, stopping at 0x01 or NUL
 print_strip_ctcp:
-        pushad
+        PUSHALL
 .psc_loop:
         mov al, [esi]
         cmp al, 0x01
         je .psc_done
         cmp al, 0
         je .psc_done
-        push esi
+        push rsi
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop esi
+        pop rsi
         inc esi
         jmp .psc_loop
 .psc_done:
-        popad
+        POPALL
         ret
 
 

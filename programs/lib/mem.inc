@@ -42,11 +42,11 @@ ARENA_HDR_SIZE  equ 12
 ; Output: EAX = pointer to allocated memory, or 0 on failure
 ;-----------------------------------------------------------------------
 mem_alloc:
-        push ebx
+        push rbx
         mov ebx, eax
         mov eax, SYS_MALLOC
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -55,15 +55,15 @@ mem_alloc:
 ; Output: none
 ;-----------------------------------------------------------------------
 mem_free:
-        push eax
-        push ebx
-        push ecx
+        push rax
+        push rbx
+        push rcx
         mov ebx, eax
         mov eax, SYS_FREE
         int 0x80
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -73,7 +73,7 @@ mem_free:
 ; WARNING: Old pointer is invalid after this call
 ;-----------------------------------------------------------------------
 mem_realloc:
-        pushad
+        PUSHALL
 
         mov esi, eax            ; old ptr
         mov edi, ebx            ; old size
@@ -86,33 +86,33 @@ mem_realloc:
         test eax, eax
         jz .mr_fail
 
-        mov [esp + 28], eax     ; overwrite EAX in pushad frame
+        mov [esp + 28], eax     ; overwrite EAX in PUSHALL frame
 
         ; Copy min(old_size, new_size) bytes
-        push eax
+        push rax
         mov ecx, edi
         cmp ecx, ebp
         jbe .mr_copy
         mov ecx, ebp
 .mr_copy:
-        push edi
+        push rdi
         mov edi, eax
         rep movsb
-        pop edi
+        pop rdi
 
         ; Free old block
         mov ebx, [esp]          ; peek at saved new ptr — not needed
-        pop eax                 ; new ptr (discard, already in stack frame)
+        pop rax                 ; new ptr (discard, already in stack frame)
         mov ebx, esi            ; old ptr
         mov ecx, edi            ; old size
         mov eax, SYS_FREE
         int 0x80
-        popad
+        POPALL
         ret
 
 .mr_fail:
         mov dword [esp + 28], 0
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -124,7 +124,7 @@ mem_realloc:
 ; Notes:  Allocates pool memory via SYS_MALLOC
 ;-----------------------------------------------------------------------
 mem_pool_init:
-        pushad
+        PUSHALL
 
         ; Enforce minimum object size of 4 (for free list pointer)
         cmp eax, 4
@@ -136,18 +136,18 @@ mem_pool_init:
         mov dword [edi + POOL_USED], 0
 
         ; Calculate total memory needed
-        push edi
+        push rdi
         imul ebx, eax, 1       ; obj_size in EBX
         mov ebx, eax
         imul eax, ecx           ; total bytes = obj_size * count
-        push ebx
+        push rbx
 
         ; Allocate
         mov ebx, eax
         mov eax, SYS_MALLOC
         int 0x80
-        pop ebx                 ; obj_size
-        pop edi                 ; pool header
+        pop rbx                 ; obj_size
+        pop rdi                 ; pool header
 
         test eax, eax
         jz .mpi_fail
@@ -174,13 +174,13 @@ mem_pool_init:
         mov [edi + POOL_FREE_HEAD], eax
 
         ; Return success
-        mov dword [esp + 28], 0 ; EAX = 0 in pushad frame
-        popad
+        mov dword [esp + 28], 0 ; EAX = 0 in PUSHALL frame
+        POPALL
         ret
 
 .mpi_fail:
         mov dword [esp + 28], -1
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -189,7 +189,7 @@ mem_pool_init:
 ; Output: EAX = pointer to object, or 0 if pool exhausted
 ;-----------------------------------------------------------------------
 mem_pool_alloc:
-        push ebx
+        push rbx
         mov eax, [edi + POOL_FREE_HEAD]
         test eax, eax
         jz .mpa_empty
@@ -198,12 +198,12 @@ mem_pool_alloc:
         mov ebx, [eax]          ; next free
         mov [edi + POOL_FREE_HEAD], ebx
         inc dword [edi + POOL_USED]
-        pop ebx
+        pop rbx
         ret
 
 .mpa_empty:
         xor eax, eax
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -212,12 +212,12 @@ mem_pool_alloc:
 ; Output: none
 ;-----------------------------------------------------------------------
 mem_pool_free:
-        push ebx
+        push rbx
         mov ebx, [edi + POOL_FREE_HEAD]
         mov [eax], ebx          ; obj->next = free_head
         mov [edi + POOL_FREE_HEAD], eax
         dec dword [edi + POOL_USED]
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -226,7 +226,7 @@ mem_pool_free:
 ; Output: none
 ;-----------------------------------------------------------------------
 mem_pool_reset:
-        pushad
+        PUSHALL
         mov dword [edi + POOL_USED], 0
         mov esi, [edi + POOL_BASE]
         mov ebx, [edi + POOL_OBJ_SIZE]
@@ -247,7 +247,7 @@ mem_pool_reset:
         mov dword [esi], 0
         mov eax, [edi + POOL_BASE]
         mov [edi + POOL_FREE_HEAD], eax
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -257,7 +257,7 @@ mem_pool_reset:
 ; Output: EAX = 0 on success, -1 on failure
 ;-----------------------------------------------------------------------
 mem_arena_init:
-        pushad
+        PUSHALL
         mov [edi + ARENA_SIZE], eax
         mov dword [edi + ARENA_OFFSET], 0
 
@@ -270,12 +270,12 @@ mem_arena_init:
 
         mov [edi + ARENA_BASE], eax
         mov dword [esp + 28], 0
-        popad
+        POPALL
         ret
 
 .mai_fail:
         mov dword [esp + 28], -1
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -285,8 +285,8 @@ mem_arena_init:
 ; Note:   Allocations are 4-byte aligned
 ;-----------------------------------------------------------------------
 mem_arena_alloc:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
 
         ; Round up to 4-byte alignment
         add eax, 3
@@ -304,14 +304,14 @@ mem_arena_alloc:
         mov eax, [edi + ARENA_BASE]
         add eax, ebx            ; return base + old offset
 
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 .maa_fail:
         xor eax, eax
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------

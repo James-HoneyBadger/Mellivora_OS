@@ -2,8 +2,8 @@
 
 ## Overview
 
-Mellivora OS is a bare-metal, from-scratch 32-bit operating system written entirely in NASM
-assembly language. It targets i486+ processors and runs under QEMU or on compatible real
+Mellivora OS is a bare-metal, from-scratch 64-bit operating system written entirely in NASM
+assembly language. It targets Core 2 Duo+ processors and runs under QEMU or on compatible real
 hardware.
 
 This guide covers everything you need to build, run, and test the OS.
@@ -18,7 +18,7 @@ This guide covers everything you need to build, run, and test the OS.
 | ------ | --------- | --------- |
 | **NASM** | 2.15+ | Netwide Assembler — assembles all `.asm` sources |
 | **GNU Make** | 4.0+ | Build orchestration |
-| **QEMU** | 6.0+ | `qemu-system-i386` — i486 emulator for testing |
+| **QEMU** | 6.0+ | `qemu-system-x86_64` — Core 2 Duo emulator for testing |
 | **Python 3** | 3.6+ | Runs `populate.py` to populate the filesystem |
 | **dd** | any | Disk image construction (standard on Linux/macOS) |
 
@@ -93,7 +93,7 @@ This single command:
 4. Creates a 2 GB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (169 files)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (220 files)
 
 ### Build Targets
 
@@ -122,7 +122,7 @@ mellivora.iso          Bootable ISO media with docs and install guide
 mellivora-lite.iso     Smaller ISO with 64 MB truncated disk image
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
-kernel.bin             32-bit kernel
+kernel.bin             64-bit kernel
 programs/*.bin         Compiled user programs (current assembly program set)
 *.lst                  Assembly listing files (useful for debugging)
 ```
@@ -213,7 +213,7 @@ Or use the standalone helper script (works without the source tree):
 Manual QEMU launch (note: **both** the ISO and the IDE disk image are required):
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 128 \
   -cdrom mellivora.iso \
   -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
   -boot d -no-shutdown \
@@ -226,7 +226,7 @@ for the HBFS filesystem.  The QEMU command attaches both devices.
 
 | Setting | Value |
 | --------- | ------- |
-| **CPU** | i486 emulation |
+| **CPU** | Core 2 Duo emulation |
 | **RAM** | 128 MB |
 | **CD-ROM** | `mellivora.iso` (El Torito boot) |
 | **IDE Disk** | `mellivora.img` as raw IDE drive (HBFS) |
@@ -251,7 +251,7 @@ Adds QEMU Monitor on stdio and interrupt/reset logging. Useful monitor commands:
 ### Custom QEMU Options
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 128 \
   -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
   -boot c -no-reboot -no-shutdown
 ```
@@ -277,16 +277,16 @@ LBA Range       Size        Content
 ─────────────────────────────────────────────────────────
 LBA 0           512 B       Stage 1 boot sector (MBR)
 LBA 1–32        16 KB       Stage 2 loader
-LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size)
-LBA 417         512 B       HBFS superblock
-LBA 418–545     64 KB       Block allocation bitmap (16 blocks)
-LBA 546–801     128 KB      Root directory (32 blocks, 455 entries)
-LBA 802+        ~2 GB       Data blocks (4 KB each)
+LBA 33+         variable    64-bit kernel (sector count generated from `kernel.bin` size)
+LBA 2081        512 B       HBFS superblock
+LBA 2082–2209   64 KB       Block allocation bitmap (16 blocks)
+LBA 2210–2465   128 KB      Root directory (32 blocks, 455 entries)
+LBA 2466+       ~2 GB       Data blocks (4 KB each)
 ```
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 4 subdirectories and places the curated runtime file set (169 files):
+The `populate.py` script creates 4 subdirectories and places the curated runtime file set (220 files):
 
 ```text
 /
@@ -306,7 +306,7 @@ The `populate.py` script creates 4 subdirectories and places the curated runtime
 
 ### Requirements
 
-- i486 or newer x86 CPU
+- Core 2 Duo or newer x86 CPU
 - IDE or SATA disk / USB drive with BIOS legacy boot
 - At least 1 MB RAM (128 MB recommended)
 - PS/2 keyboard (USB works if BIOS provides PS/2 emulation)
@@ -338,7 +338,7 @@ sync
 
 1. Create a new **x86** VM in legacy BIOS mode
 2. Attach `mellivora.iso` as the VM's optical drive
-3. Give the VM at least **128 MB RAM**
+3. Give the VM at least **1024 MB RAM**
 4. Boot from the ISO
 5. For a persistent install, attach a virtual disk and write `boot/mellivora.img` from the host onto that disk
 
@@ -349,11 +349,11 @@ sync
 ```text
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (16-bit real mode)
-├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
+├── stage2.asm              Stage 2 loader (A20, E820, long mode switch)
 ├── kernel.asm              Kernel entry and include graph (main file + 22 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v3.0)
+├── CHANGELOG.md            Version history (v1.0 → v4.0)
 ├── README.md               Project overview
 │
 ├── kernel/                 Kernel subsystem modules
@@ -375,8 +375,8 @@ Mellivora_OS/
 │   ├── mouse.inc           PS/2 mouse driver
 │   ├── sched.inc           Preemptive scheduler
 │   ├── burrows.inc         Burrows desktop environment
-│   ├── paging.inc          Paging and virtual memory
-│   ├── ipc.inc             Inter-process communication (pipes, shared memory)
+│   ├── paging.inc          4-level paging (PML4, 2 MB pages)
+│   ├── ipc.inc             Inter-process communication (pipes, shared memory, MQ)
 │   ├── sb16.inc            Sound Blaster 16 audio driver
 │   └── screensaver.inc     Screensaver modes
 │
@@ -425,7 +425,7 @@ to the filesystem.
 QEMU requires explicit audio configuration:
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd
 ```
@@ -438,7 +438,7 @@ Check current size with `ls -la kernel.bin`; Stage 2 reads the generated sector 
 ### Serial debug output
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -serial stdio
 ```
@@ -449,7 +449,7 @@ Ensure QEMU is launched with an RTL8139 NIC. The `make run` target includes this
 default. If launching manually:
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -cpu core2duo -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -nic user,model=rtl8139
 ```

@@ -150,10 +150,10 @@ start:
         mov eax, ecx
         sub eax, 40
         xor edx, edx
-        push ebx
+        push rbx
         mov ebx, 30
         div ebx
-        pop ebx
+        pop rbx
         cmp eax, NUM_COLORS
         jge .check_buttons
         mov [sel_color], eax
@@ -217,7 +217,7 @@ get_sel_ptr:
 ; draw_settings - Render the settings window
 ;---------------------------------------
 draw_settings:
-        pushad
+        PUSHALL
         mov eax, [win_id]
 
         ; Background
@@ -274,15 +274,15 @@ draw_settings:
         add ecx, 40
         mov edx, 32
         mov esi, 20
-        push ebp
+        push rbp
         mov edi, ebp
         shl edi, 2
         mov edi, [theme_buf + edi]
         call gui_fill_rect
-        pop ebp
+        pop rbp
 
         ; RGB value text
-        push ebp
+        push rbp
         mov eax, ebp
         shl eax, 2
         mov eax, [theme_buf + eax]
@@ -295,7 +295,7 @@ draw_settings:
         mov esi, rgb_str_buf
         mov edi, 0x00404040
         call gui_draw_text
-        pop ebp
+        pop rbp
 
         inc ebp
         jmp .ds_entry
@@ -339,16 +339,16 @@ draw_settings:
         mov edi, 0x00808080
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; format_rgb - Format EAX as "RR GG BB" into rgb_str_buf
 ;---------------------------------------
 format_rgb:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         mov edx, eax
         ; Red
         mov eax, edx
@@ -373,14 +373,14 @@ format_rgb:
         mov [rgb_str_buf + 6], ah
         mov [rgb_str_buf + 7], al
         mov byte [rgb_str_buf + 8], 0
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ; hex_byte - Convert AL to 2 hex chars in AH:AL
 hex_byte:
-        push ecx
+        push rcx
         mov cl, al
         shr al, 4
         call hex_nibble
@@ -388,7 +388,7 @@ hex_byte:
         mov al, cl
         and al, 0x0F
         call hex_nibble
-        pop ecx
+        pop rcx
         ret
 
 hex_nibble:

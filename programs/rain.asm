@@ -59,48 +59,48 @@ init_drops:
         ; Pseudo-random column (0-79)
         imul eax, 1103515245
         add eax, 12345
-        push eax
+        push rax
         xor edx, edx
         mov ebx, NUM_COLS
         div ebx
         mov [edi], dl           ; col = rand % 80
-        pop eax
+        pop rax
 
         ; Random starting row (negative = off screen)
         imul eax, 1103515245
         add eax, 12345
-        push eax
+        push rax
         and eax, 0x1F           ; 0-31
         neg al                  ; Start above screen
         mov [edi + 1], al       ; row
-        pop eax
+        pop rax
 
         ; Speed (1-3)
         imul eax, 1103515245
         add eax, 12345
-        push eax
+        push rax
         and eax, 0x01
         inc al                  ; 1-2
         mov [edi + 2], al       ; speed
-        pop eax
+        pop rax
 
         ; Trail length (4-12)
         imul eax, 1103515245
         add eax, 12345
-        push eax
+        push rax
         and eax, 0x07
         add al, 5               ; 5-12
         mov [edi + 3], al       ; length
-        pop eax
+        pop rax
 
         ; Random character
         imul eax, 1103515245
         add eax, 12345
-        push eax
+        push rax
         and eax, 0x5E           ; wide range
         add al, 0x21            ; printable ASCII range
         mov [edi + 4], al
-        pop eax
+        pop rax
 
         add edi, DROP_SIZE
         dec ecx
@@ -131,12 +131,12 @@ update_drops:
         imul eax, 1103515245
         add eax, 12345
         mov [rand_state], eax
-        push eax
+        push rax
         xor edx, edx
         mov ebx, NUM_COLS
         div ebx
         mov [esi], dl           ; new column
-        pop eax
+        pop rax
 
         ; New row above screen
         movzx edx, byte [esi + 3]
@@ -179,7 +179,7 @@ update_drops:
 ; render_frame - Draw all drops directly to VGA
 ;---------------------------------------
 render_frame:
-        pushad
+        PUSHALL
 
         ; Clear VGA buffer to black
         mov edi, VGA_BASE
@@ -197,8 +197,8 @@ render_frame:
 
 .draw_trail:
         ; Draw positions from (row) to (row - length)
-        push ecx
-        push edx
+        push rcx
+        push rdx
 
         ; Check if row is on screen
         cmp edx, 0
@@ -259,8 +259,8 @@ render_frame:
         mov byte [VGA_BASE + eax], 0xB0 ; Light shade
 
 .draw_skip:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         dec edx                 ; Move up the trail
         dec ecx
         jnz .draw_trail
@@ -269,7 +269,7 @@ render_frame:
         dec ebp
         jnz .draw_drop
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================

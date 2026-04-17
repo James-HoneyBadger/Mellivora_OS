@@ -86,7 +86,7 @@ main_loop:
 
 ;--- Draw the player interface ---
 draw_player:
-        pushad
+        PUSHALL
 
         ; Background
         mov eax, [win_id]
@@ -136,7 +136,7 @@ draw_player:
 .draw_vu:
         cmp ecx, VU_BARS
         jge .draw_controls
-        push ecx
+        push rcx
 
         ; Bar position
         mov ebx, ecx
@@ -155,17 +155,17 @@ draw_player:
         jz .vu_bar_done
 
         mov eax, [win_id]
-        push edx
-        push ebx
+        push rdx
+        push rbx
         mov ecx, VU_Y + VU_BAR_H
         sub ecx, edx           ; top of bar
         mov esi, edx           ; height = level
         mov edx, VU_BAR_W
         ; Color based on level
-        pop ebx
-        pop edi                 ; edi = level
-        push edi
-        push ebx
+        pop rbx
+        pop rdi                 ; edi = level
+        push rdi
+        push rbx
         cmp edi, 50
         jg .vu_red
         mov edi, COL_VU_BAR
@@ -175,22 +175,22 @@ draw_player:
 .vu_draw:
         ; eax=win, ebx=x, ecx=y, edx=w, esi=h, edi=color
         ; Need to re-set esi to height
-        pop ebx
-        pop esi                ; esi = level (height)
-        push esi
-        push ebx
+        pop rbx
+        pop rsi                ; esi = level (height)
+        push rsi
+        push rbx
         call gui_fill_rect
-        pop ebx
-        pop edx
+        pop rbx
+        pop rdx
         jmp .vu_next_bar
 
 .vu_bar_done:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .draw_vu
 
 .vu_next_bar:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .draw_vu
 
@@ -218,11 +218,11 @@ draw_player:
         test eax, eax
         jz .draw_buttons
 
-        push eax
+        push rax
         mov eax, [win_id]
         mov ebx, 10
         mov ecx, VU_Y + VU_BAR_H + 10
-        pop edx
+        pop rdx
         mov esi, 8
         mov edi, COL_PROGRESS
         call gui_fill_rect
@@ -288,7 +288,7 @@ draw_player:
         mov edi, COL_ACCENT
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 ;--- Handle keyboard ---
@@ -392,7 +392,7 @@ exit_app:
 ;=======================================================================
 
 start_audio:
-        pushad
+        PUSHALL
         ; Calculate remaining data
         mov eax, [pcm_total_len]
         sub eax, [pcm_played]
@@ -429,12 +429,12 @@ start_audio:
         mov byte [play_state], STATE_STOPPED
         mov dword [pcm_played], 0
 .sa_not_done:
-        popad
+        POPALL
         ret
 
 ; Update VU bars by sampling PCM data
 update_vu_from_pcm:
-        pushad
+        PUSHALL
         mov esi, [pcm_data_ptr]
         add esi, [pcm_played]
         ; Back up a bit to sample recent data
@@ -481,7 +481,7 @@ update_vu_from_pcm:
         inc ecx
         jmp .uv_loop
 .uv_done:
-        popad
+        POPALL
         ret
 
 
@@ -489,7 +489,7 @@ update_vu_from_pcm:
 ; WAV file loader
 ;=======================================================================
 load_wav:
-        pushad
+        PUSHALL
 
         ; Read file
         mov ebx, arg_buf
@@ -579,19 +579,19 @@ load_wav:
         mov dword [pcm_played], 0
         mov byte [play_state], STATE_STOPPED
 
-        popad
+        POPALL
         ret
 
 .lw_fail:
 .lw_bad_fmt:
         mov byte [loaded], 0
-        popad
+        POPALL
         ret
 
 
 ; Build info string: "44100 Hz, 16-bit, Stereo, 123 KB"
 build_info_line:
-        pushad
+        PUSHALL
         mov edi, info_line
 
         ; Sample rate
@@ -624,20 +624,20 @@ build_info_line:
         call str_copy_append
 
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 ; itoa_append - Convert EAX to decimal string at EDI, advance EDI
 itoa_append:
-        pushad
+        PUSHALL
         mov ebx, 10
         xor ecx, ecx
         test eax, eax
         jnz .ia_loop
         mov byte [edi], '0'
         inc edi
-        mov [esp + 28], edi     ; update saved edi
-        popad
+        mov [rsp + 112], edi     ; update saved edi
+        POPALL
         ret
 .ia_loop:
         test eax, eax
@@ -645,25 +645,25 @@ itoa_append:
         xor edx, edx
         div ebx
         add dl, '0'
-        push edx
+        push rdx
         inc ecx
         jmp .ia_loop
 .ia_reverse:
         test ecx, ecx
         jz .ia_done
-        pop eax
+        pop rax
         mov [edi], al
         inc edi
         dec ecx
         jmp .ia_reverse
 .ia_done:
-        mov [esp + 28], edi     ; update saved edi
-        popad
+        mov [rsp + 112], edi     ; update saved edi
+        POPALL
         ret
 
 ; str_copy_append - Copy string at ESI to EDI, advance EDI
 str_copy_append:
-        push eax
+        push rax
 .sca_loop:
         lodsb
         test al, al
@@ -671,7 +671,7 @@ str_copy_append:
         stosb
         jmp .sca_loop
 .sca_done:
-        pop eax
+        pop rax
         ret
 
 

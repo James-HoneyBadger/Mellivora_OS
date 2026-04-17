@@ -43,10 +43,10 @@
 ; Features: Echoes typed chars, handles backspace, Enter terminates
 ;-----------------------------------------------------------------------
 io_read_line:
-        push ebx
-        push ecx
-        push edx
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rdi
         dec ecx                 ; reserve for null
         xor edx, edx           ; char count
 
@@ -121,10 +121,10 @@ io_read_line:
 .irl_done:
         mov byte [edi + edx], 0
         mov eax, edx
-        pop edi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -134,11 +134,11 @@ io_read_line:
 ;         Carry flag set if empty input
 ;-----------------------------------------------------------------------
 io_read_num:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
         sub esp, 16             ; local buffer on stack
         mov edi, esp
         mov edx, ecx
@@ -219,22 +219,22 @@ io_read_num:
 .irn_result:
         add esp, 16
         clc                     ; clear carry = valid
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .irn_empty:
         xor eax, eax
         add esp, 16
         stc                     ; set carry = empty
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -252,13 +252,13 @@ io_read_key:
 ; Output: none
 ;-----------------------------------------------------------------------
 io_print:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, SYS_PRINT
         mov ebx, esi
         int 0x80
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -277,26 +277,26 @@ io_println:
 ; Output: none
 ;-----------------------------------------------------------------------
 io_putchar:
-        push eax
-        push ebx
+        push rax
+        push rbx
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
 ; io_newline - Output a newline character
 ;-----------------------------------------------------------------------
 io_newline:
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -305,9 +305,9 @@ io_newline:
 ; Output: none
 ;-----------------------------------------------------------------------
 io_print_repeat:
-        push eax
-        push ebx
-        push ecx
+        push rax
+        push rbx
+        push rcx
         movzx ebx, al
 .ipr_loop:
         cmp ecx, 0
@@ -317,19 +317,19 @@ io_print_repeat:
         dec ecx
         jmp .ipr_loop
 .ipr_done:
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
 ; io_clear - Clear the screen
 ;-----------------------------------------------------------------------
 io_clear:
-        push eax
+        push rax
         mov eax, SYS_CLEAR
         int 0x80
-        pop eax
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -338,11 +338,11 @@ io_clear:
 ; Output: EAX = argument string length (0 = no args)
 ;-----------------------------------------------------------------------
 io_get_args:
-        push ebx
+        push rbx
         mov eax, SYS_GETARGS
         mov ebx, edi
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -353,11 +353,11 @@ io_get_args:
 ; Output: EAX = argc (number of arguments found)
 ;-----------------------------------------------------------------------
 io_parse_args:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
         xor eax, eax           ; argc
 
 .ipa_skip_spaces:
@@ -397,11 +397,11 @@ io_parse_args:
         jmp .ipa_skip_spaces
 
 .ipa_done:
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -411,14 +411,14 @@ io_parse_args:
 ; Output: EAX = bytes read, or -1 on error
 ;-----------------------------------------------------------------------
 io_file_read:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, SYS_FREAD
         mov ebx, esi
         mov ecx, edi
         int 0x80
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -427,9 +427,9 @@ io_file_read:
 ; Output: EAX = 0 on success, -1 on error
 ;-----------------------------------------------------------------------
 io_file_write:
-        push ebx
-        push ecx
-        push esi
+        push rbx
+        push rcx
+        push rsi
         mov eax, SYS_FWRITE
         ; Input:  ESI=name, EDI=buf, ECX=size, EDX=type
         ; Syscall: EBX=name, ECX=buf, EDX=size, ESI=type
@@ -438,9 +438,9 @@ io_file_write:
         mov edx, ecx            ; EDX = size     (frees ECX)
         mov ecx, edi            ; ECX = buffer
         int 0x80
-        pop esi
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -449,18 +449,18 @@ io_file_write:
 ; Output: EAX = 1 if exists, 0 if not
 ;-----------------------------------------------------------------------
 io_file_exists:
-        push ebx
+        push rbx
         mov eax, SYS_STAT
         mov ebx, esi
         int 0x80
         cmp eax, -1
         je .ife_no
         mov eax, 1
-        pop ebx
+        pop rbx
         ret
 .ife_no:
         xor eax, eax
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -469,11 +469,11 @@ io_file_exists:
 ; Output: EAX = file size in bytes, or -1 if not found
 ;-----------------------------------------------------------------------
 io_file_size:
-        push ebx
+        push rbx
         mov eax, SYS_STAT
         mov ebx, esi
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -482,11 +482,11 @@ io_file_size:
 ; Output: EAX = 0 on success, -1 on error
 ;-----------------------------------------------------------------------
 io_file_delete:
-        push ebx
+        push rbx
         mov eax, SYS_DELETE
         mov ebx, esi
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -496,11 +496,11 @@ io_file_delete:
 ;         ECX = file size
 ;-----------------------------------------------------------------------
 io_dir_read:
-        push ebx
+        push rbx
         mov eax, SYS_READDIR
         mov ebx, edi
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -509,11 +509,11 @@ io_dir_read:
 ; Output: EAX = 0 on success, -1 on error
 ;-----------------------------------------------------------------------
 io_dir_create:
-        push ebx
+        push rbx
         mov eax, SYS_MKDIR
         mov ebx, esi
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -522,11 +522,11 @@ io_dir_create:
 ; Output: EAX = 0 on success, -1 on error
 ;-----------------------------------------------------------------------
 io_dir_change:
-        push ebx
+        push rbx
         mov eax, SYS_CHDIR
         mov ebx, esi
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -535,11 +535,11 @@ io_dir_change:
 ; Output: EAX = 0
 ;-----------------------------------------------------------------------
 io_dir_getcwd:
-        push ebx
+        push rbx
         mov eax, SYS_GETCWD
         mov ebx, edi
         int 0x80
-        pop ebx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -550,15 +550,15 @@ io_dir_getcwd:
 ; Right-align: "     hello"
 ;-----------------------------------------------------------------------
 io_print_padded:
-        pushad
+        PUSHALL
         mov bl, al              ; pad char
         mov dl, ah              ; alignment
 
         ; Get string length
-        push esi
+        push rsi
         call str_len
         mov edi, eax            ; string len
-        pop esi
+        pop rsi
 
         ; Padding needed
         sub ecx, edi
@@ -569,22 +569,22 @@ io_print_padded:
         je .ipp_right
 
         ; Left-align: print string, then pad
-        push ecx
+        push rcx
         mov eax, SYS_PRINT
         mov ebx, esi
         int 0x80
-        pop ecx
+        pop rcx
         mov al, bl
 .ipp_pad_loop:
         cmp ecx, 0
         jle .ipp_done
-        push ecx
+        push rcx
         movzx ebx, al
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         dec ecx
         jmp .ipp_pad_loop
 
@@ -594,13 +594,13 @@ io_print_padded:
 .ipp_rpad_loop:
         cmp ecx, 0
         jle .ipp_rprint
-        push ecx
-        push eax
+        push rcx
+        push rax
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         dec ecx
         jmp .ipp_rpad_loop
 .ipp_rprint:
@@ -614,7 +614,7 @@ io_print_padded:
         mov ebx, esi
         int 0x80
 .ipp_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -623,12 +623,12 @@ io_print_padded:
 ; Output: none
 ;-----------------------------------------------------------------------
 io_print_centered:
-        pushad
+        PUSHALL
         ; Get length
-        push esi
+        push rsi
         call str_len
         mov edx, eax
-        pop esi
+        pop rsi
 
         ; Column = (80 - len) / 2
         mov ebx, 80
@@ -644,7 +644,7 @@ io_print_centered:
         mov eax, SYS_PRINT
         mov ebx, esi
         int 0x80
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -653,10 +653,10 @@ io_print_centered:
 ; Output: none
 ;-----------------------------------------------------------------------
 io_beep:
-        push eax
+        push rax
         mov eax, SYS_BEEP
         int 0x80
-        pop eax
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -665,10 +665,10 @@ io_beep:
 ; Output: none
 ;-----------------------------------------------------------------------
 io_sleep:
-        push eax
+        push rax
         mov eax, SYS_SLEEP
         int 0x80
-        pop eax
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------

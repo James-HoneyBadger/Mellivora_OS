@@ -49,7 +49,7 @@ show_date:
         ; Print day-of-week name
         movzx eax, byte [date_buf + 4]   ; dow (1=Sun..7=Sat or 0=Sun)
         and eax, 7
-        mov eax, [dow_table + eax * 4]
+        mov rax, [dow_table + rax * 8]
         mov ebx, eax
         mov eax, SYS_PRINT
         int 0x80
@@ -63,7 +63,7 @@ show_date:
         cmp eax, 0
         je .bad_month
         dec eax
-        mov eax, [month_table + eax * 4]
+        mov rax, [month_table + rax * 8]
         mov ebx, eax
         mov eax, SYS_PRINT
         int 0x80
@@ -106,10 +106,10 @@ show_date:
         movzx eax, byte [date_buf]
         call bcd_to_bin
         imul eax, 100
-        push eax
+        push rax
         movzx eax, byte [date_buf + 1]
         call bcd_to_bin
-        pop ecx
+        pop rcx
         add eax, ecx
         call print_dec
 
@@ -133,31 +133,31 @@ usage:
 ; bcd_to_bin: Convert BCD byte in AL to binary in EAX
 ;--------------------------------------
 bcd_to_bin:
-        push ebx
+        push rbx
         movzx ebx, al
         shr al, 4
         movzx eax, al
         imul eax, 10
         and ebx, 0x0F
         add eax, ebx
-        pop ebx
+        pop rbx
         ret
 
 ;--------------------------------------
 ; print_padded2: Print 2-digit number in EAX with leading zero
 ;--------------------------------------
 print_padded2:
-        push eax
+        push rax
         cmp eax, 10
         jge .two
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        pop eax
+        pop rax
 .two:
         call print_dec
-        pop eax
+        pop rax
         ret
 
 ;--------------------------------------
@@ -190,7 +190,7 @@ usage_str:  db "Usage: date [-s HHMMSS]", 10, 0
 str_unk:    db "??? ", 0
 
 dow_table:
-        dd dow_sun, dow_mon, dow_tue, dow_wed, dow_thu, dow_fri, dow_sat, dow_sun
+        dq dow_sun, dow_mon, dow_tue, dow_wed, dow_thu, dow_fri, dow_sat, dow_sun
 
 dow_sun: db "Sun ", 0
 dow_mon: db "Mon ", 0
@@ -201,8 +201,8 @@ dow_fri: db "Fri ", 0
 dow_sat: db "Sat ", 0
 
 month_table:
-        dd m_jan, m_feb, m_mar, m_apr, m_may, m_jun
-        dd m_jul, m_aug, m_sep, m_oct, m_nov, m_dec
+        dq m_jan, m_feb, m_mar, m_apr, m_may, m_jun
+        dq m_jul, m_aug, m_sep, m_oct, m_nov, m_dec
 
 m_jan: db "Jan ", 0
 m_feb: db "Feb ", 0

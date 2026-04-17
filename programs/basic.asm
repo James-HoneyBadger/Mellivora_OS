@@ -84,7 +84,7 @@ start:
 ; READ LINE from keyboard into input_buf
 ;=======================================================================
 read_line:
-        pushad
+        PUSHALL
         mov edi, input_buf
         xor ecx, ecx
 
@@ -110,18 +110,18 @@ read_line:
         inc ecx
 
         ; Echo
-        push ecx
+        push rcx
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ecx
+        pop rcx
         jmp .rl_loop
 
 .rl_bs:
         cmp ecx, 0
         je .rl_loop
         dec ecx
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
@@ -131,7 +131,7 @@ read_line:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
-        pop ecx
+        pop rcx
         jmp .rl_loop
 
 .rl_cancel:
@@ -140,12 +140,12 @@ read_line:
 .rl_done:
         mov byte [edi + ecx], 0
         ; Newline
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop ecx
-        popad
+        pop rcx
+        POPALL
         ret
 
 ;=======================================================================
@@ -179,7 +179,7 @@ parse_linenum:
 ; If text is empty, delete the line
 ;=======================================================================
 store_line:
-        pushad
+        PUSHALL
         mov edx, eax            ; EDX = line number
 
         ; Check if text is empty (delete line)
@@ -204,17 +204,17 @@ store_line:
 .sl_replace:
         ; Overwrite existing line text
         add edi, 4
-        push ecx
+        push rcx
         mov ecx, MAX_LINE_LEN - 1
         call copy_str_n
-        pop ecx
-        popad
+        pop rcx
+        POPALL
         ret
 
 .sl_insert_here:
         ; Shift lines down to make room
-        push esi
-        push edx
+        push rsi
+        push rdx
         mov eax, [line_count]
         cmp eax, MAX_LINES
         jge .sl_full
@@ -232,10 +232,10 @@ store_line:
         lea eax, [esi + 4 + MAX_LINE_LEN]
         mov edi, eax
 .sl_shift:
-        push ecx
+        push rcx
         mov ecx, 4 + MAX_LINE_LEN
-        push esi
-        push edi
+        push rsi
+        push rdi
         std
         add esi, ecx
         dec esi
@@ -243,11 +243,11 @@ store_line:
         dec edi
         rep movsb
         cld
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         sub esi, 4 + MAX_LINE_LEN
         sub edi, 4 + MAX_LINE_LEN
-        pop ecx
+        pop rcx
         dec ecx
         jnz .sl_shift
 
@@ -256,21 +256,21 @@ store_line:
         mov edi, program_area
         imul ebx, 4 + MAX_LINE_LEN
         add edi, ebx
-        pop edx
+        pop rdx
         mov [edi], edx          ; Line number
         add edi, 4
-        pop esi
+        pop rsi
         mov ecx, MAX_LINE_LEN - 1
         call copy_str_n
         inc dword [line_count]
-        popad
+        POPALL
         ret
 
 .sl_full:
-        pop edx
-        pop esi
+        pop rdx
+        pop rsi
         mov byte [run_error], ERR_MEM
-        popad
+        POPALL
         ret
 
 .delete_line:
@@ -297,20 +297,20 @@ store_line:
         add esi, 4 + MAX_LINE_LEN
         mov ecx, eax
         imul ecx, 4 + MAX_LINE_LEN
-        push edi
+        push rdi
         cld
         rep movsb
-        pop edi
+        pop rdi
 .dl_done:
 .dl_notfound:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; COPY_STR_N: copy string ESI->EDI, max ECX chars, null-terminate
 ;=======================================================================
 copy_str_n:
-        push eax
+        push rax
 .csn:
         lodsb
         cmp al, 0
@@ -322,14 +322,14 @@ copy_str_n:
 .csn_pad:
         mov byte [edi], 0
 .csn_end:
-        pop eax
+        pop rax
         ret
 
 ;=======================================================================
 ; EXECUTE STATEMENT at ESI
 ;=======================================================================
 exec_statement:
-        pushad
+        PUSHALL
         call skip_spc
 
         ; Check for immediate commands first
@@ -342,6 +342,10 @@ exec_statement:
         call try_cmd_load
         jc .es_done
         call try_cmd_save
+        jc .es_done
+        call try_cmd_help
+        jc .es_done
+        call try_cmd_system
         jc .es_done
 
         ; BASIC statements
@@ -388,7 +392,7 @@ exec_statement:
         mov byte [run_error], ERR_SYNTAX
 
 .es_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -407,9 +411,9 @@ skip_spc:
 ; CF=1 if match (ESI advanced past keyword+spaces), CF=0 if no match
 ;=======================================================================
 match_kw:
-        push eax
-        push edi
-        push esi
+        push rax
+        push rdi
+        push rsi
 .mk_loop:
         mov al, [edi]
         cmp al, 0
@@ -429,16 +433,16 @@ match_kw:
         jmp .mk_loop
 .mk_match:
         ; Matched - update ESI on stack
-        add esp, 4             ; discard saved ESI
-        pop edi
-        pop eax
+        add rsp, 4             ; discard saved ESI
+        pop rdi
+        pop rax
         call skip_spc
         stc
         ret
 .mk_fail:
-        pop esi
-        pop edi
-        pop eax
+        pop rsi
+        pop rdi
+        pop rax
         clc
         ret
 
@@ -446,7 +450,7 @@ match_kw:
 ; PRINT statement: PRINT expr [";" expr ...] | "string" [;]
 ;=======================================================================
 try_print:
-        push esi
+        push rsi
         mov edi, kw_print
         call match_kw
         jnc .tp_fail
@@ -477,11 +481,11 @@ try_print:
         je .tp_sep
         cmp al, '"'
         je .tp_str_end
-        push eax
+        push rax
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop eax
+        pop rax
         inc esi
         jmp .tp_str_loop
 .tp_str_end:
@@ -500,7 +504,7 @@ try_print:
         mov ebx, 0x0A
         int 0x80
 .tp_ok:
-        add esp, 4             ; discard saved ESI
+        add rsp, 4             ; discard saved ESI
         stc
         ret
 
@@ -517,7 +521,7 @@ try_print:
         jmp .tp_item
 
 .tp_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -525,7 +529,7 @@ try_print:
 ; INPUT statement: INPUT ["prompt";] var
 ;=======================================================================
 try_input:
-        push esi
+        push rsi
         mov edi, kw_input
         call match_kw
         jnc .ti_fail
@@ -541,10 +545,10 @@ try_input:
         cmp al, 0
         je .ti_pend
         movzx ebx, al
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop eax
+        pop rax
         inc esi
         jmp .ti_ploop
 .ti_pend:
@@ -574,26 +578,26 @@ try_input:
         sub al, 'A'
         movzx ebx, al
         shl ebx, 2
-        push ebx               ; Save var offset
+        push rbx               ; Save var offset
 
         ; Read number from user
         call read_input_number
 
-        pop ebx
+        pop rbx
         mov [variables + ebx], eax
 
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .ti_err:
         mov byte [run_error], ERR_SYNTAX
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .ti_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -601,21 +605,21 @@ try_input:
 ; LET statement: LET var = expr  (or implicit: var = expr)
 ;=======================================================================
 try_let:
-        push esi
+        push rsi
         mov edi, kw_let
         call match_kw
         jnc .tl_fail
         call do_assignment
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tl_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_implicit_let:
-        push esi
+        push rsi
         mov al, [esi]
         call to_upper
         cmp al, 'A'
@@ -623,7 +627,7 @@ try_implicit_let:
         cmp al, 'Z'
         jg .til_fail
         ; Check next char is = or space then = or ( for array
-        push eax
+        push rax
         mov al, [esi + 1]
         cmp al, '='
         je .til_ok
@@ -635,15 +639,15 @@ try_implicit_let:
         cmp al, '='
         jne .til_fail2
 .til_ok:
-        pop eax
+        pop rax
         call do_assignment
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .til_fail2:
-        pop eax
+        pop rax
 .til_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -659,21 +663,21 @@ do_assignment:
         je .da_array
 
         shl ebx, 2
-        push ebx
+        push rbx
         call skip_spc
         cmp byte [esi], '='
         jne .da_err
         inc esi
         call skip_spc
         call eval_expr
-        pop ebx
+        pop rbx
         mov [variables + ebx], eax
         ret
 
 .da_array:
         ; Array assignment
         inc esi                 ; skip (
-        push ebx               ; var index
+        push rbx               ; var index
         call eval_expr          ; index
         cmp byte [esi], ')'
         jne .da_arr_err
@@ -683,13 +687,13 @@ do_assignment:
         jne .da_arr_err
         inc esi
         call skip_spc
-        push eax               ; array index
+        push rax               ; array index
         call eval_expr          ; value
         mov ecx, eax            ; value to store
-        pop eax                 ; array index
-        pop ebx                 ; var index
+        pop rax                 ; array index
+        pop rbx                 ; var index
         ; Find array
-        push esi
+        push rsi
         mov esi, array_table
         mov edx, MAX_ARRAYS
 .da_arr_find:
@@ -698,7 +702,7 @@ do_assignment:
         add esi, 4 + ARRAY_MAX_SIZE * 4
         dec edx
         jnz .da_arr_find
-        pop esi
+        pop rsi
         mov byte [run_error], ERR_SYNTAX
         ret
 .da_arr_store:
@@ -707,18 +711,18 @@ do_assignment:
         cmp eax, ARRAY_MAX_SIZE
         jge .da_arr_bad
         mov [esi + 4 + eax * 4], ecx
-        pop esi
+        pop rsi
         ret
 .da_arr_bad:
-        pop esi
+        pop rsi
         mov byte [run_error], ERR_SYNTAX
         ret
 .da_arr_err:
-        pop ebx
+        pop rbx
         mov byte [run_error], ERR_SYNTAX
         ret
 .da_err:
-        pop ebx
+        pop rbx
         mov byte [run_error], ERR_SYNTAX
         ret
 
@@ -726,14 +730,14 @@ do_assignment:
 ; IF statement: IF expr rel expr THEN statement
 ;=======================================================================
 try_if:
-        push esi
+        push rsi
         mov edi, kw_if
         call match_kw
         jnc .tif_fail
 
         ; Evaluate left side
         call eval_expr
-        push eax
+        push rax
 
         ; Get comparison operator
         call skip_spc
@@ -781,7 +785,7 @@ try_if:
         call skip_spc
         call eval_expr
         mov ecx, eax            ; RHS
-        pop ebx                  ; LHS
+        pop rbx                  ; LHS
 
         ; Compare
         cmp dl, 1
@@ -832,25 +836,25 @@ try_if:
         ; Execute statement after THEN
         call exec_statement
 .tif_no_then:
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tif_false:
         ; Condition false - skip rest of line
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tif_err:
-        add esp, 4              ; clean up pushed LHS
+        add rsp, 4              ; clean up pushed LHS
         mov byte [run_error], ERR_SYNTAX
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tif_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -858,18 +862,18 @@ try_if:
 ; GOTO statement
 ;=======================================================================
 try_goto:
-        push esi
+        push rsi
         mov edi, kw_goto
         call match_kw
         jnc .tg_fail
         call eval_expr
         mov [goto_target], eax
         mov byte [goto_flag], 1
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tg_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -877,7 +881,7 @@ try_goto:
 ; GOSUB / RETURN
 ;=======================================================================
 try_gosub:
-        push esi
+        push rsi
         mov edi, kw_gosub
         call match_kw
         jnc .tgs_fail
@@ -892,21 +896,21 @@ try_gosub:
         call eval_expr
         mov [goto_target], eax
         mov byte [goto_flag], 1
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tgs_overflow:
         mov byte [run_error], ERR_GOSUB
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tgs_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_return:
-        push esi
+        push rsi
         mov edi, kw_return
         call match_kw
         jnc .tr_fail
@@ -919,16 +923,16 @@ try_return:
         inc ebx                 ; Return to NEXT line after GOSUB
         mov [return_line_idx], ebx
         mov byte [return_flag], 1
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tr_underflow:
         mov byte [run_error], ERR_RETURN
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tr_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -936,7 +940,7 @@ try_return:
 ; FOR / NEXT
 ;=======================================================================
 try_for:
-        push esi
+        push rsi
         mov edi, kw_for
         call match_kw
         jnc .tf_fail
@@ -961,8 +965,8 @@ try_for:
 
         ; Start value
         call eval_expr
-        push eax                ; start val
-        push edx                ; var index
+        push rax                ; start val
+        push rdx                ; var index
 
         ; Expect TO
         call skip_spc
@@ -975,25 +979,25 @@ try_for:
         mov ecx, eax            ; end value
 
         ; Check for STEP
-        push ecx
+        push rcx
         call skip_spc
-        push esi
+        push rsi
         mov edi, kw_step
         call match_kw
         jnc .tf_no_step
         call eval_expr
         mov ebp, eax            ; step value
-        add esp, 4              ; pop saved esi
-        pop ecx
+        add rsp, 4              ; pop saved esi
+        pop rcx
         jmp .tf_have_step
 .tf_no_step:
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         mov ebp, 1              ; default step = 1
 .tf_have_step:
 
-        pop edx                 ; var index
-        pop eax                 ; start value
+        pop rdx                 ; var index
+        pop rax                 ; start value
 
         ; Set variable to start
         mov [variables + edx * 4], eax
@@ -1010,25 +1014,25 @@ try_for:
         mov [for_stack + ebx + 12], ebp     ; step value
         inc dword [for_sp]
 
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tf_err2:
-        add esp, 8
+        add rsp, 8
 .tf_err:
         mov byte [run_error], ERR_SYNTAX
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tf_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_next:
-        push esi
+        push rsi
         mov edi, kw_next
         call match_kw
         jnc .tn_fail
@@ -1095,25 +1099,25 @@ try_next:
         inc ebx
         mov [return_line_idx], ebx
         mov byte [return_flag], 1
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tn_done_loop:
         ; Pop FOR frame
         dec dword [for_sp]
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tn_err:
         mov byte [run_error], ERR_FOR
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tn_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -1121,50 +1125,50 @@ try_next:
 ; END / REM / CLS / COLOR / BEEP
 ;=======================================================================
 try_end:
-        push esi
+        push rsi
         mov edi, kw_end
         call match_kw
         jnc .te_fail
         mov byte [end_flag], 1
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .te_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_rem:
-        push esi
+        push rsi
         mov edi, kw_rem
         call match_kw
         jnc .trem_fail
         ; Skip rest of line (it's a comment)
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .trem_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_cls:
-        push esi
+        push rsi
         mov edi, kw_cls
         call match_kw
         jnc .tcls_fail
         mov eax, SYS_CLEAR
         int 0x80
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tcls_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_color:
-        push esi
+        push rsi
         mov edi, kw_color
         call match_kw
         jnc .tclr_fail
@@ -1172,16 +1176,16 @@ try_color:
         mov ebx, eax
         mov eax, SYS_SETCOLOR
         int 0x80
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tclr_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_beep_stmt:
-        push esi
+        push rsi
         mov edi, kw_beep
         call match_kw
         jnc .tb_fail
@@ -1189,11 +1193,11 @@ try_beep_stmt:
         mov ebx, 1000
         mov ecx, 15
         int 0x80
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tb_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -1201,7 +1205,7 @@ try_beep_stmt:
 ; POKE address, value
 ;---------------------------------------
 try_poke:
-        push esi
+        push rsi
         mov edi, kw_poke
         call match_kw
         jnc .tpk_fail
@@ -1215,16 +1219,16 @@ try_poke:
         call eval_expr
         ; Write byte
         mov [edx], al
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tpk_err:
         mov byte [run_error], ERR_SYNTAX
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tpk_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -1232,7 +1236,7 @@ try_poke:
 ; SLEEP expr (in centiseconds / ticks)
 ;---------------------------------------
 try_sleep:
-        push esi
+        push rsi
         mov edi, kw_sleep
         call match_kw
         jnc .tsl_fail
@@ -1240,11 +1244,11 @@ try_sleep:
         mov ebx, eax
         mov eax, SYS_SLEEP
         int 0x80
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tsl_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -1252,7 +1256,7 @@ try_sleep:
 ; DIM var(size) - Allocate an array
 ;---------------------------------------
 try_dim:
-        push esi
+        push rsi
         mov edi, kw_dim
         call match_kw
         jnc .tdm_fail
@@ -1286,8 +1290,8 @@ try_dim:
         jl .tdm_err
 
         ; Find free array slot or existing for this var
-        push eax
-        push edx
+        push rax
+        push rdx
         mov edi, array_table
         mov ecx, MAX_ARRAYS
 .tdm_find:
@@ -1299,50 +1303,50 @@ try_dim:
         dec ecx
         jnz .tdm_find
         ; No free slot
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
         mov byte [run_error], ERR_MEM
-        add esp, 4
+        add rsp, 4
         stc
         ret
 
 .tdm_alloc:
         ; Allocate: set var id
-        pop edx
+        pop rdx
         mov [edi], edx
         jmp .tdm_zero
 
 .tdm_reinit:
-        pop edx                 ; discard
+        pop rdx                 ; discard
 
 .tdm_zero:
-        pop eax                 ; size
+        pop rax                 ; size
         ; Zero the array data
-        push eax
-        push edi
+        push rax
+        push rdi
         add edi, 4
         mov ecx, ARRAY_MAX_SIZE
-        push eax
+        push rax
         xor eax, eax
         rep stosd
-        pop eax
-        pop edi
+        pop rax
+        pop rdi
         ; Store size at last position (used for bounds checking)
         ; We store it after the data: [edi + 4 + ARRAY_MAX_SIZE * 4 - 4]
         ; Actually store at a known offset — just use the variable's dim size
         ; We'll keep it simple: arrays are always ARRAY_MAX_SIZE elements
-        pop eax
-        add esp, 4
+        pop rax
+        add rsp, 4
         stc
         ret
 
 .tdm_err:
         mov byte [run_error], ERR_SYNTAX
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tdm_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -1350,80 +1354,126 @@ try_dim:
 ; IMMEDIATE COMMANDS: RUN, LIST, NEW, LOAD, SAVE
 ;=======================================================================
 try_cmd_run:
-        push esi
+        push rsi
         mov edi, kw_run
         call match_kw
         jnc .tcr_fail
         call run_program
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tcr_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_cmd_list:
-        push esi
+        push rsi
         mov edi, kw_list
         call match_kw
         jnc .tcl_fail
         call list_program
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tcl_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_cmd_new:
-        push esi
+        push rsi
         mov edi, kw_new
         call match_kw
         jnc .tcn_fail
         mov dword [line_count], 0
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tcn_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_cmd_load:
-        push esi
+        push rsi
         mov edi, kw_load
         call match_kw
         jnc .tclod_fail
         call cmd_load
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tclod_fail:
-        pop esi
+        pop rsi
         clc
         ret
 
 try_cmd_save:
-        push esi
+        push rsi
         mov edi, kw_save
         call match_kw
         jnc .tcsv_fail
         call cmd_save
-        add esp, 4
+        add rsp, 4
         stc
         ret
 .tcsv_fail:
-        pop esi
+        pop rsi
         clc
+        ret
+
+try_cmd_help:
+        push rsi
+        mov edi, kw_help
+        call match_kw
+        jnc .tch_fail
+        call cmd_help
+        add rsp, 4
+        stc
+        ret
+.tch_fail:
+        pop rsi
+        clc
+        ret
+
+try_cmd_system:
+        push rsi
+        mov edi, kw_system
+        call match_kw
+        jnc .tcsys_fail
+        ; Exit BASIC, return to shell
+        mov eax, SYS_EXIT
+        xor ebx, ebx
+        int 0x80
+        ; Does not return
+.tcsys_fail:
+        pop rsi
+        clc
+        ret
+
+;---------------------------------------
+; cmd_help - Print available commands
+;---------------------------------------
+cmd_help:
+        PUSHALL
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x0E
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, msg_help
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x07
+        int 0x80
+        POPALL
         ret
 
 ;=======================================================================
 ; RUN PROGRAM
 ;=======================================================================
 run_program:
-        pushad
+        PUSHALL
         mov dword [current_line_idx], 0
         mov dword [gosub_sp], 0
         mov dword [for_sp], 0
@@ -1504,11 +1554,11 @@ run_program:
         jge .re_noline
         imul eax, 4 + MAX_LINE_LEN
         mov eax, [program_area + eax]
-        push eax
+        push rax
         mov eax, SYS_PRINT
         mov ebx, msg_at_line
         int 0x80
-        pop eax
+        pop rax
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
@@ -1520,14 +1570,14 @@ run_program:
 
 .run_end:
         mov byte [run_error], 0
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; LIST PROGRAM
 ;=======================================================================
 list_program:
-        pushad
+        PUSHALL
         mov ecx, [line_count]
         cmp ecx, 0
         je .lp_empty
@@ -1540,14 +1590,14 @@ list_program:
         call print_dec
 
         ; Print space
-        push ebx
+        push rbx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ebx
+        pop rbx
 
         ; Print line text
-        push ebx
+        push rbx
         lea ebx, [edi + 4]
         mov eax, SYS_PRINT
         int 0x80
@@ -1555,7 +1605,7 @@ list_program:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop ebx
+        pop rbx
 
         add edi, 4 + MAX_LINE_LEN
         inc ebx
@@ -1563,7 +1613,7 @@ list_program:
         jl .lp_loop
 
 .lp_empty:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1577,7 +1627,7 @@ eval_expr:
 
 eval_add_sub:
         call eval_mul_div
-        push eax
+        push rax
 
 .eas_loop:
         call skip_spc
@@ -1585,31 +1635,31 @@ eval_add_sub:
         je .eas_add
         cmp byte [esi], '-'
         je .eas_sub
-        pop eax
+        pop rax
         ret
 
 .eas_add:
         inc esi
         call skip_spc
         call eval_mul_div
-        pop ebx
+        pop rbx
         add eax, ebx
-        push eax
+        push rax
         jmp .eas_loop
 
 .eas_sub:
         inc esi
         call skip_spc
         call eval_mul_div
-        pop ebx
+        pop rbx
         sub ebx, eax
         mov eax, ebx
-        push eax
+        push rax
         jmp .eas_loop
 
 eval_mul_div:
         call eval_unary
-        push eax
+        push rax
 
 .emd_loop:
         call skip_spc
@@ -1619,16 +1669,16 @@ eval_mul_div:
         je .emd_div
         cmp byte [esi], '%'
         je .emd_mod
-        pop eax
+        pop rax
         ret
 
 .emd_mul:
         inc esi
         call skip_spc
         call eval_unary
-        pop ebx
+        pop rbx
         imul eax, ebx
-        push eax
+        push rax
         jmp .emd_loop
 
 .emd_div:
@@ -1638,10 +1688,10 @@ eval_mul_div:
         cmp eax, 0
         je .emd_div0
         mov ebx, eax
-        pop eax
+        pop rax
         cdq
         idiv ebx
-        push eax
+        push rax
         jmp .emd_loop
 
 .emd_mod:
@@ -1651,16 +1701,16 @@ eval_mul_div:
         cmp eax, 0
         je .emd_div0
         mov ebx, eax
-        pop eax
+        pop rax
         cdq
         idiv ebx
         mov eax, edx
-        push eax
+        push rax
         jmp .emd_loop
 
 .emd_div0:
         mov byte [run_error], ERR_DIV0
-        pop eax
+        pop rax
         xor eax, eax
         ret
 
@@ -1718,7 +1768,7 @@ eval_atom:
 
 .ea_rnd:
         ; RND function?
-        push esi
+        push rsi
         mov edi, kw_rnd
         call match_kw
         jnc .ea_peek
@@ -1732,9 +1782,9 @@ eval_atom:
         jne .ea_rnd_noarg
         inc esi
         ; EAX = max value
-        push eax
+        push rax
         call random
-        pop ebx
+        pop rbx
         cmp ebx, 0
         je .ea_rnd_done
         xor edx, edx
@@ -1811,14 +1861,14 @@ eval_atom:
         sub al, 'A'
         movzx edx, al          ; var letter index
         add esi, 2              ; skip letter and (
-        push edx
+        push rdx
         call eval_expr
-        pop edx
+        pop rdx
         cmp byte [esi], ')'
         jne .ea_arr_err
         inc esi
         ; Find array for variable edx
-        push esi
+        push rsi
         mov esi, array_table
         mov ecx, MAX_ARRAYS
 .ea_arr_find:
@@ -1827,7 +1877,7 @@ eval_atom:
         add esi, 4 + ARRAY_MAX_SIZE * 4
         dec ecx
         jnz .ea_arr_find
-        pop esi
+        pop rsi
         mov byte [run_error], ERR_SYNTAX
         xor eax, eax
         ret
@@ -1838,10 +1888,10 @@ eval_atom:
         cmp eax, ARRAY_MAX_SIZE
         jge .ea_arr_bounds
         mov eax, [esi + 4 + eax * 4]
-        pop esi
+        pop rsi
         ret
 .ea_arr_bounds:
-        pop esi
+        pop rsi
         mov byte [run_error], ERR_SYNTAX
         xor eax, eax
         ret
@@ -1851,9 +1901,9 @@ eval_atom:
         ret
 
 .ea_err2:
-        pop esi
+        pop rsi
 .ea_err:
-        pop esi
+        pop rsi
         mov byte [run_error], ERR_SYNTAX
         xor eax, eax
         ret
@@ -1878,18 +1928,18 @@ eval_atom:
 ; PRINT SIGNED INTEGER in EAX
 ;=======================================================================
 print_signed:
-        pushad
+        PUSHALL
         test eax, eax
         jns .ps_pos
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '-'
         int 0x80
-        pop eax
+        pop rax
         neg eax
 .ps_pos:
         call print_dec
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1908,12 +1958,12 @@ to_upper:
 ; READ NUMBER from keyboard for INPUT
 ;=======================================================================
 read_input_number:
-        push ecx
-        push edx
-        push ebx
+        push rcx
+        push rdx
+        push rbx
         xor ecx, ecx           ; sign (0=pos, 1=neg)
         xor esi, esi            ; accumulator... reuse
-        push esi
+        push rsi
         xor esi, esi
         mov edi, input_buf
 
@@ -1936,11 +1986,11 @@ read_input_number:
         jg .rin_loop
 
         ; Echo
-        push eax
+        push rax
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop eax
+        pop rax
 
         sub al, '0'
         movzx eax, al
@@ -1950,11 +2000,11 @@ read_input_number:
 
 .rin_neg:
         xor ecx, 1
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '-'
         int 0x80
-        pop eax
+        pop rax
         jmp .rin_loop
 
 .rin_bs:
@@ -1964,7 +2014,7 @@ read_input_number:
         mov ebx, 10
         div ebx
         mov esi, eax
-        push esi
+        push rsi
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
@@ -1974,49 +2024,49 @@ read_input_number:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
-        pop esi
+        pop rsi
         jmp .rin_loop
 
 .rin_done:
         ; Newline
-        push esi
+        push rsi
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop esi
+        pop rsi
 
         mov eax, esi
         cmp ecx, 0
         je .rin_pos
         neg eax
 .rin_pos:
-        add esp, 4              ; pop saved esi
-        pop ebx
-        pop edx
-        pop ecx
+        add rsp, 4              ; pop saved esi
+        pop rbx
+        pop rdx
+        pop rcx
         ret
 
 ;=======================================================================
 ; RANDOM number generator (LCG)
 ;=======================================================================
 random:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov eax, [rand_seed]
         imul eax, 1103515245
         add eax, 12345
         mov [rand_seed], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ;=======================================================================
 ; PRINT ERROR MESSAGE
 ;=======================================================================
 print_error:
-        pushad
+        PUSHALL
         movzx eax, byte [run_error]
         cmp eax, ERR_SYNTAX
         je .pe_syntax
@@ -2063,23 +2113,23 @@ print_error:
         mov ebx, err_generic_msg
 .pe_print:
         mov eax, SYS_SETCOLOR
-        push ebx
+        push rbx
         mov ebx, 0x0C
         int 0x80
-        pop ebx
+        pop rbx
         mov eax, SYS_PRINT
         int 0x80
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; LOAD file: ESI = filename
 ;=======================================================================
 cmd_load:
-        pushad
+        PUSHALL
         ; Get filename from input
         call skip_spc
         cmp byte [esi], '"'
@@ -2143,7 +2193,7 @@ cmd_load:
         je .cl_parse
 
         ; Parse line number and store
-        push esi
+        push rsi
         mov esi, input_buf
         movzx eax, byte [esi]
         cmp al, '0'
@@ -2153,21 +2203,21 @@ cmd_load:
         call parse_linenum
         call store_line
 .cl_skip_line:
-        pop esi
+        pop rsi
         jmp .cl_parse
 
 .cl_done:
         mov eax, SYS_PRINT
         mov ebx, msg_loaded
         int 0x80
-        popad
+        POPALL
         ret
 
 .cl_err:
         mov byte [run_error], ERR_FILE
         call print_error
         mov byte [run_error], 0
-        popad
+        POPALL
         ret
 
 .cl_copy_word:
@@ -2186,7 +2236,7 @@ cmd_load:
 ; LOAD from command-line args
 ;=======================================================================
 cmd_load_from_args:
-        pushad
+        PUSHALL
         mov esi, input_buf
         call skip_spc
         mov edi, filename_tmp
@@ -2232,7 +2282,7 @@ cmd_load_from_args:
         mov byte [edi], 0
         cmp ecx, 0
         je .cla_parse
-        push esi
+        push rsi
         mov esi, input_buf
         movzx eax, byte [esi]
         cmp al, '0'
@@ -2242,24 +2292,24 @@ cmd_load_from_args:
         call parse_linenum
         call store_line
 .cla_sk:
-        pop esi
+        pop rsi
         jmp .cla_parse
 
 .cla_loaded:
         mov eax, SYS_PRINT
         mov ebx, msg_loaded
         int 0x80
-        popad
+        POPALL
         ret
 .cla_err:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; SAVE program to file
 ;=======================================================================
 cmd_save:
-        pushad
+        PUSHALL
         call skip_spc
         cmp byte [esi], '"'
         je .cs_quoted
@@ -2292,8 +2342,8 @@ cmd_save:
 
 .cs_line:
         ; Write line number as text
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov eax, [esi]
         call write_dec_to_buf    ; writes to EDI, advances EDI, adds to EDX
         mov byte [edi], ' '
@@ -2301,7 +2351,7 @@ cmd_save:
         inc edx
 
         ; Write line text
-        push esi
+        push rsi
         add esi, 4
 .cs_text:
         lodsb
@@ -2315,9 +2365,9 @@ cmd_save:
         mov byte [edi], 0x0A
         inc edi
         inc edx
-        pop esi
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rcx
+        pop rbx
 
         add esi, 4 + MAX_LINE_LEN
         inc ebx
@@ -2337,14 +2387,14 @@ cmd_save:
         mov eax, SYS_PRINT
         mov ebx, msg_saved_file
         int 0x80
-        popad
+        POPALL
         ret
 
 .cs_err:
         mov byte [run_error], ERR_FILE
         call print_error
         mov byte [run_error], 0
-        popad
+        POPALL
         ret
 
 .cs_copy_word:
@@ -2363,7 +2413,7 @@ cmd_save:
 ; WRITE DECIMAL to buffer at EDI (advances EDI, adds count to EDX)
 ;=======================================================================
 write_dec_to_buf:
-        pushad
+        PUSHALL
         xor ecx, ecx
         mov ebx, 10
         test eax, eax
@@ -2371,31 +2421,31 @@ write_dec_to_buf:
         mov byte [edi], '0'
         inc edi
         inc edx
-        mov [esp + 20], edi     ; update EDI in pushad frame
-        mov [esp + 24], edx     ; update EDX
-        popad
+        mov [rsp + 72], edi     ; update EDI in PUSHALL frame
+        mov [rsp + 96], edx     ; update EDX
+        POPALL
         ret
 .wd_nz:
 .wd_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .wd_push
-        mov edx, [esp + (ecx * 4) + 24]  ; original EDX from pushad
-        mov edi, [esp + (ecx * 4) + 20]  ; original EDI from pushad
+        mov edx, [rsp + rcx * 8 + 88]  ; original EDX from PUSHALL (FRAME_RDX=88)
+        mov edi, [rsp + rcx * 8 + 72]  ; original EDI from PUSHALL (FRAME_RDI=72)
 .wd_pop:
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
         inc edx
         dec ecx
         jnz .wd_pop
-        mov [esp + 20], edi
-        mov [esp + 24], edx
-        popad
+        mov [rsp + 72], edi
+        mov [rsp + 96], edx
+        POPALL
         ret
 
 ;=======================================================================
@@ -2442,11 +2492,40 @@ kw_abs:         db "ABS", 0
 kw_time:        db "TIME", 0
 kw_sleep:       db "SLEEP", 0
 kw_dim:         db "DIM", 0
+kw_help:        db "HELP", 0
+kw_system:      db "SYSTEM", 0
 
 ; Messages
 msg_banner:     db "Mellivora BASIC v2.2", 0x0A
                 db "====================", 0x0A
                 db "Type HELP for commands", 0x0A, 0
+msg_help:       db "Mellivora BASIC Commands", 0x0A
+                db "========================", 0x0A
+                db 'PRINT expr/"text"  Display output', 0x0A
+                db "INPUT var          Read from keyboard", 0x0A
+                db "LET var = expr     Assign variable (A-Z)", 0x0A
+                db "IF expr THEN stmt  Conditional", 0x0A
+                db "GOTO line          Jump to line number", 0x0A
+                db "GOSUB line         Call subroutine", 0x0A
+                db "RETURN             Return from GOSUB", 0x0A
+                db "FOR v=a TO b [STEP c]  Loop", 0x0A
+                db "NEXT var           End of FOR loop", 0x0A
+                db "DIM var(size)      Declare array", 0x0A
+                db "PEEK(addr)         Read memory byte", 0x0A
+                db "POKE addr, val     Write memory byte", 0x0A
+                db "COLOR n            Set text colour", 0x0A
+                db "CLS                Clear screen", 0x0A
+                db "BEEP               Play beep sound", 0x0A
+                db "SLEEP n            Pause n centiseconds", 0x0A
+                db "REM text           Comment line", 0x0A
+                db "END                Stop program", 0x0A
+                db "RUN                Run program", 0x0A
+                db "LIST               List program", 0x0A
+                db "NEW                Clear program", 0x0A
+                db 'LOAD "file"       Load from disk', 0x0A
+                db 'SAVE "file"       Save to disk', 0x0A
+                db "HELP               Show this help", 0x0A
+                db "SYSTEM             Exit to shell", 0x0A, 0
 msg_ready:      db "Ready.", 0x0A, 0
 msg_prompt:     db "] ", 0
 msg_input_prompt: db "? ", 0

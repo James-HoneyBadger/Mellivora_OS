@@ -48,7 +48,7 @@ start:
 ; Draw the maze
 ;---------------------------------------
 draw_maze:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
         xor edx, edx
@@ -128,7 +128,7 @@ draw_maze:
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -136,7 +136,7 @@ draw_maze:
 ; Uses stack-based DFS with PRNG for direction shuffling
 ;---------------------------------------
 generate_maze:
-        pushad
+        PUSHALL
         ; Fill with walls
         mov edi, maze
         mov ecx, MAZE_SZ
@@ -147,7 +147,7 @@ generate_maze:
         mov dword [stack_ptr], 0
         mov eax, 1*MAZE_W + 1
         mov byte [maze + eax], PATH
-        push eax               ; push starting cell
+        push rax               ; push starting cell
 
         ; Push to DFS stack
         mov edi, [stack_ptr]
@@ -248,14 +248,14 @@ generate_maze:
         ; Carve the wall between current and chosen
         mov byte [maze + eax], PATH
         ; Find wall cell (midpoint)
-        push eax
+        push rax
         mov ebx, [.cur_row]
         imul ebx, MAZE_W
         add ebx, [.cur_col]
         add ebx, eax
         shr ebx, 1              ; midpoint index
         mov byte [maze + ebx], PATH
-        pop eax
+        pop rax
 
         ; Push chosen onto stack
         mov ecx, [stack_ptr]
@@ -272,8 +272,8 @@ generate_maze:
         mov byte [maze + 1*MAZE_W + 1], START
         mov eax, (MAZE_H-2)*MAZE_W + (MAZE_W-2)
         mov byte [maze + eax], GOAL
-        pop eax
-        popad
+        pop rax
+        POPALL
         ret
 
 .cur_row:   dd 0
@@ -286,7 +286,7 @@ generate_maze:
 ; Solve maze using BFS
 ;---------------------------------------
 solve_maze:
-        pushad
+        PUSHALL
         ; Clear visited
         mov edi, visited
         mov ecx, MAZE_SZ
@@ -357,11 +357,11 @@ solve_maze:
         je .bfs_tr
         mov byte [visited + edx], 1
         mov [parent + edx*4], eax
-        push ecx
+        push rcx
         mov ecx, [q_tail]
         mov [bfs_queue + ecx*4], edx
         inc dword [q_tail]
-        pop ecx
+        pop rcx
 .bfs_tr:
         ret
 
@@ -380,21 +380,21 @@ solve_maze:
         jne .bfs_trace
 
 .bfs_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Simple PRNG (LCG)
 ;---------------------------------------
 prng:
-        push ebx
+        push rbx
         mov eax, [prng_state]
         imul eax, 1103515245
         add eax, 12345
         mov [prng_state], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop ebx
+        pop rbx
         ret
 
 ;---------------------------------------

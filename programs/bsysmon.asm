@@ -47,7 +47,7 @@ start:
 ; render_info - Draw system info panel
 ;=======================================
 render_info:
-        pushad
+        PUSHALL
 
         ; Background
         mov eax, [win_id]
@@ -199,7 +199,7 @@ render_info:
         mov esi, val_desktop
         call draw_value
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -207,19 +207,19 @@ render_info:
 ; ESI = label string
 ;---------------------------------------
 draw_label:
-        push eax
-        push ebx
-        push ecx
-        push edi
+        push rax
+        push rbx
+        push rcx
+        push rdi
         mov eax, [win_id]
         mov ebx, 10
         mov ecx, [line_y]
         mov edi, 0x00809CBA
         call gui_draw_text
-        pop edi
-        pop ecx
-        pop ebx
-        pop eax
+        pop rdi
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ;---------------------------------------
@@ -227,19 +227,19 @@ draw_label:
 ; ESI = value string
 ;---------------------------------------
 draw_value:
-        push eax
-        push ebx
-        push ecx
-        push edi
+        push rax
+        push rbx
+        push rcx
+        push rdi
         mov eax, [win_id]
         mov ebx, 150
         mov ecx, [line_y]
         mov edi, 0x00E0E8F0
         call gui_draw_text
-        pop edi
-        pop ecx
-        pop ebx
-        pop eax
+        pop rdi
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ;---------------------------------------
@@ -248,14 +248,14 @@ draw_value:
 ; Output: DL = tens digit, AL = ones digit
 ;---------------------------------------
 byte_to_dec:
-        push ecx
+        push rcx
         mov dl, al
         shr dl, 4
         and dl, 0x0F
         add dl, '0'
         and al, 0x0F
         add al, '0'
-        pop ecx
+        pop rcx
         ret
 
 ; ---- Data ----
@@ -275,7 +275,7 @@ lbl_vidmem:     db "Video:", 0
 val_vidmem:     db "640x480x32 VBE", 0
 
 lbl_arch:       db "CPU:", 0
-val_arch:       db "i486+ (32-bit)", 0
+val_arch:       db "Core 2 Duo+ (64-bit)", 0
 
 lbl_disk:       db "Disk:", 0
 val_disk:       db "2 GB HBFS", 0

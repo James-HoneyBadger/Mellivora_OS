@@ -45,7 +45,7 @@ anyone who wants to understand how the system works under the hood.
 ## Boot Sequence
 
 Mellivora boots in three stages: a 512-byte MBR bootloader, a 16 KB second stage, and
-the 32-bit protected-mode kernel.
+the 64-bit long-mode kernel.
 
 ### Stage 1 — MBR Bootloader (boot.asm)
 
@@ -59,9 +59,9 @@ The BIOS loads the first sector (512 bytes) of the disk to `0x7C00`.
 5. Verifies the Stage 2 magic number `'BOS2'` (dword at `0x7E00`)
 6. Jumps to `0x0000:0x7E04` (skipping the 4-byte magic), passing boot drive in `DL`
 
-### Stage 2 — Protected Mode Setup (stage2.asm)
+### Stage 2 — Long Mode Setup (stage2.asm)
 
-Stage 2 runs at `0x7E00` in real mode and transitions to 32-bit protected mode.
+Stage 2 runs at `0x7E00` in real mode and transitions to 64-bit long mode.
 
 1. Re-initializes segments and stack (`SP=0x7C00`)
 2. Sets VGA mode `0x03` (80×25 text), draws a blue splash/title bar at `0xB800`
@@ -69,36 +69,44 @@ Stage 2 runs at `0x7E00` in real mode and transitions to 32-bit protected mode.
 4. Loads the kernel from disk starting at **LBA 33**, reading the generated
    `KERNEL_SECTORS` value from `kernel_sectors.inc` into low memory at `0x20000`
    (segment `0x2000`), in chunks of up to 64 sectors
-5. Enters protected mode:
+5. Enters 32-bit protected mode (temporary):
    - Loads the GDT (`lgdt [gdt_descriptor]`)
    - Sets CR0 PE bit
-   - Far-jumps to `0x08:pmode_entry`
-6. In 32-bit mode: sets all segment registers to `0x10` (kernel data), `ESP = 0x9FC00`
+   - Far-jumps to `0x38:pm32_entry` (temporary 32-bit code segment)
+6. In 32-bit mode: sets all segment registers to `0x10` (kernel data), `RSP = 0x003FF000`
 7. Stores boot info at fixed addresses:
    - Boot drive → `[0x500]`
    - Memory map count → `[0x504]`
    - Memory map pointer → `[0x508]`
 8. Copies kernel from `0x20000` to `0x00100000` (1 MB) via `REP MOVSD`
-9. Jumps to `0x08:0x00100000` — kernel entry point
+9. Builds 4-level page tables at `0x70000` (identity-maps 4 GB with 2 MB pages)
+10. Enables PAE (CR4 bit 5), OSFXSR (bit 9), OSXMMEXCPT (bit 10)
+11. Loads PML4 base (`0x70000`) into CR3
+12. Enables Long Mode via IA32_EFER MSR (bit 8 = LME)
+13. Enables paging (CR0 bit 31) — this activates long mode
+14. Far-jumps to `0x08:lmode_entry` (64-bit kernel code segment)
+15. In 64-bit mode: sets segment registers to `0x10`, `RSP = 0x003FF000`
+16. Jumps to `0x00100000` — kernel entry point
 
 ### Stage 3 — Kernel Entry (kernel.asm)
 
-The kernel starts executing at 1 MB in 32-bit protected mode.
+The kernel starts executing at 1 MB in 64-bit long mode (paging already active from
+Stage 2).
 
 1. Initializes all subsystems in order:
    - VGA clear screen
    - PIC remapping (IRQs to INT 0x20–0x2F)
-   - IDT setup (256 entries)
+   - IDT setup (256 entries, 16-byte 64-bit gate descriptors)
    - PIT timer (100 Hz)
    - Keyboard driver
    - PMM (using E820 map)
    - ATA/IDE disk detection
    - Serial port (COM1 at 115200 baud)
-   - TSS (Ring 3 support)
+   - TSS (Ring 3 support, 16-byte 64-bit TSS descriptor)
    - Scheduler (task table, quantum)
-   - IPC (pipes and shared memory)
+   - IPC (pipes, shared memory, and message queues)
    - Network stack (RTL8139, ARP, TCP/IP)
-   - Paging (identity-map 128 MB + LFB)
+   - VBE LFB page mapping (identity-map LFB pages via 2 MB PD entries)
    - PS/2 mouse driver
    - Sound Blaster 16 audio driver
    - VBE/BGA framebuffer detection
@@ -125,18 +133,24 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
 
 ## Global Descriptor Table (GDT)
 
-The GDT is defined in Stage 2 and uses a flat 4 GB memory model with 6 entries:
+The GDT is defined in Stage 2 with 8 entries supporting 64-bit long mode:
 
-| Selector | Name | Base | Limit | Access | Flags | Ring | Description |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `0x00` | Null | — | — | — | — | — | Required null descriptor |
-| `0x08` | Kernel Code | 0 | 4 GB | `0x9A` | `0xCF` | 0 | Execute/Read, 32-bit, 4K gran |
-| `0x10` | Kernel Data | 0 | 4 GB | `0x92` | `0xCF` | 0 | Read/Write, 32-bit, 4K gran |
-| `0x18` | User Code | 0 | 4 GB | `0xFA` | `0xCF` | 3 | Execute/Read, 32-bit, 4K gran |
-| `0x20` | User Data | 0 | 4 GB | `0xF2` | `0xCF` | 3 | Read/Write, 32-bit, 4K gran |
-| `0x28` | TSS | Runtime | 104 B | `0x89` | `0x00` | 0 | Task State Segment |
+| Selector | Name | Access | Flags | Ring | Description |
+| --- | --- | --- | --- | --- | --- |
+| `0x00` | Null | — | — | — | Required null descriptor |
+| `0x08` | Kernel Code | `0x9A` | `0xAF` | 0 | 64-bit code: L=1, D=0 |
+| `0x10` | Kernel Data | `0x92` | `0xCF` | 0 | Read/Write, flat 4 GB |
+| `0x18` | User Code | `0xFA` | `0xAF` | 3 | 64-bit code: L=1, D=0 |
+| `0x20` | User Data | `0xF2` | `0xCF` | 3 | Read/Write, flat 4 GB |
+| `0x28` | TSS Low | `0x89` | `0x00` | 0 | 64-bit TSS (16-byte descriptor) |
+| `0x30` | TSS High | — | — | — | Upper 8 bytes of TSS descriptor |
+| `0x38` | Temp 32-bit | `0x9A` | `0xCF` | 0 | Boot-time only: 32-bit code for PM→LM transition |
 
 User-mode selectors include RPL=3: `USER_CS = 0x1B`, `USER_DS = 0x23`, `TSS_SEL = 0x28`.
+
+In 64-bit long mode, code segments use L=1 (Long) and D=0. The D/B bit is ignored
+when L=1. Data segments still use D/B=1 for 32-bit stack operations. The TSS descriptor
+occupies two GDT slots (16 bytes) because 64-bit mode requires a full 64-bit base address.
 
 ### Access Byte Layout
 
@@ -171,15 +185,17 @@ The IDT has **256 entries** (2048 bytes total) stored at `idt_table` in BSS.
 | 0x22–0x27 | `irq_stub` | Interrupt | 0 | PIC1 stub (EOI to PIC1) |
 | 0x28–0x2F | `irq_stub_pic2` | Interrupt | 0 | PIC2 stub (EOI to both PICs) |
 | 0x80 | `syscall_handler` | **Trap** | **3** | Syscall entry (user-callable) |
-| All others | `isr_default` | Interrupt | 0 | Simple `iretd` stub |
+| All others | `isr_default` | Interrupt | 0 | Simple `iretq` stub |
 
 INT 0x80 is a **trap gate** with DPL=3 (access byte `0xEF`), allowing user-mode programs
 to invoke syscalls. All other gates are interrupt gates with DPL=0 (access byte `0x8E`).
+In 64-bit mode, each IDT gate descriptor is 16 bytes (128 bits) to hold a full 64-bit
+handler address.
 
 ### Exception Recovery
 
 Both exception handlers print diagnostic information (vector number, error code) and
-then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
+then recover to the shell by resetting `RSP` to `KERNEL_STACK` and jumping to
 `shell_main`. This prevents a single fault from crashing the entire system.
 
 ---
@@ -267,28 +283,31 @@ The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x300000). Each bit represe
 
 | Routine | Parameters | Description |
 | --- | --- | --- |
-| `pmm_alloc_page` | — | Returns first free page address (EAX), sets bit |
-| `pmm_free_page` | EAX = address | Clears bit for given address |
-| `pmm_alloc_pages` | ECX = count | Allocates N contiguous pages, returns base in EAX |
+| `pmm_alloc_page` | — | Returns first free page address (RAX), sets bit |
+| `pmm_free_page` | RAX = address | Clears bit for given address |
+| `pmm_alloc_pages` | RCX = count | Allocates N contiguous pages, returns base in RAX |
 | `pmm_count_free` | — | Counts free pages (Kernighan's bit-clearing method) |
 
 ---
 
 ## Paging
 
-Mellivora uses a flat identity-mapped paging scheme — virtual addresses equal physical
-addresses for the first 128 MB. Paging is enabled primarily to support Ring 3 user-mode
-execution and page-fault recovery.
+Mellivora uses 4-level paging with 2 MB pages to identity-map the first 4 GB of physical
+address space. Paging is set up by Stage 2 before entering long mode and is required for
+64-bit operation. Virtual addresses equal physical addresses throughout the mapped range.
 
-### Page Directory & Tables
+### Page Table Hierarchy
 
-| Property | Value |
-| --- | --- |
-| Page directory address | `PAGE_DIR_ADDR` = `0x00380000` |
-| Page table base | `PAGE_TABLE_BASE` = `0x00381000` |
-| Page directory size | 4 KB (1024 dword entries) |
-| Page tables | 32 tables × 4 KB = 128 KB total |
-| Identity-mapped range | 0–128 MB (32 tables × 1024 pages × 4 KB) |
+| Level | Address | Entries | Covers | Description |
+| --- | --- | --- | --- | --- |
+| PML4 | `0x70000` | 1 used | 512 GB each | Page Map Level 4 |
+| PDPT | `0x71000` | 4 used | 1 GB each | Page Directory Pointer Table |
+| PD0 | `0x72000` | 512 | 2 MB each | Page Directory (0–1 GB) |
+| PD1 | `0x73000` | 512 | 2 MB each | Page Directory (1–2 GB) |
+| PD2 | `0x74000` | 512 | 2 MB each | Page Directory (2–3 GB) |
+| PD3 | `0x75000` | 512 | 2 MB each | Page Directory (3–4 GB) |
+
+Total page table memory: 6 pages × 4 KB = 24 KB (at `0x70000`–`0x75FFF`).
 
 ### Page Entry Flags
 
@@ -297,34 +316,35 @@ execution and page-fault recovery.
 | `PG_PRESENT` | `0x01` | Page is present in memory |
 | `PG_WRITABLE` | `0x02` | Page is read/write |
 | `PG_USER` | `0x04` | Page accessible from Ring 3 |
-| `PG_WRITE_THROUGH` | `0x08` | Write-through caching |
+| `PG_PAGE_SIZE` | `0x80` | 2 MB page (PS bit, in PD entries) |
 
-### Initialization
+Each PD entry uses flags `0x87` (Present + RW + User + PS) for 2 MB identity-mapped pages.
+PML4 and PDPT entries use flags `0x07` (Present + RW + User).
 
-1. Zero the page directory (1024 entries)
-2. Build 32 page tables, each covering 4 MB (1024 × 4 KB pages)
-3. Each entry is set to `(physical_addr) | PG_PRESENT | PG_WRITABLE | PG_USER`
-4. Page directory entries point to the corresponding page table with the same flags
-5. Load `PAGE_DIR_ADDR` into CR3
-6. Set bit 31 (PG) in CR0 to enable paging
+### Setup (in Stage 2, 32-bit mode)
 
-### `paging_map_page`
+1. Zero 6 pages (24 KB) at `0x70000`
+2. PML4[0] → PDPT at `0x71000` (flags `0x07`)
+3. PDPT[0..3] → PD0..PD3 at `0x72000`–`0x75000` (flags `0x07`)
+4. Fill 2048 PD entries (4 PDs × 512), each mapping 2 MB with flags `0x87`
+5. Enable PAE in CR4 (bit 5)
+6. Load `0x70000` into CR3
+7. Set LME in IA32_EFER MSR (bit 8)
+8. Enable paging in CR0 (bit 31) — activates long mode
 
-Maps a single virtual page to a physical address:
+### VBE Framebuffer Mapping
 
-- Computes page directory index: `virtual >> 22`
-- Computes page table index: `(virtual >> 12) & 0x3FF`
-- Writes the physical address with flags into the correct page table entry
-
-This routine is used to identity-map the VBE linear framebuffer (8 MB / 2048 pages)
-after the LFB physical address is detected via PCI.
+After detecting the VBE linear framebuffer (LFB) address via PCI, the kernel maps the
+LFB region by updating the appropriate 2 MB PD entries. Since the entire 4 GB is already
+identity-mapped, the LFB at its physical address (typically above 3 GB) is already
+accessible.
 
 ### Page Fault Handler (ISR 14)
 
 When an invalid page access occurs:
 
 1. Reads the faulting address from CR2
-2. Stores the error code, faulting EIP, and faulting address in `pf_errcode`, `pf_eip`,
+2. Stores the error code, faulting RIP, and faulting address in `pf_errcode`, `pf_eip`,
    `pf_addr`
 3. Prints a diagnostic message with all three values
 4. Recovers by jumping to `shell_main` rather than halting — this allows the system to
@@ -361,12 +381,12 @@ a block allocation bitmap, and support for nested subdirectories.
 | `HBFS_MAX_FILES` | 455 (131,072 / 288) |
 | `HBFS_SUBDIR_BLOCKS` | 16 |
 | `HBFS_SUBDIR_MAX_ENTRIES` | 224 (16 × 4096 / 288) |
-| `HBFS_SUPERBLOCK_LBA` | 417 |
-| `HBFS_BITMAP_START` | 418 |
-| `HBFS_ROOT_DIR_START` | 546 |
-| `HBFS_DATA_START` | 802 |
+| `HBFS_SUPERBLOCK_LBA` | 2081 |
+| `HBFS_BITMAP_START` | 2082 |
+| `HBFS_ROOT_DIR_START` | 2210 |
+| `HBFS_DATA_START` | 2466 |
 
-### Superblock Structure (512 bytes at LBA 417)
+### Superblock Structure (512 bytes at LBA 2081)
 
 | Offset | Size | Field | Default |
 | --- | --- | --- | --- |
@@ -630,8 +650,8 @@ Lair:/> diff /docs/a /docs/b   # Both files resolved transparently
 
 | Routine | Parameters | Description |
 | --- | --- | --- |
-| `ata_read_sectors` | EAX=LBA, ECX=count, EDI=dest | Read sectors via LBA48 + `REP INSW` |
-| `ata_write_sectors` | EAX=LBA, ECX=count, ESI=src | Write sectors via LBA48 + `REP OUTSW` |
+| `ata_read_sectors` | RAX=LBA, RCX=count, RDI=dest | Read sectors via LBA48 + `REP INSW` |
+| `ata_write_sectors` | RAX=LBA, RCX=count, RSI=src | Write sectors via LBA48 + `REP OUTSW` |
 | `ata_wait_ready` | — | Polls BSY bit with 0x100000 timeout |
 | `ata_identify` | — | Reads 256 identify words, extracts total sectors |
 
@@ -789,9 +809,9 @@ Where `pitch` = width × bytes-per-pixel (2560 for 640×32bpp) and `Bpp` = bpp /
 
 ### SYS_FRAMEBUF (Syscall 37)
 
-| Sub-function | EBX | Action |
+| Sub-function | RBX | Action |
 | --- | --- | --- |
-| 0 | Get info | Returns EAX=LFB addr, EBX=width, ECX=height, EDX=bpp |
+| 0 | Get info | Returns RAX=LFB addr, RBX=width, RCX=height, RDX=bpp |
 | 1 | Set mode | Switch to 640×480×32 VBE mode |
 | 2 | Restore text | Return to 80×25 VGA text mode |
 
@@ -845,7 +865,7 @@ Where `pitch` = width × bytes-per-pixel (2560 for 640×32bpp) and `Bpp` = bpp /
 ### Ctrl+C Handling
 
 When `program_running = 1` and Ctrl+C is detected, the IRQ handler performs a hard
-abort: resets `ESP` to `KERNEL_STACK` and jumps to `shell_main`.
+abort: resets `RSP` to `KERNEL_STACK` and jumps to `shell_main`.
 
 ---
 
@@ -880,7 +900,7 @@ to user programs and the Burrows desktop environment.
 
 The handler validates packets by checking bit 3 of byte 0 — if not set, the packet is
 discarded and the byte counter resets. X/Y deltas are sign-extended using bits 4/5 of
-byte 0. The Y axis is negated (`neg eax`) to convert from PS/2 convention (up-positive)
+byte 0. The Y axis is negated (`neg rax`) to convert from PS/2 convention (up-positive)
 to screen coordinates (down-positive).
 
 ### Position Tracking
@@ -905,9 +925,9 @@ to screen coordinates (down-positive).
 
 Returns the current mouse state:
 
-- **EAX** = X position
-- **EBX** = Y position
-- **ECX** = Button state
+- **RAX** = X position
+- **RBX** = Y position
+- **RCX** = Button state
 
 ---
 
@@ -1021,7 +1041,7 @@ maintains per-task kernel stacks for clean context switching.
 | --- | --- |
 | `MAX_TASKS` | 16 |
 | `SCHED_QUANTUM` | 10 PIT ticks (100 ms at 100 Hz) |
-| `TCB_SIZE` | 32 bytes per entry |
+| `TCB_SIZE` | 64 bytes per entry |
 | Kernel stack | 4 KB page per task (allocated via PMM) |
 
 ### Task States
@@ -1034,18 +1054,19 @@ maintains per-task kernel stacks for clean context switching.
 
 ### Task Control Block (TCB)
 
-Each 32-byte TCB contains:
+Each 64-byte TCB contains:
 
 | Field | Offset | Type | Description |
 | --- | --- | --- | --- |
-| `TCB_ESP` | 0 | dword | Saved kernel-mode stack pointer |
-| `TCB_STATE` | 4 | dword | Task state (FREE/READY/RUNNING/BLOCKED) |
-| `TCB_KSTACK` | 8 | dword | Top of kernel stack (for TSS ESP0) |
-| `TCB_USTACK` | 12 | dword | User-mode stack top |
-| `TCB_ENTRY` | 16 | dword | Program entry point |
-| `TCB_PID` | 20 | dword | Task ID |
-| `TCB_PRIORITY` | 24 | dword | Task priority (v3.0, 0=highest) |
-| `TCB_WAKEUP` | 28 | dword | Wakeup tick for sys_sleep (v3.0) |
+| `TCB_RSP` | 0 | qword | Saved kernel-mode stack pointer |
+| `TCB_STATE` | 8 | dword | Task state (FREE/READY/RUNNING/BLOCKED) |
+| `TCB_KSTACK` | 16 | qword | Top of kernel stack (for TSS RSP0) |
+| `TCB_USTACK` | 24 | qword | User-mode stack top |
+| `TCB_ENTRY` | 32 | qword | Program entry point |
+| `TCB_PID` | 40 | dword | Task ID |
+| `TCB_PRIORITY` | 44 | dword | Task priority (0=highest) |
+| `TCB_WAKEUP` | 48 | dword | Wakeup tick for sys_sleep |
+| Reserved | 52 | 12 bytes | Padding to 64-byte alignment |
 
 ### Ring 3 Selectors
 
@@ -1061,11 +1082,12 @@ When a new task is spawned:
 
 1. Find a `TASK_FREE` slot in the task table
 2. Allocate a 4 KB kernel stack page via `pmm_alloc_page`
-3. Build an initial stack frame (52 bytes) at the top of the kernel stack:
-   - `PUSHAD` frame (32 bytes) — all general registers zeroed
-   - `IRETD` frame (20 bytes) — SS3 (`USER_DS`), ESP3 (user stack), EFLAGS (`0x200` =
-     interrupts enabled), CS3 (`USER_CS`), EIP (program entry point)
-4. Set TCB fields: ESP to the constructed frame, state to `TASK_READY`
+3. Build an initial stack frame (160 bytes) at the top of the kernel stack:
+   - `PUSHALL` frame (120 bytes) — 15 general-purpose registers (R15, R14, R13, R12,
+     R11, R10, R9, R8, RBP, RDI, RSI, RDX, RCX, RBX, RAX), all zeroed
+   - `IRETQ` frame (40 bytes) — RIP (entry point), CS (`USER_CS`), RFLAGS (`0x200` =
+     interrupts enabled), RSP3 (user stack), SS3 (`USER_DS`)
+4. Set TCB fields: RSP to the constructed frame, state to `TASK_READY`
 
 ### Scheduling Algorithm
 
@@ -1085,8 +1107,8 @@ The PIT IRQ0 handler (`irq_timer`) drives preemption:
 3. **Only preempt Ring 3 code** — checks the CS RPL field on the interrupt stack frame;
    if the interrupted code was in Ring 0, skip preemption (avoids corrupting kernel state)
 4. Save the current task's context (all registers on kernel stack)
-5. Update TSS ESP0 to the new task's kernel stack top: `mov [tss_struct + 4], kstack_top`
-6. Restore the new task's saved context and `IRETD`
+5. Update TSS RSP0 to the new task's kernel stack top: `mov [tss_struct + 4], kstack_top`
+6. Restore the new task's saved context and `IRETQ`
 
 ### Cooperative Yield
 
@@ -1306,16 +1328,16 @@ These defaults are used as fallbacks if DHCP does not complete.
 
 | # | Name | Args | Returns |
 | --- | --- | --- | --- |
-| 39 | `SYS_SOCKET` | EBX=type (1=TCP, 2=UDP) | EAX=socket fd (-1 error) |
-| 40 | `SYS_CONNECT` | EBX=fd, ECX=IP, EDX=port | EAX=0/-1 |
-| 41 | `SYS_SEND` | EBX=fd, ECX=buf, EDX=len | EAX=bytes sent |
-| 42 | `SYS_RECV` | EBX=fd, ECX=buf, EDX=max | EAX=bytes received |
-| 43 | `SYS_BIND` | EBX=fd, ECX=port | EAX=0/-1 |
-| 44 | `SYS_LISTEN` | EBX=fd | EAX=0/-1 |
-| 45 | `SYS_ACCEPT` | EBX=fd | EAX=new fd (-1 error) |
-| 46 | `SYS_DNS` | EBX=hostname | EAX=IP (0=fail) |
-| 47 | `SYS_SOCKCLOSE` | EBX=fd | EAX=0 |
-| 48 | `SYS_PING` | EBX=IP, ECX=timeout | EAX=RTT ms (-1=timeout) |
+| 39 | `SYS_SOCKET` | RBX=type (1=TCP, 2=UDP) | RAX=socket fd (-1 error) |
+| 40 | `SYS_CONNECT` | RBX=fd, RCX=IP, RDX=port | RAX=0/-1 |
+| 41 | `SYS_SEND` | RBX=fd, RCX=buf, RDX=len | RAX=bytes sent |
+| 42 | `SYS_RECV` | RBX=fd, RCX=buf, RDX=max | RAX=bytes received |
+| 43 | `SYS_BIND` | RBX=fd, RCX=port | RAX=0/-1 |
+| 44 | `SYS_LISTEN` | RBX=fd | RAX=0/-1 |
+| 45 | `SYS_ACCEPT` | RBX=fd | RAX=new fd (-1 error) |
+| 46 | `SYS_DNS` | RBX=hostname | RAX=IP (0=fail) |
+| 47 | `SYS_SOCKCLOSE` | RBX=fd | RAX=0 |
+| 48 | `SYS_PING` | RBX=IP, RCX=timeout | RAX=RTT ms (-1=timeout) |
 
 ---
 
@@ -1428,25 +1450,25 @@ Each theme is 48 bytes (12 colors × 4 bytes each):
 
 | Sub | Name | Parameters | Description |
 | --- | --- | --- | --- |
-| 0 | `GUI_CREATE_WINDOW` | ECX=x\|y (packed), EDX=w\|h, ESI=title | Create window → EAX=win_id |
-| 1 | `GUI_DESTROY_WINDOW` | ECX=win_id | Destroy a window |
-| 2 | `GUI_FILL_RECT` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=color | Fill rectangle in window |
-| 3 | `GUI_DRAW_TEXT` | ECX=win_id, EDX=x\|y, ESI=text, EDI=color | Draw text in window |
-| 4 | `GUI_POLL_EVENT` | — | Returns event in EAX/EBX/ECX |
+| 0 | `GUI_CREATE_WINDOW` | RCX=x\|y (packed), RDX=w\|h, RSI=title | Create window → RAX=win_id |
+| 1 | `GUI_DESTROY_WINDOW` | RCX=win_id | Destroy a window |
+| 2 | `GUI_FILL_RECT` | RCX=win_id, RDX=x\|y, RSI=w\|h, RDI=color | Fill rectangle in window |
+| 3 | `GUI_DRAW_TEXT` | RCX=win_id, RDX=x\|y, RSI=text, RDI=color | Draw text in window |
+| 4 | `GUI_POLL_EVENT` | — | Returns event in RAX/RBX/RCX |
 | 5 | `GUI_GET_THEME` | — | Get current theme data |
-| 6 | `GUI_SET_THEME` | ECX=theme index | Switch theme |
-| 7 | `GUI_DRAW_PIXEL` | ECX=win_id, EDX=x\|y, ESI=color | Plot single pixel |
-| 8 | `GUI_DRAW_LINE` | ECX=win_id, EDX=x1\|y1, ESI=x2\|y2, EDI=color | Draw line |
+| 6 | `GUI_SET_THEME` | RCX=theme index | Switch theme |
+| 7 | `GUI_DRAW_PIXEL` | RCX=win_id, RDX=x\|y, RSI=color | Plot single pixel |
+| 8 | `GUI_DRAW_LINE` | RCX=win_id, RDX=x1\|y1, RSI=x2\|y2, RDI=color | Draw line |
 | 9 | `GUI_COMPOSE` | — | Trigger desktop compositing |
 | 10 | `GUI_FLIP` | — | Flip back buffer to screen |
 | 11 | `GUI_DESKTOP` | — | Enter desktop mode |
-| 20 | `GUI_DRAW_BUTTON` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=label | Draw button widget |
-| 21 | `GUI_DRAW_CHECKBOX` | ECX=win_id, EDX=x\|y, ESI=checked, EDI=label | Draw checkbox widget |
-| 22 | `GUI_DRAW_PROGRESS` | ECX=win_id, EDX=x\|y, ESI=w\|value, EDI=color | Draw progress bar |
-| 23 | `GUI_DRAW_TEXTBOX` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=text | Draw text input box |
-| 24 | `GUI_DRAW_LISTBOX` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=items | Draw list box widget |
-| 25 | `GUI_DRAW_LABEL` | ECX=win_id, EDX=x\|y, ESI=text, EDI=color | Draw label widget |
-| 26 | `GUI_DRAW_RECT` | ECX=win_id, EDX=x\|y, ESI=w\|h, EDI=color | Draw rectangle outline |
+| 20 | `GUI_DRAW_BUTTON` | RCX=win_id, RDX=x\|y, RSI=w\|h, RDI=label | Draw button widget |
+| 21 | `GUI_DRAW_CHECKBOX` | RCX=win_id, RDX=x\|y, RSI=checked, RDI=label | Draw checkbox widget |
+| 22 | `GUI_DRAW_PROGRESS` | RCX=win_id, RDX=x\|y, RSI=w\|value, RDI=color | Draw progress bar |
+| 23 | `GUI_DRAW_TEXTBOX` | RCX=win_id, RDX=x\|y, RSI=w\|h, RDI=text | Draw text input box |
+| 24 | `GUI_DRAW_LISTBOX` | RCX=win_id, RDX=x\|y, RSI=w\|h, RDI=items | Draw list box widget |
+| 25 | `GUI_DRAW_LABEL` | RCX=win_id, RDX=x\|y, RSI=text, RDI=color | Draw label widget |
+| 26 | `GUI_DRAW_RECT` | RCX=win_id, RDX=x\|y, RSI=w\|h, RDI=color | Draw rectangle outline |
 
 Sub-functions 12–19 are reserved. Total: 20 sub-functions (0–11 core, 20–26 widgets).
 
@@ -1480,8 +1502,9 @@ Sub-functions 12–19 are reserved. Total: 20 sub-functions (0–11 core, 20–2
 
 The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 
-- **ELF:** `elf_load_program` validates ELF32 little-endian, iterates program headers,
-  loads `PT_LOAD` segments (copies file data + zeroes BSS), returns entry point
+- **ELF:** `elf_load_program` validates ELF64 (class 2, little-endian), iterates 64-bit
+  program headers, loads `PT_LOAD` segments (copies file data + zeroes BSS), returns
+  entry point
 - **Flat binary:** Entry point = `PROGRAM_BASE` directly
 
 ### Ring 3 Execution
@@ -1490,17 +1513,17 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 2. Write **SYS_EXIT trampoline** at `PROGRAM_EXIT_ADDR` (0x2FFFF0):
 
    ```nasm
-   mov eax, 0    ; SYS_EXIT
+   mov rax, 0    ; SYS_EXIT
    int 0x80
    ```
 
    This catches programs that use `RET` instead of `SYS_EXIT`
-3. Update TSS ESP0 to `KERNEL_STACK` (for Ring 0 transitions)
-4. Set up Ring 3 stack at `PROGRAM_EXIT_ADDR - 4`, push trampoline as return address
-5. Perform `IRETD` to Ring 3:
+3. Update TSS RSP0 to `KERNEL_STACK` (for Ring 0 transitions)
+4. Set up Ring 3 stack at `PROGRAM_EXIT_ADDR - 8`, push trampoline as return address
+5. Perform `IRETQ` to Ring 3:
    - Push `USER_DS` (0x23) — SS3
-   - Push ESP3
-   - Push EFLAGS (with IF set)
+   - Push RSP3
+   - Push RFLAGS (with IF set)
    - Push `USER_CS` (0x1B) — CS3
    - Push entry point
 
@@ -1508,8 +1531,8 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 
 | Method | Trigger |
 | --- | --- |
-| `SYS_EXIT` (INT 0x80, EAX=0) | Normal exit — saves exit code, resets to shell |
-| Ctrl+C | Hard abort — IRQ handler resets ESP, jumps to shell |
+| `SYS_EXIT` (INT 0x80, RAX=0) | Normal exit — saves exit code, resets to shell |
+| Ctrl+C | Hard abort — IRQ handler resets RSP, jumps to shell |
 | CPU Exception | Fault handler prints info, recovers to shell |
 | `RET` instruction | Hits trampoline → SYS_EXIT automatically |
 
@@ -1519,84 +1542,100 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 
 All syscalls are invoked via `INT 0x80`. Register conventions:
 
-- **EAX** = syscall number
-- **EBX, ECX, EDX, ESI, EDI** = arguments
-- **EAX** = return value
+- **RAX** = syscall number
+- **RBX, RCX, RDX, RSI, RDI** = arguments
+- **RAX** = return value
 
 ### Complete Syscall Table
 
 | # | Name | Args | Returns |
 | --- | --- | --- | --- |
-| 0 | `SYS_EXIT` | EBX=exit code | — |
-| 1 | `SYS_PUTCHAR` | EBX=character | EAX=0 |
-| 2 | `SYS_GETCHAR` | — | EAX=char (blocking) |
-| 3 | `SYS_PRINT` | EBX=string ptr | EAX=0 |
-| 4 | `SYS_READ_KEY` | — | EAX=key (0 if none, non-blocking) |
-| 5 | `SYS_OPEN` | EBX=filename, ECX=mode (1=read, 2=write) | EAX=fd (-1 error) |
-| 6 | `SYS_READ` | EBX=fd, ECX=buf, EDX=count | EAX=bytes read |
-| 7 | `SYS_WRITE` | EBX=fd, ECX=buf, EDX=count | EAX=bytes written |
-| 8 | `SYS_CLOSE` | EBX=fd | EAX=0 |
-| 9 | `SYS_DELETE` | EBX=filename | EAX=0/-1 |
-| 10 | `SYS_SEEK` | EBX=fd, ECX=offset | EAX=new position |
-| 11 | `SYS_STAT` | EBX=filename | EAX=size (-1 not found), ECX=blocks |
-| 12 | `SYS_MKDIR` | EBX=dirname | EAX=0/-1 |
-| 13 | `SYS_READDIR` | EBX=name buf, ECX=index | EAX=type, ECX=size |
-| 14 | `SYS_SETCURSOR` | EBX=X, ECX=Y | EAX=0 |
-| 15 | `SYS_GETTIME` | — | EAX=tick_count |
-| 16 | `SYS_SLEEP` | EBX=ticks | EAX=0 |
-| 17 | `SYS_CLEAR` | — | EAX=0 |
-| 18 | `SYS_SETCOLOR` | EBX=color byte | EAX=0 |
-| 19 | `SYS_MALLOC` | EBX=size (rounded to 4 KB pages) | EAX=address (0=fail) |
-| 20 | `SYS_FREE` | EBX=address, ECX=size | EAX=0 |
-| 21 | `SYS_EXEC` | EBX=filename | EAX=0 |
-| 22 | `SYS_DISK_READ` | EBX=LBA, ECX=count, EDX=buf | EAX=0/-1 (denied to Ring 3) |
-| 23 | `SYS_DISK_WRITE` | EBX=LBA, ECX=count, EDX=buf | EAX=0/-1 (denied to Ring 3) |
-| 24 | `SYS_BEEP` | EBX=freq (0=off), ECX=duration | EAX=0 |
-| 25 | `SYS_DATE` | EBX=6-byte buf [s,m,h,d,mo,yr] | EAX=full year |
-| 26 | `SYS_CHDIR` | EBX=dirname | EAX=0/-1 |
-| 27 | `SYS_GETCWD` | EBX=dest buf | EAX=0 |
-| 28 | `SYS_SERIAL` | EBX=string ptr | EAX=0 |
-| 29 | `SYS_GETENV` | EBX=var name | EDI=value ptr |
-| 30 | `SYS_FREAD` | EBX=filename, ECX=buf | EAX=bytes read (0=not found) |
-| 31 | `SYS_FWRITE` | EBX=filename, ECX=buf, EDX=size | EAX=0/-1 |
-| 32 | `SYS_GETARGS` | EBX=dest buf (512 bytes max) | EAX=arg string length |
-| 33 | `SYS_SERIAL_IN` | — | EAX=char from serial port |
-| 34 | `SYS_STDIN_READ` | EBX=buf, ECX=max | EAX=bytes read (line-buffered) |
-| 35 | `SYS_YIELD` | — | EAX=0 (cooperative task yield) |
-| 36 | `SYS_MOUSE` | — | EAX=x, EBX=y, ECX=buttons |
-| 37 | `SYS_FRAMEBUF` | EBX=sub-function | (see VBE/BGA section) |
-| 38 | `SYS_GUI` | EBX=sub-function | (see Burrows section, 20 sub-functions) |
-| 39 | `SYS_SOCKET` | EBX=type (1=TCP, 2=UDP) | EAX=socket fd (-1 error) |
-| 40 | `SYS_CONNECT` | EBX=fd, ECX=IP, EDX=port | EAX=0/-1 |
-| 41 | `SYS_SEND` | EBX=fd, ECX=buf, EDX=len | EAX=bytes sent |
-| 42 | `SYS_RECV` | EBX=fd, ECX=buf, EDX=max | EAX=bytes received |
-| 43 | `SYS_BIND` | EBX=fd, ECX=port | EAX=0/-1 |
-| 44 | `SYS_LISTEN` | EBX=fd | EAX=0/-1 |
-| 45 | `SYS_ACCEPT` | EBX=fd | EAX=new fd (-1 error) |
-| 46 | `SYS_DNS` | EBX=hostname | EAX=IP address (0=fail) |
-| 47 | `SYS_SOCKCLOSE` | EBX=fd | EAX=0 |
-| 48 | `SYS_PING` | EBX=IP, ECX=timeout | EAX=RTT ms (-1=timeout) |
-| 49 | `SYS_SETDATE` | EBX=6-byte buf, ECX=century | EAX=0 |
-| 50 | `SYS_AUDIO_PLAY` | EBX=buf, ECX=len, EDX=format | EAX=0/-1 |
-| 51 | `SYS_AUDIO_STOP` | — | EAX=0 |
-| 52 | `SYS_AUDIO_STATUS` | — | EAX=state, EBX=present |
-| 53 | `SYS_KILL` | EBX=pid | EAX=0/-1 |
-| 54 | `SYS_GETPID` | — | EAX=current pid |
-| 55 | `SYS_CLIPBOARD_COPY` | EBX=buf, ECX=len | EAX=0 |
-| 56 | `SYS_CLIPBOARD_PASTE` | EBX=buf, ECX=max | EAX=bytes pasted |
-| 57 | `SYS_NOTIFY` | EBX=text, EDX=color | EAX=0 |
-| 58 | `SYS_FILE_OPEN_DLG` | EBX=title, EDX=filter | EAX=1/0, ECX=filename |
-| 59 | `SYS_FILE_SAVE_DLG` | EBX=title, EDX=filter | EAX=1/0, ECX=filename |
-| 60 | `SYS_PIPE_CREATE` | — | EAX=pipe_id (-1 error) |
-| 61 | `SYS_PIPE_WRITE` | EBX=id, ECX=buf, EDX=len | EAX=bytes written |
-| 62 | `SYS_PIPE_READ` | EBX=id, ECX=buf, EDX=max | EAX=bytes read |
-| 63 | `SYS_PIPE_CLOSE` | EBX=id | EAX=0 |
-| 64 | `SYS_SHMGET` | EBX=key, ECX=size | EAX=shm_id (-1 error) |
-| 65 | `SYS_SHMADDR` | EBX=shm_id | EAX=pointer |
-| 66 | `SYS_PROCLIST` | EBX=slot (0–15), ECX=buf (16B) | EAX=0/-1 |
-| 67 | `SYS_MEMINFO` | — | EAX=free pages, EBX=total |
+| 0 | `SYS_EXIT` | RBX=exit code | — |
+| 1 | `SYS_PUTCHAR` | RBX=character | RAX=0 |
+| 2 | `SYS_GETCHAR` | — | RAX=char (blocking) |
+| 3 | `SYS_PRINT` | RBX=string ptr | RAX=0 |
+| 4 | `SYS_READ_KEY` | — | RAX=key (0 if none, non-blocking) |
+| 5 | `SYS_OPEN` | RBX=filename, RCX=mode (1=read, 2=write) | RAX=fd (-1 error) |
+| 6 | `SYS_READ` | RBX=fd, RCX=buf, RDX=count | RAX=bytes read |
+| 7 | `SYS_WRITE` | RBX=fd, RCX=buf, RDX=count | RAX=bytes written |
+| 8 | `SYS_CLOSE` | RBX=fd | RAX=0 |
+| 9 | `SYS_DELETE` | RBX=filename | RAX=0/-1 |
+| 10 | `SYS_SEEK` | RBX=fd, RCX=offset | RAX=new position |
+| 11 | `SYS_STAT` | RBX=filename | RAX=size (-1 not found), RCX=blocks |
+| 12 | `SYS_MKDIR` | RBX=dirname | RAX=0/-1 |
+| 13 | `SYS_READDIR` | RBX=name buf, RCX=index | RAX=type, RCX=size |
+| 14 | `SYS_SETCURSOR` | RBX=X, RCX=Y | RAX=0 |
+| 15 | `SYS_GETTIME` | — | RAX=tick_count |
+| 16 | `SYS_SLEEP` | RBX=ticks | RAX=0 |
+| 17 | `SYS_CLEAR` | — | RAX=0 |
+| 18 | `SYS_SETCOLOR` | RBX=color byte | RAX=0 |
+| 19 | `SYS_MALLOC` | RBX=size (rounded to 4 KB pages) | RAX=address (0=fail) |
+| 20 | `SYS_FREE` | RBX=address, RCX=size | RAX=0 |
+| 21 | `SYS_EXEC` | RBX=filename | RAX=0 |
+| 22 | `SYS_DISK_READ` | RBX=LBA, RCX=count, RDX=buf | RAX=0/-1 (denied to Ring 3) |
+| 23 | `SYS_DISK_WRITE` | RBX=LBA, RCX=count, RDX=buf | RAX=0/-1 (denied to Ring 3) |
+| 24 | `SYS_BEEP` | RBX=freq (0=off), RCX=duration | RAX=0 |
+| 25 | `SYS_DATE` | RBX=6-byte buf [s,m,h,d,mo,yr] | RAX=full year |
+| 26 | `SYS_CHDIR` | RBX=dirname | RAX=0/-1 |
+| 27 | `SYS_GETCWD` | RBX=dest buf | RAX=0 |
+| 28 | `SYS_SERIAL` | RBX=string ptr | RAX=0 |
+| 29 | `SYS_GETENV` | RBX=var name | RDI=value ptr |
+| 30 | `SYS_FREAD` | RBX=filename, RCX=buf | RAX=bytes read (0=not found) |
+| 31 | `SYS_FWRITE` | RBX=filename, RCX=buf, RDX=size | RAX=0/-1 |
+| 32 | `SYS_GETARGS` | RBX=dest buf (512 bytes max) | RAX=arg string length |
+| 33 | `SYS_SERIAL_IN` | — | RAX=char from serial port |
+| 34 | `SYS_STDIN_READ` | RBX=buf, RCX=max | RAX=bytes read (line-buffered) |
+| 35 | `SYS_YIELD` | — | RAX=0 (cooperative task yield) |
+| 36 | `SYS_MOUSE` | — | RAX=x, RBX=y, RCX=buttons |
+| 37 | `SYS_FRAMEBUF` | RBX=sub-function | (see VBE/BGA section) |
+| 38 | `SYS_GUI` | RBX=sub-function | (see Burrows section, 20 sub-functions) |
+| 39 | `SYS_SOCKET` | RBX=type (1=TCP, 2=UDP) | RAX=socket fd (-1 error) |
+| 40 | `SYS_CONNECT` | RBX=fd, RCX=IP, RDX=port | RAX=0/-1 |
+| 41 | `SYS_SEND` | RBX=fd, RCX=buf, RDX=len | RAX=bytes sent |
+| 42 | `SYS_RECV` | RBX=fd, RCX=buf, RDX=max | RAX=bytes received |
+| 43 | `SYS_BIND` | RBX=fd, RCX=port | RAX=0/-1 |
+| 44 | `SYS_LISTEN` | RBX=fd | RAX=0/-1 |
+| 45 | `SYS_ACCEPT` | RBX=fd | RAX=new fd (-1 error) |
+| 46 | `SYS_DNS` | RBX=hostname | RAX=IP address (0=fail) |
+| 47 | `SYS_SOCKCLOSE` | RBX=fd | RAX=0 |
+| 48 | `SYS_PING` | RBX=IP, RCX=timeout | RAX=RTT ms (-1=timeout) |
+| 49 | `SYS_SETDATE` | RBX=6-byte buf, RCX=century | RAX=0 |
+| 50 | `SYS_AUDIO_PLAY` | RBX=buf, RCX=len, RDX=format | RAX=0/-1 |
+| 51 | `SYS_AUDIO_STOP` | — | RAX=0 |
+| 52 | `SYS_AUDIO_STATUS` | — | RAX=state, RBX=present |
+| 53 | `SYS_KILL` | RBX=pid | RAX=0/-1 |
+| 54 | `SYS_GETPID` | — | RAX=current pid |
+| 55 | `SYS_CLIPBOARD_COPY` | RBX=buf, RCX=len | RAX=0 |
+| 56 | `SYS_CLIPBOARD_PASTE` | RBX=buf, RCX=max | RAX=bytes pasted |
+| 57 | `SYS_NOTIFY` | RBX=text, RDX=color | RAX=0 |
+| 58 | `SYS_FILE_OPEN_DLG` | RBX=title, RDX=filter | RAX=1/0, RCX=filename |
+| 59 | `SYS_FILE_SAVE_DLG` | RBX=title, RDX=filter | RAX=1/0, RCX=filename |
+| 60 | `SYS_PIPE_CREATE` | — | RAX=pipe_id (-1 error) |
+| 61 | `SYS_PIPE_WRITE` | RBX=id, RCX=buf, RDX=len | RAX=bytes written |
+| 62 | `SYS_PIPE_READ` | RBX=id, RCX=buf, RDX=max | RAX=bytes read |
+| 63 | `SYS_PIPE_CLOSE` | RBX=id | RAX=0 |
+| 64 | `SYS_SHMGET` | RBX=key, RCX=size | RAX=shm_id (-1 error) |
+| 65 | `SYS_SHMADDR` | RBX=shm_id | RAX=pointer |
+| 66 | `SYS_PROCLIST` | RBX=slot (0–15), RCX=buf (16B) | RAX=0/-1 |
+| 67 | `SYS_MEMINFO` | — | RAX=free pages, RBX=total |
+| 68 | `SYS_CHMOD` | RBX=filename, RCX=perms (9 bits rwxrwxrwx) | RAX=0/-1 |
+| 69 | `SYS_CHOWN` | RBX=filename, RCX=owner UID | RAX=0/-1 |
+| 70 | `SYS_SYMLINK` | RBX=link name, RCX=target path | RAX=0/-1 |
+| 71 | `SYS_READLINK` | RBX=link name, RCX=output buf | RAX=target length (-1 error) |
+| 72 | `SYS_SIGNAL` | RBX=signal (1–4), RCX=handler (0=default) | RAX=previous handler |
+| 73 | `SYS_RAISE` | RBX=target PID, RCX=signal (1–4) | RAX=0/-1 |
+| 74 | `SYS_MQ_CREATE` | RBX=key (nonzero) | RAX=mq_id (-1 error) |
+| 75 | `SYS_MQ_SEND` | RBX=mq_id, RCX=data, RDX=len | RAX=0/-1 |
+| 76 | `SYS_MQ_RECV` | RBX=mq_id, RCX=dest, RDX=max | RAX=bytes read (0=empty) |
+| 77 | `SYS_MQ_CLOSE` | RBX=mq_id | RAX=0/-1 |
+| 78 | `SYS_STRACE` | RBX=sub (0=off, 1=on, 2=read, 3=query) | RAX=varies |
+| 79 | `SYS_LISTENV` | RBX=dest buf, RCX=max size | RAX=bytes written |
+| 80 | `SYS_RENAME` | RBX=old name, RCX=new name | RAX=0/-1 |
+| 81 | `SYS_SETENV` | RBX="NAME=VALUE" string | RAX=0 |
+| 82 | `SYS_RMDIR` | RBX=dirname | RAX=0/-1 |
+| 83 | `SYS_TRUNCATE` | RBX=filename, RCX=new size | RAX=0/-1 |
 
-**Total: 68 syscalls (0–67).**
+**Total: 84 syscalls (0–83).**
 
 ---
 
@@ -1644,9 +1683,9 @@ The 58 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,
 
 | Routine | Description |
 | --- | --- |
-| `env_set_str(ESI)` | Set variable from `"NAME=value"` string |
-| `env_get(ESI)` | Get value pointer for name, returns EDI |
-| `env_get_var(ESI, EDI)` | Copy value to destination buffer |
+| `env_set_str(RSI)` | Set variable from `"NAME=value"` string |
+| `env_get(RSI)` | Get value pointer for name, returns RDI |
+| `env_get_var(RSI, RDI)` | Copy value to destination buffer |
 | `cmd_set` | Shell command: `set NAME VALUE` or `set` to list all |
 | `cmd_unset` | Shell command: `unset NAME` |
 
@@ -1768,7 +1807,7 @@ Mellivora includes a Sound Blaster 16 driver for ISA DMA audio playback.
 
 ### Format Encoding
 
-The `EDX` format parameter for `SYS_AUDIO_PLAY` encodes:
+The `RDX` format parameter for `SYS_AUDIO_PLAY` encodes:
 
 | Bits | Field |
 | --- | --- |
@@ -1781,15 +1820,16 @@ The `EDX` format parameter for `SYS_AUDIO_PLAY` encodes:
 
 | # | Name | Args | Returns |
 | --- | --- | --- | --- |
-| 50 | `SYS_AUDIO_PLAY` | EBX=buffer, ECX=length, EDX=format | EAX=0/-1 |
-| 51 | `SYS_AUDIO_STOP` | — | EAX=0 |
-| 52 | `SYS_AUDIO_STATUS` | — | EAX=state, EBX=present |
+| 50 | `SYS_AUDIO_PLAY` | RBX=buffer, RCX=length, RDX=format | RAX=0/-1 |
+| 51 | `SYS_AUDIO_STOP` | — | RAX=0 |
+| 52 | `SYS_AUDIO_STATUS` | — | RAX=state, RBX=present |
 
 ---
 
 ## Inter-Process Communication (IPC)
 
-Mellivora provides pipes and shared memory regions for communication between tasks.
+Mellivora provides pipes, shared memory regions, and message queues for communication
+between tasks.
 
 ### Pipes
 
@@ -1814,16 +1854,32 @@ empty.
 Shared memory regions are identified by an integer key. `SYS_SHMGET` creates
 or retrieves a region by key, and `SYS_SHMADDR` returns the data pointer.
 
+### Message Queues
+
+| Property | Value |
+| --- | --- |
+| `MQ_MAX_QUEUES` | 4 |
+| `MQ_MAX_MSGS` | 8 messages per queue |
+| `MQ_MSG_SIZE` | 256 bytes per message |
+
+Message queues are identified by a nonzero integer key. `SYS_MQ_CREATE` creates or
+opens a queue by key. Messages are stored in a circular buffer with head/tail pointers.
+Reads return 0 when the queue is empty; writes return -1 when full.
+
 ### IPC Syscalls
 
 | # | Name | Args | Returns |
 | --- | --- | --- | --- |
-| 60 | `SYS_PIPE_CREATE` | — | EAX=pipe_id (-1 error) |
-| 61 | `SYS_PIPE_WRITE` | EBX=id, ECX=buf, EDX=len | EAX=bytes written |
-| 62 | `SYS_PIPE_READ` | EBX=id, ECX=buf, EDX=max | EAX=bytes read |
-| 63 | `SYS_PIPE_CLOSE` | EBX=id | EAX=0 |
-| 64 | `SYS_SHMGET` | EBX=key, ECX=size | EAX=shm_id (-1 error) |
-| 65 | `SYS_SHMADDR` | EBX=shm_id | EAX=pointer |
+| 60 | `SYS_PIPE_CREATE` | — | RAX=pipe_id (-1 error) |
+| 61 | `SYS_PIPE_WRITE` | RBX=id, RCX=buf, RDX=len | RAX=bytes written |
+| 62 | `SYS_PIPE_READ` | RBX=id, RCX=buf, RDX=max | RAX=bytes read |
+| 63 | `SYS_PIPE_CLOSE` | RBX=id | RAX=0 |
+| 64 | `SYS_SHMGET` | RBX=key, RCX=size | RAX=shm_id (-1 error) |
+| 65 | `SYS_SHMADDR` | RBX=shm_id | RAX=pointer |
+| 74 | `SYS_MQ_CREATE` | RBX=key (nonzero) | RAX=mq_id (-1 error) |
+| 75 | `SYS_MQ_SEND` | RBX=mq_id, RCX=data, RDX=len | RAX=0/-1 |
+| 76 | `SYS_MQ_RECV` | RBX=mq_id, RCX=dest, RDX=max | RAX=bytes read (0=empty) |
+| 77 | `SYS_MQ_CLOSE` | RBX=mq_id | RAX=0/-1 |
 
 ---
 

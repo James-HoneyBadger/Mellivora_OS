@@ -132,11 +132,11 @@ you_win:
         mov eax, 1
         shl eax, cl
         dec eax
-        push eax
+        push rax
         mov eax, SYS_PRINT
         mov ebx, opt_str
         int 0x80
-        pop eax
+        pop rax
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, ')'
@@ -179,27 +179,27 @@ get_peg:
         je .peg_c
         jmp .loop
 .peg_a:
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, 'A'
         int 0x80
-        pop eax
+        pop rax
         xor eax, eax
         ret
 .peg_b:
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, 'B'
         int 0x80
-        pop eax
+        pop rax
         mov eax, 1
         ret
 .peg_c:
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, 'C'
         int 0x80
-        pop eax
+        pop rax
         mov eax, 2
         ret
 .quit:
@@ -273,7 +273,7 @@ get_peg_ptr:
 ; draw_state: Draw all three pegs
 ;--------------------------------------
 draw_state:
-        pusha
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -303,34 +303,34 @@ draw_state:
         jl .draw_base
 
         ; Draw peg A at this level
-        push ecx
+        push rcx
         mov eax, 0
         call draw_peg_level
         mov eax, SYS_PRINT
         mov ebx, peg_gap
         int 0x80
-        pop ecx
+        pop rcx
 
         ; Draw peg B at this level
-        push ecx
+        push rcx
         mov eax, 1
         call draw_peg_level
         mov eax, SYS_PRINT
         mov ebx, peg_gap
         int 0x80
-        pop ecx
+        pop rcx
 
         ; Draw peg C at this level
-        push ecx
+        push rcx
         mov eax, 2
         call draw_peg_level
-        pop ecx
+        pop rcx
 
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop ecx
+        pop rcx
 
         dec ecx
         jmp .draw_level
@@ -350,7 +350,7 @@ draw_state:
         mov ebx, label_str
         int 0x80
 
-        popa
+        POPALL
         ret
 
 ;--------------------------------------
@@ -358,10 +358,10 @@ draw_state:
 ; EAX = peg (0/1/2), ECX = level (0=bottom)
 ;--------------------------------------
 draw_peg_level:
-        push ebx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rdx
+        push rsi
+        push rdi
 
         call get_peg_ptr
         mov esi, eax            ; peg ptr
@@ -381,62 +381,62 @@ draw_peg_level:
         sub edx, ebx            ; padding each side
 
         ; Print padding
-        push ebx
+        push rbx
         mov ecx, edx
 .pad_left:
         cmp ecx, 0
         jle .disk_body
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .pad_left
 
 .disk_body:
-        pop ebx
+        pop rbx
         ; Color based on disk size
-        push ebx
+        push rbx
         dec ebx
         and ebx, 7
         movzx ebx, byte [disk_colors + ebx]
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop ebx
+        pop rbx
 
         ; Draw disk: [=====]
-        push ebx
+        push rbx
         mov ecx, ebx
         shl ecx, 1
         inc ecx                 ; width = size*2+1
 .draw_disk:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0xDB           ; block char
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .draw_disk
-        pop ebx
+        pop rbx
 
         ; Reset color
-        push edx
+        push rdx
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0F
         int 0x80
-        pop edx
+        pop rdx
 
         ; Right padding
         mov ecx, edx
 .pad_right:
         cmp ecx, 0
         jle .peg_done
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .pad_right
 
@@ -446,11 +446,11 @@ draw_peg_level:
 .pole_left:
         cmp ecx, 0
         jle .pole_char
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .pole_left
 .pole_char:
@@ -467,19 +467,19 @@ draw_peg_level:
 .pole_right:
         cmp ecx, 0
         jle .peg_done
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jmp .pole_right
 
 .peg_done:
-        pop edi
-        pop esi
-        pop edx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rbx
         ret
 
 ;--------------------------------------

@@ -39,7 +39,7 @@ start:
 ; draw_clock
 ;=======================================
 draw_clock:
-        pushad
+        PUSHALL
 
         ; Clear screen (black)
         mov edi, VGA_BASE
@@ -80,19 +80,19 @@ draw_clock:
         jge .face_done
 
         ; Is this a major tick (every 5)?
-        push ecx
+        push rcx
         mov eax, ecx
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, 5
         div ecx
-        pop ecx
+        pop rcx
         test edx, edx
-        pop ecx
+        pop rcx
         jnz .face_minor
 
         ; Major tick (hour markers 12,1,2,...,11)
-        push ecx
+        push rcx
         call get_circle_pos     ; ECX=angle(0-59), RADIUS -> (EAX=x, EDX=y)
         cmp eax, 0
         jl .face_skip_draw
@@ -104,70 +104,70 @@ draw_clock:
         jge .face_skip_draw
 
         ; Determine hour number
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         mov eax, ecx
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, 5
         div ecx
-        pop ecx
+        pop rcx
         ; EAX = 0-11 (0=12 o'clock)
         test eax, eax
         jnz .not_twelve
         mov eax, 12
 .not_twelve:
-        push eax               ; hour number
+        push rax               ; hour number
 
         ; Recalculate position
         call get_circle_pos
         mov ebx, eax            ; x
         mov ecx, edx            ; y
 
-        pop eax                 ; hour number
+        pop rax                 ; hour number
         ; Write hour digit(s)
         cmp eax, 10
         jl .single_digit
         ; Two digits: write "1" then digit
-        push eax
+        push rax
         mov al, '1'
         mov ah, 0x0E            ; Yellow
-        push ecx
+        push rcx
         imul ecx, SCREEN_W
         add ecx, ebx
         dec ecx                 ; one left
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         sub al, 10
         add al, '0'
         mov ah, 0x0E
-        push ecx
+        push rcx
         imul ecx, SCREEN_W
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ecx
+        pop rcx
         jmp .face_next
 
 .single_digit:
         add al, '0'
         mov ah, 0x0E
-        push ecx
+        push rcx
         imul ecx, SCREEN_W
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ecx
+        pop rcx
         jmp .face_next
 
 .face_minor:
         ; Minor tick marker
-        push ecx
+        push rcx
         call get_circle_pos
         cmp eax, 0
         jl .face_skip_draw
@@ -181,18 +181,18 @@ draw_clock:
         mov ecx, edx
         mov al, 0xFA            ; middle dot
         mov ah, 0x08            ; dark gray
-        push ecx
+        push rcx
         imul ecx, SCREEN_W
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop ecx
-        pop ecx
+        pop rcx
+        pop rcx
         jmp .face_next
 
 .face_skip_draw:
-        pop ecx
+        pop rcx
 .face_next:
         inc ecx
         jmp .face_loop
@@ -212,13 +212,13 @@ draw_clock:
         ; Add minute offset
         mov ecx, [cur_min]
         xor edx, edx
-        push eax
+        push rax
         mov eax, ecx
         mov ecx, 12
         xor edx, edx
         div ecx
         mov ecx, eax
-        pop eax
+        pop rax
         add eax, ecx           ; hour position in 60-scale
         mov ecx, eax
         mov eax, 5              ; hand length
@@ -279,7 +279,7 @@ draw_clock:
         mov ebx, title_str
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -287,7 +287,7 @@ draw_clock:
 ; Draws from center along direction
 ;---------------------------------------
 draw_hand:
-        pushad
+        PUSHALL
         mov [hand_len], eax
         mov [hand_char], dl
         mov [hand_color], dh
@@ -299,10 +299,10 @@ draw_hand:
         jg .dh_done
 
         ; Get position at this distance
-        push ecx
+        push rcx
         mov ecx, [hand_angle]
         call get_hand_pos       ; ECX=angle, ESI=distance -> (EAX=x, EDX=y)
-        pop ecx
+        pop rcx
 
         ; Bounds check
         cmp eax, 0
@@ -315,7 +315,7 @@ draw_hand:
         jge .dh_next
 
         ; Write to VGA
-        push ecx
+        push rcx
         mov ecx, edx
         imul ecx, SCREEN_W
         add ecx, eax
@@ -324,21 +324,21 @@ draw_hand:
         mov al, [hand_char]
         mov ah, [hand_color]
         mov [ecx], ax
-        pop ecx
+        pop rcx
 
 .dh_next:
         inc esi
         jmp .dh_loop
 .dh_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; get_circle_pos: ECX=angle(0-59) -> EAX=x, EDX=y (at RADIUS from center)
 ;---------------------------------------
 get_circle_pos:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
 
         ; Use lookup table for sin/cos approximation
         ; angle 0 = 12 o'clock (top), goes clockwise
@@ -357,7 +357,7 @@ get_circle_pos:
         mov ebx, 100
         idiv ebx
         add eax, CENTER_X
-        push eax
+        push rax
 
         movsx eax, word [cos_table + ecx*2]
         imul eax, RADIUS
@@ -367,17 +367,17 @@ get_circle_pos:
         mov edx, CENTER_Y
         sub edx, eax
 
-        pop eax
-        pop ecx
-        pop ebx
+        pop rax
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; get_hand_pos: ECX=angle(0-59), ESI=distance -> (EAX=x, EDX=y)
 ;---------------------------------------
 get_hand_pos:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
 
         cmp ecx, 60
         jl .ghp_ok
@@ -390,7 +390,7 @@ get_hand_pos:
         mov ebx, 100
         idiv ebx
         add eax, CENTER_X
-        push eax
+        push rax
 
         movsx eax, word [cos_table + ecx*2]
         imul eax, esi
@@ -400,31 +400,31 @@ get_hand_pos:
         mov edx, CENTER_Y
         sub edx, eax
 
-        pop eax
-        pop ecx
-        pop ebx
+        pop rax
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; print_2digit: print EAX as 2-digit number
 ;---------------------------------------
 print_2digit:
-        pushad
+        PUSHALL
         xor edx, edx
         mov ecx, 10
         div ecx
         ; EAX=tens, EDX=ones
         add eax, '0'
-        push edx
+        push rdx
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop edx
+        pop rdx
         add edx, '0'
         mov ebx, edx
         mov eax, SYS_PUTCHAR
         int 0x80
-        popad
+        POPALL
         ret
 
 ; === Data ===

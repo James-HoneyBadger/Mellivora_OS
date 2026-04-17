@@ -3,7 +3,7 @@
 ;=======================================================================
 
 shell_main:
-        mov esp, KERNEL_STACK
+        mov rsp, KERNEL_STACK
         mov byte [vga_color], COLOR_DEFAULT
         mov eax, [program_exit_code]
         mov [shell_last_status], eax
@@ -50,11 +50,11 @@ shell_main:
         xor edx, edx
         mov ebx, PIT_HZ
         div ebx                 ; EAX = whole seconds, EDX = remainder
-        push edx
+        push rdx
         call vga_print_dec
         mov al, '.'
         call vga_putchar
-        pop eax
+        pop rax
         ; Convert remainder to centiseconds: rem * 100 / PIT_HZ
         imul eax, 100
         xor edx, edx
@@ -62,10 +62,10 @@ shell_main:
         div ebx
         cmp eax, 10
         jge .bt_no_pad
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .bt_no_pad:
         call vga_print_dec
         mov esi, msg_boot_suf
@@ -75,6 +75,9 @@ shell_main:
 .no_motd:
 
 .prompt:
+        ; Reap any completed background jobs before showing prompt
+        call jobs_reap_done
+
         ; Print prompt with full current directory path
         mov byte [vga_color], COLOR_PROMPT
         mov esi, shell_prompt_pre
@@ -96,6 +99,7 @@ shell_main:
         ; Read command line
         mov edi, line_buffer
         xor ecx, ecx           ; Character count
+        mov dword [shell_cursor_pos], 0
 
         ; On first boot, flush stale PS/2 data from the keyboard buffer.
         ; The 8042 controller may deliver delayed bytes after sti that
@@ -123,34 +127,860 @@ shell_main:
         je .execute
         cmp al, 0x08            ; Backspace?
         je .backspace
-        cmp al, 0x7F            ; Delete (also backspace on some terms)?
-        je .backspace
         cmp al, KEY_UP          ; Up arrow - history prev
         je .hist_up
         cmp al, KEY_DOWN        ; Down arrow - history next
         je .hist_down
+        cmp al, KEY_LEFT        ; Left arrow - cursor left
+        je .key_left
+        cmp al, KEY_RIGHT       ; Right arrow - cursor right
+        je .key_right
+        cmp al, KEY_HOME        ; Home - cursor to start
+        je .key_home
+        cmp al, KEY_END         ; End - cursor to end
+        je .key_end
+        cmp al, KEY_DELETE      ; Delete - delete at cursor
+        je .key_delete
+        cmp al, 0x7F            ; Terminal DEL - delete at cursor
+        je .key_delete
         cmp al, TAB_KEY         ; Tab - auto-complete
         je .tab_complete
         cmp al, CTRL_C_CODE     ; Ctrl+C - cancel
         je .ctrl_c
+        cmp al, 1               ; Ctrl+A - cursor to start
+        je .key_home
+        cmp al, 5               ; Ctrl+E - cursor to end
+        je .key_end
+        cmp al, 12              ; Ctrl+L - clear screen, reprint
+        je .ctrl_l
+        cmp al, 21              ; Ctrl+U - kill to start of line
+        je .ctrl_u
+        cmp al, 11              ; Ctrl+K - kill to end of line
+        je .ctrl_k
+        cmp al, 23              ; Ctrl+W - delete previous word
+        je .ctrl_w
+        cmp al, 18              ; Ctrl+R - reverse history search
+        je .ctrl_r
+        cmp al, 20              ; Ctrl+T - transpose chars
+        je .ctrl_t
 
         ; Store character if buffer not full
         cmp ecx, LINE_BUFFER_SIZE - 1
         jge .read_loop
-        stosb
+        mov edx, [shell_cursor_pos]
+        cmp edx, ecx
+        je .append_char
+
+        ; --- Mid-line insert: shift buffer right ---
+        push rax                ; Save character (in AL)
+        mov eax, ecx
+.shift_r:
+        cmp eax, edx
+        jle .shift_r_done
+        mov bl, [line_buffer + eax - 1]
+        mov [line_buffer + eax], bl
+        dec eax
+        jmp .shift_r
+.shift_r_done:
+        pop rax                 ; Restore character
+        mov [line_buffer + edx], al
         inc ecx
-        ; Echo character
+        inc dword [shell_cursor_pos]
+        ; Print inserted char (advances VGA cursor)
         call vga_putchar
+        ; Save target cursor position
+        mov eax, [vga_cursor_x]
+        mov [shell_saved_cx], eax
+        mov eax, [vga_cursor_y]
+        mov [shell_saved_cy], eax
+        ; Redraw rest of line
+        mov edx, [shell_cursor_pos]
+.redraw_insert:
+        cmp edx, ecx
+        jge .repos_insert
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        jmp .redraw_insert
+.repos_insert:
+        mov eax, [shell_saved_cx]
+        mov [vga_cursor_x], eax
+        mov eax, [shell_saved_cy]
+        mov [vga_cursor_y], eax
+        call vga_update_cursor
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+.append_char:
+        mov [line_buffer + ecx], al
+        inc ecx
+        inc dword [shell_cursor_pos]
+        call vga_putchar
+        lea edi, [line_buffer + ecx]
         jmp .read_loop
 
 .backspace:
-        or ecx, ecx
+        cmp dword [shell_cursor_pos], 0
         jz .read_loop
-        dec edi
+        dec dword [shell_cursor_pos]
         dec ecx
-        mov al, 0x08
+        ; Move VGA cursor back (non-destructive)
+        cmp dword [vga_cursor_x], 0
+        je .bs_wrap
+        dec dword [vga_cursor_x]
+        jmp .bs_shift
+.bs_wrap:
+        cmp dword [vga_cursor_y], 0
+        je .bs_shift
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.bs_shift:
+        ; Shift buffer left from cursor_pos
+        mov edx, [shell_cursor_pos]
+        mov eax, edx
+.bs_shift_loop:
+        cmp eax, ecx
+        jge .bs_redraw
+        mov bl, [line_buffer + eax + 1]
+        mov [line_buffer + eax], bl
+        inc eax
+        jmp .bs_shift_loop
+.bs_redraw:
+        ; Save target cursor position
+        mov eax, [vga_cursor_x]
+        mov [shell_saved_cx], eax
+        mov eax, [vga_cursor_y]
+        mov [shell_saved_cy], eax
+        ; Redraw from cursor to end
+        mov edx, [shell_cursor_pos]
+.bs_redraw_loop:
+        cmp edx, ecx
+        jge .bs_erase
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        jmp .bs_redraw_loop
+.bs_erase:
+        mov al, ' '
+        call vga_putchar
+        ; Restore cursor
+        mov eax, [shell_saved_cx]
+        mov [vga_cursor_x], eax
+        mov eax, [shell_saved_cy]
+        mov [vga_cursor_y], eax
+        call vga_update_cursor
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+.key_left:
+        cmp dword [shell_cursor_pos], 0
+        je .read_loop
+        dec dword [shell_cursor_pos]
+        cmp dword [vga_cursor_x], 0
+        je .kl_wrap
+        dec dword [vga_cursor_x]
+        jmp .kl_done
+.kl_wrap:
+        cmp dword [vga_cursor_y], 0
+        je .kl_done
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.kl_done:
+        call vga_update_cursor
+        jmp .read_loop
+
+.key_right:
+        mov edx, [shell_cursor_pos]
+        cmp edx, ecx
+        jge .read_loop
+        inc dword [shell_cursor_pos]
+        inc dword [vga_cursor_x]
+        cmp dword [vga_cursor_x], VGA_WIDTH
+        jl .kr_done
+        mov dword [vga_cursor_x], 0
+        inc dword [vga_cursor_y]
+.kr_done:
+        call vga_update_cursor
+        jmp .read_loop
+
+.key_home:
+        mov edx, [shell_cursor_pos]
+        or edx, edx
+        jz .read_loop
+        mov dword [shell_cursor_pos], 0
+.kh_back:
+        cmp dword [vga_cursor_x], 0
+        je .kh_wrap
+        dec dword [vga_cursor_x]
+        jmp .kh_next
+.kh_wrap:
+        cmp dword [vga_cursor_y], 0
+        je .kh_done
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.kh_next:
+        dec edx
+        jnz .kh_back
+.kh_done:
+        call vga_update_cursor
+        jmp .read_loop
+
+.key_end:
+        mov edx, [shell_cursor_pos]
+        cmp edx, ecx
+        jge .read_loop
+.ke_fwd:
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        cmp edx, ecx
+        jl .ke_fwd
+        mov [shell_cursor_pos], ecx
+        jmp .read_loop
+
+.key_delete:
+        mov edx, [shell_cursor_pos]
+        cmp edx, ecx
+        jge .read_loop
+        dec ecx
+        mov eax, edx
+.del_shift:
+        cmp eax, ecx
+        jge .del_redraw
+        mov bl, [line_buffer + eax + 1]
+        mov [line_buffer + eax], bl
+        inc eax
+        jmp .del_shift
+.del_redraw:
+        mov eax, [vga_cursor_x]
+        mov [shell_saved_cx], eax
+        mov eax, [vga_cursor_y]
+        mov [shell_saved_cy], eax
+        mov edx, [shell_cursor_pos]
+.del_redraw_loop:
+        cmp edx, ecx
+        jge .del_erase
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        jmp .del_redraw_loop
+.del_erase:
+        mov al, ' '
+        call vga_putchar
+        mov eax, [shell_saved_cx]
+        mov [vga_cursor_x], eax
+        mov eax, [shell_saved_cy]
+        mov [vga_cursor_y], eax
+        call vga_update_cursor
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+.ctrl_l:
+        ; Clear screen, reprint prompt and current input
+        call vga_clear
+        ; Reprint prompt
+        mov byte [vga_color], COLOR_PROMPT
+        push rsi
+        mov esi, shell_prompt_pre
+        call vga_print
+        push rdi
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, path_search_buf
+        call vga_print
+        mov esi, shell_prompt_post
+        call vga_print
+        pop rdi
+        pop rsi
+        mov byte [vga_color], COLOR_DEFAULT
+        ; Reprint current input
+        push rcx
+        xor edx, edx
+.cl_reprint:
+        cmp edx, ecx
+        jge .cl_cursor
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        jmp .cl_reprint
+.cl_cursor:
+        pop rcx
+        ; Move cursor back to shell_cursor_pos
+        mov edx, ecx
+        mov eax, [shell_cursor_pos]
+.cl_back:
+        cmp eax, edx
+        jge .cl_done
+        cmp dword [vga_cursor_x], 0
+        je .cl_bwrap
+        dec dword [vga_cursor_x]
+        jmp .cl_bnext
+.cl_bwrap:
+        cmp dword [vga_cursor_y], 0
+        je .cl_done
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.cl_bnext:
+        inc eax
+        jmp .cl_back
+.cl_done:
+        call vga_update_cursor
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+.ctrl_u:
+        ; Kill from start of line to cursor
+        mov edx, [shell_cursor_pos]
+        or edx, edx
+        jz .read_loop
+        ; Shift buffer left by cursor_pos chars
+        push rcx                ; save length
+        mov eax, 0
+        mov ebx, edx
+.cu_shift:
+        cmp ebx, [rsp]         ; compare to saved ecx (length)
+        jge .cu_shift_done
+        mov cl, [line_buffer + ebx]
+        mov [line_buffer + eax], cl
+        inc eax
+        inc ebx
+        jmp .cu_shift
+.cu_shift_done:
+        pop rcx
+        sub ecx, edx           ; new length = old_len - cursor_pos
+        mov dword [shell_cursor_pos], 0
+        ; Move VGA cursor to start of input
+        push rcx
+.cu_back:
+        or edx, edx
+        jz .cu_redraw
+        cmp dword [vga_cursor_x], 0
+        je .cu_bwrap
+        dec dword [vga_cursor_x]
+        jmp .cu_bnext
+.cu_bwrap:
+        cmp dword [vga_cursor_y], 0
+        je .cu_redraw
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.cu_bnext:
+        dec edx
+        jmp .cu_back
+.cu_redraw:
+        ; Save start cursor pos
+        mov eax, [vga_cursor_x]
+        mov [shell_saved_cx], eax
+        mov eax, [vga_cursor_y]
+        mov [shell_saved_cy], eax
+        ; Redraw remaining buffer
+        pop rcx
+        xor edx, edx
+.cu_draw:
+        cmp edx, ecx
+        jge .cu_blank
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        jmp .cu_draw
+.cu_blank:
+        ; Blank deleted chars (edx = how many we just drew)
+        ; We need to blank 'deleted count' more spaces
+        mov ebx, [shell_saved_cx]  ; temp: save
+        push rcx                   ; save new length
+        ; Number of blanks needed = old_cursor_pos (still in the shift count)
+        ; Actually edx = new_len at this point. Need old cursor pos blanks.
+        ; We saved nothing for that; just blank a generous amount
+        mov ecx, edx               ; edx = new chars drawn
+        add ecx, 16                ; blank extra to be safe
+        sub ecx, edx
+.cu_bl:
+        or ecx, ecx
+        jz .cu_repos
+        mov al, ' '
+        call vga_putchar
+        dec ecx
+        jmp .cu_bl
+.cu_repos:
+        pop rcx
+        mov eax, [shell_saved_cx]
+        mov [vga_cursor_x], eax
+        mov eax, [shell_saved_cy]
+        mov [vga_cursor_y], eax
+        call vga_update_cursor
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+.ctrl_k:
+        ; Kill from cursor to end of line
+        mov edx, [shell_cursor_pos]
+        cmp edx, ecx
+        jge .read_loop
+        ; Save cursor pos, blank the rest on screen
+        mov eax, [vga_cursor_x]
+        mov [shell_saved_cx], eax
+        mov eax, [vga_cursor_y]
+        mov [shell_saved_cy], eax
+        push rdx
+.ck_blank:
+        cmp edx, ecx
+        jge .ck_repos
+        mov al, ' '
+        call vga_putchar
+        inc edx
+        jmp .ck_blank
+.ck_repos:
+        pop rdx
+        mov ecx, edx            ; new length = cursor_pos
+        mov eax, [shell_saved_cx]
+        mov [vga_cursor_x], eax
+        mov eax, [shell_saved_cy]
+        mov [vga_cursor_y], eax
+        call vga_update_cursor
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+.ctrl_t:
+        ; Transpose two characters before cursor
+        cmp dword [shell_cursor_pos], 0
+        je .read_loop
+        ; If at end of line, swap chars at pos-2 and pos-1
+        ; Otherwise swap chars at pos-1 and pos, advance cursor
+        mov edx, [shell_cursor_pos]
+        cmp edx, ecx
+        je .ct_at_end
+        ; Mid-line: swap [pos-1] and [pos], advance cursor
+        mov al, [line_buffer + edx - 1]
+        mov bl, [line_buffer + edx]
+        mov [line_buffer + edx - 1], bl
+        mov [line_buffer + edx], al
+        inc dword [shell_cursor_pos]
+        ; Redraw: move cursor back 1, print both chars
+        cmp dword [vga_cursor_x], 0
+        je .ct_mid_wrap
+        dec dword [vga_cursor_x]
+        jmp .ct_mid_draw
+.ct_mid_wrap:
+        cmp dword [vga_cursor_y], 0
+        je .ct_mid_draw
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.ct_mid_draw:
+        call vga_update_cursor
+        mov al, bl
+        call vga_putchar
+        mov al, [line_buffer + edx]
         call vga_putchar
         jmp .read_loop
+.ct_at_end:
+        ; At end: swap [pos-2] and [pos-1]
+        cmp edx, 2
+        jl .read_loop
+        mov al, [line_buffer + edx - 2]
+        mov bl, [line_buffer + edx - 1]
+        mov [line_buffer + edx - 2], bl
+        mov [line_buffer + edx - 1], al
+        ; Move cursor back 2 positions, redraw both
+        push rdx
+        mov edx, 2
+.ct_end_back:
+        cmp dword [vga_cursor_x], 0
+        je .ct_end_bwrap
+        dec dword [vga_cursor_x]
+        jmp .ct_end_bnext
+.ct_end_bwrap:
+        cmp dword [vga_cursor_y], 0
+        je .ct_end_redraw
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.ct_end_bnext:
+        dec edx
+        jnz .ct_end_back
+.ct_end_redraw:
+        pop rdx
+        call vga_update_cursor
+        mov al, [line_buffer + edx - 2]
+        call vga_putchar
+        mov al, [line_buffer + edx - 1]
+        call vga_putchar
+        jmp .read_loop
+
+.ctrl_w:
+        ; Delete previous word: skip trailing spaces, then skip word chars
+        mov edx, [shell_cursor_pos]
+        or edx, edx
+        jz .read_loop
+        ; Find start of previous word
+        mov ebx, edx            ; save original cursor pos
+        ; Skip spaces backward
+.cw_skip_space:
+        or edx, edx
+        jz .cw_do_delete
+        cmp byte [line_buffer + edx - 1], ' '
+        jne .cw_skip_word
+        dec edx
+        jmp .cw_skip_space
+.cw_skip_word:
+        or edx, edx
+        jz .cw_do_delete
+        cmp byte [line_buffer + edx - 1], ' '
+        je .cw_do_delete
+        dec edx
+        jmp .cw_skip_word
+.cw_do_delete:
+        ; EDX = new cursor pos, EBX = old cursor pos
+        ; Chars to delete = EBX - EDX
+        mov eax, ebx
+        sub eax, edx            ; EAX = chars to delete
+        or eax, eax
+        jz .read_loop
+        ; Move VGA cursor back by (EBX - EDX) chars
+        push rcx
+        push rdx
+        push rax
+        mov ecx, eax            ; count of chars to move back
+.cw_vga_back:
+        or ecx, ecx
+        jz .cw_vga_back_done
+        cmp dword [vga_cursor_x], 0
+        je .cw_vga_bwrap
+        dec dword [vga_cursor_x]
+        jmp .cw_vga_bnext
+.cw_vga_bwrap:
+        cmp dword [vga_cursor_y], 0
+        je .cw_vga_back_done
+        dec dword [vga_cursor_y]
+        mov dword [vga_cursor_x], VGA_WIDTH - 1
+.cw_vga_bnext:
+        dec ecx
+        jmp .cw_vga_back
+.cw_vga_back_done:
+        pop rax                 ; chars deleted
+        pop rdx                 ; new cursor pos
+        pop rcx                 ; line length
+        ; Shift buffer left: move [ebx..ecx) to [edx..)
+        push rax                ; save delete count
+        mov eax, edx
+.cw_shift:
+        cmp ebx, ecx
+        jge .cw_shift_done
+        mov ah, [line_buffer + ebx]
+        mov [line_buffer + eax], ah
+        inc eax
+        inc ebx
+        jmp .cw_shift
+.cw_shift_done:
+        pop rax                 ; delete count
+        sub ecx, eax            ; new line length
+        mov [shell_cursor_pos], edx
+        ; Save VGA pos, redraw from cursor, blank deleted chars
+        mov eax, [vga_cursor_x]
+        mov [shell_saved_cx], eax
+        mov eax, [vga_cursor_y]
+        mov [shell_saved_cy], eax
+        push rcx
+        mov eax, edx
+.cw_redraw:
+        cmp eax, ecx
+        jge .cw_blank
+        push rax
+        mov al, [line_buffer + eax]
+        call vga_putchar
+        pop rax
+        inc eax
+        jmp .cw_redraw
+.cw_blank:
+        ; Blank leftover chars
+        pop rcx
+        push rcx
+        mov eax, [rsp + 0]      ; ecx (new len)
+        ; We need to blank from new_len to old display end
+        ; Just blank a safe amount
+        mov ebx, 16
+.cw_bl:
+        or ebx, ebx
+        jz .cw_repos
+        mov al, ' '
+        call vga_putchar
+        dec ebx
+        jmp .cw_bl
+.cw_repos:
+        pop rcx
+        mov eax, [shell_saved_cx]
+        mov [vga_cursor_x], eax
+        mov eax, [shell_saved_cy]
+        mov [vga_cursor_y], eax
+        call vga_update_cursor
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+.ctrl_r:
+        ; Reverse incremental history search
+        ; Show (reverse-i-search)`': prompt, accept chars, search
+        push rcx                ; save current line length
+        ; Save current input in temp_line_buf
+        push rcx
+        mov esi, line_buffer
+        mov edi, temp_line_buf
+        rep movsb
+        mov byte [edi], 0
+        pop rcx
+        mov [cr_saved_len], ecx
+        ; Init search
+        mov dword [cr_query_len], 0
+        mov dword [cr_match_idx], -1
+        ; Erase current input and show search prompt
+        call .erase_input
+        mov esi, cr_prompt_pre
+        call vga_print
+        mov esi, cr_prompt_mid
+        call vga_print
+.cr_loop:
+        call kb_getchar
+        cmp al, 0x0D            ; Enter - accept match
+        je .cr_accept
+        cmp al, 0x0A
+        je .cr_accept
+        cmp al, CTRL_C_CODE     ; Ctrl+C - cancel
+        je .cr_cancel
+        cmp al, 27              ; Escape - cancel
+        je .cr_cancel
+        cmp al, 0x08            ; Backspace - remove last query char
+        je .cr_backspace
+        cmp al, 18              ; Ctrl+R again - search further back
+        je .cr_search_next
+        ; Filter non-printable
+        cmp al, 32
+        jb .cr_loop
+        cmp al, 126
+        ja .cr_loop
+        ; Add char to search query
+        mov edx, [cr_query_len]
+        cmp edx, 63
+        jge .cr_loop            ; query full
+        mov [cr_query_buf + edx], al
+        inc dword [cr_query_len]
+        mov byte [cr_query_buf + edx + 1], 0
+        ; Reset search index
+        mov eax, [hist_count]
+        mov [cr_match_idx], eax
+        jmp .cr_do_search
+.cr_backspace:
+        cmp dword [cr_query_len], 0
+        je .cr_loop
+        dec dword [cr_query_len]
+        mov edx, [cr_query_len]
+        mov byte [cr_query_buf + edx], 0
+        ; Reset search index
+        mov eax, [hist_count]
+        mov [cr_match_idx], eax
+        jmp .cr_do_search
+.cr_search_next:
+        ; Search further back from current match
+        jmp .cr_do_search
+.cr_do_search:
+        ; Search backward from cr_match_idx - 1
+        mov eax, [cr_match_idx]
+        dec eax
+        cmp eax, 0
+        jl .cr_no_match
+.cr_search_loop:
+        ; Compare query against hist_buf[eax]
+        push rax
+        shl eax, 8             ; * HIST_ENTRY_SIZE
+        lea esi, [hist_buf + eax]
+        mov edi, cr_query_buf
+        call .cr_strstr
+        pop rax
+        jc .cr_found
+        dec eax
+        cmp eax, 0
+        jge .cr_search_loop
+.cr_no_match:
+        mov dword [cr_match_idx], -1
+        jmp .cr_redraw
+.cr_found:
+        mov [cr_match_idx], eax
+.cr_redraw:
+        ; Clear line and redraw search prompt with match
+        ; Move cursor to col 0
+        mov eax, [vga_cursor_x]
+        push rax
+        mov dword [vga_cursor_x], 0
+        ; Blank the entire line
+        push rcx
+        mov ecx, VGA_WIDTH
+.cr_blank_line:
+        mov al, ' '
+        call vga_putchar
+        loop .cr_blank_line
+        pop rcx
+        mov dword [vga_cursor_x], 0
+        pop rax                 ; discard saved cursor_x
+        ; Print search prompt
+        mov esi, cr_prompt_pre
+        call vga_print
+        mov esi, cr_query_buf
+        call vga_print
+        mov esi, cr_prompt_mid
+        call vga_print
+        ; Print match if found
+        cmp dword [cr_match_idx], -1
+        je .cr_loop
+        mov eax, [cr_match_idx]
+        shl eax, 8
+        lea esi, [hist_buf + eax]
+        call vga_print
+        jmp .cr_loop
+.cr_accept:
+        ; Accept match, copy to line_buffer
+        pop rcx                 ; discard saved len
+        cmp dword [cr_match_idx], -1
+        je .cr_accept_empty
+        ; Clear line
+        mov dword [vga_cursor_x], 0
+        push rcx
+        mov ecx, VGA_WIDTH
+.cr_acc_blank:
+        mov al, ' '
+        call vga_putchar
+        loop .cr_acc_blank
+        pop rcx
+        mov dword [vga_cursor_x], 0
+        ; Reprint prompt
+        mov byte [vga_color], COLOR_PROMPT
+        mov esi, shell_prompt_pre
+        call vga_print
+        push rdi
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, path_search_buf
+        call vga_print
+        mov esi, shell_prompt_post
+        call vga_print
+        pop rdi
+        mov byte [vga_color], COLOR_DEFAULT
+        ; Copy match to line_buffer
+        mov eax, [cr_match_idx]
+        shl eax, 8
+        lea esi, [hist_buf + eax]
+        mov edi, line_buffer
+        xor ecx, ecx
+.cr_acc_copy:
+        lodsb
+        stosb
+        cmp al, 0
+        je .cr_acc_done
+        push rcx
+        call vga_putchar
+        pop rcx
+        inc ecx
+        jmp .cr_acc_copy
+.cr_acc_done:
+        mov [shell_cursor_pos], ecx
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+.cr_accept_empty:
+        ; No match - restore original input
+        jmp .cr_restore
+.cr_cancel:
+        pop rcx                 ; discard saved len
+.cr_restore:
+        ; Restore original input from temp_line_buf
+        ; Clear line
+        mov dword [vga_cursor_x], 0
+        push rcx
+        mov ecx, VGA_WIDTH
+.cr_can_blank:
+        mov al, ' '
+        call vga_putchar
+        loop .cr_can_blank
+        pop rcx
+        mov dword [vga_cursor_x], 0
+        ; Reprint prompt
+        mov byte [vga_color], COLOR_PROMPT
+        mov esi, shell_prompt_pre
+        call vga_print
+        push rdi
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, path_search_buf
+        call vga_print
+        mov esi, shell_prompt_post
+        call vga_print
+        pop rdi
+        mov byte [vga_color], COLOR_DEFAULT
+        ; Restore original line
+        mov esi, temp_line_buf
+        mov edi, line_buffer
+        mov ecx, [cr_saved_len]
+        push rcx
+        rep movsb
+        pop rcx
+        mov byte [line_buffer + ecx], 0
+        ; Reprint it
+        push rcx
+        xor edx, edx
+.cr_reprint:
+        cmp edx, ecx
+        jge .cr_reprint_done
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        jmp .cr_reprint
+.cr_reprint_done:
+        pop rcx
+        mov [shell_cursor_pos], ecx
+        lea edi, [line_buffer + ecx]
+        jmp .read_loop
+
+; Substring search: does null-terminated ESI contain null-terminated EDI?
+; Returns CF=1 if found, CF=0 if not
+.cr_strstr:
+        push rax
+        push rbx
+        push rsi
+        push rdi
+        cmp byte [edi], 0      ; empty query matches everything
+        je .crss_found
+.crss_outer:
+        cmp byte [esi], 0
+        je .crss_notfound
+        push rsi
+        push rdi
+.crss_inner:
+        cmp byte [edi], 0
+        je .crss_inner_match
+        mov al, [esi]
+        cmp al, 0
+        je .crss_inner_fail
+        cmp al, [edi]
+        jne .crss_inner_fail
+        inc esi
+        inc edi
+        jmp .crss_inner
+.crss_inner_match:
+        pop rdi
+        pop rsi
+        jmp .crss_found
+.crss_inner_fail:
+        pop rdi
+        pop rsi
+        inc esi
+        jmp .crss_outer
+.crss_notfound:
+        pop rdi
+        pop rsi
+        pop rbx
+        pop rax
+        clc
+        ret
+.crss_found:
+        pop rdi
+        pop rsi
+        pop rbx
+        pop rax
+        stc
+        ret
 
 .hist_up:
         cmp dword [hist_browse], 0
@@ -172,16 +1002,18 @@ shell_main:
 .tab_complete:
         call shell_tab_complete
         lea edi, [line_buffer + ecx]
+        mov [shell_cursor_pos], ecx
         jmp .read_loop
 
 .ctrl_c:
         ; Print ^C and cancel current input
-        push esi
+        push rsi
         mov esi, msg_ctrl_c
         call vga_print
-        pop esi
+        pop rsi
         mov edi, line_buffer
         xor ecx, ecx
+        mov dword [shell_cursor_pos], 0
         jmp .prompt
 
 .hist_clear_line:
@@ -189,6 +1021,7 @@ shell_main:
         call .erase_input
         mov edi, line_buffer
         xor ecx, ecx
+        mov dword [shell_cursor_pos], 0
         jmp .read_loop
 
 .hist_recall:
@@ -206,31 +1039,38 @@ shell_main:
         je .hist_copy_done
         stosb
         inc ecx
-        push ecx
+        push rcx
         call vga_putchar        ; Echo the char
-        pop ecx
+        pop rcx
         jmp .hist_copy
 .hist_copy_done:
+        mov [shell_cursor_pos], ecx
         jmp .read_loop
 
 .erase_input:
-        ; Backspace over ECX characters
-        push ecx
+        ; Move cursor to end of line first
+        push rcx
+        mov edx, [shell_cursor_pos]
+.erase_to_end:
+        cmp edx, ecx
+        jge .erase_at_end
+        mov al, [line_buffer + edx]
+        call vga_putchar
+        inc edx
+        jmp .erase_to_end
+.erase_at_end:
+        pop rcx
+        ; Erase ECX characters going backward
+        push rcx
 .erase_loop:
         cmp ecx, 0
         je .erase_done
-        push ecx
         mov al, 0x08
         call vga_putchar
-        mov al, ' '
-        call vga_putchar
-        mov al, 0x08
-        call vga_putchar
-        pop ecx
         dec ecx
         jmp .erase_loop
 .erase_done:
-        pop ecx
+        pop rcx
         ret
 
 .execute:
@@ -325,7 +1165,7 @@ HIST_MAX        equ 64
 HIST_ENTRY_SIZE equ 256
 
 shell_save_history:
-        pushad
+        PUSHALL
         ; Shift history up if full
         mov eax, [hist_count]
         cmp eax, HIST_MAX
@@ -352,7 +1192,7 @@ shell_save_history:
         mov byte [edi], 0       ; Ensure null termination
 .copy_done:
         inc dword [hist_count]
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -364,6 +1204,9 @@ shell_parse_cmd:
         call skip_spaces
 
         mov dword [shell_last_status], 0
+
+        ; --- Expand $VAR references in line_buffer ---
+        call shell_expand_vars
 
         ; --- Check for trailing '&' (background job request) ---
         call shell_strip_bg_ampersand
@@ -397,11 +1240,46 @@ shell_status_fail:
         ret
 
 ;---------------------------------------
+; shell_expand_vars - Expand $VARIABLE references in line_buffer
+; Scans for '$' — if found, runs env_expand into env_temp_buf
+; then copies result back to line_buffer.
+;---------------------------------------
+shell_expand_vars:
+        PUSHALL
+        ; Quick check: does line_buffer contain any '$'?
+        mov esi, line_buffer
+.sev_scan:
+        lodsb
+        cmp al, 0
+        je .sev_done            ; No '$' found — nothing to do
+        cmp al, '$'
+        jne .sev_scan
+        ; Found '$' — do full expansion
+        mov esi, line_buffer
+        mov edi, env_temp_buf
+        call env_expand
+        ; Copy expanded result back to line_buffer
+        mov esi, env_temp_buf
+        mov edi, line_buffer
+        mov ecx, LINE_BUFFER_SIZE - 1
+.sev_copy:
+        lodsb
+        stosb
+        test al, al
+        jz .sev_done
+        dec ecx
+        jnz .sev_copy
+        mov byte [edi], 0      ; Ensure null-termination
+.sev_done:
+        POPALL
+        ret
+
+;---------------------------------------
 ; shell_print_elapsed - Print elapsed time since time_start_ticks
 ; Output: "real 1.23s" format (seconds with 2 decimal places)
 ;---------------------------------------
 shell_print_elapsed:
-        pushad
+        PUSHALL
         mov byte [time_active], 0
 
         ; Calculate elapsed ticks
@@ -421,7 +1299,7 @@ shell_print_elapsed:
         xor edx, edx
         mov ebx, 100
         div ebx                 ; EAX = seconds, EDX = remainder
-        push edx
+        push rdx
         call vga_print_dec
 
         ; Print decimal point
@@ -429,13 +1307,13 @@ shell_print_elapsed:
         call vga_print
 
         ; Print fractional part (2 digits, zero-padded)
-        pop eax                 ; remainder (0-99)
+        pop rax                 ; remainder (0-99)
         cmp eax, 10
         jge .no_pad
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .no_pad:
         call vga_print_dec
 
@@ -443,7 +1321,7 @@ shell_print_elapsed:
         mov esi, msg_s_nl
         call vga_print
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -457,7 +1335,7 @@ shell_print_elapsed:
 ; If a glob matches nothing, the literal pattern is kept (POSIX).
 ;---------------------------------------
 shell_expand_globs:
-        pushad
+        PUSHALL
 
         ; Skip if line_buffer is empty
         mov esi, line_buffer
@@ -465,10 +1343,10 @@ shell_expand_globs:
         je .seg_done
 
         ; Quick check: does line_buffer contain any wildcard chars at all?
-        push esi
+        push rsi
         mov esi, line_buffer
         call str_has_wildcards
-        pop esi
+        pop rsi
         jnc .seg_done           ; No wildcards — nothing to do
 
         ; Load current directory for matching
@@ -505,7 +1383,7 @@ shell_expand_globs:
         je .seg_finish
 
         ; Extract token into glob_token_buf
-        push edi
+        push rdi
         mov edi, glob_token_buf
         xor ecx, ecx
 .seg_tok:
@@ -520,20 +1398,20 @@ shell_expand_globs:
         jb .seg_tok
 .seg_tok_end:
         mov byte [edi + ecx], 0
-        pop edi                 ; Restore output pointer
+        pop rdi                 ; Restore output pointer
 
         ; Does this token have wildcards?
-        push esi
+        push rsi
         mov esi, glob_token_buf
         call str_has_wildcards
-        pop esi
+        pop rsi
         jnc .seg_copy_literal   ; No wildcards — copy as-is
 
         ; Expand against directory entries
-        push esi
+        push rsi
         mov dword [.seg_match_count], 0
         mov ebp, hbfs_dir_buf
-        push edi                ; Save output pointer
+        push rdi                ; Save output pointer
         call hbfs_get_max_entries
         mov edx, eax            ; EDX = max entries
 
@@ -544,17 +1422,17 @@ shell_expand_globs:
         je .seg_dir_next
 
         ; Match this entry name against pattern
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov esi, glob_token_buf ; pattern
         mov edi, ebp            ; candidate = entry name (at start of dirent)
         call wildcard_match
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         jnc .seg_dir_next
 
         ; Match! Append filename to output
-        pop edi                 ; Restore output pointer
+        pop rdi                 ; Restore output pointer
         ; Add space separator if not first match
         cmp dword [.seg_match_count], 0
         je .seg_no_sep
@@ -562,7 +1440,7 @@ shell_expand_globs:
         stosb
 .seg_no_sep:
         ; Copy entry name
-        push esi
+        push rsi
         lea esi, [ebp]          ; Entry name at start of dirent
 .seg_cp_name:
         lodsb
@@ -571,9 +1449,9 @@ shell_expand_globs:
         stosb
         jmp .seg_cp_name
 .seg_cp_name_done:
-        pop esi
+        pop rsi
         inc dword [.seg_match_count]
-        push edi                ; Save output pointer again
+        push rdi                ; Save output pointer again
 
 .seg_dir_next:
         add ebp, HBFS_DIR_ENTRY_SIZE
@@ -581,8 +1459,8 @@ shell_expand_globs:
         jmp .seg_dir_loop
 
 .seg_dir_done:
-        pop edi                 ; Restore output pointer
-        pop esi                 ; Restore line_buffer pointer
+        pop rdi                 ; Restore output pointer
+        pop rsi                 ; Restore line_buffer pointer
 
         ; If no matches, copy the literal glob pattern
         cmp dword [.seg_match_count], 0
@@ -623,17 +1501,18 @@ shell_expand_globs:
         mov byte [edi], 0
 
 .seg_done:
-        popad
+        POPALL
         ret
 
 .seg_match_count: dd 0
 
 ;---------------------------------------
 ; Check for trailing '&' (not '&&') in line_buffer.
-; If found, strip it and print a warning. Runs command in foreground.
+; If found, strip it and set bg_request flag for background execution.
 ;---------------------------------------
 shell_strip_bg_ampersand:
-        pushad
+        PUSHALL
+        mov byte [bg_request], 0    ; Default: foreground
         mov esi, line_buffer
         ; Find end of input
         xor ecx, ecx
@@ -662,19 +1541,22 @@ shell_strip_bg_ampersand:
 .sba_is_bg:
         ; Strip the '&' (null-terminate there)
         mov byte [esi + ecx], 0
-        ; Print warning
-        push ecx
-        mov byte [vga_color], COLOR_INFO
-        mov esi, msg_bg_unsupported
-        call vga_print
-        mov byte [vga_color], COLOR_DEFAULT
-        pop ecx
+        ; Trim trailing spaces after removing '&'
+.sba_trim:
+        dec ecx
+        js .sba_set_bg
+        cmp byte [esi + ecx], ' '
+        jne .sba_set_bg
+        mov byte [esi + ecx], 0
+        jmp .sba_trim
+.sba_set_bg:
+        mov byte [bg_request], 1    ; Request background execution
 .sba_done:
-        popad
+        POPALL
         ret
 
 shell_execute_conditionals:
-        pushad
+        PUSHALL
         mov esi, line_buffer
 .sec_scan:
         mov al, [esi]
@@ -694,7 +1576,7 @@ shell_execute_conditionals:
         jmp .sec_scan
 
 .sec_none:
-        popad
+        POPALL
         clc
         ret
 
@@ -778,12 +1660,12 @@ shell_execute_conditionals:
         call shell_status_fail
         mov esi, msg_redir_syntax
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
 .sec_done:
-        popad
+        POPALL
         stc
         ret
 
@@ -793,7 +1675,7 @@ shell_dispatch_core:
         ; Guard: only expand once per command to prevent infinite recursion
         cmp byte [alias_expanding], 1
         je .alias_skip_nofix
-        push esi
+        push rsi
         mov ecx, [alias_count]
         cmp ecx, 0
         je .alias_skip
@@ -803,17 +1685,17 @@ shell_dispatch_core:
         cmp ebx, ecx
         jge .alias_skip
         ; Check if command starts with alias name
-        push esi
+        push rsi
         mov edi, edx
         call str_starts_with
-        pop esi
+        pop rsi
         jc .alias_found
         add edx, ALIAS_ENTRY_SIZE
         inc ebx
         jmp .alias_lookup
 .alias_found:
         ; Copy alias command into alias_expand_buf, then append rest of args
-        push esi          ; ESI now points past the alias name
+        push rsi          ; ESI now points past the alias name
         lea esi, [edx + ALIAS_NAME_LEN]
         mov edi, alias_expand_buf
         mov ecx, 255
@@ -825,7 +1707,7 @@ shell_dispatch_core:
         dec ecx
         jnz .aexp_copy_cmd
 .aexp_cmd_done:
-        pop esi
+        pop rsi
         ; Append remaining arguments
 .aexp_copy_rest:
         lodsb
@@ -836,14 +1718,75 @@ shell_dispatch_core:
         jnz .aexp_copy_rest
 .aexp_done:
         mov byte [edi], 0
-        pop esi            ; discard saved ESI
+        pop rsi            ; discard saved ESI
         mov esi, alias_expand_buf
         mov byte [alias_expanding], 1  ; Prevent re-expansion
         jmp shell_parse_cmd  ; Re-parse with expanded command
 .alias_skip:
-        pop esi
+        pop rsi
 .alias_skip_nofix:
         mov byte [alias_expanding], 0  ; Reset for next command
+
+        ; --- Shell function expansion ---
+        cmp byte [func_expanding], 1
+        je .func_skip_nofix
+        push rsi
+        mov ecx, [func_count]
+        cmp ecx, 0
+        je .func_skip
+        xor ebx, ebx
+        mov edx, func_table
+.func_lookup:
+        cmp ebx, ecx
+        jge .func_skip
+        push rsi
+        mov edi, edx
+        call str_starts_with
+        pop rsi
+        jc .func_found
+        add edx, FUNC_ENTRY_SIZE
+        inc ebx
+        jmp .func_lookup
+.func_found:
+        ; Execute function body: split on ';' and execute each command
+        pop rsi                        ; discard saved ESI
+        mov byte [func_expanding], 1   ; Prevent recursion
+        lea esi, [edx + FUNC_NAME_LEN] ; ESI = function body
+        ; Execute semicolon-separated commands
+.func_exec_loop:
+        cmp byte [esi], 0
+        je .func_exec_done
+        cmp byte [esi], ' '
+        jne .func_exec_start
+        inc esi
+        jmp .func_exec_loop
+.func_exec_start:
+        ; Copy next command (up to ';' or null) into line_buffer
+        mov edi, line_buffer
+.func_exec_copy:
+        lodsb
+        cmp al, ';'
+        je .func_exec_run
+        cmp al, 0
+        je .func_exec_run_last
+        stosb
+        jmp .func_exec_copy
+.func_exec_run:
+        mov byte [edi], 0
+        push rsi
+        call shell_parse_cmd
+        pop rsi
+        jmp .func_exec_loop
+.func_exec_run_last:
+        mov byte [edi], 0
+        call shell_parse_cmd
+.func_exec_done:
+        mov byte [func_expanding], 0
+        ret                            ; Return from shell_parse_cmd
+.func_skip:
+        pop rsi
+.func_skip_nofix:
+        mov byte [func_expanding], 0
 
         ; Compare against known commands
         mov edi, cmd_help_str
@@ -970,6 +1913,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_mkdir
 
+        mov edi, cmd_rmdir_str
+        call str_starts_with
+        jc .cmd_rmdir
+
         mov edi, cmd_cd_str
         call str_starts_with
         jc .cmd_cd
@@ -1001,6 +1948,10 @@ shell_dispatch_core:
         mov edi, cmd_unset_str
         call str_starts_with
         jc .cmd_unset
+
+        mov edi, cmd_read_str
+        call str_starts_with
+        jc .cmd_read
 
         mov edi, cmd_shutdown_str
         call str_starts_with
@@ -1045,6 +1996,14 @@ shell_dispatch_core:
         mov edi, cmd_alias_str
         call str_starts_with
         jc .cmd_alias
+
+        mov edi, cmd_functions_str
+        call str_starts_with
+        jc .cmd_functions
+
+        mov edi, cmd_function_str
+        call str_starts_with
+        jc .cmd_function
 
         mov edi, cmd_history_str
         call str_starts_with
@@ -1121,6 +2080,14 @@ shell_dispatch_core:
         mov edi, cmd_chown_str
         call str_starts_with
         jc .cmd_chown
+
+        mov edi, cmd_jobs_str
+        call str_starts_with
+        jc .cmd_jobs
+
+        mov edi, cmd_fg_str
+        call str_starts_with
+        jc .cmd_fg
 
         ; Unknown command - try to execute as program
         mov esi, line_buffer
@@ -1340,12 +2307,12 @@ shell_dispatch_core:
         call vga_print
         mov eax, [total_free_pages]
         shl eax, 2              ; Pages * 4 = KB
-        push eax
+        push rax
         shr eax, 10             ; KB / 1024 = MB
         call vga_print_dec
         mov esi, msg_mb
         call vga_print
-        pop eax
+        pop rax
         ret
 
 .cmd_clear:
@@ -1534,6 +2501,11 @@ shell_dispatch_core:
         call cmd_mkdir
         ret
 
+.cmd_rmdir:
+        call skip_spaces
+        call cmd_rmdir_impl
+        ret
+
 .cmd_cd:
         call skip_spaces
         call cmd_cd
@@ -1568,6 +2540,11 @@ shell_dispatch_core:
 .cmd_unset:
         call skip_spaces
         call cmd_unset_env
+        ret
+
+.cmd_read:
+        call skip_spaces
+        call cmd_read_input
         ret
 
 .cmd_shutdown:
@@ -1614,6 +2591,15 @@ shell_dispatch_core:
 .cmd_alias:
         call skip_spaces
         call cmd_alias
+        ret
+
+.cmd_function:
+        call skip_spaces
+        call cmd_function
+        ret
+
+.cmd_functions:
+        call cmd_functions
         ret
 
 .cmd_history:
@@ -1688,6 +2674,15 @@ shell_dispatch_core:
         call cmd_chown
         ret
 
+.cmd_jobs:
+        call cmd_jobs
+        ret
+
+.cmd_fg:
+        call skip_spaces
+        call cmd_fg
+        ret
+
 .cmd_ping:
         call cmd_ping
         ret
@@ -1728,7 +2723,7 @@ shell_dispatch_core:
         mov al, '('
         call vga_putchar
         movzx eax, byte [scr_mode]
-        mov esi, [scr_mode_names + eax*4]
+        mov rsi, [scr_mode_names + rax*8]
         call vga_print
         mov al, ')'
         call vga_putchar
@@ -1746,7 +2741,7 @@ shell_dispatch_core:
         mov al, '('
         call vga_putchar
         movzx eax, byte [scr_mode]
-        mov esi, [scr_mode_names + eax*4]
+        mov rsi, [scr_mode_names + rax*8]
         call vga_print
         mov al, ')'
         call vga_putchar
@@ -1765,7 +2760,7 @@ shell_dispatch_core:
 ; Usage: diff FILE1 FILE2
 ;---------------------------------------
 cmd_diff_files:
-        pushad
+        PUSHALL
         ; Parse two filenames
         mov edi, filename_buf
         call copy_word
@@ -1831,8 +2826,8 @@ cmd_diff_files:
         je .diff_f1_extra
 
         ; Compare current lines
-        push esi
-        push edi
+        push rsi
+        push rdi
         call .diff_cmp_line
         jc .diff_lines_same
 
@@ -1846,10 +2841,10 @@ cmd_diff_files:
         call vga_newline
         ; Print file1 line
         mov byte [vga_color], COLOR_ERROR
-        pop edi
-        pop esi
-        push esi
-        push edi
+        pop rdi
+        pop rsi
+        push rsi
+        push rdi
         mov al, '<'
         call vga_putchar
         mov al, ' '
@@ -1868,10 +2863,10 @@ cmd_diff_files:
         call vga_newline
         ; Print file2 line
         mov byte [vga_color], COLOR_SUCCESS
-        pop edi
-        pop esi
-        push esi
-        push edi
+        pop rdi
+        pop rsi
+        push rsi
+        push rdi
         mov al, '>'
         call vga_putchar
         mov al, ' '
@@ -1891,8 +2886,8 @@ cmd_diff_files:
         mov byte [vga_color], COLOR_DEFAULT
 
 .diff_lines_same:
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ; Advance both to next line
 .diff_skip1:
         cmp byte [esi], 0
@@ -1950,7 +2945,7 @@ cmd_diff_files:
         je .diff_ok
         call shell_status_fail
 .diff_ok:
-        popad
+        POPALL
         ret
 
 .diff_usage:
@@ -1959,7 +2954,7 @@ cmd_diff_files:
         mov esi, msg_need_2files
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .diff_not_found1:
         call shell_status_fail
@@ -1969,7 +2964,7 @@ cmd_diff_files:
         mov esi, msg_not_found_w
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .diff_not_found2:
         call shell_status_fail
@@ -1979,13 +2974,13 @@ cmd_diff_files:
         mov esi, msg_not_found_w
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ; Compare line at ESI vs line at EDI. CF=1 if same.
 .diff_cmp_line:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .dcl_loop:
         mov al, [esi]
         mov ah, [edi]
@@ -2008,13 +3003,13 @@ cmd_diff_files:
         cmp ah, 0
         je .dcl_same
 .dcl_diff:
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         clc
         ret
 .dcl_same:
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         stc
         ret
 
@@ -2029,7 +3024,7 @@ cmd_diff_files:
 ;        -d  only show duplicates
 ;---------------------------------------
 cmd_uniq_file:
-        pushad
+        PUSHALL
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
@@ -2049,24 +3044,24 @@ cmd_uniq_file:
 .uniq_loaded:
 
         mov esi, PROGRAM_BASE
-        mov dword [.uniq_prev], 0
+        mov qword [.uniq_prev], 0
         mov dword [.uniq_count], 1
 
 .uniq_loop:
         cmp byte [esi], 0
         je .uniq_flush
-        mov [.uniq_cur], esi
+        mov [.uniq_cur], rsi
 
-        cmp dword [.uniq_prev], 0
+        cmp qword [.uniq_prev], 0
         je .uniq_save_prev
 
         ; Compare current with previous
-        push esi
-        push edi
-        mov edi, [.uniq_prev]
+        push rsi
+        push rdi
+        mov rdi, [.uniq_prev]
         call cmd_diff_files.diff_cmp_line
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         jc .uniq_dup
 
         ; Lines differ - flush previous
@@ -2079,8 +3074,8 @@ cmd_uniq_file:
         jmp .uniq_advance
 
 .uniq_save_prev:
-        mov eax, [.uniq_cur]
-        mov [.uniq_prev], eax
+        mov rax, [.uniq_cur]
+        mov [.uniq_prev], rax
 .uniq_advance:
         ; Skip to next line
 .uniq_skip:
@@ -2095,15 +3090,15 @@ cmd_uniq_file:
         jmp .uniq_loop
 
 .uniq_flush:
-        cmp dword [.uniq_prev], 0
+        cmp qword [.uniq_prev], 0
         je .uniq_done
         call .uniq_emit
 .uniq_done:
-        popad
+        POPALL
         ret
 
 .uniq_emit:
-        pushad
+        PUSHALL
         ; Check -d flag (bit 3)
         mov eax, 3
         call test_flag
@@ -2123,7 +3118,7 @@ cmd_uniq_file:
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
 .uniq_no_c:
-        mov esi, [.uniq_prev]
+        mov rsi, [.uniq_prev]
 .uniq_pl:
         mov al, [esi]
         cmp al, 0
@@ -2136,7 +3131,7 @@ cmd_uniq_file:
 .uniq_pnl:
         call vga_newline
 .uniq_emit_skip:
-        popad
+        POPALL
         ret
 
 .uniq_usage:
@@ -2144,25 +3139,25 @@ cmd_uniq_file:
         mov esi, msg_need_filename
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .uniq_nf:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_file_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
-.uniq_prev:   dd 0
-.uniq_cur:    dd 0
+.uniq_prev:   dq 0
+.uniq_cur:    dq 0
 .uniq_count:  dd 0
 
 ;---------------------------------------
 ; Command: rev - Reverse each line of a file
 ;---------------------------------------
 cmd_rev_file:
-        pushad
+        PUSHALL
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
@@ -2215,28 +3210,28 @@ cmd_rev_file:
         inc esi
         jmp .rev_loop
 .rev_done:
-        popad
+        POPALL
         ret
 .rev_usage:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_need_filename
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .rev_nf:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_file_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: tac - Print file lines in reverse order
 ;---------------------------------------
 cmd_tac_file:
-        pushad
+        PUSHALL
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
@@ -2259,24 +3254,24 @@ cmd_tac_file:
         mov esi, PROGRAM_BASE
         mov edi, PROGRAM_BASE + 0x10000
         mov dword [.tac_lines], 0
-        mov [edi], esi
-        add edi, 4
+        mov [rdi], rsi
+        add rdi, 8
         inc dword [.tac_lines]
 
 .tac_scan:
-        cmp byte [esi], 0
+        cmp byte [rsi], 0
         je .tac_print
-        cmp byte [esi], 0x0A
+        cmp byte [rsi], 0x0A
         jne .tac_next_ch
-        inc esi
-        cmp byte [esi], 0
+        inc rsi
+        cmp byte [rsi], 0
         je .tac_print
-        mov [edi], esi
-        add edi, 4
+        mov [rdi], rsi
+        add rdi, 8
         inc dword [.tac_lines]
         jmp .tac_scan
 .tac_next_ch:
-        inc esi
+        inc rsi
         jmp .tac_scan
 
 .tac_print:
@@ -2285,8 +3280,8 @@ cmd_tac_file:
         je .tac_done
 .tac_print_loop:
         dec ecx
-        mov esi, PROGRAM_BASE + 0x10000
-        mov esi, [esi + ecx * 4]
+        mov rsi, PROGRAM_BASE + 0x10000
+        mov rsi, [rsi + rcx * 8]
 .tac_pline:
         mov al, [esi]
         cmp al, 0
@@ -2301,21 +3296,21 @@ cmd_tac_file:
         cmp ecx, 0
         jne .tac_print_loop
 .tac_done:
-        popad
+        POPALL
         ret
 .tac_usage:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_need_filename
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .tac_nf:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_file_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .tac_lines: dd 0
 
@@ -2325,7 +3320,7 @@ cmd_tac_file:
 ;        alias NAME CMD     (define alias)
 ;---------------------------------------
 cmd_alias:
-        pushad
+        PUSHALL
         cmp byte [esi], 0
         je .alias_list
 
@@ -2343,11 +3338,11 @@ cmd_alias:
 .alias_find:
         cmp ebx, ecx
         jge .alias_new_slot
-        push esi
+        push rsi
         mov esi, filename_buf
         mov edi, edx
         call str_compare
-        pop esi
+        pop rsi
         je .alias_update
         add edx, ALIAS_ENTRY_SIZE
         inc ebx
@@ -2362,7 +3357,7 @@ cmd_alias:
         inc dword [alias_count]
 
 .alias_update:
-        push esi
+        push rsi
         mov esi, filename_buf
         mov edi, edx
         mov ecx, ALIAS_NAME_LEN - 1
@@ -2375,7 +3370,7 @@ cmd_alias:
         jnz .alias_cpn
         mov byte [edi], 0
 .alias_nd:
-        pop esi
+        pop rsi
         lea edi, [edx + ALIAS_NAME_LEN]
         mov ecx, ALIAS_CMD_LEN - 1
 .alias_cpc:
@@ -2389,7 +3384,7 @@ cmd_alias:
 .alias_cd:
         mov esi, msg_alias_set
         call vga_print
-        popad
+        POPALL
         ret
 
 .alias_list:
@@ -2414,13 +3409,13 @@ cmd_alias:
         inc ebx
         jmp .alias_ll
 .alias_ld:
-        popad
+        POPALL
         ret
 
 .alias_none:
         mov esi, msg_no_aliases
         call vga_print
-        popad
+        POPALL
         ret
 
 .alias_show_one:
@@ -2430,11 +3425,11 @@ cmd_alias:
 .alias_sf:
         cmp ebx, ecx
         jge .alias_snf
-        push esi
+        push rsi
         mov esi, filename_buf
         mov edi, edx
         call str_compare
-        pop esi
+        pop rsi
         je .alias_sp
         add edx, ALIAS_ENTRY_SIZE
         inc ebx
@@ -2443,14 +3438,14 @@ cmd_alias:
         lea esi, [edx + ALIAS_NAME_LEN]
         call vga_print
         call vga_newline
-        popad
+        POPALL
         ret
 .alias_snf:
         mov esi, filename_buf
         call vga_print
         mov esi, msg_not_found_w
         call vga_print
-        popad
+        POPALL
         ret
 
 .alias_full:
@@ -2458,14 +3453,187 @@ cmd_alias:
         mov esi, msg_table_full
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
+        ret
+
+;---------------------------------------
+; Command: function name { cmd1; cmd2 } - Define shell function
+;---------------------------------------
+cmd_function:
+        PUSHALL
+        ; Parse function name
+        cmp byte [esi], 0
+        je .func_usage
+
+        mov edi, filename_buf
+        call copy_word
+        call skip_spaces
+
+        ; Expect '{'
+        cmp byte [esi], '{'
+        jne .func_usage
+        inc esi
+        call skip_spaces_fn
+
+        ; Find the closing '}'
+        ; Copy body (everything between { and }) to temp buffer
+        mov edi, cond_work_buf
+        xor ecx, ecx
+.func_copy_body:
+        cmp byte [esi], 0
+        je .func_usage          ; No closing brace
+        cmp byte [esi], '}'
+        je .func_body_done
+        lodsb
+        stosb
+        inc ecx
+        cmp ecx, FUNC_BODY_LEN - 1
+        jb .func_copy_body
+.func_body_done:
+        ; Trim trailing spaces from body
+.func_trim_trail:
+        cmp ecx, 0
+        je .func_body_empty
+        cmp byte [edi - 1], ' '
+        jne .func_body_trimmed
+        dec edi
+        dec ecx
+        jmp .func_trim_trail
+.func_body_trimmed:
+        mov byte [edi], 0
+
+        ; Check for existing function with same name (update it)
+        mov ecx, [func_count]
+        xor ebx, ebx
+        mov edx, func_table
+.func_find:
+        cmp ebx, ecx
+        jge .func_new_slot
+        push rsi
+        mov esi, filename_buf
+        mov edi, edx
+        call str_compare
+        pop rsi
+        je .func_update
+        add edx, FUNC_ENTRY_SIZE
+        inc ebx
+        jmp .func_find
+
+.func_new_slot:
+        cmp ecx, FUNC_MAX
+        jge .func_full
+        mov eax, ecx
+        imul eax, FUNC_ENTRY_SIZE
+        lea edx, [func_table + eax]
+        inc dword [func_count]
+
+.func_update:
+        ; Copy name
+        push rsi
+        mov esi, filename_buf
+        mov edi, edx
+        mov ecx, FUNC_NAME_LEN - 1
+.func_cpn:
+        lodsb
+        stosb
+        cmp al, 0
+        je .func_cpn_done
+        dec ecx
+        jnz .func_cpn
+        mov byte [edi], 0
+.func_cpn_done:
+        pop rsi
+
+        ; Copy body from cond_work_buf
+        push rsi
+        mov esi, cond_work_buf
+        lea edi, [edx + FUNC_NAME_LEN]
+        mov ecx, FUNC_BODY_LEN - 1
+.func_cpb:
+        lodsb
+        stosb
+        cmp al, 0
+        je .func_cpb_done
+        dec ecx
+        jnz .func_cpb
+        mov byte [edi], 0
+.func_cpb_done:
+        pop rsi
+
+        mov byte [vga_color], COLOR_INFO
+        mov esi, msg_func_defined
+        call vga_print
+        mov esi, filename_buf
+        call vga_print
+        call vga_newline
+        mov byte [vga_color], COLOR_DEFAULT
+        POPALL
+        ret
+
+.func_body_empty:
+.func_usage:
+        mov esi, msg_func_usage
+        call vga_print
+        POPALL
+        ret
+
+.func_full:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_func_full
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        POPALL
+        ret
+
+; skip_spaces_fn - Skip spaces in ESI (local helper)
+skip_spaces_fn:
+        cmp byte [esi], ' '
+        jne .ssf_done
+        inc esi
+        jmp skip_spaces_fn
+.ssf_done:
+        ret
+
+;---------------------------------------
+; Command: functions - List all defined shell functions
+;---------------------------------------
+cmd_functions:
+        PUSHALL
+        mov ecx, [func_count]
+        cmp ecx, 0
+        je .funcs_none
+        xor ebx, ebx
+        mov edx, func_table
+.funcs_loop:
+        cmp ebx, ecx
+        jge .funcs_done
+        mov byte [vga_color], COLOR_INFO
+        mov esi, edx
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        mov esi, msg_func_sep
+        call vga_print
+        lea esi, [edx + FUNC_NAME_LEN]
+        call vga_print
+        mov esi, msg_func_end
+        call vga_print
+        add edx, FUNC_ENTRY_SIZE
+        inc ebx
+        jmp .funcs_loop
+.funcs_done:
+        POPALL
+        ret
+.funcs_none:
+        mov esi, msg_func_none
+        call vga_print
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: history - Show command history
 ;---------------------------------------
 cmd_history:
-        pushad
+        PUSHALL
         mov ecx, [hist_count]
         cmp ecx, 0
         je .hist_empty
@@ -2488,34 +3656,34 @@ cmd_history:
         inc ebx
         jmp .hist_loop
 .hist_done:
-        popad
+        POPALL
         ret
 .hist_empty:
         mov esi, msg_no_history
         call vga_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: which - Show if a name is built-in or external
 ;---------------------------------------
 cmd_which:
-        pushad
+        PUSHALL
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
         je .which_usage
 
         ; Check against a table of built-in command names
-        mov ebx, .which_builtins
+        mov rbx, .which_builtins
 .which_check:
-        mov edi, [ebx]
-        cmp edi, 0
+        mov rdi, [rbx]
+        cmp rdi, 0
         je .which_try_fs
         mov esi, filename_buf
         call str_compare
         je .which_builtin
-        add ebx, 4
+        add rbx, 8
         jmp .which_check
 
 .which_try_fs:
@@ -2549,7 +3717,7 @@ cmd_which:
         dec esi
 .which_pready:
         mov byte [edi], 0
-        push esi
+        push rsi
         call path_restore_cwd
 
         mov esi, temp_path_buf
@@ -2564,7 +3732,7 @@ cmd_which:
 
         ; Found in this PATH directory
         call path_restore_cwd
-        pop esi
+        pop rsi
         ; Print: "name is /dir/name (external)"
         mov esi, filename_buf
         call vga_print
@@ -2578,11 +3746,11 @@ cmd_which:
         call vga_print
         mov esi, msg_external
         call vga_print
-        popad
+        POPALL
         ret
 
 .which_pskip:
-        pop esi
+        pop rsi
         jmp .which_path_next
 
 .which_path_done:
@@ -2592,7 +3760,7 @@ cmd_which:
         call vga_print
         mov esi, msg_not_found_w
         call vga_print
-        popad
+        POPALL
         ret
 
 .which_found_cwd:
@@ -2612,7 +3780,7 @@ cmd_which:
         call vga_print
         mov esi, msg_external
         call vga_print
-        popad
+        POPALL
         ret
 
 .which_builtin:
@@ -2620,7 +3788,7 @@ cmd_which:
         call vga_print
         mov esi, msg_builtin
         call vga_print
-        popad
+        POPALL
         ret
 
 .which_usage:
@@ -2628,42 +3796,43 @@ cmd_which:
         mov esi, msg_need_filename
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ; Table of built-in command name pointers (null-terminated)
 .which_builtins:
-        dd cmd_help_str, cmd_ver_str, cmd_clear_str, cmd_dir_str
-        dd cmd_ls_str, cmd_del_str, cmd_rm_str, cmd_format_str
-        dd cmd_cat_str, cmd_write_str, cmd_hex_str, cmd_mem_str
-        dd cmd_time_str, cmd_disk_str, cmd_run_str, cmd_enter_str
-        dd cmd_copy_str, cmd_ren_str, cmd_mv_str, cmd_move_str
-        dd cmd_df_str, cmd_more_str, cmd_echo_str, cmd_wc_str
-        dd cmd_find_str, cmd_append_str, cmd_date_str, cmd_beep_str
-        dd cmd_batch_str, cmd_mkdir_str, cmd_cd_str, cmd_pwd_str
-        dd cmd_pushd_str, cmd_popd_str, cmd_dirs_str
-        dd cmd_touch_str, cmd_set_str, cmd_unset_str, cmd_shutdown_str
-        dd cmd_reboot_str
-        dd cmd_cls_str, cmd_head_str, cmd_tail_str, cmd_type_str
-        dd cmd_diff_str, cmd_uniq_str, cmd_rev_str, cmd_tac_str
-        dd cmd_alias_str, cmd_history_str, cmd_which_str
-        dd cmd_sleep_str, cmd_color_str, cmd_size_str, cmd_strings_str
-        dd cmd_mouse_str
-        dd cmd_gui_str
-        dd cmd_scrsaver_str
-        dd cmd_whoami_str
-        dd cmd_stat_str
-        dd cmd_fsck_str
-        dd cmd_ln_str
-        dd cmd_chmod_str
-        dd cmd_chown_str
-        dd 0
+        dq cmd_help_str, cmd_ver_str, cmd_clear_str, cmd_dir_str
+        dq cmd_ls_str, cmd_del_str, cmd_rm_str, cmd_format_str
+        dq cmd_cat_str, cmd_write_str, cmd_hex_str, cmd_mem_str
+        dq cmd_time_str, cmd_disk_str, cmd_run_str, cmd_enter_str
+        dq cmd_copy_str, cmd_ren_str, cmd_mv_str, cmd_move_str
+        dq cmd_df_str, cmd_more_str, cmd_echo_str, cmd_wc_str
+        dq cmd_find_str, cmd_append_str, cmd_date_str, cmd_beep_str
+        dq cmd_batch_str, cmd_mkdir_str, cmd_cd_str, cmd_pwd_str
+        dq cmd_pushd_str, cmd_popd_str, cmd_dirs_str
+        dq cmd_touch_str, cmd_set_str, cmd_unset_str, cmd_read_str, cmd_shutdown_str
+        dq cmd_reboot_str
+        dq cmd_cls_str, cmd_head_str, cmd_tail_str, cmd_type_str
+        dq cmd_diff_str, cmd_uniq_str, cmd_rev_str, cmd_tac_str
+        dq cmd_alias_str, cmd_history_str, cmd_which_str
+        dq cmd_sleep_str, cmd_color_str, cmd_size_str, cmd_strings_str
+        dq cmd_mouse_str
+        dq cmd_gui_str
+        dq cmd_scrsaver_str
+        dq cmd_whoami_str
+        dq cmd_stat_str
+        dq cmd_fsck_str
+        dq cmd_ln_str
+        dq cmd_chmod_str
+        dq cmd_chown_str
+        dq cmd_rmdir_str
+        dq 0
 
 ;---------------------------------------
 ; Command: sleep - Sleep for N seconds
 ;---------------------------------------
 cmd_sleep:
-        pushad
+        PUSHALL
         xor eax, eax
 .sleep_parse:
         movzx ecx, byte [esi]
@@ -2680,14 +3849,14 @@ cmd_sleep:
 .sleep_do:
         cmp eax, 0
         je .sleep_usage
-        push eax
+        push rax
         mov esi, msg_sleeping
         call vga_print
-        mov eax, [esp]
+        mov eax, [rsp]
         call vga_print_dec
         mov esi, msg_sleep_sec
         call vga_print
-        pop eax
+        pop rax
         imul eax, 100
         mov ebx, [tick_count]
         add ebx, eax
@@ -2698,12 +3867,12 @@ cmd_sleep:
         mov eax, [tick_count]
         cmp eax, ebx
         jl .sleep_wait
-        popad
+        POPALL
         ret
 
 .sleep_abort:
         mov byte [ctrl_c_flag], 0
-        popad
+        POPALL
         ret
 
 .sleep_usage:
@@ -2711,7 +3880,7 @@ cmd_sleep:
         mov esi, msg_sleep_usage
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2719,7 +3888,7 @@ cmd_sleep:
 ; Usage: color FG [BG]  (hex values 0-F)
 ;---------------------------------------
 cmd_color:
-        pushad
+        PUSHALL
         cmp byte [esi], 0
         je .color_usage
 
@@ -2743,13 +3912,13 @@ cmd_color:
         mov [vga_color], bl
         mov esi, msg_color_set
         call vga_print
-        popad
+        POPALL
         ret
 
 .color_usage:
         mov esi, msg_color_usage
         call vga_print
-        popad
+        POPALL
         ret
 
 .color_hex_val:
@@ -2777,7 +3946,7 @@ cmd_color:
 ; Command: size - Show file size and type
 ;---------------------------------------
 cmd_size_file:
-        pushad
+        PUSHALL
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
@@ -2833,7 +4002,7 @@ cmd_size_file:
         jne .size_no_restore
         call gff_restore_cwd
 .size_no_restore:
-        popad
+        POPALL
         ret
 
 .size_usage:
@@ -2841,14 +4010,14 @@ cmd_size_file:
         mov esi, msg_need_filename
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .size_nf:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_file_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2856,7 +4025,7 @@ cmd_size_file:
 ; Flags: -n N  minimum string length (default 4)
 ;---------------------------------------
 cmd_strings_file:
-        pushad
+        PUSHALL
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
@@ -2917,14 +4086,14 @@ cmd_strings_file:
 
 .strings_flush:
         call .strings_flush_run
-        popad
+        POPALL
         ret
 
 .strings_flush_run:
         cmp ebx, [strings_min_len]
         jb .strings_reset
-        push esi
-        push ecx
+        push rsi
+        push rcx
         mov esi, edx
         mov ecx, ebx
 .strings_ploop:
@@ -2934,8 +4103,8 @@ cmd_strings_file:
         dec ecx
         jnz .strings_ploop
         call vga_newline
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
 .strings_reset:
         xor ebx, ebx
         ret
@@ -2945,14 +4114,14 @@ cmd_strings_file:
         mov esi, msg_need_filename
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .strings_nf:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_file_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .strings_total: dd 0
@@ -2961,7 +4130,7 @@ cmd_strings_file:
 ; Command: mouse - Show PS/2 mouse status
 ;---------------------------------------
 cmd_mouse_status:
-        pushad
+        PUSHALL
         cmp byte [mouse_present], 0
         je .mouse_not_present
 
@@ -3009,7 +4178,7 @@ cmd_mouse_status:
 .btn_done:
         call vga_newline
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .mouse_not_present:
@@ -3017,7 +4186,7 @@ cmd_mouse_status:
         mov esi, msg_mouse_absent
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3026,7 +4195,7 @@ cmd_mouse_status:
 ;        -s  sort by size (largest first) — not yet, just reserved
 ;---------------------------------------
 cmd_list_dir:
-        pushad
+        PUSHALL
         call hbfs_load_root_dir
 
         ; Check for -l flag (bit 11 = 'l' - 'a')
@@ -3071,8 +4240,8 @@ cmd_list_dir:
         mov byte [vga_color], COLOR_INFO
 .sc_print:
         ; Print filename padded to 16 chars
-        push esi
-        push ecx
+        push rsi
+        push rcx
         mov esi, edi
         xor ecx, ecx
 .sc_name:
@@ -3090,8 +4259,8 @@ cmd_list_dir:
         inc ecx
         jmp .sc_pad
 .sc_col:
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         mov byte [vga_color], COLOR_DEFAULT
         inc edx
         cmp edx, 4             ; 4 columns
@@ -3117,7 +4286,7 @@ cmd_list_dir:
         call vga_print_dec
         mov esi, msg_dir_files
         call vga_print
-        popad
+        POPALL
         ret
 
 .long_format:
@@ -3187,7 +4356,7 @@ cmd_list_dir:
         call vga_putchar
 
         ; Print modified timestamp as YYYY-MM-DD HH:MM
-        push ebx
+        push rbx
         mov ebx, [edi + 272]        ; DIRENT_MODIFIED (packed RTC)
         ; Extract year: bits 31-25 + 2000
         mov eax, ebx
@@ -3203,10 +4372,10 @@ cmd_list_dir:
         and eax, 0x0F
         cmp eax, 10
         jge .mon_ok
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .mon_ok:
         call vga_print_dec
         mov al, '-'
@@ -3217,10 +4386,10 @@ cmd_list_dir:
         and eax, 0x1F
         cmp eax, 10
         jge .day_ok
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .day_ok:
         call vga_print_dec
         mov al, ' '
@@ -3231,10 +4400,10 @@ cmd_list_dir:
         and eax, 0x1F
         cmp eax, 10
         jge .hour_ok
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .hour_ok:
         call vga_print_dec
         mov al, ':'
@@ -3245,22 +4414,22 @@ cmd_list_dir:
         and eax, 0x3F
         cmp eax, 10
         jge .tmin_ok
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .tmin_ok:
         call vga_print_dec
-        pop ebx
+        pop rbx
 
         mov al, ' '
         call vga_putchar
 
         ; Print filename
-        push esi
+        push rsi
         mov esi, edi
         call vga_print
-        pop esi
+        pop rsi
 
         mov byte [vga_color], COLOR_DEFAULT
         mov al, 0x0A
@@ -3279,7 +4448,7 @@ cmd_list_dir:
         mov esi, msg_dir_files
         call vga_print
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3287,7 +4456,7 @@ cmd_list_dir:
 ; Flags: -v  verbose (print each deleted filename)
 ;---------------------------------------
 cmd_delete_file:
-        pushad
+        PUSHALL
         ; Parse filename/pattern argument
         mov edi, filename_buf
         call copy_word
@@ -3307,14 +4476,14 @@ cmd_delete_file:
         mov eax, 21            ; 'v' - 'a'
         call test_flag
         jnc .del_exact_quiet
-        push esi
+        push rsi
         mov esi, msg_del_prefix
         call vga_print
         mov esi, edi
         call vga_print
         mov al, 0x0A
         call vga_putchar
-        pop esi
+        pop rsi
 .del_exact_quiet:
         call hbfs_delete_file_entry
         ; If CWD was changed by global search, restore it
@@ -3324,7 +4493,7 @@ cmd_delete_file:
 .del_no_restore:
         mov esi, msg_deleted
         call vga_print
-        popad
+        POPALL
         ret
 
 .wildcard:
@@ -3340,26 +4509,26 @@ cmd_delete_file:
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
         je .wc_next
 
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, filename_buf           ; pattern
         call wildcard_match
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         jnc .wc_next
 
         ; -v: print name before delete
         mov eax, 21            ; 'v' - 'a'
         call test_flag
         jnc .wc_del_quiet
-        push esi
+        push rsi
         mov esi, msg_del_prefix
         call vga_print
         mov esi, edi
         call vga_print
         mov al, 0x0A
         call vga_putchar
-        pop esi
+        pop rsi
 .wc_del_quiet:
         call hbfs_delete_file_entry
         inc ebx
@@ -3374,7 +4543,7 @@ cmd_delete_file:
         je .not_found
         mov esi, msg_deleted
         call vga_print
-        popad
+        POPALL
         ret
 
 .not_found:
@@ -3382,7 +4551,7 @@ cmd_delete_file:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3531,7 +4700,7 @@ cmd_reboot:
 ;        (default N=10)
 ;---------------------------------------
 cmd_head_file:
-        pushad
+        PUSHALL
         ; Check for -n flag first (set by parse_flags)
         mov dword [head_lines], 10
         cmp dword [cmd_flag_num], 0
@@ -3593,19 +4762,19 @@ cmd_head_file:
         cmp ecx, [head_lines]
         jl .head_loop
 .head_done:
-        popad
+        POPALL
         ret
 .head_not_found:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .head_usage:
         mov esi, msg_head_usage
         call vga_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3614,7 +4783,7 @@ cmd_head_file:
 ;        (default N=10)
 ;---------------------------------------
 cmd_tail_file:
-        pushad
+        PUSHALL
         ; Check for -n flag first (set by parse_flags)
         mov dword [head_lines], 10
         cmp dword [cmd_flag_num], 0
@@ -3705,19 +4874,19 @@ cmd_tail_file:
 .tail_print_done:
         mov al, 0x0A
         call vga_putchar
-        popad
+        POPALL
         ret
 .tail_not_found:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .tail_usage:
         mov esi, msg_tail_usage
         call vga_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3725,7 +4894,7 @@ cmd_tail_file:
 ; Flags: -n  show line numbers
 ;---------------------------------------
 cmd_cat_file:
-        pushad
+        PUSHALL
         cmp byte [esi], 0
         jne .cat_from_file
         call shell_use_stdin_as_input
@@ -3756,7 +4925,7 @@ cmd_cat_file:
         call vga_print
         mov al, 0x0A
         call vga_putchar
-        popad
+        POPALL
         ret
 
 .cat_numbered:
@@ -3767,7 +4936,7 @@ cmd_cat_file:
         je .cat_n_done
         inc ebx
         ; Print line number right-aligned in 4-char field
-        push esi
+        push rsi
         mov byte [vga_color], COLOR_INFO
         mov eax, ebx
         mov edx, 4
@@ -3775,7 +4944,7 @@ cmd_cat_file:
         mov al, ' '
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
-        pop esi
+        pop rsi
         ; Print chars until newline or end
 .cat_n_char:
         lodsb
@@ -3788,7 +4957,7 @@ cmd_cat_file:
 .cat_n_done:
         mov al, 0x0A
         call vga_putchar
-        popad
+        POPALL
         ret
 
 .cat_usage:
@@ -3796,7 +4965,7 @@ cmd_cat_file:
         mov esi, msg_need_filename
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .not_found:
@@ -3804,7 +4973,7 @@ cmd_cat_file:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3814,7 +4983,7 @@ cmd_cat_file:
 PAGER_LINES equ 23
 
 cmd_more_file:
-        pushad
+        PUSHALL
         ; Set page size from -n flag or default
         mov dword [.more_page], PAGER_LINES
         cmp dword [cmd_flag_num], 0
@@ -3850,12 +5019,12 @@ cmd_more_file:
         jl .more_loop
 
         ; Show pager prompt
-        push esi
+        push rsi
         mov byte [vga_color], COLOR_INFO
         mov esi, msg_more_prompt
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        pop esi
+        pop rsi
 
         ; Wait for keypress
         call kb_getchar
@@ -3867,10 +5036,10 @@ cmd_more_file:
         ; Erase the prompt line
         mov al, 0x0D             ; CR
         call vga_putchar
-        push esi
+        push rsi
         mov esi, msg_more_erase
         call vga_print
-        pop esi
+        pop rsi
         mov al, 0x0D
         call vga_putchar
 
@@ -3880,7 +5049,7 @@ cmd_more_file:
 .more_done:
         mov al, 0x0A
         call vga_putchar
-        popad
+        POPALL
         ret
 
 .more_not_found:
@@ -3888,7 +5057,7 @@ cmd_more_file:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .more_page: dd PAGER_LINES
 
@@ -3898,7 +5067,7 @@ cmd_more_file:
 ; Then type content, end with empty line
 ;---------------------------------------
 cmd_write_file:
-        pushad
+        PUSHALL
 
         ; ESI points to filename - copy it
         mov edi, filename_buf
@@ -3913,8 +5082,8 @@ cmd_write_file:
 
 .read_content:
         ; Read a line
-        push edi
-        push ebx
+        push rdi
+        push rbx
         mov edi, temp_line_buf
         xor ecx, ecx
 
@@ -3946,8 +5115,8 @@ cmd_write_file:
         mov al, 0x0A
         call vga_putchar
 
-        pop ebx
-        pop edi
+        pop rbx
+        pop rdi
 
         ; Check for empty line (end of input)
         cmp ecx, 0
@@ -3982,7 +5151,7 @@ cmd_write_file:
 
         mov esi, msg_saved
         call vga_print
-        popad
+        POPALL
         ret
 
 .write_error:
@@ -3990,19 +5159,34 @@ cmd_write_file:
         mov esi, msg_write_err
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: touch - Create empty file
 ;---------------------------------------
 cmd_touch_file:
-        pushad
+        PUSHALL
         mov edi, filename_buf
         call copy_word
         cmp byte [filename_buf], 0
         je .touch_usage
 
+        ; Check if file already exists — if so, just update timestamp
+        mov esi, filename_buf
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .touch_create
+
+        ; File exists: update modified timestamp only
+        call rtc_get_timestamp
+        mov [edi + DIRENT_MODIFIED], eax
+        call hbfs_save_root_dir
+        mov esi, .touch_updated_msg
+        call vga_print
+        jmp .touch_done
+
+.touch_create:
         ; Create empty file
         mov esi, filename_buf
         mov edi, PROGRAM_BASE
@@ -4025,15 +5209,17 @@ cmd_touch_file:
         call vga_print
 
 .touch_done:
-        popad
+        POPALL
         ret
+
+.touch_updated_msg: db "Timestamp updated", 0x0A, 0
 
 ;---------------------------------------
 ; Command: hex - Hexdump a file
 ; Flags: -n N  limit to N bytes (default 512)
 ;---------------------------------------
 cmd_hexdump_file:
-        pushad
+        PUSHALL
         mov edi, PROGRAM_BASE
         call hbfs_read_file
         jc .not_found
@@ -4065,17 +5251,17 @@ cmd_hexdump_file:
         call vga_putchar
 
         ; Print 16 hex bytes
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ebx, 16
 .hex_byte:
         cmp edx, ecx
         jge .hex_pad
         movzx eax, byte [esi + edx]
-        push eax
+        push rax
         shr eax, 4
         call .print_nibble
-        pop eax
+        pop rax
         and eax, 0x0F
         call .print_nibble
         mov al, ' '
@@ -4098,11 +5284,11 @@ cmd_hexdump_file:
         ; Print ASCII representation
         mov al, '|'
         call vga_putchar
-        pop edx
-        push edx
+        pop rdx
+        push rdx
         mov ebx, 16
 .ascii_byte:
-        cmp edx, [esp + 4]     ; Compare with ecx on stack
+        cmp edx, [rsp + 8]     ; Compare with ecx on stack
         jge .ascii_done
         movzx eax, byte [esi + edx]
         cmp al, 0x20
@@ -4124,8 +5310,8 @@ cmd_hexdump_file:
         mov al, 0x0A
         call vga_putchar
 
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         jmp .hex_line
 
 .print_nibble:
@@ -4140,7 +5326,7 @@ cmd_hexdump_file:
         ret
 
 .hex_done:
-        popad
+        POPALL
         ret
 
 .not_found:
@@ -4148,14 +5334,14 @@ cmd_hexdump_file:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: mem - Show memory information
 ;---------------------------------------
 cmd_show_memory:
-        pushad
+        PUSHALL
         mov byte [vga_color], COLOR_INFO
         mov esi, msg_mem_header
         call vga_print
@@ -4187,14 +5373,14 @@ cmd_show_memory:
         mov al, 0x0A
         call vga_putchar
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: disk - Show disk information
 ;---------------------------------------
 cmd_show_disk:
-        pushad
+        PUSHALL
         cmp byte [ata_present], 0
         je .no_disk
 
@@ -4218,20 +5404,20 @@ cmd_show_disk:
         mov esi, msg_mb
         call vga_print
 
-        popad
+        POPALL
         ret
 
 .no_disk:
         mov esi, msg_ata_none
         call vga_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: df - Show HBFS filesystem usage
 ;---------------------------------------
 cmd_df_info:
-        pushad
+        PUSHALL
         cmp byte [ata_present], 0
         je .df_no_disk
 
@@ -4246,7 +5432,7 @@ cmd_df_info:
         sub eax, HBFS_DATA_START
         shr eax, 3              ; / 8 sectors per block = total blocks
         mov ebx, eax            ; EBX = total blocks
-        push ebx
+        push rbx
 
         ; Count used blocks from bitmap
         call hbfs_load_bitmap
@@ -4277,15 +5463,15 @@ cmd_df_info:
         jmp .df_count
 
 .df_counted:
-        ; ECX = used blocks, [esp] = total blocks
-        pop ebx                 ; EBX = total blocks
+        ; ECX = used blocks, [rsp] = total blocks
+        pop rbx                 ; EBX = total blocks
         ; Clamp used to total
         cmp ecx, ebx
         jle .df_clamp_ok
         mov ecx, ebx
 .df_clamp_ok:
-        push ecx
-        push ebx
+        push rcx
+        push rbx
 
         ; Print total blocks
         mov esi, msg_df_total
@@ -4298,10 +5484,10 @@ cmd_df_info:
         ; Print used blocks
         mov esi, msg_df_used
         call vga_print
-        pop ebx                 ; total
-        pop ecx                 ; used
-        push ecx
-        push ebx
+        pop rbx                 ; total
+        pop rcx                 ; used
+        push rcx
+        push rbx
         mov eax, ecx
         call vga_print_dec
         mov esi, msg_df_blocks
@@ -4310,11 +5496,11 @@ cmd_df_info:
         ; Print free blocks
         mov esi, msg_df_free
         call vga_print
-        pop ebx                 ; total
-        pop ecx                 ; used
+        pop rbx                 ; total
+        pop rcx                 ; used
         mov eax, ebx
         sub eax, ecx
-        push eax
+        push rax
         call vga_print_dec
         mov esi, msg_df_blocks
         call vga_print
@@ -4322,7 +5508,7 @@ cmd_df_info:
         ; Print free space in KB
         mov esi, msg_df_avail
         call vga_print
-        pop eax                 ; free blocks
+        pop rax                 ; free blocks
         shl eax, 2              ; * 4 = KB
         call vga_print_dec
         mov esi, msg_df_kb
@@ -4392,7 +5578,7 @@ cmd_df_info:
         mov esi, msg_df_dirs
         call vga_print
 
-        popad
+        POPALL
         ret
 
 ; Helper: count files in currently loaded directory buffer
@@ -4429,14 +5615,229 @@ cmd_df_info:
 .df_no_disk:
         mov esi, msg_hbfs_nodisk
         call vga_print
-        popad
+        POPALL
+        ret
+
+;---------------------------------------
+; Command: jobs - List background jobs
+;---------------------------------------
+cmd_jobs:
+        PUSHALL
+        ; First, reap any completed background tasks
+        call jobs_reap_done
+
+        mov edx, 0             ; found any?
+        mov ecx, JOB_MAX
+        mov edi, job_table
+.jobs_loop:
+        cmp dword [edi + JOB_ACTIVE], 1
+        jne .jobs_next
+        ; Check if the task is still running
+        mov eax, [edi + JOB_TASK_ID]
+        call sched_task_alive
+        test eax, eax
+        jz .jobs_mark_done
+        ; Print: [N] PID  Name
+        mov edx, 1
+        mov esi, msg_bg_launched    ; "["
+        call vga_print
+        ; Job number = JOB_MAX - ECX
+        mov eax, JOB_MAX
+        sub eax, ecx
+        inc eax
+        call vga_print_dec
+        mov esi, msg_bg_launched2   ; "] "
+        call vga_print
+        ; PID
+        mov eax, [edi + JOB_PID]
+        call vga_print_dec
+        mov al, ' '
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        ; Name
+        lea esi, [edi + JOB_NAME]
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        jmp .jobs_next
+.jobs_mark_done:
+        mov dword [edi + JOB_ACTIVE], 0
+        dec dword [job_count]
+.jobs_next:
+        add edi, JOB_ENTRY_SIZE
+        dec ecx
+        jnz .jobs_loop
+
+        test edx, edx
+        jnz .jobs_end
+        mov esi, msg_no_jobs
+        call vga_print
+.jobs_end:
+        POPALL
+        ret
+
+;---------------------------------------
+; cmd_fg - Bring background job to foreground
+; ESI = argument (job number)
+;---------------------------------------
+cmd_fg:
+        PUSHALL
+        cmp byte [esi], 0
+        je .fg_usage
+
+        ; Parse job number
+        xor eax, eax
+.fg_parse:
+        movzx edx, byte [esi]
+        cmp dl, '0'
+        jb .fg_parsed
+        cmp dl, '9'
+        ja .fg_parsed
+        imul eax, 10
+        sub dl, '0'
+        add eax, edx
+        inc esi
+        jmp .fg_parse
+.fg_parsed:
+        ; EAX = 1-based job number → 0-based index
+        dec eax
+        cmp eax, JOB_MAX
+        jge .fg_no_job
+        imul eax, JOB_ENTRY_SIZE
+        lea edi, [job_table + eax]
+        cmp dword [edi + JOB_ACTIVE], 1
+        jne .fg_no_job
+
+        ; Check task is still alive
+        mov eax, [edi + JOB_TASK_ID]
+        call sched_task_alive
+        test eax, eax
+        jz .fg_no_job
+
+        ; Wait for the task to finish
+        mov byte [vga_color], COLOR_INFO
+        lea esi, [edi + JOB_NAME]
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        mov byte [vga_color], COLOR_DEFAULT
+.fg_wait:
+        hlt
+        mov eax, [edi + JOB_TASK_ID]
+        call sched_task_alive
+        test eax, eax
+        jnz .fg_wait
+        ; Task finished — clean up job entry
+        mov dword [edi + JOB_ACTIVE], 0
+        dec dword [job_count]
+        POPALL
+        ret
+
+.fg_usage:
+        mov esi, msg_fg_usage
+        call vga_print
+        POPALL
+        ret
+.fg_no_job:
+        mov esi, msg_fg_no_job
+        call vga_print
+        POPALL
+        ret
+
+;---------------------------------------
+; jobs_reap_done - Clean up completed background jobs
+; Prints "[N] Done" for each completed job.
+;---------------------------------------
+jobs_reap_done:
+        PUSHALL
+        mov ecx, JOB_MAX
+        mov edi, job_table
+.jrd_loop:
+        cmp dword [edi + JOB_ACTIVE], 1
+        jne .jrd_next
+        mov eax, [edi + JOB_TASK_ID]
+        call sched_task_alive
+        test eax, eax
+        jnz .jrd_next           ; Still running
+        ; Task is done — print notification
+        mov esi, msg_bg_done    ; "["
+        call vga_print
+        mov eax, JOB_MAX
+        sub eax, ecx
+        inc eax
+        call vga_print_dec
+        mov esi, msg_bg_done2   ; "] Done\n"
+        call vga_print
+        ; Clean up
+        mov dword [edi + JOB_ACTIVE], 0
+        dec dword [job_count]
+.jrd_next:
+        add edi, JOB_ENTRY_SIZE
+        dec ecx
+        jnz .jrd_loop
+        POPALL
+        ret
+
+;---------------------------------------
+; jobs_register - Register a new background job
+; EAX = task ID from sched_create_task
+; ESI = program name (null-terminated)
+; Returns: job number in EAX (1-based), or 0 on failure
+;---------------------------------------
+jobs_register:
+        PUSHALL
+        mov ebx, eax            ; Save task ID
+        ; Find free slot
+        mov ecx, JOB_MAX
+        mov edi, job_table
+.jr_find:
+        cmp dword [edi + JOB_ACTIVE], 0
+        je .jr_found
+        add edi, JOB_ENTRY_SIZE
+        dec ecx
+        jnz .jr_find
+        ; Table full
+        mov qword [rsp + FRAME_RAX], 0
+        POPALL
+        ret
+.jr_found:
+        mov dword [edi + JOB_ACTIVE], 1
+        mov [edi + JOB_TASK_ID], ebx
+        mov [edi + JOB_PID], ebx
+        ; Copy program name
+        push rdi
+        lea edi, [edi + JOB_NAME]
+        mov ecx, 51             ; max name length
+.jr_cpname:
+        lodsb
+        stosb
+        test al, al
+        jz .jr_name_done
+        dec ecx
+        jnz .jr_cpname
+        mov byte [edi], 0
+.jr_name_done:
+        pop rdi
+        inc dword [job_count]
+        ; Return 1-based job number
+        mov eax, edi
+        sub eax, job_table
+        xor edx, edx
+        push rbx
+        mov ebx, JOB_ENTRY_SIZE
+        div ebx
+        pop rbx
+        inc eax
+        mov [rsp + FRAME_RAX], rax     ; Return in RAX
+        POPALL
         ret
 
 ;---------------------------------------
 ; Command: run - Execute a program from filesystem
 ;---------------------------------------
 cmd_exec_program:
-        pushad
+        PUSHALL
 
         ; Parse program name (up to first space or null)
         mov edi, prog_name_buf
@@ -4507,7 +5908,7 @@ cmd_exec_program:
         dec esi                 ; point back at null for next iteration
 .path_dir_ready:
         mov byte [edi], 0
-        push esi                ; save position in PATH string
+        push rsi                ; save position in PATH string
 
         ; Restore to user's cwd first (clean slate for cd)
         call path_restore_cwd
@@ -4540,11 +5941,11 @@ cmd_exec_program:
 
         ; Restore user's cwd before execution
         call path_restore_cwd
-        pop esi                 ; clean up PATH string pointer
+        pop rsi                 ; clean up PATH string pointer
         jmp .found_program
 
 .path_cd_fail:
-        pop esi                 ; restore PATH string position
+        pop rsi                 ; restore PATH string position
         jmp .path_next_dir
 
 .path_not_found:
@@ -4568,14 +5969,18 @@ cmd_exec_program:
         call elf_load_program
         jc .not_found           ; ELF parse error
         ; EAX = entry point from ELF
-        mov [program_entry], eax
+        mov [program_entry], rax
         jmp .exec_program
 
 .try_flat:
         ; Flat binary at PROGRAM_BASE
-        mov dword [program_entry], PROGRAM_BASE
+        mov qword [program_entry], PROGRAM_BASE
 
 .exec_program:
+        ; Check for background execution request
+        cmp byte [bg_request], 1
+        je .exec_background
+
         mov esi, msg_exec
         call vga_print
 
@@ -4588,29 +5993,80 @@ cmd_exec_program:
         mov byte [PROGRAM_EXIT_ADDR + 6], 0x80
 
         ; Update TSS kernel stack for ring transitions
-        mov dword [tss_struct + 4], KERNEL_STACK
+        mov qword [tss_struct + 4], KERNEL_STACK
 
         ; Set up ring 3 stack
-        mov eax, PROGRAM_EXIT_ADDR - 4
+        mov rax, PROGRAM_EXIT_ADDR - 8
         ; Push return address (trampoline) on ring 3 stack
-        mov dword [eax], PROGRAM_EXIT_ADDR
+        mov qword [rax], PROGRAM_EXIT_ADDR
 
         ; Switch to ring 3 via IRET
-        mov ebx, [program_entry]
-        push dword USER_DS      ; SS3
-        push eax                ; ESP3
-        pushfd
-        or dword [esp], 0x200   ; Ensure interrupts enabled
-        push dword USER_CS      ; CS3
-        push ebx                ; EIP
-        iretd
+        mov rbx, [program_entry]
+        push qword USER_DS      ; SS3
+        push rax                ; RSP3
+        pushfq
+        or dword [rsp], 0x200   ; Ensure interrupts enabled
+        push qword USER_CS      ; CS3
+        push rbx                ; RIP
+        iretq
         ; SYS_EXIT will jump to shell_main, we never return here
+
+.exec_background:
+        ; Launch program as a background task via scheduler
+        mov rbx, [program_entry]         ; Entry point
+        mov ecx, PROGRAM_EXIT_ADDR - 8   ; User stack top
+        ; Write SYS_EXIT trampoline for background task too
+        mov byte [PROGRAM_EXIT_ADDR], 0xB8
+        mov dword [PROGRAM_EXIT_ADDR + 1], 0
+        mov byte [PROGRAM_EXIT_ADDR + 5], 0xCD
+        mov byte [PROGRAM_EXIT_ADDR + 6], 0x80
+        mov qword [ecx], PROGRAM_EXIT_ADDR  ; Return address on user stack
+
+        call sched_create_task
+        cmp eax, -1
+        je .bg_fail
+
+        ; Register in job table
+        push rax                ; Save task ID
+        mov esi, prog_name_buf
+        call jobs_register
+        mov ebx, eax            ; EBX = job number
+        pop rax                 ; EAX = task ID
+
+        ; Print "[N] PID"
+        push rax
+        mov esi, msg_bg_launched    ; "["
+        call vga_print
+        mov eax, ebx
+        call vga_print_dec
+        mov esi, msg_bg_launched2   ; "] "
+        call vga_print
+        pop rax
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
+        mov byte [bg_request], 0
+        mov byte [program_running], 0
+        POPALL
+        clc
+        ret
+
+.bg_fail:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_bg_unsupported
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        mov byte [bg_request], 0
+        POPALL
+        clc
+        ret
 
 .path_fsize: dd 0               ; Temp storage for file size during PATH search
 
 .not_found:
         call shell_status_fail
-        popad
+        POPALL
         stc
         ret
 
@@ -4630,7 +6086,7 @@ shell_redir_reset:
         ret
 
 shell_prepare_redirection:
-        pushad
+        PUSHALL
         call shell_redir_reset
         mov esi, line_buffer
 .spr_scan:
@@ -4671,7 +6127,7 @@ shell_prepare_redirection:
         call copy_word
         cmp byte [redir_in_name], 0
         je .spr_syntax_err
-        push esi
+        push rsi
         mov esi, redir_in_name
         call hbfs_find_file_global
         jc .spr_in_err_pop
@@ -4682,7 +6138,7 @@ shell_prepare_redirection:
         jne .spr_in_size_ok
         call gff_restore_cwd
 .spr_in_size_ok:
-        pop esi
+        pop rsi
         mov esi, redir_in_name
         mov edi, redir_in_buf
         call hbfs_read_file
@@ -4697,13 +6153,13 @@ shell_prepare_redirection:
         jne .spr_in_err_pop_done
         call gff_restore_cwd
 .spr_in_err_pop_done:
-        pop esi
+        pop rsi
 .spr_in_err:
         call shell_status_fail
         call shell_redir_reset
         mov esi, msg_redir_in_err
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
@@ -4712,12 +6168,12 @@ shell_prepare_redirection:
         jne .spr_in_big_pop_done
         call gff_restore_cwd
 .spr_in_big_pop_done:
-        pop esi
+        pop rsi
         call shell_status_fail
         call shell_redir_reset
         mov esi, msg_redir_too_big
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
@@ -4726,17 +6182,17 @@ shell_prepare_redirection:
         call shell_redir_reset
         mov esi, msg_redir_syntax
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
 .spr_ok:
-        popad
+        POPALL
         clc
         ret
 
 shell_finish_redirection:
-        pushad
+        PUSHALL
         cmp byte [stdout_redir_active], 1
         jne .sfr_reset
 
@@ -4788,18 +6244,18 @@ shell_finish_redirection:
         call shell_redir_reset
         mov esi, msg_write_err
         call vga_print
-        popad
+        POPALL
         ret
 
 .sfr_reset:
         call shell_redir_reset
-        popad
+        POPALL
         ret
 
 shell_use_stdin_as_input:
         cmp byte [stdin_redir_active], 1
         jne .susi_no_input
-        push edi
+        push rdi
         mov ecx, [stdin_redir_len]
         cmp ecx, PROGRAM_MAX_SIZE - 1
         jle .susi_size_ok
@@ -4814,7 +6270,7 @@ shell_use_stdin_as_input:
         mov byte [stdin_redir_active], 0
         mov esi, PROGRAM_BASE
         mov ecx, edx
-        pop edi
+        pop rdi
         clc
         ret
 .susi_no_input:
@@ -4822,7 +6278,7 @@ shell_use_stdin_as_input:
         ret
 
 shell_execute_pipeline:
-        pushad
+        PUSHALL
         mov esi, line_buffer
 .sep_scan:
         mov al, [esi]
@@ -4834,7 +6290,7 @@ shell_execute_pipeline:
         jmp .sep_scan
 
 .sep_none:
-        popad
+        POPALL
         clc
         ret
 
@@ -4944,7 +6400,7 @@ shell_execute_pipeline:
 
 .pipe_done:
         call shell_redir_reset
-        popad
+        POPALL
         stc
         ret
 
@@ -4953,14 +6409,14 @@ shell_execute_pipeline:
         call shell_redir_reset
         mov esi, msg_redir_syntax
         call vga_print
-        popad
+        POPALL
         stc
         ret
 
 .pipe_fail:
         call shell_status_fail
         call shell_redir_reset
-        popad
+        POPALL
         stc
         ret
 
@@ -4968,11 +6424,11 @@ shell_execute_pipeline:
 ; Command: enter - Hex entry mode
 ;---------------------------------------
 cmd_enter_hex:
-        pushad
+        PUSHALL
         mov edi, PROGRAM_BASE   ; Write hex data here
 
 .hex_prompt:
-        push edi
+        push rdi
         mov byte [vga_color], COLOR_PROMPT
         mov al, 'h'
         call vga_putchar
@@ -4980,7 +6436,7 @@ cmd_enter_hex:
 
         ; Read a line
         mov esi, temp_line_buf
-        push esi
+        push rsi
         mov edi, temp_line_buf
         xor ecx, ecx
 
@@ -5000,8 +6456,8 @@ cmd_enter_hex:
         mov byte [edi], 0
         mov al, 0x0A
         call vga_putchar
-        pop esi
-        pop edi
+        pop rsi
+        pop rdi
 
         ; Empty line = end of hex input
         or ecx, ecx
@@ -5025,7 +6481,7 @@ cmd_enter_hex:
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
 
-        push ecx
+        push rcx
         mov edi, filename_buf
         xor ecx, ecx
 .read_name:
@@ -5044,7 +6500,7 @@ cmd_enter_hex:
         mov byte [edi], 0
         mov al, 0x0A
         call vga_putchar
-        pop ecx
+        pop rcx
 
         ; Save file as executable
         mov esi, filename_buf
@@ -5055,7 +6511,7 @@ cmd_enter_hex:
 
         mov esi, msg_saved
         call vga_print
-        popad
+        POPALL
         ret
 
 .save_fail:
@@ -5063,7 +6519,7 @@ cmd_enter_hex:
         mov esi, msg_write_err
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -5071,7 +6527,7 @@ cmd_enter_hex:
 ; Flags: -v  verbose (print filenames)
 ;---------------------------------------
 cmd_copy_file:
-        pushad
+        PUSHALL
 
         ; Parse source filename
         mov edi, filename_buf
@@ -5094,7 +6550,7 @@ cmd_copy_file:
         jc .copy_wild
 
         ; Load source file
-        push esi
+        push rsi
         mov esi, filename_buf
         mov edi, PROGRAM_BASE
         call hbfs_read_file
@@ -5109,12 +6565,12 @@ cmd_copy_file:
         call hbfs_create_file
         jc .copy_fail
 
-        pop esi
+        pop rsi
         ; -v: print what was copied
         mov eax, 21            ; 'v' - 'a'
         call test_flag
         jnc .copy_quiet
-        push esi
+        push rsi
         mov esi, msg_copy_prefix
         call vga_print
         mov esi, filename_buf
@@ -5125,11 +6581,11 @@ cmd_copy_file:
         call vga_print
         mov al, 0x0A
         call vga_putchar
-        pop esi
+        pop rsi
 .copy_quiet:
         mov esi, msg_copied
         call vga_print
-        popad
+        POPALL
         ret
 
 .usage_error:
@@ -5137,7 +6593,7 @@ cmd_copy_file:
         mov esi, msg_copy_usage
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .copy_wild:
@@ -5156,12 +6612,12 @@ cmd_copy_file:
         cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
         je .cw_count_next
 
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, filename_buf
         call wildcard_match
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         jnc .cw_count_next
         inc ebx
 
@@ -5184,7 +6640,7 @@ cmd_copy_file:
         mov esi, msg_wild_needs_star
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .cw_copy_begin:
@@ -5202,31 +6658,31 @@ cmd_copy_file:
         cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
         je .cw_next
 
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, filename_buf
         call wildcard_match
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         jnc .cw_next
 
         ; source entry name -> wildcard_src_buf
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, edi
         mov edi, wildcard_src_buf
         call str_copy
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
 
         ; load source content
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, wildcard_src_buf
         mov edi, PROGRAM_BASE
         call hbfs_read_file
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         jc .cw_next
 
         ; build destination name
@@ -5245,14 +6701,14 @@ cmd_copy_file:
         call wildcard_expand_star
 
 .cw_create:
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, wildcard_dst_buf
         mov edi, PROGRAM_BASE
         movzx edx, byte [last_file_type]
         call hbfs_create_file
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         jc .cw_next
         inc ebx
 
@@ -5266,7 +6722,7 @@ cmd_copy_file:
         je .wild_not_found
         mov esi, msg_copied
         call vga_print
-        popad
+        POPALL
         ret
 
 .wild_not_found:
@@ -5274,25 +6730,25 @@ cmd_copy_file:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .src_not_found:
-        pop esi
+        pop rsi
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .copy_fail:
-        pop esi
+        pop rsi
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_write_err
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -5300,7 +6756,7 @@ cmd_copy_file:
 ; Usage: ren oldname newname
 ;---------------------------------------
 cmd_rename_file:
-        pushad
+        PUSHALL
 
         ; Parse old filename
         mov edi, filename_buf
@@ -5328,7 +6784,7 @@ cmd_rename_file:
         jc .ren_not_found
 
         ; Copy new name into entry (max 252 chars)
-        push edi
+        push rdi
         mov esi, filename_buf2
         xor ecx, ecx
 .copy_new_name:
@@ -5343,7 +6799,7 @@ cmd_rename_file:
 .name_truncate:
         mov byte [edi], 0      ; Force null-terminate
 .name_copied:
-        pop edi
+        pop rdi
 
         ; Update modified timestamp
         mov eax, [tick_count]
@@ -5358,7 +6814,7 @@ cmd_rename_file:
 .ren_no_restore:
         mov esi, msg_renamed
         call vga_print
-        popad
+        POPALL
         ret
 
 .ren_usage:
@@ -5366,7 +6822,7 @@ cmd_rename_file:
         mov esi, msg_ren_usage
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .ren_wild:
@@ -5383,12 +6839,12 @@ cmd_rename_file:
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
         je .rw_count_next
 
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, filename_buf
         call wildcard_match
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         jnc .rw_count_next
         inc ebx
 
@@ -5411,7 +6867,7 @@ cmd_rename_file:
         mov esi, msg_wild_needs_star
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .rw_do:
@@ -5427,22 +6883,22 @@ cmd_rename_file:
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
         je .rw_next
 
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, filename_buf
         call wildcard_match
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         jnc .rw_next
 
         ; source entry name -> wildcard_src_buf
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, edi
         mov edi, wildcard_src_buf
         call str_copy
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
 
         ; build destination name
         mov esi, filename_buf2
@@ -5461,8 +6917,8 @@ cmd_rename_file:
 
 .rw_write:
         ; Copy new name into matched entry
-        push ecx
-        push edi
+        push rcx
+        push rdi
         mov esi, wildcard_dst_buf
         xor edx, edx
 .rw_copy_name:
@@ -5479,8 +6935,8 @@ cmd_rename_file:
 .rw_name_done:
         call rtc_get_timestamp
         mov [edi + DIRENT_MODIFIED], eax
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         inc ebx
 
 .rw_next:
@@ -5492,7 +6948,7 @@ cmd_rename_file:
         call hbfs_save_root_dir
         mov esi, msg_renamed
         call vga_print
-        popad
+        POPALL
         ret
 
 .ren_not_found:
@@ -5500,7 +6956,311 @@ cmd_rename_file:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
+        ret
+
+;---------------------------------------
+; Command: rmdir <dirname>
+; Remove an empty directory
+;---------------------------------------
+cmd_rmdir_impl:
+        PUSHALL
+        cmp byte [esi], 0
+        je .rmdir_usage
+
+        mov [.rmdir_name_ptr], rsi
+
+        ; Find in current directory
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .rmdir_not_found
+
+        ; Check it's a directory
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne .rmdir_not_dir
+
+        ; Check directory is empty: read its data blocks, scan for entries
+        mov eax, [edi + DIRENT_START_BLOCK]
+        mov [.rmdir_entry], edi
+        ; Load directory data from disk
+        shl eax, 3              ; block * 8 = LBA offset
+        add eax, HBFS_DATA_START
+        mov ecx, [edi + DIRENT_BLOCK_COUNT]
+        shl ecx, 3              ; blocks * 8 = sector count
+        mov esi, hbfs_block_buf
+        ; Can't read into hbfs_block_buf if it's too small; use dir_buf trick
+        ; Actually subdirs are 16 blocks = 64KB. Use a sector-by-sector scan.
+        ; We scan the first sector of each block for non-free entries.
+        mov edi, [.rmdir_entry]
+        mov eax, [edi + DIRENT_START_BLOCK]
+        mov ebx, [edi + DIRENT_BLOCK_COUNT]
+        ; Scan all sectors of the subdir for any non-free entry
+        mov [.rmdir_blk], eax
+        mov [.rmdir_cnt], ebx
+
+.rmdir_scan_blk:
+        cmp dword [.rmdir_cnt], 0
+        je .rmdir_empty
+        ; Read one block (8 sectors) into hbfs_block_buf
+        mov eax, [.rmdir_blk]
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov edi, hbfs_block_buf
+        call ata_read_sectors
+        ; Scan entries in this block
+        mov edi, hbfs_block_buf
+        mov ecx, HBFS_BLOCK_SIZE / HBFS_DIR_ENTRY_SIZE
+.rmdir_scan_entry:
+        cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        jne .rmdir_not_empty
+        add edi, HBFS_DIR_ENTRY_SIZE
+        loop .rmdir_scan_entry
+        inc dword [.rmdir_blk]
+        dec dword [.rmdir_cnt]
+        jmp .rmdir_scan_blk
+
+.rmdir_empty:
+        ; Directory is empty — delete it
+        ; Re-find the entry (hbfs_block_buf was overwritten)
+        call hbfs_load_root_dir
+        mov rsi, [.rmdir_name_ptr]
+        call hbfs_find_file
+        jc .rmdir_not_found     ; shouldn't happen
+        call hbfs_delete_file_entry
+        mov esi, .rmdir_ok_msg
+        call vga_print
+        POPALL
+        ret
+
+.rmdir_not_empty:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .rmdir_not_empty_msg
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        POPALL
+        ret
+
+.rmdir_not_dir:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .rmdir_not_dir_msg
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        POPALL
+        ret
+
+.rmdir_not_found:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_not_found
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        POPALL
+        ret
+
+.rmdir_usage:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .rmdir_usage_msg
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        POPALL
+        ret
+
+.rmdir_entry:       dd 0
+.rmdir_name_ptr:    dq 0
+.rmdir_blk:         dd 0
+.rmdir_cnt:         dd 0
+.rmdir_ok_msg:      db "Directory removed", 0x0A, 0
+.rmdir_not_empty_msg: db "rmdir: directory not empty", 0x0A, 0
+.rmdir_not_dir_msg: db "rmdir: not a directory", 0x0A, 0
+.rmdir_usage_msg:   db "Usage: rmdir <directory>", 0x0A, 0
+
+;---------------------------------------
+; Command: read [-p PROMPT] VARNAME
+; Read a line of input into an environment variable
+; Usage:
+;   read VAR        - Read line into $VAR
+;   read -p "text" VAR - Print prompt first, then read
+;---------------------------------------
+cmd_read_input:
+        PUSHALL
+        ; ESI points to arguments (spaces already skipped)
+        cmp byte [esi], 0
+        je .ri_usage
+
+        ; Check for -p flag
+        cmp byte [esi], '-'
+        jne .ri_no_prompt
+        cmp byte [esi + 1], 'p'
+        jne .ri_no_prompt
+        cmp byte [esi + 2], ' '
+        jne .ri_no_prompt
+        add esi, 3
+        ; Skip spaces to prompt text
+.ri_skip_p:
+        cmp byte [esi], ' '
+        jne .ri_get_prompt
+        inc esi
+        jmp .ri_skip_p
+.ri_get_prompt:
+        ; Check for quoted prompt
+        cmp byte [esi], '"'
+        je .ri_quoted
+        ; Unquoted: single word prompt
+        push rsi
+        call vga_print
+        ; Find end of prompt word
+        pop rsi
+.ri_skip_prompt:
+        cmp byte [esi], 0
+        je .ri_usage
+        cmp byte [esi], ' '
+        je .ri_after_prompt
+        inc esi
+        jmp .ri_skip_prompt
+
+.ri_quoted:
+        inc esi                 ; skip opening quote
+        push rsi
+        call vga_print_until_quote
+        pop rsi
+        ; Advance past closing quote
+.ri_find_close:
+        cmp byte [esi], 0
+        je .ri_usage
+        cmp byte [esi], '"'
+        je .ri_past_quote
+        inc esi
+        jmp .ri_find_close
+.ri_past_quote:
+        inc esi                 ; skip closing quote
+
+.ri_after_prompt:
+        ; Skip spaces to varname
+.ri_skip_to_var:
+        cmp byte [esi], ' '
+        jne .ri_have_var
+        inc esi
+        jmp .ri_skip_to_var
+.ri_have_var:
+        cmp byte [esi], 0
+        je .ri_usage
+        jmp .ri_read_line
+
+.ri_no_prompt:
+        ; ESI points directly at variable name
+
+.ri_read_line:
+        ; Save variable name pointer
+        mov [.ri_varname], rsi
+
+        ; Read a line of input using kb_getchar + echo
+        mov edi, .ri_input_buf
+        xor ecx, ecx           ; length
+.ri_key_loop:
+        call kb_getchar
+        cmp al, 0x0D            ; Enter
+        je .ri_got_line
+        cmp al, 0x0A
+        je .ri_got_line
+        cmp al, 0x08            ; Backspace
+        je .ri_backspace
+        cmp al, 3               ; Ctrl+C
+        je .ri_cancel
+
+        ; Ignore non-printable
+        cmp al, 32
+        jb .ri_key_loop
+
+        ; Store and echo if room
+        cmp ecx, 250
+        jge .ri_key_loop
+        mov [edi + ecx], al
+        inc ecx
+        call vga_putchar
+        jmp .ri_key_loop
+
+.ri_backspace:
+        test ecx, ecx
+        jz .ri_key_loop
+        dec ecx
+        ; Erase on screen
+        mov al, 0x08
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        mov al, 0x08
+        call vga_putchar
+        jmp .ri_key_loop
+
+.ri_cancel:
+        ; Ctrl+C: abort with empty result
+        mov al, 0x0A
+        call vga_putchar
+        POPALL
+        ret
+
+.ri_got_line:
+        mov byte [edi + ecx], 0 ; null terminate input
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Build "VARNAME=VALUE" in env_temp_buf
+        mov rsi, [.ri_varname]
+        mov edi, env_temp_buf
+        xor edx, edx           ; length counter
+.ri_copy_name:
+        lodsb
+        cmp al, 0
+        je .ri_name_done
+        cmp al, ' '
+        je .ri_name_done
+        stosb
+        inc edx
+        cmp edx, 60
+        jb .ri_copy_name
+.ri_name_done:
+        mov al, '='
+        stosb
+        ; Copy input value
+        mov esi, .ri_input_buf
+.ri_copy_val:
+        lodsb
+        stosb
+        test al, al
+        jnz .ri_copy_val
+
+        ; Set the env variable
+        mov esi, env_temp_buf
+        call env_set_str
+
+        POPALL
+        ret
+
+.ri_usage:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, .ri_usage_msg
+        call vga_print
+        mov byte [vga_color], COLOR_DEFAULT
+        POPALL
+        ret
+
+.ri_varname:    dq 0
+.ri_input_buf:  times 256 db 0
+.ri_usage_msg:  db "Usage: read [-p prompt] VARNAME", 0x0A, 0
+
+; Print string at ESI until '"' or null (no newline)
+vga_print_until_quote:
+        push rsi
+.vpuq_loop:
+        lodsb
+        cmp al, 0
+        je .vpuq_done
+        cmp al, '"'
+        je .vpuq_done
+        call vga_putchar
+        jmp .vpuq_loop
+.vpuq_done:
+        pop rsi
         ret
 
 ;---------------------------------------
@@ -5508,7 +7268,7 @@ cmd_rename_file:
 ; Show detailed file information
 ;---------------------------------------
 cmd_stat:
-        pushad
+        PUSHALL
         ; Skip leading spaces
 .stat_skip:
         cmp byte [esi], ' '
@@ -5528,10 +7288,10 @@ cmd_stat:
         ; Print "  File: <name>"
         mov esi, .stat_lbl_file
         call vga_print
-        push edi
+        push rdi
         mov esi, edi            ; filename at start of entry
         call vga_print
-        pop edi
+        pop rdi
         mov al, 0x0A
         call vga_putchar
 
@@ -5615,8 +7375,8 @@ cmd_stat:
         mov esi, .stat_lbl_perms
         call vga_print
         movzx eax, word [edi + DIRENT_PERMS]
-        push edi
-        push eax
+        push rdi
+        push rax
         ; Print symbolic rwxrwxrwx
         mov edi, .stat_rwx_buf
         mov ecx, 9
@@ -5632,10 +7392,10 @@ cmd_stat:
         mov edx, eax
         mov eax, edx
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, 3
         div ecx
-        pop ecx
+        pop rcx
         ; EDX = remainder: 0=r,1=w,2=x
         cmp edx, 0
         je .stat_rwx_r
@@ -5665,8 +7425,8 @@ cmd_stat:
         jnz .stat_rwx_loop
 .stat_rwx_done:
         mov byte [edi], 0
-        pop eax
-        pop edi
+        pop rax
+        pop rdi
         mov esi, .stat_rwx_buf
         call vga_print
         mov al, ' '
@@ -5675,18 +7435,18 @@ cmd_stat:
         call vga_putchar
         movzx eax, word [edi + DIRENT_PERMS]
         ; Print octal: 3 digits (each 3 bits)
-        push eax
+        push rax
         shr eax, 6
         and eax, 7
         add al, '0'
         call vga_putchar
-        pop eax
-        push eax
+        pop rax
+        push rax
         shr eax, 3
         and eax, 7
         add al, '0'
         call vga_putchar
-        pop eax
+        pop rax
         and eax, 7
         add al, '0'
         call vga_putchar
@@ -5713,10 +7473,10 @@ cmd_stat:
         shl eax, 3
         add eax, HBFS_DATA_START
         mov ecx, 1             ; 1 sector is enough for a path
-        push edi
+        push rdi
         mov edi, .ln_read_buf
         call ata_read_sectors
-        pop edi
+        pop rdi
         jc .stat_done
         mov esi, .ln_read_buf
         call vga_print
@@ -5724,13 +7484,13 @@ cmd_stat:
         call vga_putchar
 
 .stat_done:
-        popad
+        POPALL
         ret
 
 .stat_usage:
         mov esi, .stat_usage_s
         call vga_print
-        popad
+        POPALL
         ret
 
 .stat_not_found:
@@ -5738,12 +7498,12 @@ cmd_stat:
         mov esi, msg_not_found
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 ; Print packed RTC timestamp in EBX as YYYY-MM-DD HH:MM:SS
 .stat_print_ts:
-        push ebx
+        push rbx
         ; Year
         mov eax, ebx
         shr eax, 25
@@ -5758,10 +7518,10 @@ cmd_stat:
         and eax, 0x0F
         cmp eax, 10
         jge .spt_mon
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .spt_mon:
         call vga_print_dec
         mov al, '-'
@@ -5772,10 +7532,10 @@ cmd_stat:
         and eax, 0x1F
         cmp eax, 10
         jge .spt_day
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .spt_day:
         call vga_print_dec
         mov al, ' '
@@ -5786,10 +7546,10 @@ cmd_stat:
         and eax, 0x1F
         cmp eax, 10
         jge .spt_hr
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .spt_hr:
         call vga_print_dec
         mov al, ':'
@@ -5800,10 +7560,10 @@ cmd_stat:
         and eax, 0x3F
         cmp eax, 10
         jge .spt_min
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .spt_min:
         call vga_print_dec
         mov al, ':'
@@ -5814,13 +7574,13 @@ cmd_stat:
         shl eax, 1
         cmp eax, 10
         jge .spt_sec
-        push eax
+        push rax
         mov al, '0'
         call vga_putchar
-        pop eax
+        pop rax
 .spt_sec:
         call vga_print_dec
-        pop ebx
+        pop rbx
         ret
 
 .stat_lbl_file:     db "  File: ", 0
@@ -5850,7 +7610,7 @@ cmd_stat:
 ; Filesystem consistency check
 ;---------------------------------------
 cmd_fsck:
-        pushad
+        PUSHALL
         mov esi, .fsck_banner
         call vga_print
 
@@ -5872,7 +7632,7 @@ cmd_fsck:
         call vga_print
         mov esi, .fsck_sb_corrupt
         call vga_print
-        popad
+        POPALL
         ret
 
 .fsck_step2:
@@ -5889,7 +7649,7 @@ cmd_fsck:
         test al, al
         jz .fsck_next_byte
         ; Count set bits in AL
-        push ecx
+        push rcx
         mov ecx, 8
 .fsck_bit_loop:
         test al, 1
@@ -5898,7 +7658,7 @@ cmd_fsck:
 .fsck_no_bit:
         shr al, 1
         loop .fsck_bit_loop
-        pop ecx
+        pop rcx
 .fsck_next_byte:
         loop .fsck_count_bits
         mov [.fsck_bmp_alloc], edx
@@ -5908,7 +7668,7 @@ cmd_fsck:
 .fsck_bmp_fail:
         mov esi, .fsck_fail
         call vga_print
-        popad
+        POPALL
         ret
 
 .fsck_step3:
@@ -5916,8 +7676,8 @@ cmd_fsck:
         mov esi, .fsck_check_dir
         call vga_print
         ; Save current dir state
-        push dword [current_dir_lba]
-        push dword [current_dir_sects]
+        push qword [current_dir_lba]
+        push qword [current_dir_sects]
         mov dword [current_dir_lba], HBFS_ROOT_DIR_START
         mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
         ; Invalidate dir cache to force a fresh load
@@ -5939,8 +7699,8 @@ cmd_fsck:
         ; Sum block count
         add edx, [edi + DIRENT_BLOCK_COUNT]
         ; Validate: block count should match ceil(size/4096)
-        push eax
-        push edx
+        push rax
+        push rdx
         mov eax, [edi + DIRENT_SIZE]
         add eax, HBFS_BLOCK_SIZE - 1
         shr eax, 12                    ; ceil(size/4096)
@@ -5951,8 +7711,8 @@ cmd_fsck:
         cmp eax, [edi + DIRENT_BLOCK_COUNT]
         je .fsck_size_ok
         ; Size mismatch
-        push esi
-        push ebx
+        push rsi
+        push rbx
         mov byte [vga_color], COLOR_ERROR
         mov esi, .fsck_warn_size
         call vga_print
@@ -5961,12 +7721,12 @@ cmd_fsck:
         mov al, 0x0A
         call vga_putchar
         mov byte [vga_color], COLOR_DEFAULT
-        pop ebx
-        pop esi
+        pop rbx
+        pop rsi
         inc dword [.fsck_errors]
 .fsck_size_ok:
-        pop edx
-        pop eax
+        pop rdx
+        pop rax
 .fsck_dir_next:
         add edi, HBFS_DIR_ENTRY_SIZE
         dec ecx
@@ -5976,8 +7736,8 @@ cmd_fsck:
         mov [.fsck_dir_blocks], edx
 
         ; Restore directory state
-        pop dword [current_dir_sects]
-        pop dword [current_dir_lba]
+        pop qword [current_dir_sects]
+        pop qword [current_dir_lba]
         mov dword [dir_cache_lba], 0   ; invalidate cache
         mov esi, .fsck_ok
         call vga_print
@@ -6027,7 +7787,7 @@ cmd_fsck:
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
 .fsck_end:
-        popad
+        POPALL
         ret
 
 .fsck_bmp_alloc:   dd 0
@@ -6057,7 +7817,7 @@ cmd_fsck:
 ; Create a symbolic link
 ;---------------------------------------
 cmd_ln:
-        pushad
+        PUSHALL
         ; Expect "-s" flag
         cmp byte [esi], '-'
         jne .ln_usage
@@ -6074,7 +7834,7 @@ cmd_ln:
         cmp byte [esi], 0
         je .ln_usage
         ; ESI points to target path
-        mov [.ln_target], esi
+        mov [.ln_target], rsi
         ; Find end of target (next space)
 .ln_scan_target:
         cmp byte [esi], 0
@@ -6097,8 +7857,8 @@ cmd_ln:
         je .ln_usage
         ; ESI = linkname, [.ln_target] = target path
         ; Compute target path length
-        push esi               ; save linkname
-        mov esi, [.ln_target]
+        push rsi               ; save linkname
+        mov rsi, [.ln_target]
         xor ecx, ecx
 .ln_len:
         cmp byte [esi + ecx], 0
@@ -6110,11 +7870,11 @@ cmd_ln:
         mov [.ln_tgt_len], ecx
 
         ; Copy target path to a temp buffer for hbfs_create_file
-        mov esi, [.ln_target]
+        mov rsi, [.ln_target]
         mov edi, .ln_buf
         rep movsb
 
-        pop esi                ; ESI = linkname
+        pop rsi                ; ESI = linkname
         ; Create symlink entry: name=linkname, data=target path, type=FTYPE_LINK
         mov ecx, [.ln_tgt_len]
         mov edi, .ln_buf       ; data = target path
@@ -6126,7 +7886,7 @@ cmd_ln:
 
         mov esi, .ln_done
         call vga_print
-        popad
+        POPALL
         ret
 
 .ln_fail:
@@ -6134,16 +7894,16 @@ cmd_ln:
         mov esi, .ln_err
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 
 .ln_usage:
         mov esi, .ln_usage_s
         call vga_print
-        popad
+        POPALL
         ret
 
-.ln_target:    dd 0
+.ln_target:    dq 0
 .ln_tgt_len:   dd 0
 .ln_done:      db "Link created.", 0x0A, 0
 .ln_err:       db "Failed to create link.", 0x0A, 0
@@ -6156,7 +7916,7 @@ cmd_ln:
 ; Example: chmod 755 myprog
 ;---------------------------------------
 cmd_chmod:
-        pushad
+        PUSHALL
         call skip_spaces
         cmp byte [esi], 0
         je .chmod_usage
@@ -6191,19 +7951,19 @@ cmd_chmod:
         mov esi, .chmod_done
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .chmod_fail:
         mov byte [vga_color], COLOR_ERROR
         mov esi, .chmod_err
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .chmod_usage:
         mov esi, .chmod_usage_s
         call vga_print
-        popad
+        POPALL
         ret
 .chmod_done:   db "Permissions updated.", 0x0A, 0
 .chmod_err:    db "chmod: file not found.", 0x0A, 0
@@ -6216,7 +7976,7 @@ cmd_chmod:
 ; Example: chown 1000 myfile
 ;---------------------------------------
 cmd_chown:
-        pushad
+        PUSHALL
         call skip_spaces
         cmp byte [esi], 0
         je .chown_usage
@@ -6249,19 +8009,19 @@ cmd_chown:
         mov esi, .chown_done
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .chown_fail:
         mov byte [vga_color], COLOR_ERROR
         mov esi, .chown_err
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
-        popad
+        POPALL
         ret
 .chown_usage:
         mov esi, .chown_usage_s
         call vga_print
-        popad
+        POPALL
         ret
 .chown_done:   db "Owner updated.", 0x0A, 0
 .chown_err:    db "chown: file not found.", 0x0A, 0

@@ -6,8 +6,45 @@
 ;
 
 ; Program header
-[BITS 32]
+[BITS 64]
 [ORG 0x00200000]
+
+; 64-bit replacements for pushad/popad
+%macro PUSHALL 0
+        push rax
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        push rbp
+        push r8
+        push r9
+        push r10
+        push r11
+        push r12
+        push r13
+        push r14
+        push r15
+%endmacro
+
+%macro POPALL 0
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rbp
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
+%endmacro
 
 ; Jump past shared code to program entry point
 jmp start
@@ -86,6 +123,24 @@ SYS_CHMOD       equ 68          ; Change perms: EBX=filename ECX=perms -> EAX=0/
 SYS_CHOWN       equ 69          ; Change owner: EBX=filename ECX=uid -> EAX=0/-1
 SYS_SYMLINK     equ 70          ; Create link: EBX=linkname ECX=target -> EAX=0/-1
 SYS_READLINK    equ 71          ; Read link: EBX=linkname ECX=buf -> EAX=len/-1
+SYS_SIGNAL      equ 72          ; Install handler: EBX=signum ECX=handler -> EAX=old
+SYS_RAISE       equ 73          ; Send signal: EBX=PID ECX=signum -> EAX=0/-1
+SYS_MQ_CREATE   equ 74          ; Create/open MQ: EBX=key -> EAX=mq_id/-1
+SYS_MQ_SEND     equ 75          ; MQ send: EBX=id ECX=buf EDX=len -> EAX=0/-1
+SYS_MQ_RECV     equ 76          ; MQ recv: EBX=id ECX=buf EDX=max -> EAX=bytes/0/-1
+SYS_MQ_CLOSE    equ 77          ; MQ destroy: EBX=id -> EAX=0/-1
+SYS_STRACE      equ 78
+SYS_LISTENV     equ 79          ; Trace ctl: EBX=0off/1on/2read/3query
+SYS_RENAME      equ 80          ; Rename: EBX=oldname ECX=newname -> EAX=0/-1
+SYS_SETENV      equ 81          ; Set env: EBX="NAME=VALUE" -> EAX=0/-1
+SYS_RMDIR       equ 82          ; Remove dir: EBX=name -> EAX=0/-1
+SYS_TRUNCATE    equ 83          ; Truncate: EBX=name ECX=size -> EAX=0/-1
+
+; Signal numbers (for SYS_SIGNAL / SYS_RAISE)
+SIGTERM         equ 1           ; Terminate (catchable)
+SIGKILL         equ 2           ; Force kill (not catchable)
+SIGUSR1         equ 3           ; User-defined signal 1
+SIGUSR2         equ 4           ; User-defined signal 2
 
 ; Audio format flags (for SYS_AUDIO_PLAY EDX)
 SB_FMT_16BIT    equ (1 << 16)
@@ -130,6 +185,9 @@ KEY_UP          equ 0x80
 KEY_DOWN        equ 0x81
 KEY_LEFT        equ 0x82
 KEY_RIGHT       equ 0x83
+KEY_HOME        equ 0x8F
+KEY_END         equ 0x90
+KEY_DELETE      equ 0x91
 
 ; Function key codes
 KEY_F1          equ 0x84
@@ -158,7 +216,7 @@ FTYPE_LINK      equ 5
 ; Clobbers no registers (uses pushad/popad)
 ;---------------------------------------
 print_dec:
-        pushad
+        PUSHALL
         xor ecx, ecx
         mov ebx, 10
         test eax, eax
@@ -171,17 +229,17 @@ print_dec:
 .pd_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .pd_push
 .pd_pop:
-        pop ebx
+        pop rbx
         add ebx, '0'
         mov eax, SYS_PUTCHAR
         int 0x80
         dec ecx
         jnz .pd_pop
 .pd_done:
-        popad
+        POPALL
         ret

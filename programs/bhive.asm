@@ -89,7 +89,7 @@ start:
 ; draw_content
 ;---------------------------------------
 draw_content:
-        pushad
+        PUSHALL
         ; Background
         mov eax, [win_id]
         mov ebx, 0
@@ -134,12 +134,12 @@ draw_content:
         jge .draw_done
 
         ; Highlight selected
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         cmp ebx, [selected]
         jne .no_hl
         mov eax, [win_id]
-        push ecx
+        push rcx
         imul ecx, 18
         add ecx, 28
         mov ebx, 0
@@ -147,37 +147,37 @@ draw_content:
         mov esi, 18
         mov edi, 0x003060A0
         call gui_fill_rect
-        pop ecx
+        pop rcx
 .no_hl:
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
 
         ; Get file entry
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         mov eax, ebx
         shl eax, 6             ; * 64
         lea esi, [file_names + eax]
 
         ; Draw icon (folder or file indicator)
         mov eax, [win_id]
-        push ecx
+        push rcx
         imul ecx, 18
         add ecx, 30
         mov ebx, 8
-        push esi
+        push rsi
         ; Check file type
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov edi, 0x00000000
-        pop esi
-        pop ecx
-        pop ebx
-        pop ecx                ; restore saved vis_idx from "Get file entry"
+        pop rsi
+        pop rcx
+        pop rbx
+        pop rcx                ; restore saved vis_idx from "Get file entry"
 
         ; Draw filename
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         mov eax, ebx
         shl eax, 6
         lea esi, [file_names + eax]
@@ -185,18 +185,18 @@ draw_content:
         mov ebx, 8
         imul ecx, 18
         add ecx, 30
-        cmp [esp + 4], dword 0  ; check if this is selected
+        cmp [rsp + 8], dword 0  ; check if this is selected
         mov edi, 0x00000000
-        push eax
-        mov eax, [esp + 4]      ; file index from pushed ebx
+        push rax
+        mov eax, [rsp + 8]      ; file index from pushed ebx
         cmp eax, [selected]
-        pop eax
+        pop rax
         jne .file_dark
         mov edi, 0x00FFFFFF
 .file_dark:
         call gui_draw_text
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
 
         inc ecx
         inc ebx
@@ -211,14 +211,14 @@ draw_content:
         mov edi, 0x00909090
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; load_dir - Load current directory listing
 ;---------------------------------------
 load_dir:
-        pushad
+        PUSHALL
         mov dword [file_count], 0
         xor ecx, ecx           ; index
 
@@ -232,14 +232,14 @@ load_dir:
         je .ld_next
 
         ; Copy name to file_names array
-        push ecx
+        push rcx
         cmp dword [file_count], 64
         jge .ld_full
         mov eax, [file_count]
         shl eax, 6
         lea edi, [file_names + eax]
         mov esi, dir_entry_buf
-        push ecx
+        push rcx
         mov ecx, 63
 .ld_copy:
         lodsb
@@ -250,10 +250,10 @@ load_dir:
         jnz .ld_copy
         mov byte [edi], 0
 .ld_pad:
-        pop ecx
+        pop rcx
         inc dword [file_count]
 .ld_full:
-        pop ecx
+        pop rcx
 
 .ld_next:
         inc ecx
@@ -261,7 +261,7 @@ load_dir:
         jl .ld_loop
 
 .ld_done:
-        popad
+        POPALL
         ret
 
 ; Data

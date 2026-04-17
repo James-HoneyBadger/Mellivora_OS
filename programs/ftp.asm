@@ -275,7 +275,7 @@ start:
 
 ; ftp_send_cmd: Send FTP command (ESI = string with CRLF)
 ftp_send_cmd:
-        push esi
+        push rsi
         ; Get length
         xor ecx, ecx
         mov edi, esi
@@ -288,7 +288,7 @@ ftp_send_cmd:
         mov eax, [ctrl_fd]
         mov ebx, esi
         call net_send
-        pop esi
+        pop rsi
         ret
 
 ; ftp_recv_response: Receive and print control response
@@ -305,11 +305,11 @@ ftp_recv_response:
 
         ; Null-terminate and print
         mov byte [resp_buf + eax], 0
-        push eax
+        push rax
         mov eax, SYS_PRINT
         mov ebx, resp_buf
         int 0x80
-        pop eax
+        pop rax
 
         ; Check if this is a complete response (3-digit code + space)
         cmp eax, 4
@@ -498,7 +498,7 @@ strip_crlf:
 ; starts_with: check if input_buf starts with string at EDI
 ; Returns CF set if match
 starts_with:
-        push esi
+        push rsi
         mov esi, input_buf
 .sw_loop:
         mov al, [edi]
@@ -510,11 +510,11 @@ starts_with:
         inc edi
         jmp .sw_loop
 .sw_match:
-        pop esi
+        pop rsi
         stc
         ret
 .sw_no:
-        pop esi
+        pop rsi
         clc
         ret
 
@@ -531,9 +531,9 @@ copy_to_edi:
 ; --- read_line: read a line from keyboard into EDI, max ECX chars ---
 ; Returns EAX = length
 read_line:
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         xor edx, edx            ; count
 .rl_loop:
         mov eax, SYS_GETCHAR
@@ -550,17 +550,17 @@ read_line:
         jge .rl_loop
         mov [edi + edx], al
         inc edx
-        push edx
+        push rdx
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop edx
+        pop rdx
         jmp .rl_loop
 .rl_bs:
         test edx, edx
         jz .rl_loop
         dec edx
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
@@ -570,19 +570,19 @@ read_line:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
-        pop edx
+        pop rdx
         jmp .rl_loop
 .rl_done:
         mov byte [edi + edx], 0
-        push edx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop edx
+        pop rdx
         mov eax, edx
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ; --- Error handlers ---

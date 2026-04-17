@@ -21,7 +21,7 @@ start:
         ; Init stacks
         mov dword [sp_depth], 0
         mov dword [rsp_depth], 0
-        mov dword [dict_ptr], user_dict
+        mov qword [dict_ptr], user_dict
         mov dword [compiling], 0
 
         ; Welcome
@@ -61,7 +61,7 @@ start:
 ; interpret_line - Process all words in ESI
 ;=======================================
 interpret_line:
-        pushad
+        PUSHALL
 .il_next:
         call skip_spaces
         cmp byte [esi], 0
@@ -74,26 +74,26 @@ interpret_line:
         mov edi, word_buf
 
         ; "bye"
-        push esi
+        push rsi
         mov esi, w_bye
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jz .do_bye
 
         ; "words"
-        push esi
+        push rsi
         mov esi, w_words
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jz .do_words
 
         ; "help"
-        push esi
+        push rsi
         mov esi, w_help
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jz .do_help
 
@@ -112,13 +112,13 @@ interpret_line:
         call skip_spaces
         call get_word
         ; Store name in current definition
-        mov edi, [dict_ptr]
-        push esi
+        mov rdi, [dict_ptr]
+        push rsi
         mov esi, word_buf
         call str_copy
-        pop esi
+        pop rsi
         ; Skip past name to body
-        mov edi, [dict_ptr]
+        mov rdi, [dict_ptr]
 .find_end_name:
         cmp byte [edi], 0
         je .found_end_name
@@ -126,7 +126,7 @@ interpret_line:
         jmp .find_end_name
 .found_end_name:
         inc edi                 ; past null
-        mov [def_body], edi     ; body starts here
+        mov [def_body], rdi     ; body starts here
         mov byte [edi], 0      ; init empty body
         jmp .il_next
 
@@ -144,7 +144,7 @@ interpret_line:
         ; End compilation
         mov dword [compiling], 0
         ; Null terminate body, advance dict_ptr
-        mov edi, [def_body]
+        mov rdi, [def_body]
 .find_body_end:
         cmp byte [edi], 0
         je .body_ended
@@ -152,16 +152,16 @@ interpret_line:
         jmp .find_body_end
 .body_ended:
         inc edi
-        mov [dict_ptr], edi
+        mov [dict_ptr], rdi
         mov esi, str_ok
-        push esi
+        push rsi
         call io_println
-        pop esi
+        pop rsi
         jmp .il_next
 
 .comp_append:
         ; Append word + space to definition body
-        mov edi, [def_body]
+        mov rdi, [def_body]
 .seek_body_end:
         cmp byte [edi], 0
         je .append_here
@@ -169,7 +169,7 @@ interpret_line:
         jmp .seek_body_end
 .append_here:
         ; Append word_buf contents
-        push esi
+        push rsi
         mov esi, word_buf
 .copy_word:
         lodsb
@@ -181,7 +181,7 @@ interpret_line:
         mov byte [edi], ' '
         inc edi
         mov byte [edi], 0      ; null terminate
-        pop esi
+        pop rsi
         jmp .il_next
 
 .do_bye:
@@ -204,21 +204,21 @@ interpret_line:
         mov esi, str_ok
         call io_println
 .il_ret:
-        popad
+        POPALL
         ret
 
 ;=======================================
 ; execute_word - Execute word in word_buf
 ;=======================================
 execute_word:
-        pushad
+        PUSHALL
         mov edi, word_buf
 
         ; Try to parse as number first
-        push edi
+        push rdi
         mov esi, edi
         call try_parse_number   ; EAX=number, CF=0 if success
-        pop edi
+        pop rdi
         jnc .ew_push_num
 
         ; --- Arithmetic ---
@@ -275,10 +275,10 @@ execute_word:
 .ew_not_div:
 
         ; mod
-        push esi
+        push rsi
         mov esi, w_mod
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_mod
         call pop_val
@@ -295,10 +295,10 @@ execute_word:
 
         ; --- Stack ops ---
         ; dup
-        push esi
+        push rsi
         mov esi, w_dup
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_dup
         call pop_val
@@ -307,55 +307,55 @@ execute_word:
         jmp .ew_done
 .ew_not_dup:
         ; drop
-        push esi
+        push rsi
         mov esi, w_drop
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_drop
         call pop_val
         jmp .ew_done
 .ew_not_drop:
         ; swap
-        push esi
+        push rsi
         mov esi, w_swap
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_swap
         call pop_val
         mov ebx, eax
         call pop_val
-        push eax
+        push rax
         mov eax, ebx
         call push_val
-        pop eax
+        pop rax
         call push_val
         jmp .ew_done
 .ew_not_swap:
         ; over
-        push esi
+        push rsi
         mov esi, w_over
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_over
         call pop_val
         mov ebx, eax
         call pop_val
-        push eax
+        push rax
         call push_val
         mov eax, ebx
         call push_val
-        pop eax
+        pop rax
         call push_val
         jmp .ew_done
 .ew_not_over:
         ; rot
-        push esi
+        push rsi
         mov esi, w_rot
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_rot
         call pop_val            ; c
@@ -363,12 +363,12 @@ execute_word:
         call pop_val            ; b
         mov ebx, eax
         call pop_val            ; a -> b c a
-        push eax
+        push rax
         mov eax, ebx
         call push_val
         mov eax, ecx
         call push_val
-        pop eax
+        pop rax
         call push_val
         jmp .ew_done
 .ew_not_rot:
@@ -389,20 +389,20 @@ execute_word:
         jmp .ew_done
 .ew_not_dot:
         ; .s (show stack)
-        push esi
+        push rsi
         mov esi, w_dots
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_dots
         call show_stack
         jmp .ew_done
 .ew_not_dots:
         ; emit
-        push esi
+        push rsi
         mov esi, w_emit
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_emit
         call pop_val
@@ -410,10 +410,10 @@ execute_word:
         jmp .ew_done
 .ew_not_emit:
         ; cr
-        push esi
+        push rsi
         mov esi, w_cr
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_cr
         call io_newline
@@ -460,10 +460,10 @@ execute_word:
 
         ; --- Miscellaneous ---
         ; random
-        push esi
+        push rsi
         mov esi, w_random
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_random
         call rand
@@ -471,10 +471,10 @@ execute_word:
         jmp .ew_done
 .ew_not_random:
         ; abs
-        push esi
+        push rsi
         mov esi, w_abs
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_abs
         call pop_val
@@ -486,10 +486,10 @@ execute_word:
         jmp .ew_done
 .ew_not_abs:
         ; negate
-        push esi
+        push rsi
         mov esi, w_negate
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_negate
         call pop_val
@@ -498,10 +498,10 @@ execute_word:
         jmp .ew_done
 .ew_not_negate:
         ; max
-        push esi
+        push rsi
         mov esi, w_max
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_max
         call pop_val
@@ -515,10 +515,10 @@ execute_word:
         jmp .ew_done
 .ew_not_max:
         ; min
-        push esi
+        push rsi
         mov esi, w_min
         call str_icmp
-        pop esi
+        pop rsi
         test eax, eax
         jnz .ew_not_min
         call pop_val
@@ -557,52 +557,52 @@ execute_word:
         xor eax, eax
         call push_val
 .ew_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Stack operations
 ;---------------------------------------
 push_val:       ; Push EAX onto data stack
-        push ebx
+        push rbx
         mov ebx, [sp_depth]
         cmp ebx, STACK_SIZE
         jge .push_overflow
         mov [data_stack + ebx*4], eax
         inc dword [sp_depth]
-        pop ebx
+        pop rbx
         ret
 .push_overflow:
-        push esi
+        push rsi
         mov esi, err_overflow
         call io_println
-        pop esi
-        pop ebx
+        pop rsi
+        pop rbx
         ret
 
 pop_val:        ; Pop into EAX
-        push ebx
+        push rbx
         cmp dword [sp_depth], 0
         je .pop_underflow
         dec dword [sp_depth]
         mov ebx, [sp_depth]
         mov eax, [data_stack + ebx*4]
-        pop ebx
+        pop rbx
         ret
 .pop_underflow:
-        push esi
+        push rsi
         mov esi, err_underflow
         call io_println
-        pop esi
+        pop rsi
         xor eax, eax
-        pop ebx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; show_stack
 ;---------------------------------------
 show_stack:
-        pushad
+        PUSHALL
         mov al, '<'
         call io_putchar
         mov eax, [sp_depth]
@@ -627,7 +627,7 @@ show_stack:
         jmp .ss_loop
 .ss_done:
         call io_newline
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -635,15 +635,15 @@ show_stack:
 ; Returns EAX=1 if found, 0 if not
 ;---------------------------------------
 find_user_word:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
 
         mov ebx, user_dict
 .fuw_loop:
-        cmp ebx, [dict_ptr]
+        cmp rbx, [dict_ptr]
         jge .fuw_not_found
         cmp byte [ebx], 0
         je .fuw_not_found
@@ -691,25 +691,25 @@ find_user_word:
 .fuw_not_found:
         xor eax, eax
 .fuw_ret:
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; show_words - List all defined words
 ;---------------------------------------
 show_words:
-        pushad
+        PUSHALL
         mov esi, builtin_list
         call io_println
 
         ; User words
         mov ebx, user_dict
 .sw_loop:
-        cmp ebx, [dict_ptr]
+        cmp rbx, [dict_ptr]
         jge .sw_done
         cmp byte [ebx], 0
         je .sw_done
@@ -738,17 +738,17 @@ show_words:
         jmp .sw_loop
 .sw_done:
         call io_newline
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; show_help
 ;---------------------------------------
 show_help:
-        pushad
+        PUSHALL
         mov esi, help_text
         call io_println
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -764,7 +764,7 @@ skip_spaces:
 
 get_word:
         ; Copy non-space chars from ESI to word_buf
-        push edi
+        push rdi
         mov edi, word_buf
 .gw_loop:
         mov al, [esi]
@@ -780,14 +780,14 @@ get_word:
         jmp .gw_loop
 .gw_done:
         mov byte [edi], 0
-        pop edi
+        pop rdi
         ret
 
 try_parse_number:
         ; ESI = string, returns EAX=value, CF=0 on success
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         xor eax, eax
         xor ecx, ecx           ; sign flag
         cmp byte [esi], '-'
@@ -814,9 +814,9 @@ try_parse_number:
         je .tpn_ok
         ; Not a valid number
         stc
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .tpn_ok:
         test ecx, ecx
@@ -824,14 +824,14 @@ try_parse_number:
         neg eax
 .tpn_ret:
         clc
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 int_to_str:
         ; EAX=number, EDI=buffer -> writes decimal string
-        pushad
+        PUSHALL
         test eax, eax
         jns .its_pos
         mov byte [edi], '-'
@@ -842,7 +842,7 @@ int_to_str:
         jnz .its_nonzero
         mov byte [edi], '0'
         mov byte [edi+1], 0
-        popad
+        POPALL
         ret
 .its_nonzero:
         xor ecx, ecx
@@ -852,20 +852,20 @@ int_to_str:
         jz .its_pop
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         jmp .its_push
 .its_pop:
         test ecx, ecx
         jz .its_term
-        pop eax
+        pop rax
         add al, '0'
         stosb
         dec ecx
         jmp .its_pop
 .its_term:
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 rand:
@@ -925,8 +925,8 @@ rand_state:     dd 0
 sp_depth:       dd 0
 rsp_depth:      dd 0
 compiling:      dd 0
-dict_ptr:       dd 0
-def_body:       dd 0
+dict_ptr:       dq 0
+def_body:       dq 0
 data_stack:     times STACK_SIZE dd 0
 return_stack:   times RSTACK_SIZE dd 0
 input_buf:      times INPUT_SIZE db 0

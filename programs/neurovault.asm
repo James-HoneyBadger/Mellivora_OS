@@ -158,7 +158,7 @@ start:
 ; TITLE SCREEN
 ;=======================================================================
 show_title:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -350,14 +350,14 @@ show_title:
         int 0x80
 
 .title_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; ABOUT SCREEN
 ;=======================================================================
 show_about:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -380,17 +380,17 @@ show_about:
         mov ecx, 1
         mov edx, 16            ; number of lines
 .about_loop:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, [esi]
+        mov rbx, [rsi]
         int 0x80
-        add esi, 4
-        pop edx
-        pop ecx
+        add rsi, 8
+        pop rdx
+        pop rcx
         inc ecx
         dec edx
         jnz .about_loop
@@ -407,14 +407,14 @@ show_about:
         int 0x80
         mov eax, SYS_GETCHAR
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; INTRO SEQUENCE
 ;=======================================================================
 show_intro:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -427,8 +427,8 @@ show_intro:
         mov edx, 14
         xor ecx, ecx
 .intro_loop:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_SETCURSOR
         mov ebx, 3
         int 0x80
@@ -441,17 +441,17 @@ show_intro:
 .intro_color_ok:
         int 0x80
         mov eax, SYS_PRINT
-        mov ebx, [esi]
+        mov rbx, [rsi]
         int 0x80
-        add esi, 4
+        add rsi, 8
 
         ; Brief pause between lines
         mov eax, SYS_SLEEP
         mov ebx, 20
         int 0x80
 
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         inc ecx
         dec edx
         jnz .intro_loop
@@ -475,14 +475,14 @@ show_intro:
         mov eax, SYS_GETCHAR
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; GAME INITIALIZATION
 ;=======================================================================
 init_game:
-        pushad
+        PUSHALL
 
         ; Start in the Nexus
         mov dword [current_room], R_NEXUS
@@ -513,7 +513,7 @@ init_game:
         mov byte [item_loc + I_GEAR],        R_MIRROR_HALL
         mov byte [item_loc + I_SCH_KEY],     LOC_NOWHERE
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -539,7 +539,7 @@ game_loop:
 ; ROOM DESCRIPTION
 ;=======================================================================
 describe_room:
-        pushad
+        PUSHALL
         mov eax, SYS_CLEAR
         int 0x80
 
@@ -548,16 +548,16 @@ describe_room:
 
         ; Get room description
         mov eax, [current_room]
-        imul eax, 4
-        mov ebx, [room_desc_table + eax]
+        imul eax, 8
+        mov rbx, [room_desc_table + rax]
 
         ; Get room name
         mov eax, [current_room]
-        imul eax, 4
-        mov ecx, [room_name_table + eax]
+        imul eax, 8
+        mov rcx, [room_name_table + rax]
 
         ; Print room name
-        push ebx
+        push rbx
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         mov ecx, 2
@@ -566,8 +566,8 @@ describe_room:
         mov ebx, C_YELLOW
         int 0x80
         mov eax, [current_room]
-        imul eax, 4
-        mov ebx, [room_name_table + eax]
+        imul eax, 8
+        mov rbx, [room_name_table + rax]
         mov eax, SYS_PRINT
         int 0x80
 
@@ -591,22 +591,22 @@ describe_room:
         call get_room_color
         mov eax, SYS_SETCOLOR
         int 0x80
-        pop ebx
+        pop rbx
         mov eax, SYS_PRINT
         int 0x80
 
         ; Print any extra description lines
         mov eax, [current_room]
-        imul eax, 4
-        mov ebx, [room_desc2_table + eax]
+        imul eax, 8
+        mov rbx, [room_desc2_table + rax]
         cmp ebx, 0
         je .no_desc2
-        push ebx
+        push rbx
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         mov ecx, 7
         int 0x80
-        pop ebx
+        pop rbx
         mov eax, SYS_PRINT
         int 0x80
 .no_desc2:
@@ -617,14 +617,14 @@ describe_room:
         ; List exits
         call list_exits
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; draw_status_bar
 ;---------------------------------------
 draw_status_bar:
-        pushad
+        PUSHALL
         ; Blue background bar
         mov eax, SYS_SETCOLOR
         mov ebx, C_WHITE | 0x10   ; white on blue
@@ -680,14 +680,14 @@ draw_status_bar:
         mov ebx, C_LGRAY
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; get_room_color - Returns color in EBX based on current mind-world
 ;---------------------------------------
 get_room_color:
-        push eax
+        push rax
         mov eax, [current_room]
         cmp eax, R_POET_GATE
         jl .col_nexus
@@ -711,14 +711,14 @@ get_room_color:
 .col_art:
         mov ebx, C_YELLOW
 .col_done:
-        pop eax
+        pop rax
         ret
 
 ;---------------------------------------
 ; list_room_items - Show items in current room
 ;---------------------------------------
 list_room_items:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         mov ecx, 9
@@ -745,32 +745,32 @@ list_room_items:
         mov esi, 1
 .item_skip_hdr:
         ; Print item name
-        push edx
+        push rdx
         mov eax, SYS_PRINT
         mov ebx, str_item_bullet
         int 0x80
         mov eax, edx
-        imul eax, 4
-        mov ebx, [item_name_table + eax]
+        imul eax, 8
+        mov rbx, [item_name_table + rax]
         mov eax, SYS_PRINT
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_newline
         int 0x80
-        pop edx
+        pop rdx
 
 .item_next:
         inc edx
         jmp .item_loop
 .items_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; list_exits - Show available exits
 ;---------------------------------------
 list_exits:
-        pushad
+        PUSHALL
 
         mov eax, SYS_SETCURSOR
         mov ebx, 2
@@ -819,7 +819,7 @@ list_exits:
         mov ebx, str_dir_w
         int 0x80
 .no_west:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -830,7 +830,7 @@ list_exits:
 ; get_input - Read a line from user into input_buf
 ;---------------------------------------
 get_input:
-        pushad
+        PUSHALL
 
         ; Print prompt
         mov eax, SYS_SETCURSOR
@@ -902,7 +902,7 @@ get_input:
         je .input_loop
         dec ecx
         ; Erase character on screen
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
@@ -912,21 +912,21 @@ get_input:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x08
         int 0x80
-        pop ecx
+        pop rcx
         jmp .input_loop
 
 .input_done:
         mov byte [edi + ecx], 0 ; Null-terminate
         mov [input_len], ecx
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; COMMAND PARSER
 ;=======================================================================
 parse_command:
-        pushad
+        PUSHALL
 
         ; Skip if empty input
         cmp dword [input_len], 0
@@ -1176,7 +1176,7 @@ parse_command:
         int 0x80
 
 .parse_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1184,7 +1184,7 @@ parse_command:
 ;=======================================================================
 try_move:
         ; EAX = direction (0-3)
-        pushad
+        PUSHALL
         mov edx, eax            ; save direction
 
         ; Look up exit for current room
@@ -1201,14 +1201,14 @@ try_move:
         inc dword [moves]
 
         ; Step sound
-        push eax
+        push rax
         mov eax, SYS_BEEP
         mov ebx, SND_STEP
         mov ecx, 1
         int 0x80
-        pop eax
+        pop rax
 
-        popad
+        POPALL
         ret
 
 .no_exit:
@@ -1224,14 +1224,14 @@ try_move:
         mov ecx, 2
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; TAKE COMMAND
 ;=======================================================================
 cmd_take:
-        pushad
+        PUSHALL
 
         ; Find which item names match the input after "TAKE " or "GET "
         mov esi, cmd_buf
@@ -1256,14 +1256,14 @@ cmd_take:
         jne .take_next
 
         ; Does input match item keyword?
-        push esi
-        push edx
+        push rsi
+        push rdx
         mov eax, edx
-        imul eax, 4
-        mov edi, [item_keyword_table + eax]
+        imul eax, 8
+        mov rdi, [item_keyword_table + rax]
         call str_starts_with
-        pop edx
-        pop esi
+        pop rdx
+        pop rsi
         cmp eax, 1
         je .take_found
 
@@ -1290,15 +1290,15 @@ cmd_take:
         mov ebx, str_taken
         int 0x80
         mov eax, edx
-        imul eax, 4
-        mov ebx, [item_name_table + eax]
+        imul eax, 8
+        mov rbx, [item_name_table + rax]
         mov eax, SYS_PRINT
         int 0x80
         mov eax, SYS_PRINT
         mov ebx, str_period
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .take_not_found:
@@ -1310,14 +1310,14 @@ cmd_take:
         mov ebx, str_take_what
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; USE COMMAND - Puzzle logic
 ;=======================================================================
 cmd_use:
-        pushad
+        PUSHALL
 
         ; Parse item name after "USE "
         mov esi, cmd_buf
@@ -1334,14 +1334,14 @@ cmd_use:
         jne .use_next
 
         ; Does input match?
-        push esi
-        push edx
+        push rsi
+        push rdx
         mov eax, edx
-        imul eax, 4
-        mov edi, [item_keyword_table + eax]
+        imul eax, 8
+        mov rdi, [item_keyword_table + rax]
         call str_starts_with
-        pop edx
-        pop esi
+        pop rdx
+        pop rsi
         cmp eax, 1
         je .use_found
 
@@ -1410,7 +1410,7 @@ cmd_use:
         int 0x80
         call play_key_sound
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_need_ink:
@@ -1422,7 +1422,7 @@ cmd_use:
         mov ebx, str_quill_dry
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_need_page:
@@ -1434,7 +1434,7 @@ cmd_use:
         mov ebx, str_need_page
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_inkwell:
@@ -1453,7 +1453,7 @@ cmd_use:
         mov ecx, 2
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ; --- General Puzzles ---
@@ -1473,7 +1473,7 @@ cmd_use:
         mov ecx, 2
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_medal:
@@ -1494,7 +1494,7 @@ cmd_use:
         int 0x80
         call play_key_sound
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_need_view:
@@ -1506,7 +1506,7 @@ cmd_use:
         mov ebx, str_medal_reject
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ; --- Artist Puzzles ---
@@ -1526,7 +1526,7 @@ cmd_use:
         mov ecx, 2
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_brush:
@@ -1549,7 +1549,7 @@ cmd_use:
         int 0x80
         call play_key_sound
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_need_canvas:
@@ -1561,7 +1561,7 @@ cmd_use:
         mov ebx, str_need_canvas
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_need_palette:
@@ -1573,7 +1573,7 @@ cmd_use:
         mov ebx, str_need_palette
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ; --- Scholar Puzzles ---
@@ -1593,7 +1593,7 @@ cmd_use:
         mov ecx, 2
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_gear:
@@ -1616,7 +1616,7 @@ cmd_use:
         int 0x80
         call play_key_sound
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_need_lens:
@@ -1628,7 +1628,7 @@ cmd_use:
         mov ebx, str_need_mirror
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_need_codex:
@@ -1640,7 +1640,7 @@ cmd_use:
         mov ebx, str_need_codex
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_no_effect:
@@ -1652,7 +1652,7 @@ cmd_use:
         mov ebx, str_no_effect
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .use_not_found:
@@ -1664,14 +1664,14 @@ cmd_use:
         mov ebx, str_dont_have
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; INVENTORY
 ;=======================================================================
 cmd_inventory:
-        pushad
+        PUSHALL
         call print_msg_line
         mov eax, SYS_SETCOLOR
         mov ebx, C_WHITE
@@ -1696,8 +1696,8 @@ cmd_inventory:
         mov ebx, str_item_bullet
         int 0x80
         mov eax, edx
-        imul eax, 4
-        mov ebx, [item_name_table + eax]
+        imul eax, 8
+        mov rbx, [item_name_table + rax]
         mov eax, SYS_PRINT
         int 0x80
         ; If it's a key, mark it special
@@ -1737,14 +1737,14 @@ cmd_inventory:
         int 0x80
 .inv_has_items:
         call wait_key
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; TALK COMMAND
 ;=======================================================================
 cmd_talk:
-        pushad
+        PUSHALL
         mov eax, [current_room]
 
         ; Poet's ghost (in sanctum or gate)
@@ -1784,7 +1784,7 @@ cmd_talk:
         mov ebx, str_nobody
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .talk_atlas:
@@ -1800,7 +1800,7 @@ cmd_talk:
         mov ebx, str_atlas_talk
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .talk_poet:
@@ -1817,7 +1817,7 @@ cmd_talk:
         mov ebx, str_poet_talk
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .talk_general:
@@ -1834,7 +1834,7 @@ cmd_talk:
         mov ebx, str_gen_talk
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .talk_artist:
@@ -1851,7 +1851,7 @@ cmd_talk:
         mov ebx, str_art_talk
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 .talk_scholar:
@@ -1868,14 +1868,14 @@ cmd_talk:
         mov ebx, str_sch_talk
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; HELP SCREEN
 ;=======================================================================
 show_help:
-        pushad
+        PUSHALL
         call print_msg_line
         mov eax, SYS_SETCOLOR
         mov ebx, C_YELLOW
@@ -1884,7 +1884,7 @@ show_help:
         mov ebx, str_help_text
         int 0x80
         call wait_key
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -2055,9 +2055,9 @@ game_win:
 ; Returns EAX=1 if match, 0 if not
 ;---------------------------------------
 str_starts_with:
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
 .sw_loop:
         mov al, [edi]
         cmp al, 0
@@ -2076,16 +2076,16 @@ str_starts_with:
 .sw_fail:
         xor eax, eax
 .sw_done:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
         ret
 
 ;---------------------------------------
 ; print_number - Print EAX as decimal
 ;---------------------------------------
 print_number:
-        pushad
+        PUSHALL
         mov ecx, 0
         mov ebx, 10
         cmp eax, 0
@@ -2093,50 +2093,50 @@ print_number:
         mov eax, SYS_PUTCHAR
         mov ebx, '0'
         int 0x80
-        popad
+        POPALL
         ret
 .pn_nonzero:
 .pn_div:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         cmp eax, 0
         jne .pn_div
 .pn_print:
-        pop edx
+        pop rdx
         add edx, '0'
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, edx
         int 0x80
-        pop ecx
+        pop rcx
         dec ecx
         jnz .pn_print
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; print_msg_line - Position cursor at message area
 ;---------------------------------------
 print_msg_line:
-        push eax
-        push ebx
-        push ecx
+        push rax
+        push rbx
+        push rcx
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         mov ecx, 18
         int 0x80
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ;---------------------------------------
 ; wait_key - Show prompt and wait for keypress
 ;---------------------------------------
 wait_key:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         mov ebx, 2
         mov ecx, 22
@@ -2149,14 +2149,14 @@ wait_key:
         int 0x80
         mov eax, SYS_GETCHAR
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; play_key_sound - Triumphant key-found jingle
 ;---------------------------------------
 play_key_sound:
-        pushad
+        PUSHALL
         mov eax, SYS_BEEP
         mov ebx, SND_KEY
         mov ecx, 3
@@ -2173,23 +2173,23 @@ play_key_sound:
         mov ebx, SND_WIN
         mov ecx, 6
         int 0x80
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; random - LCG PRNG, result in EAX
 ;---------------------------------------
 random:
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov eax, [rand_seed]
         imul eax, 1103515245
         add eax, 12345
         mov [rand_seed], eax
         shr eax, 16
         and eax, 0x7FFF
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ret
 
 ;=======================================================================
@@ -2235,10 +2235,10 @@ about_line15: db " ", 0
 about_line16: db "Inspired by Mindwheel (1984) by Robert Pinsky.", 0
 
 about_lines:
-        dd about_line1, about_line2, about_line3, about_line4
-        dd about_line5, about_line6, about_line7, about_line8
-        dd about_line9, about_line10, about_line11, about_line12
-        dd about_line13, about_line14, about_line15, about_line16
+        dq about_line1, about_line2, about_line3, about_line4
+        dq about_line5, about_line6, about_line7, about_line8
+        dq about_line9, about_line10, about_line11, about_line12
+        dq about_line13, about_line14, about_line15, about_line16
 
 ; === Intro Sequence ===
 intro_line1:  db " ", 0
@@ -2257,10 +2257,10 @@ intro_line13: db "  Four minds. Four Memory Keys. Time is running out.", 0
 intro_line14: db " ", 0
 
 intro_lines:
-        dd intro_line1, intro_line2, intro_line3, intro_line4
-        dd intro_line5, intro_line6, intro_line7, intro_line8
-        dd intro_line9, intro_line10, intro_line11, intro_line12
-        dd intro_line13, intro_line14
+        dq intro_line1, intro_line2, intro_line3, intro_line4
+        dq intro_line5, intro_line6, intro_line7, intro_line8
+        dq intro_line9, intro_line10, intro_line11, intro_line12
+        dq intro_line13, intro_line14
 
 str_intro_ready: db "Press any key to begin your dive...", 0
 
@@ -2292,14 +2292,14 @@ rn_clock:       db "The Clock Tower", 0
 rn_sch_sanc:    db "The Scholar's Sanctum", 0
 
 room_name_table:
-        dd rn_nexus, rn_poet_gate, rn_library, rn_verse_hall
-        dd rn_ink_pool, rn_burn_shelf, rn_poet_sanc
-        dd rn_gen_gate, rn_trench, rn_no_mans, rn_cmd_post
-        dd rn_frozen, rn_gen_sanc
-        dd rn_art_gate, rn_foyer, rn_portrait, rn_sculpture
-        dd rn_studio, rn_art_sanc
-        dd rn_sch_gate, rn_archives, rn_puzzle, rn_mirror
-        dd rn_clock, rn_sch_sanc
+        dq rn_nexus, rn_poet_gate, rn_library, rn_verse_hall
+        dq rn_ink_pool, rn_burn_shelf, rn_poet_sanc
+        dq rn_gen_gate, rn_trench, rn_no_mans, rn_cmd_post
+        dq rn_frozen, rn_gen_sanc
+        dq rn_art_gate, rn_foyer, rn_portrait, rn_sculpture
+        dq rn_studio, rn_art_sanc
+        dq rn_sch_gate, rn_archives, rn_puzzle, rn_mirror
+        dq rn_clock, rn_sch_sanc
 
 ; === Room Descriptions ===
 rd_nexus:  db "You float in a vast digital void. Four shimmering portals pulse", 0
@@ -2378,24 +2378,24 @@ rd_sch_sanc:   db "A chamber of perfect order. Every surface is covered in proof
 rd_sch_sanc2:  db "and theorems. Inscribed: 'Truth is the mechanism that moves all.'", 0
 
 room_desc_table:
-        dd rd_nexus, rd_poet_gate, rd_library, rd_verse, rd_ink, rd_burn
-        dd rd_poet_sanc
-        dd rd_gen_gate, rd_trench, rd_no_mans, rd_cmd_post, rd_frozen
-        dd rd_gen_sanc
-        dd rd_art_gate, rd_foyer, rd_portrait, rd_sculpture, rd_studio
-        dd rd_art_sanc
-        dd rd_sch_gate, rd_archives, rd_puzzle, rd_mirror, rd_clock
-        dd rd_sch_sanc
+        dq rd_nexus, rd_poet_gate, rd_library, rd_verse, rd_ink, rd_burn
+        dq rd_poet_sanc
+        dq rd_gen_gate, rd_trench, rd_no_mans, rd_cmd_post, rd_frozen
+        dq rd_gen_sanc
+        dq rd_art_gate, rd_foyer, rd_portrait, rd_sculpture, rd_studio
+        dq rd_art_sanc
+        dq rd_sch_gate, rd_archives, rd_puzzle, rd_mirror, rd_clock
+        dq rd_sch_sanc
 
 room_desc2_table:
-        dd rd_nexus2, rd_poet_gate2, rd_library2, rd_verse2, rd_ink2, rd_burn2
-        dd rd_poet_sanc2
-        dd rd_gen_gate2, rd_trench2, rd_no_mans2, rd_cmd_post2, rd_frozen2
-        dd rd_gen_sanc2
-        dd rd_art_gate2, rd_foyer2, rd_portrait2, rd_sculpture2, rd_studio2
-        dd rd_art_sanc2
-        dd rd_sch_gate2, rd_archives2, rd_puzzle2, rd_mirror2, rd_clock2
-        dd rd_sch_sanc2
+        dq rd_nexus2, rd_poet_gate2, rd_library2, rd_verse2, rd_ink2, rd_burn2
+        dq rd_poet_sanc2
+        dq rd_gen_gate2, rd_trench2, rd_no_mans2, rd_cmd_post2, rd_frozen2
+        dq rd_gen_sanc2
+        dq rd_art_gate2, rd_foyer2, rd_portrait2, rd_sculpture2, rd_studio2
+        dq rd_art_sanc2
+        dq rd_sch_gate2, rd_archives2, rd_puzzle2, rd_mirror2, rd_clock2
+        dq rd_sch_sanc2
 
 ; === Room Exits ===
 ; Each room has 4 dwords: [N, S, E, W] -- 0xFF = no exit
@@ -2481,10 +2481,10 @@ in_gear:        db "a brass clockwork gear", 0
 in_sch_key:     db "Memory Key of the Scholar", 0
 
 item_name_table:
-        dd in_quill, in_inkwell, in_torn_page, in_poet_key
-        dd in_compass, in_medal, in_fieldglass, in_gen_key
-        dd in_brush, in_canvas, in_palette, in_art_key
-        dd in_lens, in_codex, in_gear, in_sch_key
+        dq in_quill, in_inkwell, in_torn_page, in_poet_key
+        dq in_compass, in_medal, in_fieldglass, in_gen_key
+        dq in_brush, in_canvas, in_palette, in_art_key
+        dq in_lens, in_codex, in_gear, in_sch_key
 
 ; === Item Keywords (for parser matching) ===
 ik_quill:       db "QUILL", 0
@@ -2505,10 +2505,10 @@ ik_gear:        db "GEAR", 0
 ik_schkey:      db "SCHOLAR", 0
 
 item_keyword_table:
-        dd ik_quill, ik_inkwell, ik_page, ik_poetkey
-        dd ik_compass, ik_medal, ik_fieldglass, ik_genkey
-        dd ik_brush, ik_canvas, ik_palette, ik_artkey
-        dd ik_lens, ik_codex, ik_gear, ik_schkey
+        dq ik_quill, ik_inkwell, ik_page, ik_poetkey
+        dq ik_compass, ik_medal, ik_fieldglass, ik_genkey
+        dq ik_brush, ik_canvas, ik_palette, ik_artkey
+        dq ik_lens, ik_codex, ik_gear, ik_schkey
 
 ; === Command Strings ===
 str_cmd_look:   db "LOOK", 0

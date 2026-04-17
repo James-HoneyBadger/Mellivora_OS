@@ -205,7 +205,7 @@ start:
 
         ; Execute the line
         mov esi, input_buf
-        mov dword [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov byte [had_error], 0
         call exec_line
         cmp byte [had_error], 0
@@ -222,7 +222,7 @@ start:
 ; INITIALIZATION
 ;=======================================================================
 perl_init:
-        pushad
+        PUSHALL
         ; Seed random
         mov eax, SYS_GETTIME
         int 0x80
@@ -270,7 +270,7 @@ perl_init:
         mov byte [in_sub_return], 0
         mov dword [return_val], 0
         mov byte [return_type], TYPE_UNDEF
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -279,7 +279,7 @@ perl_init:
 ; Output: EAX = 0 success, -1 fail
 ;=======================================================================
 load_script:
-        pushad
+        PUSHALL
 
         ; Read entire file
         mov ebx, esi
@@ -347,24 +347,24 @@ load_script:
         mov byte [edi + edx], 0
         inc ecx
 .ls_no_last:
-        mov [esp + 28], ecx    ; return count via pushad
+        mov [rsp + 112], ecx    ; return count via PUSHALL
         mov [script_lines], ecx
 
         ; Success
-        mov dword [esp + 28], 0
-        popad
+        mov dword [rsp + 112], 0
+        POPALL
         ret
 
 .ls_fail:
-        mov dword [esp + 28], -1
-        popad
+        mov dword [rsp + 112], -1
+        POPALL
         ret
 
 ;=======================================================================
 ; RUN SCRIPT - Execute all loaded script lines
 ;=======================================================================
 run_script:
-        pushad
+        PUSHALL
         mov dword [current_line], 0
 
         ; First pass: find all sub definitions
@@ -378,11 +378,11 @@ run_script:
         ; Get pointer to current line
         imul ebx, eax, MAX_LINE_LEN
         lea esi, [script_buf + ebx]
-        mov dword [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Skip empty lines
         call skip_whitespace
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         cmp byte [esi], 0
         je .rs_next
         cmp byte [esi], '#'
@@ -404,14 +404,14 @@ run_script:
         jmp .rs_loop
 
 .rs_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; FIND SUBS - Scan for sub definitions (first pass)
 ;=======================================================================
 find_subs:
-        pushad
+        PUSHALL
         xor ecx, ecx           ; line index
 
 .fs_loop:
@@ -419,7 +419,7 @@ find_subs:
         jge .fs_done
 
         ; Get line pointer
-        push ecx
+        push rcx
         imul ebx, ecx, MAX_LINE_LEN
         lea esi, [script_buf + ebx]
 
@@ -445,27 +445,27 @@ find_subs:
         call read_ident_esi
 
         ; Store: name + start line
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         call store_sub_def
 
 .fs_next:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .fs_loop
 
 .fs_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; EXEC_LINE - Execute a single line of Perl
 ;=======================================================================
 exec_line:
-        pushad
+        PUSHALL
 
         call skip_whitespace
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         cmp byte [esi], 0
         je .el_done
         cmp byte [esi], '#'     ; comment
@@ -607,7 +607,7 @@ exec_line:
         call report_syntax_error
 
 .el_done:
-        popad
+        POPALL
         ret
 
 ; --- use strict; use warnings; etc. (no-op) ---
@@ -617,10 +617,10 @@ exec_line:
 
 ; --- my $var = expr; ---
 .el_my:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         add esi, 2              ; skip "my"
         call skip_ws_esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Fall through to handle $ or @ assignment
         cmp byte [esi], '$'
         je .el_scalar_op
@@ -669,7 +669,7 @@ exec_line:
 ; --- for (C-style or alias for foreach) ---
 .el_for:
         ; Check if it's for (...;...;...) or for $var (list)
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '('
         je .el_for_c
@@ -763,7 +763,7 @@ exec_line:
         jmp .el_done
 
 .el_skip_to_end:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 .el_ste_loop:
         cmp byte [esi], 0
         je .el_ste_done
@@ -772,15 +772,15 @@ exec_line:
         inc esi
         jmp .el_ste_loop
 .el_ste_done:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         jmp .el_done
 
 ;=======================================================================
 ; PRINT / SAY
 ;=======================================================================
 do_print:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
 .dp_next_item:
@@ -807,7 +807,7 @@ do_print:
         je .dp_array
 
         ; Number or expression
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         ; Result in expr_result / expr_result_str
         cmp byte [expr_result_type], TYPE_STR
@@ -818,21 +818,21 @@ do_print:
         call math_int_to_str
         mov esi, num_format_buf
         call io_print
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .dp_after_item
 
 .dp_print_str_result:
         mov esi, expr_result_str
         call io_print
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .dp_after_item
 
 .dp_string:
         ; Print double-quoted string with interpolation
         inc esi                 ; skip opening "
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call print_dq_string
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .dp_after_item
 
 .dp_sq_string:
@@ -852,11 +852,11 @@ do_print:
         cmp byte [esi], '\\'
         je .dp_sq_char
         ; Print the backslash too
-        push esi
+        push rsi
         mov eax, SYS_PUTCHAR
         mov ebx, '\\'
         int 0x80
-        pop esi
+        pop rsi
 .dp_sq_char:
         movzx ebx, byte [esi]
         mov eax, SYS_PUTCHAR
@@ -868,7 +868,7 @@ do_print:
         jmp .dp_after_item
 
 .dp_var:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_variable
         cmp byte [expr_result_type], TYPE_STR
         je .dp_var_str
@@ -877,18 +877,18 @@ do_print:
         call math_int_to_str
         mov esi, num_format_buf
         call io_print
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .dp_after_item
 .dp_var_str:
         mov esi, expr_result_str
         call io_print
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .dp_after_item
 
 .dp_array:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call print_array
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .dp_after_item
 
 .dp_after_item:
@@ -909,16 +909,16 @@ do_print:
         jne .dp_nosemi
         inc esi
 .dp_nosemi:
-        mov [parse_ptr], esi
-        popad
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 ;=======================================================================
 ; PRINT DOUBLE-QUOTED STRING with interpolation and escapes
 ;=======================================================================
 print_dq_string:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
 
 .pdq_loop:
         cmp byte [esi], 0
@@ -994,46 +994,46 @@ print_dq_string:
 
 .pdq_interp:
         ; Variable interpolation inside string
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_variable
         cmp byte [expr_result_type], TYPE_STR
         je .pdq_interp_str
         mov eax, [expr_result]
         mov edi, num_format_buf
-        push esi
+        push rsi
         call math_int_to_str
         mov esi, num_format_buf
         call io_print
-        pop esi
-        mov esi, [parse_ptr]
+        pop rsi
+        mov rsi, [parse_ptr]
         jmp .pdq_loop
 .pdq_interp_str:
-        push esi
+        push rsi
         mov esi, expr_result_str
         call io_print
-        pop esi
-        mov esi, [parse_ptr]
+        pop rsi
+        mov rsi, [parse_ptr]
         jmp .pdq_loop
 
 .pdq_interp_arr:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call print_array
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .pdq_loop
 
 .pdq_end:
         inc esi                 ; skip closing "
 .pdq_done:
-        mov [parse_ptr], esi
-        popad
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 ;=======================================================================
 ; SCALAR OPERATIONS: $var = expr; $var++ etc.
 ;=======================================================================
 do_scalar_op:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
 
         ; Parse variable name
         inc esi                 ; skip $
@@ -1063,7 +1063,7 @@ do_scalar_op:
         cmp byte [esi+1], '='  ; == is comparison, not assign
         je .dso_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         ; Store result in variable
         mov esi, temp_name
@@ -1079,7 +1079,7 @@ do_scalar_op:
 
 .dso_plus_eq:
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         mov esi, temp_name
         call get_var_int
@@ -1092,7 +1092,7 @@ do_scalar_op:
 
 .dso_incr:
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov esi, temp_name
         call get_var_int
         inc eax
@@ -1111,7 +1111,7 @@ do_scalar_op:
 
 .dso_minus_eq:
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         mov esi, temp_name
         call get_var_int
@@ -1124,7 +1124,7 @@ do_scalar_op:
 
 .dso_decr:
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov esi, temp_name
         call get_var_int
         dec eax
@@ -1138,23 +1138,23 @@ do_scalar_op:
         cmp byte [esi+1], '='  ; .= (concat-assign)
         jne .dso_done
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Get current string value
-        push esi
+        push rsi
         mov esi, temp_name
         call get_var_str       ; result in expr_result_str
         ; Copy current value
         mov esi, expr_result_str
         mov edi, concat_buf
         call str_copy
-        pop esi
+        pop rsi
         ; Evaluate RHS
         call eval_expr
         ; Append
         mov esi, concat_buf
         mov edi, expr_result_str
         ; Find end of current string in concat_buf
-        push edi
+        push rdi
         mov edi, concat_buf
         call str_len
         add edi, eax
@@ -1169,7 +1169,7 @@ do_scalar_op:
         call math_int_to_str
         jmp .dso_concat_store
 .dso_concat_store:
-        pop edi
+        pop rdi
         ; Copy concat_buf into var
         mov esi, concat_buf
         mov edi, expr_result_str
@@ -1182,11 +1182,11 @@ do_scalar_op:
 .dso_arr_elem:
         ; $arr[index] = expr
         inc esi                 ; skip [
-        mov [parse_ptr], esi
-        push edi               ; save temp_name location
+        mov [parse_ptr], rsi
+        push rdi               ; save temp_name location
         call eval_expr          ; get index
         mov ebx, [expr_result] ; EBX = index
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ']'
         jne .dso_ae_err
@@ -1197,11 +1197,11 @@ do_scalar_op:
         cmp byte [esi+1], '='
         je .dso_ae_read
         inc esi
-        mov [parse_ptr], esi
-        pop edi                 ; edi still points at temp_name
-        push ebx               ; save index
+        mov [parse_ptr], rsi
+        pop rdi                 ; edi still points at temp_name
+        push rbx               ; save index
         call eval_expr          ; get value
-        pop ebx
+        pop rbx
         ; Store into array
         mov esi, temp_name
         mov eax, ebx           ; index
@@ -1209,23 +1209,23 @@ do_scalar_op:
         jmp .dso_done
 
 .dso_ae_read:
-        pop edi
+        pop rdi
         jmp .dso_done
 .dso_ae_err:
-        pop edi
+        pop rdi
         call report_syntax_error
         jmp .dso_done
 
 .dso_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; ARRAY OPERATIONS: @arr = (list); push/pop etc.
 ;=======================================================================
 do_array_op:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         inc esi                 ; skip @
         mov edi, temp_name
         call read_ident
@@ -1244,14 +1244,14 @@ do_array_op:
         inc esi
 
         ; Find or create array
-        push esi
+        push rsi
         mov esi, temp_name
         call find_or_create_array   ; EAX = array index
         mov [temp_arr_idx], eax
         ; Clear existing elements
         mov ebx, eax
         mov dword [arr_counts + ebx*4], 0
-        pop esi
+        pop rsi
 
         ; Parse elements
 .dao_parse_list:
@@ -1261,9 +1261,9 @@ do_array_op:
         cmp byte [esi], 0
         je .dao_done
 
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 
         ; Push value to array
         mov eax, [temp_arr_idx]
@@ -1285,40 +1285,40 @@ do_array_op:
         jne .dao_done
         inc esi
 .dao_done:
-        mov [parse_ptr], esi
-        popad
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 .dao_single:
         ; @arr = expr  (single value)
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        push esi
+        push rsi
         mov esi, temp_name
         call find_or_create_array
         mov ebx, eax
         mov dword [arr_counts + ebx*4], 0
         mov [temp_arr_idx], eax
         call array_push_result
-        pop esi
-        mov esi, [parse_ptr]
+        pop rsi
+        mov rsi, [parse_ptr]
         jmp .dao_done
 
 ;=======================================================================
 ; IF / ELSIF / ELSE
 ;=======================================================================
 do_if:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Expect ( condition )
         cmp byte [esi], '('
         jne .dif_bare_cond
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .dif_eval_done
@@ -1326,9 +1326,9 @@ do_if:
         jmp .dif_eval_done
 
 .dif_bare_cond:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 
 .dif_eval_done:
         call skip_ws_esi
@@ -1342,16 +1342,16 @@ do_if:
         cmp byte [esi], '{'
         jne .dif_inline_true
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call exec_block
         ; Skip any elsif/else
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_elsif_else
         jmp .dif_done
 
 .dif_inline_true:
         ; Single statement (postfix if not common in block form)
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call exec_line
         jmp .dif_done
 
@@ -1360,9 +1360,9 @@ do_if:
         cmp byte [esi], '{'
         jne .dif_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call skip_block
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Check for elsif
@@ -1372,7 +1372,7 @@ do_if:
         jne .dif_check_else
         add esi, 5
         call skip_ws_esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call do_if              ; Recursive elsif
         jmp .dif_done
 
@@ -1392,37 +1392,37 @@ do_if:
         cmp byte [esi], '{'
         jne .dif_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call exec_block
         jmp .dif_done
 
 .dif_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; UNLESS (negated if)
 ;=======================================================================
 do_unless:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         cmp byte [esi], '('
         jne .dun_bare
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .dun_eval
         inc esi
         jmp .dun_eval
 .dun_bare:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 .dun_eval:
         call skip_ws_esi
         mov eax, [expr_result]
@@ -1433,7 +1433,7 @@ do_unless:
         cmp byte [esi], '{'
         jne .dun_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call exec_block
         jmp .dun_done
 
@@ -1441,44 +1441,44 @@ do_unless:
         cmp byte [esi], '{'
         jne .dun_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call skip_block
 
 .dun_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; WHILE loop
 ;=======================================================================
 do_while:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
 
         ; Save condition position
-        mov [while_cond_ptr], esi
+        mov [while_cond_ptr], rsi
         inc dword [loop_depth]
 
 .dw_test:
         ; Restore condition parse position
-        mov esi, [while_cond_ptr]
+        mov rsi, [while_cond_ptr]
         call skip_ws_esi
 
         cmp byte [esi], '('
         jne .dw_bare_cond
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .dw_check
         inc esi
         jmp .dw_check
 .dw_bare_cond:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 
 .dw_check:
         call skip_ws_esi
@@ -1490,10 +1490,10 @@ do_while:
         cmp byte [esi], '{'
         jne .dw_exit
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Save body start for re-execution
-        mov [while_body_ptr], esi
+        mov [while_body_ptr], rsi
 
         call exec_block
 
@@ -1518,45 +1518,45 @@ do_while:
         dec dword [loop_depth]
 
         ; Skip past body if we didn't enter it
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '{'
         jne .dw_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call skip_block
 
 .dw_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; UNTIL loop (negated while)
 ;=======================================================================
 do_until:
-        pushad
-        mov esi, [parse_ptr]
-        mov [while_cond_ptr], esi
+        PUSHALL
+        mov rsi, [parse_ptr]
+        mov [while_cond_ptr], rsi
         inc dword [loop_depth]
 
 .du_test:
-        mov esi, [while_cond_ptr]
+        mov rsi, [while_cond_ptr]
         call skip_ws_esi
         cmp byte [esi], '('
         jne .du_bare
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .du_check
         inc esi
         jmp .du_check
 .du_bare:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 
 .du_check:
         call skip_ws_esi
@@ -1567,7 +1567,7 @@ do_until:
         cmp byte [esi], '{'
         jne .du_exit
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call exec_block
 
         cmp byte [loop_break], 1
@@ -1585,15 +1585,15 @@ do_until:
         mov byte [loop_break], 0
 .du_exit:
         dec dword [loop_depth]
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; FOREACH loop: foreach $var (list) { ... }
 ;=======================================================================
 do_foreach:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Check for 'my' keyword
@@ -1630,9 +1630,9 @@ do_foreach:
         je .dfe_list_done
 
         ; Check for range operator: N..M
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         cmp byte [esi], '.'
@@ -1643,12 +1643,12 @@ do_foreach:
         ; Range: start..end
         mov ecx, [expr_result]  ; start
         add esi, 2
-        mov [parse_ptr], esi
-        push ecx
+        mov [parse_ptr], rsi
+        push rcx
         call eval_expr
-        pop ecx
+        pop rcx
         mov edx, [expr_result]  ; end
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 
         ; Generate range
 .dfe_range_loop:
@@ -1692,7 +1692,7 @@ do_foreach:
         inc esi
 
         ; Save body position
-        mov [foreach_body_ptr], esi
+        mov [foreach_body_ptr], rsi
         inc dword [loop_depth]
 
         ; Iterate
@@ -1711,8 +1711,8 @@ do_foreach:
         call store_var_result
 
         ; Execute body
-        mov esi, [foreach_body_ptr]
-        mov [parse_ptr], esi
+        mov rsi, [foreach_body_ptr]
+        mov [parse_ptr], rsi
         call exec_block
 
         cmp byte [loop_break], 1
@@ -1736,22 +1736,22 @@ do_foreach:
 .dfe_loop_done:
         dec dword [loop_depth]
         ; Skip remaining block text
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         jmp .dfe_done
 
 .dfe_err:
         call report_syntax_error
 .dfe_done:
-        mov [parse_ptr], esi
-        popad
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 ;=======================================================================
 ; FOR C-style: for (init; cond; incr) { ... }
 ;=======================================================================
 do_for_c:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         cmp byte [esi], '('
@@ -1759,16 +1759,16 @@ do_for_c:
         inc esi
 
         ; Execute init statement
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call exec_line
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ';'
         jne .dfc_err
         inc esi
 
         ; Save condition position
-        mov [for_cond_ptr], esi
+        mov [for_cond_ptr], rsi
 
         ; Find increment position (after second ;)
         call find_for_parts     ; sets for_incr_ptr, for_body_ptr
@@ -1776,16 +1776,16 @@ do_for_c:
 
 .dfc_test:
         ; Evaluate condition
-        mov esi, [for_cond_ptr]
-        mov [parse_ptr], esi
+        mov rsi, [for_cond_ptr]
+        mov [parse_ptr], rsi
         call eval_expr
         mov eax, [expr_result]
         cmp eax, 0
         je .dfc_exit
 
         ; Execute body
-        mov esi, [for_body_ptr]
-        mov [parse_ptr], esi
+        mov rsi, [for_body_ptr]
+        mov [parse_ptr], rsi
         call exec_block
 
         cmp byte [loop_break], 1
@@ -1797,8 +1797,8 @@ do_for_c:
 
         ; Execute increment
 .dfc_do_incr:
-        mov esi, [for_incr_ptr]
-        mov [parse_ptr], esi
+        mov rsi, [for_incr_ptr]
+        mov [parse_ptr], rsi
         call exec_line
         jmp .dfc_test
 
@@ -1810,12 +1810,12 @@ do_for_c:
         mov byte [loop_break], 0
 .dfc_exit:
         dec dword [loop_depth]
-        popad
+        POPALL
         ret
 
 .dfc_err:
         call report_syntax_error
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1824,7 +1824,7 @@ do_for_c:
 ; Handles nested braces, multi-line in script mode
 ;=======================================================================
 exec_block:
-        pushad
+        PUSHALL
         mov dword [block_depth], 1
 
 .eb_line_loop:
@@ -1833,7 +1833,7 @@ exec_block:
         je .eb_parse_stmt       ; REPL mode, single line
 
 .eb_check_line:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], 0
         jne .eb_parse_stmt
@@ -1846,14 +1846,14 @@ exec_block:
 
         imul ebx, eax, MAX_LINE_LEN
         lea esi, [script_buf + ebx]
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         jmp .eb_check_line
 
 .eb_parse_stmt:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         cmp byte [esi], 0
         je .eb_line_loop        ; Try next line
@@ -1880,41 +1880,41 @@ exec_block:
         cmp byte [loop_continue], 0
         jne .eb_done
 
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ';'
         jne .eb_no_semi
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 .eb_no_semi:
         jmp .eb_line_loop
 
 .eb_skip_comment:
         ; Skip to end of line
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 .eb_sc_loop:
         cmp byte [esi], 0
         je .eb_sc_done
         inc esi
         jmp .eb_sc_loop
 .eb_sc_done:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         jmp .eb_line_loop
 
 .eb_close_brace:
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 .eb_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; SKIP BLOCK - Skip { ... } without executing (handles nesting)
 ;=======================================================================
 skip_block:
-        pushad
+        PUSHALL
         mov dword [block_depth], 1
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 
 .sb_loop:
         cmp dword [block_depth], 0
@@ -2006,16 +2006,16 @@ skip_block:
         jmp .sb_loop
 
 .sb_done:
-        mov [parse_ptr], esi
-        popad
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 ;=======================================================================
 ; SKIP elsif/else after a taken if branch
 ;=======================================================================
 skip_elsif_else:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
 .see_loop:
@@ -2036,9 +2036,9 @@ skip_elsif_else:
         cmp byte [esi], '{'
         jne .see_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call skip_block
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         jmp .see_loop
 
@@ -2060,18 +2060,18 @@ skip_elsif_else:
         cmp byte [esi], '{'
         jne .see_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call skip_block
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 
 .see_done:
-        mov [parse_ptr], esi
-        popad
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 skip_parens_esi:
         ; Skip balanced parentheses, ESI past opening (
-        push ecx
+        push rcx
         mov ecx, 1
 .spe_loop:
         cmp ecx, 0
@@ -2089,15 +2089,15 @@ skip_parens_esi:
         inc esi
         jmp .spe_loop
 .spe_done:
-        pop ecx
+        pop rcx
         ret
 
 ;=======================================================================
 ; SKIP SUB BODY (don't execute sub definitions during sequential run)
 ;=======================================================================
 skip_sub_body:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         ; Skip sub name
         mov edi, temp_name
@@ -2107,10 +2107,10 @@ skip_sub_body:
         cmp byte [esi], '{'
         jne .ssb_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call skip_block
 .ssb_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -2119,23 +2119,23 @@ skip_sub_body:
 ; Result in [expr_result] (int) and [expr_result_str] (string)
 ;=======================================================================
 eval_expr:
-        pushad
+        PUSHALL
         call eval_or
-        popad
+        POPALL
         ret
 
 ; --- OR level: expr || expr ---
 eval_or:
         call eval_and
 .eo_loop:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '|'
         jne .eo_check_or_kw
         cmp byte [esi+1], '|'
         jne .eo_done
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Short-circuit: if LHS is true, skip RHS
         cmp dword [expr_result], 0
         jne .eo_done
@@ -2151,7 +2151,7 @@ eval_or:
         cmp byte [esi+2], ' '
         jne .eo_done
         add esi, 3
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         cmp dword [expr_result], 0
         jne .eo_done
         call eval_and
@@ -2164,14 +2164,14 @@ eval_or:
 eval_and:
         call eval_comparison
 .ea_loop:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '&'
         jne .ea_check_and_kw
         cmp byte [esi+1], '&'
         jne .ea_done
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         cmp dword [expr_result], 0
         je .ea_done             ; Short-circuit
         call eval_comparison
@@ -2187,7 +2187,7 @@ eval_and:
         cmp byte [esi+3], ' '
         jne .ea_done
         add esi, 4
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         cmp dword [expr_result], 0
         je .ea_done
         call eval_comparison
@@ -2199,7 +2199,7 @@ eval_and:
 ; --- COMPARISON level ---
 eval_comparison:
         call eval_concat
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Numeric comparisons
@@ -2228,10 +2228,10 @@ eval_comparison:
         cmp byte [esi+1], '='
         jne .ec_ret
         add esi, 2
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_concat
-        pop ebx
+        pop rbx
         cmp ebx, [expr_result]
         je .ec_true
         jmp .ec_false
@@ -2240,10 +2240,10 @@ eval_comparison:
         cmp byte [esi+1], '='
         jne .ec_check_not
         add esi, 2
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_concat
-        pop ebx
+        pop rbx
         cmp ebx, [expr_result]
         jne .ec_true
         jmp .ec_false
@@ -2255,20 +2255,20 @@ eval_comparison:
         cmp byte [esi+1], '='
         je .ec_le
         inc esi
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_concat
-        pop ebx
+        pop rbx
         cmp ebx, [expr_result]
         jl .ec_true
         jmp .ec_false
 
 .ec_le:
         add esi, 2
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_concat
-        pop ebx
+        pop rbx
         cmp ebx, [expr_result]
         jle .ec_true
         jmp .ec_false
@@ -2277,20 +2277,20 @@ eval_comparison:
         cmp byte [esi+1], '='
         je .ec_ge
         inc esi
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_concat
-        pop ebx
+        pop rbx
         cmp ebx, [expr_result]
         jg .ec_true
         jmp .ec_false
 
 .ec_ge:
         add esi, 2
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_concat
-        pop ebx
+        pop rbx
         cmp ebx, [expr_result]
         jge .ec_true
         jmp .ec_false
@@ -2301,7 +2301,7 @@ eval_comparison:
         cmp byte [esi+2], ' '
         jne .ec_ret
         add esi, 3
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Save LHS string
         mov esi, expr_result_str
         mov edi, cmp_buf
@@ -2319,7 +2319,7 @@ eval_comparison:
         cmp byte [esi+2], ' '
         jne .ec_ret
         add esi, 3
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov esi, expr_result_str
         mov edi, cmp_buf
         call str_copy
@@ -2336,7 +2336,7 @@ eval_comparison:
         cmp byte [esi+2], ' '
         jne .ec_check_str_le
         add esi, 3
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov esi, expr_result_str
         mov edi, cmp_buf
         call str_copy
@@ -2353,7 +2353,7 @@ eval_comparison:
         cmp byte [esi+2], ' '
         jne .ec_ret
         add esi, 3
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov esi, expr_result_str
         mov edi, cmp_buf
         call str_copy
@@ -2370,7 +2370,7 @@ eval_comparison:
         cmp byte [esi+2], ' '
         jne .ec_check_str_ge
         add esi, 3
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov esi, expr_result_str
         mov edi, cmp_buf
         call str_copy
@@ -2387,7 +2387,7 @@ eval_comparison:
         cmp byte [esi+2], ' '
         jne .ec_ret
         add esi, 3
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov esi, expr_result_str
         mov edi, cmp_buf
         call str_copy
@@ -2412,7 +2412,7 @@ eval_comparison:
 eval_concat:
         call eval_add
 .ecc_loop:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '.'
         je .ecc_dot
@@ -2423,7 +2423,7 @@ eval_concat:
         jne .ecc_done
         ; x repeat
         add esi, 2
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Save LHS string
         mov esi, expr_result_str
         mov edi, concat_buf
@@ -2438,17 +2438,17 @@ eval_concat:
 .ecc_rep_loop:
         cmp edx, ecx
         jge .ecc_rep_done
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov esi, concat_buf
         call str_len
-        push eax
+        push rax
         mov esi, concat_buf
         call str_copy
-        pop eax
+        pop rax
         add edi, eax
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         inc edx
         jmp .ecc_rep_loop
 .ecc_rep_done:
@@ -2467,7 +2467,7 @@ eval_concat:
         cmp byte [esi+1], '='  ; .= handled elsewhere
         je .ecc_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Save LHS string
         mov esi, expr_result_str
         mov edi, concat_buf
@@ -2499,7 +2499,7 @@ eval_concat:
 eval_add:
         call eval_mul
 .ead_loop:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '+'
         je .ead_add
@@ -2513,10 +2513,10 @@ eval_add:
         cmp byte [esi+1], '='  ; += handled elsewhere
         je .ead_done
         inc esi
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_mul
-        pop ebx
+        pop rbx
         add [expr_result], ebx
         mov byte [expr_result_type], TYPE_INT
         jmp .ead_loop
@@ -2527,10 +2527,10 @@ eval_add:
         cmp byte [esi+1], '='
         je .ead_done
         inc esi
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_mul
-        pop ebx
+        pop rbx
         mov eax, ebx
         sub eax, [expr_result]
         mov [expr_result], eax
@@ -2544,7 +2544,7 @@ eval_add:
 eval_mul:
         call eval_unary
 .em_loop:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '*'
         je .em_mul
@@ -2558,10 +2558,10 @@ eval_mul:
         cmp byte [esi+1], '*'
         je .em_power
         inc esi
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_unary
-        pop ebx
+        pop rbx
         imul ebx, [expr_result]
         mov [expr_result], ebx
         mov byte [expr_result_type], TYPE_INT
@@ -2569,10 +2569,10 @@ eval_mul:
 
 .em_power:
         add esi, 2
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_unary
-        pop ebx
+        pop rbx
         ; ebx ** expr_result
         mov ecx, [expr_result]
         mov eax, 1
@@ -2589,10 +2589,10 @@ eval_mul:
 
 .em_div:
         inc esi
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_unary
-        pop ebx
+        pop rbx
         mov eax, [expr_result]
         cmp eax, 0
         je .em_div0
@@ -2611,10 +2611,10 @@ eval_mul:
 
 .em_mod:
         inc esi
-        mov [parse_ptr], esi
-        push dword [expr_result]
+        mov [parse_ptr], rsi
+        push qword [expr_result]
         call eval_unary
-        pop ebx
+        pop rbx
         mov eax, [expr_result]
         cmp eax, 0
         je .em_div0
@@ -2627,7 +2627,7 @@ eval_mul:
 
 ; --- UNARY level: - ! not ---
 eval_unary:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         cmp byte [esi], '-'
@@ -2645,7 +2645,7 @@ eval_unary:
         cmp byte [esi+3], ' '
         jne .eu_primary
         add esi, 4
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_unary
         cmp dword [expr_result], 0
         je .eu_not_true
@@ -2659,7 +2659,7 @@ eval_unary:
 .eu_neg:
         ; Make sure it's not -> or just a minus sign at end
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_unary
         neg dword [expr_result]
         mov byte [expr_result_type], TYPE_INT
@@ -2669,7 +2669,7 @@ eval_unary:
         cmp byte [esi+1], '='      ; != is comparison
         je .eu_primary
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_unary
         cmp dword [expr_result], 0
         je .eu_not_true
@@ -2683,7 +2683,7 @@ eval_unary:
 
 ; --- PRIMARY level: number, string, variable, ( expr ), function calls ---
 eval_primary:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Number literal
@@ -2696,7 +2696,7 @@ eval_primary:
         mov byte [expr_result_type], TYPE_INT
         ; Advance parse_ptr
         add esi, ecx
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Also put numeric string repr
         mov eax, [expr_result]
         mov edi, expr_result_str
@@ -2773,14 +2773,14 @@ eval_primary:
 
 .ep_dqs_interp:
         ; Interpolate variable into string
-        mov [parse_ptr], esi
-        push edi
+        mov [parse_ptr], rsi
+        push rdi
         call eval_variable
-        pop edi
+        pop rdi
         ; Copy result into string being built
         cmp byte [expr_result_type], TYPE_STR
         jne .ep_dqs_interp_int
-        push esi
+        push rsi
         mov esi, expr_result_str
 .ep_dqs_copy_str:
         mov al, [esi]
@@ -2791,16 +2791,16 @@ eval_primary:
         inc esi
         jmp .ep_dqs_copy_str
 .ep_dqs_copy_done:
-        pop esi
-        mov esi, [parse_ptr]
+        pop rsi
+        mov rsi, [parse_ptr]
         jmp .ep_dqs_loop
 .ep_dqs_interp_int:
-        push esi
+        push rsi
         mov eax, [expr_result]
-        push edi
+        push rdi
         mov edi, num_format_buf
         call math_int_to_str
-        pop edi
+        pop rdi
         mov esi, num_format_buf
 .ep_dqs_copy_int:
         mov al, [esi]
@@ -2811,22 +2811,22 @@ eval_primary:
         inc esi
         jmp .ep_dqs_copy_int
 .ep_dqs_int_done:
-        pop esi
-        mov esi, [parse_ptr]
+        pop rsi
+        mov rsi, [parse_ptr]
         jmp .ep_dqs_loop
 
 .ep_dqs_end:
         inc esi
 .ep_dqs_done:
         mov byte [edi], 0
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov byte [expr_result_type], TYPE_STR
         ; Set int value to string length
-        push esi
+        push rsi
         mov esi, expr_result_str
         call str_len
         mov [expr_result], eax
-        pop esi
+        pop rsi
         ret
 
 .ep_sq_string:
@@ -2863,17 +2863,17 @@ eval_primary:
         inc esi
 .ep_sqs_done:
         mov byte [edi], 0
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov byte [expr_result_type], TYPE_STR
-        push esi
+        push rsi
         mov esi, expr_result_str
         call str_len
         mov [expr_result], eax
-        pop esi
+        pop rsi
         ret
 
 .ep_variable:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_variable
         ret
 
@@ -2882,8 +2882,8 @@ eval_primary:
         inc esi
         mov edi, temp_name
         call read_ident
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, temp_name
         call find_array
         cmp eax, -1
@@ -2891,25 +2891,25 @@ eval_primary:
         mov eax, [arr_counts + eax*4]
         mov [expr_result], eax
         mov byte [expr_result_type], TYPE_INT
-        pop esi
+        pop rsi
         ret
 .ep_arr_zero:
         mov dword [expr_result], 0
         mov byte [expr_result_type], TYPE_INT
-        pop esi
+        pop rsi
         ret
 
 .ep_paren:
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .ep_paren_done
         inc esi
 .ep_paren_done:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ret
 
 .ep_stdin:
@@ -2928,31 +2928,31 @@ eval_primary:
         jne .ep_stdin_done_nogt
         inc esi
 .ep_stdin_done_nogt:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Check for piped stdin first
-        push esi
+        push rsi
         mov eax, SYS_STDIN_READ
         mov ebx, expr_result_str
         int 0x80
         cmp eax, 0
         jg .ep_stdin_got_piped
-        pop esi
+        pop rsi
 
         ; Interactive: read from keyboard
-        push esi
+        push rsi
         mov edi, expr_result_str
         mov ecx, VAR_VAL_LEN
         call io_read_line
         call io_newline
-        pop esi
+        pop rsi
 
         mov byte [expr_result_type], TYPE_STR
-        push esi
+        push rsi
         mov esi, expr_result_str
         call str_len
         mov [expr_result], eax
-        pop esi
+        pop rsi
         ret
 
 .ep_stdin_got_piped:
@@ -2966,21 +2966,21 @@ eval_primary:
         jne .ep_stdin_piped_done
         mov byte [expr_result_str + eax], 0
 .ep_stdin_piped_done:
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
-        push esi
+        push rsi
         mov esi, expr_result_str
         call str_len
         mov [expr_result], eax
-        pop esi
+        pop rsi
         ret
 
 ;=======================================================================
 ; EVAL_VARIABLE - Evaluate $var or $arr[idx] or special variables
 ;=======================================================================
 eval_variable:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         inc esi                 ; skip $
 
         ; Special variable: $_
@@ -3005,19 +3005,19 @@ eval_variable:
 
 .ev_underscore:
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Copy _ variable value
-        push esi
+        push rsi
         mov esi, underscore_name
         call get_var_str
-        pop esi
-        popad
+        pop rsi
+        POPALL
         ret
 
 .ev_not_underscore:
         mov edi, temp_name
         call read_ident
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Check for array element $arr[idx]
         call skip_ws_esi
@@ -3025,39 +3025,39 @@ eval_variable:
         je .ev_arr_elem
 
         ; Regular scalar lookup
-        push esi
+        push rsi
         mov esi, temp_name
         call lookup_var
-        pop esi
-        mov [parse_ptr], esi
-        popad
+        pop rsi
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 .ev_arr_elem:
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         mov ebx, [expr_result] ; index
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ']'
         jne .ev_ae_done
         inc esi
 .ev_ae_done:
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, temp_name
         mov eax, ebx
         call get_array_elem
-        pop esi
-        popad
+        pop rsi
+        POPALL
         ret
 
 ;=======================================================================
 ; BUILT-IN FUNCTIONS
 ;=======================================================================
 try_builtin:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; length(expr)
@@ -3144,7 +3144,7 @@ try_builtin:
         jc .tb_rand
 
         ; Try as sub call
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call try_sub_call
         cmp eax, 1
         je .tb_sub_done
@@ -3162,40 +3162,40 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_length_bare
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_len_done
         inc esi
 .tb_len_done:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         cmp byte [expr_result_type], TYPE_STR
         jne .tb_len_int
-        push esi
+        push rsi
         mov esi, expr_result_str
         call str_len
         mov [expr_result], eax
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_INT
         ret
 .tb_len_int:
         ; Length of number = digits count
-        push esi
+        push rsi
         mov eax, [expr_result]
         mov edi, num_format_buf
         call math_int_to_str
         mov esi, num_format_buf
         call str_len
         mov [expr_result], eax
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_INT
         ret
 
 .tb_length_bare:
         ; length $var - without parens
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         jmp .tb_len_done
 
@@ -3205,20 +3205,20 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_substr_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr          ; get string
         mov esi, expr_result_str
         mov edi, concat_buf
         call str_copy
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ','
         jne .tb_substr_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr          ; get offset
         mov ebx, [expr_result]
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Optional length parameter
@@ -3226,22 +3226,22 @@ try_builtin:
         cmp byte [esi], ','
         jne .tb_substr_nolen
         inc esi
-        mov [parse_ptr], esi
-        push ebx
+        mov [parse_ptr], rsi
+        push rbx
         call eval_expr
         mov ecx, [expr_result]
-        pop ebx
-        mov esi, [parse_ptr]
+        pop rbx
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
 .tb_substr_nolen:
         cmp byte [esi], ')'
         jne .tb_substr_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Do substr: concat_buf[ebx..ebx+ecx]
-        push esi
+        push rsi
         mov esi, concat_buf
         call str_len
         ; Clamp offset
@@ -3276,18 +3276,18 @@ try_builtin:
         jmp .tb_substr_copy
 .tb_substr_copy_done:
         mov byte [edi + edx], 0
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
         ret
 
 .tb_substr_empty:
         mov byte [expr_result_str], 0
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
         ret
 
 .tb_substr_done:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ret
 
 ; --- abs(n) ---
@@ -3296,14 +3296,14 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_abs_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_abs_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov eax, [expr_result]
         cmp eax, 0
         jge .tb_abs_done
@@ -3319,14 +3319,14 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_int_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_int_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 .tb_int_done:
         mov byte [expr_result_type], TYPE_INT
         ret
@@ -3337,14 +3337,14 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_chr_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_chr_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov eax, [expr_result]
         mov byte [expr_result_str], al
         mov byte [expr_result_str + 1], 0
@@ -3358,14 +3358,14 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_ord_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_ord_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         movzx eax, byte [expr_result_str]
         mov [expr_result], eax
         mov byte [expr_result_type], TYPE_INT
@@ -3378,18 +3378,18 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_uc_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_uc_done
         inc esi
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, expr_result_str
         call str_upper
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
 .tb_uc_done:
         ret
@@ -3399,18 +3399,18 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_lc_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_lc_done
         inc esi
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, expr_result_str
         call str_lower
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
 .tb_lc_done:
         ret
@@ -3421,26 +3421,26 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_idx_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         mov esi, expr_result_str
         mov edi, concat_buf
         call str_copy
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ','
         jne .tb_idx_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_idx_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Search concat_buf for expr_result_str
-        push esi
+        push rsi
         mov esi, concat_buf
         mov edi, expr_result_str
         call str_str
@@ -3453,7 +3453,7 @@ try_builtin:
 .tb_idx_notfound:
         mov dword [expr_result], -1
 .tb_idx_fin:
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_INT
 .tb_idx_done:
         ret
@@ -3464,26 +3464,26 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_ridx_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         mov esi, expr_result_str
         mov edi, concat_buf
         call str_copy
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ','
         jne .tb_ridx_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_ridx_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Search from end
-        push esi
+        push rsi
         mov esi, concat_buf
         call str_len
         mov ecx, eax
@@ -3498,14 +3498,14 @@ try_builtin:
         cmp ecx, 0
         jl .tb_ridx_fin
         ; Compare at position ecx
-        push ecx
+        push rcx
         lea esi, [concat_buf + ecx]
         mov edi, expr_result_str
-        push edx
+        push rdx
         mov ecx, edx
         call mem_cmp
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         cmp eax, 0
         je .tb_ridx_found
         dec ecx
@@ -3513,7 +3513,7 @@ try_builtin:
 .tb_ridx_found:
         mov [expr_result], ecx
 .tb_ridx_fin:
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_INT
 .tb_ridx_done:
         ret
@@ -3524,12 +3524,12 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_join_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr          ; separator string
         mov esi, expr_result_str
         mov edi, join_sep
         call str_copy
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ','
         jne .tb_join_done
@@ -3544,10 +3544,10 @@ try_builtin:
         cmp byte [esi], ')'
         jne .tb_join_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Join array elements
-        push esi
+        push rsi
         mov esi, temp_name
         call find_array
         cmp eax, -1
@@ -3564,9 +3564,9 @@ try_builtin:
         ; Add separator if not first
         cmp edx, 0
         je .tb_join_no_sep
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         mov esi, join_sep
 .tb_join_sep_copy:
         mov al, [esi]
@@ -3577,28 +3577,28 @@ try_builtin:
         inc esi
         jmp .tb_join_sep_copy
 .tb_join_sep_done:
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
 .tb_join_no_sep:
         ; Get element value
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov esi, temp_name
         mov eax, edx
         call get_array_elem
         ; Copy to output
-        push esi
+        push rsi
         cmp byte [expr_result_type], TYPE_STR
         jne .tb_join_elem_int
         mov esi, expr_result_str
         jmp .tb_join_elem_copy
 .tb_join_elem_int:
         mov eax, [expr_result]
-        push edi
+        push rdi
         mov edi, num_format_buf
         call math_int_to_str
-        pop edi
+        pop rdi
         mov esi, num_format_buf
 .tb_join_elem_copy:
         mov al, [esi]
@@ -3609,21 +3609,21 @@ try_builtin:
         inc esi
         jmp .tb_join_elem_copy
 .tb_join_elem_done:
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
         inc edx
         jmp .tb_join_loop
 
 .tb_join_end:
         mov byte [edi], 0
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
         ret
 
 .tb_join_empty:
         mov byte [expr_result_str], 0
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
 .tb_join_done:
         ret
@@ -3634,25 +3634,25 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_split_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Get separator
         call eval_expr
         mov esi, expr_result_str
         mov edi, split_sep
         call str_copy
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ','
         jne .tb_split_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr          ; string to split
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_split_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Result is array count - stored for assignment
         mov dword [expr_result], 0
@@ -3666,20 +3666,20 @@ try_builtin:
         cmp byte [esi], '('
         jne .tb_rev_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_rev_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         cmp byte [expr_result_type], TYPE_STR
         jne .tb_rev_done
-        push esi
+        push rsi
         mov esi, expr_result_str
         call str_reverse
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_STR
 .tb_rev_done:
         ret
@@ -3700,16 +3700,16 @@ try_builtin:
         cmp byte [esi], ')'
         jne .tb_sort_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         ; Simple bubble sort on the array (numeric)
-        push esi
+        push rsi
         mov esi, temp_name
         call find_array
         cmp eax, -1
         je .tb_sort_fin
         call sort_array
 .tb_sort_fin:
-        pop esi
+        pop rsi
         mov dword [expr_result], 0
         mov byte [expr_result_type], TYPE_INT
 .tb_sort_done:
@@ -3731,8 +3731,8 @@ try_builtin:
         cmp byte [esi], ')'
         jne .tb_def_done
         inc esi
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, temp_name
         call find_var
         cmp eax, -1
@@ -3745,7 +3745,7 @@ try_builtin:
 .tb_def_undef:
         mov dword [expr_result], 0
 .tb_def_fin:
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_INT
 .tb_def_done:
         ret
@@ -3766,8 +3766,8 @@ try_builtin:
         cmp byte [esi], ')'
         jne .tb_sca_done
         inc esi
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, temp_name
         call find_array
         cmp eax, -1
@@ -3778,28 +3778,28 @@ try_builtin:
 .tb_sca_zero:
         mov dword [expr_result], 0
 .tb_sca_fin:
-        pop esi
+        pop rsi
         mov byte [expr_result_type], TYPE_INT
 .tb_sca_done:
         ret
 
 ; --- rand ---
 .tb_rand:
-        push esi
+        push rsi
         call skip_ws_esi
         cmp byte [esi], '('
         jne .tb_rand_noarg
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr          ; max
         mov ecx, [expr_result]
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .tb_rand_do
         inc esi
 .tb_rand_do:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         cmp ecx, 0
         jle .tb_rand_noarg
         mov eax, [rand_seed]
@@ -3812,7 +3812,7 @@ try_builtin:
         div ecx
         mov [expr_result], edx
         mov byte [expr_result_type], TYPE_INT
-        pop esi
+        pop rsi
         ret
 
 .tb_rand_noarg:
@@ -3824,16 +3824,16 @@ try_builtin:
         and eax, 0x7FFF
         mov [expr_result], eax
         mov byte [expr_result_type], TYPE_INT
-        mov [parse_ptr], esi
-        pop esi
+        mov [parse_ptr], rsi
+        pop rsi
         ret
 
 ;=======================================================================
 ; CHOMP - Remove trailing newline from variable
 ;=======================================================================
 do_chomp:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '('
         jne .dc_bare
@@ -3855,10 +3855,10 @@ do_chomp:
         jne .dc_no_semi
         inc esi
 .dc_no_semi:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Get string value and remove trailing \n
-        push esi
+        push rsi
         mov esi, temp_name
         call get_var_str
         mov esi, expr_result_str
@@ -3873,18 +3873,18 @@ do_chomp:
         mov byte [expr_result_type], TYPE_STR
         mov esi, temp_name
         call store_var_result
-        pop esi
+        pop rsi
 
 .dc_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; PUSH / POP / SHIFT / UNSHIFT
 ;=======================================================================
 do_push:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '@'
         jne .dpu_done
@@ -3895,31 +3895,31 @@ do_push:
         cmp byte [esi], ','
         jne .dpu_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
-        push esi
+        push rsi
         mov esi, temp_name
         call find_or_create_array
         mov [temp_arr_idx], eax
-        pop esi
+        pop rsi
 
         call eval_expr
         mov eax, [temp_arr_idx]
         call array_push_result
 
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ';'
         jne .dpu_done
         inc esi
 .dpu_done:
-        mov [parse_ptr], esi
-        popad
+        mov [parse_ptr], rsi
+        POPALL
         ret
 
 do_pop_op:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '('
         jne .dpo_bare
@@ -3936,8 +3936,8 @@ do_pop_op:
         jne .dpo_no_paren
         inc esi
 .dpo_no_paren:
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, temp_name
         call find_array
         cmp eax, -1
@@ -3949,22 +3949,22 @@ do_pop_op:
         dec ecx
         mov [arr_counts + eax*4], ecx
 .dpo_fin:
-        pop esi
+        pop rsi
 .dpo_done:
-        popad
+        POPALL
         ret
 
 do_shift:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '@'
         jne .dsh_done
         inc esi
         mov edi, temp_name
         call read_ident
-        mov [parse_ptr], esi
-        push esi
+        mov [parse_ptr], rsi
+        push rsi
         mov esi, temp_name
         call find_array
         cmp eax, -1
@@ -3978,23 +3978,23 @@ do_shift:
         imul ebx, eax, MAX_ARR_ELEM * 4
         lea edi, [arr_data + ebx]
         lea esi, [arr_data + ebx + 4]
-        push ecx
+        push rcx
         shl ecx, 2
         cmp ecx, 0
         je .dsh_shift_done
         rep movsb
 .dsh_shift_done:
-        pop ecx
+        pop rcx
 .dsh_fin:
-        pop esi
-        mov esi, [parse_ptr]
+        pop rsi
+        mov rsi, [parse_ptr]
 .dsh_done:
-        popad
+        POPALL
         ret
 
 do_unshift:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '@'
         jne .dus_done
@@ -4005,13 +4005,13 @@ do_unshift:
         cmp byte [esi], ','
         jne .dus_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
-        push esi
+        push rsi
         mov esi, temp_name
         call find_or_create_array
         mov [temp_arr_idx], eax
-        pop esi
+        pop rsi
 
         call eval_expr
 
@@ -4022,7 +4022,7 @@ do_unshift:
         jge .dus_skip
         ; Move elements up by 1
         imul ebx, eax, MAX_ARR_ELEM * 4
-        push ecx
+        push rcx
 .dus_shift_up:
         cmp ecx, 0
         je .dus_shift_done
@@ -4031,28 +4031,28 @@ do_unshift:
         dec ecx
         jmp .dus_shift_up
 .dus_shift_done:
-        pop ecx
+        pop rcx
         ; Store new value at position 0
         mov edx, [expr_result]
         mov [arr_data + ebx], edx
         inc dword [arr_counts + eax*4]
 .dus_skip:
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
 .dus_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; DIE / EXIT
 ;=======================================================================
 do_die:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], '"'
         jne .dd_default
         ; Print the message
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call do_print
         call io_newline
         jmp .dd_exit
@@ -4068,32 +4068,32 @@ do_die:
 .dd_exit:
         mov eax, SYS_EXIT
         int 0x80
-        popad
+        POPALL
         ret
 
 do_exit:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         ; Optional exit code (ignored but parsed)
         cmp byte [esi], ';'
         je .dex_go
         cmp byte [esi], 0
         je .dex_go
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
 .dex_go:
         mov eax, SYS_EXIT
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; FILE I/O: open, close
 ;=======================================================================
 do_open:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Simple form: open(FH, "filename") or open(FH, "<filename")
@@ -4112,32 +4112,32 @@ do_open:
         call skip_ws_esi
 
         ; Get filename
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ')'
         jne .do_open_done
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Try to read the file
-        push esi
+        push rsi
         mov ebx, expr_result_str
         mov ecx, file_io_buf
         mov eax, SYS_FREAD
         int 0x80
         mov [file_io_size], eax
         mov dword [file_io_pos], 0
-        pop esi
+        pop rsi
 
 .do_open_done:
-        popad
+        POPALL
         ret
 
 do_close:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         ; Skip to ; or end
 .dcl_loop:
@@ -4152,24 +4152,24 @@ do_close:
         jne .dcl_nosemi
         inc esi
 .dcl_nosemi:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         mov dword [file_io_size], 0
         mov dword [file_io_pos], 0
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; RETURN from sub
 ;=======================================================================
 do_return:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         call skip_ws_esi
         cmp byte [esi], ';'
         je .dr_no_val
         cmp byte [esi], 0
         je .dr_no_val
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call eval_expr
         mov eax, [expr_result]
         mov [return_val], eax
@@ -4181,20 +4181,20 @@ do_return:
         mov byte [return_type], TYPE_UNDEF
 .dr_done:
         mov byte [in_sub_return], 1
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; SUB CALL
 ;=======================================================================
 try_sub_call:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
 
-        mov esi, [parse_ptr]
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 
         ; Read identifier
@@ -4204,10 +4204,10 @@ try_sub_call:
         je .tsc_no
 
         ; Look up sub
-        push esi
+        push rsi
         mov esi, temp_name
         call find_sub
-        pop esi
+        pop rsi
         cmp eax, -1
         je .tsc_no
 
@@ -4236,10 +4236,10 @@ try_sub_call:
         jne .tsc_nosemi
         inc esi
 .tsc_nosemi:
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
         ; Save current script position
-        push dword [current_line]
+        push qword [current_line]
         inc dword [call_depth]
 
         ; Jump to sub body (line after 'sub name {')
@@ -4270,7 +4270,7 @@ try_sub_call:
 
 .tsc_found_brace:
         inc esi
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
         call exec_block
 
         ; Clear return flag
@@ -4278,23 +4278,23 @@ try_sub_call:
 
 .tsc_call_done:
         dec dword [call_depth]
-        pop dword [current_line]
+        pop qword [current_line]
 
         mov eax, 1              ; return success
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .tsc_no:
         mov eax, 0
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;=======================================================================
@@ -4303,39 +4303,39 @@ try_sub_call:
 
 ; find_var: ESI = name -> EAX = index or -1
 find_var:
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         xor ecx, ecx
 .fv_loop:
         cmp ecx, [num_vars]
         jge .fv_not_found
         imul ebx, ecx, VAR_NAME_LEN
         lea edi, [var_names + ebx]
-        push esi
-        push ecx
+        push rsi
+        push rcx
         call str_cmp
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         je .fv_found
         inc ecx
         jmp .fv_loop
 .fv_found:
         mov eax, ecx
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 .fv_not_found:
         mov eax, -1
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ; lookup_var: ESI = name, sets expr_result/type
 lookup_var:
-        pushad
+        PUSHALL
         call find_var
         cmp eax, -1
         je .lv_undef
@@ -4347,12 +4347,12 @@ lookup_var:
         mov [expr_result], ebx
         mov byte [expr_result_type], TYPE_INT
         ; Also set string representation
-        push esi
+        push rsi
         mov eax, ebx
         mov edi, expr_result_str
         call math_int_to_str
-        pop esi
-        popad
+        pop rsi
+        POPALL
         ret
 .lv_str:
         ; String value
@@ -4362,43 +4362,43 @@ lookup_var:
         call str_copy
         mov byte [expr_result_type], TYPE_STR
         ; Set int value (attempt to parse)
-        push esi
+        push rsi
         mov esi, expr_result_str
         call math_parse_signed
         mov [expr_result], eax
-        pop esi
-        popad
+        pop rsi
+        POPALL
         ret
 .lv_undef:
         mov dword [expr_result], 0
         mov byte [expr_result_str], 0
         mov byte [expr_result_type], TYPE_UNDEF
-        popad
+        POPALL
         ret
 
 ; get_var_int: ESI = name -> EAX = int value
 get_var_int:
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         call find_var
         cmp eax, -1
         je .gvi_zero
         mov eax, [var_ints + eax*4]
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 .gvi_zero:
         xor eax, eax
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ; get_var_str: ESI = name -> expr_result_str filled
 get_var_str:
-        pushad
+        PUSHALL
         call find_var
         cmp eax, -1
         je .gvs_empty
@@ -4410,7 +4410,7 @@ get_var_str:
         mov edi, expr_result_str
         call math_int_to_str
         mov byte [expr_result_type], TYPE_INT
-        popad
+        POPALL
         ret
 .gvs_str:
         imul ebx, eax, VAR_VAL_LEN
@@ -4418,17 +4418,17 @@ get_var_str:
         mov edi, expr_result_str
         call str_copy
         mov byte [expr_result_type], TYPE_STR
-        popad
+        POPALL
         ret
 .gvs_empty:
         mov byte [expr_result_str], 0
         mov byte [expr_result_type], TYPE_UNDEF
-        popad
+        POPALL
         ret
 
 ; store_var_result: ESI = name, stores from expr_result/type
 store_var_result:
-        pushad
+        PUSHALL
         call find_var
         cmp eax, -1
         jne .svr_found
@@ -4454,26 +4454,26 @@ store_var_result:
         cmp byte [expr_result_type], TYPE_STR
         jne .svr_int_str
         imul ebx, eax, VAR_VAL_LEN
-        push esi
+        push rsi
         lea edi, [var_strs + ebx]
         mov esi, expr_result_str
         call str_copy
-        pop esi
+        pop rsi
         jmp .svr_done
 
 .svr_int_str:
         ; Also store string representation of int
         imul ebx, eax, VAR_VAL_LEN
-        push esi
+        push rsi
         lea edi, [var_strs + ebx]
         mov eax, [expr_result]
-        push edi
+        push rdi
         call math_int_to_str
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
 
 .svr_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -4481,7 +4481,7 @@ store_var_result:
 ;=======================================================================
 store_sub_def:
         ; temp_name = sub name, ECX = line number
-        pushad
+        PUSHALL
         mov eax, [num_subs]
         cmp eax, MAX_SUBS
         jge .ssd_done
@@ -4492,39 +4492,39 @@ store_sub_def:
         mov [sub_lines + eax*4], ecx
         inc dword [num_subs]
 .ssd_done:
-        popad
+        POPALL
         ret
 
 find_sub:
         ; ESI = name -> EAX = index or -1
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         xor ecx, ecx
 .fsu_loop:
         cmp ecx, [num_subs]
         jge .fsu_nf
         imul ebx, ecx, VAR_NAME_LEN
         lea edi, [sub_names + ebx]
-        push esi
-        push ecx
+        push rsi
+        push rcx
         call str_cmp
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         je .fsu_found
         inc ecx
         jmp .fsu_loop
 .fsu_found:
         mov eax, ecx
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 .fsu_nf:
         mov eax, -1
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 ;=======================================================================
@@ -4532,34 +4532,34 @@ find_sub:
 ;=======================================================================
 find_array:
         ; ESI = name -> EAX = index or -1
-        push ebx
-        push ecx
-        push edi
+        push rbx
+        push rcx
+        push rdi
         xor ecx, ecx
 .fa_loop:
         cmp ecx, [num_arrays]
         jge .fa_nf
         imul ebx, ecx, VAR_NAME_LEN
         lea edi, [arr_names + ebx]
-        push esi
-        push ecx
+        push rsi
+        push rcx
         call str_cmp
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         je .fa_found
         inc ecx
         jmp .fa_loop
 .fa_found:
         mov eax, ecx
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 .fa_nf:
         mov eax, -1
-        pop edi
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rcx
+        pop rbx
         ret
 
 find_or_create_array:
@@ -4581,8 +4581,8 @@ find_or_create_array:
 
 array_push_result:
         ; EAX = array index, pushes expr_result
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, [arr_counts + eax*4]
         cmp ecx, MAX_ARR_ELEM
         jge .apr_done
@@ -4591,17 +4591,17 @@ array_push_result:
         mov [arr_data + ebx + ecx*4], edx
         inc dword [arr_counts + eax*4]
 .apr_done:
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 get_array_elem:
         ; ESI = array name, EAX = index -> sets expr_result
-        pushad
-        push eax
+        PUSHALL
+        push rax
         call find_array
         mov ecx, eax
-        pop eax
+        pop rax
         cmp ecx, -1
         je .gae_undef
         cmp eax, [arr_counts + ecx*4]
@@ -4616,22 +4616,22 @@ get_array_elem:
         mov eax, edx
         mov edi, expr_result_str
         call math_int_to_str
-        popad
+        POPALL
         ret
 .gae_undef:
         mov dword [expr_result], 0
         mov byte [expr_result_type], TYPE_UNDEF
         mov byte [expr_result_str], 0
-        popad
+        POPALL
         ret
 
 set_array_elem:
         ; ESI = array name, EAX = index, expr_result has value
-        pushad
-        push eax
+        PUSHALL
+        push rax
         call find_or_create_array
         mov ecx, eax            ; array idx
-        pop eax
+        pop rax
         cmp eax, 0
         jl .sae_done
         cmp eax, MAX_ARR_ELEM
@@ -4647,19 +4647,19 @@ set_array_elem:
         mov edx, [expr_result]
         mov [arr_data + ebx + eax*4], edx
 .sae_done:
-        popad
+        POPALL
         ret
 
 print_array:
         ; Print array elements separated by spaces
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         inc esi                 ; skip @
         mov edi, temp_name
         call read_ident
-        mov [parse_ptr], esi
+        mov [parse_ptr], rsi
 
-        push esi
+        push rsi
         mov esi, temp_name
         call find_array
         cmp eax, -1
@@ -4671,16 +4671,16 @@ print_array:
         jge .pa_done
         cmp edx, 0
         je .pa_no_space
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 .pa_no_space:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov esi, temp_name
         mov eax, edx
         call get_array_elem
@@ -4696,18 +4696,18 @@ print_array:
         mov esi, num_format_buf
         call io_print
 .pa_next:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         inc edx
         jmp .pa_loop
 .pa_done:
-        pop esi
-        popad
+        pop rsi
+        POPALL
         ret
 
 sort_array:
         ; EAX = array index; simple bubble sort on int values
-        pushad
+        PUSHALL
         mov ecx, [arr_counts + eax*4]
         cmp ecx, 2
         jl .sa_done
@@ -4735,15 +4735,15 @@ sort_array:
         cmp byte [sort_swapped], 0
         jne .sa_outer
 .sa_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
 ; FIND FOR PARTS: Find the increment part and body of for(;;) loop
 ;=======================================================================
 find_for_parts:
-        pushad
-        mov esi, [parse_ptr]
+        PUSHALL
+        mov rsi, [parse_ptr]
         ; parse_ptr is at the condition. Find the next ;
 .ffp_find_semi:
         cmp byte [esi], 0
@@ -4760,7 +4760,7 @@ find_for_parts:
         jmp .ffp_find_semi
 .ffp_found_semi:
         inc esi
-        mov [for_incr_ptr], esi
+        mov [for_incr_ptr], rsi
 
         ; Find the closing ) then {
 .ffp_find_rparen:
@@ -4776,10 +4776,10 @@ find_for_parts:
         cmp byte [esi], '{'
         jne .ffp_err
         inc esi
-        mov [for_body_ptr], esi
+        mov [for_body_ptr], rsi
 
 .ffp_err:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -4788,8 +4788,8 @@ find_for_parts:
 
 ; Skip whitespace at [parse_ptr]
 skip_whitespace:
-        push esi
-        mov esi, [parse_ptr]
+        push rsi
+        mov rsi, [parse_ptr]
 .sw_loop:
         cmp byte [esi], ' '
         je .sw_next
@@ -4800,8 +4800,8 @@ skip_whitespace:
         inc esi
         jmp .sw_loop
 .sw_done:
-        mov [parse_ptr], esi
-        pop esi
+        mov [parse_ptr], rsi
+        pop rsi
         ret
 
 ; Skip whitespace at ESI (in place)
@@ -4818,8 +4818,8 @@ skip_ws_esi:
 
 ; Read identifier from ESI into EDI, advance ESI
 read_ident:
-        push eax
-        push ecx
+        push rax
+        push rcx
         xor ecx, ecx
 .ri_loop:
         movzx eax, byte [esi]
@@ -4850,8 +4850,8 @@ read_ident:
         jmp .ri_loop
 .ri_done:
         mov byte [edi + ecx], 0
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 read_ident_esi:
@@ -4860,8 +4860,8 @@ read_ident_esi:
 
 ; Read identifier and check if valid (at least 1 char)
 read_ident_check:
-        push ecx
-        push edi
+        push rcx
+        push rdi
         xor ecx, ecx
         movzx eax, byte [esi]
         cmp al, 'a'
@@ -4879,23 +4879,23 @@ read_ident_check:
 .ric_ok:
         call read_ident
         mov eax, 1
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         ret
 .ric_fail:
         mov eax, 0
-        pop edi
-        pop ecx
+        pop rdi
+        pop rcx
         ret
 
 ; Match keyword: ESI=input, EDI=keyword
 ; Returns CF set if match, advances parse_ptr past keyword
 match_keyword:
-        push eax
-        push ecx
-        push esi
-        push edi
-        mov esi, [parse_ptr]
+        push rax
+        push rcx
+        push rsi
+        push rdi
+        mov rsi, [parse_ptr]
         call skip_ws_esi
 .mk_loop:
         mov al, [edi]
@@ -4927,27 +4927,27 @@ match_keyword:
         cmp al, '_'
         je .mk_fail
         ; Match!
-        mov [parse_ptr], esi
-        pop edi
-        pop esi
-        pop ecx
-        pop eax
+        mov [parse_ptr], rsi
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rax
         stc
         ret
 .mk_fail:
-        pop edi
-        pop esi
-        pop ecx
-        pop eax
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rax
         clc
         ret
 
 ; Match keyword using ESI directly (not parse_ptr)
 match_keyword_esi:
-        push eax
-        push ecx
-        push edi
-        push esi             ; save start
+        push rax
+        push rcx
+        push rdi
+        push rsi             ; save start
 .mke_loop:
         mov al, [edi]
         cmp al, 0
@@ -4977,23 +4977,23 @@ match_keyword_esi:
         cmp al, '_'
         je .mke_fail
         ; Match! ESI is advanced past keyword
-        add esp, 4             ; discard saved esi
-        pop edi
-        pop ecx
-        pop eax
+        add rsp, 4             ; discard saved esi
+        pop rdi
+        pop rcx
+        pop rax
         stc
         ret
 .mke_fail:
-        pop esi                ; restore esi
-        pop edi
-        pop ecx
-        pop eax
+        pop rsi                ; restore esi
+        pop rdi
+        pop rcx
+        pop rax
         clc
         ret
 
 ; Report syntax error
 report_syntax_error:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, COLOR_ERROR
         int 0x80
@@ -5016,11 +5016,11 @@ report_syntax_error:
         mov ebx, COLOR_DEFAULT
         int 0x80
         mov byte [had_error], 1
-        popad
+        POPALL
         ret
 
 report_error:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCOLOR
         mov ebx, COLOR_ERROR
         int 0x80
@@ -5029,7 +5029,7 @@ report_error:
         mov ebx, COLOR_DEFAULT
         int 0x80
         mov byte [had_error], 1
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -5098,7 +5098,7 @@ section .bss
         alignb 4
 
 ; Parser state
-parse_ptr:      resd 1
+parse_ptr:      resq 1
 current_line:   resd 1
 script_lines:   resd 1
 had_error:      resb 1
@@ -5147,11 +5147,11 @@ join_sep:       resb 64
 split_sep:      resb 64
 
 ; While/for state
-while_cond_ptr: resd 1
-while_body_ptr: resd 1
-for_cond_ptr:   resd 1
-for_incr_ptr:   resd 1
-for_body_ptr:   resd 1
+while_cond_ptr: resq 1
+while_body_ptr: resq 1
+for_cond_ptr:   resq 1
+for_incr_ptr:   resq 1
+for_body_ptr:   resq 1
 
 ; Foreach state
 foreach_var:    resb VAR_NAME_LEN
@@ -5159,7 +5159,7 @@ foreach_count:  resd 1
 foreach_idx:    resd 1
 foreach_data:   resd MAX_ARR_ELEM
 foreach_types:  resb MAX_ARR_ELEM
-foreach_body_ptr: resd 1
+foreach_body_ptr: resq 1
 
 ; Sort
 sort_swapped:   resb 1

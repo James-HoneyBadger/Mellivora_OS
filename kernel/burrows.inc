@@ -109,7 +109,7 @@ GUI_DRAW_RECT      equ 26
 ;=======================================================================
 
 burrows_init:
-        pushad
+        PUSHALL
         ; Copy default theme to runtime theme buffer
         mov esi, gui_theme_blue
         mov edi, gui_theme
@@ -128,7 +128,7 @@ burrows_init:
         mov byte [gui_menu_open], 0
         mov byte [gui_exit_flag], 0
         mov byte [gui_dragging], 0
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -240,7 +240,7 @@ gui_desktop_resume:
         ret
 
 gui_exit_desktop:
-        pushad
+        PUSHALL
         mov byte [gui_desktop_active], 0
         mov byte [gui_exit_flag], 0
 
@@ -258,7 +258,7 @@ gui_exit_desktop:
         ; Restore text mode
         call vbe_restore_text
         call vga_init
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -275,7 +275,7 @@ LOGIN_NAME_LEN  equ 16
 LOGIN_PASS_LEN  equ 16
 
 gui_login_screen:
-        pushad
+        PUSHALL
 
         ; Initialize login state
         mov dword [login_sel_user], 0
@@ -336,7 +336,7 @@ gui_login_screen:
         je .login_next_user
 
         ; Highlight selected user
-        push ecx
+        push rcx
         cmp ecx, [login_sel_user]
         jne .login_no_highlight
         mov eax, LOGIN_BOX_X + 10
@@ -348,10 +348,10 @@ gui_login_screen:
         mov esi, 0x004488CC
         call gui_bb_fill_rect
 .login_no_highlight:
-        pop ecx
+        pop rcx
 
         ; Draw user name
-        push ecx
+        push rcx
         mov eax, LOGIN_BOX_X + 20
         mov ebx, ecx
         imul ebx, 20
@@ -361,7 +361,7 @@ gui_login_screen:
         add esi, login_users
         mov edx, 0x00DDDDDD
         call gui_bb_draw_string
-        pop ecx
+        pop rcx
 
 .login_next_user:
         inc ecx
@@ -391,13 +391,13 @@ gui_login_screen:
         mov ebx, LOGIN_BOX_Y + 122
         mov edx, 0x00FFFFFF
 .login_star_loop:
-        push ecx
-        push eax
+        push rcx
+        push rax
         mov cl, '*'
         call gui_bb_draw_char
-        pop eax
+        pop rax
         add eax, 8
-        pop ecx
+        pop rcx
         dec ecx
         jnz .login_star_loop
 .login_no_stars:
@@ -586,7 +586,7 @@ gui_login_screen:
         mov ecx, LOGIN_NAME_LEN
         rep movsb
         mov byte [login_authenticated], 1
-        popad
+        POPALL
         ret
 
 .login_release:
@@ -611,8 +611,8 @@ gui_login_screen:
 
 .login_check_len:
         ; Get stored password length
-        push ecx
-        push esi
+        push rcx
+        push rsi
         xor ecx, ecx
 .login_slen:
         cmp byte [esi + ecx], 0
@@ -621,8 +621,8 @@ gui_login_screen:
         jmp .login_slen
 .login_slen_done:
         mov edx, ecx   ; edx = stored password length
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ; Compare lengths
         cmp ecx, edx
         jne .login_wrong
@@ -647,7 +647,7 @@ gui_login_screen:
         mov ecx, LOGIN_NAME_LEN
         rep movsb
         mov byte [login_authenticated], 1
-        popad
+        POPALL
         ret
 
 .login_wrong:
@@ -657,7 +657,7 @@ gui_login_screen:
 
 .login_cancelled:
         mov byte [login_authenticated], 0
-        popad
+        POPALL
         ret
 
 .login_prev_btn: db 0
@@ -725,8 +725,8 @@ FDLG_BTN_CAN_Y  equ (FDLG_Y + FDLG_H - 30)
 ; Returns: EAX = 1 + fdlg_result filled, or EAX = 0 cancelled
 ;---------------------------------------
 gui_file_open_dialog:
-        mov [fdlg_title], esi
-        mov [fdlg_filter], edx
+        mov [fdlg_title], rsi
+        mov [fdlg_filter], rdx
         mov byte [fdlg_mode], 0        ; open mode
         mov byte [fdlg_name_buf], 0
         mov byte [fdlg_name_len], 0
@@ -738,8 +738,8 @@ gui_file_open_dialog:
 ; Returns: EAX = 1 + fdlg_result filled, or EAX = 0 cancelled
 ;---------------------------------------
 gui_file_save_dialog:
-        mov [fdlg_title], esi
-        mov [fdlg_filter], edx
+        mov [fdlg_title], rsi
+        mov [fdlg_filter], rdx
         mov byte [fdlg_mode], 1        ; save mode
         mov byte [fdlg_name_buf], 0
         mov byte [fdlg_name_len], 0
@@ -749,7 +749,7 @@ gui_file_save_dialog:
 ; fdlg_run — main dialog loop (shared by open/save)
 ;---------------------------------------
 fdlg_run:
-        pushad
+        PUSHALL
         mov dword [fdlg_scroll], 0
         mov dword [fdlg_sel], 0
         mov byte [fdlg_prev_btn], 0
@@ -881,7 +881,7 @@ fdlg_run:
         ; Clicked in file list — compute index
         sub ebx, FDLG_LIST_Y
         xor edx, edx
-        push eax
+        push rax
         mov eax, ebx
         mov ecx, 18
         div ecx
@@ -889,10 +889,10 @@ fdlg_run:
         cmp eax, [fdlg_file_count]
         jge .fdlg_pop_loop
         mov [fdlg_sel], eax
-        pop eax
+        pop rax
         jmp .fdlg_sel_to_name
 .fdlg_pop_loop:
-        pop eax
+        pop rax
         jmp .fdlg_loop
 
 .fdlg_check_btns:
@@ -942,12 +942,12 @@ fdlg_run:
         jb .fdlg_cp_res
         mov byte [edi + ecx], 0
 .fdlg_ok_ret:
-        popad
+        POPALL
         mov eax, 1
         ret
 
 .fdlg_cancel:
-        popad
+        POPALL
         xor eax, eax
         ret
 
@@ -955,7 +955,7 @@ fdlg_run:
 ; fdlg_load_files — enumerate FS into fdlg_files array
 ;---------------------------------------
 fdlg_load_files:
-        pushad
+        PUSHALL
         mov dword [fdlg_file_count], 0
 
         call hbfs_load_root_dir
@@ -975,7 +975,7 @@ fdlg_load_files:
         je .fl_next
 
         ; Apply type filter
-        mov edx, [fdlg_filter]
+        mov rdx, [fdlg_filter]
         test edx, edx
         jz .fl_accept           ; 0 = all types
         cmp eax, edx
@@ -983,8 +983,8 @@ fdlg_load_files:
 
 .fl_accept:
         ; Copy filename into fdlg_files[ebp*64]
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov eax, ebp
         shl eax, 6              ; *64
         lea edi, [fdlg_files + eax]
@@ -999,8 +999,8 @@ fdlg_load_files:
         mov byte [edi], 0
 .fl_pad:
         ; Store type for icon display
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         movzx eax, byte [esi + DIRENT_TYPE]
         mov edx, ebp
         mov [fdlg_ftypes + edx], al
@@ -1008,8 +1008,8 @@ fdlg_load_files:
         mov eax, [esi + DIRENT_SIZE]
         mov [fdlg_fsizes + edx * 4], eax
 
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         inc ebp
 
 .fl_next:
@@ -1019,14 +1019,14 @@ fdlg_load_files:
 
 .fl_done:
         mov [fdlg_file_count], ebp
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; fdlg_draw — render the file dialog
 ;---------------------------------------
 fdlg_draw:
-        pushad
+        PUSHALL
 
         ; Dim overlay behind dialog
         mov eax, 0
@@ -1063,7 +1063,7 @@ fdlg_draw:
         ; Title text
         mov eax, FDLG_X + 8
         mov ebx, FDLG_Y + 4
-        mov esi, [fdlg_title]
+        mov rsi, [fdlg_title]
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
 
@@ -1098,21 +1098,21 @@ fdlg_draw:
         jne .fd_no_hl
 
         ; Draw selection highlight
-        push ecx
+        push rcx
         mov eax, FDLG_LIST_X
         mov ebx, ebp
         imul ebx, 18
         add ebx, FDLG_LIST_Y
-        push ebx
+        push rbx
         mov ecx, FDLG_LIST_W
         mov edx, 18
         mov esi, 0x000A246A     ; dark blue highlight
         call gui_bb_fill_rect
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
 
         ; Draw filename in white on blue
-        push ecx
+        push rcx
         mov eax, ecx
         shl eax, 6
         lea esi, [fdlg_files + eax]
@@ -1120,10 +1120,10 @@ fdlg_draw:
         mov edx, 0x00FFFFFF
         add ebx, 1
         call gui_bb_draw_string
-        pop ecx
+        pop rcx
 
         ; Draw type icon letter
-        push ecx
+        push rcx
         movzx edx, byte [fdlg_ftypes + ecx]
         mov eax, FDLG_LIST_X + 4
         sub ebx, 1
@@ -1144,12 +1144,12 @@ fdlg_draw:
         mov edx, 0x00FFFF00
 .fd_draw_icon:
         call gui_bb_draw_char
-        pop ecx
+        pop rcx
         jmp .fd_next_entry
 
 .fd_no_hl:
         ; Draw filename in black on white
-        push ecx
+        push rcx
         mov eax, ecx
         shl eax, 6
         lea esi, [fdlg_files + eax]
@@ -1161,8 +1161,8 @@ fdlg_draw:
         call gui_bb_draw_string
 
         ; Draw type icon
-        pop ecx
-        push ecx
+        pop rcx
+        push rcx
         movzx edx, byte [fdlg_ftypes + ecx]
         mov eax, FDLG_LIST_X + 4
         mov ebx, ebp
@@ -1184,7 +1184,7 @@ fdlg_draw:
         mov edx, 0x00B0B000
 .fd_draw_icon2:
         call gui_bb_draw_char
-        pop ecx
+        pop rcx
 
 .fd_next_entry:
         inc ebp
@@ -1281,7 +1281,7 @@ fdlg_draw:
         ; Draw mouse cursor over dialog
         call gui_draw_cursor
 
-        popad
+        POPALL
         ret
 
 .fd_name_label: db "File name:", 0
@@ -1291,8 +1291,8 @@ fdlg_draw:
 .fd_scroll_ind: db 24, "/", 25, 0      ; ↑/↓
 
 ; ----- File dialog data -----
-fdlg_title:      dd 0
-fdlg_filter:     dd 0
+fdlg_title:      dq 0
+fdlg_filter:     dq 0
 fdlg_mode:       db 0          ; 0=open, 1=save
 fdlg_scroll:     dd 0
 fdlg_sel:        dd 0
@@ -1310,7 +1310,7 @@ fdlg_fsizes:     times FDLG_MAX_FILES dd 0         ; file sizes
 ;=======================================================================
 
 gui_compose:
-        pushad
+        PUSHALL
         call gui_draw_background
         call gui_draw_desktop_icons
         call gui_draw_all_windows
@@ -1326,20 +1326,20 @@ gui_compose:
         call gui_draw_notifications
         call gui_draw_cursor
         call gui_flip
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; gui_draw_background - Fill backbuf with desktop color
 ;---------------------------------------
 gui_draw_background:
-        pushad
+        PUSHALL
         cld
         mov edi, GUI_BACKBUF
         mov eax, [gui_theme + THEME_DESKTOP_BG]
         mov ecx, GUI_SCREEN_W * GUI_SCREEN_H
         rep stosd
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1358,7 +1358,7 @@ ICON_COUNT      equ 8           ; number of desktop icons
 ; gui_draw_desktop_icons - Draw icons on desktop surface
 ;---------------------------------------
 gui_draw_desktop_icons:
-        pushad
+        PUSHALL
         xor ecx, ecx           ; icon index
 .di_loop:
         cmp ecx, ICON_COUNT
@@ -1370,80 +1370,80 @@ gui_draw_desktop_icons:
         imul ebx, ICON_CELL_H
         add ebx, ICON_START_Y
 
-        push ecx
-        push eax
-        push ebx
+        push rcx
+        push rax
+        push rbx
 
         ; Draw icon background (rounded-ish box with accent tint)
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, ICON_SIZE
         mov edx, ICON_SIZE
         ; Semi-transparent accent box
         mov esi, [gui_theme + THEME_ACCENT]
         ; Brighten slightly for icon bg
-        push eax
+        push rax
         mov eax, esi
         shr eax, 1
         and eax, 0x007F7F7F
         add eax, 0x00404040    ; lighten
         mov esi, eax
-        pop eax
+        pop rax
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Draw border around icon
-        pop ebx
-        pop eax
-        push eax
-        push ebx
-        push ecx
-        push edx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
+        push rcx
+        push rdx
         mov ecx, ICON_SIZE
         mov edx, ICON_SIZE
         mov esi, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Draw mini-symbol inside icon (a simple letter glyph)
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
         add eax, 12            ; center the char
         add ebx, 8
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov edx, 0x00FFFFFF
-        mov ecx, [esp + 16]    ; icon index from outer push
+        mov ecx, [rsp + 32]    ; icon index from outer push
         movzx ecx, byte [gui_icon_symbols + ecx]
         call gui_bb_draw_char
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Draw label text below icon
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+        pop rbx
+        pop rax
+        push rax
+        push rbx
         add ebx, ICON_SIZE + 2
         add eax, 0             ; left-align label
-        push ecx
-        mov ecx, [esp + 12]    ; icon index
-        mov esi, [gui_icon_labels + ecx*4]
+        push rcx
+        mov ecx, [rsp + 24]    ; icon index
+        mov rsi, [gui_icon_labels + rcx*8]
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
-        pop ecx
+        pop rcx
 
-        pop ebx
-        pop eax
-        pop ecx
+        pop rbx
+        pop rax
+        pop rcx
         inc ecx
         jmp .di_loop
 .di_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1452,10 +1452,10 @@ gui_draw_desktop_icons:
 ; Returns: EAX = icon index (0-5) or -1
 ;---------------------------------------
 gui_icon_hit_test:
-        push ebx
-        push ecx
-        push edx
-        push esi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
 
         ; Check x range
         cmp eax, ICON_START_X
@@ -1477,30 +1477,30 @@ gui_icon_hit_test:
         cmp edx, ICON_SIZE + ICON_TEXT_H
         jg .ih_miss
 
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .ih_miss:
         mov eax, -1
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
 ; gui_flip - Copy backbuffer to LFB
 ;---------------------------------------
 gui_flip:
-        pushad
+        PUSHALL
         cld
         mov esi, GUI_BACKBUF
         mov edi, [vbe_lfb_addr]
         mov ecx, GUI_SCREEN_W * GUI_SCREEN_H
         rep movsd
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1512,7 +1512,7 @@ CURSOR_H        equ 20
 CURSOR_W        equ 16
 
 gui_draw_cursor:
-        pushad
+        PUSHALL
         ; --- Pass 1: draw shadow (offset +1,+1, dark translucent) ---
         mov ebp, [mouse_x]
         inc ebp                 ; shadow offset x+1
@@ -1526,7 +1526,7 @@ gui_draw_cursor:
         movzx edi, word [esi]
         add esi, 2
         mov ebx, CURSOR_W
-        push ebp
+        push rbp
 .shd_bit:
         cmp ebx, 0
         je .shd_next
@@ -1540,7 +1540,7 @@ gui_draw_cursor:
         jl .shd_skip
         cmp edx, GUI_SCREEN_H
         jge .shd_skip
-        push edx
+        push rdx
         imul edx, GUI_PITCH
         lea edx, [GUI_BACKBUF + edx + ebp*4]
         ; Darken existing pixel (shift each channel right by 1)
@@ -1548,14 +1548,14 @@ gui_draw_cursor:
         shr eax, 1
         and eax, 0x007F7F7F
         mov [edx], eax
-        pop edx
+        pop rdx
 .shd_skip:
         shl edi, 1
         inc ebp
         dec ebx
         jmp .shd_bit
 .shd_next:
-        pop ebp
+        pop rbp
         inc edx
         dec ecx
         jmp .shd_row
@@ -1572,7 +1572,7 @@ gui_draw_cursor:
         movzx edi, word [esi]
         add esi, 2
         mov ebx, CURSOR_W
-        push ebp
+        push rbp
 .bdr_bit:
         cmp ebx, 0
         je .bdr_next
@@ -1586,18 +1586,18 @@ gui_draw_cursor:
         jl .bdr_skip
         cmp edx, GUI_SCREEN_H
         jge .bdr_skip
-        push edx
+        push rdx
         imul edx, GUI_PITCH
         lea edx, [GUI_BACKBUF + edx + ebp*4]
         mov dword [edx], 0x00000000
-        pop edx
+        pop rdx
 .bdr_skip:
         shl edi, 1
         inc ebp
         dec ebx
         jmp .bdr_bit
 .bdr_next:
-        pop ebp
+        pop rbp
         inc edx
         dec ecx
         jmp .bdr_row
@@ -1614,7 +1614,7 @@ gui_draw_cursor:
         movzx edi, word [esi]
         add esi, 2
         mov ebx, CURSOR_W
-        push ebp
+        push rbp
 .fil_bit:
         cmp ebx, 0
         je .fil_next
@@ -1628,23 +1628,23 @@ gui_draw_cursor:
         jl .fil_skip
         cmp edx, GUI_SCREEN_H
         jge .fil_skip
-        push edx
+        push rdx
         imul edx, GUI_PITCH
         lea edx, [GUI_BACKBUF + edx + ebp*4]
         mov dword [edx], 0x00FFFFFF
-        pop edx
+        pop rdx
 .fil_skip:
         shl edi, 1
         inc ebp
         dec ebx
         jmp .fil_bit
 .fil_next:
-        pop ebp
+        pop rbp
         inc edx
         dec ecx
         jmp .fil_row
 .fil_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1664,11 +1664,11 @@ gui_bb_pixel:
         jl .bp_skip
         cmp ebx, GUI_SCREEN_H
         jge .bp_skip
-        push edx
+        push rdx
         imul edx, ebx, GUI_PITCH
         lea edx, [GUI_BACKBUF + edx + eax*4]
         mov [edx], ecx
-        pop edx
+        pop rdx
 .bp_skip:
         ret
 
@@ -1677,7 +1677,7 @@ gui_bb_pixel:
 ; EAX = x, EBX = y, ECX = width, EDX = color
 ;---------------------------------------
 gui_bb_hline:
-        pushad
+        PUSHALL
         cmp ebx, 0
         jl .hl_done
         cmp ebx, GUI_SCREEN_H
@@ -1703,7 +1703,7 @@ gui_bb_hline:
         mov eax, edx
         rep stosd
 .hl_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1711,7 +1711,7 @@ gui_bb_hline:
 ; EAX = x, EBX = y, ECX = height, EDX = color
 ;---------------------------------------
 gui_bb_vline:
-        pushad
+        PUSHALL
         cmp eax, 0
         jl .vl_done
         cmp eax, GUI_SCREEN_W
@@ -1742,7 +1742,7 @@ gui_bb_vline:
         dec ecx
         jmp .vl_loop
 .vl_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1750,7 +1750,7 @@ gui_bb_vline:
 ; EAX = x, EBX = y, ECX = w, EDX = h, ESI = color
 ;---------------------------------------
 gui_bb_fill_rect:
-        pushad
+        PUSHALL
         ; Bounds check
         cmp eax, GUI_SCREEN_W
         jge .fr_done
@@ -1796,16 +1796,16 @@ gui_bb_fill_rect:
 .fr_row:
         cmp dword [.fr_h], 0
         jle .fr_done
-        push edi
+        push rdi
         mov ecx, [.fr_w]
         mov eax, esi
         rep stosd
-        pop edi
+        pop rdi
         add edi, GUI_PITCH
         dec dword [.fr_h]
         jmp .fr_row
 .fr_done:
-        popad
+        POPALL
         ret
 .fr_w: dd 0
 .fr_h: dd 0
@@ -1815,38 +1815,38 @@ gui_bb_fill_rect:
 ; EAX = x, EBX = y, ECX = w, EDX = h, ESI = color
 ;---------------------------------------
 gui_bb_rect:
-        pushad
-        push edx
+        PUSHALL
+        push rdx
         mov edx, esi
         ; Top
         call gui_bb_hline
         ; Bottom
-        pop edx
-        push edx
-        push ebx
+        pop rdx
+        push rdx
+        push rbx
         add ebx, edx
         dec ebx
-        push edx
+        push rdx
         mov edx, esi
         call gui_bb_hline
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ; Left
-        push ecx
+        push rcx
         mov ecx, edx
         mov edx, esi
         call gui_bb_vline
-        pop ecx
+        pop rcx
         ; Right
-        push eax
+        push rax
         add eax, ecx
         dec eax
-        mov ecx, [esp + 4]  ; h (saved on stack past push eax)
+        mov ecx, [rsp + 8]  ; h (saved on stack past push rax)
         ; edx = color (already set from left vline)
         call gui_bb_vline
-        pop eax
-        pop edx
-        popad
+        pop rax
+        pop rdx
+        POPALL
         ret
 
 ;---------------------------------------
@@ -1854,47 +1854,47 @@ gui_bb_rect:
 ; EAX = x, EBX = y, ECX = w, EDX = h, ESI = face color
 ;---------------------------------------
 gui_bb_button_3d:
-        pushad
+        PUSHALL
         ; Fill face
         call gui_bb_fill_rect
 
         ; --- Top highlight ---
-        push edx
+        push rdx
         mov edx, 0x00FFFFFF
         call gui_bb_hline       ; hline(x, y, w, white)
-        pop edx
+        pop rdx
 
         ; --- Left highlight ---
-        push ecx
-        push edx               ; save h (edx is clobbered by color)
+        push rcx
+        push rdx               ; save h (edx is clobbered by color)
         mov ecx, edx           ; ecx = h
         mov edx, 0x00FFFFFF
         call gui_bb_vline       ; vline(x, y, h, white)
-        pop edx                 ; restore h
-        pop ecx
+        pop rdx                 ; restore h
+        pop rcx
 
         ; --- Bottom shadow ---
-        push ebx
+        push rbx
         add ebx, edx           ; ebx = y + h
         dec ebx                 ; ebx = y + h - 1
-        push edx
+        push rdx
         mov edx, 0x00222222
         call gui_bb_hline       ; hline(x, y+h-1, w, dark)
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
 
         ; --- Right shadow ---
-        push eax
+        push rax
         add eax, ecx           ; eax = x + w
         dec eax                 ; eax = x + w - 1
-        push ecx
+        push rcx
         mov ecx, edx           ; ecx = h
         mov edx, 0x00222222
         call gui_bb_vline       ; vline(x+w-1, y, h, dark)
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
 
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1906,7 +1906,7 @@ gui_bb_button_3d:
 ; EAX = x, EBX = y, CL = char, EDX = color
 ;---------------------------------------
 gui_bb_draw_char:
-        pushad
+        PUSHALL
         mov [.dc_x], eax
         mov [.dc_color], edx
 
@@ -1941,14 +1941,14 @@ gui_bb_draw_char:
         test edx, 0x80
         jz .dc_skip_bit
         ; Write pixel
-        push edx
-        push ecx
+        push rdx
+        push rcx
         imul ecx, ebx, GUI_PITCH
         lea ecx, [GUI_BACKBUF + ecx + eax*4]
         mov edx, [.dc_color]
         mov [ecx], edx
-        pop ecx
-        pop edx
+        pop rcx
+        pop rdx
 .dc_skip_bit:
         shl edx, 1
         inc eax
@@ -1961,7 +1961,7 @@ gui_bb_draw_char:
         dec ecx
         jmp .dc_row
 .dc_done:
-        popad
+        POPALL
         ret
 .dc_x:     dd 0
 .dc_color: dd 0
@@ -1971,7 +1971,7 @@ gui_bb_draw_char:
 ; EAX = x, EBX = y, ESI = string ptr, EDX = color
 ;---------------------------------------
 gui_bb_draw_string:
-        pushad
+        PUSHALL
 .ds_loop:
         movzx ecx, byte [esi]
         cmp cl, 0
@@ -1981,7 +1981,7 @@ gui_bb_draw_string:
         inc esi
         jmp .ds_loop
 .ds_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -1994,12 +1994,12 @@ gui_bb_draw_string:
 ; Returns: EAX = window id (0-15) or -1
 ;---------------------------------------
 gui_create_window:
-        pushad
+        PUSHALL
         mov [.cw_x], eax
         mov [.cw_y], ebx
         mov [.cw_w], ecx
         mov [.cw_h], edx
-        mov [.cw_title], esi
+        mov [.cw_title], rsi
 
         ; Find free slot
         xor edi, edi
@@ -2024,8 +2024,8 @@ gui_create_window:
         mov [ebp + WIN_H], eax
 
         ; Copy title (up to 63 chars)
-        push edi
-        mov esi, [.cw_title]
+        push rdi
+        mov rsi, [.cw_title]
         lea edi, [ebp + WIN_TITLE]
         mov ecx, 63
 .cw_cp:
@@ -2037,7 +2037,7 @@ gui_create_window:
         jnz .cw_cp
         mov byte [edi], 0
 .cw_cp_done:
-        pop edi
+        pop rdi
 
         ; Z-order
         inc dword [gui_next_z]
@@ -2049,27 +2049,27 @@ gui_create_window:
         inc dword [gui_win_count]
 
         ; Return window index
-        mov [esp + 28], edi     ; EAX in pushad frame
-        popad
+        mov [rsp + FRAME_RAX], rdi     ; RAX in PUSHALL frame
+        POPALL
         ret
 
 .cw_full:
-        mov dword [esp + 28], -1
-        popad
+        mov qword [rsp + FRAME_RAX], -1
+        POPALL
         ret
 
 .cw_x: dd 0
 .cw_y: dd 0
 .cw_w: dd 0
 .cw_h: dd 0
-.cw_title: dd 0
+.cw_title: dq 0
 
 ;---------------------------------------
 ; gui_destroy_window_n - Destroy window by index
 ; EAX = window index
 ;---------------------------------------
 gui_destroy_window_n:
-        pushad
+        PUSHALL
         cmp eax, MAX_WINDOWS
         jge .dw_done
         imul eax, WIN_STRUCT_SIZE
@@ -2080,14 +2080,14 @@ gui_destroy_window_n:
         jge .dw_done
         mov dword [gui_win_count], 0
 .dw_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; gui_destroy_all_windows
 ;---------------------------------------
 gui_destroy_all_windows:
-        pushad
+        PUSHALL
         mov edi, gui_win_table
         xor eax, eax
         mov ecx, (MAX_WINDOWS * WIN_STRUCT_SIZE) / 4
@@ -2095,14 +2095,14 @@ gui_destroy_all_windows:
         mov dword [gui_win_count], 0
         mov dword [gui_focused_win], -1
         mov dword [gui_next_z], 0
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; gui_cleanup_app_windows - Destroy windows created by programs
 ;---------------------------------------
 gui_cleanup_app_windows:
-        pushad
+        PUSHALL
         xor ecx, ecx
         mov esi, gui_win_table
 .ca_loop:
@@ -2125,7 +2125,7 @@ gui_cleanup_app_windows:
         jge .ca_ok
         mov dword [gui_win_count], 0
 .ca_ok:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -2134,12 +2134,12 @@ gui_cleanup_app_windows:
 ; Returns: EAX = window index or -1
 ;---------------------------------------
 gui_find_window_at:
-        push ebx
-        push ecx
-        push edx
-        push esi
-        push edi
-        push ebp
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        push rbp
 
         mov [.fw_px], eax
         mov [.fw_py], ebx
@@ -2188,12 +2188,12 @@ gui_find_window_at:
         jmp .fw_scan
 .fw_ret:
         mov eax, [.fw_best]
-        pop ebp
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rbp
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .fw_px: dd 0
 .fw_py: dd 0
@@ -2205,21 +2205,21 @@ gui_find_window_at:
 ; EAX = window index
 ;---------------------------------------
 gui_focus_window:
-        pushad
+        PUSHALL
         mov [gui_focused_win], eax
         imul eax, WIN_STRUCT_SIZE
         add eax, gui_win_table
         inc dword [gui_next_z]
         mov ebx, [gui_next_z]
         mov [eax + WIN_Z], ebx
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; gui_cycle_window - Alt+Tab: cycle to next visible window
 ;---------------------------------------
 gui_cycle_window:
-        pushad
+        PUSHALL
         ; Find next active+visible window after focused one
         mov eax, [gui_focused_win]
         cmp eax, -1
@@ -2255,7 +2255,7 @@ gui_cycle_window:
         inc ecx
         jmp .cw_loop
 .cw_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -2266,7 +2266,7 @@ gui_cycle_window:
 ; gui_draw_all_windows - Draw in z-order (lowest first)
 ;---------------------------------------
 gui_draw_all_windows:
-        pushad
+        PUSHALL
         ; Selection sort: repeatedly find min-z undrawn window
         xor edi, edi            ; drawn bitmask
 .aw_pass:
@@ -2296,14 +2296,14 @@ gui_draw_all_windows:
         cmp dword [.aw_min_idx], -1
         je .aw_done
         mov ebx, [.aw_min_idx]
-        push edi
+        push rdi
         call gui_draw_window_n
-        pop edi
+        pop rdi
         mov ecx, [.aw_min_idx]
         bts edi, ecx
         jmp .aw_pass
 .aw_done:
-        popad
+        POPALL
         ret
 .aw_min_z:   dd 0
 .aw_min_idx: dd 0
@@ -2313,7 +2313,7 @@ gui_draw_all_windows:
 ; EBX = window index
 ;---------------------------------------
 gui_draw_window_n:
-        pushad
+        PUSHALL
         cmp ebx, MAX_WINDOWS
         jge .wn_done
 
@@ -2333,10 +2333,10 @@ gui_draw_window_n:
         mov edi, [ebp + WIN_H]
 
         ; --- Draw shadow (3-pixel offset, dark color) ---
-        push ecx
-        push edx
-        push esi
-        push edi
+        push rcx
+        push rdx
+        push rsi
+        push rdi
         mov eax, ecx
         sub eax, BORDER_W
         add eax, 3             ; Shadow offset right
@@ -2349,14 +2349,14 @@ gui_draw_window_n:
         add edx, TITLEBAR_H + BORDER_W
         mov esi, 0x00111111    ; Very dark shadow color
         call gui_bb_fill_rect
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
 
         ; --- Draw border ---
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, ecx
         sub eax, BORDER_W
         mov ebx, edx
@@ -2365,25 +2365,25 @@ gui_draw_window_n:
         add ecx, 2 * BORDER_W
         mov edx, edi
         add edx, TITLEBAR_H + BORDER_W
-        push esi
+        push rsi
         mov esi, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_rect
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
 
         ; --- Draw title bar (gradient) ---
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         ; Choose base color based on focus
         mov esi, [gui_theme + THEME_TITLE_INACTIVE]
-        push eax
+        push rax
         mov eax, [gui_focused_win]
         imul eax, WIN_STRUCT_SIZE
         add eax, gui_win_table
         cmp eax, ebp
-        pop eax
+        pop rax
         jne .wn_unfocused
         mov esi, [gui_theme + THEME_TITLE_ACTIVE]
 .wn_unfocused:
@@ -2396,9 +2396,9 @@ gui_draw_window_n:
         mov [gui_grad_y], edx
         ; width for title bar fill = win_w + 2*BORDER_W - 2
         ; Note: esi now holds the color, but win_w is on the stack
-        ; from the 'push esi' at the start of this block (before esi
+        ; from the 'push rsi' at the start of this block (before esi
         ; was overwritten with the theme color).
-        mov eax, [esp]             ; win_w (saved on stack)
+        mov eax, [rsp]             ; win_w (saved on stack)
         add eax, 2 * BORDER_W - 2
         mov [gui_grad_w], eax
         mov dword [gui_grad_row], 0
@@ -2416,9 +2416,9 @@ gui_draw_window_n:
         imul ecx, 80               ; scale
         xor edx, edx
         mov eax, TITLEBAR_H - 1
-        push eax
+        push rax
         xchg eax, ecx
-        pop ecx
+        pop rcx
         div ecx                    ; eax = light_factor
         mov [gui_grad_factor], eax
 
@@ -2472,14 +2472,14 @@ gui_draw_window_n:
         jmp .grad_loop
 
 .grad_done:
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
 
         ; --- Draw title text ---
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         mov eax, ecx
         add eax, 4
         mov ebx, edx
@@ -2488,14 +2488,14 @@ gui_draw_window_n:
         lea esi, [ebp + WIN_TITLE]
         mov edx, [gui_theme + THEME_TITLE_TEXT]
         call gui_bb_draw_string
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
 
         ; --- Draw close button (3D red square with X) ---
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         mov eax, ecx
         add eax, esi            ; win_x + win_w
         add eax, BORDER_W
@@ -2503,28 +2503,28 @@ gui_draw_window_n:
         mov ebx, edx
         sub ebx, TITLEBAR_H
         add ebx, 3
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov ecx, CLOSE_BTN_SIZE
         mov edx, CLOSE_BTN_SIZE
         mov esi, 0x00CC3333     ; Red
         call gui_bb_button_3d
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         ; Draw "X"
         add eax, 4
         add ebx, 0
         mov cl, 'X'
         mov edx, 0x00FFFFFF
         call gui_bb_draw_char
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
 
         ; --- Draw maximize button (3D gray square with box char) ---
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         mov eax, ecx
         add eax, esi
         add eax, BORDER_W
@@ -2532,26 +2532,26 @@ gui_draw_window_n:
         mov ebx, edx
         sub ebx, TITLEBAR_H
         add ebx, 3
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov ecx, CLOSE_BTN_SIZE
         mov edx, CLOSE_BTN_SIZE
         mov esi, 0x00666666     ; Dark gray
         call gui_bb_button_3d
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         add eax, 3
         mov cl, '#'             ; maximize icon
         mov edx, 0x00FFFFFF
         call gui_bb_draw_char
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
 
         ; --- Draw minimize button (3D gray square with underscore) ---
-        push ecx
-        push edx
-        push esi
+        push rcx
+        push rdx
+        push rsi
         mov eax, ecx
         add eax, esi
         add eax, BORDER_W
@@ -2559,36 +2559,36 @@ gui_draw_window_n:
         mov ebx, edx
         sub ebx, TITLEBAR_H
         add ebx, 3
-        push eax
-        push ebx
+        push rax
+        push rbx
         mov ecx, CLOSE_BTN_SIZE
         mov edx, CLOSE_BTN_SIZE
         mov esi, 0x00666666     ; Dark gray
         call gui_bb_button_3d
-        pop ebx
-        pop eax
+        pop rbx
+        pop rax
         add eax, 3
         mov cl, '_'             ; minimize icon
         mov edx, 0x00FFFFFF
         call gui_bb_draw_char
-        pop esi
-        pop edx
-        pop ecx
+        pop rsi
+        pop rdx
+        pop rcx
 
         ; --- Draw content area background ---
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, ecx
         mov ebx, edx
         mov ecx, esi
         mov edx, edi
         mov esi, [gui_theme + THEME_WINDOW_BG]
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
 .wn_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -2596,7 +2596,7 @@ gui_draw_window_n:
 ;=======================================================================
 
 gui_draw_taskbar:
-        pushad
+        PUSHALL
 
         ; Taskbar background
         mov eax, 0
@@ -2650,15 +2650,15 @@ gui_draw_taskbar:
         jz .tb_next
 
         ; Draw button background
-        push ecx
-        push eax
+        push rcx
+        push rax
         mov eax, [.tb_x]
         mov ebx, TASKBAR_Y + 4
         mov ecx, 80
         mov edx, 20
         ; Highlight focused window
-        pop esi                     ; eax = ptr
-        push esi
+        pop rsi                     ; eax = ptr
+        push rsi
         mov edi, [gui_focused_win]
         imul edi, WIN_STRUCT_SIZE
         add edi, gui_win_table
@@ -2672,8 +2672,8 @@ gui_draw_taskbar:
         call gui_bb_button_3d
 
         ; Draw truncated title
-        pop eax                     ; window entry
-        push eax
+        pop rax                     ; window entry
+        push rax
         mov ebx, TASKBAR_Y + 6
         mov esi, eax
         add esi, WIN_TITLE
@@ -2682,8 +2682,8 @@ gui_draw_taskbar:
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
 
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         add dword [.tb_x], 84      ; button width + gap
         ; Stop if we'd overlap the clock
         cmp dword [.tb_x], GUI_SCREEN_W - 72
@@ -2693,7 +2693,7 @@ gui_draw_taskbar:
         jmp .tb_loop
 .tb_end:
 
-        popad
+        POPALL
         ret
 .tb_x  dd 0
 
@@ -2702,7 +2702,7 @@ gui_draw_taskbar:
 ; Determines which button was clicked by X offset, toggles visibility
 ;---------------------------------------
 gui_taskbar_btn_click:
-        pushad
+        PUSHALL
         mov dword [.tbc_x], 76
         xor ecx, ecx
 .tbc_loop:
@@ -2726,12 +2726,12 @@ gui_taskbar_btn_click:
         test dword [eax + WIN_FLAGS], 0x02  ; visible?
         jz .tbc_show
         ; If visible and focused, minimize; if visible but not focused, just focus
-        push eax
+        push rax
         mov edx, [gui_focused_win]
         imul edx, WIN_STRUCT_SIZE
         add edx, gui_win_table
         cmp eax, edx
-        pop eax
+        pop rax
         jne .tbc_focus
         ; Minimize (hide)
         and dword [eax + WIN_FLAGS], ~0x02
@@ -2739,10 +2739,10 @@ gui_taskbar_btn_click:
 .tbc_show:
         or dword [eax + WIN_FLAGS], 0x02   ; make visible
 .tbc_focus:
-        push ecx
+        push rcx
         mov eax, ecx
         call gui_focus_window
-        pop ecx
+        pop rcx
         jmp .tbc_done
 
 .tbc_skip:
@@ -2753,7 +2753,7 @@ gui_taskbar_btn_click:
         inc ecx
         jmp .tbc_loop
 .tbc_done:
-        popad
+        POPALL
         ret
 .tbc_x dd 0
 
@@ -2761,7 +2761,7 @@ gui_taskbar_btn_click:
 ; gui_read_time - Read RTC into clock vars
 ;---------------------------------------
 gui_read_time:
-        pushad
+        PUSHALL
         ; Read hours (CMOS reg 4)
         mov al, 4
         out 0x70, al
@@ -2772,7 +2772,7 @@ gui_read_time:
         out 0x70, al
         in al, 0x71
         mov [.rt_min], al
-        popad
+        POPALL
         ret
 .rt_hour: db 0
 .rt_min:  db 0
@@ -2781,7 +2781,7 @@ gui_read_time:
 ; gui_format_time - Format HH:MM into gui_clock_buf
 ;---------------------------------------
 gui_format_time:
-        pushad
+        PUSHALL
         ; Hours (BCD)
         movzx eax, byte [gui_read_time.rt_hour]
         mov ebx, eax
@@ -2802,7 +2802,7 @@ gui_format_time:
         mov [gui_clock_buf+3], bl
         mov [gui_clock_buf+4], al
         mov byte [gui_clock_buf+5], 0
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -2810,7 +2810,7 @@ gui_format_time:
 ;=======================================================================
 
 gui_draw_menu:
-        pushad
+        PUSHALL
         ; Calculate menu Y position (above taskbar)
         mov eax, GUI_MENU_ITEMS
         imul eax, GUI_MENU_ITEM_H
@@ -2847,7 +2847,7 @@ gui_draw_menu:
         ; Highlight if hovered
         cmp ecx, [gui_menu_sel]
         jne .dm_no_hl
-        push ecx
+        push rcx
         mov eax, GUI_MENU_X + 1
         inc ebx
         mov ecx, GUI_MENU_W - 2
@@ -2855,25 +2855,25 @@ gui_draw_menu:
         mov esi, [gui_theme + THEME_MENU_HIGHLIGHT]
         call gui_bb_fill_rect
         dec ebx
-        pop ecx
+        pop rcx
 .dm_no_hl:
         ; Draw text
-        push ecx
+        push rcx
         mov eax, GUI_MENU_X + 28
         add ebx, 4
-        mov esi, [gui_menu_strings + ecx*4]
+        mov rsi, [gui_menu_strings + rcx*8]
         mov edx, [gui_theme + THEME_MENU_TEXT]
         cmp ecx, [gui_menu_sel]
         jne .dm_txt_ok
         mov edx, 0x00FFFFFF
 .dm_txt_ok:
         call gui_bb_draw_string
-        pop ecx
+        pop rcx
 
         inc ecx
         jmp .dm_item
 .dm_done:
-        popad
+        POPALL
         ret
 .dm_y: dd 0
 
@@ -2883,9 +2883,9 @@ gui_draw_menu:
 ; Returns: EAX = item index or -1
 ;---------------------------------------
 gui_menu_hit_test:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         ; Calculate menu top
         mov ecx, GUI_MENU_ITEMS
         imul ecx, GUI_MENU_ITEM_H
@@ -2908,15 +2908,15 @@ gui_menu_hit_test:
         div ecx             ; eax = index
         cmp eax, GUI_MENU_ITEMS
         jge .mh_miss
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .mh_miss:
         mov eax, -1
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -2924,7 +2924,7 @@ gui_menu_hit_test:
 ; EAX = item index
 ;---------------------------------------
 gui_menu_select:
-        pushad
+        PUSHALL
         mov byte [gui_menu_open], 0
         cmp eax, 0
         je .ms_term
@@ -2950,63 +2950,63 @@ gui_menu_select:
         je .ms_about
         cmp eax, 11
         je .ms_exit
-        popad
+        POPALL
         ret
 .ms_term:
         mov esi, gui_prog_bterm
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_files:
         mov esi, gui_prog_bhive
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_forager:
         mov esi, gui_prog_bforager
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_edit:
         mov esi, gui_prog_bedit
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_calc:
         mov esi, gui_prog_bcalc
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_paint:
         mov esi, gui_prog_bpaint
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_timewarp:
         mov esi, gui_prog_timewarp
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_clock:
-        popad
+        POPALL
         call gui_applet_clock
         ret
 .ms_settings:
-        popad
+        POPALL
         call gui_applet_settings
         ret
 .ms_sysmon:
         mov esi, gui_prog_bsysmon
         call gui_launch_app
-        popad
+        POPALL
         ret
 .ms_about:
-        popad
+        POPALL
         call gui_applet_about
         ret
 .ms_exit:
         mov byte [gui_exit_flag], 1
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -3023,10 +3023,10 @@ gui_launch_app:
 ; EAX = icon index (0-5)
 ;---------------------------------------
 gui_icon_launch:
-        pushad
+        PUSHALL
         cmp eax, ICON_COUNT
         jge .il_done
-        mov esi, [gui_icon_progs + eax*4]
+        mov rsi, [gui_icon_progs + rax*8]
         cmp esi, 0
         je .il_applet
         call gui_launch_app
@@ -3034,7 +3034,7 @@ gui_icon_launch:
 .il_applet:
         ; No external program — reserved for future applets
 .il_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -3042,7 +3042,7 @@ gui_icon_launch:
 ;=======================================================================
 
 gui_handle_input:
-        pushad
+        PUSHALL
         ; Get current mouse buttons
         movzx ecx, byte [mouse_buttons]
 
@@ -3207,7 +3207,7 @@ gui_handle_input:
 .hi_exit:
         mov byte [gui_exit_flag], 1
 .hi_done:
-        popad
+        POPALL
         ret
 .hi_latch: db 0
 
@@ -3215,7 +3215,7 @@ gui_handle_input:
 ; gui_handle_window_click - Process click on windows
 ;---------------------------------------
 gui_handle_window_click:
-        pushad
+        PUSHALL
         mov eax, [mouse_x]
         mov ebx, [mouse_y]
         call gui_find_window_at
@@ -3223,9 +3223,9 @@ gui_handle_window_click:
         je .wc_done
 
         ; Focus this window
-        push eax
+        push rax
         call gui_focus_window
-        pop eax
+        pop rax
 
         ; Get window entry
         mov ebx, eax
@@ -3243,10 +3243,10 @@ gui_handle_window_click:
 
         cmp dword [mouse_x], ecx
         jl .wc_not_close
-        push ecx
+        push rcx
         add ecx, CLOSE_BTN_SIZE
         cmp dword [mouse_x], ecx
-        pop ecx
+        pop rcx
         jg .wc_not_close
         cmp dword [mouse_y], edx
         jl .wc_not_close
@@ -3269,10 +3269,10 @@ gui_handle_window_click:
 
         cmp dword [mouse_x], ecx
         jl .wc_not_max
-        push ecx
+        push rcx
         add ecx, CLOSE_BTN_SIZE
         cmp dword [mouse_x], ecx
-        pop ecx
+        pop rcx
         jg .wc_not_max
         cmp dword [mouse_y], edx
         jl .wc_not_max
@@ -3327,10 +3327,10 @@ gui_handle_window_click:
 
         cmp dword [mouse_x], ecx
         jl .wc_not_min
-        push ecx
+        push rcx
         add ecx, CLOSE_BTN_SIZE
         cmp dword [mouse_x], ecx
-        pop ecx
+        pop rcx
         jg .wc_not_min
         cmp dword [mouse_y], edx
         jl .wc_not_min
@@ -3364,14 +3364,14 @@ gui_handle_window_click:
         add ecx, TITLEBAR_H
         mov [gui_drag_off_y], ecx
 .wc_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; gui_handle_drag - Move window with mouse
 ;---------------------------------------
 gui_handle_drag:
-        pushad
+        PUSHALL
         mov eax, [gui_drag_win]
         cmp eax, MAX_WINDOWS
         jge .dr_done
@@ -3388,7 +3388,7 @@ gui_handle_drag:
         add ebx, TITLEBAR_H
         mov [eax + WIN_Y], ebx
 .dr_done:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -3403,7 +3403,7 @@ GUI_CTX_ITEMS   equ 5
 ; gui_draw_ctx_menu - Draw right-click context menu
 ;---------------------------------------
 gui_draw_ctx_menu:
-        pushad
+        PUSHALL
         mov eax, [gui_ctx_x]
         mov ebx, [gui_ctx_y]
 
@@ -3424,26 +3424,26 @@ gui_draw_ctx_menu:
         mov [.ctx_dy], ebx
 
         ; Background
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, GUI_CTX_W
         mov edx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
         mov esi, [gui_theme + THEME_MENU_BG]
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Border
         mov eax, [.ctx_dx]
         mov ebx, [.ctx_dy]
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, GUI_CTX_W
         mov edx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
         mov esi, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Draw items
         xor ecx, ecx
@@ -3458,7 +3458,7 @@ gui_draw_ctx_menu:
         ; Highlight if hovered
         cmp ecx, [gui_ctx_sel]
         jne .ctx_no_hl
-        push ecx
+        push rcx
         mov eax, [.ctx_dx]
         inc eax
         inc ebx
@@ -3467,25 +3467,25 @@ gui_draw_ctx_menu:
         mov esi, [gui_theme + THEME_MENU_HIGHLIGHT]
         call gui_bb_fill_rect
         dec ebx
-        pop ecx
+        pop rcx
 .ctx_no_hl:
-        push ecx
+        push rcx
         mov eax, [.ctx_dx]
         add eax, 12
         add ebx, 3
-        mov esi, [gui_ctx_strings + ecx*4]
+        mov rsi, [gui_ctx_strings + rcx*8]
         mov edx, [gui_theme + THEME_MENU_TEXT]
         cmp ecx, [gui_ctx_sel]
         jne .ctx_txt_ok
         mov edx, 0x00FFFFFF
 .ctx_txt_ok:
         call gui_bb_draw_string
-        pop ecx
+        pop rcx
 
         inc ecx
         jmp .ctx_item
 .ctx_done:
-        popad
+        POPALL
         ret
 .ctx_dx: dd 0
 .ctx_dy: dd 0
@@ -3495,9 +3495,9 @@ gui_draw_ctx_menu:
 ; EAX = x, EBX = y  Returns: EAX = item or -1
 ;---------------------------------------
 gui_ctx_hit_test:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         ; Reconstruct clipped position
         mov ecx, [gui_ctx_x]
@@ -3508,7 +3508,7 @@ gui_ctx_hit_test:
         sub ecx, GUI_CTX_W
 .cth_xok:
         mov edx, [gui_ctx_y]
-        push edx
+        push rdx
         mov edi, edx
         add edi, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
         cmp edi, TASKBAR_Y
@@ -3524,10 +3524,10 @@ gui_ctx_hit_test:
         jge .cth_miss
         cmp ebx, edx
         jl .cth_miss
-        push edx
+        push rdx
         add edx, GUI_CTX_ITEMS * GUI_CTX_ITEM_H
         cmp ebx, edx
-        pop edx
+        pop rdx
         jge .cth_miss
 
         ; Compute item index
@@ -3538,17 +3538,17 @@ gui_ctx_hit_test:
         div ecx
         cmp eax, GUI_CTX_ITEMS
         jge .cth_miss
-        pop edx
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .cth_miss:
-        pop edx
+        pop rdx
         mov eax, -1
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -3556,7 +3556,7 @@ gui_ctx_hit_test:
 ; EAX = item index
 ;---------------------------------------
 gui_ctx_select:
-        pushad
+        PUSHALL
         mov byte [gui_ctx_open], 0
         cmp eax, 0
         je .cx_term
@@ -3568,29 +3568,29 @@ gui_ctx_select:
         je .cx_settings
         cmp eax, 4
         je .cx_exit
-        popad
+        POPALL
         ret
 .cx_term:
         mov esi, gui_prog_bterm
         call gui_launch_app
-        popad
+        POPALL
         ret
 .cx_files:
         mov esi, gui_prog_bhive
         call gui_launch_app
-        popad
+        POPALL
         ret
 .cx_about:
-        popad
+        POPALL
         call gui_applet_about
         ret
 .cx_settings:
-        popad
+        POPALL
         call gui_applet_settings
         ret
 .cx_exit:
         mov byte [gui_exit_flag], 1
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -3601,7 +3601,7 @@ gui_ctx_select:
 ; gui_applet_about - About Mellivora OS
 ;---------------------------------------
 gui_applet_about:
-        pushad
+        PUSHALL
         mov eax, 170
         mov ebx, 140
         mov ecx, 300
@@ -3647,7 +3647,7 @@ gui_applet_about:
         mov edx, 0x00000000
         call gui_bb_draw_string
 
-        ; Line 4: "32-bit Protected Mode"
+        ; Line 4: "64-bit Long Mode"
         mov edx, [ebp + WIN_Y]
         lea eax, [ecx + 30]
         lea ebx, [edx + 100]
@@ -3721,7 +3721,7 @@ gui_applet_about:
         mov eax, [.abt_win]
         call gui_destroy_window_n
 .abt_ret:
-        popad
+        POPALL
         ret
 .abt_win: dd 0
 
@@ -3729,7 +3729,7 @@ gui_applet_about:
 ; gui_applet_clock - Digital clock
 ;---------------------------------------
 gui_applet_clock:
-        pushad
+        PUSHALL
         mov eax, 180
         mov ebx, 140
         mov ecx, 260
@@ -4345,7 +4345,7 @@ gui_applet_clock:
         mov eax, [.clk_win]
         call gui_destroy_window_n
 .clk_ret:
-        popad
+        POPALL
         ret
 
 ; Debounce: wait for mouse release
@@ -4358,7 +4358,7 @@ gui_applet_clock:
 
 ; Format date into .clk_date_buf as "YYYY-MM-DD"
 .clk_format_date:
-        pushad
+        PUSHALL
         movzx eax, byte [rtc_century]
         imul eax, 100
         movzx ebx, byte [rtc_year]
@@ -4392,64 +4392,64 @@ gui_applet_clock:
 .cfd_d2:
         call .clk_itoa_at
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 ; Integer to ASCII: EAX -> [EDI], null-terminated
 .clk_itoa:
-        push eax
-        push ebx
-        push ecx
-        push edx
+        push rax
+        push rbx
+        push rcx
+        push rdx
         xor ecx, ecx
         mov ebx, 10
 .clk_it_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .clk_it_push
 .clk_it_pop:
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
         dec ecx
         jnz .clk_it_pop
         mov byte [edi], 0
-        pop edx
-        pop ecx
-        pop ebx
-        pop eax
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ; Integer to ASCII at EDI (no null term), advances EDI
 .clk_itoa_at:
-        push eax
-        push ebx
-        push ecx
-        push edx
+        push rax
+        push rbx
+        push rcx
+        push rdx
         xor ecx, ecx
         mov ebx, 10
 .clk_ita_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .clk_ita_push
 .clk_ita_pop:
-        pop eax
+        pop rax
         add al, '0'
         mov [edi], al
         inc edi
         dec ecx
         jnz .clk_ita_pop
-        pop edx
-        pop ecx
-        pop ebx
-        pop eax
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 .clk_win:       dd 0
@@ -4472,7 +4472,7 @@ gui_applet_clock:
 ; gui_applet_settings - Theme picker
 ;---------------------------------------
 gui_applet_settings:
-        pushad
+        PUSHALL
         mov eax, 140
         mov ebx, 120
         mov ecx, 360
@@ -4506,98 +4506,98 @@ gui_applet_settings:
         ; Blue theme button
         lea eax, [ecx + 20]
         lea ebx, [edx + 50]
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, 100
         mov edx, 36
         mov esi, 0x003060A0
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         lea eax, [ecx + 36]
-        push edx
+        push rdx
         lea ebx, [edx + 60]
         mov esi, gui_str_theme_blue
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
-        pop edx
+        pop rdx
 
         ; Dark theme button
         lea eax, [ecx + 130]
         lea ebx, [edx + 50]
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, 100
         mov edx, 36
         mov esi, 0x00303030
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         lea eax, [ecx + 150]
-        push edx
+        push rdx
         lea ebx, [edx + 60]
         mov esi, gui_str_theme_dark
         mov edx, 0x00D0D0D0
         call gui_bb_draw_string
-        pop edx
+        pop rdx
 
         ; Light theme button
         lea eax, [ecx + 240]
         lea ebx, [edx + 50]
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, 100
         mov edx, 36
         mov esi, 0x00B0C4DE
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         lea eax, [ecx + 256]
-        push edx
+        push rdx
         lea ebx, [edx + 60]
         mov esi, gui_str_theme_light
         mov edx, 0x00000000
         call gui_bb_draw_string
-        pop edx
+        pop rdx
 
         ; Amber theme button
         lea eax, [ecx + 20]
         lea ebx, [edx + 96]
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, 100
         mov edx, 36
         mov esi, 0x00CC8800
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         lea eax, [ecx + 36]
-        push edx
+        push rdx
         lea ebx, [edx + 106]
         mov esi, gui_str_theme_amber
         mov edx, 0x00FFCC00
         call gui_bb_draw_string
-        pop edx
+        pop rdx
 
         ; Current theme preview (color bar)
         lea eax, [ecx + 20]
         lea ebx, [edx + 150]
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, 320
         mov edx, 40
         mov esi, [gui_theme + THEME_DESKTOP_BG]
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         lea eax, [ecx + 100]
         lea ebx, [edx + 162]
         mov esi, gui_str_set_cur
-        push edx
+        push rdx
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
-        pop edx
+        pop rdx
 
         ; Instructions
         lea eax, [ecx + 40]
@@ -4754,7 +4754,7 @@ gui_applet_settings:
         mov eax, [.set_win]
         call gui_destroy_window_n
 .set_ret:
-        popad
+        POPALL
         ret
 .set_win: dd 0
 
@@ -4798,11 +4798,11 @@ sys_gui:
         cmp ebx, GUI_DRAW_RECT
         je .sg_draw_rect
         mov eax, -1
-        iretd
+        iretq
 
 .sg_create:
         ; ECX = x|y (hi16=x, lo16=y), EDX = w|h, ESI = title
-        push esi
+        push rsi
         mov eax, ecx
         shr eax, 16            ; x
         movzx ebx, cx          ; y
@@ -4810,27 +4810,27 @@ sys_gui:
         shr ecx, 16            ; w
         movzx edx, dx          ; h
         call gui_create_window
-        pop esi
+        pop rsi
         ; Mark window as app-owned
         cmp eax, -1
         je .sg_cr_done
-        push eax
+        push rax
         imul eax, WIN_STRUCT_SIZE
         mov dword [gui_win_table + eax + WIN_APP_ID], 1
-        pop eax
+        pop rax
 .sg_cr_done:
-        iretd
+        iretq
 
 .sg_destroy:
         ; ECX = win_id
         mov eax, ecx
         call gui_destroy_window_n
         xor eax, eax
-        iretd
+        iretq
 
 .sg_fill:
         ; ECX = win_id, EDX = x|y, ESI = w|h, EDI = color
-        pushad
+        PUSHALL
         mov eax, ecx
         cmp eax, MAX_WINDOWS
         jge .sg_f_done
@@ -4852,13 +4852,13 @@ sys_gui:
         mov esi, edi
         call gui_bb_fill_rect
 .sg_f_done:
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sg_text:
         ; ECX = win_id, EDX = x|y, ESI = text, EDI = color
-        pushad
+        PUSHALL
         mov eax, ecx
         cmp eax, MAX_WINDOWS
         jge .sg_t_done
@@ -4876,9 +4876,9 @@ sys_gui:
         mov edx, edi
         call gui_bb_draw_string
 .sg_t_done:
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sg_poll:
         ; Poll for events, return in EAX/EBX/ECX
@@ -4897,11 +4897,11 @@ sys_gui:
         cmp eax, [gui_prev_mouse_y]
         jne .sg_p_mouse_mv
         xor eax, eax
-        iretd
+        iretq
 .sg_p_key:
         movzx ebx, al
         mov eax, EVT_KEY_PRESS
-        iretd
+        iretq
 .sg_p_mouse_btn:
         ; Clear latch and update prev state
         mov byte [mouse_btn_latch], 0
@@ -4935,7 +4935,7 @@ sys_gui:
         cmp dword [mouse_y], ecx
         jg .sg_p_click
         mov eax, EVT_CLOSE
-        iretd
+        iretq
 .sg_p_click:
         ; Return click with coords relative to focused window
         mov eax, [gui_focused_win]
@@ -4948,12 +4948,12 @@ sys_gui:
         mov ecx, [mouse_y]
         sub ecx, [eax + WIN_Y]
         mov eax, EVT_MOUSE_CLICK
-        iretd
+        iretq
 .sg_p_abs:
         mov ebx, [mouse_x]
         mov ecx, [mouse_y]
         mov eax, EVT_MOUSE_CLICK
-        iretd
+        iretq
 .sg_p_mouse_mv:
         mov eax, [mouse_x]
         mov [gui_prev_mouse_x], eax
@@ -4970,40 +4970,40 @@ sys_gui:
         mov ecx, [mouse_y]
         sub ecx, [eax + WIN_Y]
         mov eax, EVT_MOUSE_MOVE
-        iretd
+        iretq
 .sg_p_mv_abs:
         mov ebx, [mouse_x]
         mov ecx, [mouse_y]
         mov eax, EVT_MOUSE_MOVE
-        iretd
+        iretq
 
 .sg_get_theme:
         ; ECX = dest buffer
-        pushad
+        PUSHALL
         cld
         mov edi, ecx
         mov esi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sg_set_theme:
         ; ECX = source buffer
-        pushad
+        PUSHALL
         cld
         mov esi, ecx
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sg_pixel:
         ; ECX = win_id, EDX = x|y, ESI = color
-        pushad
+        PUSHALL
         mov eax, ecx
         cmp eax, MAX_WINDOWS
         jge .sg_px_done
@@ -5021,26 +5021,26 @@ sys_gui:
         mov ecx, esi
         call gui_bb_pixel
 .sg_px_done:
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sg_compose:
-        pushad
+        PUSHALL
         call gui_draw_background
         call gui_draw_all_windows
         call gui_draw_taskbar
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .sg_flip:
-        pushad
+        PUSHALL
         call gui_draw_cursor
         call gui_flip
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 ;---------------------------------------
 ; Widget drawing sub-handlers
@@ -5069,7 +5069,7 @@ sys_gui:
 ; ---- GUI_DRAW_BUTTON (20) ----
 ; Param block: [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=text_ptr(d), [12]=pressed(b)
 .sg_draw_button:
-        pushad
+        PUSHALL
         call .wgt_resolve_win
         jc .sg_wgt_done
         mov [.wgt_ox], eax
@@ -5096,24 +5096,24 @@ sys_gui:
         mov esi, 0x00B0B0B0
         call gui_bb_fill_rect
         ; Dark top/left
-        push edx
+        push rdx
         mov edx, 0x00404040
         call gui_bb_hline
-        pop edx
-        push ecx
+        pop rdx
+        push rcx
         mov ecx, edx
         mov edx, 0x00404040
         call gui_bb_vline
-        pop ecx
+        pop rcx
 
 .sg_btn_text:
         ; Center text
-        push ebx
-        mov esi, [esp + 4 + 8]       ; original ESI from pushad
+        push rbx
+        mov esi, [rsp + 8 + FRAME_RSI]       ; original ESI from PUSHALL
         mov esi, [esi + 8]           ; text_ptr
         ; Measure text length
-        push eax
-        push ecx
+        push rax
+        push rcx
         xor ecx, ecx
 .sg_btn_tlen:
         cmp byte [esi + ecx], 0
@@ -5123,23 +5123,23 @@ sys_gui:
 .sg_btn_tlen_done:
         ; ecx = text length
         shl ecx, 3               ; *8 = pixel width
-        pop eax                   ; restore eax (was pushed as placeholder)
+        pop rax                   ; restore eax (was pushed as placeholder)
         ; Actually we need to center: x + (w - text_px_w) / 2
         ; Get w again
-        push eax
-        mov eax, [esp + 8]       ; This is getting complex; simplify
-        pop eax
-        pop ecx
+        push rax
+        mov eax, [rsp + 8]       ; This is getting complex; simplify
+        pop rax
+        pop rcx
 
         ; Simple approach: offset x by 4, y by (h-16)/2
         add eax, 4
-        pop ebx
-        push edx
+        pop rbx
+        push rdx
         sub edx, FONT_H
         shr edx, 1
         add ebx, edx
-        pop edx
-        mov esi, [esp + 8]           ; original ESI
+        pop rdx
+        mov rsi, [rsp + FRAME_RSI]           ; original RSI
         mov esi, [esi + 8]           ; text_ptr
         mov edx, 0x00000000
         call gui_bb_draw_string
@@ -5148,7 +5148,7 @@ sys_gui:
 ; ---- GUI_DRAW_CHECKBOX (21) ----
 ; Param block: [0]=x(w), [2]=y(w), [4]=checked(b), [6]=text_ptr(d)
 .sg_draw_checkbox:
-        pushad
+        PUSHALL
         call .wgt_resolve_win
         jc .sg_wgt_done
         mov [.wgt_ox], eax
@@ -5160,9 +5160,9 @@ sys_gui:
         add ebx, [.wgt_oy]
 
         ; Draw checkbox box (14x14)
-        push esi
-        push eax
-        push ebx
+        push rsi
+        push rax
+        push rbx
         mov ecx, 14
         mov edx, 14
         mov esi, 0x00FFFFFF
@@ -5170,46 +5170,46 @@ sys_gui:
         ; Border
         mov esi, 0x00808080
         call gui_bb_rect
-        pop ebx
-        pop eax
-        pop esi
+        pop rbx
+        pop rax
+        pop rsi
 
         ; Draw check mark if checked
         cmp byte [esi + 4], 0
         je .sg_chk_text
-        push esi
-        push eax
-        push ebx
+        push rsi
+        push rax
+        push rbx
         add eax, 3
         add ebx, 3
         mov ecx, 8
         mov edx, 8
         mov esi, 0x00008000
         call gui_bb_fill_rect
-        pop ebx
-        pop eax
-        pop esi
+        pop rbx
+        pop rax
+        pop rsi
 
 .sg_chk_text:
         ; Draw label text
         add eax, 18              ; offset past checkbox
         inc ebx
-        push esi
+        push rsi
         mov esi, [esi + 6]       ; text_ptr (at offset 6, but it's a dword)
         ; Actually the text ptr is at offset 6 as a 2-byte aligned dword
         ; Let me fix: offset 8 for dword alignment
-        pop esi
-        push esi
+        pop rsi
+        push rsi
         mov esi, [esi + 8]       ; text_ptr at offset 8
         mov edx, 0x00000000
         call gui_bb_draw_string
-        pop esi
+        pop rsi
         jmp .sg_wgt_done
 
 ; ---- GUI_DRAW_PROGRESS (22) ----
 ; Param block: [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=value(b 0-100)
 .sg_draw_progress:
-        pushad
+        PUSHALL
         call .wgt_resolve_win
         jc .sg_wgt_done
         mov [.wgt_ox], eax
@@ -5223,21 +5223,21 @@ sys_gui:
         movzx edx, word [esi + 6]    ; h
 
         ; Draw background (grey)
-        push esi
-        push eax
-        push ebx
-        push ecx
-        push edx
+        push rsi
+        push rax
+        push rbx
+        push rcx
+        push rdx
         mov esi, 0x00C0C0C0
         call gui_bb_fill_rect
         ; Border
         mov esi, 0x00808080
         call gui_bb_rect
-        pop edx
-        pop ecx
-        pop ebx
-        pop eax
-        pop esi
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
+        pop rsi
 
         ; Draw fill
         movzx edi, byte [esi + 8]     ; value 0-100
@@ -5248,39 +5248,39 @@ sys_gui:
         mov edi, 100
 .sg_prog_clamp:
         ; fill_w = (w * value) / 100
-        push eax
-        push edx
-        push esi
+        push rax
+        push rdx
+        push rsi
         movzx eax, word [esi + 4]    ; w
         sub eax, 2                   ; inner width
         imul eax, edi
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, 100
         div ecx
-        pop ecx
+        pop rcx
         mov ecx, eax                 ; fill_w
-        pop esi
-        pop edx
-        pop eax
+        pop rsi
+        pop rdx
+        pop rax
 
-        push eax
-        push ebx
+        push rax
+        push rbx
         inc eax                       ; inside border
         inc ebx
         sub edx, 2                   ; inner height
-        push esi
+        push rsi
         mov esi, 0x000066CC          ; blue fill
         call gui_bb_fill_rect
-        pop esi
-        pop ebx
-        pop eax
+        pop rsi
+        pop rbx
+        pop rax
         jmp .sg_wgt_done
 
 ; ---- GUI_DRAW_TEXTBOX (23) ----
 ; Param block: [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=text_ptr(d), [12]=focused(b)
 .sg_draw_textbox:
-        pushad
+        PUSHALL
         call .wgt_resolve_win
         jc .sg_wgt_done
         mov [.wgt_ox], eax
@@ -5294,16 +5294,16 @@ sys_gui:
         movzx edx, word [esi + 6]
 
         ; White background
-        push esi
-        push eax
-        push ebx
-        push ecx
-        push edx
+        push rsi
+        push rax
+        push rbx
+        push rcx
+        push rdx
         mov esi, 0x00FFFFFF
         call gui_bb_fill_rect
 
         ; Border — blue if focused, grey if not
-        mov esi, [esp + 20]           ; original ESI
+        mov esi, [rsp + 32]           ; original ESI
         cmp byte [esi + 12], 0
         je .sg_tb_grey
         mov esi, 0x000066CC
@@ -5312,31 +5312,31 @@ sys_gui:
         mov esi, 0x00808080
 .sg_tb_bdr:
         call gui_bb_rect
-        pop edx
-        pop ecx
-        pop ebx
-        pop eax
-        pop esi
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
+        pop rsi
 
         ; Draw text (clipped to box)
-        push eax
-        push ebx
+        push rax
+        push rbx
         add eax, 4
         add ebx, 2
-        push esi
+        push rsi
         mov esi, [esi + 8]           ; text_ptr
         mov edx, 0x00000000
         call gui_bb_draw_string
-        pop esi
-        pop ebx
-        pop eax
+        pop rsi
+        pop rbx
+        pop rax
         jmp .sg_wgt_done
 
 ; ---- GUI_DRAW_LISTBOX (24) ----
 ; Param block: [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w),
 ;              [8]=items_ptr(d), [12]=item_count(w), [14]=selected(w), [16]=scroll(w), [18]=item_len(w)
 .sg_draw_listbox:
-        pushad
+        PUSHALL
         call .wgt_resolve_win
         jc .sg_wgt_done
         mov [.wgt_ox], eax
@@ -5350,20 +5350,20 @@ sys_gui:
         movzx edx, word [esi + 6]
 
         ; White background
-        push esi
-        push eax
-        push ebx
-        push ecx
-        push edx
+        push rsi
+        push rax
+        push rbx
+        push rcx
+        push rdx
         mov esi, 0x00FFFFFF
         call gui_bb_fill_rect
         mov esi, 0x00808080
         call gui_bb_rect
-        pop edx
-        pop ecx
-        pop ebx
-        pop eax
-        pop esi
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rax
+        pop rsi
 
         ; Draw items
         mov [.wgt_lbx], eax
@@ -5377,18 +5377,18 @@ sys_gui:
         mov ebp, [esi + 8]           ; items_ptr
 
         ; Calculate visible items: h / 18
-        push eax
+        push rax
         mov eax, [.wgt_lbh]
         sub eax, 2
         xor edx, edx
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         mov ebx, 18
         div ebx
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         mov [.wgt_lb_vis], eax
-        pop eax
+        pop rax
 
         xor edx, edx             ; visible row counter
 .sg_lb_loop:
@@ -5399,14 +5399,14 @@ sys_gui:
         jge .sg_wgt_done
 
         ; Check if this item is selected
-        push esi
+        push rsi
         movzx eax, word [esi + 14]   ; selected
         cmp eax, ecx
         jne .sg_lb_no_hl
 
         ; Draw highlight bar
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, [.wgt_lbx]
         inc eax
         mov ebx, edx
@@ -5418,12 +5418,12 @@ sys_gui:
         mov edx, 18
         mov esi, 0x000A246A
         call gui_bb_fill_rect
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
 
         ; Draw text in white
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, [.wgt_lbx]
         add eax, 4
         mov ebx, edx
@@ -5436,15 +5436,15 @@ sys_gui:
         add esi, ebp
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
-        pop edx
-        pop ecx
-        pop esi
+        pop rdx
+        pop rcx
+        pop rsi
         jmp .sg_lb_next
 
 .sg_lb_no_hl:
         ; Draw text in black
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, [.wgt_lbx]
         add eax, 4
         mov ebx, edx
@@ -5456,9 +5456,9 @@ sys_gui:
         add esi, ebp
         mov edx, 0x00000000
         call gui_bb_draw_string
-        pop edx
-        pop ecx
-        pop esi
+        pop rdx
+        pop rcx
+        pop rsi
 
 .sg_lb_next:
         inc ecx
@@ -5468,7 +5468,7 @@ sys_gui:
 ; ---- GUI_DRAW_LABEL (25) ----
 ; Param block: [0]=x(w), [2]=y(w), [4]=text_ptr(d), [8]=color(d)
 .sg_draw_label:
-        pushad
+        PUSHALL
         call .wgt_resolve_win
         jc .sg_wgt_done
         movzx eax, word [esi]
@@ -5483,7 +5483,7 @@ sys_gui:
 ; ---- GUI_DRAW_RECT (26) ----
 ; Param block: [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=color(d), [12]=filled(b)
 .sg_draw_rect:
-        pushad
+        PUSHALL
         call .wgt_resolve_win
         jc .sg_wgt_done
         movzx eax, word [esi]
@@ -5503,9 +5503,9 @@ sys_gui:
         jmp .sg_wgt_done
 
 .sg_wgt_done:
-        popad
+        POPALL
         xor eax, eax
-        iretd
+        iretq
 
 .wgt_ox:        dd 0
 .wgt_oy:        dd 0
@@ -5854,9 +5854,9 @@ gui_str_clock:      db "Clock", 0
 gui_str_settings:   db "Settings", 0
 
 gui_str_about_l1:   db "Mellivora OS", 0
-gui_str_about_l2:   db "v3.0.0", 0
+gui_str_about_l2:   db "v4.0.0", 0
 gui_str_about_l3:   db "Burrows Desktop Environment", 0
-gui_str_about_l4:   db "32-bit Protected Mode / i486+", 0
+gui_str_about_l4:   db "64-bit Long Mode / x86-64", 0
 gui_str_about_l5:   db "HBFS Filesystem / 2 GB", 0
 gui_str_about_l6:   db "Press ESC to close", 0
 
@@ -5896,18 +5896,18 @@ gui_str_m_about:    db "About", 0
 gui_str_m_exit:     db "Exit Desktop", 0
 
 gui_menu_strings:
-        dd gui_str_m_term
-        dd gui_str_m_files
-        dd gui_str_m_forager
-        dd gui_str_m_edit
-        dd gui_str_m_calc
-        dd gui_str_m_paint
-        dd gui_str_m_timewarp
-        dd gui_str_m_clock
-        dd gui_str_m_settings
-        dd gui_str_m_sysmon
-        dd gui_str_m_about
-        dd gui_str_m_exit
+        dq gui_str_m_term
+        dq gui_str_m_files
+        dq gui_str_m_forager
+        dq gui_str_m_edit
+        dq gui_str_m_calc
+        dq gui_str_m_paint
+        dq gui_str_m_timewarp
+        dq gui_str_m_clock
+        dq gui_str_m_settings
+        dq gui_str_m_sysmon
+        dq gui_str_m_about
+        dq gui_str_m_exit
 
 ; Program names for external apps
 gui_prog_bterm:     db "bterm", 0
@@ -5923,24 +5923,24 @@ gui_prog_timewarp:  db "timewarp", 0
 gui_icon_symbols:   db 'T', 'H', 'W', 'E', 'C', 'P', 'Z', 'M', 0
 
 gui_icon_labels:
-        dd gui_str_ic_term
-        dd gui_str_ic_files
-        dd gui_str_ic_forager
-        dd gui_str_ic_edit
-        dd gui_str_ic_calc
-        dd gui_str_ic_paint
-        dd gui_str_ic_timewarp
-        dd gui_str_ic_sysmon
+        dq gui_str_ic_term
+        dq gui_str_ic_files
+        dq gui_str_ic_forager
+        dq gui_str_ic_edit
+        dq gui_str_ic_calc
+        dq gui_str_ic_paint
+        dq gui_str_ic_timewarp
+        dq gui_str_ic_sysmon
 
 gui_icon_progs:
-        dd gui_prog_bterm
-        dd gui_prog_bhive
-        dd gui_prog_bforager
-        dd gui_prog_bedit
-        dd gui_prog_bcalc
-        dd gui_prog_bpaint
-        dd gui_prog_timewarp
-        dd gui_prog_bsysmon
+        dq gui_prog_bterm
+        dq gui_prog_bhive
+        dq gui_prog_bforager
+        dq gui_prog_bedit
+        dq gui_prog_bcalc
+        dq gui_prog_bpaint
+        dq gui_prog_timewarp
+        dq gui_prog_bsysmon
 
 gui_str_ic_term:    db "BTerm", 0
 gui_str_ic_files:   db "BHive", 0
@@ -5959,11 +5959,11 @@ gui_str_ctx_set:    db "Settings", 0
 gui_str_ctx_exit:   db "Exit Desktop", 0
 
 gui_ctx_strings:
-        dd gui_str_ctx_term
-        dd gui_str_ctx_files
-        dd gui_str_ctx_about
-        dd gui_str_ctx_set
-        dd gui_str_ctx_exit
+        dq gui_str_ctx_term
+        dq gui_str_ctx_files
+        dq gui_str_ctx_about
+        dq gui_str_ctx_set
+        dq gui_str_ctx_exit
 
 ;=======================================================================
 ; NOTIFICATION SYSTEM
@@ -5985,7 +5985,7 @@ NOTIFY_TEXT_LEN equ 60
 ;  EDX = color (0=default blue)
 ;---------------------------------------
 gui_notify:
-        pushad
+        PUSHALL
         test edx, edx
         jnz .gn_color_ok
         mov edx, 0x003366CC     ; default blue
@@ -6031,7 +6031,7 @@ gui_notify:
 .gn_pad:
         mov byte [edi], 0
 
-        popad
+        POPALL
         ret
 
 
@@ -6039,7 +6039,7 @@ gui_notify:
 ; gui_draw_notifications - Draw active notification toasts
 ;---------------------------------------
 gui_draw_notifications:
-        pushad
+        PUSHALL
         xor ecx, ecx
 .dn_loop:
         cmp ecx, NOTIFY_MAX
@@ -6111,7 +6111,7 @@ gui_draw_notifications:
         jmp .dn_loop
 
 .dn_done:
-        popad
+        POPALL
         ret
 
 .dn_idx:   dd 0

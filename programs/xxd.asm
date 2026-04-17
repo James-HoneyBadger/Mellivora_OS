@@ -133,7 +133,7 @@ start:
 ;---------------------------------------
 print_hex32:
         ; EAX = 32-bit value, prints 8 hex digits
-        pushad
+        PUSHALL
         mov edx, eax
         mov eax, edx
         shr eax, 28
@@ -166,12 +166,12 @@ print_hex32:
         mov eax, edx
         and eax, 0xF
         call print_nybble
-        popad
+        POPALL
         ret
 
 print_hex8:
         ; AL = byte, prints 2 hex digits
-        pushad
+        PUSHALL
         movzx edx, al
         mov eax, edx
         shr eax, 4
@@ -179,12 +179,12 @@ print_hex8:
         mov eax, edx
         and eax, 0xF
         call print_nybble
-        popad
+        POPALL
         ret
 
 print_nybble:
         ; EAX = 0-15, prints one hex digit
-        pushad
+        PUSHALL
         cmp eax, 10
         jge .pn_af
         add eax, '0'
@@ -195,7 +195,7 @@ print_nybble:
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================

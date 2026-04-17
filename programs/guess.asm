@@ -123,11 +123,11 @@ read_number:
         jg .loop
 
         ; Echo the digit
-        push eax
+        push rax
         mov ebx, eax
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop eax
+        pop rax
 
         ; Accumulate: esi = esi * 10 + digit
         sub al, '0'
@@ -140,11 +140,11 @@ read_number:
 
 .done:
         ; Newline
-        push esi
+        push rsi
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
-        pop esi
+        pop rsi
 
         mov eax, esi
         ret

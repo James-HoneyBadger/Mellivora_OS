@@ -85,8 +85,8 @@ start:
         je .no_match
 
         ; Check if find_str matches at edi
-        push esi
-        push edi
+        push rsi
+        push rdi
         mov ebx, find_str
         mov ecx, [find_len]
 .cmp_loop:
@@ -105,31 +105,31 @@ start:
         jmp .cmp_loop
 
 .cmp_fail:
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         inc edi
         jmp .search
 
 .found_match:
-        pop edi                 ; edi = match start position
-        pop esi                 ; esi = line start position
+        pop rdi                 ; edi = match start position
+        pop rsi                 ; esi = line start position
 
         ; Print characters from esi up to edi (before the match)
         mov ebx, esi
 .print_before:
         cmp ebx, edi
         jge .print_repl
-        push ebx
+        push rbx
         movzx ebx, byte [ebx]
         mov eax, SYS_PUTCHAR
         int 0x80
-        pop ebx
+        pop rbx
         inc ebx
         jmp .print_before
 
 .print_repl:
         ; Print replacement string
-        push esi
+        push rsi
         mov esi, replace_str
 .pr_loop:
         cmp byte [esi], 0
@@ -140,7 +140,7 @@ start:
         inc esi
         jmp .pr_loop
 .pr_done:
-        pop esi
+        pop rsi
 
         ; Skip past the matched text in the original
         mov eax, [find_len]

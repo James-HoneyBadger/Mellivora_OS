@@ -67,8 +67,8 @@ ds_stack_init:
 ; Output: Carry flag clear on success, set if full
 ;-----------------------------------------------------------------------
 ds_stack_push:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, [edi + STK_TOP]
         cmp ecx, [edi + STK_CAPACITY]
         jge .dsp_full
@@ -76,13 +76,13 @@ ds_stack_push:
         mov [ebx + ecx*4], eax
         inc dword [edi + STK_TOP]
         clc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 .dsp_full:
         stc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -92,8 +92,8 @@ ds_stack_push:
 ;         Carry flag clear on success, set if empty
 ;-----------------------------------------------------------------------
 ds_stack_pop:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, [edi + STK_TOP]
         test ecx, ecx
         jz .dspp_empty
@@ -102,13 +102,13 @@ ds_stack_pop:
         mov ebx, [edi + STK_BASE]
         mov eax, [ebx + ecx*4]
         clc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 .dspp_empty:
         stc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -117,8 +117,8 @@ ds_stack_pop:
 ; Output: EAX = top value, Carry set if empty
 ;-----------------------------------------------------------------------
 ds_stack_peek:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, [edi + STK_TOP]
         test ecx, ecx
         jz .dspk_empty
@@ -126,13 +126,13 @@ ds_stack_peek:
         mov ebx, [edi + STK_BASE]
         mov eax, [ebx + ecx*4]
         clc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 .dspk_empty:
         stc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -179,9 +179,9 @@ ds_queue_init:
 ; Output: Carry clear on success, set if full
 ;-----------------------------------------------------------------------
 ds_queue_push:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         mov ecx, [edi + QUE_COUNT]
         cmp ecx, [edi + QUE_CAPACITY]
         jge .dqp_full
@@ -199,15 +199,15 @@ ds_queue_push:
         mov [edi + QUE_TAIL], edx
         inc dword [edi + QUE_COUNT]
         clc
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .dqp_full:
         stc
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -216,8 +216,8 @@ ds_queue_push:
 ; Output: EAX = dequeued value, Carry set if empty
 ;-----------------------------------------------------------------------
 ds_queue_pop:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, [edi + QUE_COUNT]
         test ecx, ecx
         jz .dqpp_empty
@@ -234,13 +234,13 @@ ds_queue_pop:
         mov [edi + QUE_HEAD], ecx
         dec dword [edi + QUE_COUNT]
         clc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 .dqpp_empty:
         stc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -249,21 +249,21 @@ ds_queue_pop:
 ; Output: EAX = front value, Carry set if empty
 ;-----------------------------------------------------------------------
 ds_queue_peek:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         cmp dword [edi + QUE_COUNT], 0
         je .dqpk_empty
         mov ebx, [edi + QUE_BASE]
         mov ecx, [edi + QUE_HEAD]
         mov eax, [ebx + ecx*4]
         clc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 .dqpk_empty:
         stc
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -310,9 +310,9 @@ ds_queue_count:
 ; Output: none
 ;-----------------------------------------------------------------------
 ds_bmap_set:
-        push eax
-        push ebx
-        push ecx
+        push rax
+        push rbx
+        push rcx
         mov ebx, eax
         shr ebx, 3              ; byte index
         mov ecx, eax
@@ -320,9 +320,9 @@ ds_bmap_set:
         mov al, 1
         shl al, cl
         or [esi + ebx], al
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -331,9 +331,9 @@ ds_bmap_set:
 ; Output: none
 ;-----------------------------------------------------------------------
 ds_bmap_clear:
-        push eax
-        push ebx
-        push ecx
+        push rax
+        push rbx
+        push rcx
         mov ebx, eax
         shr ebx, 3
         mov ecx, eax
@@ -342,9 +342,9 @@ ds_bmap_clear:
         shl al, cl
         not al
         and [esi + ebx], al
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -353,8 +353,8 @@ ds_bmap_clear:
 ; Output: EAX = 1 if set, 0 if clear
 ;-----------------------------------------------------------------------
 ds_bmap_test:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ebx, eax
         shr ebx, 3              ; byte index
         mov ecx, eax
@@ -362,8 +362,8 @@ ds_bmap_test:
         movzx eax, byte [esi + ebx]
         shr eax, cl
         and eax, 1
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -372,9 +372,9 @@ ds_bmap_test:
 ; Output: EAX = index of first clear bit, or -1 if all set
 ;-----------------------------------------------------------------------
 ds_bmap_find_free:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         xor eax, eax           ; bit index
 
 .dbff_loop:
@@ -382,8 +382,8 @@ ds_bmap_find_free:
         jge .dbff_none
 
         ; Test this bit
-        push ecx
-        push eax
+        push rcx
+        push rax
         mov edx, eax
         shr edx, 3             ; byte
         mov ebx, eax
@@ -392,24 +392,24 @@ ds_bmap_find_free:
         mov cl, bl
         shr al, cl
         test al, 1
-        pop eax
-        pop ecx
+        pop rax
+        pop rcx
         jz .dbff_found
 
         inc eax
         jmp .dbff_loop
 
 .dbff_found:
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .dbff_none:
         mov eax, -1
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -418,10 +418,10 @@ ds_bmap_find_free:
 ; Output: EAX = count of set bits
 ;-----------------------------------------------------------------------
 ds_bmap_count_set:
-        push ebx
-        push ecx
-        push edx
-        push esi
+        push rbx
+        push rcx
+        push rdx
+        push rsi
 
         ; Process byte by byte
         xor eax, eax           ; count
@@ -448,10 +448,10 @@ ds_bmap_count_set:
         jmp .dbcs_byte
 
 .dbcs_done:
-        pop esi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -460,7 +460,7 @@ ds_bmap_count_set:
 ; Output: none (array sorted in place, ascending)
 ;-----------------------------------------------------------------------
 ds_sort_insert:
-        pushad
+        PUSHALL
         cmp ecx, 1
         jle .dsi_done
 
@@ -480,10 +480,10 @@ ds_sort_insert:
         jbe .dsi_insert
 
         ; Shift arr[j] to arr[j+1]
-        push eax
+        push rax
         mov eax, [esi + ebx*4]
         mov [esi + ebx*4 + 4], eax
-        pop eax
+        pop rax
         dec ebx
         jmp .dsi_inner
 
@@ -493,7 +493,7 @@ ds_sort_insert:
         jmp .dsi_outer
 
 .dsi_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -503,10 +503,10 @@ ds_sort_insert:
 ;         Carry clear if found, set if not
 ;-----------------------------------------------------------------------
 ds_binary_search:
-        push ebx
-        push ecx
-        push edx
-        push edi
+        push rbx
+        push rcx
+        push rdx
+        push rdi
 
         xor ebx, ebx           ; low = 0
         dec ecx                 ; high = count - 1
@@ -535,19 +535,19 @@ ds_binary_search:
 .dbs_found:
         mov eax, edx
         clc
-        pop edi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 .dbs_notfound:
         mov eax, -1
         stc
-        pop edi
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdi
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;-----------------------------------------------------------------------
@@ -556,14 +556,14 @@ ds_binary_search:
 ; Output: none
 ;-----------------------------------------------------------------------
 ds_array_swap:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov ecx, [esi + eax*4]
         mov edx, [esi + ebx*4]
         mov [esi + eax*4], edx
         mov [esi + ebx*4], ecx
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 
 ;-----------------------------------------------------------------------
@@ -572,7 +572,7 @@ ds_array_swap:
 ; Output: none
 ;-----------------------------------------------------------------------
 ds_array_reverse:
-        pushad
+        PUSHALL
         xor eax, eax           ; left
         mov ebx, ecx
         dec ebx                 ; right
@@ -586,7 +586,7 @@ ds_array_reverse:
         jmp .dar_loop
 
 .dar_done:
-        popad
+        POPALL
         ret
 
 ;-----------------------------------------------------------------------
@@ -595,8 +595,8 @@ ds_array_reverse:
 ; Output: EAX = minimum value, EBX = index of minimum
 ;-----------------------------------------------------------------------
 ds_array_min:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, [esi]          ; min = arr[0]
         xor ebx, ebx           ; min_idx = 0
         mov edx, 1              ; i = 1
@@ -613,8 +613,8 @@ ds_array_min:
         jmp .dam_loop
 
 .dam_done:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 
 ;-----------------------------------------------------------------------
@@ -623,8 +623,8 @@ ds_array_min:
 ; Output: EAX = maximum value, EBX = index of maximum
 ;-----------------------------------------------------------------------
 ds_array_max:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, [esi]
         xor ebx, ebx
         mov edx, 1
@@ -641,8 +641,8 @@ ds_array_max:
         jmp .dax_loop
 
 .dax_done:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 
 ;-----------------------------------------------------------------------
@@ -651,8 +651,8 @@ ds_array_max:
 ; Output: EAX = sum
 ;-----------------------------------------------------------------------
 ds_array_sum:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         xor eax, eax
         xor edx, edx
 
@@ -664,6 +664,6 @@ ds_array_sum:
         jmp .das_loop
 
 .das_done:
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret

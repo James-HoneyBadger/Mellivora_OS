@@ -1,5 +1,6 @@
 ;=======================================================================
-; IDT (Interrupt Descriptor Table)
+; IDT (Interrupt Descriptor Table) — 64-bit Long Mode
+; Each entry is 16 bytes (vs 8 in 32-bit)
 ;=======================================================================
 
 idt_init:
@@ -44,6 +45,11 @@ idt_init:
         jmp .exc_noerr
 
 .irq_setup:
+        ; Override exception 7 (#NM) with FPU lazy-switch handler
+        mov ecx, 7
+        mov eax, isr_fpu_nm
+        call idt_set_gate
+
         ; Set exception handlers that push error codes
         mov ecx, 8
         mov eax, isr_exception_err
@@ -98,37 +104,54 @@ idt_init:
         mov ecx, 0x80
         mov eax, syscall_handler
         ; Use trap gate with DPL=3 for syscalls
-        mov edi, idt_table
-        shl ecx, 3             ; ECX * 8 = offset in IDT
-        add edi, ecx
+        mov rdi, idt_table
+        push rcx
+        shl ecx, 4             ; ECX * 16 = offset in IDT
+        add rdi, rcx
+        pop rcx
 
-        mov word [edi], ax      ; Offset low
-        mov word [edi+2], 0x08  ; Code selector
-        mov byte [edi+4], 0x00  ; Reserved
-        mov byte [edi+5], 0xEF  ; Trap gate, DPL=3, Present
-        shr eax, 16
-        mov word [edi+6], ax    ; Offset high
+        mov word [rdi], ax      ; Offset bits 0-15
+        mov word [rdi+2], 0x08  ; Code selector
+        mov byte [rdi+4], 0x00  ; IST=0
+        mov byte [rdi+5], 0xEF  ; Trap gate, DPL=3, Present
+        mov rdx, rax
+        shr rdx, 16
+        mov word [rdi+6], dx    ; Offset bits 16-31
+        shr rdx, 16
+        mov word [rdi+8], dx    ; Offset bits 32-47
+        shr rdx, 16
+        mov word [rdi+10], dx   ; Offset bits 48-63
+        mov dword [rdi+12], 0   ; Reserved
         jmp .load
 
 .load:
         lidt [idt_descriptor]
         ret
 
-; Set IDT gate: ECX=vector, EAX=handler address
+; Set IDT gate: ECX=vector, EAX=handler address (RAX preserved)
+; Writes a 16-byte 64-bit interrupt gate descriptor
 idt_set_gate:
-        push edi
-        mov edi, idt_table
-        push ecx
-        shl ecx, 3             ; ECX * 8 = offset in IDT
-        add edi, ecx
-        pop ecx
+        push rdi
+        push rdx
+        mov rdi, idt_table
+        push rcx
+        shl ecx, 4             ; ECX * 16 = offset in IDT
+        add rdi, rcx
+        pop rcx
 
-        mov word [edi], ax      ; Offset low
-        mov word [edi+2], 0x08  ; Code segment selector
-        mov byte [edi+4], 0x00  ; Reserved
-        mov byte [edi+5], 0x8E  ; Interrupt gate, DPL=0, Present
-        shr eax, 16
-        mov word [edi+6], ax    ; Offset high
+        mov word [rdi], ax      ; Offset bits 0-15
+        mov word [rdi+2], 0x08  ; Code segment selector
+        mov byte [rdi+4], 0x00  ; IST=0, reserved
+        mov byte [rdi+5], 0x8E  ; Interrupt gate, DPL=0, Present
+        mov rdx, rax
+        shr rdx, 16
+        mov word [rdi+6], dx    ; Offset bits 16-31
+        shr rdx, 16
+        mov word [rdi+8], dx    ; Offset bits 32-47
+        shr rdx, 16
+        mov word [rdi+10], dx   ; Offset bits 48-63
+        mov dword [rdi+12], 0   ; Reserved (must be zero)
 
-        pop edi
+        pop rdx
+        pop rdi
         ret

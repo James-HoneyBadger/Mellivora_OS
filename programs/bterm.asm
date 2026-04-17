@@ -52,6 +52,10 @@ start:
         je .handle_enter
         cmp bl, 8               ; Backspace
         je .handle_bs
+        cmp bl, 3               ; Ctrl+C (copy last output line)
+        je .handle_copy
+        cmp bl, 22              ; Ctrl+V (paste into input)
+        je .handle_paste
         cmp bl, 32
         jl .main_loop
         cmp bl, 126
@@ -73,6 +77,62 @@ start:
         mov ecx, [input_len]
         mov byte [input_buf + ecx], 0
         jmp .main_loop
+
+.handle_copy:
+        ; Copy last output line to clipboard
+        mov eax, [num_lines]
+        test eax, eax
+        jz .main_loop
+        dec eax
+        shl eax, 6              ; * 64 bytes per line
+        lea ebx, [output_buf + eax]
+        ; Find line length
+        mov esi, ebx
+        xor ecx, ecx
+.hc_len:
+        cmp byte [esi + ecx], 0
+        je .hc_do
+        inc ecx
+        cmp ecx, 63
+        jl .hc_len
+.hc_do:
+        mov eax, SYS_CLIPBOARD_COPY
+        int 0x80
+        jmp .main_loop
+
+.handle_paste:
+        ; Paste clipboard text into input buffer
+        mov eax, SYS_CLIPBOARD_PASTE
+        mov ebx, clip_buf
+        mov ecx, INPUT_MAX
+        int 0x80
+        test eax, eax
+        jz .main_loop
+        ; Append pasted text to input
+        mov esi, clip_buf
+        mov ecx, eax
+.hp_loop:
+        cmp ecx, 0
+        jle .main_loop
+        mov eax, [input_len]
+        cmp eax, INPUT_MAX
+        jge .main_loop
+        mov al, [esi]
+        cmp al, 0
+        je .main_loop
+        cmp al, 10             ; skip newlines
+        je .hp_skip
+        cmp al, 13
+        je .hp_skip
+        mov edx, [input_len]
+        mov [input_buf + edx], al
+        inc dword [input_len]
+        mov edx, [input_len]
+        mov byte [input_buf + edx], 0
+.hp_skip:
+        inc esi
+        dec ecx
+        jmp .hp_loop
 
 .handle_enter:
         ; Show prompt line in output
@@ -96,7 +156,7 @@ start:
 ; term_draw_content - Draw terminal text
 ;---------------------------------------
 term_draw_content:
-        pushad
+        PUSHALL
         ; Clear content area
         mov eax, [win_id]
         mov ebx, 0
@@ -114,8 +174,8 @@ term_draw_content:
         jge .draw_prompt
         cmp ecx, TERM_LINES
         jge .draw_prompt
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov eax, ecx
         shl eax, 6             ; * 64 bytes per line
         lea esi, [output_buf + eax]
@@ -124,8 +184,8 @@ term_draw_content:
         mov ecx, edx
         mov edi, 0x0000CC00     ; green text
         call gui_draw_text
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         add edx, 16
         inc ecx
         jmp .draw_lines
@@ -158,14 +218,14 @@ term_draw_content:
         mov edi, 0x00FFFFFF
         call gui_draw_text
 
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; term_exec_cmd - Execute the input buffer command
 ;---------------------------------------
 term_exec_cmd:
-        pushad
+        PUSHALL
         cmp dword [input_len], 0
         je .done
 
@@ -256,7 +316,7 @@ term_exec_cmd:
 
 ; --- Command: ls ---
 .try_ls:
-        push esi
+        push rsi
         mov esi, input_buf
         mov edi, cmd_ls
         call str_eq
@@ -265,15 +325,15 @@ term_exec_cmd:
         mov edi, cmd_dir
         call str_eq
         je .do_ls_ok
-        pop esi
+        pop rsi
         xor eax, eax
         ret
 .do_ls_ok:
-        pop esi
+        pop rsi
         ; Read directory entries
         xor ecx, ecx           ; index
 .ls_loop:
-        push ecx               ; save index
+        push rcx               ; save index
         mov eax, SYS_READDIR
         mov ebx, tmp_buf       ; buf for entry name
         int 0x80
@@ -305,11 +365,11 @@ term_exec_cmd:
         mov esi, tmp_buf
         call term_add_line
 .ls_next:
-        pop ecx
+        pop rcx
         inc ecx
         jmp .ls_loop
 .ls_end:
-        pop ecx                 ; balance the push
+        pop rcx                 ; balance the push
         mov eax, 1
         ret
 
@@ -359,10 +419,10 @@ term_exec_cmd:
         jl .cat_char
 .cat_nl:
         mov byte [edi], 0
-        push esi
+        push rsi
         mov esi, fmt_buf
         call term_add_line
-        pop esi
+        pop rsi
         mov edi, fmt_buf
         xor ecx, ecx
         jmp .cat_char
@@ -378,10 +438,10 @@ term_exec_cmd:
         cmp ecx, 0
         je .cat_ret
         mov byte [edi], 0
-        push esi
+        push rsi
         mov esi, fmt_buf
         call term_add_line
-        pop esi
+        pop rsi
 .cat_ret:
         mov eax, 1
         ret
@@ -580,7 +640,7 @@ term_exec_cmd:
         ; ESI now points to the text content
         call skip_spaces_esi
         ; Measure text length
-        push esi
+        push rsi
         xor ecx, ecx
 .write_len:
         cmp byte [esi + ecx], 0
@@ -589,7 +649,7 @@ term_exec_cmd:
         jmp .write_len
 .write_len_done:
         mov edx, ecx           ; EDX = size
-        pop ecx                 ; ECX = buf (the text)
+        pop rcx                 ; ECX = buf (the text)
         mov ebx, tmp_buf        ; EBX = filename
         xor esi, esi            ; type = 0
         mov eax, SYS_FWRITE
@@ -623,9 +683,9 @@ term_exec_cmd:
         cmp eax, -1
         je .size_err
         ; EAX = file size in bytes
-        push eax
+        push rax
         mov edi, fmt_buf
-        pop eax
+        pop rax
         call int_to_str
         mov esi, edi            ; point to formatted string
         ; Append " bytes"
@@ -711,10 +771,10 @@ term_exec_cmd:
         jmp .hex_byte
 .hex_eol:
         mov byte [edi], 0
-        push ecx
+        push rcx
         mov esi, fmt_buf
         call term_add_line
-        pop ecx
+        pop rcx
         add ecx, 8
         jmp .hex_line
 .hex_done:
@@ -776,7 +836,7 @@ term_exec_cmd:
         jmp .done
 
 .do_exit:
-        popad
+        POPALL
         jmp .close_exit
 
 .close_exit:
@@ -787,7 +847,7 @@ term_exec_cmd:
         int 0x80
 
 .done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -795,18 +855,18 @@ term_exec_cmd:
 ; ESI = string
 ;---------------------------------------
 term_add_line:
-        pushad
+        PUSHALL
         mov ecx, [num_lines]
         cmp ecx, TERM_LINES
         jl .add
         ; Scroll up
         cld
         mov edi, output_buf
-        push esi
+        push rsi
         mov esi, output_buf + 64
         mov ecx, (TERM_LINES - 1) * 64 / 4
         rep movsd
-        pop esi
+        pop rsi
         mov ecx, TERM_LINES - 1
         mov [num_lines], ecx
 .add:
@@ -824,24 +884,24 @@ term_add_line:
         mov byte [edi], 0
 .pad:
         inc dword [num_lines]
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; term_add_prompt_line - Add "> <input>" line
 ;---------------------------------------
 term_add_prompt_line:
-        pushad
+        PUSHALL
         mov ecx, [num_lines]
         cmp ecx, TERM_LINES
         jl .add
         cld
         mov edi, output_buf
-        push esi
+        push rsi
         mov esi, output_buf + 64
         mov ecx, (TERM_LINES - 1) * 64 / 4
         rep movsd
-        pop esi
+        pop rsi
         mov ecx, TERM_LINES - 1
         mov [num_lines], ecx
 .add:
@@ -863,7 +923,7 @@ term_add_prompt_line:
         mov byte [edi], 0
 .done:
         inc dword [num_lines]
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -871,8 +931,8 @@ term_add_prompt_line:
 ; Returns: EAX = 1 if match, 0 otherwise
 ;---------------------------------------
 str_starts:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .loop:
         mov al, [edi]
         cmp al, 0
@@ -884,13 +944,13 @@ str_starts:
         jmp .loop
 .match:
         mov eax, 1
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 .no:
         xor eax, eax
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ;---------------------------------------
@@ -898,8 +958,8 @@ str_starts:
 ; Returns: EAX = 1 if match (also ZF set); 0 otherwise
 ;---------------------------------------
 str_eq:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .loop:
         mov al, [esi]
         mov bl, [edi]
@@ -915,37 +975,37 @@ str_eq:
         test eax, eax           ; set ZF=0 (eax!=0 means match, but je tests ZF)
         ; For je to work, we need ZF set on match. Use cmp eax, 1.
         cmp eax, 1              ; ZF=1
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 .no:
         xor eax, eax
         ; eax=0, need ZF clear for jne. cmp eax, 1 sets ZF=0.
         cmp eax, 1              ; ZF=0
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ;---------------------------------------
 ; Utility: str_copy - Copy ESI to EDI
 ;---------------------------------------
 str_copy:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .cloop:
         lodsb
         stosb
         cmp al, 0
         jne .cloop
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ;---------------------------------------
 ; Utility: str_len - Length of string at EDI -> EAX
 ;---------------------------------------
 str_len:
-        push edi
+        push rdi
         xor eax, eax
 .sloop:
         cmp byte [edi + eax], 0
@@ -953,7 +1013,7 @@ str_len:
         inc eax
         jmp .sloop
 .sdone:
-        pop edi
+        pop rdi
         ret
 
 ;---------------------------------------
@@ -985,7 +1045,7 @@ skip_spaces_esi:
 ; EDI = output buffer, EAX = number
 ;---------------------------------------
 int_to_str:
-        pushad
+        PUSHALL
         mov ebx, edi
         mov ecx, 10
         xor edx, edx
@@ -994,7 +1054,7 @@ int_to_str:
         jne .nonzero
         mov byte [edi], '0'
         mov byte [edi + 1], 0
-        popad
+        POPALL
         ret
 .nonzero:
         ; Push digits in reverse
@@ -1005,7 +1065,7 @@ int_to_str:
         xor edx, edx
         div ecx
         add dl, '0'
-        push edx
+        push rdx
         inc esi
         jmp .divloop
 .reverse:
@@ -1014,25 +1074,25 @@ int_to_str:
 .poploop:
         cmp ecx, 0
         je .tsdone
-        pop eax
+        pop rax
         stosb
         dec ecx
         jmp .poploop
 .tsdone:
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 ; Utility: hex_word - Write 4-digit hex of AX to EDI
 ;---------------------------------------
 hex_word:
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov ecx, 4
 .hw_loop:
         rol ax, 4
-        push eax
+        push rax
         and al, 0x0F
         cmp al, 10
         jl .hw_digit
@@ -1042,23 +1102,23 @@ hex_word:
         add al, '0'
 .hw_store:
         stosb
-        pop eax
+        pop rax
         dec ecx
         jnz .hw_loop
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 ;---------------------------------------
 ; Utility: hex_byte_out - Write 2-digit hex of AL to EDI
 ;---------------------------------------
 hex_byte_out:
-        push eax
-        push ecx
+        push rax
+        push rcx
         mov ecx, 2
         rol al, 4
 .hb_loop:
-        push eax
+        push rax
         and al, 0x0F
         cmp al, 10
         jl .hb_digit
@@ -1068,12 +1128,12 @@ hex_byte_out:
         add al, '0'
 .hb_store:
         stosb
-        pop eax
+        pop rax
         rol al, 4
         dec ecx
         jnz .hb_loop
-        pop ecx
-        pop eax
+        pop rcx
+        pop rax
         ret
 
 ; ======================= DATA =======================
@@ -1105,7 +1165,7 @@ cmd_exit:       db "exit", 0
 
 ; Messages
 msg_welcome:    db "Mellivora Terminal v2.2", 0
-msg_version:    db "Mellivora OS v3.0", 0
+msg_version:    db "Mellivora OS v4.0", 0
 msg_whoami:     db "root", 0
 msg_unknown:    db "Unknown command. Type 'help'.", 0
 msg_ok:         db "OK", 0
@@ -1133,6 +1193,7 @@ num_lines:      dd 0
 
 ; Buffers
 input_buf:      times 64 db 0
+clip_buf:       times 64 db 0
 tmp_buf:        times 128 db 0
 fmt_buf:        times 128 db 0
 output_buf:     times TERM_LINES * 64 db 0

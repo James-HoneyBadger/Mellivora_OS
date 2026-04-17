@@ -226,11 +226,11 @@ start:
 
 .print_body:
         mov byte [recv_buf + eax], 0
-        push eax
+        push rax
         mov eax, SYS_PRINT
         mov ebx, recv_buf
         int 0x80
-        pop eax
+        pop rax
 
 .recv_loop_cont:
         jmp .recv_loop
@@ -299,7 +299,7 @@ start:
         int 0x80
 
 ; Strings
-http_proto:   db " HTTP/1.0", 0x0D, 0x0A, 0
+http_proto:   db " HTTP/1.1", 0x0D, 0x0A, 0
 host_hdr:     db "Host: ", 0
 conn_close:   db 0x0D, 0x0A, "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A, 0
 msg_usage:    db "Usage: forager <url>", 0x0A, "  Example: forager example.com/index.html", 0x0A, 0

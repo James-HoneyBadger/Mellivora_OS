@@ -6,7 +6,7 @@
 ; return a value. Uses the standard Mellivora calling convention:
 ;   - Arguments in EAX, EBX, ECX, EDX, ESI, EDI as documented
 ;   - Return values in EAX (and sometimes ECX)
-;   - All other registers preserved via pushad/popad
+;   - All other registers preserved via PUSHALL/POPALL
 ;
 ; Functions:
 ;   str_len         - Get string length
@@ -49,8 +49,8 @@
 ; Output: EAX = length (not counting null terminator)
 ;-----------------------------------------------------------------------
 str_len:
-        push esi
-        push ecx
+        push rsi
+        push rcx
         xor eax, eax
 .sl_loop:
         cmp byte [esi], 0
@@ -59,8 +59,8 @@ str_len:
         inc esi
         jmp .sl_loop
 .sl_done:
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -69,9 +69,9 @@ str_len:
 ; Output: EAX = bytes copied (including null)
 ;-----------------------------------------------------------------------
 str_copy:
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
         xor eax, eax
 .sc_loop:
         mov cl, [esi]
@@ -83,9 +83,9 @@ str_copy:
         inc edi
         jmp .sc_loop
 .sc_done:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -94,10 +94,10 @@ str_copy:
 ; Output: EAX = bytes written (including null)
 ;-----------------------------------------------------------------------
 str_ncopy:
-        push esi
-        push edi
-        push ecx
-        push edx
+        push rsi
+        push rdi
+        push rcx
+        push rdx
         xor eax, eax
         cmp ecx, 0
         je .snc_done
@@ -118,10 +118,10 @@ str_ncopy:
         mov byte [edi], 0
         inc eax
 .snc_done:
-        pop edx
-        pop ecx
-        pop edi
-        pop esi
+        pop rdx
+        pop rcx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -130,9 +130,9 @@ str_ncopy:
 ; Output: EAX = total length of resulting string
 ;-----------------------------------------------------------------------
 str_cat:
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
         ; Find end of dest
         xor eax, eax
 .scat_find:
@@ -151,9 +151,9 @@ str_cat:
         inc eax
         jmp .scat_copy
 .scat_done:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -163,8 +163,8 @@ str_cat:
 ;         ZF set if equal
 ;-----------------------------------------------------------------------
 str_cmp:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .scmp_loop:
         movzx eax, byte [esi]
         movzx ecx, byte [edi]
@@ -176,8 +176,8 @@ str_cmp:
         inc edi
         jmp .scmp_loop
 .scmp_done:
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -187,10 +187,10 @@ str_cmp:
 ;         ZF set if equal
 ;-----------------------------------------------------------------------
 str_icmp:
-        push esi
-        push edi
-        push ebx
-        push edx
+        push rsi
+        push rdi
+        push rbx
+        push rdx
 .sicmp_loop:
         movzx eax, byte [esi]
         movzx ebx, byte [edi]
@@ -215,10 +215,10 @@ str_icmp:
         inc edi
         jmp .sicmp_loop
 .sicmp_done:
-        pop edx
-        pop ebx
-        pop edi
-        pop esi
+        pop rdx
+        pop rbx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -228,9 +228,9 @@ str_icmp:
 ;         ZF set if equal
 ;-----------------------------------------------------------------------
 str_ncmp:
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
         xor eax, eax
         cmp ecx, 0
         je .sncmp_done
@@ -247,9 +247,9 @@ str_ncmp:
         jnz .sncmp_loop
         xor eax, eax
 .sncmp_done:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -258,8 +258,8 @@ str_ncmp:
 ; Output: EAX = pointer to character, or 0 if not found
 ;-----------------------------------------------------------------------
 str_chr:
-        push esi
-        push ecx
+        push rsi
+        push rcx
         mov cl, al
 .schr_loop:
         mov al, [esi]
@@ -271,13 +271,13 @@ str_chr:
         jmp .schr_loop
 .schr_found:
         mov eax, esi
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         ret
 .schr_nf:
         xor eax, eax
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -286,9 +286,9 @@ str_chr:
 ; Output: EAX = pointer to character, or 0 if not found
 ;-----------------------------------------------------------------------
 str_rchr:
-        push esi
-        push ecx
-        push edx
+        push rsi
+        push rcx
+        push rdx
         mov cl, al
         xor edx, edx           ; last found = 0
 .srchr_loop:
@@ -303,9 +303,9 @@ str_rchr:
         jmp .srchr_loop
 .srchr_done:
         mov eax, edx
-        pop edx
-        pop ecx
-        pop esi
+        pop rdx
+        pop rcx
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -314,11 +314,11 @@ str_rchr:
 ; Output: EAX = pointer to first match, or 0 if not found
 ;-----------------------------------------------------------------------
 str_str:
-        push esi
-        push edi
-        push ebx
-        push ecx
-        push edx
+        push rsi
+        push rdi
+        push rbx
+        push rcx
+        push rdx
         ; Get needle length
         mov ebx, edi
         xor ecx, ecx
@@ -350,19 +350,19 @@ str_str:
         jmp .sstr_outer
 .sstr_found:
         mov eax, esi
-        pop edx
-        pop ecx
-        pop ebx
-        pop edi
-        pop esi
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rdi
+        pop rsi
         ret
 .sstr_nf:
         xor eax, eax
-        pop edx
-        pop ecx
-        pop ebx
-        pop edi
-        pop esi
+        pop rdx
+        pop rcx
+        pop rbx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -371,8 +371,8 @@ str_str:
 ; Output: EAX = 1 if yes, 0 if no
 ;-----------------------------------------------------------------------
 str_starts_with:
-        push esi
-        push edi
+        push rsi
+        push rdi
 .ssw_loop:
         cmp byte [edi], 0
         je .ssw_yes
@@ -386,13 +386,13 @@ str_starts_with:
         jmp .ssw_loop
 .ssw_yes:
         mov eax, 1
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 .ssw_no:
         xor eax, eax
-        pop edi
-        pop esi
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -401,21 +401,21 @@ str_starts_with:
 ; Output: EAX = 1 if yes, 0 if no
 ;-----------------------------------------------------------------------
 str_ends_with:
-        push esi
-        push edi
-        push ebx
-        push ecx
+        push rsi
+        push rdi
+        push rbx
+        push rcx
         ; Get string length
-        push esi
+        push rsi
         call str_len
         mov ebx, eax           ; string len
-        pop esi
+        pop rsi
         ; Get suffix length
-        push esi
+        push rsi
         mov esi, edi
         call str_len
         mov ecx, eax           ; suffix len
-        pop esi
+        pop rsi
         ; suffix longer than string?
         cmp ecx, ebx
         ja .sew_no
@@ -434,17 +434,17 @@ str_ends_with:
         jmp .sew_cmp
 .sew_yes:
         mov eax, 1
-        pop ecx
-        pop ebx
-        pop edi
-        pop esi
+        pop rcx
+        pop rbx
+        pop rdi
+        pop rsi
         ret
 .sew_no:
         xor eax, eax
-        pop ecx
-        pop ebx
-        pop edi
-        pop esi
+        pop rcx
+        pop rbx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -453,8 +453,8 @@ str_ends_with:
 ; Output: none
 ;-----------------------------------------------------------------------
 str_upper:
-        push esi
-        push eax
+        push rsi
+        push rax
 .sup_loop:
         mov al, [esi]
         cmp al, 0
@@ -469,8 +469,8 @@ str_upper:
         inc esi
         jmp .sup_loop
 .sup_done:
-        pop eax
-        pop esi
+        pop rax
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -479,8 +479,8 @@ str_upper:
 ; Output: none
 ;-----------------------------------------------------------------------
 str_lower:
-        push esi
-        push eax
+        push rsi
+        push rax
 .slo_loop:
         mov al, [esi]
         cmp al, 0
@@ -495,8 +495,8 @@ str_lower:
         inc esi
         jmp .slo_loop
 .slo_done:
-        pop eax
-        pop esi
+        pop rax
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -515,9 +515,9 @@ str_trim:
 ; Output: none (modifies in-place by shifting content left)
 ;-----------------------------------------------------------------------
 str_ltrim:
-        push eax
-        push edi
-        push ecx
+        push rax
+        push rdi
+        push rcx
         ; Find first non-space
         mov edi, esi
 .slt_skip:
@@ -538,7 +538,7 @@ str_ltrim:
         cmp edi, esi
         je .slt_done           ; no leading whitespace
         ; Shift content left
-        push esi
+        push rsi
 .slt_copy:
         mov al, [edi]
         mov [esi], al
@@ -548,11 +548,11 @@ str_ltrim:
         inc esi
         jmp .slt_copy
 .slt_shifted:
-        pop esi
+        pop rsi
 .slt_done:
-        pop ecx
-        pop edi
-        pop eax
+        pop rcx
+        pop rdi
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -561,8 +561,8 @@ str_ltrim:
 ; Output: none
 ;-----------------------------------------------------------------------
 str_rtrim:
-        push eax
-        push edi
+        push rax
+        push rdi
         ; Find end
         mov edi, esi
 .srt_end:
@@ -588,8 +588,8 @@ str_rtrim:
         mov byte [edi], 0
         jmp .srt_trim
 .srt_done:
-        pop edi
-        pop eax
+        pop rdi
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -598,9 +598,9 @@ str_rtrim:
 ; Output: none
 ;-----------------------------------------------------------------------
 str_reverse:
-        push eax
-        push esi
-        push edi
+        push rax
+        push rsi
+        push rdi
         ; Find end
         mov edi, esi
 .srev_end:
@@ -623,9 +623,9 @@ str_reverse:
         dec edi
         jmp .srev_swap
 .srev_done:
-        pop edi
-        pop esi
-        pop eax
+        pop rdi
+        pop rsi
+        pop rax
         ret
 
 ;-----------------------------------------------------------------------
@@ -634,9 +634,9 @@ str_reverse:
 ; Output: EAX = count
 ;-----------------------------------------------------------------------
 str_count_char:
-        push esi
-        push ecx
-        push edx
+        push rsi
+        push rcx
+        push rdx
         mov cl, al
         xor eax, eax
 .scc_loop:
@@ -650,9 +650,9 @@ str_count_char:
         inc esi
         jmp .scc_loop
 .scc_done:
-        pop edx
-        pop ecx
-        pop esi
+        pop rdx
+        pop rcx
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -661,9 +661,9 @@ str_count_char:
 ; Output: EAX = number of replacements
 ;-----------------------------------------------------------------------
 str_replace_char:
-        push esi
-        push ecx
-        push edx
+        push rsi
+        push rcx
+        push rdx
         mov cl, al
         mov dl, ah
         xor eax, eax
@@ -678,9 +678,9 @@ str_replace_char:
         inc esi
         jmp .src_loop
 .src_done:
-        pop edx
-        pop ecx
-        pop esi
+        pop rdx
+        pop rcx
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -692,8 +692,8 @@ str_replace_char:
 ; Note: Modifies string in-place (inserts nulls at delimiters)
 ;-----------------------------------------------------------------------
 str_token:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         mov cl, al
         ; Use saved position if ESI=0
         cmp esi, 0
@@ -727,19 +727,19 @@ str_token:
         mov byte [edi], 0      ; null-terminate token
         inc edi
         mov [_str_token_pos], edi
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 .stok_end_str:
         mov dword [_str_token_pos], 0
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 .stok_none:
         xor eax, eax
         mov dword [_str_token_pos], 0
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 
 section .bss
@@ -758,8 +758,8 @@ section .text
 ;         ECX = updated remaining bytes
 ;-----------------------------------------------------------------------
 str_split_line:
-        push edi
-        push ebx
+        push rdi
+        push rbx
         xor eax, eax
         cmp ecx, 0
         je .ssl_eof
@@ -793,8 +793,8 @@ str_split_line:
         dec ecx
 .ssl_done:
         mov byte [edi], 0      ; null-terminate
-        pop ebx
-        pop edi
+        pop rbx
+        pop rdi
         ret
 .ssl_skip_to_nl:
         cmp ecx, 0
@@ -806,8 +806,8 @@ str_split_line:
         jmp .ssl_skip_to_nl
 .ssl_eof:
         mov eax, -1
-        pop ebx
-        pop edi
+        pop rbx
+        pop rdi
         ret
 
 ;-----------------------------------------------------------------------
@@ -893,13 +893,13 @@ str_is_space:
 ; Output: none
 ;-----------------------------------------------------------------------
 mem_copy:
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
         rep movsb
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -908,11 +908,11 @@ mem_copy:
 ; Output: none
 ;-----------------------------------------------------------------------
 mem_set:
-        push edi
-        push ecx
+        push rdi
+        push rcx
         rep stosb
-        pop ecx
-        pop edi
+        pop rcx
+        pop rdi
         ret
 
 ;-----------------------------------------------------------------------
@@ -922,9 +922,9 @@ mem_set:
 ;         ZF set if equal
 ;-----------------------------------------------------------------------
 mem_cmp:
-        push esi
-        push edi
-        push ecx
+        push rsi
+        push rdi
+        push rcx
         xor eax, eax
 .mc_loop:
         cmp ecx, 0
@@ -938,9 +938,9 @@ mem_cmp:
         dec ecx
         jmp .mc_loop
 .mc_done:
-        pop ecx
-        pop edi
-        pop esi
+        pop rcx
+        pop rdi
+        pop rsi
         ret
 
 ;-----------------------------------------------------------------------
@@ -949,8 +949,8 @@ mem_cmp:
 ; Output: none
 ;-----------------------------------------------------------------------
 mem_zero:
-        push eax
+        push rax
         xor al, al
         call mem_set
-        pop eax
+        pop rax
         ret

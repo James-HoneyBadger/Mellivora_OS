@@ -87,10 +87,10 @@ start:
         ; Random character for head
         call rand
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, 94
         div ecx
-        pop ecx
+        pop rcx
         add edx, 33             ; printable ASCII 33-126
         mov al, dl
         mov ah, 0x0F            ; Bright white (the leading char)
@@ -102,7 +102,7 @@ start:
         dec ecx                 ; one behind head
 
         ; Bright green trail (3 chars behind)
-        push esi
+        push rsi
         mov esi, 3
 .trail_green:
         cmp ecx, 0
@@ -113,10 +113,10 @@ start:
         ; Random char for shimmer effect
         call rand
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, 94
         div ecx
-        pop ecx
+        pop rcx
         add edx, 33
         mov al, dl
         mov ah, 0x0A            ; Bright green
@@ -126,10 +126,10 @@ start:
         dec ecx
         dec esi
         jnz .trail_green
-        pop esi
+        pop rsi
 
         ; Dark green chars (next chunk)
-        push esi
+        push rsi
         mov esi, [drop_len + esi*4]
         sub esi, 3
         cmp esi, 1
@@ -141,18 +141,18 @@ start:
         jge .trail2_skip
 
         ; 50% chance to change char for flicker
-        push edx
+        push rdx
         call rand
         test eax, 1
-        pop edx
+        pop rdx
         jz .trail2_keep
 
         call rand
         xor edx, edx
-        push ecx
+        push rcx
         mov ecx, 94
         div ecx
-        pop ecx
+        pop rcx
         add edx, 33
         mov al, dl
         mov ah, 0x02            ; Dark green
@@ -161,22 +161,22 @@ start:
 
 .trail2_keep:
         ; Just recolor existing char to dark green
-        push edx
-        push ecx
+        push rdx
+        push rcx
         imul ecx, SCREEN_W
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov byte [ecx + 1], 0x02  ; Just change attribute
-        pop ecx
-        pop edx
+        pop rcx
+        pop rdx
 
 .trail2_skip:
         dec ecx
         dec esi
         jnz .trail_dark
 .trail2_done:
-        pop esi
+        pop rsi
 
         ; Erase the very tail
         mov ecx, [drop_row + esi*4]
@@ -248,27 +248,27 @@ start:
 ; vga_write: write char AL with attr AH at (EBX=col, ECX=row)
 ;---------------------------------------
 vga_write:
-        push ecx
-        push edx
+        push rcx
+        push rdx
         imul ecx, SCREEN_W
         add ecx, ebx
         shl ecx, 1
         add ecx, VGA_BASE
         mov [ecx], ax
-        pop edx
-        pop ecx
+        pop rdx
+        pop rcx
         ret
 
 ;---------------------------------------
 ; clear_black: fill screen with black spaces
 ;---------------------------------------
 clear_black:
-        pushad
+        PUSHALL
         mov edi, VGA_BASE
         mov eax, 0x00200020
         mov ecx, SCREEN_W * SCREEN_H / 2
         rep stosd
-        popad
+        POPALL
         ret
 
 ;---------------------------------------

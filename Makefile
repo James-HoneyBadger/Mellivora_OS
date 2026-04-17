@@ -4,14 +4,14 @@
 # Produces a bootable disk image with:
 #   Sector 0:      Stage 1 boot sector (512 bytes)
 #   Sectors 1-32:  Stage 2 loader (16 KB)
-#   Sectors 33+:   Kernel (192 KB)
+#   Sectors 33+:   Kernel (up to 1MB = 2048 sectors)
 #   Remaining:     Filesystem area
 #
-# Target: i486+ emulation via QEMU
+# Target: x86_64 emulation via QEMU
 #
 
 NASM = nasm
-QEMU = qemu-system-i386
+QEMU = qemu-system-x86_64
 DD = dd
 UNAME_S := $(shell uname -s)
 
@@ -30,6 +30,9 @@ STAGE2_SRC = stage2.asm
 KERNEL_SRC = kernel.asm
 
 # QEMU settings
+QEMU_CPU ?= qemu64
+QEMU_RAM_MB ?= 2048
+
 # Choose a host-compatible QEMU audio backend by default.
 # Override manually when needed, e.g.:
 #   make run QEMU_AUDIO_BACKEND=alsa
@@ -49,8 +52,8 @@ ifeq ($(QEMU_NO_REBOOT),1)
 QEMU_RESET_FLAGS += -no-reboot
 endif
 
-QEMU_FLAGS = -cpu 486 \
-             -m 128 \
+QEMU_FLAGS = -cpu $(QEMU_CPU) \
+			 -m $(QEMU_RAM_MB) \
              -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough \
              -boot c \
              -no-shutdown \
@@ -92,7 +95,7 @@ $(BOOT_BIN): $(BOOT_SRC)
 # Kernel include files (split for readability)
 KERNEL_INCS = $(wildcard kernel/*.inc)
 
-# Assemble 32-bit kernel
+# Assemble 64-bit kernel
 $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS)
 	$(NASM) -f bin -O0 -o $@ -l $(@:.bin=.lst) $<
 
@@ -111,7 +114,7 @@ $(STAGE2_BIN): $(STAGE2_SRC) kernel_sectors.inc
 # Layout:
 #   Offset 0x00000 (LBA 0):  boot.bin   (512 bytes)
 #   Offset 0x00200 (LBA 1):  stage2.bin (16384 bytes = 32 sectors)
-#   Offset 0x04200 (LBA 33): kernel.bin (padded to 192KB = 384 sectors)
+#   Offset 0x04200 (LBA 33): kernel.bin (up to 1MB = 2048 sectors)
 $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "=== Building Mellivora disk image ==="
 	@echo "  Boot sector:  $(BOOT_BIN)"
@@ -123,14 +126,14 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	$(DD) if=$(BOOT_BIN) of=$(IMAGE) bs=512 count=1 conv=notrunc status=none
 	# Write stage 2 at LBA 1
 	$(DD) if=$(STAGE2_BIN) of=$(IMAGE) bs=512 seek=1 conv=notrunc status=none
-	# Write kernel at LBA 33
+	# Write kernel at LBA 33 (up to 2048 sectors / 1MB reserved)
 	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
 	@echo "=== $(IMAGE) created ($(IMAGE_SIZE_MB) MB) ==="
 	@ls -la $(IMAGE)
 
-# Run in QEMU with i486 CPU
+# Run in QEMU with x86_64 CPU
 run: $(IMAGE)
-	@echo "=== Launching Mellivora in QEMU (i486 CPU, 128MB RAM) ==="
+	@echo "=== Launching Mellivora in QEMU ($(QEMU_CPU), $(QEMU_RAM_MB)MB RAM) ==="
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS)
 
@@ -253,7 +256,7 @@ help:
 	@echo "    make populate     Populate filesystem (requires programs)"
 	@echo ""
 	@echo "  Run"
-	@echo "    make run          Launch in QEMU (i486, 128 MB RAM)"
+	@echo "    make run          Launch in QEMU (default: $(QEMU_CPU), $(QEMU_RAM_MB) MB RAM)"
 	@echo "    make dev          Full build + launch in one step"
 	@echo "    make debug        Launch with QEMU monitor on stdio"
 	@echo "    make run-serial   Launch with serial on TCP port 4555"

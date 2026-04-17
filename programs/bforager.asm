@@ -298,7 +298,7 @@ start:
         int 0x80
 
 draw_browser:
-        pushad
+        PUSHALL
         ; main background
         mov eax, [win_id]
         xor ebx, ebx
@@ -474,8 +474,8 @@ draw_browser:
         jge .links_title
         cmp ebx, [page_line_count]
         jge .links_title
-        push ecx
-        push ebx
+        push rcx
+        push rbx
         mov eax, ebx
         imul eax, LINE_STRIDE
         lea esi, [page_lines + eax]
@@ -484,8 +484,8 @@ draw_browser:
         mov ecx, edx
         mov edi, 0x00000000
         call gui_draw_text
-        pop ebx
-        pop ecx
+        pop rbx
+        pop rcx
         add edx, 16
         inc ecx
         inc ebx
@@ -541,11 +541,11 @@ draw_browser:
         jmp .draw_links
 
 .draw_done:
-        popad
+        POPALL
         ret
 
 browser_navigate:
-        pushad
+        PUSHALL
         mov esi, address_buf
         call trim_leading_spaces
         cmp byte [esi], 0
@@ -576,11 +576,11 @@ browser_navigate:
         call fetch_http_page
  .bn_done:
         mov byte [history_suppress], 0
-        popad
+        POPALL
         ret
 
 browser_go_back:
-        pushad
+        PUSHALL
         cmp dword [history_index], 0
         jle .bgb_done
         dec dword [history_index]
@@ -589,11 +589,11 @@ browser_go_back:
         mov byte [history_suppress], 1
         call browser_navigate
 .bgb_done:
-        popad
+        POPALL
         ret
 
 browser_go_forward:
-        pushad
+        PUSHALL
         mov eax, [history_index]
         inc eax
         cmp eax, [history_count]
@@ -603,11 +603,11 @@ browser_go_forward:
         mov byte [history_suppress], 1
         call browser_navigate
 .bgf_done:
-        popad
+        POPALL
         ret
 
 browser_go_home:
-        pushad
+        PUSHALL
         mov esi, home_url
         mov edi, address_buf
         call copy_zstr
@@ -615,11 +615,11 @@ browser_go_home:
         call str_len
         mov [address_len], eax
         call browser_navigate
-        popad
+        POPALL
         ret
 
 browser_set_home:
-        pushad
+        PUSHALL
         cmp byte [address_buf], 0
         je .bsh_done
         mov esi, address_buf
@@ -629,11 +629,11 @@ browser_set_home:
         mov edi, status_buf
         call copy_zstr
 .bsh_done:
-        popad
+        POPALL
         ret
 
 build_home_indicator:
-        pushad
+        PUSHALL
         mov edi, home_ind_buf
         mov esi, home_prefix
         call copy_zstr
@@ -650,21 +650,21 @@ build_home_indicator:
         jb .bhi_loop
 .bhi_done:
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 browser_reload_current:
-        pushad
+        PUSHALL
         cmp byte [address_buf], 0
         je .brc_done
         mov byte [history_suppress], 1
         call browser_navigate
 .brc_done:
-        popad
+        POPALL
         ret
 
 history_push_current:
-        pushad
+        PUSHALL
         cmp dword [history_count], 0
         je .hpc_store_new
         mov eax, [history_index]
@@ -704,11 +704,11 @@ history_push_current:
         inc eax
         mov [history_count], eax
 .hpc_done:
-        popad
+        POPALL
         ret
 
 history_shift_left:
-        pushad
+        PUSHALL
         mov esi, history_buf + HISTORY_STRIDE
         mov edi, history_buf
         mov ecx, ((MAX_HISTORY - 1) * HISTORY_STRIDE) / 4
@@ -717,11 +717,11 @@ history_shift_left:
         xor eax, eax
         mov ecx, HISTORY_STRIDE / 4
         rep stosd
-        popad
+        POPALL
         ret
 
 history_load_index:
-        pushad
+        PUSHALL
         imul eax, HISTORY_STRIDE
         lea esi, [history_buf + eax]
         mov edi, address_buf
@@ -729,11 +729,11 @@ history_load_index:
         mov esi, address_buf
         call str_len
         mov [address_len], eax
-        popad
+        POPALL
         ret
 
 dispatch_non_http:
-        pushad
+        PUSHALL
         call build_dispatch_command
         mov ebx, exec_buf
         mov eax, SYS_EXEC
@@ -744,11 +744,11 @@ dispatch_non_http:
         mov edi, status_buf
         call copy_zstr
 .dn_done:
-        popad
+        POPALL
         ret
 
 fetch_http_page:
-        pushad
+        PUSHALL
         call clear_page_state
         mov esi, msg_connecting
         mov edi, status_buf
@@ -825,7 +825,7 @@ fetch_http_page:
         mov edi, status_buf
         call copy_zstr
         mov byte [http_redir_count], 0
-        popad
+        POPALL
         ret
 
 .do_redirect:
@@ -834,7 +834,7 @@ fetch_http_page:
         cmp byte [http_redir_count], http_redir_max
         jg .redir_limit
         call parse_url
-        popad
+        POPALL
         jmp fetch_http_page
 
 .redir_limit:
@@ -842,7 +842,7 @@ fetch_http_page:
         mov esi, msg_redir_limit
         mov edi, status_buf
         call copy_zstr
-        popad
+        POPALL
         ret
 
 .do_dechunk:
@@ -852,20 +852,20 @@ fetch_http_page:
         mov edi, status_buf
         call copy_zstr
         mov byte [http_redir_count], 0
-        popad
+        POPALL
         ret
 
 .dns_fail:
         mov esi, msg_dns_fail
         mov edi, status_buf
         call copy_zstr
-        popad
+        POPALL
         ret
 .sock_fail:
         mov esi, msg_sock_fail
         mov edi, status_buf
         call copy_zstr
-        popad
+        POPALL
         ret
 .connect_fail:
         mov eax, [sockfd]
@@ -873,7 +873,7 @@ fetch_http_page:
         mov esi, msg_conn_fail
         mov edi, status_buf
         call copy_zstr
-        popad
+        POPALL
         ret
 .send_fail:
         mov eax, [sockfd]
@@ -881,11 +881,11 @@ fetch_http_page:
         mov esi, msg_send_fail
         mov edi, status_buf
         call copy_zstr
-        popad
+        POPALL
         ret
 
 append_response:
-        pushad
+        PUSHALL
         mov edi, response_buf
         add edi, [response_len]
         mov eax, MAX_RESPONSE - 1
@@ -900,7 +900,7 @@ append_response:
         rep movsb
         add [response_len], edx
 .ar_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -909,9 +909,9 @@ append_response:
 ;          EAX = 0 if no redirect
 ;---------------------------------------
 check_http_redirect:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
         mov esi, response_buf
         ; Check "HTTP/1.x 3xx"
         ; Skip to status code (after first space)
@@ -982,18 +982,18 @@ check_http_redirect:
         mov byte [edi + ecx], 0
         mov esi, address_buf
         mov eax, 1
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 .chr_next:
         inc esi
         jmp .chr_find_loc
 .chr_no:
         xor eax, eax
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ;---------------------------------------
@@ -1001,8 +1001,8 @@ check_http_redirect:
 ; Returns: EAX = 1 if chunked, 0 if not
 ;---------------------------------------
 check_chunked_encoding:
-        push esi
-        push ecx
+        push rsi
+        push rcx
         mov esi, response_buf
 .cce_loop:
         cmp byte [esi], 0
@@ -1039,16 +1039,16 @@ check_chunked_encoding:
         cmp al, 'd'
         jne .cce_next
         mov eax, 1
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         ret
 .cce_next:
         inc esi
         jmp .cce_loop
 .cce_no:
         xor eax, eax
-        pop ecx
-        pop esi
+        pop rcx
+        pop rsi
         ret
 
 ;---------------------------------------
@@ -1056,7 +1056,7 @@ check_chunked_encoding:
 ; Finds the body (after \r\n\r\n) and reassembles chunks
 ;---------------------------------------
 dechunk_response:
-        pushad
+        PUSHALL
         ; Find body start
         mov esi, response_buf
         mov ecx, [response_len]
@@ -1130,11 +1130,11 @@ dechunk_response:
         mov [response_len], eax
         mov byte [edi], 0
 .dc_done:
-        popad
+        POPALL
         ret
 
 parse_response_body:
-        pushad
+        PUSHALL
         mov esi, response_buf
         mov ecx, [response_len]
 .find_body:
@@ -1153,11 +1153,11 @@ parse_response_body:
 .parse_now:
         call parse_links
         call parse_text
-        popad
+        POPALL
         ret
 
 parse_links:
-        pushad
+        PUSHALL
         mov dword [link_count], 0
 .pl_loop:
         mov al, [esi]
@@ -1225,7 +1225,7 @@ parse_links:
         jb .copy_loop
 .link_done:
         mov byte [ebx + ecx], 0
-        push esi
+        push rsi
         mov esi, ebx
         mov edi, link_label_tmp
         call copy_link_label
@@ -1234,17 +1234,17 @@ parse_links:
         lea edi, [link_labels + eax]
         mov esi, link_label_tmp
         call copy_zstr
-        pop esi
+        pop rsi
         inc dword [link_count]
 .pl_next:
         inc esi
         jmp .pl_loop
 .pl_done:
-        popad
+        POPALL
         ret
 
 parse_text:
-        pushad
+        PUSHALL
         mov dword [page_line_count], 1
         mov dword [cur_line], 0
         mov dword [cur_col], 0
@@ -1291,11 +1291,11 @@ parse_text:
         inc esi
         jmp .pt_loop
 .pt_done:
-        popad
+        POPALL
         ret
 
 maybe_break_before_tag:
-        pushad
+        PUSHALL
         mov al, [esi + 1]
         or al, 0x20
         cmp al, 'b'
@@ -1314,11 +1314,11 @@ maybe_break_before_tag:
 .mb_break:
         call page_newline
 .mb_done:
-        popad
+        POPALL
         ret
 
 append_page_char:
-        pushad
+        PUSHALL
         mov dl, al
         cmp dword [cur_line], MAX_LINES
         jge .apc_done
@@ -1337,11 +1337,11 @@ append_page_char:
         add eax, [cur_col]
         mov byte [page_lines + eax], 0
 .apc_done:
-        popad
+        POPALL
         ret
 
 page_newline:
-        pushad
+        PUSHALL
         cmp dword [cur_line], MAX_LINES - 1
         jge .pnl_done
         inc dword [cur_line]
@@ -1350,20 +1350,20 @@ page_newline:
         inc eax
         mov [page_line_count], eax
 .pnl_done:
-        popad
+        POPALL
         ret
 
 clear_page_lines:
-        pushad
+        PUSHALL
         mov edi, page_lines
         xor eax, eax
         mov ecx, MAX_LINES * LINE_STRIDE / 4
         rep stosd
-        popad
+        POPALL
         ret
 
 clear_page_state:
-        pushad
+        PUSHALL
         mov dword [link_count], 0
         mov dword [scroll_line], 0
         mov dword [page_line_count], 1
@@ -1379,11 +1379,11 @@ clear_page_state:
         mov ecx, (MAX_LINKS * LINK_STRIDE) / 4
         rep stosd
         call clear_page_lines
-        popad
+        POPALL
         ret
 
 build_http_request:
-        pushad
+        PUSHALL
         mov edi, request_buf
         mov dword [edi], 'GET '
         add edi, 4
@@ -1427,13 +1427,13 @@ build_http_request:
         mov eax, edi
         sub eax, request_buf
         mov [request_len], eax
-        popad
+        POPALL
         ret
 
 parse_url:
         ; Input: ESI -> URL string
         ; Output: EAX = scheme id, hostname/path/port filled
-        pushad
+        PUSHALL
         mov eax, SCHEME_HTTP
         mov [scheme_id], eax
         mov word [port], 80
@@ -1591,12 +1591,12 @@ parse_url:
         mov byte [edi], 0
 .pz_done:
         mov eax, [scheme_id]
-        mov [esp + 28], eax
-        popad
+        mov [rsp + 112], eax
+        POPALL
         ret
 
 build_dispatch_command:
-        pushad
+        PUSHALL
         mov edi, exec_buf
         mov eax, [scheme_id]
         cmp eax, SCHEME_FTP
@@ -1664,12 +1664,12 @@ build_dispatch_command:
         call u32_to_ascii
 .bdc_done:
         mov byte [edi], 0
-        popad
+        POPALL
         ret
 
 click_link_hit:
         ; EBX = x, ECX = y relative to window
-        pushad
+        PUSHALL
         mov eax, -1
         cmp ecx, LINKS_Y + 24
         jl .clh_done
@@ -1702,23 +1702,23 @@ click_link_hit:
 .clh_miss:
         mov eax, -1
 .clh_done:
-        mov [esp + 28], eax
-        popad
+        mov [rsp + 112], eax
+        POPALL
         ret
 
 navigate_link_index:
-        pushad
+        PUSHALL
         imul eax, LINK_STRIDE
         lea esi, [link_urls + eax]
-        mov [link_nav_ptr], esi
+        mov [link_nav_ptr], rsi
         call resolve_link_address
         call browser_navigate
-        popad
+        POPALL
         ret
 
 resolve_link_address:
-        pushad
-        mov esi, [link_nav_ptr]
+        PUSHALL
+        mov rsi, [link_nav_ptr]
         mov al, [esi]
         test al, al
         jz .rla_done
@@ -1743,7 +1743,7 @@ resolve_link_address:
         mov esi, hostname
         call copy_zstr
         dec edi
-        mov esi, [link_nav_ptr]
+        mov rsi, [link_nav_ptr]
         jmp .copy_tail
 .relative_simple:
         mov edi, address_buf
@@ -1755,22 +1755,22 @@ resolve_link_address:
         dec edi
         mov al, '/'
         stosb
-        mov esi, [link_nav_ptr]
+        mov rsi, [link_nav_ptr]
         jmp .copy_tail
 .copy_abs:
         mov edi, address_buf
-        mov esi, [link_nav_ptr]
+        mov rsi, [link_nav_ptr]
 .copy_tail:
         call copy_zstr
         mov esi, address_buf
         call str_len
         mov [address_len], eax
 .rla_done:
-        popad
+        POPALL
         ret
 
 copy_link_label:
-        pushad
+        PUSHALL
         xor ecx, ecx
 .cll_loop:
         mov al, [esi + ecx]
@@ -1782,22 +1782,22 @@ copy_link_label:
         jb .cll_loop
 .cll_done:
         mov byte [edi + ecx], 0
-        popad
+        POPALL
         ret
 
 copy_zstr:
         ; ESI src, EDI dst
-        push eax
+        push rax
 .cz_loop:
         lodsb
         stosb
         test al, al
         jnz .cz_loop
-        pop eax
+        pop rax
         ret
 
 str_len:
-        push ecx
+        push rcx
         xor eax, eax
 .sl_loop:
         cmp byte [esi + eax], 0
@@ -1805,23 +1805,23 @@ str_len:
         inc eax
         jmp .sl_loop
 .sl_done:
-        pop ecx
+        pop rcx
         ret
 
 trim_leading_spaces:
         ; ESI input, returns trimmed ESI
-        push eax
+        push rax
 .tls_loop:
         cmp byte [esi], ' '
         jne .tls_done
         inc esi
         jmp .tls_loop
 .tls_done:
-        pop eax
+        pop rax
         ret
 
 trim_trailing_spaces:
-        pushad
+        PUSHALL
         mov edi, esi
         call str_len
         test eax, eax
@@ -1836,12 +1836,12 @@ trim_trailing_spaces:
         dec edi
         jmp .tts_loop
 .tts_done:
-        popad
+        POPALL
         ret
 
 str_eq:
         ; ESI left, EDI right, returns EAX = 1 if equal else 0
-        push ebx
+        push rbx
         xor eax, eax
 .seq_loop:
         mov bl, [esi]
@@ -1855,12 +1855,12 @@ str_eq:
 .seq_match:
         mov eax, 1
 .seq_done:
-        pop ebx
+        pop rbx
         ret
 
 u32_to_ascii:
         ; EAX value, EDI buffer write cursor
-        pushad
+        PUSHALL
         cmp eax, 0
         jne .uta_nonzero
         mov byte [edi], '0'
@@ -1872,19 +1872,19 @@ u32_to_ascii:
 .uta_push:
         xor edx, edx
         div ebx
-        push edx
+        push rdx
         inc ecx
         test eax, eax
         jnz .uta_push
 .uta_pop:
-        pop eax
+        pop rax
         add al, '0'
         stosb
         dec ecx
         jnz .uta_pop
 .uta_done:
-        mov [esp + 28], edi
-        popad
+        mov [rsp + 112], edi
+        POPALL
         ret
 
 title_str:      db "BForager", 0
@@ -1934,7 +1934,7 @@ sockfd:         dd 0
 request_len:    dd 0
 response_len:   dd 0
 retry_count:    dd 0
-link_nav_ptr:   dd 0
+link_nav_ptr:   dq 0
 link_draw_idx:  dd 0
 link_draw_x:    dd 0
 link_draw_y:    dd 0

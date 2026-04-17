@@ -169,7 +169,7 @@ do_decode:
         jl .dec_done
 
         ; Decode 4 chars to 3 bytes
-        push ecx
+        push rcx
         xor edx, edx       ; accumulator
 
         ; Char 1
@@ -231,7 +231,7 @@ do_decode:
         jmp .dec_adv
 
 .dec_adv:
-        pop ecx
+        pop rcx
         add esi, 4
         sub ecx, 4
         jmp .dec_loop

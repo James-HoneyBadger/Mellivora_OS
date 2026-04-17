@@ -82,7 +82,7 @@ start:
 
 ;---------------------------------------
 pick_word:
-        pushad
+        PUSHALL
         ; Use gettime as index into word list
         mov eax, SYS_GETTIME
         int 0x80
@@ -106,12 +106,12 @@ pick_word:
         mov byte [edi + ecx], 0
 .pw_done:
         mov [word_len], ecx
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 init_round:
-        pushad
+        PUSHALL
         mov dword [wrong], 0
         mov byte [won], 0
         ; Clear guessed letters
@@ -123,7 +123,7 @@ init_round:
         mov edi, reveal
         mov ecx, MAX_WORD
         rep stosb
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -161,14 +161,14 @@ get_guess:
         ; Mark as guessed
         mov byte [guessed + ecx], 1
         ; Echo letter
-        push eax
+        push rax
         movzx ebx, al
         mov eax, SYS_PUTCHAR
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
-        pop eax
+        pop rax
         ret
 .gg_quit:
         xor eax, eax
@@ -177,7 +177,7 @@ get_guess:
 ;---------------------------------------
 check_guess:
         ; AL = guessed letter (lowercase)
-        pushad
+        PUSHALL
         mov dl, al              ; save letter
         xor ecx, ecx
         xor ebx, ebx           ; hit flag
@@ -222,12 +222,12 @@ check_guess:
         jmp .cg_wloop
 
 .cg_end:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 draw_screen:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -333,7 +333,7 @@ draw_screen:
         cmp byte [reveal + ecx], 1
         jne .ds_blank
         ; Show letter
-        push ecx
+        push rcx
         movzx ebx, byte [cur_word + ecx]
         ; Uppercase for display
         cmp bl, 'a'
@@ -347,17 +347,17 @@ draw_screen:
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
         jmp .ds_wnext
 .ds_blank:
-        push ecx
+        push rcx
         mov eax, SYS_PUTCHAR
         mov ebx, '_'
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
 .ds_wnext:
         inc ecx
         jmp .ds_word
@@ -383,14 +383,14 @@ draw_screen:
         jge .ds_gdone
         cmp byte [guessed + ecx], 0
         je .ds_gnext
-        push ecx
+        push rcx
         lea ebx, [ecx + 'A']
         mov eax, SYS_PUTCHAR
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop rcx
 .ds_gnext:
         inc ecx
         jmp .ds_gloop
@@ -414,7 +414,7 @@ draw_screen:
         mov ebx, 10
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================

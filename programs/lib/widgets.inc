@@ -14,15 +14,15 @@
 ;     [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=text_ptr(d), [12]=pressed(b)
 ;---------------------------------------
 wgt_draw_button:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ecx, eax
         mov esi, ebx
         mov ebx, GUI_DRAW_BUTTON
         mov eax, SYS_GUI
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ret
 
 ;---------------------------------------
@@ -32,15 +32,15 @@ wgt_draw_button:
 ;     [0]=x(w), [2]=y(w), [4]=checked(b), [8]=text_ptr(d)
 ;---------------------------------------
 wgt_draw_checkbox:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ecx, eax
         mov esi, ebx
         mov ebx, GUI_DRAW_CHECKBOX
         mov eax, SYS_GUI
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ret
 
 ;---------------------------------------
@@ -50,15 +50,15 @@ wgt_draw_checkbox:
 ;     [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=value(b 0-100)
 ;---------------------------------------
 wgt_draw_progress:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ecx, eax
         mov esi, ebx
         mov ebx, GUI_DRAW_PROGRESS
         mov eax, SYS_GUI
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ret
 
 ;---------------------------------------
@@ -68,15 +68,15 @@ wgt_draw_progress:
 ;     [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=text_ptr(d), [12]=focused(b)
 ;---------------------------------------
 wgt_draw_textbox:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ecx, eax
         mov esi, ebx
         mov ebx, GUI_DRAW_TEXTBOX
         mov eax, SYS_GUI
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ret
 
 ;---------------------------------------
@@ -88,15 +88,15 @@ wgt_draw_textbox:
 ;     [16]=scroll(w), [18]=item_len(w)
 ;---------------------------------------
 wgt_draw_listbox:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ecx, eax
         mov esi, ebx
         mov ebx, GUI_DRAW_LISTBOX
         mov eax, SYS_GUI
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ret
 
 ;---------------------------------------
@@ -106,15 +106,15 @@ wgt_draw_listbox:
 ;     [0]=x(w), [2]=y(w), [4]=text_ptr(d), [8]=color(d)
 ;---------------------------------------
 wgt_draw_label:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ecx, eax
         mov esi, ebx
         mov ebx, GUI_DRAW_LABEL
         mov eax, SYS_GUI
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ret
 
 ;---------------------------------------
@@ -124,13 +124,13 @@ wgt_draw_label:
 ;     [0]=x(w), [2]=y(w), [4]=w(w), [6]=h(w), [8]=color(d), [12]=filled(b)
 ;---------------------------------------
 wgt_draw_rect:
-        push ecx
-        push esi
+        push rcx
+        push rsi
         mov ecx, eax
         mov esi, ebx
         mov ebx, GUI_DRAW_RECT
         mov eax, SYS_GUI
         int 0x80
-        pop esi
-        pop ecx
+        pop rsi
+        pop rcx
         ret

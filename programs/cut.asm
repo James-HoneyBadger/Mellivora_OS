@@ -296,8 +296,8 @@ parse_field_list:
 
 ; Set field bit for field number in EAX (1..64)
 set_field_bit:
-        push ebx
-        push ecx
+        push rbx
+        push rcx
         mov ecx, eax
         dec ecx
         cmp ecx, 32
@@ -308,8 +308,8 @@ set_field_bit:
         mov ebx, [field_mask_hi]
         or ebx, eax
         mov [field_mask_hi], ebx
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 .sfb_low:
         mov eax, 1
@@ -317,16 +317,16 @@ set_field_bit:
         mov ebx, [field_mask_lo]
         or ebx, eax
         mov [field_mask_lo], ebx
-        pop ecx
-        pop ebx
+        pop rcx
+        pop rbx
         ret
 
 ; Test if field number in EAX (1..64) is selected.
 ; Returns CF=1 if selected, CF=0 otherwise.
 is_field_selected:
-        push eax
-        push ebx
-        push ecx
+        push rax
+        push rbx
+        push rcx
         cmp eax, 1
         jl .ifs_no
         cmp eax, 64
@@ -346,15 +346,15 @@ is_field_selected:
         jc .ifs_yes
         jmp .ifs_no
 .ifs_yes:
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         stc
         ret
 .ifs_no:
-        pop ecx
-        pop ebx
-        pop eax
+        pop rcx
+        pop rbx
+        pop rax
         clc
         ret
 

@@ -110,7 +110,7 @@ parse_number:
 
 ;=== Draw the calendar ===
 draw_calendar:
-        pushad
+        PUSHALL
         ; Print header: "  Month Year"
         mov eax, SYS_SETCOLOR
         mov ebx, 0x1F           ; white on blue
@@ -167,17 +167,17 @@ draw_calendar:
         ; y + y/4 - y/100 + y/400
         mov ebx, eax            ; y
         xor edx, edx
-        push eax
+        push rax
         mov ecx, 4
         div ecx                 ; y/4
         add ebx, eax
-        pop eax
-        push eax
+        pop rax
+        push rax
         xor edx, edx
         mov ecx, 100
         div ecx                 ; y/100
         sub ebx, eax
-        pop eax
+        pop rax
         xor edx, edx
         mov ecx, 400
         div ecx                 ; y/400
@@ -264,11 +264,11 @@ draw_calendar:
         cmp eax, 10
         jge .two_digits
         ; Single digit: print 2 leading spaces + digit + space
-        push eax
+        push rax
         mov eax, SYS_PRINT
         mov ebx, msg_cell_2sp
         int 0x80
-        pop eax
+        pop rax
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
@@ -277,11 +277,11 @@ draw_calendar:
 
 .two_digits:
         ; Two digits: print 1 leading space + digits + space
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop eax
+        pop rax
         call print_dec
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
@@ -289,11 +289,11 @@ draw_calendar:
 
 .day_printed:
         ; Reset color after today highlight
-        push ecx
+        push rcx
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07
         int 0x80
-        pop ecx
+        pop rcx
 
         inc ecx                 ; next column
         cmp ecx, 7
@@ -316,7 +316,7 @@ draw_calendar:
         mov ebx, msg_newline
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=== Leap year check ===

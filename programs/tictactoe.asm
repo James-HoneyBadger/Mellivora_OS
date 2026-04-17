@@ -144,7 +144,7 @@ quit:
 ; draw_board: Display the current board
 ;--------------------------------------
 draw_board:
-        pusha
+        PUSHALL
 
         mov eax, SYS_PRINT
         mov ebx, newline
@@ -158,9 +158,9 @@ draw_board:
         int 0x80
 
         ; Cell 0 of row
-        push ecx
+        push rcx
         call .draw_cell
-        pop ecx
+        pop rcx
         inc ecx
 
         mov eax, SYS_PRINT
@@ -168,9 +168,9 @@ draw_board:
         int 0x80
 
         ; Cell 1 of row
-        push ecx
+        push rcx
         call .draw_cell
-        pop ecx
+        pop rcx
         inc ecx
 
         mov eax, SYS_PRINT
@@ -178,9 +178,9 @@ draw_board:
         int 0x80
 
         ; Cell 2 of row
-        push ecx
+        push rcx
         call .draw_cell
-        pop ecx
+        pop rcx
         inc ecx
 
         mov eax, SYS_PRINT
@@ -200,7 +200,7 @@ draw_board:
         mov eax, SYS_PRINT
         mov ebx, newline
         int 0x80
-        popa
+        POPALL
         ret
 
 .draw_cell:
@@ -295,7 +295,7 @@ check_draw:
 ; cpu_move: CPU plays optimally (minimax-lite)
 ;--------------------------------------
 cpu_move:
-        pusha
+        PUSHALL
 
         ; 1. Try to win
         mov edx, COMP
@@ -340,7 +340,7 @@ cpu_move:
 .place:
         mov byte [board + eax], COMP
 .done_cpu:
-        popa
+        POPALL
         ret
 
 ;--------------------------------------
@@ -348,15 +348,15 @@ cpu_move:
 ; Returns cell index in EAX, or -1
 ;--------------------------------------
 try_complete:
-        push esi
-        push ecx
-        push ebx
+        push rsi
+        push rcx
+        push rbx
         mov esi, win_lines
         mov ecx, 8
 .tc_loop:
         movzx eax, byte [esi]      ; a
         movzx ebx, byte [esi+1]    ; b
-        push edx
+        push rdx
         movzx edx, byte [esi+2]    ; c
         ; Count pieces
         xor edi, edi        ; count of player
@@ -387,29 +387,29 @@ try_complete:
 .not_c:
         cmp byte [board + edx], EMPTY
         jne .eval
-        push edx
+        push rdx
         movzx edx, byte [esi+2]
         mov [.empty_cell], edx
-        pop edx
+        pop rdx
 .eval:
-        pop edx
+        pop rdx
         cmp edi, 2
         jne .tc_next
         cmp dword [.empty_cell], -1
         je .tc_next
         mov eax, [.empty_cell]
-        pop ebx
-        pop ecx
-        pop esi
+        pop rbx
+        pop rcx
+        pop rsi
         ret
 .tc_next:
         add esi, 3
         dec ecx
         jnz .tc_loop
         mov eax, -1
-        pop ebx
-        pop ecx
-        pop esi
+        pop rbx
+        pop rcx
+        pop rsi
         ret
 
 .empty_cell: dd 0

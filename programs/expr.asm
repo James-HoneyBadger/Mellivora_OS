@@ -86,11 +86,11 @@ start:
         ; Check if negative
         test eax, eax
         jns .positive
-        push eax
+        push rax
         mov eax, SYS_PUTCHAR
         mov ebx, '-'
         int 0x80
-        pop eax
+        pop rax
         neg eax
 .positive:
         call print_dec

@@ -23,9 +23,9 @@ start:
 
 .fib_loop:
         ; Print index
-        push ecx
-        push esi
-        push edi
+        push rcx
+        push rsi
+        push rdi
 
         ; Print "F(nn) = "
         mov eax, SYS_PRINT
@@ -58,9 +58,9 @@ start:
         mov ebx, 0x0A
         int 0x80
 
-        pop edi
-        pop esi
-        pop ecx
+        pop rdi
+        pop rsi
+        pop rcx
 
         ; Calculate next: new = esi + edi, shift
         cmp ecx, 1

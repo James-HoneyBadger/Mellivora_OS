@@ -1,0 +1,36 @@
+# GitHub CODEOWNERS
+# Automatically assigns reviewers for pull requests
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Global owner (all files not matched below)
+* @James-HoneyBadger
+
+# Kernel subsystems
+/kernel/                     @James-HoneyBadger
+/boot.asm                    @James-HoneyBadger
+/stage2.asm                  @James-HoneyBadger
+/kernel.asm                  @James-HoneyBadger
+
+# Programs and libraries
+/programs/                   @James-HoneyBadger
+/samples/                    @James-HoneyBadger
+
+# Documentation
+/docs/                       @James-HoneyBadger
+README.md                    @James-HoneyBadger
+CONTRIBUTING.md              @James-HoneyBadger
+ROADMAP.md                   @James-HoneyBadger
+
+# GitHub workflows and templates
+/.github/workflows/          @James-HoneyBadger
+/.github/ISSUE_TEMPLATE/     @James-HoneyBadger
+/.github/pull_request_template.md  @James-HoneyBadger
+
+# Build and test
+Makefile                     @James-HoneyBadger
+populate.py                  @James-HoneyBadger
+tests/                       @James-HoneyBadger
+
+# Configuration
+Containerfile                @James-HoneyBadger
+.github/                     @James-HoneyBadger

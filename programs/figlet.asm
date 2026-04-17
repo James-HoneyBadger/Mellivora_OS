@@ -75,11 +75,11 @@ start:
         je .dash
         ; Default: space
 .space_char:
-        push esi
+        push rsi
         mov eax, SYS_PRINT
         mov ebx, str_space
         int 0x80
-        pop esi
+        pop rsi
         jmp .char_loop
 
 .exclaim:
@@ -98,7 +98,7 @@ start:
 .print_glyph:
         ; EDX = glyph index, EBP = row
         ; Address = font_data + (index * FONT_HEIGHT + row) * CHAR_WIDTH
-        push esi
+        push rsi
         mov eax, edx
         imul eax, FONT_HEIGHT
         add eax, ebp
@@ -106,7 +106,7 @@ start:
         lea ebx, [font_data + eax]
         mov eax, SYS_PRINT
         int 0x80
-        pop esi
+        pop rsi
         jmp .char_loop
 
 .row_end:

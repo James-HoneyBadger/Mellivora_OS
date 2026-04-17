@@ -165,7 +165,7 @@ start:
 ;=======================================================================
 
 check_wall_collision:
-        pushad
+        PUSHALL
         ; Check if player is inside a wall, push them back
         mov eax, [player_x]
         sar eax, FP_SHIFT
@@ -191,7 +191,7 @@ check_wall_collision:
         mov dword [player_x], (3 * FP_ONE + FP_HALF)
         mov dword [player_y], (3 * FP_ONE + FP_HALF)
 .cwc_ok:
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -199,7 +199,7 @@ check_wall_collision:
 ;=======================================================================
 
 render_frame:
-        pushad
+        PUSHALL
 
         ; Draw ceiling (dark gray)
         mov eax, [win_id]
@@ -257,33 +257,33 @@ render_frame:
         ; EAX = distance (fixed-point), EBX = wall type
 
         ; Correct for fisheye: dist *= cos(ray_angle - player_angle)
-        push ebx
+        push rbx
         mov ecx, [.ray_angle]
         sub ecx, [player_angle]
         ; Approximate cos for small angles: 1 - x^2/2
         ; For simplicity, use lookup cos
-        push eax
+        push rax
         mov eax, ecx
         call fp_cos
         mov ecx, eax           ; cos value
-        pop eax
+        pop rax
         imul eax, ecx
         sar eax, FP_SHIFT
-        pop ebx
+        pop rbx
 
         ; Calculate wall height
         ; wall_height = VIEW_H * FP_ONE / distance
         cmp eax, 1
         jl .wall_max
-        push ebx
-        push edx
+        push rbx
+        push rdx
         mov ecx, eax           ; Distance
         mov eax, VIEW_H
         shl eax, FP_SHIFT
         cdq
         idiv ecx
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         ; EAX = wall height in pixels
         cmp eax, VIEW_H
         jle .wall_clip_ok
@@ -312,31 +312,31 @@ render_frame:
         cmp ecx, VIEW_H
         jge .no_shade
         ; Scale each channel
-        push eax
+        push rax
         ; Extract R, G, B and scale by wall_h / VIEW_H
         mov edx, eax
         and edx, 0xFF         ; Blue
         imul edx, ecx
         xor ebx, ebx
         mov ebx, VIEW_H
-        push eax
+        push rax
         mov eax, edx
         xor edx, edx
         div ebx
         mov esi, eax            ; shaded B
-        pop eax
+        pop rax
 
         mov edx, eax
         shr edx, 8
         and edx, 0xFF         ; Green
         imul edx, ecx
-        push eax
+        push rax
         mov eax, edx
         xor edx, edx
         div ebx
         shl eax, 8
         or esi, eax             ; shaded G
-        pop eax
+        pop rax
 
         mov edx, eax
         shr edx, 16
@@ -348,7 +348,7 @@ render_frame:
         shl eax, 16
         or esi, eax             ; shaded R
 
-        pop eax                 ; discard original color
+        pop rax                 ; discard original color
         mov eax, esi
         jmp .draw_wall
 .no_shade:
@@ -356,16 +356,16 @@ render_frame:
 
 .draw_wall:
         ; Draw wall column: x=edi, y=wall_top, w=1, h=wall_h
-        push edi
+        push rdi
         mov ecx, [.wall_top]
         mov edx, 1
         mov esi, [.wall_h]
-        push eax               ; Save color
+        push rax               ; Save color
         mov eax, [win_id]
         mov ebx, edi
-        pop edi                 ; Color
+        pop rdi                 ; Color
         call gui_fill_rect
-        pop edi
+        pop rdi
 
 .cast_next:
         inc edi
@@ -392,7 +392,7 @@ render_frame:
         ; Draw minimap
         call draw_minimap
 
-        popad
+        POPALL
         ret
 
 .ray_angle: dd 0
@@ -407,14 +407,14 @@ render_frame:
 ; ECX = ray angle (16.16 fixed-point)
 ; Returns: EAX = distance, BL = wall type
 cast_ray:
-        pushad
+        PUSHALL
 
         ; Get ray direction components
         mov eax, ecx
-        push ecx
+        push rcx
         call fp_cos
         mov [.ray_dx], eax     ; cos(angle)
-        pop ecx
+        pop rcx
         mov eax, ecx
         call fp_sin
         mov [.ray_dy], eax     ; sin(angle)
@@ -502,17 +502,17 @@ cast_ray:
         shr ebx, 1
         add eax, ebx
 
-        ; Return via pushad frame
-        mov [esp + 28], eax    ; EAX = distance
+        ; Return via PUSHALL frame
+        mov [rsp + 112], eax    ; EAX = distance
         movzx eax, byte [.hit_type]
-        mov [esp + 16], eax    ; EBX = wall type (low byte)
-        popad
+        mov [rsp + 104], eax    ; EBX = wall type (low byte)
+        POPALL
         ret
 
 .ray_miss:
-        mov dword [esp + 28], MAX_DIST
-        mov dword [esp + 16], 0
-        popad
+        mov dword [rsp + 112], MAX_DIST
+        mov dword [rsp + 104], 0
+        POPALL
         ret
 
 .ray_dx:     dd 0
@@ -529,7 +529,7 @@ cast_ray:
 ;=======================================================================
 
 draw_minimap:
-        pushad
+        PUSHALL
         ; Draw in bottom-right corner of HUD
         ; Each map cell = 2x2 pixels
         MINI_X equ (WIN_W - MAP_W * 2 - 8)
@@ -601,7 +601,7 @@ draw_minimap:
         mov edi, 0x00FFFF00   ; Yellow
         call gui_fill_rect
 
-        popad
+        POPALL
         ret
 
 .mm_color: dd 0
@@ -623,9 +623,9 @@ TRIG_TABLE_SIZE equ 64
 ; EAX = angle in 16.16 fixed-point radians
 ; Returns: EAX = sin(angle) in 16.16
 fp_sin:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         ; Normalize to [0, TWO_PI_FP)
 .sin_norm:
@@ -647,18 +647,18 @@ fp_sin:
         and eax, (TRIG_TABLE_SIZE - 1)
         mov eax, [sin_table + eax*4]
 
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ; fp_cos - Fixed-point cosine
 ; EAX = angle in 16.16 fixed-point radians
 ; Returns: EAX = cos(angle) in 16.16
 fp_cos:
-        push ebx
-        push ecx
-        push edx
+        push rbx
+        push rcx
+        push rdx
 
         ; cos(x) = sin(x + pi/2)
         add eax, (TWO_PI_FP / 4)       ; + pi/2
@@ -680,9 +680,9 @@ fp_cos:
         and eax, (TRIG_TABLE_SIZE - 1)
         mov eax, [sin_table + eax*4]
 
-        pop edx
-        pop ecx
-        pop ebx
+        pop rdx
+        pop rcx
+        pop rbx
         ret
 
 ; fp_cos_angle / fp_sin_angle - convenience: use player_angle

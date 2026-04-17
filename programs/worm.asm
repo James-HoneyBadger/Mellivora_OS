@@ -76,7 +76,7 @@ start:
 
 ;---------------------------------------
 init_game:
-        pushad
+        PUSHALL
         mov byte [game_over], 0
         mov dword [score], 0
         mov dword [direction], DIR_RIGHT
@@ -107,12 +107,12 @@ init_game:
         mov dword [worm_y + 12], eax
 
         call place_food
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 place_food:
-        pushad
+        PUSHALL
 .pf_try:
         mov eax, SYS_GETTIME
         int 0x80
@@ -150,12 +150,12 @@ place_food:
         inc ecx
         jmp .pf_check
 .pf_ok:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 check_input:
-        pushad
+        PUSHALL
 .ci_drain:
         mov eax, SYS_GETCHAR
         int 0x80
@@ -215,12 +215,12 @@ check_input:
 .ci_quit:
         mov byte [game_over], 1
 .ci_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 move_worm:
-        pushad
+        PUSHALL
         ; Calculate new head position
         mov eax, [worm_x]      ; current head x
         mov ebx, [worm_y]      ; current head y
@@ -341,12 +341,12 @@ move_worm:
 .mw_die:
         mov byte [game_over], 1
 .mw_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 draw_board:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -474,7 +474,7 @@ draw_board:
         mov eax, SYS_PRINT
         mov ebx, msg_controls
         int 0x80
-        popad
+        POPALL
         ret
 
 ;=======================================

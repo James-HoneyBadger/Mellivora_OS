@@ -33,7 +33,7 @@ start:
         jge .done
 
         ; Print logo portion
-        push esi
+        push rsi
         mov eax, SYS_SETCOLOR
         mov ebx, C_LOGO
         int 0x80
@@ -42,9 +42,9 @@ start:
         mov eax, esi
         imul eax, 33            ; each logo line is 33 bytes (32 chars + null)
         lea ebx, [logo_art + eax]
-        push ebx
+        push rbx
         mov eax, SYS_PRINT
-        pop ebx
+        pop rbx
         int 0x80
 
         ; Pad to INFO_START_COL
@@ -55,12 +55,12 @@ start:
         mov eax, SYS_PUTCHAR
         int 0x80
 
-        pop esi
+        pop rsi
 
         ; Print info line
-        push esi
+        push rsi
         call print_info_line
-        pop esi
+        pop rsi
 
         ; Newline
         mov eax, SYS_PUTCHAR
@@ -213,12 +213,12 @@ print_info_line:
         xor edx, edx
         mov ecx, 60
         div ecx                 ; EAX = minutes, EDX = seconds
-        push edx
+        push rdx
         mov eax, SYS_SETCOLOR
         mov ebx, C_VALUE
         int 0x80
-        pop edx
-        push edx
+        pop rdx
+        push rdx
         ; Re-divide for minutes
         mov eax, [uptime_ticks]
         xor edx, edx
@@ -227,18 +227,18 @@ print_info_line:
         xor edx, edx
         mov ecx, 60
         div ecx
-        push edx                ; seconds
+        push rdx                ; seconds
         ; EAX = minutes
         call print_dec
         mov eax, SYS_PRINT
         mov ebx, str_min
         int 0x80
-        pop eax                 ; seconds
+        pop rax                 ; seconds
         call print_dec
         mov eax, SYS_PRINT
         mov ebx, str_sec
         int 0x80
-        pop edx                 ; discard extra push
+        pop rdx                 ; discard extra push
         ret
 
 .line_memory:
@@ -386,7 +386,7 @@ print_info_line:
 ; Inline string follows the CALL instruction
 ;---------------------------------------
 print_label:
-        pop esi                 ; Return address = string address
+        pop rsi                 ; Return address = string address
         mov eax, SYS_SETCOLOR
         mov ebx, C_LABEL
         int 0x80
@@ -398,7 +398,7 @@ print_label:
         lodsb
         test al, al
         jnz .skip
-        push esi                ; Push new return address
+        push rsi                ; Push new return address
         mov eax, SYS_PRINT
         mov ebx, str_colon
         int 0x80
@@ -474,30 +474,30 @@ print_color_bar:
 ;=======================================================================
 
 ; ASCII art logo - each line is 32 printable chars + null terminator (33 bytes)
-; Honey badger / system logo
+; Mellivora (Honey Badger) logo
 logo_art:
-        db "                                ", 0  ; 0
-        db "    _______________________     ", 0  ; 1
-        db "   / ~~~~~~~~~~~~~~~~~~~ \      ", 0  ; 2
-        db "  / ~~~~~~~~~~~~~~~~~~~~~ \     ", 0  ; 3
-        db " | ~~~~~~  ( )  ~~~~~~~~~~ |    ", 0  ; 4
-        db " | ~~~~~~   v   ~~~~~~~~~~ |    ", 0  ; 5
-        db " | ~~~~~~  ---  ~~~~~~~~~~ |    ", 0  ; 6
-        db "  \ ~~~~~~~~~~~~~~~~~~~~~ /     ", 0  ; 7
-        db "   \_______________________/    ", 0  ; 8
-        db "      |   |        |   |        ", 0  ; 9
-        db "     /|   |\      /|   |\       ", 0  ; 10
-        db "                                ", 0  ; 11
+        db "  MELLIVORA  OS  v4.0           ", 0  ; 0
+        db "  ~~~~~~~~~~~~~~~~~~~~          ", 0  ; 1
+        db "      .--------.                ", 0  ; 2
+        db "     / ~~~~~~~~ \               ", 0  ; 3
+        db "    | ~( ^  ^ )~ |              ", 0  ; 4
+        db "    |  ~ ( v ) ~  |             ", 0  ; 5
+        db "    |   ~ --- ~   |             ", 0  ; 6
+        db "     \__________/               ", 0  ; 7
+        db "      ||      ||                ", 0  ; 8
+        db "     _||_    _||_               ", 0  ; 9
+        db "                                ", 0  ; 10
+        db "   << honey badger >>           ", 0  ; 11
 
 str_root:       db "root", 0
 str_at:         db "@", 0
 str_hostname:   db "honeybadger", 0
 str_separator:  db "------------------------", 0
 str_colon:      db ": ", 0
-str_os_val:     db "Mellivora OS v3.0.1", 0
-str_kernel_val: db "Mellivora 3.0.1 (i486 32-bit)", 0
+str_os_val:     db "Mellivora OS v4.0.0", 0
+str_kernel_val: db "Mellivora 4.0.0 (x86-64 long mode)", 0
 str_shell_val:  db "HB Lair v2.2 (Honey Badger Lair)", 0
-str_cpu_val:    db "i486+ (Protected Mode, Ring 0/3)", 0
+str_cpu_val:    db "x86-64 (Long Mode, Ring 0/3)", 0
 str_disk_val:   db "ATA PIO, HBFS (2 GB, 4 KB blocks)", 0
 str_term_val:   db "VGA 80x25, 16 colors", 0
 str_min:        db "m ", 0

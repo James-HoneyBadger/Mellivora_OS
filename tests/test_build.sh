@@ -75,8 +75,8 @@ echo ""
 
 # ---------- HBFS superblock ----------
 echo "[HBFS superblock]"
-# Superblock is at LBA 417 = byte offset 417*512 = 213504
-SB_OFF=$((417 * 512))
+# Superblock is at LBA 2081 = byte offset 2081*512 = 1065472
+SB_OFF=$((2081 * 512))
 MAGIC=$(xxd -s $SB_OFF -l 4 -p "$IMG" 2>/dev/null)
 # HBFS_MAGIC = 0x48424653 -> little-endian on disk: 53 46 42 48
 check "Superblock magic = HBFS" "[[ '$MAGIC' == '53464248' ]]"
@@ -91,8 +91,8 @@ echo ""
 
 # ---------- HBFS bitmap sanity ----------
 echo "[HBFS bitmap]"
-# Bitmap at LBA 418 = offset 418*512 = 214016
-BM_OFF=$((418 * 512))
+# Bitmap at LBA 2082 = offset 2082*512 = 1065984
+BM_OFF=$((2082 * 512))
 # First byte should not be 0x00 (at least some blocks allocated)
 FIRST_BM=$(xxd -s $BM_OFF -l 1 -p "$IMG" 2>/dev/null)
 check "Bitmap first byte != 0 (blocks allocated)" "[[ '$FIRST_BM' != '00' ]]"
@@ -101,8 +101,8 @@ echo ""
 
 # ---------- Root directory ----------
 echo "[HBFS root directory]"
-# Root dir at LBA 546 = offset 546*512 = 279552
-RD_OFF=$((546 * 512))
+# Root dir at LBA 2210 = offset 2210*512 = 1131520
+RD_OFF=$((2210 * 512))
 # First entry should have a non-null first byte (filename)
 FIRST_ENTRY=$(xxd -s $RD_OFF -l 1 -p "$IMG" 2>/dev/null)
 check "Root dir first entry not empty" "[[ '$FIRST_ENTRY' != '00' ]]"

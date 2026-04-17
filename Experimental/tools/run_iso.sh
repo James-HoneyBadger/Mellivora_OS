@@ -11,7 +11,7 @@
 # Usage:
 #   ./run_iso.sh [mellivora.iso]
 #
-# Requirements: qemu-system-i386, one of: xorriso, bsdtar, 7z
+# Requirements: qemu-system-x86_64, one of: xorriso, bsdtar, 7z
 #
 set -euo pipefail
 
@@ -46,7 +46,7 @@ show_help() {
   echo "  -h, --help    Show this help message"
   echo ""
   echo "Environment variables:"
-  echo "  QEMU                  QEMU binary (default: qemu-system-i386)"
+echo "  QEMU                  QEMU binary (default: qemu-system-x86_64)"
   echo "  QEMU_AUDIO_BACKEND    Audio backend: none, pa, alsa (default: none)"
   echo "  QEMU_EXTRA_ARGS       Extra arguments passed to QEMU"
   echo ""
@@ -71,7 +71,7 @@ if [[ ! -f "$ISO" ]]; then
   die "ISO file not found: $ISO"
 fi
 
-QEMU="${QEMU:-qemu-system-i386}"
+QEMU="${QEMU:-qemu-system-x86_64}"
 if ! command -v "$QEMU" >/dev/null 2>&1; then
   die "$QEMU not found — install QEMU or set QEMU= to the correct binary"
 fi
@@ -109,7 +109,7 @@ EXTRA="${QEMU_EXTRA_ARGS:-}"
 
 echo ""
 info "QEMU:    ${BLD}$QEMU${RST}"
-info "CPU:     ${BLD}i486${RST}  RAM: ${BLD}128 MB${RST}"
+info "CPU:     ${BLD}Core 2 Duo${RST}  RAM: ${BLD}128 MB${RST}"
 info "Boot:    ${BLD}CD-ROM${RST} (El Torito) + ${BLD}IDE disk${RST} (HBFS)"
 info "Audio:   ${BLD}$AUDIO${RST}"
 [[ -n "$EXTRA" ]] && info "Extra:   $EXTRA"
@@ -120,7 +120,7 @@ echo ""
 
 # shellcheck disable=SC2086
 exec "$QEMU" \
-  -cpu 486 \
+  -cpu core2duo \
   -m 128 \
   -cdrom "$ISO" \
   -drive "file=$IMG,format=raw,if=ide,cache=writethrough" \

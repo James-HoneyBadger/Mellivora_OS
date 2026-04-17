@@ -112,7 +112,7 @@ start:
 
 ;---------------------------------------
 init_game:
-        pushad
+        PUSHALL
         ; Clear board
         mov edi, board
         mov ecx, COLS * ROWS
@@ -120,7 +120,7 @@ init_game:
         rep stosb
         mov byte [current], PLAYER
         mov byte [game_over], 0
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
@@ -129,50 +129,50 @@ init_game:
 
 get_cell:
         ; EAX = row, EBX = col, returns value in AL
-        push edx
-        push ecx
+        push rdx
+        push rcx
         imul eax, COLS
         add eax, ebx
         movzx eax, byte [board + eax]
-        pop ecx
-        pop edx
+        pop rcx
+        pop rdx
         ret
 
 set_cell:
         ; EAX = row, EBX = col, CL = value
-        push edx
+        push rdx
         imul eax, COLS
         add eax, ebx
         mov [board + eax], cl
-        pop edx
+        pop rdx
         ret
 
 ;---------------------------------------
 drop_disc:
         ; EBX = column (0-6), CL = player
         ; Returns EAX = row placed, or -1 if full
-        pushad
+        PUSHALL
         mov eax, ROWS - 1
 .dd_loop:
         cmp eax, 0
         jl .dd_full
-        push eax
-        push ecx
+        push rax
+        push rcx
         call get_cell
-        pop ecx
+        pop rcx
         cmp al, EMPTY
-        pop eax
+        pop rax
         je .dd_place
         dec eax
         jmp .dd_loop
 .dd_place:
         call set_cell
-        mov [esp + 28], eax     ; return row via pushad EAX
-        popad
+        mov [rsp + 112], eax     ; return row via PUSHALL EAX
+        POPALL
         ret
 .dd_full:
-        mov dword [esp + 28], -1
-        popad
+        mov dword [rsp + 112], -1
+        POPALL
         ret
 
 ;---------------------------------------
@@ -199,10 +199,10 @@ get_player_move:
         ; Valid column
         sub al, '1'
         movzx ebx, al
-        push ebx
+        push rbx
         mov cl, PLAYER
         call drop_disc
-        pop ebx
+        pop rbx
         cmp eax, -1
         je .gpm_key             ; column full, try again
         ret
@@ -214,24 +214,24 @@ get_player_move:
 ;---------------------------------------
 cpu_move:
         ; Simple AI: try to win, then block, then center, then random
-        pushad
+        PUSHALL
 
         ; First: can we win?
         xor ebx, ebx
 .cm_win_check:
         cmp ebx, COLS
         jge .cm_try_block
-        push ebx
+        push rbx
         mov cl, COMP
         call drop_disc
         cmp eax, -1
         je .cm_win_skip
         ; Check if this wins
-        push ebx
-        push eax
+        push rbx
+        push rax
         call check_win
-        pop edx                 ; row
-        pop ebx                 ; col
+        pop rdx                 ; row
+        pop rbx                 ; col
         cmp eax, COMP
         je .cm_chosen           ; winning move!
         ; Undo
@@ -239,7 +239,7 @@ cpu_move:
         mov cl, EMPTY
         call set_cell
 .cm_win_skip:
-        pop ebx
+        pop rbx
         inc ebx
         jmp .cm_win_check
 
@@ -249,16 +249,16 @@ cpu_move:
 .cm_block_check:
         cmp ebx, COLS
         jge .cm_center
-        push ebx
+        push rbx
         mov cl, PLAYER
         call drop_disc
         cmp eax, -1
         je .cm_block_skip
-        push ebx
-        push eax
+        push rbx
+        push rax
         call check_win
-        pop edx
-        pop ebx
+        pop rdx
+        pop rbx
         cmp eax, PLAYER
         je .cm_block_found
         ; Undo
@@ -266,7 +266,7 @@ cpu_move:
         mov cl, EMPTY
         call set_cell
 .cm_block_skip:
-        pop ebx
+        pop rbx
         inc ebx
         jmp .cm_block_check
 
@@ -275,11 +275,11 @@ cpu_move:
         mov eax, edx
         mov cl, EMPTY
         call set_cell
-        pop ebx                 ; discard saved ebx
-        push ebx
+        pop rbx                 ; discard saved ebx
+        push rbx
         mov cl, COMP
         call drop_disc
-        pop ebx
+        pop rbx
         jmp .cm_done
 
 .cm_center:
@@ -296,32 +296,32 @@ cpu_move:
 .cm_rand:
         imul eax, eax, 1103515245
         add eax, 12345
-        push eax
+        push rax
         xor edx, edx
         mov ecx, COLS
         div ecx
         mov ebx, edx
-        pop eax
-        push eax
+        pop rax
+        push rax
         mov cl, COMP
         call drop_disc
-        pop eax
+        pop rax
         cmp eax, -1
         je .cm_rand
         jmp .cm_done
 
 .cm_chosen:
         ; Winning move is already placed. Clean up stack.
-        pop ebx                 ; discard saved ebx
+        pop rbx                 ; discard saved ebx
 
 .cm_done:
-        popad
+        POPALL
         ret
 
 ;---------------------------------------
 check_win:
         ; Returns EAX = winning player (1 or 2), or 0
-        pushad
+        PUSHALL
         ; Check all possible 4-in-a-row
         ; Horizontal
         xor esi, esi            ; row
@@ -358,8 +358,8 @@ check_win:
         jne .cw_hnext
         ; Win!
         movzx eax, dl
-        mov [esp + 28], eax
-        popad
+        mov [rsp + 112], eax
+        POPALL
         ret
 .cw_hnext:
         inc edi
@@ -401,8 +401,8 @@ check_win:
         cmp al, dl
         jne .cw_vnext
         movzx eax, dl
-        mov [esp + 28], eax
-        popad
+        mov [rsp + 112], eax
+        POPALL
         ret
 .cw_vnext:
         inc edi
@@ -445,8 +445,8 @@ check_win:
         cmp al, dl
         jne .cw_d1next
         movzx eax, dl
-        mov [esp + 28], eax
-        popad
+        mov [rsp + 112], eax
+        POPALL
         ret
 .cw_d1next:
         inc edi
@@ -488,8 +488,8 @@ check_win:
         cmp al, dl
         jne .cw_d2next
         movzx eax, dl
-        mov [esp + 28], eax
-        popad
+        mov [rsp + 112], eax
+        POPALL
         ret
 .cw_d2next:
         inc edi
@@ -499,14 +499,14 @@ check_win:
         jmp .cw_d2row
 
 .cw_none:
-        mov dword [esp + 28], 0
-        popad
+        mov dword [rsp + 112], 0
+        POPALL
         ret
 
 ;---------------------------------------
 check_full:
         ; Returns EAX = 1 if board full, 0 otherwise
-        pushad
+        PUSHALL
         xor ecx, ecx
 .cf_loop:
         cmp ecx, COLS * ROWS
@@ -516,17 +516,17 @@ check_full:
         inc ecx
         jmp .cf_loop
 .cf_not:
-        mov dword [esp + 28], 0
-        popad
+        mov dword [rsp + 112], 0
+        POPALL
         ret
 .cf_full:
-        mov dword [esp + 28], 1
-        popad
+        mov dword [rsp + 112], 1
+        POPALL
         ret
 
 ;---------------------------------------
 draw_board:
-        pushad
+        PUSHALL
         mov eax, SYS_SETCURSOR
         xor ebx, ebx
         xor ecx, ecx
@@ -636,7 +636,7 @@ draw_board:
         mov ebx, msg_legend
         int 0x80
 
-        popad
+        POPALL
         ret
 
 ;=======================================

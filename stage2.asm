@@ -1,15 +1,17 @@
 ;
-; Mellivora OS - Stage 2 Loader
+; Mellivora OS - Stage 2 Loader (64-bit Long Mode)
 ;
 ; Loaded at 0x7E00 by stage 1 boot sector.
 ; Runs in 16-bit real mode initially. Responsibilities:
 ;   1. Detect available memory via BIOS int 0x15 E820
-;   2. Load the 32-bit kernel from disk (LBA 33+) to 0x100000 (1MB)
-;   3. Set up GDT for flat 4GB segments
-;   4. Switch to 32-bit protected mode
-;   5. Jump to 32-bit kernel entry point
+;   2. Enable A20 gate and enter unreal mode (flat FS with 4 GB limit)
+;   3. Load kernel from disk (LBA 33+) to 0x100000 (1MB) via bounce buffer
+;   4. Set up identity-mapped 4-level page tables (2MB pages, first 4GB)
+;   5. Set up GDT for 64-bit long mode
+;   6. Enable PAE, Long Mode (IA32_EFER), and paging
+;   7. Jump to 64-bit kernel entry point
 ;
-; Target: i486+
+; Target: Core 2 Duo+
 ;
 
 [BITS 16]
@@ -102,9 +104,39 @@ detect_memory:
         call print16
 
         ;---------------------------------------
-        ; Load kernel from disk into LOW MEMORY at KERNEL_TMPBUF
-        ; (0x20000). 192KB kernel fits easily below 640KB.
-        ; We will copy it to 1MB after entering protected mode.
+        ; Enable A20 gate and enter "unreal mode" so that the FS
+        ; segment register keeps a 4 GB limit.  This lets us copy
+        ; disk chunks directly to extended memory (1 MB+) while
+        ; still calling BIOS INT 13h in real mode.
+        ;---------------------------------------
+setup_unreal:
+        cli
+
+        ; Enable A20 via fast gate (port 0x92)
+        in al, 0x92
+        or al, 2
+        and al, 0xFE
+        out 0x92, al
+
+        lgdt [gdt_descriptor]           ; Load 4 GB flat GDT
+
+        mov eax, cr0
+        or al, 1
+        mov cr0, eax                    ; Enter 16-bit protected mode
+
+        mov bx, 0x10                    ; Selector 0x10 = 4 GB data
+        mov fs, bx                      ; FS descriptor cache ← 4 GB limit
+
+        and al, 0xFE
+        mov cr0, eax                    ; Return to real mode
+        jmp 0x0000:.unreal_done         ; Far jump to reload CS
+.unreal_done:
+        sti                             ; FS now retains 4 GB limit
+
+        ;---------------------------------------
+        ; Load kernel from disk using a 16 KB bounce buffer at
+        ; KERNEL_TMPBUF (0x20000).  Each chunk is copied to extended
+        ; memory at 1 MB+ via unreal-mode FS writes.
         ;---------------------------------------
 load_kernel:
         mov si, msg_load_kern
@@ -128,7 +160,9 @@ load_kernel:
         ; Kernel on disk starts at LBA 33 (after boot + stage2)
         mov dword [cur_lba], 33
         mov word [sectors_left], KERNEL_SECTORS
-        mov word [load_seg], KERNEL_TMPBUF_SEG  ; Start segment = 0x2000
+        mov word [load_seg], KERNEL_TMPBUF_SEG  ; Fixed bounce buffer
+        mov dword [hi_dest], 0x00100000         ; Destination starts at 1 MB
+        mov dword [kernel_src_lin], 0x00100000  ; Will be placed via INT 15h
 
 .load_chunk:
         cmp word [sectors_left], 0
@@ -143,13 +177,12 @@ load_kernel:
 .chunk_ok:
         mov [chunk_size], ax
 
-        ; Set up DAP for reading into [load_seg]:0x0000
+        ; Set up DAP for reading into fixed bounce buffer
         mov byte [kern_dap], 16
         mov byte [kern_dap+1], 0
         mov [kern_dap+2], ax            ; sector count
         mov word [kern_dap+4], 0x0000   ; offset always 0
-        mov bx, [load_seg]
-        mov [kern_dap+6], bx            ; segment advances each chunk
+        mov word [kern_dap+6], KERNEL_TMPBUF_SEG  ; Fixed bounce buffer
         mov eax, [cur_lba]
         mov [kern_dap+8], eax
         mov dword [kern_dap+12], 0
@@ -158,14 +191,18 @@ load_kernel:
         call read_kernel_chunk
         jc .load_fail
 
+        ; Copy chunk from bounce buffer to extended memory via BIOS
+        call copy_chunk_to_himem
+        jc .load_fail
+
         ; Advance LBA
         movzx eax, word [chunk_size]
         add [cur_lba], eax
 
-        ; Advance load segment: seg += chunk_size * 512 / 16 = chunk_size * 32
-        mov ax, [chunk_size]
-        shl ax, 5               ; * 32 = paragraphs per chunk
-        add [load_seg], ax
+        ; Advance destination in extended memory
+        movzx eax, word [chunk_size]
+        shl eax, 9              ; * 512 = byte count
+        add [hi_dest], eax
 
         ; Decrease remaining
         mov ax, [chunk_size]
@@ -179,7 +216,7 @@ load_kernel:
 .load_done:
         mov si, msg_ok
         call print16
-        jmp enter_pmode
+        jmp enter_long_mode
 
 .load_fail:
         mov si, msg_load_fail
@@ -187,30 +224,27 @@ load_kernel:
         jmp halt16
 
         ;---------------------------------------
-        ; Enter 32-bit protected mode
+        ; Enter 64-bit long mode
+        ; Step 1: Enter 32-bit protected mode (temp selector 0x38)
+        ; Step 2: In PM, set up page tables and enable long mode
+        ; Step 3: Far jump to 64-bit code (selector 0x08)
         ;---------------------------------------
-enter_pmode:
+enter_long_mode:
         mov si, msg_pmode
         call print16
 
         cli                             ; No interrupts during switch
 
-        ; Re-enable A20 gate (ensure it's on before entering pmode)
-        in al, 0x92
-        or al, 2
-        and al, 0xFE
-        out 0x92, al
-
-        ; Load the real GDT for protected mode
+        ; Load GDT with 64-bit long mode descriptors
         lgdt [gdt_descriptor]
 
-        ; Set PE bit in CR0
+        ; Set PE bit in CR0 (enter protected mode)
         mov eax, cr0
         or eax, 1
         mov cr0, eax
 
-        ; Far jump to flush pipeline and load CS with 32-bit code selector
-        jmp 0x08:pmode_entry
+        ; Far jump to temporary 32-bit code segment (selector 0x38)
+        jmp 0x38:pm32_entry
 
 halt16:
         cli
@@ -368,12 +402,39 @@ putchar16:
         pop bx
         ret
 
+;---------------------------------------
+; Copy chunk from bounce buffer (0x20000) to extended memory
+; at [hi_dest] via unreal-mode FS (4 GB limit).
+; Preserves all registers.
+;---------------------------------------
+copy_chunk_to_himem:
+        pushad
+
+        mov esi, KERNEL_TMPBUF_LIN      ; Source: bounce buffer
+        mov edi, [hi_dest]              ; Destination: extended memory
+        movzx ecx, word [chunk_size]
+        shl ecx, 7                      ; Dword count = sectors * 512 / 4
+
+.copy:
+        mov eax, [fs:esi]               ; Read from bounce buf (FS has 4 GB limit)
+        mov [fs:edi], eax               ; Write to extended memory
+        add esi, 4
+        add edi, 4
+        dec ecx
+        jnz .copy
+
+        popad
+        ret
+
 ;=======================================================
-; 32-BIT PROTECTED MODE CODE
+; 32-BIT PROTECTED MODE CODE (temporary)
+; Sets up boot info, copies kernel, builds page tables,
+; enables long mode, then jumps to 64-bit code.
+; Uses temporary selector 0x38 (32-bit code segment).
 ;=======================================================
 [BITS 32]
 
-pmode_entry:
+pm32_entry:
         ; Set up 32-bit segment registers
         mov ax, 0x10            ; Data segment selector
         mov ds, ax
@@ -381,7 +442,7 @@ pmode_entry:
         mov fs, ax
         mov gs, ax
         mov ss, ax
-        mov esp, 0x9FC00        ; Stack at top of conventional memory
+        mov esp, KERNEL_STACK_TOP ; 64-bit kernel stack top (aligned, above low memory)
 
         ; Store boot drive and memory map info at known location
         ; The kernel expects these at 0x500 (BIOS-safe area)
@@ -392,16 +453,103 @@ pmode_entry:
         mov dword [0x508], memory_map   ; Pointer to memory map data
 
         ; Copy kernel to 1MB from selected source buffer.
-        ; Source is disk-loaded 0x20000 (raw disk boot) or BIOS-preloaded
-        ; 0xBE00 (ISO boot with full preload via boot-load-size).
+        ; Source is BIOS-preloaded 0xBE00 (ISO boot with full preload
+        ; via boot-load-size).  Skipped when the unreal-mode loader
+        ; already placed the kernel at 1 MB.
         cld
         mov esi, [kernel_src_lin]
+        cmp esi, 0x00100000
+        je .skip_copy
         mov edi, 0x00100000             ; Dest: 1MB
         mov ecx, (KERNEL_SECTORS * 512) / 4  ; Dword count
         rep movsd
+.skip_copy:
 
-        ; Jump to kernel at 1MB
-        jmp 0x08:0x00100000
+        ;---------------------------------------
+        ; Set up 4-level page tables at 0x70000
+        ; Identity-map first 4GB using 2MB pages
+        ;   PML4  @ 0x70000  (1 entry  -> PDPT)
+        ;   PDPT  @ 0x71000  (4 entries -> PD0-PD3)
+        ;   PD0-3 @ 0x72000-0x75000  (512 entries each)
+        ;---------------------------------------
+        mov edi, 0x70000
+        xor eax, eax
+        mov ecx, 6 * 1024              ; 6 pages * 4KB / 4 = 6144 dwords
+        rep stosd                       ; Zero entire page table area
+
+        ; PML4[0] -> PDPT at 0x71000 (Present + Read/Write + User)
+        mov dword [0x70000], 0x71007
+
+        ; PDPT[0..3] -> PD0..PD3
+        mov dword [0x71000], 0x72007
+        mov dword [0x71008], 0x73007
+        mov dword [0x71010], 0x74007
+        mov dword [0x71018], 0x75007
+
+        ; Fill 2048 PD entries: each maps a 2MB page
+        ; Flags: PS (bit 7) | US (bit 2) | RW (bit 1) | P (bit 0) = 0x87
+        mov edi, 0x72000
+        xor eax, eax                    ; Physical address starts at 0
+        mov ecx, 2048                   ; 4 PDs * 512 entries
+.fill_pd:
+        mov edx, eax
+        or edx, 0x87                    ; Present + RW + User + Page Size (2MB)
+        mov [edi], edx                  ; Low 32 bits of PD entry
+        mov dword [edi + 4], 0          ; High 32 bits = 0
+        add eax, 0x200000              ; Next 2MB
+        add edi, 8                      ; Next PD entry (8 bytes)
+        dec ecx
+        jnz .fill_pd
+
+        ;---------------------------------------
+        ; Enable PAE (bit 5), OSFXSR (bit 9), OSXMMEXCPT (bit 10)
+        ;---------------------------------------
+        mov eax, cr4
+        or eax, (1 << 5) | (1 << 9) | (1 << 10)
+        mov cr4, eax
+
+        ;---------------------------------------
+        ; Load PML4 base into CR3
+        ;---------------------------------------
+        mov eax, 0x70000
+        mov cr3, eax
+
+        ;---------------------------------------
+        ; Enable Long Mode via IA32_EFER MSR
+        ;---------------------------------------
+        mov ecx, 0xC0000080             ; IA32_EFER
+        rdmsr
+        or eax, (1 << 8)               ; Set LME (Long Mode Enable)
+        wrmsr
+
+        ;---------------------------------------
+        ; Enable paging — activates long mode
+        ;---------------------------------------
+        mov eax, cr0
+        or eax, (1 << 31)              ; CR0.PG
+        mov cr0, eax
+
+        ; Far jump to 64-bit kernel code segment (selector 0x08)
+        jmp 0x08:lmode_entry
+
+;=======================================================
+; 64-BIT LONG MODE CODE
+;=======================================================
+[BITS 64]
+
+lmode_entry:
+        ; Set up 64-bit data segment registers
+        mov ax, 0x10
+        mov ds, ax
+        mov es, ax
+        mov fs, ax
+        mov gs, ax
+        mov ss, ax
+        mov rsp, KERNEL_STACK_TOP
+
+        ; Jump to 64-bit kernel at 1MB
+        mov rax, 0x00100000
+        jmp rax
 
 ;=======================================================
 ; DATA (16-bit context)
@@ -413,6 +561,7 @@ KERNEL_TMPBUF_OFF equ 0x0000   ; Offset for temp buffer
 KERNEL_TMPBUF_LIN equ 0x20000  ; Linear address of temp buffer (seg*16+off)
 PRELOAD_KERNEL_ADDR equ 0xBE00 ; Kernel location when preloaded by BIOS
                                ; (0x7C00 + 33 * 512)
+KERNEL_STACK_TOP    equ 0x003FF000 ; 4KB-aligned stack top below heap (legacy 0x9FC00)
 
 ; KERNEL_SECTORS is generated by the build system in kernel_sectors.inc
 ; It equals ceil(kernel.bin size / 512), ensuring we always load the
@@ -431,67 +580,90 @@ kernel_src_lin: dd KERNEL_TMPBUF_LIN
 
 kern_dap:       times 16 db 0
 
+hi_dest:        dd 0                    ; Destination address in extended memory
+
 msg_stage2:     db "Stage 2 loader", 0x0D, 0x0A, 0
 msg_mem:        db "Memory: ", 0
 msg_entries:    db " regions", 0x0D, 0x0A, 0
 msg_load_kern:  db "Loading kernel", 0
 msg_ok:         db " OK", 0x0D, 0x0A, 0
 msg_load_fail:  db "Kernel load fail!", 0
-msg_pmode:      db "Entering protected mode...", 0x0D, 0x0A, 0
+msg_pmode:      db "Entering long mode...", 0x0D, 0x0A, 0
 splash_title:   db "Mellivora OS - Booting...", 0
 
 ;---------------------------------------
-; GDT for 32-bit protected mode
-; Flat model: 4GB code and data segments
+; GDT for 64-bit long mode
+;
+; Selector layout:
+;   0x00 - Null descriptor
+;   0x08 - Kernel code (64-bit, DPL=0, L=1 D=0)
+;   0x10 - Kernel data (flat 4GB, DPL=0)
+;   0x18 - User code   (64-bit, DPL=3, L=1 D=0)
+;   0x20 - User data   (flat 4GB, DPL=3)
+;   0x28 - TSS low     (16-byte descriptor in long mode)
+;   0x30 - TSS high
+;   0x38 - 32-bit code (temporary, used only during boot)
 ;---------------------------------------
 gdt_start:
         ; Null descriptor (selector 0x00)
         dq 0
 
-        ; Code segment descriptor (selector 0x08)
-        ; Base=0, Limit=4GB, 32-bit, ring 0, executable, readable
+        ; Kernel code segment (selector 0x08)
+        ; 64-bit long mode: L=1, D=0, ring 0
         dw 0xFFFF               ; Limit 0:15
         dw 0x0000               ; Base 0:15
         db 0x00                 ; Base 16:23
-        db 10011010b            ; Access: present, ring 0, code, exec/read
-        db 11001111b            ; Flags: 4KB granularity, 32-bit + Limit 16:19
+        db 10011010b            ; Access: P=1, DPL=0, S=1, Type=1010
+        db 10101111b            ; G=1, L=1, D=0, Limit 16:19=0xF
         db 0x00                 ; Base 24:31
 
-        ; Data segment descriptor (selector 0x10)
-        ; Base=0, Limit=4GB, 32-bit, ring 0, writable
+        ; Kernel data segment (selector 0x10)
+        ; Flat 4GB (DB=1 needed for unreal mode bootstrap)
         dw 0xFFFF               ; Limit 0:15
         dw 0x0000               ; Base 0:15
         db 0x00                 ; Base 16:23
-        db 10010010b            ; Access: present, ring 0, data, read/write
-        db 11001111b            ; Flags: 4KB granularity, 32-bit + Limit 16:19
+        db 10010010b            ; Access: P=1, DPL=0, S=1, Type=0010
+        db 11001111b            ; G=1, DB=1, Limit 16:19=0xF
         db 0x00                 ; Base 24:31
 
-        ; User code segment descriptor (selector 0x18)
-        ; Base=0, Limit=4GB, 32-bit, ring 3, executable, readable
+        ; User code segment (selector 0x18)
+        ; 64-bit long mode: L=1, D=0, ring 3
         dw 0xFFFF               ; Limit 0:15
         dw 0x0000               ; Base 0:15
         db 0x00                 ; Base 16:23
-        db 11111010b            ; Access: present, ring 3, code, exec/read
-        db 11001111b            ; Flags: 4KB granularity, 32-bit + Limit 16:19
+        db 11111010b            ; Access: P=1, DPL=3, S=1, Type=1010
+        db 10101111b            ; G=1, L=1, D=0
         db 0x00                 ; Base 24:31
 
-        ; User data segment descriptor (selector 0x20)
-        ; Base=0, Limit=4GB, 32-bit, ring 3, writable
+        ; User data segment (selector 0x20)
+        ; Flat 4GB, ring 3
         dw 0xFFFF               ; Limit 0:15
         dw 0x0000               ; Base 0:15
         db 0x00                 ; Base 16:23
-        db 11110010b            ; Access: present, ring 3, data, read/write
-        db 11001111b            ; Flags: 4KB granularity, 32-bit + Limit 16:19
+        db 11110010b            ; Access: P=1, DPL=3, S=1, Type=0010
+        db 11001111b            ; G=1, DB=1
         db 0x00                 ; Base 24:31
 
-        ; TSS descriptor (selector 0x28)
-        ; Base filled by kernel at runtime
+        ; TSS descriptor (selector 0x28) — 16 bytes in long mode
+        ; Low 8 bytes
         dw 0x0067               ; Limit (104 bytes - 1)
         dw 0x0000               ; Base 0:15 (filled by kernel)
-        db 0x00                 ; Base 16:23 (filled by kernel)
-        db 10001001b            ; Access: present, ring 0, TSS available
+        db 0x00                 ; Base 16:23
+        db 10001001b            ; Access: P=1, DPL=0, Type=1001 (64-bit TSS)
         db 0x00                 ; Flags + Limit 16:19
-        db 0x00                 ; Base 24:31 (filled by kernel)
+        db 0x00                 ; Base 24:31
+        ; High 8 bytes (occupies selector 0x30 — not usable as segment)
+        dd 0x00000000           ; Base 32:63
+        dd 0x00000000           ; Reserved, must be zero
+
+        ; Temporary 32-bit code segment (selector 0x38)
+        ; Used only during real-mode to long-mode transition
+        dw 0xFFFF               ; Limit 0:15
+        dw 0x0000               ; Base 0:15
+        db 0x00                 ; Base 16:23
+        db 10011010b            ; Access: P=1, DPL=0, S=1, Type=1010
+        db 11001111b            ; G=1, DB=1 (32-bit), Limit 16:19=0xF
+        db 0x00                 ; Base 24:31
 gdt_end:
 
 gdt_descriptor:

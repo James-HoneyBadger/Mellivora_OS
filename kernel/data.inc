@@ -5,7 +5,7 @@
 ;=======================================================================
 
 path_save_cwd:
-        pushad
+        PUSHALL
         ; Save scalar state
         mov eax, [current_dir_lba]
         mov [path_save_lba], eax
@@ -22,11 +22,11 @@ path_save_cwd:
         mov edi, path_save_stack
         mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
         rep movsb
-        popad
+        POPALL
         ret
 
 path_restore_cwd:
-        pushad
+        PUSHALL
         ; Restore scalar state
         mov eax, [path_save_lba]
         mov [current_dir_lba], eax
@@ -43,14 +43,14 @@ path_restore_cwd:
         mov edi, dir_stack
         mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
         rep movsb
-        popad
+        POPALL
         ret
 
 ; File-level CWD save/restore (separate from path_save_cwd)
 ; Used by hbfs_read_file for path resolution without conflicting
 ; with the PATH search in cmd_exec_program
 file_save_cwd:
-        pushad
+        PUSHALL
         mov eax, [current_dir_lba]
         mov [file_save_lba], eax
         mov eax, [current_dir_sects]
@@ -64,11 +64,11 @@ file_save_cwd:
         mov edi, file_save_stack
         mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
         rep movsb
-        popad
+        POPALL
         ret
 
 file_restore_cwd:
-        pushad
+        PUSHALL
         mov eax, [file_save_lba]
         mov [current_dir_lba], eax
         mov eax, [file_save_sects]
@@ -82,7 +82,7 @@ file_restore_cwd:
         mov edi, dir_stack
         mov ecx, DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
         rep movsb
-        popad
+        POPALL
         ret
 
 ;=======================================================================
@@ -108,7 +108,7 @@ banner_str:
         db "    | |  | |  __/ | | |\ V / (_) | | | (_| || |_| |___) |                ", 0x0A
         db "    |_|  |_|\___|_|_|_| \_/ \___/|_|  \__,_| \___/|____/                 ", 0x0A
         db "                                                                          ", 0x0A
-        db "       HB Lair v2.2 - Honey Badger Lair  |  32-bit i486+                ", 0x0A, 0
+        db "       HB Lair v2.2 - Honey Badger Lair  |  64-bit x86-64                ", 0x0A, 0
 
 motd_str:
         db 0x0A
@@ -118,12 +118,12 @@ msg_boot_time:  db "  Boot complete in ", 0
 msg_boot_suf:   db "s", 0x0A, 0x0A, 0
 
 version_text:
-        db "Mellivora OS v3.0.0", 0x0A
-        db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
+        db "Mellivora OS v4.0.0", 0x0A
+        db "  Kernel:        Mellivora (64-bit long mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
-        db "  Address Space: 4 GB flat memory model", 0x0A
+        db "  Address Space: 64-bit virtual (4 GB identity-mapped)", 0x0A
         db "  Disk:          ATA PIO, LBA48 (up to 128 PB)", 0x0A
         db "  Filesystem:    HBFS (Honey Badger File System)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
@@ -137,10 +137,10 @@ version_text:
         db "  Serial:        COM1 at 115200 baud", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
         db "  Audio:         Sound Blaster 16 (ISA DMA)", 0x0A
-        db "  Syscalls:      INT 0x80 (68 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (72 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Shell:         Tab completion, history, Ctrl+C abort", 0x0A
-        db "  Programs:      Flat binary + ELF32 (ring 3)", 0x0A
+        db "  Programs:      Flat binary + ELF64 (ring 3)", 0x0A
         db "  Arguments:     Command-line args via SYS_GETARGS", 0x0A
         db "  Env vars:      set/unset with $VAR expansion", 0x0A
         db "  File I/O:      open/read/write/close/seek (fd)", 0x0A
@@ -186,6 +186,7 @@ cmd_date_str:   db "date", 0
 cmd_beep_str:   db "beep", 0
 cmd_batch_str:  db "batch", 0
 cmd_mkdir_str:  db "mkdir", 0
+cmd_rmdir_str:  db "rmdir", 0
 cmd_cd_str:     db "cd", 0
 cmd_pwd_str:    db "pwd", 0
 cmd_pushd_str:  db "pushd", 0
@@ -194,6 +195,7 @@ cmd_dirs_str:   db "dirs", 0
 cmd_touch_str:  db "touch", 0
 cmd_set_str:    db "set", 0
 cmd_unset_str:  db "unset", 0
+cmd_read_str:   db "read", 0
 cmd_shutdown_str: db "shutdown", 0
 cmd_reboot_str: db "reboot", 0
 cmd_cls_str:    db "cls", 0
@@ -224,6 +226,10 @@ cmd_fsck_str:   db "fsck", 0
 cmd_ln_str:     db "ln", 0
 cmd_chmod_str:  db "chmod", 0
 cmd_chown_str:  db "chown", 0
+cmd_jobs_str:   db "jobs", 0
+cmd_fg_str:     db "fg", 0
+cmd_function_str: db "function", 0
+cmd_functions_str: db "functions", 0
 
 ; Screensaver strings
 msg_scrsaver_set:  db "  Screensaver mode set to: ", 0
@@ -234,11 +240,11 @@ msg_scrsaver_help: db "  Usage: scrsaver [0-4]", 0x0A
                    db "    4 = Plasma", 0x0A, 0
 
 scr_mode_names:
-        dd scr_mode_0
-        dd scr_mode_1
-        dd scr_mode_2
-        dd scr_mode_3
-        dd scr_mode_4
+        dq scr_mode_0
+        dq scr_mode_1
+        dq scr_mode_2
+        dq scr_mode_3
+        dq scr_mode_4
 scr_mode_0: db "Starfield", 0
 scr_mode_1: db "Matrix", 0
 scr_mode_2: db "Pipes", 0
@@ -347,6 +353,7 @@ help_text:
         db "    goto LABEL - Jump to label in script", 0x0A
         db "    if [not] errorlevel N cmd - Conditional exec", 0x0A
         db "    rem comment - Batch comment (skipped)", 0x0A
+        db "    for V in I1 I2 do CMD - Loop over items", 0x0A
         db "    @cmd       - Execute silently (no echo)", 0x0A
         db "  mkdir D    - Create directory", 0x0A
         db "  cd DIR     - Change directory (cd - for previous)", 0x0A
@@ -369,6 +376,8 @@ help_text:
         db "  rev [F]    - Reverse each line", 0x0A
         db "  tac [F]    - Print file in reverse line order", 0x0A
         db "  alias [N C]- Define alias N for command C", 0x0A
+        db "  function N { .. } - Define shell function", 0x0A
+        db "  functions  - List defined functions", 0x0A
         db "  history    - Show command history", 0x0A
         db "  which N    - Show if N is built-in or program", 0x0A
         db "  sleep N    - Sleep N seconds", 0x0A
@@ -377,7 +386,10 @@ help_text:
         db "  strings F  - Extract printable strings from file", 0x0A
         db "  mouse      - Show PS/2 mouse status", 0x0A
         db "  burrows    - Enter Burrows desktop (640x480)", 0x0A
+        db "  jobs       - List background jobs", 0x0A
+        db "  fg N       - Bring background job N to foreground", 0x0A
         db "  <name>     - Run program (searches PATH)", 0x0A
+        db "  <name> &   - Run program in background", 0x0A
         db "  >, >>, <   - Redirect output/input to files", 0x0A
         db "  cmd1 | cmd2- Pipe one command into another", 0x0A
         db "  cmd1 && cmd2 - Run cmd2 only if cmd1 succeeds", 0x0A
@@ -390,11 +402,11 @@ help_text:
 
 ; Messages
 msg_exception:  db "*** CPU EXCEPTION ***", 0x0A, 0
-msg_exc_eip:    db "  EIP: 0x", 0
+msg_exc_eip:    db "  RIP: 0x", 0
 msg_exc_err:    db "  Error code: 0x", 0
 msg_pf:         db "*** PAGE FAULT ***", 0x0A, 0
 msg_pf_addr:    db "  Address: 0x", 0
-msg_pf_eip:     db "  EIP: 0x", 0
+msg_pf_rip:     db "  RIP: 0x", 0
 msg_pf_err:     db "  Error: 0x", 0
 msg_pf_cause:   db "  Cause: ", 0
 msg_pf_not_present: db "[not present] ", 0
@@ -421,7 +433,7 @@ msg_shutdown_sync: db "  Syncing filesystem...", 0x0A, 0
 msg_shutdown_done: db "  Filesystem synced. Powering off...", 0x0A, 0
 msg_reboot:     db "  Rebooting Mellivora OS...", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0
-msg_cpu:        db "  CPU:           i486+ (32-bit protected mode)", 0x0A, 0
+msg_cpu:        db "  CPU:           x86-64 (64-bit long mode)", 0x0A, 0
 msg_mem_detect: db "  RAM:           ", 0
 msg_mem_total:  db "  Total memory:  ", 0
 msg_mem_header: db "=== Memory Information ===", 0x0A, 0
@@ -451,8 +463,11 @@ msg_hbfs_nodisk: db "  Filesystem:    No disk available", 0x0A, 0
 msg_hbfs_dir_read_err:  db "HBFS: directory read failed", 0x0A, 0
 msg_hbfs_dir_write_err: db "HBFS: directory write failed", 0x0A, 0
 msg_hbfs_bitmap_err:    db "HBFS: bitmap read failed", 0x0A, 0
+msg_hbfs_journal_recover: db "  Filesystem:    Journal recovery in progress...", 0x0A, 0
+msg_hbfs_journal_fixed:   db "  Filesystem:    Journal recovery complete", 0x0A, 0
 msg_ata_read_err:       db "ATA: read failed after retries", 0x0A, 0
 msg_ata_write_err:      db "ATA: write failed after retries", 0x0A, 0
+msg_ata_dma:            db " [DMA]", 0x0A, 0
 dir_header:     db "Type       Size  Modified         Name", 0x0A, 0
 dir_separator:  db "----- --------- ---------------- ----------------", 0x0A, 0
 type_text:      db "text ", 0
@@ -477,6 +492,14 @@ msg_write_prompt: db "Type content (empty line to end):", 0x0A, 0
 msg_write_err:  db "Write error!", 0x0A, 0
 msg_unknown_cmd: db "Unknown command. Type 'help'.", 0x0A, 0
 msg_bg_unsupported: db "Note: background jobs (&) not yet supported; running in foreground.", 0x0A, 0
+msg_bg_launched: db "[", 0
+msg_bg_launched2: db "] ", 0
+msg_bg_done:    db "[", 0
+msg_bg_done2:   db "] Done", 0x0A, 0
+msg_no_jobs:    db "No background jobs.", 0x0A, 0
+msg_jobs_hdr:   db "  PID  Name", 0x0A, 0
+msg_fg_usage:   db "Usage: fg JOB_ID", 0x0A, 0
+msg_fg_no_job:  db "fg: no such job", 0x0A, 0
 msg_redir_syntax: db "Redirection syntax error.", 0x0A, 0
 msg_redir_in_err: db "Redirection input file error.", 0x0A, 0
 msg_redir_too_big: db "Redirection file too large.", 0x0A, 0
@@ -496,9 +519,19 @@ msg_serial_info: db "  Serial:        COM1 @ 115200 baud", 0x0A, 0
 msg_exec:       db "Executing...", 0x0A, 0
 msg_exec_done:  db "Program exited.", 0x0A, 0
 msg_ctrl_c:     db "^C", 0x0A, 0
+cr_prompt_pre:  db "(reverse-i-search)`", 0
+cr_prompt_mid:  db "': ", 0
 msg_batch_prefix: db "> ", 0
 msg_batch_nested: db "Error: nested batch execution not supported", 0x0A, 0
 msg_batch_label_nf: db "Batch: label not found: ", 0
+msg_for_usage:      db "Batch: syntax: for VAR in item1 item2 ... do COMMAND", 0x0A, 0
+msg_for_no_do:      db "Batch: 'for' missing 'do' keyword", 0x0A, 0
+msg_func_usage:     db "Usage: function name { cmd1; cmd2; cmd3 }", 0x0A, 0
+msg_func_full:      db "Error: function table full", 0x0A, 0
+msg_func_defined:   db "Function defined: ", 0
+msg_func_none:      db "No functions defined", 0x0A, 0
+msg_func_sep:       db " = { ", 0
+msg_func_end:       db " }", 0x0A, 0
 msg_if_el_kw:       db "errorlevel ", 0
 msg_dir_created: db "Directory created.", 0x0A, 0
 msg_already_exists: db "Already exists.", 0x0A, 0
@@ -578,8 +611,8 @@ shift_table:
 ; IDT DESCRIPTOR
 ;=======================================================================
 idt_descriptor:
-        dw 256 * 8 - 1         ; IDT size (256 entries * 8 bytes)
-        dd idt_table            ; IDT base address
+        dw 256 * 16 - 1        ; IDT size (256 entries * 16 bytes = 4KB)
+        dq idt_table            ; IDT base address (64-bit)
 
 ;=======================================================================
 ; BSS (Uninitialized Data) - zeroed at boot
@@ -603,6 +636,12 @@ ata_present:    resb 1
 ata_total_sectors: resq 1      ; 64-bit LBA48 sector count
 ata_identify_buf: resb 512
 
+; ATA DMA data
+ata_dma_capable: resb 1        ; 1 if DMA is available
+ata_bm_base:    resw 1         ; Bus Master IDE base I/O port
+                alignb 8       ; PRD table must be dword-aligned
+ata_prd_table:  resb 8         ; One PRD entry: base(4) + count(2) + flags(2)
+
 hbfs_super_buf:  resb 512       ; Superblock buffer
 hbfs_dir_buf:    resb HBFS_ROOT_DIR_SIZE  ; Directory buffer (64KB)
 hbfs_block_buf:  resb HBFS_BLOCK_SIZE     ; General block buffer (4KB)
@@ -612,6 +651,9 @@ dir_cache_sects: resd 1                     ; Sector count of cached directory
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE
+shell_cursor_pos: resd 1
+shell_saved_cx:   resd 1
+shell_saved_cy:   resd 1
 filename_buf:   resb 256
 filename_buf2:  resb 256
 wildcard_src_buf: resb 256
@@ -621,14 +663,20 @@ redir_in_name:  resb 256
 redir_out_buf:  resb BATCH_BUFFER_SIZE
 redir_in_buf:   resb BATCH_BUFFER_SIZE
 
-exc_eip:        resd 1          ; Saved EIP from exception
-exc_errcode:    resd 1          ; Saved error code from exception
+exc_rip:        resq 1          ; Saved RIP from exception (64-bit)
+exc_errcode:    resq 1          ; Saved error code from exception (64-bit)
 
 hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (64 * 256 = 16KB)
 hist_count:     resd 1          ; Number of entries in history
 hist_browse:    resd 1          ; Current browse position
 
-idt_table:      resb 256 * 8   ; 256 IDT entries * 8 bytes each = 2KB
+; Ctrl+R reverse search state
+cr_query_buf:   resb 64         ; Search query buffer
+cr_query_len:   resd 1          ; Current query length
+cr_match_idx:   resd 1          ; Matched history index (-1 = none)
+cr_saved_len:   resd 1          ; Saved line length before search
+
+idt_table:      resb 256 * 16  ; 256 IDT entries * 16 bytes each = 4KB
 
 ; Serial port
 serial_present: resb 1
@@ -636,6 +684,7 @@ serial_present: resb 1
 ; Keyboard ctrl state
 kb_ctrl:        resb 1
 kb_alt:         resb 1
+kb_e0_flag:     resb 1
 boot_kb_flushed: resb 1
 boot_motd_shown: resb 1          ; 0 = show MOTD on first prompt
 
@@ -652,7 +701,7 @@ rtc_century:    resb 1
 ctrl_c_flag:    resb 1
 
 ; Program execution
-program_entry:  resd 1
+program_entry:  resq 1
 program_exit_code: resd 1
 shell_last_status: resd 1
 
@@ -680,14 +729,22 @@ dir_stack:        resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE  ; Stack of parent d
 
 ; Last file type read (set by hbfs_read_file)
 last_file_type: resb 1
-wild_star_pat:  resd 1
-wild_star_txt:  resd 1
+wild_star_pat:  resq 1
+wild_star_txt:  resq 1
 
 ; Batch execution buffers
 batch_line_buf:   resb LINE_BUFFER_SIZE
 batch_script_buf: resb BATCH_BUFFER_SIZE  ; 32KB batch script storage
 batch_running:    resb 1                  ; Guard against nested batch calls
 batch_resume_pos: resd 1                  ; Resume offset into batch_script_buf
+
+; For-loop state (for VAR in item1 item2 ... do COMMAND)
+for_active:       resb 1                  ; 1 = currently inside a for-loop
+for_var_name:     resb 32                 ; Loop variable name (without $)
+for_items_buf:    resb LINE_BUFFER_SIZE    ; Remaining items to iterate
+for_cmd_buf:      resb LINE_BUFFER_SIZE    ; Command template (with $VAR)
+for_loop_pos:     resd 1                  ; Saved batch position for multi-line for
+for_expand_buf:   resb LINE_BUFFER_SIZE    ; Scratch buffer for variable substitution
 
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing
@@ -722,8 +779,8 @@ alias_table:     resb ALIAS_MAX * ALIAS_ENTRY_SIZE  ; 4KB alias table
 alias_count:     resd 1
 
 ; Diff command buffers
-diff_buf1:       resd 1          ; Pointer (uses malloc)
-diff_buf2:       resd 1          ; Pointer (uses malloc)
+diff_buf1:       resq 1          ; Pointer (uses malloc)
+diff_buf2:       resq 1          ; Pointer (uses malloc)
 
 ; Strings command
 strings_min_len: resd 1
@@ -731,6 +788,15 @@ strings_min_len: resd 1
 ; Alias expansion buffer
 alias_expand_buf: resb 256
 alias_expanding:  resb 1          ; Guard: 1 = already expanded, prevents recursion
+
+; Shell functions table (16 entries: 32 byte name + 480 byte body = 512 per entry)
+FUNC_MAX          equ 16
+FUNC_NAME_LEN     equ 32
+FUNC_BODY_LEN     equ 480
+FUNC_ENTRY_SIZE   equ 512
+func_table:       resb FUNC_MAX * FUNC_ENTRY_SIZE ; 8KB
+func_count:       resd 1
+func_expanding:   resb 1          ; Guard: 1 = already expanded, prevents recursion
 
 ; PATH search: saved directory state for restore after search
 path_save_lba:    resd 1          ; Saved current_dir_lba
@@ -769,6 +835,10 @@ file_save_stack:  resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 path_dir_buf:     resb 256        ; Directory part of path (e.g. "/bin")
 path_base_buf:    resb 256        ; Basename part of path (e.g. "hello")
 
+; Symlink resolution
+symlink_depth:    resd 1          ; Current recursion depth counter
+symlink_path_buf: resb 256        ; Buffer for resolved symlink target path
+
 ; GFF (global file find) CWD save slots
 gff_cwd_lba:      resd 1
 gff_cwd_sects:    resd 1
@@ -782,6 +852,32 @@ task_count:       resd 1                              ; Number of active tasks
 sched_tick:       resd 1                              ; Tick counter for current time slice
 task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array
 
+; FPU lazy switching state
+fpu_owner:        resd 1                              ; Task index that owns FPU (-1 = none)
+align 16
+fpu_state_table:  resb MAX_TASKS * FPU_STATE_SIZE      ; 512 bytes per task for FXSAVE/FXRSTOR
+
+; Signal handling state
+SIG_MAX           equ 4                               ; Signals 1-4
+SIG_ENTRY_SIZE    equ (SIG_MAX * 8)                    ; 32 bytes per task (4 handler qword ptrs)
+SIGTERM           equ 1
+SIGKILL           equ 2
+SIGUSR1           equ 3
+SIGUSR2           equ 4
+sig_handlers:     resb MAX_TASKS * SIG_ENTRY_SIZE      ; Handler pointers (0=default)
+sig_pending:      resb MAX_TASKS                       ; Pending signal bitmask per task
+
+; Job control (background tasks)
+JOB_MAX           equ 8
+JOB_ENTRY_SIZE    equ 64            ; 4 (active) + 4 (task_id) + 4 (pid) + 52 (name)
+JOB_ACTIVE        equ 0
+JOB_TASK_ID       equ 4
+JOB_PID           equ 8
+JOB_NAME          equ 12
+job_table:        resb JOB_MAX * JOB_ENTRY_SIZE
+job_count:        resd 1
+bg_request:       resb 1             ; 1 = current command should run in background
+
 ; Networking state (RTL8139 NIC)
 net_state:        resd 1          ; NET_STATE_NONE / FOUND / UP
 net_pci_bus:      resb 1
@@ -791,11 +887,11 @@ net_pci_func:     resb 1
 net_io_base:      resd 1          ; NIC I/O port base address
 net_mac:          resb 6          ; MAC address (6 bytes)
                   resb 2          ; alignment padding
-net_rx_buf:       resd 1          ; Pointer to RX buffer (from PMM)
-net_tx_buf:       resd 1          ; Pointer to TX buffer (from PMM)
+net_rx_buf:       resq 1          ; Pointer to RX buffer (from PMM)
+net_tx_buf:       resq 1          ; Pointer to TX buffer (from PMM)
 net_tx_desc:      resd 1          ; Current TX descriptor index (0-3)
-net_tx_bufs:      resd 4          ; Pointers to 4 TX buffers
-net_pkt_buf:      resd 1          ; Pointer to packet processing buffer
+net_tx_bufs:      resq 4          ; Pointers to 4 TX buffers
+net_pkt_buf:      resq 1          ; Pointer to packet processing buffer
 net_irq:          resb 1          ; NIC IRQ number
                   resb 3          ; alignment
 net_rx_offset:    resd 1          ; Current RX ring buffer read offset
@@ -823,7 +919,7 @@ net_ip_buf:       resb 1536       ; IP packet build buffer
 net_ip_dst:       resd 1
 net_ip_proto:     resb 1
                   resb 3          ; alignment
-net_ip_payload:   resd 1
+net_ip_payload:   resq 1
 net_ip_payload_len: resd 1
 net_recv_src_ip:  resd 1          ; Source IP of received packet
 
@@ -847,7 +943,7 @@ net_udp_dst_port: resw 1
 net_udp_local_port: resw 1
                   resw 1          ; alignment
 net_udp_dst_ip:   resd 1
-net_udp_payload:  resd 1
+net_udp_payload:  resq 1
 net_udp_payload_len: resd 1
 
 ; TCP working vars
@@ -863,7 +959,7 @@ net_tcp_send_flags: resb 1
                   resb 2          ; alignment
 net_tcp_ck_dst:   resd 1
 net_tcp_ck_len:   resd 1
-net_tcp_data_ptr: resd 1
+net_tcp_data_ptr: resq 1
 net_tcp_data_len: resd 1
 
 ; Socket table
@@ -886,8 +982,7 @@ net_dns_id:       resw 1
 net_dns_resolved: resb 1
                   resb 1          ; alignment
 net_dns_result_ip: resd 1
-net_dns_query_name: resd 1        ; pointer to query hostname
-net_dns_query_len: resw 1         ; length of built query (for retry)
+net_dns_query_name: resq 1        ; pointer to query hostname
 net_dns_buf:      resb 512        ; DNS packet build buffer
 net_dns_cache:    resb 8 * 32     ; 8 entries * 32 bytes (28 name + 4 IP)
 
@@ -926,5 +1021,15 @@ scr_bounce_x:     resd 1
 scr_bounce_y:     resd 1
 scr_bounce_dx:    resd 1
 scr_bounce_dy:    resd 1
+
+; Strace data
+STRACE_BUF_SIZE equ 4096        ; 256 entries * 16 bytes each
+strace_active:    resb 1        ; 0=off, 1=tracing
+strace_pos:       resd 1        ; Write offset into strace_buf (bytes)
+strace_count:     resd 1        ; Number of entries logged
+strace_buf:       resb STRACE_BUF_SIZE
+
+; Buddy allocator free list heads (orders 0..BUDDY_MAX_ORDER)
+buddy_free_list:  resq BUDDY_MAX_ORDER + 1
 
 bss_end:
