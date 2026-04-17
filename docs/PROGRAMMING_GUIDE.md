@@ -20,13 +20,11 @@ compiler.
 10. [Directory Operations](#directory-operations)
 11. [Serial Port I/O](#serial-port-io)
 12. [Environment & Arguments](#environment--arguments)
-13. [Networking](#networking)
-14. [GUI Programming](#gui-programming)
-15. [Game Loop Pattern](#game-loop-pattern)
-16. [Building Assembly Programs](#building-assembly-programs)
-17. [C Programming with TCC](#c-programming-with-tcc)
-18. [Debugging Tips](#debugging-tips)
-19. [Complete Syscall Table](#complete-syscall-table)
+13. [Game Loop Pattern](#game-loop-pattern)
+14. [Building Assembly Programs](#building-assembly-programs)
+15. [C Programming with TCC](#c-programming-with-tcc)
+16. [Debugging Tips](#debugging-tips)
+17. [Complete Syscall Table](#complete-syscall-table)
 
 ---
 
@@ -54,13 +52,13 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 | Register | Usage |
 | --- | --- |
-| EAX | Syscall number / return value |
-| EBX | First argument |
-| ECX | Second argument |
-| EDX | Third argument |
-| ESI | Fourth argument |
-| EDI | Fifth argument / secondary return |
-| ESP | Stack pointer (program's own stack) |
+| RAX | Syscall number / return value |
+| RBX | First argument |
+| RCX | Second argument |
+| RDX | Third argument |
+| RSI | Fourth argument |
+| RDI | Fifth argument / secondary return |
+| RSP | Stack pointer (program's own stack) |
 
 ---
 
@@ -70,17 +68,17 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 ```nasm
 ; hello.asm — Hello World for Mellivora OS
-BITS 32
+BITS 64
 ORG 0x200000
 
     ; Print a string
-    mov eax, 3          ; SYS_PRINT
-    mov ebx, message    ; pointer to null-terminated string
+    mov rax, 3          ; SYS_PRINT
+    mov rbx, message    ; pointer to null-terminated string
     int 0x80
 
     ; Exit cleanly
-    mov eax, 0          ; SYS_EXIT
-    xor ebx, ebx       ; exit code 0
+    mov rax, 0          ; SYS_EXIT
+    xor rbx, rbx       ; exit code 0
     int 0x80
 
 message: db "Hello, World!", 10, 0
@@ -102,10 +100,10 @@ Lair:/>
 
 ### Key Points
 
-- **`BITS 32`**: We're in 32-bit protected mode
+- **`BITS 64`**: We're in 64-bit long mode
 - **`ORG 0x200000`**: Program is loaded at this address
 - **`INT 0x80`**: All OS services go through this interrupt
-- **`SYS_EXIT` (EAX=0)**: Always exit cleanly, or the trampoline does it for you
+- **`SYS_EXIT` (RAX=0)**: Always exit cleanly, or the trampoline does it for you
 - **`-O0`**: Disable NASM optimizations (critical — prevents short jump issues)
 
 ---
@@ -161,40 +159,6 @@ SYS_FREAD       equ 30
 SYS_FWRITE      equ 31
 SYS_GETARGS     equ 32
 SYS_SERIAL_IN   equ 33
-SYS_STDIN_READ  equ 34
-SYS_YIELD       equ 35
-SYS_MOUSE       equ 36
-SYS_FRAMEBUF    equ 37
-SYS_GUI         equ 38
-SYS_SOCKET      equ 39
-SYS_CONNECT     equ 40
-SYS_SEND        equ 41
-SYS_RECV        equ 42
-SYS_BIND        equ 43
-SYS_LISTEN      equ 44
-SYS_ACCEPT      equ 45
-SYS_DNS         equ 46
-SYS_SOCKCLOSE   equ 47
-SYS_PING        equ 48
-SYS_SETDATE     equ 49
-SYS_AUDIO_PLAY  equ 50
-SYS_AUDIO_STOP  equ 51
-SYS_AUDIO_STATUS equ 52
-SYS_KILL        equ 53
-SYS_GETPID      equ 54
-SYS_CLIP_COPY   equ 55
-SYS_CLIP_PASTE  equ 56
-SYS_NOTIFY      equ 57
-SYS_FILE_OPEN_DLG equ 58
-SYS_FILE_SAVE_DLG equ 59
-SYS_PIPE_CREATE equ 60
-SYS_PIPE_WRITE  equ 61
-SYS_PIPE_READ   equ 62
-SYS_PIPE_CLOSE  equ 63
-SYS_SHMGET      equ 64
-SYS_SHMADDR     equ 65
-SYS_PROCLIST    equ 66
-SYS_MEMINFO     equ 67
 ```
 
 Or include the provided header:
@@ -801,419 +765,6 @@ var_name: db "PATH", 0
 
 ---
 
-## Networking
-
-Mellivora provides 10 networking syscalls (39–48) for socket operations, DNS resolution,
-and ICMP ping. The `programs/lib/net.inc` library wraps these into convenient functions.
-
-### Creating a TCP Connection
-
-```nasm
-%include "syscalls.inc"
-%include "lib/net.inc"
-
-start:
-        ; 1. Resolve hostname to IP
-        mov esi, hostname
-        call net_dns            ; EAX = IP address (0 = failed)
-        test eax, eax
-        jz .error
-        mov [server_ip], eax
-
-        ; 2. Create a TCP socket
-        mov eax, NET_TCP        ; NET_TCP = 1
-        call net_socket         ; EAX = socket fd (-1 = error)
-        cmp eax, -1
-        je .error
-        mov [sockfd], eax
-
-        ; 3. Connect to port 80
-        mov eax, [sockfd]
-        mov ebx, [server_ip]
-        mov ecx, 80
-        call net_connect        ; EAX = 0 (success) or -1 (error)
-        cmp eax, -1
-        je .error
-
-        ; 4. Send data
-        mov eax, [sockfd]
-        mov esi, message
-        call net_send_line      ; Sends string + CRLF
-
-        ; 5. Receive response
-        mov eax, [sockfd]
-        mov ebx, recv_buf
-        mov ecx, 512
-        call net_recv           ; EAX = bytes (0=no data, -1=closed)
-
-        ; 6. Close socket
-        mov eax, [sockfd]
-        call net_close
-
-.error:
-        mov eax, SYS_EXIT
-        xor ebx, ebx
-        int 0x80
-
-hostname:  db "example.com", 0
-message:   db "GET / HTTP/1.0", 0
-
-section .bss
-server_ip: resd 1
-sockfd:    resd 1
-recv_buf:  resb 513
-```
-
-### Socket Lifecycle
-
-1. **Create** → `net_socket` with `NET_TCP` (1) or `NET_UDP` (2)
-2. **Connect** → `net_connect` with IP and port (for clients)
-3. **Send/Receive** → `net_send`, `net_recv`, `net_send_line`, `net_recv_line`
-4. **Close** → `net_close`
-
-For servers: `net_bind` → `net_listen` → `net_accept` (returns new socket fd)
-
-### Sending Line-Oriented Protocols
-
-Many text protocols (HTTP, FTP, SMTP, NNTP) use CRLF-terminated lines:
-
-```nasm
-        ; net_send_line appends \r\n automatically
-        mov eax, [sockfd]
-        mov esi, helo_cmd
-        call net_send_line      ; Sends "HELO mellivora\r\n"
-
-        ; net_recv_line reads until \n and null-terminates
-        mov eax, [sockfd]
-        mov edi, response_buf
-        mov ecx, 256
-        call net_recv_line      ; EAX = bytes, buffer is null-terminated
-
-helo_cmd: db "HELO mellivora", 0
-```
-
-### DNS Resolution
-
-```nasm
-        mov esi, hostname
-        call net_dns
-        test eax, eax
-        jz .dns_failed          ; 0 = resolution failed
-        ; EAX = 32-bit IP address in little-endian
-```
-
-The kernel maintains an 8-entry DNS cache. Repeated lookups for the same hostname
-return the cached result without a network request.
-
-### ICMP Ping
-
-```nasm
-        mov eax, [target_ip]
-        call net_ping           ; EAX = RTT in timer ticks, or -1 = timeout
-        cmp eax, -1
-        je .timed_out
-```
-
-### Parsing IP Addresses
-
-```nasm
-        mov esi, ip_string
-        call net_parse_ip       ; EAX = 32-bit IP (0 = parse error)
-
-ip_string: db "10.0.2.2", 0
-```
-
-### Networking Syscall Reference
-
-| Syscall | # | EBX | ECX | EDX | EAX Return |
-| --- | --- | --- | --- | --- | --- |
-| SYS_SOCKET | 39 | type (1/2) | — | — | fd or -1 |
-| SYS_CONNECT | 40 | fd | IP | port | 0 or -1 |
-| SYS_SEND | 41 | fd | buffer | length | bytes or -1 |
-| SYS_RECV | 42 | fd | buffer | max len | bytes, 0, -1 |
-| SYS_BIND | 43 | fd | port | — | 0 or -1 |
-| SYS_LISTEN | 44 | fd | — | — | 0 or -1 |
-| SYS_ACCEPT | 45 | fd | — | — | new fd or -1 |
-| SYS_DNS | 46 | hostname | — | — | IP or 0 |
-| SYS_SOCKCLOSE | 47 | fd | — | — | 0 |
-| SYS_PING | 48 | IP | — | — | RTT or -1 |
-
----
-
-## GUI Programming
-
-Mellivora's Burrows desktop environment provides a windowed GUI accessible through
-`SYS_GUI` (syscall 38) and its 20 sub-functions. The `lib/gui.inc` library wraps
-these into convenient functions.
-
-### Setting Up a GUI Application
-
-```nasm
-%include "syscalls.inc"
-%include "lib/gui.inc"
-
-start:
-        ; Create a window: x=50, y=40, w=300, h=200
-        mov eax, 50
-        mov ebx, 40
-        mov ecx, 300
-        mov edx, 200
-        mov esi, title
-        call gui_create_window
-        cmp eax, -1
-        je .exit
-        mov [win_id], eax
-```
-
-### Window Drawing
-
-All drawing coordinates are relative to the window's content area (0,0 is the
-top-left corner inside the title bar and border):
-
-```nasm
-        ; Fill window background
-        mov eax, [win_id]
-        xor ebx, ebx           ; x=0
-        xor ecx, ecx           ; y=0
-        mov edx, 300            ; width
-        mov esi, 200            ; height
-        mov edi, 0x2F2F3F       ; dark blue-gray
-        call gui_fill_rect
-
-        ; Draw text
-        mov eax, [win_id]
-        mov ebx, 10             ; x offset
-        mov ecx, 20             ; y offset
-        mov esi, label_text
-        mov edi, 0xFFFFFF       ; white
-        call gui_draw_text
-
-        ; Draw single pixel
-        mov eax, [win_id]
-        mov ebx, 150            ; x
-        mov ecx, 100            ; y
-        mov esi, 0xFF0000       ; red
-        call gui_draw_pixel
-```
-
-### The GUI Event Loop
-
-Every GUI application follows the compose → flip → poll pattern:
-
-```nasm
-.event_loop:
-        ; 1. Compose the desktop (all windows, taskbar, etc.)
-        call gui_compose
-
-        ; 2. Flip back buffer to screen
-        call gui_flip
-
-        ; 3. Poll for events
-        call gui_poll_event
-        ; EAX = event type, EBX = param1, ECX = param2
-
-        cmp eax, EVT_CLOSE
-        je .close
-
-        cmp eax, EVT_KEY_PRESS
-        je .handle_key
-
-        cmp eax, EVT_MOUSE_CLICK
-        je .handle_click
-
-        ; Yield to avoid busy-waiting
-        mov eax, SYS_YIELD
-        int 0x80
-
-        jmp .event_loop
-
-.close:
-        mov eax, [win_id]
-        call gui_destroy_window
-.exit:
-        mov eax, SYS_EXIT
-        xor ebx, ebx
-        int 0x80
-```
-
-### Event Types
-
-| Constant | Value | EBX | ECX |
-| --- | --- | --- | --- |
-| `EVT_NONE` | 0 | — | — |
-| `EVT_MOUSE_CLICK` | 1 | x position | y position |
-| `EVT_MOUSE_MOVE` | 2 | x position | y position |
-| `EVT_KEY_PRESS` | 3 | key code | — |
-| `EVT_CLOSE` | 4 | window id | — |
-
-### Themes
-
-Applications can read and apply themes:
-
-```nasm
-        ; Get current theme into buffer
-        mov eax, theme_buf
-        call gui_get_theme
-
-        ; Set a theme (0=Blue, 1=Dark, 2=Light, 3=Amber)
-        mov eax, SYS_GUI
-        mov ebx, GUI_SET_THEME
-        mov ecx, 1              ; Dark theme
-        int 0x80
-```
-
-### Mouse Input (Outside GUI)
-
-For programs that need raw mouse coordinates without the Burrows desktop:
-
-```nasm
-        mov eax, SYS_MOUSE     ; syscall 36
-        int 0x80
-        ; EAX = X position, EBX = Y position, ECX = button state
-        ; Buttons: bit 0 = left, bit 1 = right, bit 2 = middle
-```
-
-### Framebuffer Access (Advanced)
-
-For programs that need direct pixel access without the window manager:
-
-```nasm
-        ; Get framebuffer info
-        mov eax, SYS_FRAMEBUF  ; syscall 37
-        mov ebx, 0             ; sub-fn 0 = get info
-        int 0x80
-        ; EAX = LFB address, EBX = width, ECX = height, EDX = bpp
-
-        ; Switch to 640×480×32 mode
-        mov eax, SYS_FRAMEBUF
-        mov ebx, 1             ; sub-fn 1 = set mode
-        int 0x80
-
-        ; Restore text mode when done
-        mov eax, SYS_FRAMEBUF
-        mov ebx, 2             ; sub-fn 2 = restore text
-        int 0x80
-```
-
-### Audio Playback (Sound Blaster 16)
-
-Programs can play audio via the SB16 driver:
-
-```nasm
-        ; Play a PCM buffer (8-bit, 11025 Hz, mono)
-        mov eax, 50             ; SYS_AUDIO_PLAY
-        mov ebx, audio_data     ; pointer to PCM data
-        mov ecx, audio_len      ; length in bytes
-        mov edx, 11025          ; format: sample rate in bits 0-15
-        int 0x80
-
-        ; Check playback status
-        mov eax, 52             ; SYS_AUDIO_STATUS
-        int 0x80
-        ; EAX = state (0=idle, 1=playing, 2=done)
-        ; EBX = sb16_present (0/1)
-
-        ; Stop playback
-        mov eax, 51             ; SYS_AUDIO_STOP
-        int 0x80
-```
-
-Format flags for EDX: bits 0–15 = sample rate Hz, bit 16 = 16-bit,
-bit 17 = stereo, bit 18 = signed samples.
-
-### Inter-Process Communication
-
-#### Pipes
-
-```nasm
-        ; Create a pipe
-        mov eax, 60             ; SYS_PIPE_CREATE
-        int 0x80
-        ; EAX = pipe_id (-1 on error)
-        mov [pipe_id], eax
-
-        ; Write to pipe
-        mov eax, 61             ; SYS_PIPE_WRITE
-        mov ebx, [pipe_id]
-        mov ecx, message        ; buffer
-        mov edx, msg_len        ; length
-        int 0x80
-
-        ; Read from pipe
-        mov eax, 62             ; SYS_PIPE_READ
-        mov ebx, [pipe_id]
-        mov ecx, recv_buf
-        mov edx, 256            ; max bytes
-        int 0x80
-        ; EAX = bytes read
-
-        ; Close pipe
-        mov eax, 63             ; SYS_PIPE_CLOSE
-        mov ebx, [pipe_id]
-        int 0x80
-```
-
-#### Shared Memory
-
-```nasm
-        ; Get or create a shared memory region
-        mov eax, 64             ; SYS_SHMGET
-        mov ebx, 1              ; key (any integer)
-        mov ecx, 4096           ; size
-        int 0x80
-        ; EAX = shm_id (-1 on error)
-        mov [shm_id], eax
-
-        ; Get the data pointer
-        mov eax, 65             ; SYS_SHMADDR
-        mov ebx, [shm_id]
-        int 0x80
-        ; EAX = pointer to 4 KB region
-        mov [shm_ptr], eax
-```
-
-### Process Management
-
-```nasm
-        ; Get current PID
-        mov eax, 54             ; SYS_GETPID
-        int 0x80
-        ; EAX = current task PID
-
-        ; List tasks (slot 0–15)
-        mov eax, 66             ; SYS_PROCLIST
-        mov ebx, 0              ; slot index
-        mov ecx, task_buf       ; 16-byte buffer
-        int 0x80
-        ; EAX = 0 if slot active, -1 if empty
-
-        ; Get memory info
-        mov eax, 67             ; SYS_MEMINFO
-        int 0x80
-        ; EAX = free pages, EBX = total at boot
-```
-
-### Built-in Burrows Apps
-
-These programs in the `programs/` directory use `gui.inc` and demonstrate GUI patterns:
-
-| Program | Description | Pattern Demonstrated |
-| --- | --- | --- |
-| `bcalc` | BCalc | Button grid, click handling |
-| `bedit` | BEdit | Text input, scrolling |
-| `bhive` | BHive | List view, directory navigation |
-| `bforager` | BForager | Address bar, link navigation, protocol handoff |
-| `bpaint` | BPaint | Pixel drawing, tool selection |
-| `bsysmon` | BSysMon | Real-time data display |
-| `bterm` | BTerm | Text rendering, keyboard I/O |
-| `bnotes` | BNotes | Simple data persistence |
-| `bplayer` | BPlayer | Audio playback, progress bar |
-| `bsettings` | BSettings | Theme switching, preferences |
-| `bsheet` | BSheet | Grid layout, formula evaluation |
-| `bview` | BView | Image rendering, file loading |
-
----
-
 ## Game Loop Pattern
 
 Here's the standard pattern used by games like Snake, Tetris, and 2048:
@@ -1362,7 +913,7 @@ Hello from C!
 
 ### Supported C Features
 
-- **Types:** `int` (32-bit), `char`, pointers
+- **Types:** `int` (64-bit), `char`, pointers
 - **Variables:** Global and local, including arrays
 - **Control flow:** `if`/`else`, `while`, `for`, `do`/`while`
 - **Functions:** Declaration, parameters, return values, recursion
@@ -1441,19 +992,6 @@ The `/samples` directory contains ready-to-compile examples:
 | `stars.c` | Starfield animation |
 | `echo.c` | Echo arguments |
 
-### Perl Samples
-
-The `/samples` directory also contains Perl scripts for the in-OS interpreter:
-
-| File | Description |
-| --- | --- |
-| `hello.pl` | Hello World |
-| `factorial.pl` | Factorial calculator |
-| `fizzbuzz.pl` | FizzBuzz |
-| `guess.pl` | Number guessing game |
-| `arrays.pl` | Array operations demo |
-| `strings.pl` | String manipulation demo |
-
 ---
 
 ## Debugging Tips
@@ -1475,7 +1013,7 @@ jmp .cont1
 Run QEMU with serial output:
 
 ```bash
-qemu-system-i386 -hda mellivora.img -serial stdio
+qemu-system-x86_64 -hda mellivora.img -serial stdio
 ```
 
 ### Print Register Values
@@ -1539,7 +1077,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 68 syscalls (0–67):
+Quick reference for all 36 syscalls:
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |
@@ -1577,37 +1115,5 @@ Quick reference for all 68 syscalls (0–67):
 | 31 | FWRITE | filename | buffer | size | 0/-1 |
 | 32 | GETARGS | dest buf | — | — | length |
 | 33 | SERIAL_IN | — | — | — | char |
-| 34 | STDIN_READ | buffer | max len | — | bytes or -1 |
+| 34 | STDIN_READ | buffer | — | — | bytes/-1 |
 | 35 | YIELD | — | — | — | 0 |
-| 36 | MOUSE | — | — | — | EAX=x, EBX=y, ECX=btns |
-| 37 | FRAMEBUF | sub-fn | — | — | (varies by sub-fn) |
-| 38 | GUI | sub-fn | (varies) | (varies) | (varies) |
-| 39 | SOCKET | type (1=TCP, 2=UDP) | — | — | fd or -1 |
-| 40 | CONNECT | socket fd | IP address | port | 0 or -1 |
-| 41 | SEND | socket fd | buffer ptr | length | bytes or -1 |
-| 42 | RECV | socket fd | buffer ptr | max length | bytes, 0, or -1 |
-| 43 | BIND | socket fd | port | — | 0 or -1 |
-| 44 | LISTEN | socket fd | — | — | 0 or -1 |
-| 45 | ACCEPT | socket fd | — | — | new fd or -1 |
-| 46 | DNS | hostname ptr | — | — | IP or 0 |
-| 47 | SOCKCLOSE | socket fd | — | — | 0 |
-| 48 | PING | IP address | — | — | RTT ticks or -1 |
-| 49 | SETDATE | 6-byte buf | century | — | 0 |
-| 50 | AUDIO_PLAY | buffer | length | format | 0/-1 |
-| 51 | AUDIO_STOP | — | — | — | 0 |
-| 52 | AUDIO_STATUS | — | — | — | state, EBX=present |
-| 53 | KILL | pid | — | — | 0/-1 |
-| 54 | GETPID | — | — | — | pid |
-| 55 | CLIP_COPY | buffer | length | — | 0 |
-| 56 | CLIP_PASTE | buffer | max len | — | bytes |
-| 57 | NOTIFY | text ptr | — | color | 0 |
-| 58 | FILE_OPEN_DLG | title | — | filter | 1/0, ECX=name |
-| 59 | FILE_SAVE_DLG | title | — | filter | 1/0, ECX=name |
-| 60 | PIPE_CREATE | — | — | — | pipe_id or -1 |
-| 61 | PIPE_WRITE | pipe_id | buffer | length | bytes |
-| 62 | PIPE_READ | pipe_id | buffer | max len | bytes |
-| 63 | PIPE_CLOSE | pipe_id | — | — | 0 |
-| 64 | SHMGET | key | size | — | shm_id or -1 |
-| 65 | SHMADDR | shm_id | — | — | pointer |
-| 66 | PROCLIST | slot (0–15) | 16B buf | — | 0/-1 |
-| 67 | MEMINFO | — | — | — | free pages, EBX=total |

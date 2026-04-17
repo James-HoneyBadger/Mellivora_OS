@@ -2,8 +2,8 @@
 
 ## Overview
 
-Mellivora OS is a bare-metal, from-scratch 32-bit operating system written entirely in NASM
-assembly language. It targets i486+ processors and runs under QEMU or on compatible real
+Mellivora OS is a bare-metal, from-scratch 64-bit operating system written entirely in NASM
+assembly language. It targets x86-64 processors and runs under QEMU or on compatible real
 hardware.
 
 This guide covers everything you need to build, run, and test the OS.
@@ -18,7 +18,7 @@ This guide covers everything you need to build, run, and test the OS.
 | ------ | --------- | --------- |
 | **NASM** | 2.15+ | Netwide Assembler — assembles all `.asm` sources |
 | **GNU Make** | 4.0+ | Build orchestration |
-| **QEMU** | 6.0+ | `qemu-system-i386` — i486 emulator for testing |
+| **QEMU** | 6.0+ | `qemu-system-x86_64` — x86-64 emulator for testing |
 | **Python 3** | 3.6+ | Runs `populate.py` to populate the filesystem |
 | **dd** | any | Disk image construction (standard on Linux/macOS) |
 
@@ -52,7 +52,7 @@ brew install nasm qemu make python3
 
 ### Optional ISO-building tools on Linux
 
-To build `mellivora.iso` on Linux, install one of the following ISO-creation tools:
+To build `mellivora.iso` on Linux, install one of the following:
 
 ```bash
 # Debian/Ubuntu
@@ -64,9 +64,6 @@ sudo dnf install xorriso
 # Arch
 sudo pacman -S xorriso
 ```
-
-To run the standalone ISO launcher (`run_iso.sh`), you also need one of
-`xorriso`, `bsdtar`, or `7z` to extract the disk image from the ISO.
 
 ### Installing on Windows
 
@@ -90,10 +87,10 @@ This single command:
 1. Assembles the boot sector (`boot.asm` → `boot.bin`, 512 bytes)
 2. Assembles the Stage 2 loader (`stage2.asm` → `stage2.bin`, ≤16 KB)
 3. Assembles the kernel (`kernel.asm` → `kernel.bin`)
-4. Creates a 2 GB raw disk image (`mellivora.img`)
+4. Creates a 64 MB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (169 files)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (73 files at the time of this update)
 
 ### Build Targets
 
@@ -104,12 +101,9 @@ This single command:
 | **Populate** | `make populate` | Write files and programs into the disk image |
 | **Full build** | `make full` | All of the above in order |
 | **Bootable ISO** | `make iso` | Create `mellivora.iso` with install docs and user guide included |
-| **Lite ISO** | `make iso-lite` | Create a smaller `mellivora-lite.iso` (64 MB truncated image) |
-| **Verify ISO** | `make iso-verify` | Validate El Torito boot record in the ISO |
 | **Clean** | `make clean` | Remove all generated files (`.bin`, `.lst`, `.img`, `.iso`) |
-| **Sizes** | `make sizes` | Show component sizes (includes ISO if present) |
+| **Sizes** | `make sizes` | Show component sizes |
 | **Run** | `make run` | Launch in QEMU |
-| **Run ISO** | `make run-iso` | Build ISO and launch in QEMU (CD-ROM + IDE disk) |
 | **Debug** | `make debug` | Launch in QEMU with monitor + debug logging |
 
 ### Build Outputs
@@ -117,12 +111,11 @@ This single command:
 After a successful build:
 
 ```text
-mellivora.img          2 GB bootable raw disk image (HBFS filesystem)
+mellivora.img          64 MB bootable raw disk image
 mellivora.iso          Bootable ISO media with docs and install guide
-mellivora-lite.iso     Smaller ISO with 64 MB truncated disk image
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
-kernel.bin             32-bit kernel
+kernel.bin             64-bit kernel
 programs/*.bin         Compiled user programs (current assembly program set)
 *.lst                  Assembly listing files (useful for debugging)
 ```
@@ -136,27 +129,16 @@ make iso
 This creates `mellivora.iso`, which:
 
 1. boots directly in BIOS/legacy-compatible VMs,
-2. includes `mellivora.img` as the El Torito no-emulation boot image,
-3. bundles the complete documentation set inside the ISO.
-
-For a smaller download, use `make iso-lite` which truncates the disk image to 64 MB
-(all filesystem data is preserved; QEMU extends the file on writes).
+2. includes `mellivora.img` as the El Torito hard-disk boot image,
+3. bundles the full `INSTALL.md` and `USER_GUIDE.md` documentation inside the ISO.
 
 The ISO staging tree includes:
 
 ```text
-boot/mellivora.img          2 GB bootable disk image (HBFS)
-README.txt                  Quick-start guide
-README.md                   Project README
-LICENSE                     MIT license
-CHANGELOG.md                Release notes
+boot/mellivora.img
+README.txt
 docs/INSTALL.md
 docs/USER_GUIDE.md
-docs/PROGRAMMING_GUIDE.md
-docs/TECHNICAL_REFERENCE.md
-docs/TUTORIAL.md
-docs/API_REFERENCE.md
-docs/NETWORKING_GUIDE.md
 ```
 
 ### Expected Warnings
@@ -181,57 +163,24 @@ that space in the output binary.
 make run
 ```
 
-`make run` now selects a host-compatible QEMU audio backend automatically:
-
-| Host OS | Default backend |
-| ------- | --------------- |
-| Linux | `none` (safe default across distros) |
-| macOS | `coreaudio` |
-
-If your local QEMU supports a different Linux backend, you can override it:
-
-```bash
-make run QEMU_AUDIO_BACKEND=alsa
-# or
-make run QEMU_AUDIO_BACKEND=pa
-```
-
 ### Booting the ISO in QEMU
 
-The easiest method uses the Makefile target:
-
 ```bash
-make run-iso
+make iso
+qemu-system-x86_64 -m 128 -cdrom mellivora.iso -boot d -no-reboot -no-shutdown
 ```
 
-Or use the standalone helper script (works without the source tree):
+This is the recommended way to test the distributable install media exactly as users will receive it.
 
-```bash
-./Experimental/tools/run_iso.sh mellivora.iso
-```
-
-Manual QEMU launch (note: **both** the ISO and the IDE disk image are required):
-
-```bash
-qemu-system-i386 -cpu 486 -m 128 \
-  -cdrom mellivora.iso \
-  -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
-  -boot d -no-shutdown \
-  -audiodev none,id=snd0 -machine pcspk-audiodev=snd0,usb=off \
-  -netdev user,id=net0 -device rtl8139,netdev=net0
-```
-
-The kernel boots from the CD-ROM via El Torito but requires an ATA hard disk
-for the HBFS filesystem.  The QEMU command attaches both devices.
+This launches QEMU with:
 
 | Setting | Value |
 | --------- | ------- |
-| **CPU** | i486 emulation |
+| **CPU** | x86-64 emulation |
 | **RAM** | 128 MB |
-| **CD-ROM** | `mellivora.iso` (El Torito boot) |
-| **IDE Disk** | `mellivora.img` as raw IDE drive (HBFS) |
-| **Boot** | CD-ROM (drive D) |
-| **Behavior** | No auto-shutdown |
+| **Disk** | `mellivora.img` as raw IDE drive |
+| **Boot** | Hard disk (drive C) |
+| **Behavior** | No auto-reboot, no auto-shutdown |
 
 ### Debug Launch
 
@@ -251,7 +200,7 @@ Adds QEMU Monitor on stdio and interrupt/reset logging. Useful monitor commands:
 ### Custom QEMU Options
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -m 128 \
   -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
   -boot c -no-reboot -no-shutdown
 ```
@@ -262,7 +211,6 @@ Useful additional options:
 | -------- | ------------- |
 | `-m 256` | Increase RAM to 256 MB |
 | `-serial stdio` | Route serial output (COM1) to your terminal |
-| `-nic user,model=rtl8139` | Enable networking (RTL8139 NIC, QEMU user-mode) |
 | `-audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd` | Enable PC speaker audio |
 | `-S -s` | Start paused + enable GDB server on port 1234 |
 
@@ -270,30 +218,30 @@ Useful additional options:
 
 ## Disk Image Layout
 
-The 2 GB raw disk image has this layout:
+The 64 MB raw disk image has this layout:
 
 ```text
 LBA Range       Size        Content
 ─────────────────────────────────────────────────────────
 LBA 0           512 B       Stage 1 boot sector (MBR)
 LBA 1–32        16 KB       Stage 2 loader
-LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size)
+LBA 33+         variable    64-bit kernel (sector count generated from `kernel.bin` size)
 LBA 417         512 B       HBFS superblock
-LBA 418–545     64 KB       Block allocation bitmap (16 blocks)
-LBA 546–801     128 KB      Root directory (32 blocks, 455 entries)
-LBA 802+        ~2 GB       Data blocks (4 KB each)
+LBA 418–425     4 KB        Block allocation bitmap
+LBA 426–553     64 KB       Root directory (16 blocks, 227 entries)
+LBA 554+        ~63 MB      Data blocks (4 KB each)
 ```
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 4 subdirectories and places the curated runtime file set (169 files):
+The `populate.py` script creates 4 subdirectories and places the curated runtime file set (73 files at the time of this update):
 
 ```text
 /
 ├── bin/           Utility programs (hello, edit, grep, sort, tcc, ...)
 ├── games/         Games (snake, tetris, 2048, galaga, mine, ...)
-├── samples/       11 C and 6 Perl source files (hello.c, fib.c, wumpus.c, ...)
-├── docs/          10 text files (readme, license, notes, todo, poem, man pages)
+├── samples/       11 C source files (hello.c, fib.c, wumpus.c, ...)
+├── docs/           5 text files (readme, license, notes, todo, poem)
 └── script.bat     Example batch script
 ```
 
@@ -306,7 +254,7 @@ The `populate.py` script creates 4 subdirectories and places the curated runtime
 
 ### Requirements
 
-- i486 or newer x86 CPU
+- x86-64 compatible CPU (AMD64/Intel 64)
 - IDE or SATA disk / USB drive with BIOS legacy boot
 - At least 1 MB RAM (128 MB recommended)
 - PS/2 keyboard (USB works if BIOS provides PS/2 emulation)
@@ -350,54 +298,27 @@ sync
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (16-bit real mode)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
-├── kernel.asm              Kernel entry and include graph (main file + 22 include modules)
+├── kernel.asm              Kernel entry and include graph (main file + 13 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v3.0)
+├── CHANGELOG.md            Version history (v1.0 → v1.15)
 ├── README.md               Project overview
 │
-├── kernel/                 Kernel subsystem modules
-│   ├── ata.inc             ATA/IDE disk driver
-│   ├── data.inc            Kernel data tables
-│   ├── filesearch.inc      File search and PATH resolution
-│   ├── hbfs.inc            HoneyBadger File System
-│   ├── idt.inc             Interrupt Descriptor Table
-│   ├── isr.inc             Interrupt Service Routines
-│   ├── pic.inc             Programmable Interrupt Controller
-│   ├── pit.inc             Programmable Interval Timer
-│   ├── pmm.inc             Physical Memory Manager
-│   ├── shell.inc           Shell and command interpreter
-│   ├── syscall.inc         System call dispatcher
-│   ├── util.inc            Kernel utility functions
-│   ├── vga.inc             VGA text mode driver
-│   ├── net.inc             TCP/IP networking stack
-│   ├── vbe.inc             VBE/BGA framebuffer driver
-│   ├── mouse.inc           PS/2 mouse driver
-│   ├── sched.inc           Preemptive scheduler
-│   ├── burrows.inc         Burrows desktop environment
-│   ├── paging.inc          Paging and virtual memory
-│   ├── ipc.inc             Inter-process communication (pipes, shared memory)
-│   ├── sb16.inc            Sound Blaster 16 audio driver
-│   └── screensaver.inc     Screensaver modes
-│
-├── programs/               User-space assembly programs (140 programs)
+├── programs/               User-space assembly programs (currently 56)
 │   ├── syscalls.inc        Shared constants and helpers
-│   ├── lib/                Reusable libraries (string, io, math, vga, mem, data, net, gui)
 │   ├── hello.asm           ... through ...
 │   └── wc.asm
 │
-├── samples/                11 C and 6 Perl source files for TCC and the Perl interpreter
+├── samples/                11 C source files for TCC
 │   ├── hello.c             ... through ...
-│   └── strings.pl
+│   └── wumpus.c
 │
 └── docs/                   Full documentation suite
     ├── INSTALL.md           This file
     ├── USER_GUIDE.md        Shell command reference
     ├── PROGRAMMING_GUIDE.md Writing programs for Mellivora
     ├── TECHNICAL_REFERENCE.md Architecture and internals
-    ├── API_REFERENCE.md     Library function reference
-    ├── TUTORIAL.md          Beginner walkthrough
-    └── NETWORKING_GUIDE.md  Networking architecture and usage
+    └── TUTORIAL.md          Beginner walkthrough
 ```
 
 ---
@@ -425,7 +346,7 @@ to the filesystem.
 QEMU requires explicit audio configuration:
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd
 ```
@@ -438,27 +359,7 @@ Check current size with `ls -la kernel.bin`; Stage 2 reads the generated sector 
 ### Serial debug output
 
 ```bash
-qemu-system-i386 -cpu 486 -m 128 \
+qemu-system-x86_64 -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -serial stdio
 ```
-
-### Networking not working
-
-Ensure QEMU is launched with an RTL8139 NIC. The `make run` target includes this by
-default. If launching manually:
-
-```bash
-qemu-system-i386 -cpu 486 -m 128 \
-  -drive file=mellivora.img,format=raw,if=ide -boot c \
-  -nic user,model=rtl8139
-```
-
-Inside the OS, run `dhcp` to obtain an IP address, then `ping 10.0.2.2` to verify.
-QEMU's user-mode networking provides NAT via gateway 10.0.2.2 and DNS at 10.0.2.3.
-
-### Burrows desktop not displaying
-
-The BGA (Bochs Graphics Adapter) must be available — this is the default for QEMU.
-If the desktop shows a blank screen, ensure your QEMU version supports VBE/BGA
-(all recent releases do). VirtualBox and VMware also provide compatible VBE adapters.

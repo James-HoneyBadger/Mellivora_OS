@@ -5,7 +5,7 @@ populate.py - Populate a Mellivora OS disk image with sample files.
 Writes files directly into the HBFS filesystem on the disk image.
 This understands the on-disk HBFS layout:
   - Superblock at LBA 417
-  - Block allocation bitmap at LBA 418 (128 sectors = 16 blocks)
+  - Block allocation bitmap at LBA 418 (8 sectors = 1 block)
   - Root directory at LBA 426 (128 sectors = 16 blocks)
   - Data area starts at LBA 554
 
@@ -17,7 +17,6 @@ Each directory entry is 288 bytes.
 import struct
 import sys
 import os
-from datetime import datetime
 
 # HBFS constants (must match kernel.asm)
 SECTOR_SIZE = 512
@@ -26,31 +25,15 @@ SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE  # 8
 HBFS_MAGIC = 0x48424653  # 'HBFS'
 HBFS_SUPERBLOCK_LBA = 417
 HBFS_BITMAP_START = 418
-HBFS_ROOT_DIR_START = 546
-HBFS_ROOT_DIR_BLOCKS = 32
+HBFS_ROOT_DIR_START = 426
+HBFS_ROOT_DIR_BLOCKS = 16
 HBFS_ROOT_DIR_SECTS = HBFS_ROOT_DIR_BLOCKS * SECTORS_PER_BLOCK
 HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE
-HBFS_DATA_START = 802
+HBFS_DATA_START = 554
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
 HBFS_MAX_FILENAME = 252
-
-
-def pack_rtc_timestamp(dt=None):
-    """Pack a datetime into HBFS 32-bit DOS-style timestamp.
-    Bits 31-25: Year (0-127, +2000)
-    Bits 24-21: Month (1-12)
-    Bits 20-16: Day (1-31)
-    Bits 15-11: Hour (0-23)
-    Bits 10-5:  Minute (0-59)
-    Bits 4-0:   Second/2 (0-29)
-    """
-    if dt is None:
-        dt = datetime.now()
-    year = max(0, min(127, dt.year - 2000))
-    return ((year << 25) | (dt.month << 21) | (dt.day << 16) |
-            (dt.hour << 11) | (dt.minute << 5) | (dt.second >> 1))
-TOTAL_BLOCKS = 524288
+TOTAL_BLOCKS = 32768
 
 # File types
 FTYPE_FREE = 0
@@ -99,10 +82,8 @@ def create_superblock():
 
 
 def create_dir_entry(filename, ftype, size, start_block,
-                     block_count, timestamp=None):
+                     block_count, timestamp=1000):
     """Create a single HBFS directory entry (288 bytes)."""
-    if timestamp is None:
-        timestamp = pack_rtc_timestamp()
     entry = bytearray(HBFS_DIR_ENTRY_SIZE)
 
     # Filename: bytes 0-252 (null-terminated, max 252 chars)
@@ -136,9 +117,9 @@ def create_dir_entry(filename, ftype, size, start_block,
     return entry
 
 
-HBFS_SUBDIR_BLOCKS = 16                # Blocks per subdirectory
+HBFS_SUBDIR_BLOCKS = 4                 # Blocks per subdirectory
 HBFS_SUBDIR_SIZE = HBFS_SUBDIR_BLOCKS * BLOCK_SIZE
-HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 224
+HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 56
 
 
 class FSImage:
@@ -147,17 +128,7 @@ class FSImage:
     def __init__(self, image_path):
         self.image_path = image_path
         self.img = open(image_path, 'r+b')
-
-        # Validate disk image: check size and boot sector presence
-        self.img.seek(0, 2)
-        img_size = self.img.tell()
-        if img_size < lba_to_offset(HBFS_DATA_START):
-            raise ValueError(
-                f"Image too small ({img_size} bytes); "
-                f"need at least {lba_to_offset(HBFS_DATA_START)} bytes "
-                "for HBFS layout")
-
-        self.bitmap = bytearray(TOTAL_BLOCKS // 8)  # 64KB bitmap
+        self.bitmap = bytearray(BLOCK_SIZE)
         self.root_dir = bytearray(HBFS_ROOT_DIR_SIZE)
         self.next_block = 0
         self.total_files = 0
@@ -214,6 +185,7 @@ class FSImage:
             size=0,
             start_block=block_num,
             block_count=HBFS_SUBDIR_BLOCKS,
+            timestamp=900
         )
         off = root_entry_count * HBFS_DIR_ENTRY_SIZE
         self.root_dir[off:off + HBFS_DIR_ENTRY_SIZE] = entry
@@ -248,6 +220,7 @@ class FSImage:
             size=len(data),
             start_block=block_num,
             block_count=blocks_needed,
+            timestamp=1000 + self.total_files * 100
         )
 
         if directory and directory in self.subdirs:
@@ -316,23 +289,23 @@ class FSImage:
 
 TEXT_FILES = {
     "readme.txt": """\
-Mellivora OS - 32-bit Operating System
+Mellivora OS - 64-bit Operating System
 ==========================================
 
-Welcome to Mellivora OS, a 32-bit protected mode operating system
-built from scratch in x86 assembly language.
+Welcome to Mellivora OS, a 64-bit long mode operating system
+built from scratch in x86-64 assembly language.
 
 Features:
-  * i486+ 32-bit protected mode
-  * Flat 4 GB memory model with bitmap page allocator
+  * x86-64 long mode
+  * Flat memory model with bitmap page allocator
   * ATA PIO disk driver with LBA48 (up to 128 PB)
   * HBFS filesystem with 252-character filenames
   * VGA 80x25 text mode with 16 colors and scrolling
   * PS/2 keyboard with scancode translation
   * PIT timer at 100 Hz
-  * Syscall interface via INT 0x80 (34 system calls)
+  * Syscall interface via INT 0x80 (36 system calls)
   * Interactive command shell with 50+ commands
-  * Program execution (flat 32-bit & ELF binaries)
+  * Program execution (flat 64-bit & ELF binaries)
   * Ring 3 user mode with TSS
   * PATH-based program search across directories
   * Command-line argument passing
@@ -359,9 +332,9 @@ Serial Console (COM1):
   transfer, and remote control.
 
   QEMU quick-start:
-    qemu-system-i386 ... -serial tcp::4555,server=on,wait=off
+    qemu-system-x86_64 ... -serial tcp::4555,server=on,wait=off
   Then on the host:  nc localhost 4555
-  Or for a PTY:      qemu-system-i386 ... -serial pty
+  Or for a PTY:      qemu-system-x86_64 ... -serial pty
 
   Shell utility (in /bin):
     serial              Interactive serial terminal (Esc to quit)
@@ -425,9 +398,9 @@ Disk Layout:
   LBA 1-32:    Stage 2 loader (16KB)
   LBA 33-416:  Kernel (384 sectors, 192KB)
   LBA 417:     HBFS Superblock
-  LBA 418-545: Block allocation bitmap (64KB, 16 blocks)
-  LBA 546-801: Root directory (128KB, 32 blocks, 455 entries)
-  LBA 802+:    Data blocks (4KB each)
+  LBA 418-425: Block allocation bitmap (4KB)
+  LBA 426-553: Root directory (64KB, 16 blocks, 227 entries)
+  LBA 554+:    Data blocks (4KB each)
 
 Syscall Interface (INT 0x80):
   EAX = syscall number
@@ -475,6 +448,8 @@ Syscall Interface (INT 0x80):
                             EAX = -1 (0xFFFFFFFF) if no data.
                    Programs should poll in a loop with SYS_SLEEP
                    between calls to avoid busy-spinning.
+  34 stdin_read  - Read piped stdin (EBX=buf) -> EAX=bytes or -1
+  35 yield       - Cooperative task yield (for future multitasking)
 
 Serial Port Notes:
   - COM1 at I/O 0x3F8, configured to 115200 baud, 8N1.
@@ -493,7 +468,7 @@ Mellivora OS TODO List
 
 [x] Stage 1 boot loader with A20 gate
 [x] Stage 2 with E820 memory detection
-[x] Protected mode switch with flat GDT
+[x] Long mode switch with 64-bit GDT
 [x] VGA text mode driver (80x25, 16 colors)
 [x] PIC initialization and IRQ remapping
 [x] IDT with ISR/IRQ handlers
@@ -503,7 +478,7 @@ Mellivora OS TODO List
 [x] ATA PIO driver with LBA48
 [x] HBFS filesystem (create, read, delete)
 [x] Command shell with 34+ commands
-[x] INT 0x80 syscall interface (34 syscalls)
+[x] INT 0x80 syscall interface (36 syscalls)
 [x] Program loading and execution
 [x] User mode (ring 3) with TSS
 [x] ELF binary loader (minimal)
@@ -522,14 +497,14 @@ Mellivora OS TODO List
 [x] Raw disk syscall restriction (ring 3 denied)
 [x] Calendar program (cal)
 [x] Calculator program (calc)
-[x] Virtual memory / paging
-[x] Preemptive multitasking
-[x] PCI bus enumeration
-[x] Network stack (NIC driver + stub)
-[x] Mouse driver (PS/2, IRQ12)
-[x] GUI / framebuffer mode (VBE/BGA)
-[x] Pipes and I/O redirection
-[x] Wildcard expansion (*.txt)
+[ ] Virtual memory / paging
+[ ] Preemptive multitasking
+[ ] PCI bus enumeration
+[ ] Network stack
+[ ] Mouse driver
+[ ] GUI / framebuffer mode
+[ ] Pipes and I/O redirection
+[ ] Wildcard expansion (*.txt)
 """,
 
     "poem.txt": """\
@@ -563,283 +538,12 @@ dir
 echo
 echo Done.
 """,
-
-    "welcome.bat": """\
-echo
-echo  *** Welcome to Mellivora OS! ***
-echo
-echo  System highlights:
-ver
-echo
-echo  Quick start:
-echo    help        - Show available commands
-echo    ls /bin     - List installed programs
-echo    ls /games   - List available games
-echo    neofetch    - System info with ASCII art
-echo    tree        - Directory tree view
-echo    figlet HI   - ASCII art text banner
-echo    rain        - Matrix digital rain
-echo    weather     - Weather dashboard
-echo
-echo  Have fun exploring the Lair!
-echo
-""",
-
-    "man-shell.txt": """\
-SHELL(1)                 Mellivora Manual                 SHELL(1)
-
-NAME
-    shell - Mellivora OS command interpreter
-
-SYNOPSIS
-    The shell starts automatically at boot.
-
-DESCRIPTION
-    The Mellivora shell is an interactive command interpreter with
-    built-in commands and external program execution.
-
-    Features:
-      * Tab completion for filenames
-      * Command history (Up/Down arrows)
-      * I/O redirection (>, >>, <)
-      * Pipes (cmd1 | cmd2)
-      * Wildcard expansion (*, ?)
-      * Environment variables ($VAR)
-      * Aliases (alias name=command)
-      * Background jobs (command &)
-      * Batch scripts (.bat files)
-      * Conditional execution (&&, ||)
-
-BUILT-IN COMMANDS
-    help        Show available commands
-    cd DIR      Change directory (cd - for previous)
-    pwd         Print working directory
-    dir / ls    List directory contents
-    cat FILE    Display file contents
-    echo TEXT   Print text
-    set VAR=VAL Set environment variable
-    alias       Define command alias
-    time CMD    Measure command execution time
-    clear       Clear screen
-    exit        Exit shell (reboot)
-
-NAVIGATION
-    Tab         Complete filename
-    Up/Down     Browse command history
-    Ctrl+C      Abort running program
-    Ctrl+L      Clear screen
-
-SEE ALSO
-    man syscalls, man editor, man fs, man asm
-""",
-
-    "man-syscalls.txt": """\
-SYSCALLS(2)              Mellivora Manual              SYSCALLS(2)
-
-NAME
-    syscalls - system call interface (INT 0x80)
-
-SYNOPSIS
-    mov eax, SYSCALL_NUMBER
-    mov ebx, arg1
-    mov ecx, arg2
-    int 0x80
-    ; result in eax
-
-DESCRIPTION
-    Programs communicate with the kernel via INT 0x80.
-    Set EAX to the syscall number, arguments in EBX-EDI.
-
-SYSTEM CALLS
-    0  SYS_EXIT        Exit program (EBX=exit code)
-    1  SYS_PUTCHAR     Print char (EBX=ASCII)
-    2  SYS_GETCHAR     Read char, blocking
-    3  SYS_PRINT       Print string (EBX=ptr)
-    4  SYS_READ_KEY    Poll key, non-blocking
-    5  SYS_OPEN        Open file (EBX=name, ECX=mode)
-    6  SYS_READ        Read fd (EBX=fd, ECX=buf, EDX=len)
-    7  SYS_WRITE       Write fd (EBX=fd, ECX=buf, EDX=len)
-    8  SYS_CLOSE       Close fd (EBX=fd)
-    9  SYS_DELETE      Delete file (EBX=name)
-   10  SYS_SEEK        Seek fd (EBX=fd, ECX=pos)
-   11  SYS_STAT        File info (EBX=name -> EAX=size)
-   12  SYS_MKDIR       Create dir (EBX=name)
-   13  SYS_READDIR     Read dir entry (EBX=buf, ECX=idx)
-   14  SYS_SETCURSOR   Set cursor (EBX=x, ECX=y)
-   15  SYS_GETTIME     Get PIT ticks -> EAX
-   16  SYS_SLEEP       Sleep (EBX=ticks, 100Hz)
-   17  SYS_CLEAR       Clear screen
-   18  SYS_SETCOLOR    Set color (EBX=attr)
-   19  SYS_MALLOC      Alloc pages (EBX=bytes -> EAX=ptr)
-   20  SYS_FREE        Free pages (EBX=ptr)
-   21  SYS_EXEC        Run program (EBX=name)
-   25  SYS_DATE        RTC date/time (EBX=buf)
-   26  SYS_CHDIR       Change dir (EBX=path)
-   27  SYS_GETCWD      Get CWD (EBX=buf)
-   28  SYS_SERIAL      Write COM1 (EBX=string)
-   29  SYS_GETENV      Get env var (EBX=name, ECX=buf)
-   30  SYS_FREAD       Read file (EBX=name, ECX=buf)
-   31  SYS_FWRITE      Write file (EBX=name, ECX=buf, EDX=len)
-   32  SYS_GETARGS     Get CLI args (EBX=buf)
-   34  SYS_STDIN_READ  Read piped stdin (EBX=buf)
-
-SEE ALSO
-    man asm, man shell
-""",
-
-    "man-editor.txt": """\
-EDITOR(1)                Mellivora Manual                EDITOR(1)
-
-NAME
-    edit - full-screen text editor
-
-SYNOPSIS
-    edit [FILENAME]
-
-DESCRIPTION
-    A simple full-screen text editor for creating and modifying
-    text files. If FILENAME exists, it is loaded for editing.
-    If omitted, a new empty buffer is created.
-
-KEY BINDINGS
-    Ctrl+S      Save file
-    Ctrl+Q      Quit (prompts if unsaved changes)
-    Ctrl+F      Find text (search forward)
-    Ctrl+G      Go to line number
-    Ctrl+K      Cut current line
-    Ctrl+U      Paste cut line
-    Ctrl+N      New file
-    Ctrl+O      Open file
-    Arrow keys  Move cursor
-    Home/End    Start/end of line
-    PgUp/PgDn   Scroll page up/down
-    Backspace   Delete character left
-    Delete      Delete character right
-    Tab         Insert spaces
-
-STATUS BAR
-    The bottom line shows: filename, line:col, modified flag,
-    and total lines.
-
-FILE SIZE LIMIT
-    Maximum file size is approximately 60KB.
-
-SEE ALSO
-    man shell, man fs
-""",
-
-    "man-fs.txt": """\
-FS(5)                    Mellivora Manual                    FS(5)
-
-NAME
-    hbfs - Honey Badger File System
-
-DESCRIPTION
-    HBFS is the native filesystem of Mellivora OS. It provides
-    a simple block-based storage layout on ATA disks.
-
-DISK LAYOUT
-    LBA 0        Boot sector (512 bytes)
-    LBA 1-32     Stage 2 loader
-    LBA 33+      Kernel image
-    LBA 417      Superblock (magic: "HBFS")
-    LBA 418-545  Block allocation bitmap (64KB)
-    LBA 546-801  Root directory (128KB, 455 entries)
-    LBA 802+     Data blocks (4KB each)
-
-DIRECTORY ENTRIES
-    Each entry is 288 bytes:
-      Bytes 0-252     Filename (null-terminated, max 252 chars)
-      Byte 253        Type (0=free, 1=text, 2=exec, 3=dir,
-                             4=batch, 5=data)
-      Bytes 256-259   File size in bytes
-      Bytes 260-263   Start block number
-      Bytes 264-267   Block count
-      Bytes 268-271   Created timestamp
-      Bytes 272-275   Modified timestamp
-
-BLOCK SIZE
-    Each block is 4096 bytes (8 sectors of 512 bytes).
-
-SUBDIRECTORIES
-    Subdirectories are stored as contiguous blocks of directory
-    entries, the same format as the root directory.
-
-COMMANDS
-    dir / ls    List files
-    cat FILE    Display file
-    del FILE    Delete file
-    mkdir DIR   Create directory
-    cd DIR      Change directory
-    df          Show disk usage
-
-SEE ALSO
-    man shell, man syscalls
-""",
-
-    "man-asm.txt": """\
-ASM(1)                   Mellivora Manual                   ASM(1)
-
-NAME
-    asm - writing programs for Mellivora OS
-
-SYNOPSIS
-    Programs are 32-bit flat binaries or ELF executables,
-    loaded at address 0x00200000.
-
-DESCRIPTION
-    To write a Mellivora program, create an .asm file:
-
-        %%include "syscalls.inc"
-
-        start:
-                ; Your code here
-                mov eax, SYS_PRINT
-                mov ebx, msg
-                int 0x80
-
-                mov eax, SYS_EXIT
-                xor ebx, ebx
-                int 0x80
-
-        msg: db "Hello, world!", 0x0A, 0
-
-    Assemble with:  nasm -f bin -o prog.bin prog.asm
-
-PROGRAM ENVIRONMENT
-    Load address:   0x00200000
-    Stack:          Grows down from 0x00300000
-    Max size:       ~1 MB
-    Calling conv:   EAX=syscall#, EBX-EDI=args
-    System calls:   INT 0x80
-
-ACCESSING ARGUMENTS
-    mov eax, SYS_GETARGS
-    mov ebx, buffer
-    int 0x80            ; EAX = arg length
-
-READING FILES
-    mov eax, SYS_FREAD
-    mov ebx, filename
-    mov ecx, buffer
-    int 0x80            ; EAX = bytes read
-
-READING STDIN (pipes)
-    mov eax, SYS_STDIN_READ
-    mov ebx, buffer
-    int 0x80            ; EAX = bytes or -1
-
-SEE ALSO
-    man syscalls, man shell
-""",
 }
 
 # Classify programs into categories for subdirectories
 GAME_PROGRAMS = {
-    '2048', 'galaga', 'guess', 'life', 'maze', 'mine',
-    'snake', 'sokoban', 'tetris', 'piano', 'tictactoe',
-    'puzzle15', 'hanoi', 'connect4', 'wordle', 'mastermind',
-    'pong', 'blackjack', 'hangman', 'worm', 'simon',
+    '2048', 'galaga', 'guess', 'kingdom', 'life', 'maze', 'mine',
+    'neurovault', 'outbreak', 'snake', 'sokoban', 'tetris', 'piano',
 }
 
 # Everything else in programs/ goes to /bin
@@ -894,11 +598,11 @@ def main():
                 else:
                     fs.add_file(prog_name, data, directory="bin")
 
-    # Add sample source files (.c, .pl)
+    # Add C sample source files
     samples_dir = "samples"
     if os.path.isdir(samples_dir):
         for fname in sorted(os.listdir(samples_dir)):
-            if fname.endswith('.c') or fname.endswith('.pl'):
+            if fname.endswith('.c'):
                 fpath = os.path.join(samples_dir, fname)
                 with open(fpath, 'r', encoding='ascii') as f:
                     data = f.read()

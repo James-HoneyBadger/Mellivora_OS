@@ -102,24 +102,12 @@ str_copy:
 
 banner_str:
         db COLOR_HEADER
-        db "     __  __      _ _ _                        ___  ____                  ", 0x0A
-        db "    |  \/  | ___| | (_)_   _____  _ __ __ _  / _ \/ ___|                 ", 0x0A
-        db "    | |\/| |/ _ \ | | \ \ / / _ \| '__/ _` || | | \___ \                 ", 0x0A
-        db "    | |  | |  __/ | | |\ V / (_) | | | (_| || |_| |___) |                ", 0x0A
-        db "    |_|  |_|\___|_|_|_| \_/ \___/|_|  \__,_| \___/|____/                 ", 0x0A
-        db "                                                                          ", 0x0A
-        db "       HB Lair v2.2 - Honey Badger Lair  |  32-bit i486+                ", 0x0A, 0
-
-motd_str:
-        db 0x0A
-        db "  Welcome to the Lair!  Type 'help' for commands, 'ver' for system info.", 0x0A, 0
-
-msg_boot_time:  db "  Boot complete in ", 0
-msg_boot_suf:   db "s", 0x0A, 0x0A, 0
+        db "          Mellivora OS - 64-bit Long Mode Operating System              ", 0x0A
+        db "       HB Lair v1.4 - Honey Badger Lair / x86-64                       ", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v3.0.0", 0x0A
-        db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
+        db "Mellivora OS v1.4", 0x0A
+        db "  Kernel:        Mellivora (64-bit long mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
@@ -127,7 +115,7 @@ version_text:
         db "  Disk:          ATA PIO, LBA48 (up to 128 PB)", 0x0A
         db "  Filesystem:    HBFS (Honey Badger File System)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
-        db "    Max files:   455 root / 224 per subdirectory", 0x0A
+        db "    Max files:   227 root / 56 per subdirectory", 0x0A
         db "    Max name:    252 characters", 0x0A
         db "    Multi-block: Files can span multiple blocks", 0x0A
         db "    Subdirs:     mkdir / cd / pwd", 0x0A
@@ -136,16 +124,12 @@ version_text:
         db "  Display:       VGA 80x25 text, 16 colors", 0x0A
         db "  Serial:        COM1 at 115200 baud", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
-        db "  Audio:         Sound Blaster 16 (ISA DMA)", 0x0A
-        db "  Syscalls:      INT 0x80 (68 syscalls)", 0x0A
-        db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
+        db "  Syscalls:      INT 0x80 (36 syscalls)", 0x0A
         db "  Shell:         Tab completion, history, Ctrl+C abort", 0x0A
         db "  Programs:      Flat binary + ELF32 (ring 3)", 0x0A
         db "  Arguments:     Command-line args via SYS_GETARGS", 0x0A
         db "  Env vars:      set/unset with $VAR expansion", 0x0A
         db "  File I/O:      open/read/write/close/seek (fd)", 0x0A
-        db "  IPC:           Pipes (8) + shared memory (4)", 0x0A
-        db "  Networking:    TCP/IP (RTL8139, ARP, DHCP, DNS)", 0x0A
         db "  Scripts:       Batch file execution", 0x0A
         db "  Security:      Raw disk access denied to ring 3", 0x0A, 0
 
@@ -188,14 +172,10 @@ cmd_batch_str:  db "batch", 0
 cmd_mkdir_str:  db "mkdir", 0
 cmd_cd_str:     db "cd", 0
 cmd_pwd_str:    db "pwd", 0
-cmd_pushd_str:  db "pushd", 0
-cmd_popd_str:   db "popd", 0
-cmd_dirs_str:   db "dirs", 0
 cmd_touch_str:  db "touch", 0
 cmd_set_str:    db "set", 0
 cmd_unset_str:  db "unset", 0
 cmd_shutdown_str: db "shutdown", 0
-cmd_reboot_str: db "reboot", 0
 cmd_cls_str:    db "cls", 0
 cmd_head_str:   db "head", 0
 cmd_tail_str:   db "tail", 0
@@ -211,39 +191,6 @@ cmd_sleep_str:  db "sleep", 0
 cmd_color_str:  db "color", 0
 cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
-cmd_mouse_str:  db "mouse", 0
-cmd_gui_str:    db "burrows", 0
-cmd_ping_str:   db "ping", 0
-cmd_ifconfig_str: db "ifconfig", 0
-cmd_dhcp_str:   db "dhcp", 0
-cmd_arp_str:    db "arp", 0
-cmd_scrsaver_str: db "scrsaver", 0
-cmd_whoami_str: db "whoami", 0
-cmd_stat_str:   db "stat", 0
-cmd_fsck_str:   db "fsck", 0
-cmd_ln_str:     db "ln", 0
-cmd_chmod_str:  db "chmod", 0
-cmd_chown_str:  db "chown", 0
-
-; Screensaver strings
-msg_scrsaver_set:  db "  Screensaver mode set to: ", 0
-msg_scrsaver_cur:  db "  Current screensaver mode: ", 0
-msg_scrsaver_help: db "  Usage: scrsaver [0-4]", 0x0A
-                   db "    0 = Starfield   1 = Matrix", 0x0A
-                   db "    2 = Pipes       3 = Bouncing logo", 0x0A
-                   db "    4 = Plasma", 0x0A, 0
-
-scr_mode_names:
-        dd scr_mode_0
-        dd scr_mode_1
-        dd scr_mode_2
-        dd scr_mode_3
-        dd scr_mode_4
-scr_mode_0: db "Starfield", 0
-scr_mode_1: db "Matrix", 0
-scr_mode_2: db "Pipes", 0
-scr_mode_3: db "Bouncing logo", 0
-scr_mode_4: db "Plasma", 0
 
 ; Help text
 msg_help_no_detail:
@@ -306,12 +253,6 @@ help_help_size:
 help_help_strings:
         db "strings FILE", 0x0A
         db "Extract printable strings from a file.", 0x0A, 0
-help_help_mouse:
-        db "mouse", 0x0A
-        db "Show PS/2 mouse status (position and buttons).", 0x0A, 0
-help_help_gui:
-        db "burrows", 0x0A
-        db "Enter Burrows desktop (640x480 graphical mode). Press any key to exit.", 0x0A, 0
 
 help_text:
         db "HB Lair Commands:", 0x0A
@@ -349,11 +290,8 @@ help_text:
         db "    rem comment - Batch comment (skipped)", 0x0A
         db "    @cmd       - Execute silently (no echo)", 0x0A
         db "  mkdir D    - Create directory", 0x0A
-        db "  cd DIR     - Change directory (cd - for previous)", 0x0A
+        db "  cd DIR     - Change directory", 0x0A
         db "  pwd        - Print working directory", 0x0A
-        db "  pushd DIR  - Push directory and cd to DIR", 0x0A
-        db "  popd       - Pop directory and restore it", 0x0A
-        db "  dirs       - Show directory stack", 0x0A
         db "  set N V    - Set environment variable", 0x0A
         db "  unset N    - Remove environment variable", 0x0A
         db "  shutdown   - Shut down the system", 0x0A
@@ -361,7 +299,7 @@ help_text:
         db "  mem        - Memory information", 0x0A
         db "  disk       - Disk information", 0x0A
         db "  df         - Filesystem usage", 0x0A
-        db "  time [CMD] - Uptime / measure command duration", 0x0A
+        db "  time       - Uptime", 0x0A
         db "  net        - Show network interface status", 0x0A
         db "  diff F1 F2 - Compare two files line by line", 0x0A
         db "  uniq [-cd] [F] - Remove adjacent duplicates", 0x0A
@@ -375,8 +313,6 @@ help_text:
         db "  color FG [BG] - Set text color (hex 0-F)", 0x0A
         db "  size F     - Show file size and type", 0x0A
         db "  strings F  - Extract printable strings from file", 0x0A
-        db "  mouse      - Show PS/2 mouse status", 0x0A
-        db "  burrows    - Enter Burrows desktop (640x480)", 0x0A
         db "  <name>     - Run program (searches PATH)", 0x0A
         db "  >, >>, <   - Redirect output/input to files", 0x0A
         db "  cmd1 | cmd2- Pipe one command into another", 0x0A
@@ -392,36 +328,13 @@ help_text:
 msg_exception:  db "*** CPU EXCEPTION ***", 0x0A, 0
 msg_exc_eip:    db "  EIP: 0x", 0
 msg_exc_err:    db "  Error code: 0x", 0
-msg_pf:         db "*** PAGE FAULT ***", 0x0A, 0
-msg_pf_addr:    db "  Address: 0x", 0
-msg_pf_eip:     db "  EIP: 0x", 0
-msg_pf_err:     db "  Error: 0x", 0
-msg_pf_cause:   db "  Cause: ", 0
-msg_pf_not_present: db "[not present] ", 0
-msg_pf_protection:  db "[protection] ", 0
-msg_pf_read:    db "[read] ", 0
-msg_pf_write_acc: db "[write] ", 0
-msg_pf_supervisor: db "[supervisor]", 0
-msg_pf_usermode: db "[user]", 0
-msg_mouse_hdr:  db "PS/2 Mouse status:", 0x0A, 0
-msg_mouse_pos:  db "  Position: ", 0
-msg_mouse_btn:  db "  Buttons:  ", 0
-msg_mouse_left: db "LEFT ", 0
-msg_mouse_right: db "RIGHT ", 0
-msg_mouse_mid:  db "MIDDLE ", 0
-msg_mouse_none: db "none", 0
-msg_mouse_absent: db "PS/2 mouse not detected.", 0x0A, 0
-msg_vbe_no:     db "VBE/BGA graphics adapter not found.", 0x0A, 0
 msg_ata_ok:     db "  ATA disk:      ", 0
 msg_ata_none:   db "  ATA disk:      not detected", 0x0A, 0
 msg_shutdown_bar: db "===========================================================", 0x0A, 0
 msg_shutdown:   db "  Shutting down Mellivora OS...", 0x0A, 0
 msg_halt:       db "  System halted. You may power off now.", 0x0A, 0
-msg_shutdown_sync: db "  Syncing filesystem...", 0x0A, 0
-msg_shutdown_done: db "  Filesystem synced. Powering off...", 0x0A, 0
-msg_reboot:     db "  Rebooting Mellivora OS...", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0
-msg_cpu:        db "  CPU:           i486+ (32-bit protected mode)", 0x0A, 0
+msg_cpu:        db \"  CPU:           x86-64 (64-bit long mode)\", 0x0A, 0
 msg_mem_detect: db "  RAM:           ", 0
 msg_mem_total:  db "  Total memory:  ", 0
 msg_mem_header: db "=== Memory Information ===", 0x0A, 0
@@ -453,19 +366,15 @@ msg_hbfs_dir_write_err: db "HBFS: directory write failed", 0x0A, 0
 msg_hbfs_bitmap_err:    db "HBFS: bitmap read failed", 0x0A, 0
 msg_ata_read_err:       db "ATA: read failed after retries", 0x0A, 0
 msg_ata_write_err:      db "ATA: write failed after retries", 0x0A, 0
-dir_header:     db "Type       Size  Modified         Name", 0x0A, 0
-dir_separator:  db "----- --------- ---------------- ----------------", 0x0A, 0
+dir_header:     db "Type       Size  Modified   Name", 0x0A, 0
+dir_separator:  db "----- --------- ---------- ----------------", 0x0A, 0
 type_text:      db "text ", 0
 type_batch:     db "batch", 0
 type_exec:      db "exec ", 0
 type_dir:       db "dir  ", 0
-type_link:      db "link ", 0
 msg_dir_count:  db "  ", 0
 msg_dir_files:  db " file(s)", 0x0A, 0
 msg_not_found:  db "File not found", 0x0A, 0
-msg_no_prev_dir: db "cd: no previous directory", 0x0A, 0
-msg_pushd_full: db "pushd: directory stack full", 0x0A, 0
-msg_popd_empty: db "popd: directory stack empty", 0x0A, 0
 msg_deleted:    db "Deleted.", 0x0A, 0
 msg_saved:      db "Saved.", 0x0A, 0
 msg_copied:     db "Copied.", 0x0A, 0
@@ -487,12 +396,17 @@ msg_format_confirm: db "Format will erase all data. Continue? (y/N) ", 0
 msg_cancelled:  db "Cancelled.", 0x0A, 0
 msg_uptime:     db "Uptime: ", 0
 msg_seconds:    db " seconds", 0x0A, 0
-msg_elapsed:    db 0x0A, "real ", 0
-msg_dot:        db ".", 0
-msg_s_nl:       db "s", 0x0A, 0
 msg_serial_info: db "  Serial:        COM1 @ 115200 baud", 0x0A, 0
 
-; (Networking strings moved to net.inc)
+; Networking strings
+msg_net_header: db "=== Network Status ===", 0x0A, 0
+msg_net_state:  db "  State:  ", 0
+msg_net_none:   db "No NIC detected", 0x0A, 0
+msg_net_found:  db "NIC found (not initialized)", 0x0A, 0
+msg_net_up:     db "UP (RTL8139)", 0x0A, 0
+msg_net_pci:    db "  PCI:    ", 0
+msg_net_iobase: db "  I/O:    0x", 0
+msg_net_mac:    db "  MAC:    ", 0
 msg_exec:       db "Executing...", 0x0A, 0
 msg_exec_done:  db "Program exited.", 0x0A, 0
 msg_ctrl_c:     db "^C", 0x0A, 0
@@ -526,15 +440,12 @@ msg_sleeping:   db "Sleeping ", 0
 msg_sleep_sec:  db " seconds...", 0x0A, 0
 msg_color_set:  db "Color set.", 0x0A, 0
 msg_color_usage: db "Usage: color FG [BG] (hex 0-F)", 0x0A, 0
-msg_date_set:   db "Date/time updated: ", 0
-msg_date_usage: db "Usage: date [YYYY-MM-DD] [HH:MM[:SS]]", 0x0A, 0
 msg_alias_usage: db "Usage: alias NAME COMMAND", 0x0A, 0
 msg_no_aliases: db "No aliases defined.", 0x0A, 0
 msg_need_filename: db "Error: filename required", 0x0A, 0
 msg_need_2files: db "Usage: diff FILE1 FILE2", 0x0A, 0
 msg_file_not_found: db "File not found", 0x0A, 0
 msg_no_history: db "No command history.", 0x0A, 0
-msg_bad_hist: db "!: event not found", 0x0A, 0
 msg_table_full: db "Alias table full.", 0x0A, 0
 msg_file_colon: db ": ", 0
 msg_sleep_usage: db "Usage: sleep SECONDS", 0x0A, 0
@@ -606,9 +517,7 @@ ata_identify_buf: resb 512
 hbfs_super_buf:  resb 512       ; Superblock buffer
 hbfs_dir_buf:    resb HBFS_ROOT_DIR_SIZE  ; Directory buffer (64KB)
 hbfs_block_buf:  resb HBFS_BLOCK_SIZE     ; General block buffer (4KB)
-hbfs_bitmap_buf: resb HBFS_BITMAP_SIZE     ; Bitmap buffer (64KB)
-dir_cache_lba:   resd 1                     ; LBA of cached directory (0 = invalid)
-dir_cache_sects: resd 1                     ; Sector count of cached directory
+hbfs_bitmap_buf: resb HBFS_BLOCK_SIZE     ; Bitmap buffer (4KB)
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE
@@ -624,7 +533,7 @@ redir_in_buf:   resb BATCH_BUFFER_SIZE
 exc_eip:        resd 1          ; Saved EIP from exception
 exc_errcode:    resd 1          ; Saved error code from exception
 
-hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (64 * 256 = 16KB)
+hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (8 * 256 = 2KB)
 hist_count:     resd 1          ; Number of entries in history
 hist_browse:    resd 1          ; Current browse position
 
@@ -635,9 +544,6 @@ serial_present: resb 1
 
 ; Keyboard ctrl state
 kb_ctrl:        resb 1
-kb_alt:         resb 1
-boot_kb_flushed: resb 1
-boot_motd_shown: resb 1          ; 0 = show MOTD on first prompt
 
 ; RTC time fields
 rtc_sec:        resb 1
@@ -667,7 +573,6 @@ env_table:      resb ENV_MAX * ENV_ENTRY_SIZE
 env_name_buf:   resb 64
 env_temp_buf:   resb LINE_BUFFER_SIZE
 expand_buf:     resb LINE_BUFFER_SIZE
-glob_token_buf: resb 256
 
 ; Subdirectory tracking
 current_dir_lba:  resd 1
@@ -739,25 +644,6 @@ path_save_depth:  resd 1          ; Saved dir_depth
 path_save_name:   resb 256        ; Saved current_dir_name
 path_save_stack:  resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE  ; Saved dir_stack
 
-; Previous directory state for "cd -"
-prev_dir_lba:     resd 1
-prev_dir_sects:   resd 1
-prev_dir_depth:   resd 1
-prev_dir_name:    resb 256
-prev_dir_stack:   resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
-prev_dir_valid:   resb 1          ; 0 = no previous dir yet
-
-; pushd/popd directory stack (8 entries, each is a full CWD snapshot)
-PUSHD_MAX         equ 8
-; Each pushd entry: lba(4) + sects(4) + depth(4) + name(256) + dir_stack(4224) = 4492
-PUSHD_ENTRY_SIZE  equ 4 + 4 + 4 + 256 + (DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE)
-pushd_stack:      resb PUSHD_MAX * PUSHD_ENTRY_SIZE
-pushd_count:      resd 1          ; Number of entries on pushd stack
-
-; Shell "time" command timing state
-time_active:      resb 1          ; 1 = timing a command
-time_start_ticks: resd 1          ; tick_count at start
-
 ; File-level CWD save (used by hbfs_read_file path resolution)
 file_save_lba:    resd 1
 file_save_sects:  resd 1
@@ -776,10 +662,9 @@ gff_cwd_depth:    resd 1
 gff_cwd_name:     resb 256
 gff_cwd_stack:    resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 
-; Scheduler / preemptive multitasking state
+; Scheduler / cooperative multitasking state
 task_current:     resd 1                              ; Index of current running task
 task_count:       resd 1                              ; Number of active tasks
-sched_tick:       resd 1                              ; Tick counter for current time slice
 task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array
 
 ; Networking state (RTL8139 NIC)
@@ -794,137 +679,5 @@ net_mac:          resb 6          ; MAC address (6 bytes)
 net_rx_buf:       resd 1          ; Pointer to RX buffer (from PMM)
 net_tx_buf:       resd 1          ; Pointer to TX buffer (from PMM)
 net_tx_desc:      resd 1          ; Current TX descriptor index (0-3)
-net_tx_bufs:      resd 4          ; Pointers to 4 TX buffers
-net_pkt_buf:      resd 1          ; Pointer to packet processing buffer
-net_irq:          resb 1          ; NIC IRQ number
-                  resb 3          ; alignment
-net_rx_offset:    resd 1          ; Current RX ring buffer read offset
-
-; IP configuration
-net_ip:           resd 1          ; Our IP address (little-endian)
-net_mask:         resd 1          ; Subnet mask
-net_gateway:      resd 1          ; Default gateway IP
-net_dns:          resd 1          ; DNS server IP
-net_ip_id:        resw 1          ; IP identification counter
-net_ephemeral_port: resw 1        ; Next ephemeral port
-
-; Ethernet frame building
-net_frame_buf:    resb 1536       ; Frame assembly buffer
-net_frame_dst_mac: resb 6         ; Destination MAC for frame building
-net_frame_ethertype: resw 1       ; EtherType for frame building
-
-; ARP
-net_arp_cache:    resb ARP_CACHE_SIZE * ARP_ENTRY_SIZE  ; 16 * 12 = 192 bytes
-net_arp_buf:      resb 28         ; ARP packet build buffer
-net_arp_target_ip: resd 1         ; ARP request target IP
-
-; IP layer working vars
-net_ip_buf:       resb 1536       ; IP packet build buffer
-net_ip_dst:       resd 1
-net_ip_proto:     resb 1
-                  resb 3          ; alignment
-net_ip_payload:   resd 1
-net_ip_payload_len: resd 1
-net_recv_src_ip:  resd 1          ; Source IP of received packet
-
-; ICMP / Ping
-net_icmp_buf:     resb 64         ; ICMP build buffer
-net_ping_id:      resw 1
-net_ping_seq:     resw 1
-net_ping_send_tick: resd 1
-net_ping_recv_tick: resd 1
-net_ping_received: resb 1
-                  resb 3          ; alignment
-net_ping_dst_ip:  resd 1
-net_ping_target:  resd 1
-net_ping_count:   resd 1
-net_ping_success: resd 1
-
-; UDP working vars
-net_udp_buf:      resb 1536       ; UDP build buffer
-net_udp_src_port: resw 1
-net_udp_dst_port: resw 1
-net_udp_local_port: resw 1
-                  resw 1          ; alignment
-net_udp_dst_ip:   resd 1
-net_udp_payload:  resd 1
-net_udp_payload_len: resd 1
-
-; TCP working vars
-net_tcp_buf:      resb 1536       ; TCP build buffer
-net_tcp_ck_buf:   resb 1548       ; TCP checksum buffer (12 pseudo + 1536)
-net_tcp_src_port: resw 1
-net_tcp_dst_port: resw 1
-net_tcp_their_seq: resd 1
-net_tcp_their_ack: resd 1
-net_tcp_hdr_len:  resd 1
-net_tcp_flags:    resb 1
-net_tcp_send_flags: resb 1
-                  resb 2          ; alignment
-net_tcp_ck_dst:   resd 1
-net_tcp_ck_len:   resd 1
-net_tcp_data_ptr: resd 1
-net_tcp_data_len: resd 1
-
-; Socket table
-net_sock_table:   resb MAX_SOCKETS * SOCK_SIZE  ; 8 * 128 = 1024 bytes
-
-; DHCP state
-net_dhcp_state:   resb 1          ; 0=idle, 1=discover sent, 2=offer received, 3=request sent, 4=configured
-net_dhcp_msg_type: resb 1
-                  resb 2          ; alignment
-net_dhcp_xid:     resd 1
-net_dhcp_offered_ip: resd 1
-net_dhcp_server_ip: resd 1
-net_dhcp_mask:    resd 1
-net_dhcp_gateway: resd 1
-net_dhcp_dns:     resd 1
-net_dhcp_buf:     resb 600        ; DHCP packet build buffer
-
-; DNS
-net_dns_id:       resw 1
-net_dns_resolved: resb 1
-                  resb 1          ; alignment
-net_dns_result_ip: resd 1
-net_dns_query_name: resd 1        ; pointer to query hostname
-net_dns_query_len: resw 1         ; length of built query (for retry)
-net_dns_buf:      resb 512        ; DNS packet build buffer
-net_dns_cache:    resb 8 * 32     ; 8 entries * 32 bytes (28 name + 4 IP)
-
-; Sound Blaster 16 state
-sb16_present:     resb 1          ; 1 if SB16 detected
-sb16_state:       resb 1          ; 0=idle, 1=playing, 2=done
-sb16_version_major: resb 1
-sb16_version_minor: resb 1
-sb16_sample_rate: resd 1          ; Current sample rate
-sb16_buf_addr:    resd 1          ; DMA buffer physical address
-sb16_buf_len:     resd 1          ; DMA buffer length
-sb16_format:      resd 1          ; Format flags
-
-; Clipboard
-clipboard_buf:    resb 4096       ; 4 KB clipboard buffer
-clipboard_len:    resd 1          ; Current clipboard content length
-
-; Screensaver
-scr_idle_count:   resd 1          ; Idle tick counter
-scr_mode:         resb 1          ; Active screensaver mode (0-4)
-scr_rng_state:    resd 1          ; PRNG state
-scr_star_x:       resw SCR_NUM_STARS
-scr_star_y:       resw SCR_NUM_STARS
-scr_star_z:       resw SCR_NUM_STARS
-scr_matrix_pos:   resb SCR_MATRIX_COLS
-scr_matrix_spd:   resb SCR_MATRIX_COLS
-scr_matrix_chr:   resb SCR_MATRIX_COLS * SCR_MATRIX_ROWS
-scr_matrix_tick:  resb 1
-scr_pipe_x:       resd SCR_NUM_PIPES
-scr_pipe_y:       resd SCR_NUM_PIPES
-scr_pipe_dir:     resb SCR_NUM_PIPES
-scr_pipe_color:   resd SCR_NUM_PIPES
-scr_pipe_seg:     resb SCR_NUM_PIPES
-scr_pipe_frame:   resd 1
-scr_bounce_x:     resd 1
-scr_bounce_y:     resd 1
-scr_bounce_dx:    resd 1
-scr_bounce_dy:    resd 1
 
 bss_end:

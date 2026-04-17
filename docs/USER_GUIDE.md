@@ -1,9 +1,7 @@
 # Mellivora OS — User Guide
 
 Welcome to Mellivora OS! This guide covers everything you need to know to use the
-HB Lair shell, manage files, run programs, network, and get the most out of the system.
-
-> **Version 3.0.0** — 140 programs, 72 syscalls, full TCP/IP networking, Burrows desktop
+HB Lair shell, manage files, run programs, and get the most out of the system.
 
 ---
 
@@ -19,11 +17,9 @@ HB Lair shell, manage files, run programs, network, and get the most out of the 
 8. [Environment Variables & Aliases](#environment-variables--aliases)
 9. [Batch Scripting](#batch-scripting)
 10. [Programs](#programs)
-11. [Networking](#networking)
-12. [Burrows Desktop Environment](#burrows-desktop-environment)
-13. [The C Compiler (TCC)](#the-c-compiler-tcc)
-14. [Tips & Tricks](#tips--tricks)
-15. [Limitations](#limitations)
+11. [The C Compiler (TCC)](#the-c-compiler-tcc)
+12. [Tips & Tricks](#tips--tricks)
+13. [Limitations](#limitations)
 
 ---
 
@@ -64,27 +60,26 @@ press **Enter** to execute them. Type `help` to see all available commands.
 
 ### Command History
 
-The shell remembers the last 64 commands. Use **Up** and **Down** arrows to browse.
+The shell remembers the last 8 commands. Use **Up** and **Down** arrows to browse.
 Press **Enter** to re-execute a recalled command.
 
 ---
 
 ## Directory Structure
 
-Mellivora organizes 169 files into subdirectories:
+Mellivora organizes files into subdirectories:
 
 ```text
 /
-├── bin/          119 utility and tool programs (edit, grep, tcc, httpd, ...)
-├── games/         21 games (snake, tetris, chess, rogue, galaga, ...)
-├── samples/       17 sample scripts (11 C, 6 Perl)
-├── docs/          10 text files (readme, license, notes, todo, poem, man pages)
-├── script.bat    Example batch script
-└── welcome.bat   System highlights and quick-start tips
+├── bin/          Utility programs (hello, edit, grep, sort, tcc, ...)
+├── games/        Games (snake, tetris, 2048, galaga, mine, ...)
+├── samples/      C source files (hello.c, fib.c, wumpus.c, ...)
+├── docs/         Documentation (readme, license, notes, ...)
+└── script.bat    Example batch script
 ```
 
-Directories support up to 16 levels of nesting. The root directory holds up to 455
-entries; subdirectories hold up to 224 entries each.
+Directories support up to 16 levels of nesting. The root directory holds up to 227
+entries; subdirectories hold up to 56 entries each.
 
 ---
 
@@ -139,10 +134,10 @@ Lair:/games> cat /samples/hello.c  # Access files across directories
 
 ### Pipes & Redirection
 
-The shell supports Unix-style redirection, pipes, and command chaining:
+The shell supports basic Unix-style redirection, single-line pipelines, and command chaining:
 
 ```text
-Lair:/> echo hello > greet.txt     # Write output to a file
+Lair:/> echo hello > greet.txt     # Write command output to a file
 Lair:/> echo world >> greet.txt    # Append output to a file
 Lair:/> cat < greet.txt            # Read from redirected stdin
 Lair:/> cat greet.txt | wc         # Pipe output into another command
@@ -152,11 +147,9 @@ Lair:/> cat /docs/readme && echo ok
 Lair:/> cat missing.txt || echo fallback
 ```
 
-Commands such as `cat`, `head`, `tail`, `wc`, `uniq`, `rev`, `sort`, `grep`, `sed`,
-`tr`, `cut`, and `tac` accept piped or redirected input when no filename is supplied.
+Commands such as `cat`, `head`, `tail`, `wc`, `uniq`, `rev`, and `tac` accept piped or redirected input when no filename is supplied.
 
-Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` to run
-`cmd2` only when `cmd1` fails.
+Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` to run `cmd2` only when `cmd1` fails.
 
 ---
 
@@ -174,7 +167,6 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `disk` | Show disk info (total sectors, size in MB) |
 | `df` | Filesystem usage (total/used/free blocks, file count) |
 | `sysinfo` | Run the sysinfo program for detailed system information |
-| `mouse` | Show current mouse position and button state |
 
 ### Screen & Display
 
@@ -189,7 +181,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | Command | Description |
 | --- | --- |
 | `dir` / `ls` | List files in current directory |
-| `dir -l` | Long format with types, sizes, and timestamps |
+| `dir -l` | Long format with types and sizes |
 | `cd DIR` | Change directory (`cd /`, `cd ..`, `cd bin`, `cd /docs/sub`) |
 | `pwd` | Print current working directory path |
 | `mkdir NAME` | Create a new subdirectory |
@@ -208,7 +200,6 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `hex FILE` | Hexadecimal dump of file |
 | `size FILE` | Show file size in bytes/blocks and type |
 | `strings FILE` | Extract printable strings (default ≥4 chars) |
-| `stat FILE` | Show file metadata (size, type, block location, timestamps) |
 
 ### File Creation & Editing
 
@@ -226,19 +217,12 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `copy SRC DEST` | Copy a file (wildcards supported: `copy *.txt backup/`) |
 | `ren OLD NEW` | Rename a file |
 | `del FILE` / `rm FILE` | Delete a file (wildcards: `del *.tmp`) |
-| `ln -s TARGET LINK` | Create a symbolic link |
-
-### Filesystem Maintenance
-
-| Command | Description |
-| --- | --- |
-| `fsck` | Check filesystem integrity (superblock, bitmap, directories) |
 
 ### Text Processing (HBU — Honey Badger Utilities)
 
 | Command | Description |
 | --- | --- |
-| `diff FILE1 FILE2` | Line-by-line file comparison (`<` and `>` diffs) |
+| `diff FILE1 FILE2` | Line-by-line file comparison (shows `<` for differences) |
 | `paste FILE1 FILE2` | Merge lines from two files side-by-side with tab separator |
 | `uniq FILE` | Remove adjacent duplicate lines |
 | `uniq -c FILE` | Show count prefix for each line |
@@ -252,16 +236,6 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `tail [-n NUM] FILE` | Print last N lines (default: 10) |
 | `od [FILE]` | Print octal/hex dump of file contents |
 
-### Networking Commands
-
-| Command | Description |
-| --- | --- |
-| `net` | Display full network status (NIC, MAC, IP, gateway, DNS) |
-| `dhcp` | Request an IP address via DHCP |
-| `ping HOST` | Send ICMP pings to a host (IP or hostname) |
-| `ifconfig` | Show network info (or `ifconfig IP` to set IP manually) |
-| `arp` | Display the ARP cache (IP → MAC mappings) |
-
 ### Program Execution
 
 | Command | Description |
@@ -272,13 +246,6 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `which NAME` | Show if built-in or locate external program in PATH |
 | `enter` | Enter raw hex bytes to create a program |
 | `batch FILE` | Execute a batch script |
-
-### Desktop
-
-| Command | Description |
-| --- | --- |
-| `burrows` | Launch the Burrows desktop environment |
-| `scrsaver` | Cycle screensaver mode or set a specific mode |
 
 ### Environment Variables
 
@@ -303,18 +270,14 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | Command | Description |
 | --- | --- |
 | `history` | Display numbered command history |
-| `!!` | Re-execute the previous command |
-| `!N` | Re-execute command number N from history |
 
 ### System Operations
 
 | Command | Description |
 | --- | --- |
 | `shutdown` | Power off (ACPI S5 shutdown, works in QEMU) |
-| `reboot` | Restart the system |
 | `format` | Format HBFS filesystem (**erases all files!** — requires `y` confirm) |
 | `sleep N` | Pause for N seconds (Ctrl+C to abort) |
-| `whoami` | Show current user |
 
 ---
 
@@ -349,13 +312,11 @@ Lair:/> del archive.txt
 
 ### Wildcards
 
-All commands that take filenames support `*` and `?` wildcards, expanded globally
-before dispatch:
+The `del` and `copy` commands support `*` and `?` wildcards:
 
 ```text
 Lair:/> del *.tmp            # Delete all .tmp files
-Lair:/> cat *.txt            # Concatenate all .txt files
-Lair:/> wc *.c               # Word count for all .c files
+Lair:/> copy *.c backup/     # Copy all .c files (future feature)
 ```
 
 ### Working Across Directories
@@ -377,8 +338,7 @@ Lair:/games> cat /docs/license
 ### Searching in Files
 
 ```text
-Lair:/> grep pattern file.txt       # Search for lines matching pattern
-Lair:/> find -name *.txt            # Find files by name
+Lair:/> find syscall /docs/notes    # Search for "syscall" in notes
 ```
 
 ### Comparing Files
@@ -396,30 +356,6 @@ Lair:/> diff file1.txt file2.txt
 Lair:/> uniq data.txt         # Remove adjacent duplicates
 Lair:/> uniq -c data.txt      # Show counts
 Lair:/> uniq -d data.txt      # Show only duplicated lines
-```
-
-### Sorting
-
-```text
-Lair:/> sort names.txt            # Alphabetical sort
-Lair:/> sort -r names.txt         # Reverse alphabetical
-Lair:/> sort -n numbers.txt       # Numeric sort
-```
-
-### Stream Editing
-
-```text
-Lair:/> sed old new file.txt    # Replace 'old' with 'new'
-Lair:/> tr abc ABC file.txt     # Translate characters
-Lair:/> cut -f 1,3 data.csv    # Extract fields 1 and 3
-```
-
-### Pipelines
-
-```text
-Lair:/> cat /docs/readme | grep system | wc
-Lair:/> cat data.txt | sort | uniq -c
-Lair:/> cat /samples/hello.c | head -n 5
 ```
 
 ### Reversing
@@ -497,187 +433,83 @@ bin             games           samples         docs            script.bat
 
 Each line is shown with a `>` prefix before execution.
 
-### Script Directives
+### Script Capabilities
 
-| Directive | Description |
-| --- | --- |
-| `rem COMMENT` | Comment — ignored during execution |
-| `:LABEL` | Define a label for goto |
-| `goto LABEL` | Jump to a label |
-| `if errorlevel N CMD` | Execute CMD if last exit code ≥ N |
-| `if not errorlevel N CMD` | Execute CMD if last exit code < N |
-| `@CMD` | Run CMD silently (no `>` prefix echo) |
+Batch scripts can use:
 
-### Script Example with Flow Control
-
-```text
-Lair:/> write test.bat
-@echo Running tests...
-true
-if errorlevel 1 goto fail
-echo All tests passed!
-goto done
-:fail
-echo TEST FAILED
-:done
-echo Finished.
-
-Lair:/> batch test.bat
-Running tests...
-All tests passed!
-Finished.
-```
+- All shell commands (`cat`, `dir`, `del`, `run`, etc.)
+- `echo` with `$VAR` expansion
+- `set` and `unset` for variables
+- Program execution by name
+- Nested `batch` calls
+- Full path support (`cat /docs/readme`)
 
 ---
 
 ## Programs
 
-Mellivora ships with **140 assembly programs** organized in `/bin` (119 utilities) and
-`/games` (21 games), plus **17 sample scripts** (11 C, 6 Perl) in `/samples`.
+Mellivora ships with a broad set of user-space programs organized in `/bin` and `/games`
+(currently 56 assembly programs).
 
-### Games (21) — in `/games`
+### Games (in /games)
 
 | Program | Controls | Description |
 | --- | --- | --- |
 | `snake` | Arrow keys, ESC | Classic snake — eat food, grow, don't crash |
-| `tetris` | ←→ move, ↑ rotate, ↓ soft drop, Space hard drop, ESC | Tetris with 7 pieces, scoring, and levels |
-| `mine` | Arrow keys, Space reveal, F flag, ESC | Minesweeper |
-| `sokoban` | Arrow keys, R restart, ESC | Box-pushing puzzle with multiple levels |
-| `2048` | Arrow keys / WASD, ESC | Sliding number tiles |
-| `galaga` | ←→ move, Space shoot, ESC | Space shooter with enemy waves |
-| `guess` | Type numbers | Number guessing with hints |
-| `life` | ESC | Conway's Game of Life (78×23 auto-running) |
-| `maze` | ESC | Random maze with BFS solver visualization |
-| `piano` | Letter keys (A–P) | PC speaker musical keyboard (15 notes) |
-| `blackjack` | H/S/Q | Blackjack card game |
-| `connect4` | 1–7 columns | Connect Four against the CPU |
-| `hangman` | Letter keys | Word-guessing hangman game |
-| `hanoi` | Number keys | Towers of Hanoi puzzle |
-| `mastermind` | Letter keys | Guess a hidden color code in ten attempts |
-| `pong` | W/S, ESC | Classic Pong against the CPU |
-| `puzzle15` | Arrow keys | Slide numbered tiles to solve the 15-puzzle |
-| `simon` | Number keys | Repeat growing color sequences |
-| `tictactoe` | Number keys (1–9) | Tic-Tac-Toe against the CPU |
-| `wordle` | Letter keys | Guess a 5-letter word in six attempts |
-| `worm` | Arrow keys | Grow a worm by eating food |
+| `tetris` | ←→ move, ↑ rotate, ↓ soft drop, Space hard drop, ESC quit | Tetris with 7 pieces, scoring, and levels |
+| `mine` | Arrow keys, Space reveal, F flag, ESC quit | Minesweeper |
+| `sokoban` | Arrow keys, R restart, ESC quit | Box-pushing puzzle |
+| `2048` | Arrow keys / WASD, ESC quit | Sliding number tiles |
+| `galaga` | ←→ move, Space shoot, ESC quit | Space shooter with enemy waves |
+| `guess` | Type numbers, Enter | Number guessing with hints |
+| `kingdom` | Number keys for menus | Medieval kingdom management simulation |
+| `life` | ESC quit | Conway's Game of Life (auto-running) |
+| `maze` | ESC quit | Random maze generation + BFS solve |
+| `neurovault` | Text commands (LOOK, GO, TAKE, etc.) | Sci-fi interactive fiction adventure |
+| `outbreak` | Number keys for menus | Zombie survival strategy game |
+| `piano` | Number keys 1–9, 0, -, =, etc. | PC speaker piano (15 notes) |
 
-### Internet Programs (11) — in `/bin`
+### Utilities (in /bin)
 
 | Program | Usage | Description |
 | --- | --- | --- |
-| `forager` | `forager <host>` | Web browser — fetch web pages |
-| `ping` | `ping <host>` | ICMP echo request with RTT display |
-| `telnet` | `telnet <host> [port]` | Interactive Telnet client |
-| `ftp` | `ftp <host> [port]` | FTP client with passive mode (ls, cd, get, put) |
-| `gopher` | `gopher <host> [path] [port]` | Gopher protocol browser with menu formatting |
-| `mail` | `mail <server>` | SMTP mail client |
-| `news` | `news <server>` | NNTP newsgroup reader |
-| `httpd` | `httpd [port]` | HTTP server with directory listing |
-| `irc` | `irc <server> [nick]` | IRC client for chat channels |
-| `ntpd` | `ntpd [server]` | Synchronize system time via NTP |
-| `pkg` | `pkg list\|search\|info` | Package manager |
-
-### Text Processing Tools (16) — in `/bin`
-
-| Program | Usage | Description |
-| --- | --- | --- |
-| `grep` | `grep PATTERN FILE` | Pattern search in files |
+| `hello` | `hello` | Hello World — template program |
+| `edit` | `edit [FILE]` | Full-screen text editor (Ctrl+S save, Ctrl+Q/ESC quit) |
+| `burrow` | `burrow` | Dual-pane file manager (Tab switch, F5 copy, F8 delete) |
+| `tcc` | `tcc FILE.c` | Tiny C Compiler — compiles and runs C code |
+| `grep` | `grep PATTERN FILE` | Search for pattern in file |
+| `sort` | `sort FILE` | Sort file lines alphabetically |
+| `hexdump` | `hexdump FILE` | Hex + ASCII file dump |
 | `sed` | `sed SEARCH REPLACE FILE` | Stream editor (search & replace) |
-| `sort` | `sort [-r] [-n] FILE` | Sort lines alphabetically, reverse, or numerically |
-| `tr` | `tr SET1 SET2 FILE` | Character translation |
-| `cut` | `cut -f LIST [-d C] FILE` | Extract fields (supports `1,3,5-7` ranges) |
-| `paste` | `paste FILE1 FILE2` | Join lines side-by-side |
-| `head` | `head [-n NUM] FILE` | First N lines (default 10) |
-| `tail` | `tail [-n NUM] FILE` | Last N lines (default 10) |
-| `wc` | `wc FILE` | Count lines, words, bytes |
-| `uniq` | `uniq [-c] [-d] FILE` | Remove adjacent duplicates |
-| `rev` | `rev FILE` | Reverse each line |
-| `diff` | `diff FILE1 FILE2` | Line-by-line comparison |
-| `od` | `od FILE` | Octal/hex binary dump |
-| `cmp` | `cmp FILE1 FILE2` | Compare two files byte by byte |
-| `nl` | `nl FILE` | Number lines of a file |
-| `xxd` | `xxd FILE` | Hex dump with ASCII sidebar |
-
-### Language Interpreters (5) — in `/bin`
-
-| Program | Usage | Description |
-| --- | --- | --- |
-| `tcc` | `tcc FILE.c` | C compiler — compiles and runs C subset |
-| `basic` | `basic` | BASIC (PRINT, INPUT, LET, IF/THEN, GOTO, FOR/NEXT) |
-| `forth` | `forth` | FORTH with stack operations and word definitions |
-| `asm` | `asm` | Interactive x86 assembler REPL (~25 instruction types) |
-| `perl` | `perl FILE.pl` | Perl 5 subset interpreter and REPL |
-
-### System & File Utilities — in `/bin`
-
-| Program | Usage | Description |
-| --- | --- | --- |
-| `edit` | `edit [FILE]` | Full-screen text editor (Ctrl+S save, ESC quit) |
-| `top` | `top` | Live process monitor (tasks, CPU, memory) |
-| `hexdump` | `hexdump FILE` | Hex + ASCII file viewer |
-| `pager` | `pager FILE` | Page-by-page viewer (Space/Q) |
-| `csv` | `csv FILE` | Formatted CSV viewer with colored headers |
-| `find` | `find [-name PATTERN]` | Find files matching pattern |
+| `cut` | `cut -f LIST [-d C] FILE` | Field extractor (supports lists/ranges like `1,3,5-7`) |
+| `tr` | `tr SET1 SET2 FILE` | Character translator |
+| `tee` | `tee INPUTFILE OUTPUTFILE` | Print file and copy it to another file |
+| `head` | `head [-n NUM] [FILE]` | Print first N lines (default 10) |
+| `tail` | `tail [-n NUM] [FILE]` | Print last N lines (default 10) |
+| `rev` | `rev [FILE]` | Reverse each line (chars in reverse order) |
+| `yes` | `yes [STRING]` | Output STRING repeatedly (default "y") until interrupted |
+| `true` | `true` | Exit with success code (for scripts) |
+| `false` | `false` | Exit with failure code (for scripts) |
+| `whoami` | `whoami` | Print current user (always "root") |
+| `seq` | `seq N` | Print numbers 1 to N (one per line) |
 | `basename` | `basename PATH` | Extract filename from path |
-| `dirname` | `dirname PATH` | Extract directory from path |
+| `dirname` | `dirname PATH` | Extract directory from path (or "." if none) |
+| `id` | `id` | Print user and group IDs (root=0) |
+| `sleep` | `sleep SECONDS` | Pause for N seconds |
+| `od` | `od [FILE]` | Octal/hex dump of file |
+| `csv` | `csv FILE` | Formatted CSV viewer with colored headers |
+| `wc` | `wc FILE` | Line, word, byte count |
+| `pager` | `pager FILE` | Page-by-page file viewer |
+| `cal` | `cal` | Calendar for current month |
+| `calc` | `calc` | Interactive calculator (+, -, *, /, %) |
+| `mandel` | `mandel` | Mandelbrot set renderer |
+| `basic` | `basic` | BASIC language interpreter |
+| `banner` | `banner` | Colorful ASCII art banner |
+| `colors` | `colors` | VGA color palette demo |
+| `fibonacci` | `fibonacci` | Fibonacci sequence |
+| `primes` | `primes` | Prime number calculator |
 | `sysinfo` | `sysinfo` | Detailed system information |
-| `serial` | `serial [send TEXT]` | Serial port testing (bidirectional, escape to quit) |
-| `apitest` | `apitest` | Syscall API exercise and validation tool |
-| `id` | `id` | User/group IDs (root=0) |
-| `whoami` | `whoami` | Show current user |
 | `uptime` | `uptime` | System uptime display |
-| `cal` | `cal` | Calendar with current day highlighted |
-| `calc` | `calc` | Interactive calculator (+, −, ×, ÷, %) |
-| `date` | `date` | Display or set current date and time |
-| `debug` | `debug` | Inspect memory, registers, and hex dumps |
-| `df` | `df` | Show disk usage statistics |
-| `du` | `du [FILE]` | Show file sizes on disk |
-| `free` | `free` | Display physical memory usage |
-| `help` | `help [TOPIC]` | Builtin help and manual pages |
-| `hive` | `hive` | Dual-pane TUI file manager |
-| `ps` | `ps` | List active tasks |
-| `strings` | `strings FILE` | Extract printable strings from binary |
-| `touch` | `touch FILE` | Create empty file |
-| `uname` | `uname` | Print system information |
-
-### Demos & Visualizations — in `/bin`
-
-| Program | Description |
-| --- | --- |
-| `mandel` | Mandelbrot set renderer (fixed-point arithmetic) |
-| `starfield` | Animated 3D starfield with parallax depth |
-| `matrix` | Matrix-style falling green character rain |
-| `clock` | Analog ASCII clock with sin/cos hands + digital display |
-| `weather` | Simulated weather station with multi-day forecast |
-| `periodic` | Interactive periodic table browser with element details |
-| `banner` | Colorful ASCII art banner printer |
-| `colors` | VGA color palette demo |
-| `hello` | Hello World template program |
-| `primes` | Prime number generator |
-| `fibonacci` | Fibonacci sequence |
-| `cowsay` | Display a message in a cow speech bubble |
-| `fortune` | Display a random fortune or quote |
-| `lolcat` | Print text in rainbow colors |
-| `rot13` | Encode or decode text with the ROT13 cipher |
-| `typist` | Typing practice with WPM and accuracy tracking |
-| `timewarp` | BASIC/PILOT/Logo editor with turtle graphics |
-
-### Burrows GUI Applications (12) — in `/bin`
-
-| Program | Description |
-| --- | ---|
-| `bterm` | BTerm GUI terminal emulator |
-| `bedit` | BEdit GUI text editor |
-| `bhive` | BHive GUI file manager |
-| `bforager` | BForager GUI web browser |
-| `bcalc` | BCalc GUI calculator |
-| `bpaint` | BPaint GUI paint application |
-| `bsysmon` | BSysMon GUI system monitor |
-| `bnotes` | BNotes GUI sticky notes |
-| `bplayer` | BPlayer GUI music player with VU meter |
-| `bsettings` | BSettings GUI theme customizer |
-| `bsheet` | BSheet GUI spreadsheet with formulas |
-| `bview` | BView GUI image viewer (24-bit BMP) |
 
 ### The Text Editor (edit)
 
@@ -692,163 +524,18 @@ Mellivora ships with **140 assembly programs** organized in `/bin` (119 utilitie
 | Ctrl+S | Save file |
 | Ctrl+Q / ESC | Quit editor |
 
----
-
-## Networking
-
-Mellivora includes a full TCP/IP networking stack with an RTL8139 NIC driver. When
-running in QEMU, networking is enabled by default via user-mode networking.
-
-### Getting Online
+Usage:
 
 ```text
-Lair:/> dhcp                   # Get an IP address automatically
-Requesting IP via DHCP...
-DHCP complete: 10.0.2.15
-
-Lair:/> net                    # Check network status
-NIC: RTL8139 (Up)
-MAC: 52:54:00:12:34:56
-IP:  10.0.2.15
-Mask: 255.255.255.0
-GW:  10.0.2.2
-DNS: 10.0.2.3
+Lair:/> edit myfile.txt      # Open specific file
+Lair:/> edit                  # Opens scratch.txt by default
 ```
-
-### Shell Networking Commands
-
-| Command | Description |
-| --- | --- |
-| `net` | Display full network status (NIC, MAC, IP, gateway, DNS) |
-| `dhcp` | Request an IP address via DHCP |
-| `ping HOST` | Send ICMP pings to a host (IP or hostname) |
-| `ifconfig` | Show network info (or `ifconfig IP` to set IP manually) |
-| `arp` | Display the ARP cache (IP → MAC mappings) |
-
-### Browsing the Web
-
-```text
-Lair:/> forager example.com
-Connecting to example.com...
-<!doctype html>
-<html>
-<head>
-    <title>Example Domain</title>
-...
-```
-
-Forager resolves hostnames via DNS, performs a TCP handshake, sends an
-HTTP/1.0 GET request, and displays the response body.
-
-### Telnet Sessions
-
-```text
-Lair:/> telnet towel.blinkenlights.nl
-Connecting to towel.blinkenlights.nl:23...
-Connected!
-```
-
-Press Ctrl+C to disconnect.
-
-### FTP File Transfers
-
-```text
-Lair:/> ftp ftp.example.com
-220 Welcome
-ftp> ls                   # List remote files
-ftp> cd pub               # Change remote directory
-ftp> get readme.txt       # Download a file
-ftp> put myfile.txt       # Upload a file
-ftp> quit
-```
-
-### Gopher Browsing
-
-```text
-Lair:/> gopher gopher.floodgap.com
-[DIR] Welcome to Floodgap Gopher
-[TXT] About this server
-```
-
-### Email (SMTP)
-
-```text
-Lair:/> mail mail.example.com
-mail> compose
-mail> quit
-```
-
-### Usenet News (NNTP)
-
-```text
-Lair:/> news news.example.com
-news> list
-news> group comp.os.mellivora
-news> read 1
-news> quit
-```
-
-### QEMU Networking Notes
-
-QEMU user-mode networking (`-netdev user`) provides:
-
-- Outbound TCP/UDP connections (HTTP, Telnet, FTP, etc.)
-- DHCP server at 10.0.2.2 that assigns 10.0.2.15
-- DNS forwarding at 10.0.2.3 (resolves public hostnames)
-- Gateway at 10.0.2.2 with NAT to host network
-
-Limitations: Inbound connections to the VM require QEMU port forwarding (`-netdev user,hostfwd=...`).
-
-For complete networking documentation, see the [Networking Guide](NETWORKING_GUIDE.md).
-
----
-
-## Burrows Desktop Environment
-
-Launch the windowed desktop with:
-
-```text
-Lair:/> burrows
-```
-
-Or run `burrows` from the command line.
-
-### Desktop Features
-
-- **640×480×32-bit** graphics via Bochs VBE/BGA framebuffer
-- **Window manager** — up to 16 draggable windows with title bars, close buttons
-- **Taskbar** with application launcher and clock
-- **Mouse support** — PS/2 IRQ12 driver with cursor tracking
-- **4 themes** — Blue, Dark, Light, Amber
-- **5 screensaver modes** — Starfield, Matrix, Pipes, Bouncing logo, Plasma
-- **Double buffering** — flicker-free rendering
-
-### GUI Applications
-
-| Application | Description |
-| --- | --- |
-| **BTerm** (`bterm`) | GUI terminal emulator with shell access |
-| **BEdit** (`bedit`) | GUI text editor with file open/save |
-| **BHive** (`bhive`) | GUI file manager with directory browsing |
-| **BForager** (`bforager`) | GUI web browser with clickable links |
-| **BCalc** (`bcalc`) | GUI calculator with button interface |
-| **BPaint** (`bpaint`) | Drawing application with color palette |
-| **BSysMon** (`bsysmon`) | GUI task and memory monitor |
-| **BNotes** (`bnotes`) | Sticky notes application |
-| **BPlayer** (`bplayer`) | Music player with VU meter (WAV playback) |
-| **BSettings** (`bsettings`) | Desktop theme customizer |
-| **BSheet** (`bsheet`) | Spreadsheet with formulas |
-| **BView** (`bview`) | Image viewer (24-bit BMP) |
-
-### Returning to Text Mode
-
-Press the designated key or close all windows to return to the HB Lair text shell.
 
 ---
 
 ## The C Compiler (TCC)
 
-Mellivora includes a Tiny C Compiler that compiles a subset of C into flat binaries
+Mellivora includes a Tiny C Compiler that compiles a subset of C into ELF executables
 and runs them immediately — all inside the OS.
 
 ### Compiling and Running C Programs
@@ -861,7 +548,7 @@ Hello, World!
 Lair:/>
 ```
 
-### Available C Samples (11 files in `/samples`)
+### Available C Samples (in /samples)
 
 | File | Description |
 | --- | --- |
@@ -882,11 +569,10 @@ Lair:/>
 - Variables (`int` type, global and local)
 - Functions with parameters and return values
 - Control flow: `if`/`else`, `while`, `for`
-- Operators: `+`, `-`, `*`, `/`, `%`, comparisons, logical, bitwise
+- Operators: `+`, `-`, `*`, `/`, `%`, comparisons, logical
 - `printf()` with `%d` and `%s` format specifiers
 - `putchar()`, `getchar()`
 - Arrays and pointers (basic support)
-- String literals
 
 ### Writing Your Own C Programs
 
@@ -901,33 +587,6 @@ int main() {
 
 Lair:/> tcc myprogram.c
 ```
-
----
-
-## The Perl Interpreter
-
-Mellivora includes a Perl 5 subset interpreter that runs `.pl` scripts or
-starts an interactive REPL.
-
-### Running Perl Scripts
-
-```text
-Lair:/> perl /samples/hello.pl
-Hello, World!
-
-Lair:/> perl /samples/factorial.pl
-```
-
-### Available Perl Samples (6 files in `/samples`)
-
-| File | Description |
-| --- | --- |
-| `hello.pl` | Hello World |
-| `factorial.pl` | Factorial calculator |
-| `fizzbuzz.pl` | FizzBuzz |
-| `guess.pl` | Number guessing game |
-| `arrays.pl` | Array operations demo |
-| `strings.pl` | String manipulation demo |
 
 ---
 
@@ -948,7 +607,7 @@ If multiple files match, press Tab repeatedly to cycle through them.
 
 ```text
 Lair:/> wc /docs/readme        # How big is it?
-Lair:/> grep memory /docs/notes # Search for "memory"
+Lair:/> find memory /docs/notes # Search for "memory"
 Lair:/> hex /bin/hello          # Look at binary structure
 Lair:/> strings /bin/hello      # Find text in a binary
 ```
@@ -968,7 +627,7 @@ nonexistent: not found
 
 ```text
 Lair:/> write init.bat
-@clear
+clear
 echo Welcome to Mellivora OS!
 date
 echo
@@ -990,28 +649,16 @@ Color values (hex): 0=Black, 1=Blue, 2=Green, 3=Cyan, 4=Red, 5=Magenta, 6=Brown,
 7=LightGray, 8=DarkGray, 9=LightBlue, A=LightGreen, B=LightCyan, C=LightRed,
 D=LightMagenta, E=Yellow, F=White
 
-### Networking Quick Start
-
-```text
-Lair:/> dhcp && forager example.com  # Get IP, then fetch a page
-Lair:/> dhcp && ping 8.8.8.8         # Get IP, then ping Google DNS
-```
-
 ---
 
 ## Limitations
 
-- **Single foreground program**: Preemptive multitasking supports up to 16 tasks, but
-  the shell runs one foreground program at a time.
-- **RTL8139 only**: Networking requires an RTL8139-compatible NIC. QEMU provides one
-  by default. No Wi-Fi support.
-- **QEMU user-mode networking**: Outbound connections work; inbound requires port
-  forwarding configuration.
-- **No file permissions**: All files are accessible to all operations.
-- **Case-sensitive filenames**: `README.txt` and `readme.txt` are different files.
-- **128 MB RAM limit**: Physical memory manager identity-maps up to 128 MB.
-- **Root: 455 files, Subdirs: 224 files**: Directory entry limits per directory.
-- **16-level directory nesting**: Maximum subdirectory depth.
-- **Tab completion**: Completes filenames in the current directory only (not PATH-aware).
-- **DNS cache**: 8-entry cache — repeated queries for the same hostname are served from cache.
-- **TCP single connection**: One active TCP connection at a time per socket.
+- **Single-tasking:** Only one program runs at a time.
+- **No networking:** No network stack.
+- **No piping or redirection:** Commands cannot be chained with `|` or `>`.
+- **No file permissions:** All files accessible to all operations.
+- **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
+- **128 MB RAM limit:** Physical memory manager supports up to 128 MB.
+- **Root: 227 files, Subdirs: 56 files:** Directory entry limits.
+- **16-level directory nesting:** Maximum subdirectory depth.
+- **Tab completion:** Only completes filenames in the current directory (not PATH-aware).
