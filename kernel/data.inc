@@ -458,7 +458,7 @@ msg_shutdown_sync: db "  Syncing filesystem...", 0x0A, 0
 msg_shutdown_done: db "  Filesystem synced. Powering off...", 0x0A, 0
 msg_reboot:     db "  Rebooting Mellivora OS...", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0
-msg_cpu:        db "  CPU:           x86-64 (64-bit long mode)", 0x0A, 0
+msg_cpu:        db "  CPU:           i486+ (32-bit protected mode)", 0x0A, 0
 msg_mem_detect: db "  RAM:           ", 0
 msg_mem_total:  db "  Total memory:  ", 0
 msg_mem_header: db "=== Memory Information ===", 0x0A, 0

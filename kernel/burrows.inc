@@ -2,7 +2,7 @@
 ; burrows.inc - Burrows Desktop Environment (Window Manager)
 ;
 ; Full windowed GUI desktop for Mellivora OS:
-;   - Double-buffered 640x480x32 compositor
+;   - Double-buffered 1024x768x32 compositor
 ;   - Draggable windows with title bar and close button
 ;   - Customizable color themes (3 presets)
 ;   - Taskbar with app launcher menu and clock
@@ -17,10 +17,10 @@
 GUI_BACKBUF     equ 0x02000000
 
 ; Screen geometry
-GUI_SCREEN_W    equ 640
-GUI_SCREEN_H    equ 480
-GUI_BPP         equ 32
-GUI_PITCH       equ GUI_SCREEN_W * 4       ; 2560 bytes per row
+GUI_SCREEN_W    equ 1024
+GUI_SCREEN_H    equ 768
+GUI_BPP         equ 32                     ; current Burrows compositor uses 32-bit ARGB
+GUI_PITCH       equ GUI_SCREEN_W * 4       ; 4096 bytes per row
 
 ; Window system
 MAX_WINDOWS     equ 16
@@ -152,6 +152,9 @@ gui_desktop_main:
         mov byte [vga_color], COLOR_DEFAULT
         ret
 .login_fail:
+        ; Login screen was already in graphics mode, so cancelled login
+        ; must restore the text console before returning to the shell.
+        call gui_exit_desktop
         ret
 .no_vbe_msg: db "Error: VBE not available", 0x0A, 0
 .notify_welcome: db "Welcome to Mellivora OS!", 0
@@ -243,6 +246,7 @@ gui_exit_desktop:
         pushad
         mov byte [gui_desktop_active], 0
         mov byte [gui_exit_flag], 0
+        mov byte [vbe_restore_pending], 1
 
         ; Reset mouse to text mode
         mov dword [mouse_max_x], 79

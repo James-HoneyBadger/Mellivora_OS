@@ -42,7 +42,7 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 ### Execution Model
 
-- **Single-tasking:** Only one program runs at a time
+- **Preemptive multitasking:** User programs run as Ring 3 tasks under the scheduler
 - **Flat memory:** No paging, no memory protection between program sections
 - **Ring 3:** User privilege level — no direct port I/O or privileged instructions
 - **Syscall interface:** All OS services via `INT 0x80`
@@ -52,13 +52,13 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 | Register | Usage |
 | --- | --- |
-| RAX | Syscall number / return value |
-| RBX | First argument |
-| RCX | Second argument |
-| RDX | Third argument |
-| RSI | Fourth argument |
-| RDI | Fifth argument / secondary return |
-| RSP | Stack pointer (program's own stack) |
+| EAX | Syscall number / return value |
+| EBX | First argument |
+| ECX | Second argument |
+| EDX | Third argument |
+| ESI | Fourth argument |
+| EDI | Fifth argument / secondary return |
+| ESP | Stack pointer (program's own stack) |
 
 ---
 
@@ -68,17 +68,17 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 ```nasm
 ; hello.asm — Hello World for Mellivora OS
-BITS 64
+BITS 32
 ORG 0x200000
 
     ; Print a string
-    mov rax, 3          ; SYS_PRINT
-    mov rbx, message    ; pointer to null-terminated string
+    mov eax, 3          ; SYS_PRINT
+    mov ebx, message    ; pointer to null-terminated string
     int 0x80
 
     ; Exit cleanly
-    mov rax, 0          ; SYS_EXIT
-    xor rbx, rbx       ; exit code 0
+    mov eax, 0          ; SYS_EXIT
+    xor ebx, ebx        ; exit code 0
     int 0x80
 
 message: db "Hello, World!", 10, 0
@@ -100,10 +100,10 @@ Lair:/>
 
 ### Key Points
 
-- **`BITS 64`**: We're in 64-bit long mode
+- **`BITS 32`**: Programs run in 32-bit protected mode
 - **`ORG 0x200000`**: Program is loaded at this address
 - **`INT 0x80`**: All OS services go through this interrupt
-- **`SYS_EXIT` (RAX=0)**: Always exit cleanly, or the trampoline does it for you
+- **`SYS_EXIT` (EAX=0)**: Always exit cleanly, or the trampoline does it for you
 - **`-O0`**: Disable NASM optimizations (critical — prevents short jump issues)
 
 ---
@@ -1013,7 +1013,7 @@ jmp .cont1
 Run QEMU with serial output:
 
 ```bash
-qemu-system-x86_64 -hda mellivora.img -serial stdio
+qemu-system-i386 -hda mellivora.img -serial stdio
 ```
 
 ### Print Register Values

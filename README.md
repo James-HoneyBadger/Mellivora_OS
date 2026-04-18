@@ -1,6 +1,6 @@
 # Mellivora OS
 
-![Release](https://img.shields.io/github/v/release/James-HoneyBadger/Mellivora_OS?display_name=tag) ![License](https://img.shields.io/github/license/James-HoneyBadger/Mellivora_OS) ![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20QEMU-blue) ![Language](https://img.shields.io/badge/language-NASM%20x86__64-informational)
+![Release](https://img.shields.io/github/v/release/James-HoneyBadger/Mellivora_OS?display_name=tag) ![License](https://img.shields.io/github/license/James-HoneyBadger/Mellivora_OS) ![Platform](https://img.shields.io/badge/platform-x86%20%7C%20QEMU-blue) ![Language](https://img.shields.io/badge/language-NASM%20x86-informational)
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
@@ -10,9 +10,9 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 ## 🦡 At a Glance
 
-- **Boot path:** 3-stage BIOS boot flow into 64-bit long mode
+- **Boot path:** 3-stage BIOS boot flow into 32-bit protected mode
 - **Userland:** 50+ shell commands, 56 assembly programs, and 11 bundled C samples
-- **Core pieces:** HBFS filesystem, ELF64 loader, PMM allocator, serial/VGA/ATA drivers
+- **Core pieces:** HBFS filesystem, ELF32 loader, PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, and release packaging
 
 ---
@@ -55,7 +55,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 ### HBFS Filesystem
 
 - **Honey Badger File System** — custom filesystem with 4 KB blocks
-- **227 entries** per root directory, **56 entries** per subdirectory
+- **455 entries** per root directory, **224 entries** per subdirectory
 - **File types**: text, executable, directory, batch script
 - **File descriptors**: open/read/write/close/seek (8 simultaneous FDs)
 - **Wildcards**: `*` and `?` pattern matching in `del` and `copy`
@@ -257,7 +257,7 @@ Mellivora_OS/
 | Command | Description |
 | --------- | ------------- |
 | `make full` | Complete build: boot + kernel + programs + filesystem |
-| `make run` | Launch in QEMU (x86-64, 128 MB RAM) |
+| `make run` | Launch in QEMU (i486-compatible x86, 128 MB RAM) |
 | `make debug` | Launch with QEMU monitor on stdio |
 | `make iso` | Create a bootable installer/live ISO with docs included |
 | `make check` | Run the regression suite and HBFS integrity checks |
@@ -270,12 +270,12 @@ Mellivora_OS/
 
 ### Emulation (Recommended)
 
-- QEMU 6.0+ with `qemu-system-x86_64`
+- QEMU 6.0+ with `qemu-system-i386` (or `qemu-system-x86_64` in compatibility mode)
 - Any modern host OS (Linux, macOS, Windows with WSL)
 
 ### Real Hardware
 
-- x86-64 compatible CPU (AMD64/Intel 64)
+- i486-or-newer x86 CPU with BIOS legacy boot support
 - 1 MB RAM minimum (128 MB recommended)
 - IDE/SATA disk or USB drive (BIOS legacy boot)
 - VGA-compatible display

@@ -118,7 +118,7 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "  Stage 2:      $(STAGE2_BIN)"
 	@echo "  Kernel:       $(KERNEL_BIN)"
 	@if [ ! -f $(IMAGE) ]; then \
-		echo "  Creating empty $(IMAGE_SIZE_MB)GB disk image"; \
+		echo "  Creating empty $(IMAGE_SIZE_MB)MB disk image"; \
 		$(DD) if=/dev/zero of=$(IMAGE) bs=1M count=$(IMAGE_SIZE_MB) status=none; \
 	else \
 		echo "  Preserving existing HBFS contents in $(IMAGE)"; \

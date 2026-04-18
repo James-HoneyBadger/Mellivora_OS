@@ -11,7 +11,8 @@ This understands the on-disk HBFS layout:
 
 Each data block is 4096 bytes (8 sectors).
 Each directory entry is 288 bytes.
-14 entries per directory block, 455 entries total.
+That yields 14 entries per directory block, 455 entries in the root directory,
+and 224 entries per subdirectory.
 """
 
 import struct
@@ -121,7 +122,7 @@ def create_dir_entry(filename, ftype, size, start_block,
 
 HBFS_SUBDIR_BLOCKS = 16                 # Blocks per subdirectory
 HBFS_SUBDIR_SIZE = HBFS_SUBDIR_BLOCKS * BLOCK_SIZE
-HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 227
+HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 224
 HBFS_BITMAP_SECTS = HBFS_BITMAP_BLOCKS * SECTORS_PER_BLOCK
 
 
@@ -211,15 +212,55 @@ class FSImage:
                 count += 1
         return count
 
-    def _alloc_blocks(self, count):
-        """Allocate contiguous blocks, returns start block number."""
-        start = self.next_block
+    def _mark_block_range(self, bitmap, start, count):
+        """Mark a block range as allocated in the provided bitmap."""
         for b in range(start, start + count):
             byte_idx = b // 8
             bit_idx = b % 8
-            self.bitmap[byte_idx] |= (1 << bit_idx)
+            bitmap[byte_idx] |= (1 << bit_idx)
+
+    def _alloc_blocks(self, count):
+        """Allocate contiguous blocks, returns start block number."""
+        start = self.next_block
+        self._mark_block_range(self.bitmap, start, count)
         self.next_block += count
         return start
+
+    def _rebuild_bitmap(self):
+        """Rebuild the allocation bitmap from live directory entries."""
+        fresh = bytearray(HBFS_BITMAP_SIZE)
+
+        def mark_directory(directory_buf, max_entries):
+            entries = []
+            for i in range(max_entries):
+                off = i * HBFS_DIR_ENTRY_SIZE
+                if not self._entry_used(directory_buf, off):
+                    continue
+                name = self._entry_name(directory_buf, off)
+                ftype = directory_buf[off + 253]
+                start_block = struct.unpack_from('<I', directory_buf, off + 260)[0]
+                block_count = struct.unpack_from('<I', directory_buf, off + 264)[0]
+                if block_count > 0:
+                    self._mark_block_range(fresh, start_block, block_count)
+                entries.append((name, ftype, start_block, block_count))
+            return entries
+
+        root_entries = mark_directory(self.root_dir, HBFS_MAX_FILES)
+        for name, ftype, start_block, block_count in root_entries:
+            if ftype != FTYPE_DIR or block_count <= 0:
+                continue
+            if name in self.subdirs:
+                subdir_data = self.subdirs[name]['data']
+            else:
+                data_lba = HBFS_DATA_START + start_block * SECTORS_PER_BLOCK
+                self.img.seek(lba_to_offset(data_lba))
+                subdir_data = self.img.read(block_count * BLOCK_SIZE)
+            subdir_max = (block_count * BLOCK_SIZE) // HBFS_DIR_ENTRY_SIZE
+            mark_directory(subdir_data, subdir_max)
+
+        self.bitmap = fresh
+        self.next_block = self._find_next_block()
+        return sum(bin(byte).count('1') for byte in self.bitmap)
 
     def _write_data(self, block_num, data, blocks_needed):
         """Write data to disk at the given block."""
@@ -348,7 +389,7 @@ class FSImage:
             self.img.seek(lba_to_offset(sd['data_lba']))
             self.img.write(sd['data'])
 
-        used = self._find_next_block()
+        used = self._rebuild_bitmap()
         free = TOTAL_BLOCKS - used
         struct.pack_into('<I', self.sb, 12, free)
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
@@ -419,9 +460,9 @@ Serial Console (COM1):
   transfer, and remote control.
 
   QEMU quick-start:
-    qemu-system-x86_64 ... -serial tcp::4555,server=on,wait=off
+    qemu-system-i386 ... -serial tcp::4555,server=on,wait=off
   Then on the host:  nc localhost 4555
-  Or for a PTY:      qemu-system-x86_64 ... -serial pty
+  Or for a PTY:      qemu-system-i386 ... -serial pty
 
   Shell utility (in /bin):
     serial              Interactive serial terminal (Esc to quit)

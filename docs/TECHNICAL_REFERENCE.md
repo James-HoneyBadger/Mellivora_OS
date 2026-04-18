@@ -36,7 +36,7 @@ anyone who wants to understand how the system works under the hood.
 ## Boot Sequence
 
 Mellivora boots in three stages: a 512-byte MBR bootloader, a 16 KB second stage, and
-the 64-bit long mode kernel.
+the 32-bit protected-mode kernel.
 
 ### Stage 1 — MBR Bootloader (boot.asm)
 
@@ -52,7 +52,7 @@ The BIOS loads the first sector (512 bytes) of the disk to `0x7C00`.
 
 ### Stage 2 — Protected Mode Setup (stage2.asm)
 
-Stage 2 runs at `0x7E00` in real mode and transitions to 64-bit long mode.
+Stage 2 runs at `0x7E00` in real mode and transitions to 32-bit protected mode.
 
 1. Re-initializes segments and stack (`SP=0x7C00`)
 2. Sets VGA mode `0x03` (80×25 text), draws a blue splash/title bar at `0xB800`
@@ -60,11 +60,11 @@ Stage 2 runs at `0x7E00` in real mode and transitions to 64-bit long mode.
 4. Loads the kernel from disk starting at **LBA 33**, reading the generated
    `KERNEL_SECTORS` value from `kernel_sectors.inc` into low memory at `0x20000`
    (segment `0x2000`), in chunks of up to 64 sectors
-5. Enters long mode:
+5. Enters protected mode:
    - Loads the GDT (`lgdt [gdt_descriptor]`)
-   - Sets CR0 PE bit
+   - Sets the CR0 PE bit
    - Far-jumps to `0x08:pmode_entry`
-6. In 64-bit mode: sets all segment registers to `0x10` (kernel data), `RSP = 0x9FC00`
+6. In 32-bit mode: sets all segment registers to `0x10` (kernel data), `ESP = 0x9FC00`
 7. Stores boot info at fixed addresses:
    - Boot drive → `[0x500]`
    - Memory map count → `[0x504]`
@@ -74,7 +74,7 @@ Stage 2 runs at `0x7E00` in real mode and transitions to 64-bit long mode.
 
 ### Stage 3 — Kernel Entry (kernel.asm)
 
-The kernel starts executing at 1 MB in 64-bit long mode.
+The kernel starts executing at 1 MB in 32-bit protected mode.
 
 1. Initializes all subsystems in order:
    - VGA clear screen
@@ -99,9 +99,9 @@ The kernel starts executing at 1 MB in 64-bit long mode.
 | 1–32 | 16 KB | Stage 2 loader (stage2.asm) |
 | 33+ | Variable | Kernel (kernel.asm + include modules) |
 | 417 | 512 B | HBFS Superblock |
-| 418–425 | 4 KB | Block allocation bitmap |
-| 426–553 | 64 KB | Root directory (16 blocks) |
-| 554+ | — | Data blocks (4 KB each) |
+| 418–545 | 64 KB | Block allocation bitmap |
+| 546–801 | 128 KB | Root directory (32 blocks) |
+| 802+ | — | Data blocks (4 KB each) |
 
 ---
 

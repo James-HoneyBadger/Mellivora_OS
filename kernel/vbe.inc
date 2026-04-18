@@ -42,8 +42,8 @@ VBE_DISPI_ENABLED       equ 0x01
 VBE_DISPI_LFB_ENABLED   equ 0x40
 
 ; Default mode
-VBE_DEFAULT_WIDTH       equ 640
-VBE_DEFAULT_HEIGHT      equ 480
+VBE_DEFAULT_WIDTH       equ 1024
+VBE_DEFAULT_HEIGHT      equ 768
 VBE_DEFAULT_BPP         equ 32
 
 ; Fallback LFB address (QEMU/Bochs standard mapping)
@@ -198,6 +198,29 @@ vbe_set_mode:
 vbe_restore_text:
         pushad
 
+        ; Reset any bank/panning state first so the adapter cleanly
+        ; returns from framebuffer mode to legacy VGA text mode.
+        mov dx, VBE_DISPI_IOPORT_INDEX
+        mov ax, VBE_DISPI_INDEX_BANK
+        out dx, ax
+        mov dx, VBE_DISPI_IOPORT_DATA
+        xor ax, ax
+        out dx, ax
+
+        mov dx, VBE_DISPI_IOPORT_INDEX
+        mov ax, VBE_DISPI_INDEX_X_OFF
+        out dx, ax
+        mov dx, VBE_DISPI_IOPORT_DATA
+        xor ax, ax
+        out dx, ax
+
+        mov dx, VBE_DISPI_IOPORT_INDEX
+        mov ax, VBE_DISPI_INDEX_Y_OFF
+        out dx, ax
+        mov dx, VBE_DISPI_IOPORT_DATA
+        xor ax, ax
+        out dx, ax
+
         ; Disable BGA
         mov dx, VBE_DISPI_IOPORT_INDEX
         mov ax, VBE_DISPI_INDEX_ENABLE
@@ -244,7 +267,16 @@ vbe_restore_text:
         mov al, 0x02
         out dx, al
 
-        ; Unlock CRTC
+        ; Fully unlock the CRTC register block before programming mode 3.
+        ; Without this, some adapters keep parts of the old graphics timing.
+        mov dx, 0x3D4
+        mov al, 0x03
+        out dx, al
+        mov dx, 0x3D5
+        in al, dx
+        or al, 0x80
+        out dx, al
+
         mov dx, 0x3D4
         mov al, 0x11
         out dx, al
@@ -312,6 +344,11 @@ vbe_restore_text:
         rep stosd
 
         mov byte [vbe_active], 0
+        mov dword [vbe_width], VGA_WIDTH
+        mov dword [vbe_height], VGA_HEIGHT
+        mov dword [vbe_bpp], 0
+        mov dword [vbe_Bpp], 0
+        mov dword [vbe_pitch], VGA_WIDTH * 2
 
         ; Restore VGA font into plane 2
         cmp byte [vbe_font_saved], 1
@@ -332,40 +369,89 @@ vbe_restore_text:
 ;---------------------------------------
 vbe_save_vga_font:
         pushad
-        ; Select plane 2 for reading via GC register 4 (Read Map Select)
-        mov dx, 0x3CE
+        ; Select font plane 2 exactly as VGA expects when accessing the
+        ; built-in text font at A0000. The previous code only changed the
+        ; read map and produced corrupted saved glyphs.
+
+        ; Sequencer: write plane 2 only
+        mov dx, 0x3C4
+        mov al, 0x02
+        out dx, al
+        mov dx, 0x3C5
         mov al, 0x04
         out dx, al
-        mov dx, 0x3CF
-        mov al, 0x02            ; plane 2
-        out dx, al
-        ; Set sequential addressing: Sequencer reg 4 bit 3
+
+        ; Sequencer: disable odd/even, enable sequential access
         mov dx, 0x3C4
         mov al, 0x04
         out dx, al
         mov dx, 0x3C5
-        in al, dx
-        or al, 0x04             ; sequential access
+        mov al, 0x06
         out dx, al
-        ; Copy 256 chars * 32 bytes = 8192 bytes from plane 2
+
+        ; Graphics controller: read plane 2 in write mode 0 from A0000
+        mov dx, 0x3CE
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x02
+        out dx, al
+
+        mov dx, 0x3CE
+        mov al, 0x05
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x00
+        out dx, al
+
+        mov dx, 0x3CE
+        mov al, 0x06
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x00
+        out dx, al
+
+        ; Copy 256 glyphs x 32 bytes each
         mov esi, 0xA0000
         mov edi, vbe_font_save_buf
         mov ecx, 8192 / 4
         cld
         rep movsd
-        ; Restore GC Read Map to plane 0
+
+        ; Restore normal text-mode memory access
+        mov dx, 0x3C4
+        mov al, 0x02
+        out dx, al
+        mov dx, 0x3C5
+        mov al, 0x03
+        out dx, al
+
+        mov dx, 0x3C4
+        mov al, 0x04
+        out dx, al
+        mov dx, 0x3C5
+        mov al, 0x02
+        out dx, al
+
         mov dx, 0x3CE
         mov al, 0x04
         out dx, al
         mov dx, 0x3CF
         mov al, 0x00
         out dx, al
-        ; Restore Sequencer reg 4 to normal text mode
-        mov dx, 0x3C4
-        mov al, 0x04
+
+        mov dx, 0x3CE
+        mov al, 0x05
         out dx, al
-        mov dx, 0x3C5
-        mov al, 0x02            ; odd/even mode
+        mov dx, 0x3CF
+        mov al, 0x10
+        out dx, al
+
+        mov dx, 0x3CE
+        mov al, 0x06
+        out dx, al
+        mov dx, 0x3CF
+        mov al, 0x0E
         out dx, al
         popad
         ret
@@ -672,9 +758,10 @@ cmd_gui_demo:
         dd 0x00FFFFFF           ; White
 
 ; VBE BSS-style data (initialized to 0 on kernel BSS clear)
-vbe_available:  db 0
-vbe_active:     db 0
-                dw 0            ; padding
+vbe_available:      db 0
+vbe_active:         db 0
+vbe_restore_pending: db 0
+                    db 0        ; padding
 vbe_lfb_addr:   dd 0
 vbe_width:      dd 0
 vbe_height:     dd 0

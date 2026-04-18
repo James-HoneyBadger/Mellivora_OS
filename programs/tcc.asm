@@ -1,5 +1,5 @@
 ; tcc.asm - Tiny C Compiler for Mellivora OS
-; Compiles a minimal subset of C to flat 64-bit x86-64 binary
+; Compiles a minimal subset of C to flat 32-bit x86 binary
 ;
 ; Supported C subset:
 ;   - int and char variables (global and local)

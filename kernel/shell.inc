@@ -4,6 +4,16 @@
 
 shell_main:
         mov esp, KERNEL_STACK
+
+        ; If control returned from Burrows, force one final console reset
+        ; here after the GUI has fully unwound.
+        cmp byte [vbe_restore_pending], 1
+        jne .shell_console_ready
+        mov byte [vbe_restore_pending], 0
+        call vbe_restore_text
+        call vga_init
+.shell_console_ready:
+
         mov byte [vga_color], COLOR_DEFAULT
         mov eax, [program_exit_code]
         mov [shell_last_status], eax
@@ -1806,6 +1816,11 @@ shell_dispatch_core:
 
 .cmd_gui:
         call gui_desktop_main
+        ; If Burrows returns directly instead of tail-jumping back into
+        ; the shell, force the text console restore here as well.
+        call vbe_restore_text
+        call vga_init
+        mov byte [vbe_restore_pending], 0
         ret
 
 .cmd_whoami:

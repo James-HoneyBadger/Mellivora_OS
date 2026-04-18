@@ -2,8 +2,8 @@
 
 ## Overview
 
-Mellivora OS is a bare-metal, from-scratch 64-bit operating system written entirely in NASM
-assembly language. It targets x86-64 processors and runs under QEMU or on compatible real
+Mellivora OS is a bare-metal, from-scratch 32-bit protected-mode operating system written entirely in NASM
+assembly language. It targets BIOS-bootable x86 hardware and runs under QEMU or on compatible real
 hardware.
 
 This guide covers everything you need to build, run, and test the OS.
@@ -18,7 +18,7 @@ This guide covers everything you need to build, run, and test the OS.
 | ------ | --------- | --------- |
 | **NASM** | 2.15+ | Netwide Assembler — assembles all `.asm` sources |
 | **GNU Make** | 4.0+ | Build orchestration |
-| **QEMU** | 6.0+ | `qemu-system-x86_64` — x86-64 emulator for testing |
+| **QEMU** | 6.0+ | `qemu-system-i386` — i486-compatible emulator for testing |
 | **Python 3** | 3.6+ | Runs `populate.py` to populate the filesystem |
 | **dd** | any | Disk image construction (standard on Linux/macOS) |
 
@@ -87,7 +87,7 @@ This single command:
 1. Assembles the boot sector (`boot.asm` → `boot.bin`, 512 bytes)
 2. Assembles the Stage 2 loader (`stage2.asm` → `stage2.bin`, ≤16 KB)
 3. Assembles the kernel (`kernel.asm` → `kernel.bin`)
-4. Creates a 64 MB raw disk image (`mellivora.img`)
+4. Creates a 2 GB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
 7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (73 files at the time of this update)
@@ -111,11 +111,11 @@ This single command:
 After a successful build:
 
 ```text
-mellivora.img          64 MB bootable raw disk image
+mellivora.img          2 GB bootable raw disk image
 mellivora.iso          Bootable ISO media with docs and install guide
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
-kernel.bin             64-bit kernel
+kernel.bin             32-bit protected-mode kernel
 programs/*.bin         Compiled user programs (current assembly program set)
 *.lst                  Assembly listing files (useful for debugging)
 ```
@@ -167,7 +167,7 @@ make run
 
 ```bash
 make iso
-qemu-system-x86_64 -m 128 -cdrom mellivora.iso -boot d -no-reboot -no-shutdown
+qemu-system-i386 -m 128 -cdrom mellivora.iso -boot d -no-reboot -no-shutdown
 ```
 
 This is the recommended way to test the distributable install media exactly as users will receive it.
@@ -176,7 +176,7 @@ This launches QEMU with:
 
 | Setting | Value |
 | --------- | ------- |
-| **CPU** | x86-64 emulation |
+| **CPU** | i486-compatible x86 emulation |
 | **RAM** | 128 MB |
 | **Disk** | `mellivora.img` as raw IDE drive |
 | **Boot** | Hard disk (drive C) |
@@ -200,7 +200,7 @@ Adds QEMU Monitor on stdio and interrupt/reset logging. Useful monitor commands:
 ### Custom QEMU Options
 
 ```bash
-qemu-system-x86_64 -m 128 \
+qemu-system-i386 -m 128 \
   -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
   -boot c -no-reboot -no-shutdown
 ```
@@ -218,18 +218,18 @@ Useful additional options:
 
 ## Disk Image Layout
 
-The 64 MB raw disk image has this layout:
+The 2 GB raw disk image has this layout:
 
 ```text
 LBA Range       Size        Content
 ─────────────────────────────────────────────────────────
 LBA 0           512 B       Stage 1 boot sector (MBR)
 LBA 1–32        16 KB       Stage 2 loader
-LBA 33+         variable    64-bit kernel (sector count generated from `kernel.bin` size)
+LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size)
 LBA 417         512 B       HBFS superblock
-LBA 418–425     4 KB        Block allocation bitmap
-LBA 426–553     64 KB       Root directory (16 blocks, 227 entries)
-LBA 554+        ~63 MB      Data blocks (4 KB each)
+LBA 418–545     64 KB       Block allocation bitmap
+LBA 546–801     128 KB      Root directory (32 blocks, 455 entries)
+LBA 802+        ~2 GB       Data blocks (4 KB each)
 ```
 
 ### On-Disk Directory Structure
@@ -254,7 +254,7 @@ The `populate.py` script creates 4 subdirectories and places the curated runtime
 
 ### Requirements
 
-- x86-64 compatible CPU (AMD64/Intel 64)
+- i486-or-newer x86 CPU with BIOS legacy boot support
 - IDE or SATA disk / USB drive with BIOS legacy boot
 - At least 1 MB RAM (128 MB recommended)
 - PS/2 keyboard (USB works if BIOS provides PS/2 emulation)
@@ -346,7 +346,7 @@ to the filesystem.
 QEMU requires explicit audio configuration:
 
 ```bash
-qemu-system-x86_64 -m 128 \
+qemu-system-i386 -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd
 ```
@@ -359,7 +359,7 @@ Check current size with `ls -la kernel.bin`; Stage 2 reads the generated sector 
 ### Serial debug output
 
 ```bash
-qemu-system-x86_64 -m 128 \
+qemu-system-i386 -m 128 \
   -drive file=mellivora.img,format=raw,if=ide -boot c \
   -serial stdio
 ```
