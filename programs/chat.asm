@@ -5,6 +5,7 @@
 
 %include "syscalls.inc"
 %include "lib/net.inc"
+%include "lib/string.inc"
 
 CHAT_PORT       equ 5555
 BROADCAST_IP    equ 0xFFFFFFFF ; 255.255.255.255
@@ -46,9 +47,8 @@ start:
 .nick_done:
 
         ; Create UDP socket
-        mov eax, SYS_SOCKET
-        mov ebx, 2              ; UDP
-        int 0x80
+        mov eax, NET_UDP
+        call net_socket
         cmp eax, -1
         je .sock_fail
         mov [fd], eax
@@ -77,11 +77,10 @@ start:
 
 .chat_loop:
         ; Try to receive a message (non-blocking via short timeout)
-        mov eax, SYS_RECV
-        mov ebx, [fd]
-        mov ecx, recv_buf
-        mov edx, RECV_BUF_SIZE - 1
-        int 0x80
+        mov eax, [fd]
+        mov ebx, recv_buf
+        mov ecx, RECV_BUF_SIZE - 1
+        call net_recv
         cmp eax, -1
         je .check_input
         test eax, eax
@@ -140,17 +139,15 @@ start:
         mov [send_len], edi
 
         ; Broadcast the message
-        mov eax, SYS_CONNECT
-        mov ebx, [fd]
-        mov ecx, BROADCAST_IP
-        mov edx, CHAT_PORT
-        int 0x80
+        mov eax, [fd]
+        mov ebx, BROADCAST_IP
+        mov ecx, CHAT_PORT
+        call net_connect
 
-        mov eax, SYS_SEND
-        mov ebx, [fd]
-        mov ecx, send_buf
-        mov edx, [send_len]
-        int 0x80
+        mov eax, [fd]
+        mov ebx, send_buf
+        mov ecx, [send_len]
+        call net_send
 
         jmp .chat_loop
 
@@ -166,21 +163,11 @@ start:
         int 0x80
 
 .exit:
-        mov eax, SYS_SOCKCLOSE
-        mov ebx, [fd]
-        int 0x80
+        mov eax, [fd]
+        call net_close
         mov eax, SYS_EXIT
         mov ebx, 1
         int 0x80
-
-skip_spaces:
-        cmp byte [esi], ' '
-        je .s
-        cmp byte [esi], 9
-        je .s
-        ret
-.s:     inc esi
-        jmp skip_spaces
 
 default_nick:   db "anonymous", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 

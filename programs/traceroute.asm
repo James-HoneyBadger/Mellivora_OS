@@ -5,6 +5,7 @@
 
 %include "syscalls.inc"
 %include "lib/net.inc"
+%include "lib/string.inc"
 
 MAX_HOPS    equ 30
 
@@ -37,9 +38,8 @@ start:
         mov byte [edi + ecx], 0
 
         ; Resolve
-        mov eax, SYS_DNS
-        mov ebx, hostname
-        int 0x80
+        mov esi, hostname
+        call net_dns
         test eax, eax
         jz .dns_fail
         mov [target_ip], eax
@@ -160,15 +160,6 @@ print_dec_padded:
         popad
         ret
 
-
-skip_spaces:
-        cmp byte [esi], ' '
-        je .s
-        cmp byte [esi], 9
-        je .s
-        ret
-.s:     inc esi
-        jmp skip_spaces
 
 msg_usage:      db "Usage: traceroute <host>", 10, 0
 msg_hdr:        db "traceroute to ", 0

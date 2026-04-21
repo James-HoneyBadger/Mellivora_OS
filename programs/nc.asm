@@ -5,6 +5,7 @@
 
 %include "syscalls.inc"
 %include "lib/net.inc"
+%include "lib/string.inc"
 
 RECV_BUF_SIZE   equ 4096
 SEND_BUF_SIZE   equ 1024
@@ -70,31 +71,28 @@ start:
         mov [port], ecx
 
         ; Resolve hostname
-        mov eax, SYS_DNS
-        mov ebx, hostname
-        int 0x80
+        mov esi, hostname
+        call net_dns
         test eax, eax
         jz .dns_fail
         mov [target_ip], eax
 
         ; Open socket
-        mov eax, SYS_SOCKET
-        mov ebx, 1              ; TCP
+        mov eax, NET_TCP
         cmp dword [use_udp], 1
         jne .open_socket
-        mov ebx, 2              ; UDP
+        mov eax, NET_UDP
 .open_socket:
-        int 0x80
+        call net_socket
         cmp eax, -1
         je .sock_fail
         mov [fd], eax
 
         ; Connect
-        mov eax, SYS_CONNECT
-        mov ebx, [fd]
-        mov ecx, [target_ip]
-        mov edx, [port]
-        int 0x80
+        mov eax, [fd]
+        mov ebx, [target_ip]
+        mov ecx, [port]
+        call net_connect
         cmp eax, -1
         je .conn_fail
 
@@ -114,20 +112,17 @@ start:
         jle .check_recv
 
         ; Send to socket (save byte count before clobbering ECX)
-        mov edx, eax            ; EDX = byte count from stdin_read
-        mov eax, SYS_SEND
-        mov ebx, [fd]
-        mov ecx, send_buf       ; ECX = buffer pointer
-                                ; EDX = length (already set)
-        int 0x80
+        mov ecx, eax            ; ECX = byte count from stdin_read
+        mov eax, [fd]
+        mov ebx, send_buf
+        call net_send
 
 .check_recv:
         ; Receive from socket
-        mov eax, SYS_RECV
-        mov ebx, [fd]
-        mov ecx, recv_buf
-        mov edx, RECV_BUF_SIZE - 1
-        int 0x80
+        mov eax, [fd]
+        mov ebx, recv_buf
+        mov ecx, RECV_BUF_SIZE - 1
+        call net_recv
         cmp eax, -1
         je .disconnect
         test eax, eax
@@ -141,9 +136,8 @@ start:
         jmp .relay_loop
 
 .disconnect:
-        mov eax, SYS_SOCKCLOSE
-        mov ebx, [fd]
-        int 0x80
+        mov eax, [fd]
+        call net_close
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
@@ -175,15 +169,6 @@ start:
         mov eax, SYS_EXIT
         mov ebx, 1
         int 0x80
-
-skip_spaces:
-        cmp byte [esi], ' '
-        je .s
-        cmp byte [esi], 9
-        je .s
-        ret
-.s:     inc esi
-        jmp skip_spaces
 
 msg_usage:      db "Usage: nc [-u] <host> <port>", 10, 0
 msg_connected:  db "Connected.", 10, 0
