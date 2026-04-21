@@ -4,12 +4,12 @@
 ; Press R to refresh, Q or ESC to quit
 %include "syscalls.inc"
 %include "lib/net.inc"
+%include "lib/http.inc"
 
 SCREEN_W        equ 80
 SCREEN_H        equ 25
 TICK_DELAY      equ 10
 HTTP_PORT       equ 80
-MAX_RETRIES     equ 500
 
 ; Weather types for animation overlay
 W_CLEAR         equ 0
@@ -59,38 +59,43 @@ start:
         jz .err_dns
         mov [server_ip], eax
 
-        ; Create TCP socket
-        mov eax, NET_TCP
-        call net_socket
-        cmp eax, -1
-        je .err_sock
-        mov [sockfd], eax
+        ; Build URL path: /<city>?0TFdu (URL-encode spaces as '+')
+        mov edi, path_buf
+        mov byte [edi], '/'
+        inc edi
+        mov esi, city_buf
+.fetch_city:
+        lodsb
+        test al, al
+        jz .fetch_params
+        cmp al, ' '
+        jne .fetch_nsp
+        mov al, '+'
+.fetch_nsp:
+        stosb
+        jmp .fetch_city
+.fetch_params:
+        mov esi, wttr_params
+.fetch_params_copy:
+        lodsb
+        test al, al
+        jz .fetch_path_done
+        stosb
+        jmp .fetch_params_copy
+.fetch_path_done:
+        mov byte [edi], 0
 
-        ; Connect to port 80
-        mov eax, [sockfd]
-        mov ebx, [server_ip]
-        mov ecx, HTTP_PORT
-        call net_connect
+        ; Fetch via HTTP GET (http_req_host set for virtual hosting)
+        mov dword [http_req_host], api_host
+        mov eax, [server_ip]
+        mov ebx, HTTP_PORT
+        mov ecx, path_buf
+        mov edx, body_buf
+        mov esi, 4095
+        call http_get
         cmp eax, -1
         je .err_conn
-
-        ; Build HTTP GET request
-        call build_request
-
-        ; Send request
-        mov eax, [sockfd]
-        mov ebx, request_buf
-        mov ecx, [request_len]
-        call net_send
-        cmp eax, -1
-        je .err_send
-
-        ; Receive HTTP response
-        call recv_response
-
-        ; Close socket
-        mov eax, [sockfd]
-        call net_close
+        mov [body_len], eax
 
         ; Check we got body data
         cmp dword [body_len], 0
@@ -154,18 +159,8 @@ start:
 .err_dns:
         mov esi, err_dns
         jmp .show_err
-.err_sock:
-        mov esi, err_sock
-        jmp .show_err
 .err_conn:
-        mov eax, [sockfd]
-        call net_close
         mov esi, err_conn
-        jmp .show_err
-.err_send:
-        mov eax, [sockfd]
-        call net_close
-        mov esi, err_send
         jmp .show_err
 .err_nodata:
         mov esi, err_nodata
@@ -201,140 +196,6 @@ start:
         cmp al, 27
         je .exit
         jmp .err_wait
-
-;=======================================================================
-; build_request - Assemble HTTP GET request in request_buf
-;   GET /<city>?0TFdu HTTP/1.0\r\n
-;   Host: wttr.in\r\n
-;   User-Agent: curl/7.0\r\n
-;   Connection: close\r\n\r\n
-;=======================================================================
-build_request:
-        pushad
-        mov edi, request_buf
-
-        ; "GET /"
-        mov esi, http_get
-        call .strcpy
-
-        ; City name (replace spaces with + for URL)
-        mov esi, city_buf
-.br_city:
-        lodsb
-        test al, al
-        jz .br_params
-        cmp al, ' '
-        jne .br_nsp
-        mov al, '+'
-.br_nsp:
-        stosb
-        jmp .br_city
-
-.br_params:
-        ; URL params + HTTP headers
-        mov esi, http_tail
-        call .strcpy
-
-        ; Store request length
-        mov eax, edi
-        sub eax, request_buf
-        mov [request_len], eax
-        popad
-        ret
-
-.strcpy:
-        lodsb
-        test al, al
-        jz .sc_ret
-        stosb
-        jmp .strcpy
-.sc_ret:
-        ret
-
-;=======================================================================
-; recv_response - Receive HTTP response, extract body into body_buf
-;=======================================================================
-recv_response:
-        pushad
-        mov dword [body_len], 0
-        mov byte [in_headers], 1
-        mov dword [retry_count], 0
-
-.rv_loop:
-        mov eax, [sockfd]
-        mov ebx, recv_buf
-        mov ecx, 1024
-        call net_recv
-
-        cmp eax, -1
-        je .rv_done
-        cmp eax, 0
-        je .rv_retry
-
-        mov dword [retry_count], 0
-
-        ; Still in HTTP headers?
-        cmp byte [in_headers], 1
-        jne .rv_body
-
-        ; Scan for \r\n\r\n (end of headers)
-        mov esi, recv_buf
-        mov ecx, eax
-.rv_scan:
-        cmp ecx, 4
-        jb .rv_loop             ; not enough data, fetch more
-        cmp dword [esi], 0x0A0D0A0D
-        je .rv_found
-        inc esi
-        dec ecx
-        jmp .rv_scan
-
-.rv_found:
-        add esi, 4              ; skip past \r\n\r\n
-        sub ecx, 4
-        mov byte [in_headers], 0
-        test ecx, ecx
-        jz .rv_loop
-
-        ; Copy remaining data to body_buf
-        mov edi, body_buf
-        add edi, [body_len]
-        rep movsb
-        mov eax, edi
-        sub eax, body_buf
-        mov [body_len], eax
-        jmp .rv_loop
-
-.rv_body:
-        ; Append received data to body_buf
-        mov esi, recv_buf
-        mov ecx, eax
-        mov edi, body_buf
-        add edi, [body_len]
-        ; Bounds check
-        mov edx, [body_len]
-        add edx, ecx
-        cmp edx, 3900
-        jge .rv_done
-        rep movsb
-        mov [body_len], edx
-        jmp .rv_loop
-
-.rv_retry:
-        inc dword [retry_count]
-        cmp dword [retry_count], MAX_RETRIES
-        jge .rv_done
-        mov eax, SYS_YIELD
-        int 0x80
-        jmp .rv_loop
-
-.rv_done:
-        ; Null-terminate body
-        mov edi, body_buf
-        add edi, [body_len]
-        mov byte [edi], 0
-        popad
-        ret
 
 ;=======================================================================
 ; clean_body - Convert UTF-8 sequences to CP437-safe characters in place
@@ -723,13 +584,7 @@ rand:
 ; DATA
 ;=======================================================================
 api_host:       db "wttr.in", 0
-
-http_get:       db "GET /", 0
-http_tail:      db "?0TFdu HTTP/1.0", 13, 10
-                db "Host: wttr.in", 13, 10
-                db "User-Agent: curl/7.0", 13, 10
-                db "Connection: close", 13, 10
-                db 13, 10, 0
+wttr_params:    db "?0TFdu", 0
 
 title_str:      db "Mellivora Weather ", 0xC4, 0xC4, 0xC4, " Live Data", 0
 lbl_updated:    db "Updated ", 0
@@ -742,9 +597,7 @@ msg_retry:      db 10, "  Press R to retry, Q to quit.", 10, 0
 err_dns:        db "  Error: Could not resolve wttr.in", 10
                 db "  Check your network connection.", 10
                 db "  Run 'dhcp' to obtain an IP address.", 10, 0
-err_sock:       db "  Error: Could not create network socket.", 10, 0
 err_conn:       db "  Error: Could not connect to wttr.in.", 10, 0
-err_send:       db "  Error: Failed to send HTTP request.", 10, 0
 err_nodata:     db "  Error: No weather data received.", 10, 0
 
 ; Variables
@@ -752,16 +605,13 @@ cur_hours:      db 0
 cur_mins:       db 0
 rand_state:     dd 0
 server_ip:      dd 0
-sockfd:         dd 0
-in_headers:     db 0
-retry_count:    dd 0
-request_len:    dd 0
 body_len:       dd 0
 weather_type:   dd 0
 frame:          dd 0
 
 ; Buffers
 city_buf:       times 128 db 0
-request_buf:    times 512 db 0
-recv_buf:       times 1280 db 0
+path_buf:       times 256 db 0
+http_req_buf:   times 512 db 0
+http_resp_buf:  times 65536 db 0
 body_buf:       times 4096 db 0

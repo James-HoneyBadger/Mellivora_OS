@@ -16,6 +16,11 @@
 
 HTTP_PORT       equ 80          ; Default HTTP port
 
+; Optional: set to a hostname string pointer before calling http_get
+; to include a "Host: <name>" header in the request.
+; Set to 0 (default) to omit the Host header.
+http_req_host:  dd 0
+
 ;---------------------------------------
 ; http_get - Blocking HTTP/1.0 GET request
 ;
@@ -25,6 +30,9 @@ HTTP_PORT       equ 80          ; Default HTTP port
 ;   ECX = pointer to null-terminated path (e.g. "/index.html")
 ;   EDX = pointer to output buffer (receives response body)
 ;   ESI = output buffer maximum size
+;
+; Optional: set http_req_host to a hostname pointer before calling
+; to include a Host: header (required for virtual-hosted servers).
 ;
 ; Returns:
 ;   EAX = body length written (-1 on error)
@@ -72,14 +80,46 @@ http_get:
         stosb
         jmp .copy_path
 .path_done:
-        ; append " HTTP/1.0\r\nConnection: close\r\n\r\n"
-        mov esi, .req_suffix
-.copy_suffix:
+        ; append " HTTP/1.0\r\n"
+        mov esi, .req_http10
+.copy_http10:
+        lodsb
+        test al, al
+        jz .http10_done
+        stosb
+        jmp .copy_http10
+.http10_done:
+        ; append "Host: <name>\r\n" if http_req_host is set
+        cmp dword [http_req_host], 0
+        je .no_host_hdr
+        mov esi, .req_host_hdr
+.copy_host_hdr:
+        lodsb
+        test al, al
+        jz .host_name_done
+        stosb
+        jmp .copy_host_hdr
+.host_name_done:
+        mov esi, [http_req_host]
+.copy_host_name:
+        lodsb
+        test al, al
+        jz .host_crlf
+        stosb
+        jmp .copy_host_name
+.host_crlf:
+        mov byte [edi+0], 0x0D
+        mov byte [edi+1], 0x0A
+        add edi, 2
+.no_host_hdr:
+        ; append "Connection: close\r\n\r\n"
+        mov esi, .req_tail
+.copy_tail:
         lodsb
         test al, al
         jz .suffix_done
         stosb
-        jmp .copy_suffix
+        jmp .copy_tail
 .suffix_done:
         ; compute request length
         mov ecx, edi
@@ -178,10 +218,10 @@ http_get:
         popad
         ret
 
-; Request suffix (embedded in code section, after ret - safe)
-.req_suffix: db " HTTP/1.0", 0x0D, 0x0A
-             db "Connection: close", 0x0D, 0x0A
-             db 0x0D, 0x0A, 0
+; Request components (embedded in code section after ret)
+.req_http10:  db " HTTP/1.0", 0x0D, 0x0A, 0
+.req_host_hdr: db "Host: ", 0
+.req_tail:    db "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A, 0
 
 ; Per-call scratch (static, non-reentrant)
 .fd:     dd -1

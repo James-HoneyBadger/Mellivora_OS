@@ -4,6 +4,7 @@
 
 %include "syscalls.inc"
 %include "lib/net.inc"
+%include "lib/http.inc"
 
 RECV_BUF_SIZE   equ 131072      ; 128 KB receive buffer
 HTTP_PORT       equ 80
@@ -141,79 +142,8 @@ start:
         jz .dns_fail
         mov [target_ip], eax
 
-        ; Create TCP socket
-        mov eax, SYS_SOCKET
-        mov ebx, 1
-        int 0x80
-        cmp eax, -1
-        je .sock_fail
-        mov [fd], eax
-
-        ; Connect to port 80
-        mov eax, SYS_CONNECT
-        mov ebx, [fd]
-        mov ecx, [target_ip]
-        mov edx, HTTP_PORT
-        int 0x80
-        cmp eax, -1
-        je .conn_fail
-
-        ; Build HTTP request: "GET /path HTTP/1.0\r\nHost: hostname\r\n\r\n"
-        mov edi, http_req
-        mov esi, get_str
-.copy_req:
-        lodsb
-        test al, al
-        jz .req_path
-        stosb
-        jmp .copy_req
-.req_path:
-        mov esi, path
-.copy_req2:
-        lodsb
-        test al, al
-        jz .req_http
-        stosb
-        jmp .copy_req2
-.req_http:
-        mov esi, http10_str
-.copy_req3:
-        lodsb
-        test al, al
-        jz .req_host
-        stosb
-        jmp .copy_req3
-.req_host:
-        mov esi, host_hdr
-.copy_req4:
-        lodsb
-        test al, al
-        jz .req_hostname
-        stosb
-        jmp .copy_req4
-.req_hostname:
-        mov esi, hostname
-.copy_req5:
-        lodsb
-        test al, al
-        jz .req_end
-        stosb
-        jmp .copy_req5
-.req_end:
-        mov dword [edi], 0x0A0D0A0D     ; "\r\n\r\n"
-        add edi, 4
-        mov byte [edi], 0
-
-        ; Compute request length
-        sub edi, http_req
-        mov [req_len], edi
-
-        ; Send HTTP request
-        mov eax, SYS_SEND
-        mov ebx, [fd]
-        mov ecx, http_req
-        mov edx, [req_len]
-        int 0x80
+        ; Set Host header for virtual-hosted servers
+        mov dword [http_req_host], hostname
 
         ; Print status
         mov eax, SYS_PRINT
@@ -232,65 +162,16 @@ start:
         mov ebx, 10
         int 0x80
 
-        ; Receive response into recv_buf
-        mov dword [total_recv], 0
-.recv_loop:
-        mov eax, SYS_RECV
-        mov ebx, [fd]
-        mov ecx, recv_buf
-        add ecx, [total_recv]
-        mov edx, RECV_BUF_SIZE - 1
-        sub edx, [total_recv]
-        test edx, edx
-        jle .recv_done
-        int 0x80
+        ; Fetch via HTTP GET
+        mov eax, [target_ip]
+        mov ebx, HTTP_PORT
+        mov ecx, path
+        mov edx, save_buf
+        mov esi, RECV_BUF_SIZE - 1
+        call http_get
         cmp eax, -1
-        je .recv_done
-        test eax, eax
-        jz .recv_done
-        add [total_recv], eax
-        jmp .recv_loop
-
-.recv_done:
-        ; Close socket
-        mov eax, SYS_SOCKCLOSE
-        mov ebx, [fd]
-        int 0x80
-
-        ; Skip HTTP header (find \r\n\r\n)
-        mov esi, recv_buf
-        mov ecx, [total_recv]
-        xor edi, edi            ; body offset
-.find_header_end:
-        cmp ecx, 4
-        jl .no_header
-        cmp dword [esi], 0x0A0D0A0D
-        je .header_found
-        inc esi
-        inc edi
-        dec ecx
-        jmp .find_header_end
-.header_found:
-        add edi, 4              ; skip the \r\n\r\n
-        mov eax, [total_recv]
-        sub eax, edi
+        je .conn_fail
         mov [body_len], eax
-        lea esi, [recv_buf + edi]
-        jmp .save_file
-
-.no_header:
-        ; No header found - save everything
-        mov esi, recv_buf
-        mov eax, [total_recv]
-        mov [body_len], eax
-
-.save_file:
-        ; Copy body to save_buf
-        mov edi, save_buf
-        mov ecx, [body_len]
-        cld
-        rep movsb
-        mov byte [edi], 0
 
         ; Write to file
         mov eax, SYS_FWRITE
@@ -325,12 +206,6 @@ start:
 .dns_fail:
         mov eax, SYS_PRINT
         mov ebx, msg_dns_fail
-        int 0x80
-        jmp .exit
-
-.sock_fail:
-        mov eax, SYS_PRINT
-        mov ebx, msg_sock_fail
         int 0x80
         jmp .exit
 
@@ -387,9 +262,6 @@ skip_spaces:
 .s:     inc esi
         jmp skip_spaces
 
-get_str:        db "GET ", 0
-http10_str:     db " HTTP/1.0", 13, 10, 0
-host_hdr:       db "Host: ", 0
 proto_str:      db "http://", 0
 default_outfile: db "index.html", 0
 
@@ -399,7 +271,6 @@ msg_saving:     db "... saving to ", 0
 msg_saved:      db "Saved ", 0
 msg_bytes:      db " bytes.", 10, 0
 msg_dns_fail:   db "wget: DNS resolution failed", 10, 0
-msg_sock_fail:  db "wget: cannot create socket", 10, 0
 msg_conn_fail:  db "wget: connection failed", 10, 0
 msg_write_fail: db "wget: cannot write file", 10, 0
 
@@ -407,11 +278,8 @@ hostname:       times 256 db 0
 path:           times 512 db 0
 outfile:        times 128 db 0
 target_ip:      dd 0
-fd:             dd -1
-req_len:        dd 0
-total_recv:     dd 0
 body_len:       dd 0
 arg_buf:        times 1024 db 0
-http_req:       times 1024 db 0
-recv_buf:       times RECV_BUF_SIZE db 0
+http_req_buf:   times 512 db 0
+http_resp_buf:  times 65536 db 0
 save_buf:       times RECV_BUF_SIZE db 0
