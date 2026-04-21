@@ -26,5 +26,5 @@ foreach my $n (@nums) {
 print "Sum: $sum\n";
 
 # Sort
-sort(@nums);
+@nums = sort { $a <=> $b } @nums;
 print "Sorted: " . join(", ", @nums) . "\n";

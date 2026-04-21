@@ -334,6 +334,7 @@ serve_dir_listing:
         mov eax, SYS_READDIR
         mov ebx, dir_name_buf
         int 0x80
+        mov [.sdl_fsize], ecx  ; save file size BEFORE restoring loop counter
         pop ecx
 
         cmp eax, -1
@@ -342,8 +343,7 @@ serve_dir_listing:
         je .sdl_next            ; free slot
         push ecx
         push eax                ; save type
-        ; Save file size 
-        mov [.sdl_fsize], ecx
+        ; File size already saved in [.sdl_fsize] above
 
         ; "<tr><td><a href=\"/filename\">filename</a></td>"
         mov esi, dir_row_start

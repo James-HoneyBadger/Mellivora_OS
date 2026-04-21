@@ -56,13 +56,32 @@ int main() {
     putchar('p');putchar('u');putchar('s');putchar('!');
     putchar(10);putchar(10);
 
-    // Initialize
-    seed = 37;
-    player = 0;
-    wumpus = 5;
-    pit1 = 3;
-    pit2 = 6;
-    bats = 2;
+    // Initialize with LCG-based random placement
+    // Ask player for a seed to vary the game
+    putchar('S');putchar('e');putchar('e');putchar('d');
+    putchar(' ');putchar('(');putchar('0');putchar('-');
+    putchar('9');putchar(')');putchar(':');putchar(' ');
+    ch = getchar();
+    if ((ch >= 48) && (ch <= 57)) { seed = 37 + (ch - 48) * 17; }
+    else { seed = 37; }
+    getchar(); // consume newline
+
+    // LCG step to place entities
+    seed = (seed * 1103515245 + 12345) & 32767;
+    player = seed % 8;
+    seed = (seed * 1103515245 + 12345) & 32767;
+    wumpus = seed % 8;
+    if (wumpus == player) { wumpus = (wumpus + 1) % 8; }
+    seed = (seed * 1103515245 + 12345) & 32767;
+    pit1 = seed % 8;
+    if ((pit1 == player) | (pit1 == wumpus)) { pit1 = (pit1 + 2) % 8; }
+    seed = (seed * 1103515245 + 12345) & 32767;
+    pit2 = seed % 8;
+    if ((pit2 == player) | (pit2 == wumpus) | (pit2 == pit1)) { pit2 = (pit2 + 3) % 8; }
+    seed = (seed * 1103515245 + 12345) & 32767;
+    bats = seed % 8;
+    if ((bats == player) | (bats == wumpus) | (bats == pit1) | (bats == pit2)) { bats = (bats + 4) % 8; }
+
     arrows = 3;
     alive = 1;
     won = 0;

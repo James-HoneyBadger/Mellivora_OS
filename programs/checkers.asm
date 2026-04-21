@@ -285,6 +285,7 @@ player_move:
         jns .check_abs_dr
         neg eax
 .check_abs_dr:
+        mov edx, eax        ; save |dr| in EDX
         cmp eax, 1
         je .check_dc
         cmp eax, 2
@@ -295,7 +296,7 @@ player_move:
         jns .check_abs_dc
         neg eax
 .check_abs_dc:
-        cmp eax, [dr]
+        cmp eax, edx
         jne .ask    ; |dr| != |dc|
 
         ; Check red pieces move up (dr < 0) unless king

@@ -54,6 +54,11 @@ start:
         mov eax, SYS_PRINT
         mov ebx, msg_hdr2
         int 0x80
+        mov eax, MAX_HOPS
+        call print_dec
+        mov eax, SYS_PRINT
+        mov ebx, msg_hops_suffix
+        int 0x80
 
         ; Send MAX_HOPS probes and show RTT for each
         ; (Without kernel TTL support we can only show the final hop RTT
@@ -107,15 +112,13 @@ start:
         int 0x80
 
         ; Check if we reached the destination
-        ; (Since we can't do proper TTL, show destination for all hops)
-        cmp ebp, 1
-        je .reached   ; just show one line to destination
-
+        ; (Without kernel TTL control we show the destination on every hop)
         inc ebp
         jmp .hop_loop
 
 .reached:
-        ; Show the destination
+.done:
+        ; Show the destination summary
         mov eax, SYS_PRINT
         mov ebx, msg_hdr3
         int 0x80
@@ -126,7 +129,6 @@ start:
         mov ebx, 10
         int 0x80
 
-.done:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
@@ -164,7 +166,8 @@ print_dec_padded:
 msg_usage:      db "Usage: traceroute <host>", 10, 0
 msg_hdr:        db "traceroute to ", 0
 msg_hdr2:       db ", max ", 0
-msg_hdr3:       db "Reached: ", 0
+msg_hops_suffix:db " hops", 10, 0
+msg_hdr3:       db "Reached destination: ", 0
 msg_dns_fail:   db "traceroute: DNS resolution failed", 10, 0
 msg_space:      db " ", 0
 msg_ms:         db " ms", 0

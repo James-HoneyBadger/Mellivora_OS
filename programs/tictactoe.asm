@@ -144,7 +144,7 @@ quit:
 ; draw_board: Display the current board
 ;--------------------------------------
 draw_board:
-        pusha
+        pushad
 
         mov eax, SYS_PRINT
         mov ebx, newline
@@ -200,7 +200,7 @@ draw_board:
         mov eax, SYS_PRINT
         mov ebx, newline
         int 0x80
-        popa
+        popad
         ret
 
 .draw_cell:
@@ -295,7 +295,7 @@ check_draw:
 ; cpu_move: CPU plays optimally (minimax-lite)
 ;--------------------------------------
 cpu_move:
-        pusha
+        pushad
 
         ; 1. Try to win
         mov edx, COMP
@@ -340,7 +340,7 @@ cpu_move:
 .place:
         mov byte [board + eax], COMP
 .done_cpu:
-        popa
+        popad
         ret
 
 ;--------------------------------------

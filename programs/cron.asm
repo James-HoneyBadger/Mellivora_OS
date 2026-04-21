@@ -57,12 +57,22 @@ start:
         int 0x80
 
 .main_loop:
-        ; Get current time
+        ; Get current time: SYS_GETTIME returns 100 Hz tick count
         mov eax, SYS_GETTIME
         int 0x80
-        ; AL = hours, AH = minutes (Mellivora SYS_GETTIME returns: AL=hours, AH=minutes)
-        mov [cur_hour], al
-        mov [cur_min], ah
+        xor edx, edx
+        mov ecx, 100
+        div ecx             ; EAX = total seconds
+        xor edx, edx
+        mov ecx, 60
+        div ecx             ; EDX = seconds (unused), EAX = total minutes
+        xor edx, edx
+        div ecx             ; EDX = cur_min (0-59), EAX = total hours
+        mov [cur_min], dl
+        xor edx, edx
+        mov ecx, 24
+        div ecx             ; EDX = cur_hour (0-23)
+        mov [cur_hour], dl
 
         ; Check each cron entry
         mov ebp, 0              ; entry index

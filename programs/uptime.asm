@@ -5,14 +5,14 @@
 
 start:
         ; Get system tick count via SYS_GETTIME
-        ; Returns tick count in EAX (18.2 ticks per second from PIT)
+        ; Returns tick count in EAX (100 ticks per second)
         mov eax, SYS_GETTIME
         int 0x80
         mov [ticks], eax
 
-        ; Convert ticks to seconds (approximately ticks / 18)
+        ; Convert ticks to seconds (100 Hz)
         xor edx, edx
-        mov ecx, 18
+        mov ecx, 100
         div ecx
         mov [total_secs], eax
 

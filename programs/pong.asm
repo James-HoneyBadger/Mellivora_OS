@@ -107,7 +107,7 @@ reset_ball:
 
 ;---------------------------------------
 check_input_pong:
-        mov eax, SYS_GETCHAR
+        mov eax, SYS_READ_KEY
         int 0x80
         cmp eax, 0
         je .cip_done

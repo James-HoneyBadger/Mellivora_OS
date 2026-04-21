@@ -359,10 +359,30 @@ start:
         cmp byte [moved], 0
         je .game_loop
         call add_random_tile
+        call check_win
+        cmp byte [game_won], 1
+        je .show_win
         call check_game_over
         cmp byte [game_over], 1
         je .show_game_over
         jmp .game_loop
+
+.show_win:
+        call draw_board
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x2F
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, msg_win
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x07
+        int 0x80
+        mov eax, SYS_GETCHAR
+        int 0x80
+        cmp al, 'r'
+        je .restart
+        jmp .quit
 
 .show_game_over:
         call draw_board
@@ -455,6 +475,28 @@ add_random_tile:
 .art_four:
         mov dword [board + eax*4], 4
 .art_done:
+        popad
+        ret
+
+;---------------------------------------
+; check_win - Scan board for 2048 tile
+;---------------------------------------
+check_win:
+        pushad
+        mov byte [game_won], 0
+        mov esi, board
+        mov ecx, NUM_CELLS
+.cw_loop:
+        mov eax, [esi]
+        cmp eax, 2048
+        jge .cw_found
+        add esi, 4
+        dec ecx
+        jnz .cw_loop
+        jmp .cw_done
+.cw_found:
+        mov byte [game_won], 1
+.cw_done:
         popad
         ret
 
@@ -684,6 +726,7 @@ msg_separator:  db "+------+------+------+------+", 0x0A, 0
 msg_empty_cell: db "      ", 0
 msg_controls:   db "Arrow keys/WASD to move, [r]estart, [q]uit", 0x0A, 0
 msg_game_over:  db 0x0A, "  GAME OVER! Press any key.", 0x0A, 0
+msg_win:        db 0x0A, "  YOU WIN! Reached 2048! Press R to play again.", 0x0A, 0
 prng_state:     dd 42
 
 ;---------------------------------------
@@ -694,4 +737,5 @@ temp_col:    times BOARD_SIZE dd 0
 score:       dd 0
 moved:       db 0
 game_over:   db 0
+game_won:    db 0
 empty_cells: times NUM_CELLS dd 0

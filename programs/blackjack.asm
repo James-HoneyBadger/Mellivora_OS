@@ -53,15 +53,18 @@ shuffle_deck:
         jmp .sd_init
 
 .sd_shuf:
-        ; Fisher-Yates shuffle using tick_count as seed
+        ; Fisher-Yates shuffle: seed LCG once from system time, then use state
+        mov eax, SYS_GETTIME
+        int 0x80
+        imul eax, eax, 1103515245
+        add eax, 12345
+        mov [rng_state], eax    ; seed once
         mov ecx, 51
 .sd_loop:
         cmp ecx, 0
         jle .sd_done
-        ; Get pseudo-random j in [0..ecx]
-        mov eax, SYS_GETTIME
-        int 0x80
-        ; Mix the time value
+        ; LCG step: state = state * 1103515245 + 12345
+        mov eax, [rng_state]
         imul eax, eax, 1103515245
         add eax, 12345
         mov [rng_state], eax

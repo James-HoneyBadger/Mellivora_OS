@@ -39,6 +39,8 @@ int sa5;  int sa6;  int sa7;  int sa8;  int sa9;
 int sa10; int sa11; int sa12; int sa13; int sa14;
 
 int move_count;
+int d0_peg; int d1_peg; int d2_peg; int d3_peg;
+int cur_peg; int next_peg; int disk;
 
 int main() {
     // Print header
@@ -70,6 +72,7 @@ int main() {
 
     n = 4;
     move_count = 0;
+    d0_peg = 1; d1_peg = 1; d2_peg = 1; d3_peg = 1;
 
     // Solve iteratively: 2^n - 1 moves
     // Using binary counter method
@@ -93,6 +96,21 @@ int main() {
         while (((aux / 2) * 2) == aux) {
             aux = aux / 2;
             to = to + 1;
+        }
+        disk = to;  // 0-indexed disk number
+
+        // Get current peg of this disk
+        cur_peg = 1;
+        if (disk == 0) { cur_peg = d0_peg; }
+        if (disk == 1) { cur_peg = d1_peg; }
+        if (disk == 2) { cur_peg = d2_peg; }
+        if (disk == 3) { cur_peg = d3_peg; }
+
+        // Compute destination peg (N=4 even: even disks go right, odd go left)
+        if ((disk == 0) | (disk == 2)) {
+            next_peg = cur_peg % 3 + 1;
+        } else {
+            next_peg = (cur_peg + 1) % 3 + 1;
         }
 
         // Print move number
@@ -122,7 +140,29 @@ int main() {
         putchar('k');
         putchar(' ');
         putchar(49 + to);
+        putchar(':');
+        putchar(' ');
+        putchar('P');
+        putchar('e');
+        putchar('g');
+        putchar(' ');
+        putchar(48 + cur_peg);
+        putchar(' ');
+        putchar('-');
+        putchar('>');
+        putchar(' ');
+        putchar('P');
+        putchar('e');
+        putchar('g');
+        putchar(' ');
+        putchar(48 + next_peg);
         putchar(10);
+
+        // Update disk's peg
+        if (disk == 0) { d0_peg = next_peg; }
+        if (disk == 1) { d1_peg = next_peg; }
+        if (disk == 2) { d2_peg = next_peg; }
+        if (disk == 3) { d3_peg = next_peg; }
 
         from = from + 1;
     }

@@ -2,7 +2,7 @@
 # factorial.pl - Factorials in Perl for Mellivora OS
 
 sub factorial {
-    my $n = $ARGV[0];
+    my ($n) = @_;
     if ($n <= 1) {
         return 1;
     }
