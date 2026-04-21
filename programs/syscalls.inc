@@ -103,6 +103,9 @@ SYS_RENAME      equ 83          ; Rename file/dir: EBX=old_name ECX=new_name -> 
 SYS_RMDIR       equ 84          ; Remove empty dir: EBX=name -> EAX=0/-1
 SYS_TRUNCATE    equ 85          ; Truncate file: EBX=name ECX=new_size -> EAX=0/-1
 SYS_CONNECT_NB  equ 86          ; Non-blocking connect: EBX=fd ECX=ip EDX=port -> EAX=0/-2/-1
+SYS_POLL        equ 87          ; Poll socket: EBX=fd ECX=events(1=in,2=out) EDX=timeout_ms -> EAX=ready_mask
+POLL_IN         equ 1           ; SYS_POLL event: data available to read
+POLL_OUT        equ 2           ; SYS_POLL event: socket ready to write
 
 ; v4.0 Priority levels
 PRIO_HIGH       equ 0

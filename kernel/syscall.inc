@@ -114,8 +114,9 @@ syscall_table:
         dd sys_rmdir            ; 84  SYS_RMDIR
         dd sys_truncate         ; 85  SYS_TRUNCATE
         dd sys_connect_nb       ; 86  SYS_CONNECT_NB
-        ; Reserved slots (87..127) — point to bad handler
-        times (SYSCALL_MAX - 87) dd syscall_handler.syscall_bad
+        dd sys_poll             ; 87  SYS_POLL
+        ; Reserved slots (88..127) — point to bad handler
+        times (SYSCALL_MAX - 88) dd syscall_handler.syscall_bad
 
 sys_exit:
         ; First check if this is a background task exiting

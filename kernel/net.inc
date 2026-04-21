@@ -3719,6 +3719,120 @@ sys_ping:
         pop ebx
         iretd
 
+;---------------------------------------
+; sys_poll - Non-blocking socket readiness check
+;  EBX = fd (socket)
+;  ECX = events mask (POLL_IN=1, POLL_OUT=2)
+;  EDX = timeout in ms (0 = non-blocking, -1 = infinite [yields])
+; Returns:
+;  EAX = ready events bitmask, 0 = timeout/not ready, -1 = bad fd
+;---------------------------------------
+POLL_IN         equ 1
+POLL_OUT        equ 2
+
+sys_poll:
+        pushad
+        ; Validate fd
+        cmp ebx, MAX_SOCKETS
+        jge .spoll_fail
+        mov eax, ebx
+        imul eax, SOCK_SIZE
+        lea ebp, [net_sock_table + eax]
+        cmp dword [ebp + SOCK_TYPE], 0
+        je .spoll_fail
+
+        ; Save args: EBX=fd, ECX=events, EDX=timeout_ms
+        mov [.spoll_fd],      ebx
+        mov [.spoll_events],  ecx
+        mov [.spoll_timeout], edx
+
+        ; Compute deadline tick (0 = check once, -1 = infinite)
+        cmp edx, -1
+        je .spoll_set_infinite
+        test edx, edx
+        jz .spoll_set_nb
+        ; ticks = ms / 10 (PIT runs at 100 Hz = 10 ms/tick)
+        mov eax, edx
+        xor edx, edx
+        mov ecx, 10
+        div ecx
+        add eax, [tick_count]
+        mov [.spoll_deadline], eax
+        jmp .spoll_check
+.spoll_set_infinite:
+        mov dword [.spoll_deadline], 0xFFFFFFFF
+        jmp .spoll_check
+.spoll_set_nb:
+        mov dword [.spoll_deadline], 0
+
+.spoll_check:
+        ; Refresh socket pointer (EBP may be stale after hlt)
+        mov eax, [.spoll_fd]
+        imul eax, SOCK_SIZE
+        lea ebp, [net_sock_table + eax]
+        mov ecx, [.spoll_events]
+        xor eax, eax
+
+        ; Check POLL_IN: any data in recv buffer?
+        test ecx, POLL_IN
+        jz .spoll_chk_out
+        cmp dword [ebp + SOCK_RECV_LEN], 0
+        jne .spoll_in_ready
+        ; Also signal POLL_IN for closed connections with buffered data = 0
+        cmp dword [ebp + SOCK_TYPE], SOCK_TCP
+        jne .spoll_chk_out
+        mov edi, [ebp + SOCK_STATE]
+        cmp edi, TCP_ESTABLISHED
+        je .spoll_chk_out
+        cmp edi, TCP_CLOSE_WAIT
+        je .spoll_chk_out
+        ; Connection is closed with no buffered data — signal HUP via POLL_IN
+        or eax, POLL_IN
+        jmp .spoll_chk_out
+.spoll_in_ready:
+        or eax, POLL_IN
+
+.spoll_chk_out:
+        test ecx, POLL_OUT
+        jz .spoll_ready_check
+        cmp dword [ebp + SOCK_TYPE], SOCK_UDP
+        je .spoll_out_ready     ; UDP always writable
+        cmp dword [ebp + SOCK_STATE], TCP_ESTABLISHED
+        jne .spoll_ready_check
+.spoll_out_ready:
+        or eax, POLL_OUT
+
+.spoll_ready_check:
+        test eax, eax
+        jnz .spoll_return       ; Something ready — return now
+
+        ; Not ready: check if we should wait
+        cmp dword [.spoll_deadline], 0
+        je .spoll_return        ; Non-blocking, return 0
+
+        mov edi, [tick_count]
+        cmp edi, [.spoll_deadline]
+        jae .spoll_return       ; Deadline passed, return 0
+
+        ; Yield and retry
+        hlt
+        jmp .spoll_check
+
+.spoll_return:
+        mov [esp + 28], eax     ; Store result in pushad EAX slot
+        popad
+        iretd
+
+.spoll_fail:
+        popad
+        mov eax, -1
+        iretd
+
+.spoll_events:  dd 0
+.spoll_timeout: dd 0
+.spoll_deadline:dd 0
+.spoll_fd:      dd 0
+
 
 ;=======================================================================
 ; SECTION 12: SHELL COMMANDS

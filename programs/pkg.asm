@@ -1,12 +1,16 @@
 ; pkg.asm - Mellivora Package Manager
-; List, install, and remove programs from disk.
+; List, install, remove, and search programs on disk.
 ;
 ; Usage: pkg list              - List installed programs
 ;        pkg info <name>       - Show program info
 ;        pkg size              - Show disk usage summary
 ;        pkg search <pattern>  - Search for programs by name
+;        pkg install <url>     - Download and install from HTTP URL
+;        pkg remove <name>     - Remove (delete) a file from disk
 
 %include "syscalls.inc"
+%include "lib/net.inc"
+%include "lib/http.inc"
 
 MAX_ENTRIES     equ 200
 ENTRY_SIZE      equ 288
@@ -45,6 +49,16 @@ start:
         call match_cmd
         cmp eax, 1
         je do_search
+
+        mov edi, cmd_install
+        call match_cmd
+        cmp eax, 1
+        je do_install
+
+        mov edi, cmd_remove
+        call match_cmd
+        cmp eax, 1
+        je do_remove
 
         mov edi, cmd_help
         call match_cmd
@@ -567,6 +581,298 @@ do_search:
         int 0x80
         jmp exit
 
+;---------------------------------------
+; do_remove - Delete a file from disk
+; Usage: pkg remove <filename>
+;---------------------------------------
+do_remove:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .remove_usage
+
+        ; Copy filename from ESI into filename_buf
+        mov edi, filename_buf
+        xor ecx, ecx
+.copy_name:
+        mov al, [esi]
+        cmp al, ' '
+        je .name_done
+        cmp al, 0
+        je .name_done
+        mov [edi], al
+        inc edi
+        inc esi
+        inc ecx
+        cmp ecx, 127
+        jb .copy_name
+.name_done:
+        mov byte [edi], 0
+
+        cmp byte [filename_buf], 0
+        je .remove_usage
+
+        ; Delete via SYS_DELETE
+        mov eax, SYS_DELETE
+        mov ebx, filename_buf
+        int 0x80
+        cmp eax, -1
+        je .remove_fail
+
+        mov eax, SYS_PRINT
+        mov ebx, msg_removed
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, filename_buf
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+        jmp exit
+
+.remove_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_remove_fail
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, filename_buf
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+        jmp exit
+
+.remove_usage:
+        mov eax, SYS_PRINT
+        mov ebx, msg_remove_usage
+        int 0x80
+        jmp exit
+
+;---------------------------------------
+; do_install - Download and install from HTTP URL
+; Usage: pkg install http://host/path
+;---------------------------------------
+do_install:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .install_usage
+
+        ; Parse URL: must start with "http://"
+        push esi
+        mov edi, install_http_prefix
+.url_check:
+        mov al, [edi]
+        cmp al, 0
+        je .url_prefix_ok
+        cmp al, [esi]
+        jne .url_bad
+        inc esi
+        inc edi
+        jmp .url_check
+.url_bad:
+        pop esi
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_badurl
+        int 0x80
+        jmp exit
+.url_prefix_ok:
+        pop eax                 ; discard saved ESI
+
+        ; Extract hostname (up to first '/')
+        mov edi, install_host
+        xor ecx, ecx
+.host_copy:
+        mov al, [esi]
+        cmp al, '/'
+        je .host_done
+        cmp al, 0
+        je .host_done
+        mov [edi], al
+        inc edi
+        inc esi
+        inc ecx
+        cmp ecx, 127
+        jb .host_copy
+.host_done:
+        mov byte [edi], 0
+
+        ; Extract path (starting at '/')
+        mov edi, install_path
+        cmp byte [esi], '/'
+        jne .path_default
+        xor ecx, ecx
+.path_copy:
+        mov al, [esi]
+        cmp al, ' '
+        je .path_end
+        cmp al, 0
+        je .path_end
+        mov [edi], al
+        inc edi
+        inc esi
+        inc ecx
+        cmp ecx, 255
+        jb .path_copy
+.path_end:
+        mov byte [edi], 0
+        jmp .path_ready
+.path_default:
+        mov byte [install_path], '/'
+        mov byte [install_path+1], 0
+.path_ready:
+
+        ; Derive filename from last '/' component of path
+        mov esi, install_path
+        mov ebx, install_path
+.find_slash:
+        mov al, [esi]
+        cmp al, 0
+        je .slash_done
+        cmp al, '/'
+        jne .slash_next
+        lea ebx, [esi + 1]
+.slash_next:
+        inc esi
+        jmp .find_slash
+.slash_done:
+        mov esi, ebx
+        mov edi, filename_buf
+        xor ecx, ecx
+.fname_copy:
+        mov al, [esi]
+        cmp al, 0
+        je .fname_done
+        mov [edi], al
+        inc edi
+        inc esi
+        inc ecx
+        cmp ecx, 127
+        jb .fname_copy
+.fname_done:
+        mov byte [edi], 0
+
+        cmp byte [filename_buf], 0
+        je .install_usage
+
+        ; Print download status
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_from
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, install_host
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, install_path
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+
+        ; DNS resolve hostname
+        mov esi, install_host
+        call net_dns
+        test eax, eax
+        jz .install_dns_fail
+        mov [install_ip], eax
+
+        ; Set Host header for virtual hosting
+        mov dword [http_req_host], install_host
+
+        ; HTTP GET request
+        mov eax, [install_ip]
+        mov ebx, 80
+        mov ecx, install_path
+        mov edx, http_resp_buf
+        mov esi, 65535
+        call http_get
+        cmp eax, -1
+        je .install_conn_fail
+        test eax, eax
+        jz .install_conn_fail
+        mov [install_size], eax
+
+        ; Detect file type by extension
+        mov esi, filename_buf
+        mov dword [install_ftype], 1    ; default: text
+.ext_scan:
+        mov al, [esi]
+        cmp al, 0
+        je .ext_scan_done
+        inc esi
+        jmp .ext_scan
+.ext_scan_done:
+        ; Check for .bin -> executable
+        cmp byte [esi - 4], '.'
+        jne .check_bat
+        cmp byte [esi - 3], 'b'
+        jne .check_bat
+        cmp byte [esi - 2], 'i'
+        jne .check_bat
+        cmp byte [esi - 1], 'n'
+        jne .check_bat
+        mov dword [install_ftype], 3
+        jmp .do_write
+.check_bat:
+        ; Check for .bat -> batch
+        cmp byte [esi - 4], '.'
+        jne .do_write
+        cmp byte [esi - 3], 'b'
+        jne .do_write
+        cmp byte [esi - 2], 'a'
+        jne .do_write
+        cmp byte [esi - 1], 't'
+        jne .do_write
+        mov dword [install_ftype], 4
+.do_write:
+        mov eax, SYS_FWRITE
+        mov ebx, filename_buf
+        mov ecx, http_resp_buf
+        mov edx, [install_size]
+        mov esi, [install_ftype]
+        int 0x80
+        cmp eax, -1
+        je .install_write_fail
+
+        ; Success
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_ok
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, filename_buf
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, ' '
+        int 0x80
+        mov eax, [install_size]
+        call print_size
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+        jmp exit
+
+.install_dns_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_dns
+        int 0x80
+        jmp exit
+
+.install_conn_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_conn
+        int 0x80
+        jmp exit
+
+.install_write_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_write
+        int 0x80
+        jmp exit
+
+.install_usage:
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_usage
+        int 0x80
+        jmp exit
+
 exit:
         mov eax, SYS_EXIT
         xor ebx, ebx
@@ -775,6 +1081,8 @@ cmd_list:       db "list", 0
 cmd_info:       db "info", 0
 cmd_size:       db "size", 0
 cmd_search:     db "search", 0
+cmd_install:    db "install", 0
+cmd_remove:     db "remove", 0
 cmd_help:       db "help", 0
 
 help_text:
@@ -785,6 +1093,8 @@ help_text:
         db "  info <name>       Show detailed file info", 10
         db "  size              Show disk usage summary", 10
         db "  search <pattern>  Search files by name", 10
+        db "  install <url>     Download and install from HTTP URL", 10
+        db "  remove <name>     Remove a file from disk", 10
         db "  help              Show this help", 10, 0
 
 msg_list_hdr:
@@ -827,6 +1137,17 @@ msg_search_hdr:    db "Search results:", 10, 0
 msg_no_match:      db "No matching files found.", 10, 0
 msg_matches:       db " match(es) found.", 10, 0
 msg_search_usage:  db "Usage: pkg search <pattern>", 10, 0
+msg_removed:       db "Removed: ", 0
+msg_remove_fail:   db "pkg: cannot remove: ", 0
+msg_remove_usage:  db "Usage: pkg remove <filename>", 10, 0
+msg_install_from:  db "Downloading ", 0
+msg_install_ok:    db "Installed: ", 0
+msg_install_dns:   db "pkg: DNS resolution failed", 10, 0
+msg_install_conn:  db "pkg: connection failed or empty response", 10, 0
+msg_install_write: db "pkg: disk write failed (disk full?)", 10, 0
+msg_install_badurl:db "pkg: URL must start with http://", 10, 0
+msg_install_usage: db "Usage: pkg install http://host/path/file.bin", 10, 0
+install_http_prefix: db "http://", 0
 
 unit_b:    db " B", 0
 unit_kb:   db " KB", 0
@@ -835,6 +1156,7 @@ unit_mb:   db " MB", 0
 ; BSS
 arg_buf:        times 256 db 0
 dirent_buf:     times 288 db 0
+filename_buf:   times 128 db 0
 search_name:    dd 0
 total_size:     dd 0
 count_text:     dd 0
@@ -842,3 +1164,11 @@ count_exec:     dd 0
 count_dir:      dd 0
 count_batch:    dd 0
 count_other:    dd 0
+install_ip:     dd 0
+install_size:   dd 0
+install_ftype:  dd 1
+install_host:   times 128 db 0
+install_path:   times 256 db 0
+; HTTP library buffers (required by lib/http.inc)
+http_req_buf:   times 512 db 0
+http_resp_buf:  times 65536 db 0
