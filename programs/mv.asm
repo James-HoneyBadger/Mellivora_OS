@@ -29,6 +29,15 @@ start:
         cmp byte [dst_name], 0
         je .usage
 
+        ; Try atomic rename first (same directory, most efficient)
+        mov eax, SYS_RENAME
+        mov ebx, src_name
+        mov ecx, dst_name
+        int 0x80
+        test eax, eax
+        jz .done_ok
+
+        ; Rename failed (e.g. cross-directory) — fall back to copy+delete
         ; Read source file
         mov eax, SYS_FREAD
         mov ebx, src_name
@@ -55,6 +64,7 @@ start:
         cmp eax, -1
         je .del_err
 
+.done_ok:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80

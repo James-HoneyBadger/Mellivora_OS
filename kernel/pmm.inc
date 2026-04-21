@@ -245,6 +245,36 @@ pmm_alloc_pages:
         xor eax, eax
         ret
 
+; Free N contiguous physical pages
+; EAX = base physical address, ECX = number of pages
+pmm_free_pages:
+        pushad
+        shr eax, 12             ; Convert base to page number
+        mov [.fp_page], eax
+        mov [.fp_count], ecx
+.fp_loop:
+        cmp dword [.fp_count], 0
+        je .fp_done
+        mov eax, [.fp_page]
+        mov ecx, eax
+        shr ecx, 3              ; Byte offset in bitmap
+        and eax, 7              ; Bit offset
+        mov edi, PMM_BITMAP
+        add edi, ecx
+        mov cl, al
+        mov ch, 1
+        shl ch, cl
+        not ch
+        and [edi], ch            ; Clear bit = free
+        inc dword [.fp_page]
+        dec dword [.fp_count]
+        jmp .fp_loop
+.fp_done:
+        popad
+        ret
+.fp_page:  dd 0
+.fp_count: dd 0
+
 ; Count free pages
 ; Returns: EAX = number of free pages
 pmm_count_free:

@@ -250,6 +250,37 @@ sched_exit_task:
 
 ;---------------------------------------
 ; sys_yield - SYS_YIELD syscall handler
+;---------------------------------------
+; sched_force_switch - Switch to another ready task
+; Called after a background task has exited (sched_exit_task already
+; freed its TCB). Picks the first READY task and IRET to it.
+; If no task is ready, falls through to shell_main.
+; DOES NOT RETURN (either iretd to ring-3 or jmp shell_main).
+;---------------------------------------
+sched_force_switch:
+        mov edi, task_table
+        xor edx, edx
+.sfs_scan:
+        cmp edx, MAX_TASKS
+        jge .sfs_no_task
+        cmp dword [edi + TCB_STATE], TASK_READY
+        je .sfs_found
+        add edi, TCB_SIZE
+        inc edx
+        jmp .sfs_scan
+.sfs_found:
+        mov dword [edi + TCB_STATE], TASK_RUNNING
+        mov [task_current], edx
+        mov eax, [edi + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+        mov esp, [edi + TCB_ESP]  ; Switch to new task's kernel stack
+        popad                      ; Restore its GP registers
+        iretd                      ; Resume the ring-3 task
+.sfs_no_task:
+        ; No other ring-3 task running — return to shell prompt
+        mov esp, KERNEL_STACK
+        jmp shell_main
+
 ;
 ; Cooperatively yields the CPU to the
 ; next ready task. If no other tasks are

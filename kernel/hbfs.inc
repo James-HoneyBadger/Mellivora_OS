@@ -832,3 +832,172 @@ sys_readlink:
         mov dword [esp + 28], -1
         popad
         iretd
+
+;---------------------------------------
+; sys_rename - Rename a file or directory (same directory)
+;   EBX = old filename pointer
+;   ECX = new filename pointer
+; Returns: EAX = 0 on success, -1 on failure
+;---------------------------------------
+sys_rename:
+        pushad
+        mov [.sr_old], ebx
+        mov [.sr_new], ecx
+        call hbfs_load_root_dir
+        ; Find old entry
+        mov esi, ebx
+        call hbfs_find_file
+        jc .sr_fail             ; source not found
+        ; Save entry pointer
+        mov [.sr_edi], edi
+        ; Check new name does not already exist
+        mov esi, [.sr_new]
+        call hbfs_find_file
+        jnc .sr_fail            ; dest already exists
+        ; Overwrite the name field in the old entry with new name
+        mov edi, [.sr_edi]
+        mov esi, [.sr_new]
+        push edi
+        mov ecx, HBFS_MAX_FILENAME
+.sr_cp:
+        lodsb
+        stosb
+        test al, al
+        jz .sr_cp_done
+        dec ecx
+        jnz .sr_cp
+        xor al, al
+        stosb
+.sr_cp_done:
+        pop edi
+        ; Update modified timestamp
+        call rtc_get_timestamp
+        mov [edi + DIRENT_MODIFIED], eax
+        call hbfs_save_root_dir
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sr_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+.sr_old: dd 0
+.sr_new: dd 0
+.sr_edi: dd 0
+
+;---------------------------------------
+; sys_rmdir - Remove an empty directory
+;   EBX = directory name pointer
+; Returns: EAX = 0 on success, -1 on failure
+;---------------------------------------
+sys_rmdir:
+        pushad
+        mov esi, ebx
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .srd_fail            ; not found
+        ; Must be a directory
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne .srd_fail
+        ; Save entry info
+        mov [.srd_edi], edi
+        push dword [edi + DIRENT_START_BLOCK]
+        push dword [edi + DIRENT_BLOCK_COUNT]
+        ; Check directory is empty: read its block and scan for non-free entries
+        mov eax, [edi + DIRENT_START_BLOCK]
+        imul eax, HBFS_SECTORS_PER_BLK
+        add eax, HBFS_DATA_START
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov edi, hbfs_block_buf
+        call ata_read_sectors
+        jc .srd_fail_pop
+        ; Scan the first block for any used entries
+        mov edi, hbfs_block_buf
+        mov ecx, HBFS_BLOCK_SIZE / HBFS_DIR_ENTRY_SIZE
+.srd_scan:
+        cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        jne .srd_notempty
+        add edi, HBFS_DIR_ENTRY_SIZE
+        loop .srd_scan
+        ; Directory is empty — free its blocks
+        pop ecx                 ; block count
+        pop eax                 ; start block
+        call hbfs_free_blocks
+        ; Reload parent directory and zero the entry
+        call hbfs_load_root_dir
+        mov edi, [.srd_edi]
+        mov ecx, HBFS_DIR_ENTRY_SIZE / 4
+        xor eax, eax
+        rep stosd
+        call hbfs_save_root_dir
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.srd_notempty:
+.srd_fail_pop:
+        pop ecx
+        pop eax
+.srd_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+.srd_edi: dd 0
+
+;---------------------------------------
+; sys_truncate - Truncate a file to a given size (shrink only)
+;   EBX = filename pointer
+;   ECX = new size in bytes (must be <= current size)
+; Returns: EAX = 0 on success, -1 on failure
+;---------------------------------------
+sys_truncate:
+        pushad
+        mov [.st_new_size], ecx
+        mov esi, ebx
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .st_fail
+        ; Only truncate regular files
+        cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        je .st_fail
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        je .st_fail
+        ; New size must be <= current size
+        mov eax, [.st_new_size]
+        cmp eax, [edi + DIRENT_SIZE]
+        ja .st_fail
+        ; Update size in directory entry
+        mov [edi + DIRENT_SIZE], eax
+        ; Calculate new block count needed
+        mov ecx, eax
+        add ecx, HBFS_BLOCK_SIZE - 1
+        shr ecx, 12             ; ceil(new_size / 4096)
+        cmp ecx, 0
+        jg .st_has_blocks
+        mov ecx, 1
+.st_has_blocks:
+        ; Free excess blocks if block count shrank
+        mov eax, [edi + DIRENT_BLOCK_COUNT]
+        cmp eax, ecx
+        jle .st_no_free
+        ; Free the tail blocks: start = (start_block + new_count), count = old-new
+        push ecx                ; save new block count
+        sub eax, ecx            ; EAX = blocks to free
+        push eax
+        mov eax, [edi + DIRENT_START_BLOCK]
+        add eax, ecx            ; first block to free
+        pop ecx                 ; blocks to free
+        call hbfs_free_blocks
+        pop ecx                 ; new block count
+        mov [edi + DIRENT_BLOCK_COUNT], ecx
+.st_no_free:
+        call rtc_get_timestamp
+        mov [edi + DIRENT_MODIFIED], eax
+        call hbfs_save_root_dir
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.st_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+.st_new_size: dd 0

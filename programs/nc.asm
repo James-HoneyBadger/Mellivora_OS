@@ -113,12 +113,12 @@ start:
         test eax, eax
         jle .check_recv
 
-        ; Send to socket
-        mov ecx, eax
+        ; Send to socket (save byte count before clobbering ECX)
+        mov edx, eax            ; EDX = byte count from stdin_read
         mov eax, SYS_SEND
         mov ebx, [fd]
-        mov ecx, send_buf
-        mov edx, ecx
+        mov ecx, send_buf       ; ECX = buffer pointer
+                                ; EDX = length (already set)
         int 0x80
 
 .check_recv:

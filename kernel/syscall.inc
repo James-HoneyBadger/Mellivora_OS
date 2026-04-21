@@ -110,10 +110,54 @@ syscall_table:
         dd sys_getenv_slot      ; 80  SYS_GETENV_SLOT
         dd sys_dmesg_write      ; 81  SYS_DMESG_WRITE
         dd sys_dmesg_read       ; 82  SYS_DMESG_READ
-        ; Reserved slots (83..127) — point to bad handler
-        times (SYSCALL_MAX - 83) dd syscall_handler.syscall_bad
+        dd sys_rename           ; 83  SYS_RENAME
+        dd sys_rmdir            ; 84  SYS_RMDIR
+        dd sys_truncate         ; 85  SYS_TRUNCATE
+        dd sys_connect_nb       ; 86  SYS_CONNECT_NB
+        ; Reserved slots (87..127) — point to bad handler
+        times (SYSCALL_MAX - 87) dd syscall_handler.syscall_bad
 
 sys_exit:
+        ; First check if this is a background task exiting
+        pushad
+        mov edi, task_table
+        xor edx, edx
+.exit_find_task:
+        cmp edx, MAX_TASKS
+        jge .exit_is_fg
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .exit_check_bg
+        add edi, TCB_SIZE
+        inc edx
+        jmp .exit_find_task
+.exit_check_bg:
+        test dword [edi + TCB_EXIT_CODE], 0x80000000
+        jz .exit_is_fg
+
+        ; Background task exit: free its program memory + stack, then switch away
+        mov eax, [edi + TCB_EXIT_CODE]
+        and eax, 0x7FFFFFFF             ; Clear bg flag → page number
+        shl eax, 12                     ; Convert page# to physical address
+        push eax                        ; Save prog base for free
+        ; Free user stack: TCB_USTACK is stack top, base = top - BG_STACK pages
+        mov eax, [edi + TCB_USTACK]
+        sub eax, (BG_STACK_PAGES * 4096)
+        mov ecx, BG_STACK_PAGES
+        call pmm_free_pages
+        ; Free program memory
+        pop eax
+        mov ecx, BG_PROG_PAGES
+        call pmm_free_pages
+        ; Remove from scheduler
+        call sched_exit_task
+        popad
+        ; Switch to another ready task (or fall back to shell_main)
+        ; This call does NOT return
+        call sched_force_switch
+        ; If sched_force_switch returns somehow, fall through to shell_main
+
+.exit_is_fg:
+        popad
         call shell_finish_redirection
         ; Save program return code (EBX) for shell inspection
         mov [program_exit_code], ebx

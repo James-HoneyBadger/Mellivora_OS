@@ -99,6 +99,10 @@ SYS_REALLOC     equ 79          ; Realloc: EBX=ptr ECX=new_size EDX=old_size -> 
 SYS_GETENV_SLOT equ 80          ; Get env slot: EBX=index ECX=dest_buf(128) -> EAX=0/-1
 SYS_DMESG_WRITE equ 81          ; Write dmesg: EBX=msg_ptr -> EAX=0
 SYS_DMESG_READ  equ 82          ; Read dmesg: EBX=index ECX=dest_buf(128) -> EAX=0/-1
+SYS_RENAME      equ 83          ; Rename file/dir: EBX=old_name ECX=new_name -> EAX=0/-1
+SYS_RMDIR       equ 84          ; Remove empty dir: EBX=name -> EAX=0/-1
+SYS_TRUNCATE    equ 85          ; Truncate file: EBX=name ECX=new_size -> EAX=0/-1
+SYS_CONNECT_NB  equ 86          ; Non-blocking connect: EBX=fd ECX=ip EDX=port -> EAX=0/-2/-1
 
 ; v4.0 Priority levels
 PRIO_HIGH       equ 0

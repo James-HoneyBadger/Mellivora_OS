@@ -514,6 +514,8 @@ msg_write_prompt: db "Type content (empty line to end):", 0x0A, 0
 msg_write_err:  db "Write error!", 0x0A, 0
 msg_unknown_cmd: db "Unknown command. Type 'help'.", 0x0A, 0
 msg_bg_unsupported: db "Note: background jobs (&) not yet supported; running in foreground.", 0x0A, 0
+msg_bg_launched: db "[bg] PID ", 0
+msg_bg_nomem:    db "bg: out of memory for background task", 0x0A, 0
 msg_redir_syntax: db "Redirection syntax error.", 0x0A, 0
 msg_redir_in_err: db "Redirection input file error.", 0x0A, 0
 msg_redir_too_big: db "Redirection file too large.", 0x0A, 0
@@ -664,6 +666,7 @@ exc_errcode:    resd 1          ; Saved error code from exception
 hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (64 * 256 = 16KB)
 hist_count:     resd 1          ; Number of entries in history
 hist_browse:    resd 1          ; Current browse position
+line_len:       resd 1          ; Total chars in line_buffer (tracks end independent of cursor)
 
 idt_table:      resb 256 * 8   ; 256 IDT entries * 8 bytes each = 2KB
 
@@ -705,6 +708,9 @@ env_table:      resb ENV_MAX * ENV_ENTRY_SIZE
 env_name_buf:   resb 64
 env_temp_buf:   resb LINE_BUFFER_SIZE
 expand_buf:     resb LINE_BUFFER_SIZE
+cmd_sub_buf:    resb LINE_BUFFER_SIZE   ; Captured output for $(...) substitution
+cmd_sub_work:   resb LINE_BUFFER_SIZE   ; Inner command work buffer for $(...)
+dec_str_buf:    resb 20                 ; Decimal string conversion buffer (20 chars)
 glob_token_buf: resb 256
 
 ; Subdirectory tracking
@@ -729,6 +735,7 @@ batch_resume_pos: resd 1                  ; Resume offset into batch_script_buf
 
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing
+bg_launch_flag:  resb 1          ; 1 = next exec should launch as background task
 prog_name_buf:   resb 256        ; Parsed program name from command line
 parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
 parent_active:    resb 1         ; 1 = re-launch parent after child exits

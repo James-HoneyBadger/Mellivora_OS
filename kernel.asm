@@ -40,6 +40,8 @@ PROGRAM_BASE        equ 0x00200000      ; Programs load at 2MB
 PROGRAM_MAX_SIZE    equ 0x00100000      ; Max 1MB per program
 HEAP_BASE           equ 0x00400000      ; Kernel heap starts at 4MB
 PMM_BITMAP          equ 0x00300000      ; Physical memory bitmap at 3MB
+BG_PROG_PAGES       equ 256             ; Pages per background program slot (1MB)
+BG_STACK_PAGES      equ 16             ; Pages per background task user stack (64KB)
 
 ; Boot info passed by stage 2 at 0x500
 BOOTINFO_DRIVE      equ 0x500

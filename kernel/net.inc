@@ -758,23 +758,26 @@ net_process_frame:
 ;---------------------------------------
 ; eth_build_frame - Build Ethernet header + send
 ;  ESI = payload data, ECX = payload length
-;  EDI = destination MAC (6 bytes)
-;  EBX = EtherType (16-bit, host byte order)
-; Uses net_frame_buf for assembly
+;  EDI = destination MAC ptr (6 bytes)
+;  BX  = EtherType (16-bit, network byte order)
+; Copies MAC into net_frame_dst_mac then calls net_send_packet.
 ;---------------------------------------
 eth_build_frame:
         pushad
-
-        ; Build frame in net_frame_buf
+        ; Store EtherType
+        mov [net_frame_ethertype], bx
+        ; Copy destination MAC from EDI into net_frame_dst_mac
         push esi
         push ecx
-
-        mov edi, [edi]          ; This won't work - need to pass MAC ptr differently
-        ; Actually, let's fix the calling convention:
-        ; On entry: stack has dest MAC ptr pushed before call
-        ; Let's use a simpler approach - caller pre-builds in net_frame_buf
+        mov esi, edi
+        mov edi, net_frame_dst_mac
+        mov ecx, 6
+        cld
+        rep movsb
         pop ecx
         pop esi
+        ; Delegate to net_send_packet
+        call net_send_packet
         popad
         ret
 
@@ -2302,6 +2305,10 @@ tcp_checksum:
         mov [net_tcp_ck_dst], eax
         mov [net_tcp_ck_len], ecx
 
+        ; Guard: segment must fit in checksum buffer (1536 bytes max for payload)
+        cmp ecx, 1536
+        ja .tcp_ck_bail
+
         ; Build pseudo-header + TCP in net_tcp_ck_buf
         mov edi, net_tcp_ck_buf
         ; Source IP
@@ -2331,6 +2338,16 @@ tcp_checksum:
         add ecx, 12             ; pseudo-header is 12 bytes
         call inet_checksum
 
+        pop edi
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+.tcp_ck_bail:
+        ; Segment too large — return zero checksum (packet will be dropped by peer)
+        xor ax, ax
         pop edi
         pop esi
         pop edx
@@ -3272,6 +3289,63 @@ sys_connect:
 
 .sconn_fail_pop:
 .sconn_fail:
+        popad
+        mov eax, -1
+        iretd
+
+;---------------------------------------
+; sys_connect_nb - Non-blocking TCP connect (initiates handshake, returns immediately)
+;  EBX = socket fd, ECX = IP (LE), EDX = port (host order)
+; Returns: EAX =  0 if already ESTABLISHED,
+;                -2 (EINPROGRESS) if SYN sent and pending,
+;                -1 on error
+;---------------------------------------
+sys_connect_nb:
+        pushad
+        cmp ebx, MAX_SOCKETS
+        jge .scnb_fail
+        mov eax, ebx
+        imul eax, SOCK_SIZE
+        lea ebp, [net_sock_table + eax]
+
+        cmp dword [ebp + SOCK_TYPE], SOCK_TCP
+        jne .scnb_fail
+
+        ; If already established, return success
+        cmp dword [ebp + SOCK_STATE], TCP_ESTABLISHED
+        je .scnb_ok
+
+        ; If already SYN_SENT (re-poll), return EINPROGRESS
+        cmp dword [ebp + SOCK_STATE], TCP_SYN_SENT
+        je .scnb_inprog
+
+        ; Fresh connect: set remote info, assign local port, send SYN
+        mov [ebp + SOCK_REMOTE_IP], ecx
+        mov [ebp + SOCK_REMOTE_PORT], dx
+
+        call net_alloc_port
+        mov [ebp + SOCK_LOCAL_PORT], ax
+
+        mov eax, [tick_count]
+        imul eax, 1103515245
+        add eax, 12345
+        mov [ebp + SOCK_SEQ], eax
+
+        mov dword [ebp + SOCK_STATE], TCP_SYN_SENT
+        mov al, TCP_SYN
+        call tcp_send_flags
+
+.scnb_inprog:
+        popad
+        mov eax, -2             ; EINPROGRESS
+        iretd
+
+.scnb_ok:
+        popad
+        xor eax, eax
+        iretd
+
+.scnb_fail:
         popad
         mov eax, -1
         iretd

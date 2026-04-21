@@ -106,6 +106,7 @@ shell_main:
         ; Read command line
         mov edi, line_buffer
         xor ecx, ecx           ; Character count
+        mov dword [line_len], 0 ; Total chars in buffer (tracks end past cursor)
 
         ; On first boot, flush stale PS/2 data from the keyboard buffer.
         ; The 8042 controller may deliver delayed bytes after sti that
@@ -163,6 +164,7 @@ shell_main:
         jge .read_loop
         stosb
         inc ecx
+        inc dword [line_len]    ; Keep total-length tracker in sync
         ; Echo character
         call vga_putchar
         jmp .read_loop
@@ -189,19 +191,68 @@ shell_main:
 
 ; v4.0: Ctrl+K - kill from cursor to end of line
 .ctrl_k:
-        ; Save killed text to kill buffer for potential Ctrl+Y
-        ; In append mode, cursor is at end, so nothing to kill
-        ; (future: support mid-line editing)
+        ; Compute chars after cursor: line_len - ecx
+        mov eax, [line_len]
+        sub eax, ecx
+        jz .read_loop           ; nothing after cursor
+        ; Blank them on screen (print space, then backspace)
+        push eax
+.ctrl_k_blank:
+        push eax
+        mov al, ' '
+        call vga_putchar
+        pop eax
+        dec eax
+        jnz .ctrl_k_blank
+        ; Move cursor back to kill point
+        pop eax
+        mov eax, [line_len]
+        sub eax, ecx
+.ctrl_k_back:
+        push eax
+        mov al, 0x08
+        call vga_putchar
+        pop eax
+        dec eax
+        jnz .ctrl_k_back
+        ; Null-terminate at cursor, update line_len
+        mov byte [edi], 0
+        mov [line_len], ecx
         jmp .read_loop
 
 ; v4.0: Ctrl+U - kill from beginning to cursor (erase whole line)
 .ctrl_u:
+        ; Erase ECX chars visually, then erase any chars after cursor too
+        mov eax, [line_len]
+        sub eax, ecx            ; chars after cursor
+        push eax
         or ecx, ecx
-        jz .read_loop
-        ; Backspace all characters
-        call .erase_input
+        jz .ctrl_u_after
+        call .erase_input       ; erase before-cursor chars (ECX)
+.ctrl_u_after:
+        pop eax
+        jz .ctrl_u_done
+.ctrl_u_after_blank:
+        push eax
+        mov al, ' '
+        call vga_putchar
+        pop eax
+        dec eax
+        jnz .ctrl_u_after_blank
+        ; backspace back
+        mov eax, [line_len]
+        sub eax, ecx
+.ctrl_u_back:
+        push eax
+        mov al, 0x08
+        call vga_putchar
+        pop eax
+        dec eax
+        jnz .ctrl_u_back
+.ctrl_u_done:
         mov edi, line_buffer
         xor ecx, ecx
+        mov dword [line_len], 0
         jmp .read_loop
 
 ; v4.0: Ctrl+W - delete previous word
@@ -275,6 +326,7 @@ shell_main:
         jz .read_loop
         dec edi
         dec ecx
+        dec dword [line_len]
         mov al, 0x08
         call vga_putchar
         jmp .read_loop
@@ -298,7 +350,9 @@ shell_main:
 
 .tab_complete:
         call shell_tab_complete
+        mov [line_len], ecx     ; cursor at end after tab-complete
         lea edi, [line_buffer + ecx]
+        mov [line_len], ecx     ; cursor at end after tab-complete
         jmp .read_loop
 
 .ctrl_c:
@@ -309,6 +363,7 @@ shell_main:
         pop esi
         mov edi, line_buffer
         xor ecx, ecx
+        mov dword [line_len], 0
         jmp .prompt
 
 .hist_clear_line:
@@ -316,6 +371,7 @@ shell_main:
         call .erase_input
         mov edi, line_buffer
         xor ecx, ecx
+        mov dword [line_len], 0
         jmp .read_loop
 
 .hist_recall:
@@ -338,11 +394,26 @@ shell_main:
         pop ecx
         jmp .hist_copy
 .hist_copy_done:
+        mov [line_len], ecx     ; cursor == end after recall
         jmp .read_loop
 
 .erase_input:
-        ; Backspace over ECX characters
+        ; Erase entire visible input line regardless of cursor position.
+        ; Step 1: advance to end of line (over after-cursor chars)
         push ecx
+        mov eax, [line_len]
+        sub eax, ecx            ; chars after cursor
+        jz .ei_no_fwd
+.ei_fwd:
+        push eax
+        mov al, ' '
+        call vga_putchar        ; overwrite and advance
+        pop eax
+        dec eax
+        jnz .ei_fwd
+.ei_no_fwd:
+        ; Step 2: cursor is now at end; bs-space-bs over all line_len chars
+        mov ecx, [line_len]
 .erase_loop:
         cmp ecx, 0
         je .erase_done
@@ -491,6 +562,10 @@ shell_parse_cmd:
         call skip_spaces
 
         mov dword [shell_last_status], 0
+        mov byte [bg_launch_flag], 0    ; Reset background flag
+
+        ; Expand $(...) command substitution and $((...)) arithmetic first
+        call shell_expand_cmdsubst
 
         ; --- Check for trailing '&' (background job request) ---
         call shell_strip_bg_ampersand
@@ -756,8 +831,397 @@ shell_expand_globs:
 .seg_match_count: dd 0
 
 ;---------------------------------------
+; shell_expand_cmdsubst
+; Expand $((expr)) arithmetic and $(cmd) command substitution in line_buffer.
+; Scans for '$(' patterns, evaluates them, and splices results in-place.
+;---------------------------------------
+shell_expand_cmdsubst:
+        pushad
+        ; Copy line_buffer to expand_buf as working copy
+        mov esi, line_buffer
+        mov edi, expand_buf
+        mov ecx, LINE_BUFFER_SIZE
+        rep movsb
+        ; Write result back to line_buffer using expand_buf as source
+        mov esi, expand_buf
+        mov edi, line_buffer
+        xor ecx, ecx            ; ECX = write position in line_buffer
+.ecs_scan:
+        mov al, [esi]
+        test al, al
+        jz .ecs_finish
+        cmp al, '$'
+        jne .ecs_pass
+        cmp byte [esi + 1], '('
+        jne .ecs_pass
+        ; Found '$(' — check for '$(('
+        cmp byte [esi + 2], '('
+        je .ecs_arith
+
+        ; ------- Command substitution: $( cmd ) -------
+        add esi, 2              ; Skip '$('
+        ; Extract inner command up to matching ')'
+        push edi
+        push ecx
+        mov edi, cmd_sub_work
+        xor ecx, ecx
+.ecs_cs_extract:
+        mov al, [esi]
+        test al, al
+        jz .ecs_cs_unbalanced
+        cmp al, ')'
+        je .ecs_cs_extracted
+        mov [edi + ecx], al
+        inc ecx
+        inc esi
+        cmp ecx, LINE_BUFFER_SIZE - 1
+        jb .ecs_cs_extract
+.ecs_cs_extracted:
+        inc esi                 ; Skip the ')'
+        mov byte [edi + ecx], 0
+        ; Execute command, capturing stdout to cmd_sub_buf
+        push esi
+        push edi
+        ; Save redirection state
+        push dword [stdout_redir_len]
+        push eax                ; save EAX
+        movzx eax, byte [stdout_redir_active]
+        push eax
+        ; Enable capture to cmd_sub_buf
+        mov byte [stdout_redir_active], 1
+        mov dword [stdout_redir_len], 0
+        ; Copy inner command to line_buffer and run it
+        mov esi, cmd_sub_work
+        mov edi, line_buffer
+        call str_copy
+        ; Run inner command (non-recursive: use batch dispatch)
+        call shell_dispatch_core
+        call shell_finish_redirection
+        ; Grab captured output length
+        mov ecx, [stdout_redir_len]
+        ; Restore redirection state
+        pop eax
+        mov [stdout_redir_active], al
+        pop eax
+        mov [stdout_redir_len], eax
+        pop edi                 ; cmd_sub_work pointer (no longer needed)
+        pop esi                 ; resume scan ESI
+        ; Strip trailing newlines from captured output (cmd_sub_buf)
+        push esi
+        mov esi, redir_out_buf
+        ; ECX = captured length
+        test ecx, ecx
+        jz .ecs_cs_empty
+.ecs_strip_nl:
+        cmp ecx, 0
+        je .ecs_cs_copy_done
+        mov al, [esi + ecx - 1]
+        cmp al, 0x0A
+        je .ecs_strip_nl_dec
+        cmp al, 0x0D
+        je .ecs_strip_nl_dec
+        jmp .ecs_cs_copy_done
+.ecs_strip_nl_dec:
+        dec ecx
+        jmp .ecs_strip_nl
+.ecs_cs_copy_done:
+        ; Copy to cmd_sub_buf
+        push ecx
+        mov edi, cmd_sub_buf
+        push esi
+        cld
+        rep movsb
+        mov byte [edi], 0
+        pop esi
+        pop ecx
+.ecs_cs_empty:
+        pop esi                 ; resume scan ESI (already past ')')
+        pop ecx                 ; restore write position
+        pop edi                 ; restore write pointer
+        ; Splice captured output into output stream
+        push esi
+        mov esi, cmd_sub_buf
+.ecs_cs_splice:
+        lodsb
+        test al, al
+        jz .ecs_cs_splice_done
+        mov [edi + ecx], al
+        inc ecx
+        jmp .ecs_cs_splice
+.ecs_cs_splice_done:
+        pop esi
+        jmp .ecs_scan
+
+.ecs_cs_unbalanced:
+        ; Unbalanced $(, just pass through
+        pop ecx
+        pop edi
+        sub esi, 2              ; back to '$'
+        jmp .ecs_pass
+
+        ; ------- Arithmetic expansion: $(( expr )) -------
+.ecs_arith:
+        add esi, 3              ; Skip '$(('
+        ; Find closing '))'
+        push edi
+        push ecx
+        mov edi, cmd_sub_work
+        xor ecx, ecx
+.ecs_ae_extract:
+        mov al, [esi]
+        test al, al
+        jz .ecs_ae_unbalanced
+        cmp al, ')'
+        jne .ecs_ae_more
+        cmp byte [esi + 1], ')'
+        je .ecs_ae_extracted
+.ecs_ae_more:
+        mov [edi + ecx], al
+        inc ecx
+        inc esi
+        cmp ecx, LINE_BUFFER_SIZE - 1
+        jb .ecs_ae_extract
+.ecs_ae_extracted:
+        add esi, 2              ; Skip '))'
+        mov byte [edi + ecx], 0
+        ; Evaluate arithmetic expression from cmd_sub_work
+        push esi
+        mov esi, cmd_sub_work
+        call shell_eval_arith   ; EAX = result
+        pop esi
+        pop ecx
+        pop edi
+        ; Convert EAX to decimal string and write into output
+        push esi
+        push eax
+        call vga_dec_to_str     ; ESI = scratch, result in dec_str_buf
+        mov esi, dec_str_buf
+.ecs_ae_splice:
+        lodsb
+        test al, al
+        jz .ecs_ae_splice_done
+        mov [edi + ecx], al
+        inc ecx
+        jmp .ecs_ae_splice
+.ecs_ae_splice_done:
+        pop eax
+        pop esi
+        jmp .ecs_scan
+
+.ecs_ae_unbalanced:
+        pop ecx
+        pop edi
+        sub esi, 3
+        jmp .ecs_pass
+
+.ecs_pass:
+        mov al, [esi]
+        mov [edi + ecx], al
+        inc ecx
+        inc esi
+        jmp .ecs_scan
+
+.ecs_finish:
+        mov byte [edi + ecx], 0
+        popad
+        ret
+
+;---------------------------------------
+; shell_eval_arith - Evaluate a simple arithmetic expression
+; ESI = pointer to null-terminated expression (with whitespace allowed)
+; Returns: EAX = integer result
+; Supports: integers, +, -, *, /, % with proper precedence
+;---------------------------------------
+shell_eval_arith:
+        push esi
+        push ebx
+        push ecx
+        push edx
+        call .sea_expr
+        pop edx
+        pop ecx
+        pop ebx
+        pop esi
+        ret
+
+.sea_skip_ws:
+        cmp byte [esi], ' '
+        je .sea_skip_ws_do
+        cmp byte [esi], 9
+        je .sea_skip_ws_do
+        ret
+.sea_skip_ws_do:
+        inc esi
+        jmp .sea_skip_ws
+
+; parse_expr: parse addition / subtraction
+.sea_expr:
+        call .sea_term          ; EAX = left
+.sea_expr_loop:
+        call .sea_skip_ws
+        mov bl, [esi]
+        cmp bl, '+'
+        je .sea_add
+        cmp bl, '-'
+        je .sea_sub
+        ret
+.sea_add:
+        inc esi
+        push eax
+        call .sea_term
+        pop ecx
+        add eax, ecx
+        jmp .sea_expr_loop
+.sea_sub:
+        inc esi
+        push eax
+        call .sea_term
+        xchg eax, [esp]         ; swap: stack=term result, eax=left
+        sub eax, [esp]
+        add esp, 4
+        jmp .sea_expr_loop
+
+; parse_term: parse multiplication / division / modulo
+.sea_term:
+        call .sea_primary       ; EAX = left
+.sea_term_loop:
+        call .sea_skip_ws
+        mov bl, [esi]
+        cmp bl, '*'
+        je .sea_mul
+        cmp bl, '/'
+        je .sea_div
+        cmp bl, '%'
+        je .sea_mod
+        ret
+.sea_mul:
+        inc esi
+        push eax
+        call .sea_primary
+        pop ecx
+        imul eax, ecx
+        jmp .sea_term_loop
+.sea_div:
+        inc esi
+        push eax
+        call .sea_primary
+        mov ecx, eax            ; divisor
+        pop eax                 ; dividend
+        test ecx, ecx
+        jz .sea_div_zero
+        cdq
+        idiv ecx
+        jmp .sea_term_loop
+.sea_div_zero:
+        xor eax, eax
+        jmp .sea_term_loop
+.sea_mod:
+        inc esi
+        push eax
+        call .sea_primary
+        mov ecx, eax
+        pop eax
+        test ecx, ecx
+        jz .sea_mod_zero
+        cdq
+        idiv ecx
+        mov eax, edx            ; remainder
+        jmp .sea_term_loop
+.sea_mod_zero:
+        xor eax, eax
+        jmp .sea_term_loop
+
+; parse_primary: parse number or parenthesized expression
+.sea_primary:
+        call .sea_skip_ws
+        mov bl, [esi]
+        cmp bl, '('
+        je .sea_paren
+        cmp bl, '-'
+        je .sea_unary_neg
+        ; Parse decimal number
+        xor eax, eax
+.sea_digits:
+        mov bl, [esi]
+        cmp bl, '0'
+        jb .sea_prim_done
+        cmp bl, '9'
+        ja .sea_prim_done
+        imul eax, 10
+        sub bl, '0'
+        movzx ecx, bl
+        add eax, ecx
+        inc esi
+        jmp .sea_digits
+.sea_prim_done:
+        ret
+.sea_paren:
+        inc esi                 ; skip '('
+        call .sea_expr
+        call .sea_skip_ws
+        cmp byte [esi], ')'
+        jne .sea_paren_done
+        inc esi                 ; skip ')'
+.sea_paren_done:
+        ret
+.sea_unary_neg:
+        inc esi
+        call .sea_primary
+        neg eax
+        ret
+
+;---------------------------------------
+; vga_dec_to_str - Convert EAX to decimal string in dec_str_buf
+; EAX = value to convert
+;---------------------------------------
+vga_dec_to_str:
+        pushad
+        mov edi, dec_str_buf + 15
+        mov byte [edi], 0
+        dec edi
+        xor ecx, ecx
+        test eax, eax
+        jns .dts_positive
+        neg eax
+        inc ecx                 ; ECX = 1 means negative
+.dts_positive:
+        test eax, eax
+        jnz .dts_loop
+        ; Special case: 0
+        mov byte [edi], '0'
+        dec edi
+        jmp .dts_done
+.dts_loop:
+        test eax, eax
+        jz .dts_sign
+        mov edx, 0
+        push ecx
+        mov ecx, 10
+        div ecx
+        pop ecx
+        add dl, '0'
+        mov [edi], dl
+        dec edi
+        jmp .dts_loop
+.dts_sign:
+        test ecx, ecx
+        jz .dts_done
+        mov byte [edi], '-'
+        dec edi
+.dts_done:
+        inc edi
+        ; Copy result to start of dec_str_buf for easy access
+        push esi
+        mov esi, edi
+        mov edi, dec_str_buf
+        call str_copy
+        pop esi
+        popad
+        ret
+
+;---------------------------------------
 ; Check for trailing '&' (not '&&') in line_buffer.
-; If found, strip it and print a warning. Runs command in foreground.
+; If found, strip it and set bg_launch_flag = 1.
 ;---------------------------------------
 shell_strip_bg_ampersand:
         pushad
@@ -787,15 +1251,9 @@ shell_strip_bg_ampersand:
         cmp byte [esi + ecx - 1], '&'
         je .sba_done                ; it's '&&', leave alone
 .sba_is_bg:
-        ; Strip the '&' (null-terminate there)
+        ; Strip the '&' (null-terminate there) and set bg launch flag
         mov byte [esi + ecx], 0
-        ; Print warning
-        push ecx
-        mov byte [vga_color], COLOR_INFO
-        mov esi, msg_bg_unsupported
-        call vga_print
-        mov byte [vga_color], COLOR_DEFAULT
-        pop ecx
+        mov byte [bg_launch_flag], 1
 .sba_done:
         popad
         ret
@@ -4905,11 +5363,14 @@ cmd_exec_program:
         mov dword [program_entry], PROGRAM_BASE
 
 .exec_program:
+        ; Check if this should be a background job
+        cmp byte [bg_launch_flag], 1
+        je .exec_bg
+
         mov esi, msg_exec
         call vga_print
 
         ; Write SYS_EXIT trampoline at end of program area
-        ; This catches programs that use RET instead of SYS_EXIT
         ; Bytes: B8 00 00 00 00 CD 80 = mov eax, 0 / int 0x80
         mov byte [PROGRAM_EXIT_ADDR], 0xB8
         mov dword [PROGRAM_EXIT_ADDR + 1], 0
@@ -4934,6 +5395,116 @@ cmd_exec_program:
         push ebx                ; EIP
         iretd
         ; SYS_EXIT will jump to shell_main, we never return here
+
+.exec_bg:
+        ; Launch program as a background scheduler task
+        ; Clear foreground program_running flag (bg tasks don't block the shell)
+        mov byte [program_running], 0
+        ; 1. Allocate memory for a copy of the program (1MB = 256 pages)
+        mov ecx, BG_PROG_PAGES
+        call pmm_alloc_pages
+        test eax, eax
+        jz .bg_nomem
+        mov [.bg_prog_addr], eax
+
+        ; 2. Copy program from PROGRAM_BASE to allocated area
+        push eax
+        mov edi, eax
+        mov esi, PROGRAM_BASE
+        mov ecx, (BG_PROG_PAGES * 4096) / 4
+        rep movsd
+        pop eax                         ; EAX = bg_prog_addr again
+
+        ; 3. Fix up entry point (relative to new base)
+        mov ebx, [program_entry]
+        sub ebx, PROGRAM_BASE
+        add ebx, eax                    ; EBX = entry point in bg copy
+
+        ; 4. Write SYS_EXIT trampoline at end of bg slot
+        mov edi, eax
+        add edi, (BG_PROG_PAGES * 4096) - 16
+        mov [.bg_tramp_addr], edi
+        mov byte  [edi],     0xB8       ; mov eax, SYS_EXIT(0)
+        mov dword [edi + 1], 0
+        mov byte  [edi + 5], 0xCD       ; int 0x80
+        mov byte  [edi + 6], 0x80
+
+        ; 5. Allocate user stack for bg task (64KB = 16 pages)
+        push ebx
+        mov ecx, BG_STACK_PAGES
+        call pmm_alloc_pages
+        test eax, eax
+        jz .bg_nomem_pop
+        mov [.bg_stack_addr], eax
+        add eax, (BG_STACK_PAGES * 4096) - 4   ; Stack top - 4 for trampoline
+        ; Push trampoline address as "return address" on ring-3 stack
+        mov edx, [.bg_tramp_addr]
+        mov [eax], edx
+        ; ECX = ring-3 ESP (pointing at trampoline)
+        mov ecx, eax
+        pop ebx                         ; EBX = bg entry point
+
+        ; 6. Create the task
+        mov esi, prog_name_buf
+        mov edi, task_create_name
+        push ecx
+        mov ecx, 16
+        rep movsb
+        pop ecx
+        call sched_create_task          ; EBX=entry, ECX=stack → EAX=pid (or -1)
+        test eax, eax
+        js .bg_sched_fail
+
+        ; 7. Mark the task as background in TCB (bit 31 of TCB_EXIT_CODE)
+        ;    Store bg_prog_addr page number so sys_exit can free it.
+        push eax                        ; save PID (= slot index)
+        imul eax, TCB_SIZE
+        lea edi, [task_table + eax]
+        mov eax, [.bg_prog_addr]
+        shr eax, 12                     ; Convert to page number
+        or  eax, 0x80000000             ; Set bg_task flag (bit 31)
+        mov [edi + TCB_EXIT_CODE], eax
+        mov dword [edi + TCB_PRIORITY], PRIO_LOW  ; Run at low priority
+        pop eax                         ; EAX = PID
+
+        ; 8. Print "[1] <pid>" to confirm bg launch
+        mov byte [bg_launch_flag], 0
+        mov byte [vga_color], COLOR_INFO
+        mov esi, msg_bg_launched
+        call vga_print
+        push eax
+        call vga_print_dec
+        mov al, 10
+        call vga_putchar
+        pop eax
+        mov byte [vga_color], COLOR_DEFAULT
+
+        popad
+        clc
+        ret
+
+.bg_nomem_pop:
+        pop ebx
+.bg_nomem:
+        mov byte [bg_launch_flag], 0
+        mov esi, msg_bg_nomem
+        call vga_print
+        jmp .not_found
+
+.bg_sched_fail:
+        ; Free allocated pages before failing
+        mov eax, [.bg_prog_addr]
+        mov ecx, BG_PROG_PAGES
+        call pmm_free_pages
+        mov eax, [.bg_stack_addr]
+        mov ecx, BG_STACK_PAGES
+        call pmm_free_pages
+        mov byte [bg_launch_flag], 0
+        jmp .not_found
+
+.bg_prog_addr:   dd 0
+.bg_stack_addr:  dd 0
+.bg_tramp_addr:  dd 0
 
 .path_fsize: dd 0               ; Temp storage for file size during PATH search
 
