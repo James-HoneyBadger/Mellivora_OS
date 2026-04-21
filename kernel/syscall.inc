@@ -107,8 +107,11 @@ syscall_table:
         dd sys_sigmask          ; 77  SYS_SIGMASK
         dd sys_taskname         ; 78  SYS_TASKNAME
         dd sys_realloc          ; 79  SYS_REALLOC
-        ; Reserved slots (80..127) — point to bad handler
-        times (SYSCALL_MAX - 80) dd syscall_handler.syscall_bad
+        dd sys_getenv_slot      ; 80  SYS_GETENV_SLOT
+        dd sys_dmesg_write      ; 81  SYS_DMESG_WRITE
+        dd sys_dmesg_read       ; 82  SYS_DMESG_READ
+        ; Reserved slots (83..127) — point to bad handler
+        times (SYSCALL_MAX - 83) dd syscall_handler.syscall_bad
 
 sys_exit:
         call shell_finish_redirection

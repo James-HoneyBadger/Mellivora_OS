@@ -277,6 +277,11 @@ ELF_PHDR_SIZE       equ 32
 ENV_MAX             equ 32
 ENV_ENTRY_SIZE      equ 128
 
+; dmesg ring buffer
+DMESG_ENTRIES       equ 64
+DMESG_LINE_SIZE     equ 128
+DMSG_TOTAL_SIZE     equ (DMESG_ENTRIES * DMESG_LINE_SIZE)
+
 ; Ctrl+C / Tab
 CTRL_C_CODE         equ 3
 TAB_KEY             equ 0x09

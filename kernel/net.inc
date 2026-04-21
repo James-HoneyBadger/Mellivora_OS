@@ -2762,6 +2762,7 @@ dns_resolve:
         mov bx, DNS_PORT
         mov dx, [net_ephemeral_port]
         inc word [net_ephemeral_port]
+        movzx ecx, word [net_dns_query_len]
         call udp_send
 
         ; Wait up to 2.5 seconds for first response

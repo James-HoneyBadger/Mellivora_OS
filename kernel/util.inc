@@ -2038,6 +2038,126 @@ sys_getenv:
         iretd
 
 ;---------------------------------------
+; SYS_GETENV_SLOT (80): Return full env entry at slot index
+; EBX = slot index (0..ENV_MAX-1)
+; ECX = destination buffer (128 bytes)
+; Returns: EAX = 0 on success (entry present), -1 on failure/empty
+;---------------------------------------
+sys_getenv_slot:
+        pushad
+        cmp ebx, ENV_MAX
+        jge .sges_fail
+        ; Compute address of slot
+        mov eax, ebx
+        imul eax, ENV_ENTRY_SIZE
+        lea esi, [env_table + eax]
+        ; Check if slot is occupied (first byte != 0)
+        cmp byte [esi], 0
+        je .sges_fail
+        ; Copy ENV_ENTRY_SIZE bytes to user buffer
+        mov edi, ecx
+        mov ecx, ENV_ENTRY_SIZE
+        cld
+        rep movsb
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sges_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; dmesg_write_msg - Write a message to the dmesg ring buffer (kernel use)
+; ESI = null-terminated string to log
+;---------------------------------------
+dmesg_write_msg:
+        pushad
+        ; Calculate destination slot: (dmesg_head % DMESG_ENTRIES) * DMESG_LINE_SIZE
+        mov eax, [dmesg_head]
+        xor edx, edx
+        mov ecx, DMESG_ENTRIES
+        div ecx
+        ; edx = slot index
+        imul edx, DMESG_LINE_SIZE
+        lea edi, [dmesg_buf + edx]
+        ; Copy string up to DMESG_LINE_SIZE-1 chars
+        mov ecx, DMESG_LINE_SIZE - 1
+.dw_copy:
+        lodsb
+        test al, al
+        jz .dw_null
+        stosb
+        dec ecx
+        jnz .dw_copy
+.dw_null:
+        mov byte [edi], 0
+        inc dword [dmesg_head]
+        inc dword [dmesg_count]
+        popad
+        ret
+
+;---------------------------------------
+; SYS_DMESG_WRITE (81): Write a message to the kernel log
+; EBX = pointer to null-terminated message string
+; Returns: EAX = 0
+;---------------------------------------
+sys_dmesg_write:
+        push esi
+        mov esi, ebx
+        call dmesg_write_msg
+        pop esi
+        xor eax, eax
+        iretd
+
+;---------------------------------------
+; SYS_DMESG_READ (82): Read a kernel log entry
+; EBX = entry index (0 = oldest available)
+; ECX = destination buffer (DMESG_LINE_SIZE bytes)
+; Returns: EAX = 0 on success, -1 if index out of range
+;---------------------------------------
+sys_dmesg_read:
+        pushad
+        ; How many valid entries are available?
+        mov eax, [dmesg_count]
+        test eax, eax
+        jz .sdr_fail
+        cmp eax, DMESG_ENTRIES
+        jle .sdr_have_count
+        mov eax, DMESG_ENTRIES
+.sdr_have_count:
+        ; Index must be < available count
+        cmp ebx, eax
+        jge .sdr_fail
+        ; Compute physical slot:
+        ;   oldest_slot = dmesg_head - avail  (mod DMESG_ENTRIES)
+        ;   slot = (oldest_slot + index) mod DMESG_ENTRIES
+        mov edx, [dmesg_head]
+        sub edx, eax            ; edx = dmesg_head - avail
+        add edx, ebx            ; edx += requested index
+        ; Normalise: add multiple of DMESG_ENTRIES to guarantee positive
+        add edx, DMESG_ENTRIES * 4
+        ; edx mod DMESG_ENTRIES
+        mov eax, edx
+        xor edx, edx
+        mov edi, DMESG_ENTRIES
+        div edi                 ; edx = remainder (slot index)
+        imul edx, DMESG_LINE_SIZE
+        lea esi, [dmesg_buf + edx]
+        ; Destination buffer is in ECX (saved at [esp+24] by pushad)
+        mov edi, [esp + 24]
+        mov ecx, DMESG_LINE_SIZE
+        cld
+        rep movsb
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sdr_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
 ; SYS_GETARGS (32): Get command-line arguments
 ; EBX = pointer to destination buffer (max 512 bytes)
 ; Returns: EAX = length of argument string (0 if none)

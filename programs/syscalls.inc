@@ -96,6 +96,9 @@ SYS_GETPGID     equ 76          ; Get PGID: EBX=pid(0=self) -> EAX=pgid/-1
 SYS_SIGMASK     equ 77          ; Signal mask: EBX=op ECX=mask -> EAX=old/-1
 SYS_TASKNAME    equ 78          ; Set task name: EBX=name_ptr -> EAX=0
 SYS_REALLOC     equ 79          ; Realloc: EBX=ptr ECX=new_size EDX=old_size -> EAX=ptr/0
+SYS_GETENV_SLOT equ 80          ; Get env slot: EBX=index ECX=dest_buf(128) -> EAX=0/-1
+SYS_DMESG_WRITE equ 81          ; Write dmesg: EBX=msg_ptr -> EAX=0
+SYS_DMESG_READ  equ 82          ; Read dmesg: EBX=index ECX=dest_buf(128) -> EAX=0/-1
 
 ; v4.0 Priority levels
 PRIO_HIGH       equ 0

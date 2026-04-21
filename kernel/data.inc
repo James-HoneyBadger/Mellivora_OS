@@ -944,6 +944,11 @@ sb16_format:      resd 1          ; Format flags
 clipboard_buf:    resb 4096       ; 4 KB clipboard buffer
 clipboard_len:    resd 1          ; Current clipboard content length
 
+; dmesg ring buffer (64 entries × 128 bytes = 8192 bytes)
+dmesg_buf:        resb 8192
+dmesg_head:       resd 1          ; next write index (wraps mod DMESG_ENTRIES)
+dmesg_count:      resd 1          ; total entries ever written
+
 ; Screensaver
 scr_idle_count:   resd 1          ; Idle tick counter
 scr_mode:         resb 1          ; Active screensaver mode (0-4)

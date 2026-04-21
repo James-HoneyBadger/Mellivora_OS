@@ -1,0 +1,417 @@
+; wget.asm - Simple HTTP/1.0 GET client
+; Usage: wget <url>
+;        wget http://hostname/path [output_file]
+
+%include "syscalls.inc"
+%include "lib/net.inc"
+
+RECV_BUF_SIZE   equ 131072      ; 128 KB receive buffer
+HTTP_PORT       equ 80
+
+start:
+        mov eax, SYS_GETARGS
+        mov ebx, arg_buf
+        int 0x80
+        test eax, eax
+        jz .usage
+
+        mov esi, arg_buf
+        call skip_spaces
+        cmp byte [esi], 0
+        je .usage
+
+        ; Parse URL: http://hostname/path or hostname/path or hostname
+        ; Skip "http://" if present
+        push esi
+        mov edi, proto_str
+        call str_starts_with
+        test eax, eax
+        jz .skip_http
+        add esi, 7              ; skip "http://"
+.skip_http:
+        pop eax                 ; discard saved ESI
+
+        ; Extract hostname (up to '/', ' ', or '\0')
+        mov edi, hostname
+        xor ecx, ecx
+.copy_host:
+        mov al, [esi]
+        cmp al, '/'
+        je .host_done
+        cmp al, ' '
+        je .host_done
+        cmp al, 0
+        je .host_done
+        mov [edi + ecx], al
+        inc ecx
+        inc esi
+        jmp .copy_host
+.host_done:
+        mov byte [edi + ecx], 0
+
+        ; Extract path (rest of URL, or default to "/")
+        cmp byte [esi], '/'
+        jne .default_path
+        mov edi, path
+        xor ecx, ecx
+.copy_path:
+        mov al, [esi]
+        cmp al, ' '
+        je .path_done
+        cmp al, 0
+        je .path_done
+        mov [edi + ecx], al
+        inc ecx
+        inc esi
+        jmp .copy_path
+.path_done:
+        mov byte [edi + ecx], 0
+        jmp .check_outfile
+
+.default_path:
+        mov byte [path], '/'
+        mov byte [path + 1], 0
+
+.check_outfile:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .gen_outfile
+
+        ; Optional output filename
+        mov edi, outfile
+        xor ecx, ecx
+.copy_out:
+        mov al, [esi]
+        cmp al, ' '
+        je .out_done
+        cmp al, 0
+        je .out_done
+        mov [edi + ecx], al
+        inc ecx
+        inc esi
+        jmp .copy_out
+.out_done:
+        mov byte [edi + ecx], 0
+        jmp .resolve
+
+.gen_outfile:
+        ; Use last component of path as filename, or "index.html"
+        mov esi, path
+        mov edi, outfile
+        xor ecx, ecx
+        ; Find last '/'
+        mov ebx, esi
+.find_last_slash:
+        mov al, [esi]
+        test al, al
+        jz .found_last_slash
+        cmp al, '/'
+        jne .fls_next
+        lea ebx, [esi + 1]
+.fls_next:
+        inc esi
+        jmp .find_last_slash
+.found_last_slash:
+        ; ebx = start of filename part
+        cmp byte [ebx], 0
+        jne .copy_outfile_name
+        ; Empty filename - use "index.html"
+        mov esi, default_outfile
+        jmp .copy_of
+.copy_outfile_name:
+        mov esi, ebx
+.copy_of:
+        xor ecx, ecx
+.copy_of_loop:
+        mov al, [esi + ecx]
+        test al, al
+        jz .copy_of_done
+        mov [edi + ecx], al
+        inc ecx
+        jmp .copy_of_loop
+.copy_of_done:
+        mov byte [edi + ecx], 0
+
+.resolve:
+        ; Resolve hostname
+        mov eax, SYS_DNS
+        mov ebx, hostname
+        int 0x80
+        test eax, eax
+        jz .dns_fail
+        mov [target_ip], eax
+
+        ; Create TCP socket
+        mov eax, SYS_SOCKET
+        mov ebx, 1
+        int 0x80
+        cmp eax, -1
+        je .sock_fail
+        mov [fd], eax
+
+        ; Connect to port 80
+        mov eax, SYS_CONNECT
+        mov ebx, [fd]
+        mov ecx, [target_ip]
+        mov edx, HTTP_PORT
+        int 0x80
+        cmp eax, -1
+        je .conn_fail
+
+        ; Build HTTP request: "GET /path HTTP/1.0\r\nHost: hostname\r\n\r\n"
+        mov edi, http_req
+        mov esi, get_str
+.copy_req:
+        lodsb
+        test al, al
+        jz .req_path
+        stosb
+        jmp .copy_req
+.req_path:
+        mov esi, path
+.copy_req2:
+        lodsb
+        test al, al
+        jz .req_http
+        stosb
+        jmp .copy_req2
+.req_http:
+        mov esi, http10_str
+.copy_req3:
+        lodsb
+        test al, al
+        jz .req_host
+        stosb
+        jmp .copy_req3
+.req_host:
+        mov esi, host_hdr
+.copy_req4:
+        lodsb
+        test al, al
+        jz .req_hostname
+        stosb
+        jmp .copy_req4
+.req_hostname:
+        mov esi, hostname
+.copy_req5:
+        lodsb
+        test al, al
+        jz .req_end
+        stosb
+        jmp .copy_req5
+.req_end:
+        mov dword [edi], 0x0A0D0A0D     ; "\r\n\r\n"
+        add edi, 4
+        mov byte [edi], 0
+
+        ; Compute request length
+        sub edi, http_req
+        mov [req_len], edi
+
+        ; Send HTTP request
+        mov eax, SYS_SEND
+        mov ebx, [fd]
+        mov ecx, http_req
+        mov edx, [req_len]
+        int 0x80
+
+        ; Print status
+        mov eax, SYS_PRINT
+        mov ebx, msg_connecting
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, hostname
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, msg_saving
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, outfile
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+
+        ; Receive response into recv_buf
+        mov dword [total_recv], 0
+.recv_loop:
+        mov eax, SYS_RECV
+        mov ebx, [fd]
+        mov ecx, recv_buf
+        add ecx, [total_recv]
+        mov edx, RECV_BUF_SIZE - 1
+        sub edx, [total_recv]
+        test edx, edx
+        jle .recv_done
+        int 0x80
+        cmp eax, -1
+        je .recv_done
+        test eax, eax
+        jz .recv_done
+        add [total_recv], eax
+        jmp .recv_loop
+
+.recv_done:
+        ; Close socket
+        mov eax, SYS_SOCKCLOSE
+        mov ebx, [fd]
+        int 0x80
+
+        ; Skip HTTP header (find \r\n\r\n)
+        mov esi, recv_buf
+        mov ecx, [total_recv]
+        xor edi, edi            ; body offset
+.find_header_end:
+        cmp ecx, 4
+        jl .no_header
+        cmp dword [esi], 0x0A0D0A0D
+        je .header_found
+        inc esi
+        inc edi
+        dec ecx
+        jmp .find_header_end
+.header_found:
+        add edi, 4              ; skip the \r\n\r\n
+        mov eax, [total_recv]
+        sub eax, edi
+        mov [body_len], eax
+        lea esi, [recv_buf + edi]
+        jmp .save_file
+
+.no_header:
+        ; No header found - save everything
+        mov esi, recv_buf
+        mov eax, [total_recv]
+        mov [body_len], eax
+
+.save_file:
+        ; Copy body to save_buf
+        mov edi, save_buf
+        mov ecx, [body_len]
+        cld
+        rep movsb
+        mov byte [edi], 0
+
+        ; Write to file
+        mov eax, SYS_FWRITE
+        mov ebx, outfile
+        mov ecx, save_buf
+        mov edx, [body_len]
+        mov esi, 1              ; FTYPE_TEXT
+        int 0x80
+        cmp eax, -1
+        je .write_fail
+
+        ; Print success
+        mov eax, SYS_PRINT
+        mov ebx, msg_saved
+        int 0x80
+        mov eax, [body_len]
+        call print_dec
+        mov eax, SYS_PRINT
+        mov ebx, msg_bytes
+        int 0x80
+
+        mov eax, SYS_EXIT
+        xor ebx, ebx
+        int 0x80
+
+.write_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_write_fail
+        int 0x80
+        jmp .exit
+
+.dns_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_dns_fail
+        int 0x80
+        jmp .exit
+
+.sock_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_sock_fail
+        int 0x80
+        jmp .exit
+
+.conn_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_conn_fail
+        int 0x80
+        jmp .exit
+
+.usage:
+        mov eax, SYS_PRINT
+        mov ebx, msg_usage
+        int 0x80
+.exit:
+        mov eax, SYS_EXIT
+        mov ebx, 1
+        int 0x80
+
+;------------------------------------------
+; str_starts_with: check if [ESI] starts with [EDI]
+; Returns EAX=1 if yes, modifies nothing else
+;------------------------------------------
+str_starts_with:
+        push esi
+        push edi
+.sw_loop:
+        mov al, [edi]
+        test al, al
+        jz .sw_yes
+        mov bl, [esi]
+        cmp al, bl
+        jne .sw_no
+        inc esi
+        inc edi
+        jmp .sw_loop
+.sw_yes:
+        mov eax, 1
+        pop edi
+        pop esi
+        ret
+.sw_no:
+        xor eax, eax
+        pop edi
+        pop esi
+        ret
+
+
+skip_spaces:
+        cmp byte [esi], ' '
+        je .s
+        cmp byte [esi], 9
+        je .s
+        ret
+.s:     inc esi
+        jmp skip_spaces
+
+get_str:        db "GET ", 0
+http10_str:     db " HTTP/1.0", 13, 10, 0
+host_hdr:       db "Host: ", 0
+proto_str:      db "http://", 0
+default_outfile: db "index.html", 0
+
+msg_usage:      db "Usage: wget [http://]<host>[/path] [outfile]", 10, 0
+msg_connecting: db "Connecting to ", 0
+msg_saving:     db "... saving to ", 0
+msg_saved:      db "Saved ", 0
+msg_bytes:      db " bytes.", 10, 0
+msg_dns_fail:   db "wget: DNS resolution failed", 10, 0
+msg_sock_fail:  db "wget: cannot create socket", 10, 0
+msg_conn_fail:  db "wget: connection failed", 10, 0
+msg_write_fail: db "wget: cannot write file", 10, 0
+
+hostname:       times 256 db 0
+path:           times 512 db 0
+outfile:        times 128 db 0
+target_ip:      dd 0
+fd:             dd -1
+req_len:        dd 0
+total_recv:     dd 0
+body_len:       dd 0
+arg_buf:        times 1024 db 0
+http_req:       times 1024 db 0
+recv_buf:       times RECV_BUF_SIZE db 0
+save_buf:       times RECV_BUF_SIZE db 0
