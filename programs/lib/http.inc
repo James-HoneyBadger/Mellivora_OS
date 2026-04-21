@@ -136,6 +136,7 @@ http_get:
         mov edi, http_resp_buf
         mov dword [.total], 0
         mov dword [.cap], 65536
+        mov dword [.stalls], 0
 
 .recv_loop:
         mov ecx, [.cap]
@@ -152,11 +153,15 @@ http_get:
         je .recv_done           ; connection closed / error
         test eax, eax
         jz .recv_yield          ; no data, yield and retry
+        mov dword [.stalls], 0  ; got data — reset stall counter
         add edi, eax
         add [.total], eax
         sub [.cap], eax
         jmp .recv_loop
 .recv_yield:
+        inc dword [.stalls]
+        cmp dword [.stalls], 500
+        jge .recv_done          ; no progress for 500 yields — treat as EOF
         mov eax, SYS_YIELD
         int 0x80
         jmp .recv_loop
@@ -232,6 +237,7 @@ http_get:
 .outmax: dd 0
 .total:  dd 0
 .cap:    dd 0
+.stalls: dd 0
 
 ;---------------------------------------
 ; http_parse_status - Extract HTTP status code from raw response header
