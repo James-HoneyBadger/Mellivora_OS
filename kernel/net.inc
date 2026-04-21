@@ -1654,13 +1654,12 @@ udp_compute_checksum:
         dec ecx
         jnz .udp_cksum_loop
 .udp_cksum_odd:
-        ; Handle odd byte
+        ; Handle odd byte (RFC 1071: on little-endian, add byte as-is)
         mov ecx, [net_udp_payload_len]
         add ecx, 8
         test ecx, 1
         jz .udp_cksum_fold
         movzx eax, byte [esi]
-        shl eax, 8             ; pad with zero on right
         add edx, eax
 
 .udp_cksum_fold:
