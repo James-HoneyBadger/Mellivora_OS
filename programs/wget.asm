@@ -5,6 +5,7 @@
 %include "syscalls.inc"
 %include "lib/net.inc"
 %include "lib/http.inc"
+%include "lib/string.inc"
 
 RECV_BUF_SIZE   equ 131072      ; 128 KB receive buffer
 HTTP_PORT       equ 80
@@ -223,44 +224,6 @@ start:
         mov eax, SYS_EXIT
         mov ebx, 1
         int 0x80
-
-;------------------------------------------
-; str_starts_with: check if [ESI] starts with [EDI]
-; Returns EAX=1 if yes, modifies nothing else
-;------------------------------------------
-str_starts_with:
-        push esi
-        push edi
-.sw_loop:
-        mov al, [edi]
-        test al, al
-        jz .sw_yes
-        mov bl, [esi]
-        cmp al, bl
-        jne .sw_no
-        inc esi
-        inc edi
-        jmp .sw_loop
-.sw_yes:
-        mov eax, 1
-        pop edi
-        pop esi
-        ret
-.sw_no:
-        xor eax, eax
-        pop edi
-        pop esi
-        ret
-
-
-skip_spaces:
-        cmp byte [esi], ' '
-        je .s
-        cmp byte [esi], 9
-        je .s
-        ret
-.s:     inc esi
-        jmp skip_spaces
 
 proto_str:      db "http://", 0
 default_outfile: db "index.html", 0

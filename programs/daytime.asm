@@ -4,6 +4,7 @@
 
 %include "syscalls.inc"
 %include "lib/net.inc"
+%include "lib/string.inc"
 
 DAYTIME_PORT    equ 13
 RECV_BUF_SIZE   equ 256
@@ -37,43 +38,42 @@ start:
         mov byte [edi + ecx], 0
 
         ; Resolve hostname
-        mov eax, SYS_DNS
-        mov ebx, hostname
-        int 0x80
+        mov esi, hostname
+        call net_dns
         test eax, eax
         jz .dns_fail
         mov [server_ip], eax
 
-        ; TCP socket + connect
-        mov eax, SYS_SOCKET
-        mov ebx, 1
-        int 0x80
+        ; TCP socket
+        mov eax, NET_TCP
+        call net_socket
         cmp eax, -1
         je .sock_fail
         mov [fd], eax
 
-        mov eax, SYS_CONNECT
-        mov ebx, [fd]
-        mov ecx, [server_ip]
-        mov edx, DAYTIME_PORT
-        int 0x80
+        ; Connect
+        mov eax, [fd]
+        mov ebx, [server_ip]
+        mov ecx, DAYTIME_PORT
+        call net_connect
         cmp eax, -1
         je .conn_fail
 
         ; Read response (server sends time string immediately)
-        mov eax, SYS_RECV
-        mov ebx, [fd]
-        mov ecx, recv_buf
-        mov edx, RECV_BUF_SIZE - 1
-        int 0x80
+        mov eax, [fd]
+        mov ebx, recv_buf
+        mov ecx, RECV_BUF_SIZE - 1
+        call net_recv
         cmp eax, -1
         je .done
         test eax, eax
         jz .done
         mov byte [recv_buf + eax], 0
+        push eax
         mov eax, SYS_PRINT
         mov ebx, recv_buf
         int 0x80
+        pop eax
         ; Ensure newline
         cmp byte [recv_buf + eax - 1], 10
         je .done
@@ -82,9 +82,8 @@ start:
         int 0x80
 
 .done:
-        mov eax, SYS_SOCKCLOSE
-        mov ebx, [fd]
-        int 0x80
+        mov eax, [fd]
+        call net_close
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
@@ -112,15 +111,6 @@ start:
         mov eax, SYS_EXIT
         mov ebx, 1
         int 0x80
-
-skip_spaces:
-        cmp byte [esi], ' '
-        je .s
-        cmp byte [esi], 9
-        je .s
-        ret
-.s:     inc esi
-        jmp skip_spaces
 
 msg_usage:      db "Usage: daytime <host>", 10, 0
 msg_dns_fail:   db "daytime: DNS resolution failed", 10, 0

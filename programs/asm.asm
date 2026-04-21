@@ -809,14 +809,6 @@ print_hex_byte:
 ;---------------------------------------
 ; Helpers
 ;---------------------------------------
-skip_spaces:
-        cmp byte [esi], ' '
-        jne .ss_ret
-        inc esi
-        jmp skip_spaces
-.ss_ret:
-        ret
-
 copy_token:
         ; Copy word from [ESI] to [EDI], stop at space/comma/null
         mov al, [esi]

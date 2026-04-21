@@ -954,3 +954,19 @@ mem_zero:
         call mem_set
         pop eax
         ret
+
+;-----------------------------------------------------------------------
+; skip_spaces - Advance ESI past leading spaces and horizontal tabs
+; Input:  ESI = pointer into string
+; Output: ESI = pointer to first non-whitespace byte (or null terminator)
+; Clobbers: nothing
+;-----------------------------------------------------------------------
+skip_spaces:
+        cmp byte [esi], ' '
+        je .ss_skip
+        cmp byte [esi], 9       ; horizontal tab
+        je .ss_skip
+        ret
+.ss_skip:
+        inc esi
+        jmp skip_spaces

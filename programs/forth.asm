@@ -754,14 +754,6 @@ show_help:
 ;---------------------------------------
 ; Utility functions
 ;---------------------------------------
-skip_spaces:
-        cmp byte [esi], ' '
-        jne .ss_done
-        inc esi
-        jmp skip_spaces
-.ss_done:
-        ret
-
 get_word:
         ; Copy non-space chars from ESI to word_buf
         push edi
