@@ -139,7 +139,7 @@ version_text:
         db "  Audio:         Sound Blaster 16 (ISA DMA)", 0x0A
         db "  Syscalls:      INT 0x80 (80 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
-        db "  Scheduler:     Priority-based preemptive (64 tasks, 4 levels)", 0x0A
+        db "  Scheduler:     Priority-based preemptive (128 tasks, 4 levels)", 0x0A
         db "  Signals:       POSIX-style (INT/KILL/TERM/TSTP/CONT/USR1/USR2)", 0x0A
         db "  Shell:         Tab, history, Ctrl+A/E/U/W/K/L/C", 0x0A
         db "  Programs:      Flat binary + ELF32 (ring 3)", 0x0A
@@ -429,6 +429,15 @@ help_text:
 msg_exception:  db "*** CPU EXCEPTION ***", 0x0A, 0
 msg_exc_eip:    db "  EIP: 0x", 0
 msg_exc_err:    db "  Error code: 0x", 0
+msg_exc_regs:   db "  Registers:", 0x0A, 0
+msg_exc_eax:    db "  EAX=0x", 0
+msg_exc_ebx:    db "  EBX=0x", 0
+msg_exc_ecx:    db "  ECX=0x", 0
+msg_exc_edx:    db "  EDX=0x", 0
+msg_exc_esi:    db "  ESI=0x", 0
+msg_exc_edi:    db "  EDI=0x", 0
+msg_exc_ebp:    db "  EBP=0x", 0
+msg_exc_esp:    db "  ESP=0x", 0
 msg_pf:         db "*** PAGE FAULT ***", 0x0A, 0
 msg_pf_addr:    db "  Address: 0x", 0
 msg_pf_eip:     db "  EIP: 0x", 0
@@ -515,6 +524,8 @@ msg_write_err:  db "Write error!", 0x0A, 0
 msg_unknown_cmd: db "Unknown command. Type 'help'.", 0x0A, 0
 msg_bg_unsupported: db "Note: background jobs (&) not yet supported; running in foreground.", 0x0A, 0
 msg_bg_launched: db "[bg] PID ", 0
+msg_bg_stopped: db 0x0A, "[bg] Stopped PID ", 0
+msg_bg_noproc:  db "Ctrl+Z: no background task to stop.", 0x0A, 0
 msg_bg_nomem:    db "bg: out of memory for background task", 0x0A, 0
 msg_redir_syntax: db "Redirection syntax error.", 0x0A, 0
 msg_redir_in_err: db "Redirection input file error.", 0x0A, 0
@@ -736,6 +747,7 @@ batch_resume_pos: resd 1                  ; Resume offset into batch_script_buf
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing
 bg_launch_flag:  resb 1          ; 1 = next exec should launch as background task
+last_bg_pid:     resd 1          ; PID of the most recently launched background task
 prog_name_buf:   resb 256        ; Parsed program name from command line
 parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
 parent_active:    resb 1         ; 1 = re-launch parent after child exits
@@ -826,7 +838,7 @@ task_current:     resd 1                              ; Index of current running
 task_count:       resd 1                              ; Number of active tasks
 sched_tick:       resd 1                              ; Tick counter for current time slice
 task_create_name: resb 16                             ; v4.0: Name for next task to create
-task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (64 * 64 = 4096 bytes)
+task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 68 = 8704 bytes)
 
 ; Networking state (RTL8139 NIC)
 net_state:        resd 1          ; NET_STATE_NONE / FOUND / UP
@@ -935,7 +947,7 @@ net_dns_result_ip: resd 1
 net_dns_query_name: resd 1        ; pointer to query hostname
 net_dns_query_len: resw 1         ; length of built query (for retry)
 net_dns_buf:      resb 512        ; DNS packet build buffer
-net_dns_cache:    resb 8 * 32     ; 8 entries * 32 bytes (28 name + 4 IP)
+net_dns_cache:    resb 32 * 32    ; 32 entries * 32 bytes (28 name + 4 IP)
 
 ; Sound Blaster 16 state
 sb16_present:     resb 1          ; 1 if SB16 detected

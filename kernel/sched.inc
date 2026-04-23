@@ -9,8 +9,9 @@
 ; and the highest-priority READY task runs.  Programs can also call
 ; SYS_YIELD for cooperative yielding.
 ;
-; v4.0: Priority-based scheduling (4 levels), 64 tasks max,
+; v4.0: Priority-based scheduling (4 levels),
 ;       task names, signal delivery, process groups.
+; v5.0: Max task count raised to 128.
 ;=======================================================================
 
 ; Task states
@@ -57,9 +58,10 @@ TCB_SIG_PEND equ 48         ; Pending signal bitmask (32 bits)
 TCB_SIG_MASK equ 52         ; Signal mask (blocked signals, 32 bits)
 TCB_PGID     equ 56         ; Process group ID (v4.0)
 TCB_EXIT_CODE equ 60        ; Exit code (v4.0)
-TCB_SIZE     equ 64
+TCB_BRK      equ 64         ; Program break address (for sbrk)
+TCB_SIZE     equ 68
 
-MAX_TASKS    equ 64          ; v4.0: Doubled from 32
+MAX_TASKS    equ 128         ; v5.0: Doubled from 64
 
 ;---------------------------------------
 ; sched_init - Initialize the scheduler
@@ -170,6 +172,7 @@ sched_create_task:
         mov [edi + TCB_SIG_MASK], dword 0
         mov [edi + TCB_PGID], edx        ; Default PGID = own PID
         mov [edi + TCB_EXIT_CODE], dword 0
+        mov [edi + TCB_BRK], dword PROGRAM_END_ADDR ; Initial break = end of static data
 
         ; Copy task name from task_create_name (set by caller, or default)
         push edi
@@ -1021,3 +1024,31 @@ sys_taskname:
         mov dword [esp + 28], 0
         popad
         iretd
+
+;---------------------------------------
+; sched_get_current_task - Find the TCB of the currently running task
+; Returns: EAX = pointer to TCB, or 0 if no task is running
+;---------------------------------------
+sched_get_current_task:
+        push edi
+        push edx
+        mov edi, task_table
+        xor edx, edx
+.find_running:
+        cmp edx, MAX_TASKS
+        jge .not_found
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .found
+        add edi, TCB_SIZE
+        inc edx
+        jmp .find_running
+.found:
+        mov eax, edi
+        pop edx
+        pop edi
+        ret
+.not_found:
+        xor eax, eax
+        pop edx
+        pop edi
+        ret

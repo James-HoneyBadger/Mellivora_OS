@@ -636,6 +636,31 @@ serial_print:
 .done:  popad
         ret
 
+; Write 32-bit value in EAX as 8 hex digits to COM1
+serial_print_hex:
+        pushad
+        mov ecx, 8          ; 8 hex digits
+        rol eax, 4
+.sph_loop:
+        push eax
+        and al, 0x0F
+        cmp al, 0x0A
+        jl .sph_digit
+        add al, 'A' - 10
+        jmp .sph_out
+.sph_digit:
+        add al, '0'
+.sph_out:
+        call serial_putchar
+        pop eax
+        rol eax, 4
+        dec ecx
+        jnz .sph_loop
+        mov al, ' '
+        call serial_putchar
+        popad
+        ret
+
 ; Non-blocking read one character from COM1
 ; Returns: AL = character if available, or 0xFF (-1 unsigned) if none
 ; Preserves all registers except EAX

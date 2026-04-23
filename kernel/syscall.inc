@@ -11,10 +11,16 @@
 
 SYSCALL_MAX     equ 128         ; Table capacity (0..127)
 
+; Handler for INT 0x80
+; Dispatches to the correct syscall handler based on EAX.
+;---------------------------------------
 syscall_handler:
         cmp eax, SYSCALL_MAX
-        jae .syscall_bad
+        ja .syscall_bad
+
+        ; Jump to the correct handler
         jmp [syscall_table + eax * 4]
+
 .syscall_bad:
         mov eax, -1
         iretd
@@ -48,7 +54,7 @@ syscall_table:
         dd sys_free             ; 20  SYS_FREE
         dd sys_exec_call        ; 21  SYS_EXEC
         dd sys_disk_read        ; 22  SYS_DISK_READ
-        dd sys_disk_write       ; 23  SYS_DISK_WRITE
+        dd sys_sbrk             ; 23  SYS_SBRK
         dd sys_beep             ; 24  SYS_BEEP
         dd sys_date             ; 25  SYS_DATE
         dd sys_chdir            ; 26  SYS_CHDIR
@@ -140,10 +146,26 @@ sys_exit:
         and eax, 0x7FFFFFFF             ; Clear bg flag → page number
         shl eax, 12                     ; Convert page# to physical address
         push eax                        ; Save prog base for free
-        ; Free user stack: TCB_USTACK is stack top, base = top - BG_STACK pages
+        ; Free user stack (BG_STACK_PAGES usable + 1 guard page below)
+        ; TCB_USTACK = guard_base + (BG_STACK_PAGES+1)*4096 - 4
+        ; guard_base = TCB_USTACK - (BG_STACK_PAGES+1)*4096 + 4
         mov eax, [edi + TCB_USTACK]
-        sub eax, (BG_STACK_PAGES * 4096)
-        mov ecx, BG_STACK_PAGES
+        sub eax, ((BG_STACK_PAGES + 1) * 4096)
+        ; Restore guard page PTE to identity-mapped before freeing physical pages
+        push eax
+        push ebx
+        push ecx
+        mov ebx, eax                    ; phys = virt (identity map)
+        add ebx, 4                      ; Correct the -4 alignment: phys = page_base
+        and ebx, 0xFFFFF000
+        mov eax, ebx                    ; virt = phys
+        mov ecx, PG_PRESENT | PG_WRITABLE | PG_USER
+        call paging_map_page
+        pop ecx
+        pop ebx
+        pop eax
+        ; EAX ≈ guard_base (off by ≤4 bytes; pmm_free_pages rounds down via shr 12)
+        mov ecx, BG_STACK_PAGES + 1
         call pmm_free_pages
         ; Free program memory
         pop eax
@@ -488,3 +510,41 @@ sys_disk_write:
 .dwrite_err:
         mov eax, -1
         iretd
+
+;---------------------------------------
+; SYS_SBRK (23): Adjust program break
+; EBX = increment (can be negative)
+; Returns: EAX = old program break on success, -1 on failure
+;---------------------------------------
+sys_sbrk:
+        pushad
+        ; Find current running task
+        call sched_get_current_task
+        test eax, eax
+        jz .sbrk_fail           ; Should not happen for user task
+
+        mov edi, eax            ; EDI = TCB
+        mov eax, [edi + TCB_BRK]
+        mov [sys_sbrk.old_brk], eax ; Save old break for return
+
+        ; Calculate new break
+        add eax, ebx
+        ; Check for valid range: must be >= end of static data
+        ; and < user stack
+        cmp eax, PROGRAM_END_ADDR
+        jl .sbrk_fail
+        cmp eax, [edi + TCB_USTACK]
+        jge .sbrk_fail
+
+        ; All good, update break in TCB
+        mov [edi + TCB_BRK], eax
+        mov eax, [sys_sbrk.old_brk]
+        popad
+        iretd
+
+.sbrk_fail:
+        mov eax, -1
+        popad
+        iretd
+
+.old_brk: dd 0

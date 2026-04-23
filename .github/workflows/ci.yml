@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nasm make python3 qemu-system-x86 fdisk dosfstools
+
+      - name: Build full OS image
+        run: make full
+
+      - name: Run test suite
+        run: make check
+
+      - name: Upload disk image artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mellivora-img-${{ github.sha }}
+          path: mellivora.img
+          retention-days: 7

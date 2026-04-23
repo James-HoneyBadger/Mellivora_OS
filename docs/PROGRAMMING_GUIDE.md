@@ -148,6 +148,7 @@ SYS_MALLOC      equ 19
 SYS_FREE        equ 20
 SYS_EXEC        equ 21
 SYS_DISK_READ   equ 22
+SYS_SBRK        equ 23
 SYS_DISK_WRITE  equ 23
 SYS_BEEP        equ 24
 SYS_DATE        equ 25
@@ -159,6 +160,7 @@ SYS_FREAD       equ 30
 SYS_FWRITE      equ 31
 SYS_GETARGS     equ 32
 SYS_SERIAL_IN   equ 33
+SYS_SBRK         equ 34
 ```
 
 Or include the provided header:
@@ -607,37 +609,50 @@ notes: dw 262, 294, 330, 349, 392, 440, 494, 523  ; C4 to C5
 
 ---
 
-## Memory Allocation
+## Memory Management
 
-### Allocate Memory
+Mellivora OS provides two ways for programs to manage memory: a simple page-level allocator (`SYS_MALLOC`/`SYS_FREE`) and a more traditional heap allocator via `SYS_SBRK`.
 
-Memory is allocated in 4 KB page granularity:
+### `SYS_SBRK` (Recommended for `malloc` implementations)
 
+For dynamic memory allocation similar to Unix, use `SYS_SBRK` to grow or shrink the program's data segment. This is the preferred method for building a `malloc` heap.
+
+- **`SYS_SBRK` (EAX=23)**
+  - **Input:** `EBX` = signed integer increment.
+    - Positive value: increases the program break (allocates memory).
+    - Negative value: decreases the program break (frees memory).
+    - Zero: returns the current program break without changing it.
+  - **Output:** `EAX` = the *old* program break address on success. On failure (e.g., requesting memory that would collide with the stack), returns `-1`.
+
+**Example: Requesting 4KB of memory**
 ```nasm
-mov eax, 19         ; SYS_MALLOC
-mov ebx, 8192       ; request 8192 bytes (gets 2 pages = 8 KB)
+mov eax, 23         ; SYS_SBRK
+mov ebx, 4096       ; Increment by 4096 bytes
 int 0x80
-; EAX = physical address of allocated memory (0 = failure)
-test eax, eax
-jz .out_of_memory
-mov [my_buffer], eax
+; EAX now holds the start of the newly allocated 4KB block
+; (the old program break).
+cmp eax, -1
+je .error_handler
+; ... use memory at [eax] ...
 ```
 
-### Free Memory
-
+**Example: Getting current break**
 ```nasm
-mov eax, 20         ; SYS_FREE
-mov ebx, [my_buffer]   ; address returned by SYS_MALLOC
-mov ecx, 8192          ; same size as allocated
+mov eax, 23
+mov ebx, 0
 int 0x80
+; EAX = current program break
 ```
 
-### Important Notes
+### `SYS_MALLOC` / `SYS_FREE` (Legacy)
 
-- Minimum allocation is 4 KB (one page), regardless of requested size
-- All sizes are rounded up to the next 4 KB boundary
-- There is no heap — allocations come directly from the physical page allocator
-- Always free what you allocate to avoid leaking pages
+These syscalls operate directly on 4KB physical memory pages. They are less flexible than `sbrk` and are generally not recommended for new applications.
+
+- **`SYS_MALLOC` (EAX=19)**: Allocates one or more 4KB pages.
+  - **Input:** `EBX` = size in bytes (will be rounded up to the nearest 4KB).
+  - **Output:** `EAX` = physical address of allocated block, or 0 on failure.
+- **`SYS_FREE` (EAX=20)**: Frees pages allocated with `SYS_MALLOC`.
+  - **Input:** `EBX` = physical address, `ECX` = size in bytes.
 
 ---
 

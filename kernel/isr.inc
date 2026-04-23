@@ -32,6 +32,8 @@ isr_exception_noerr:
         call vga_print_hex
         mov al, 0x0A
         call vga_putchar
+        ; Print register dump from pushad frame
+        call exc_dump_regs
         mov byte [vga_color], COLOR_DEFAULT
         popad
         ; Recover to shell
@@ -71,12 +73,143 @@ isr_exception_err:
         call vga_print_hex
         mov al, 0x0A
         call vga_putchar
+        ; Print register dump from pushad frame
+        call exc_dump_regs
         mov byte [vga_color], COLOR_DEFAULT
         popad
         ; Recover to shell
         mov esp, KERNEL_STACK
         sti
         jmp shell_main
+
+;---------------------------------------
+; exc_dump_regs - Print register contents from pushad frame.
+; Must be called from within a pushad block.
+; Pushad frame layout (at ESP on entry to this routine, after CALL):
+;   [ESP+4]  = saved EDI    [ESP+8]  = saved ESI
+;   [ESP+12] = saved EBP    [ESP+16] = orig ESP (pre-pushad)
+;   [ESP+20] = saved EBX    [ESP+24] = saved EDX
+;   [ESP+28] = saved ECX    [ESP+32] = saved EAX
+;---------------------------------------
+exc_dump_regs:
+        push esi
+        push eax
+
+        mov esi, msg_exc_regs
+        call vga_print
+
+        ; EAX
+        mov esi, msg_exc_eax
+        call vga_print
+        mov eax, [esp + 32 + 4]   ; +4 for push esi, +4 for push eax above, but
+        ; recalculate: after push esi + push eax, esp moved by 8
+        ; pushad frame base was at esp+8 relative to entry of exc_dump_regs
+        ; [entry_esp+4..+32] = EDI..EAX  → adjust for two pushes = +8 more
+        ; So saved EAX = [entry_esp + 4 + 8 + 28] ... let's recompute cleanly.
+        ; On entry to exc_dump_regs, ESP = ret_addr, then +4 = pushad[EDI]
+        ; After "push esi; push eax" ESP moved -8, so pushad[EDI] = [esp+12]
+        ; pushad: EDI=+12, ESI=+16, EBP=+20, origESP=+24, EBX=+28, EDX=+32, ECX=+36, EAX=+40
+        mov eax, [esp + 40]   ; saved EAX
+        call vga_print_hex
+        mov al, ' '
+        call vga_putchar
+        ; EBX
+        mov esi, msg_exc_ebx
+        call vga_print
+        mov eax, [esp + 28]   ; saved EBX
+        call vga_print_hex
+        mov al, ' '
+        call vga_putchar
+        ; ECX
+        mov esi, msg_exc_ecx
+        call vga_print
+        mov eax, [esp + 36]   ; saved ECX
+        call vga_print_hex
+        mov al, 0x0A
+        call vga_putchar
+        ; EDX
+        mov esi, msg_exc_edx
+        call vga_print
+        mov eax, [esp + 32]   ; saved EDX
+        call vga_print_hex
+        mov al, ' '
+        call vga_putchar
+        ; ESI
+        mov esi, msg_exc_esi
+        call vga_print
+        mov eax, [esp + 16]   ; saved ESI
+        call vga_print_hex
+        mov al, ' '
+        call vga_putchar
+        ; EDI
+        mov esi, msg_exc_edi
+        call vga_print
+        mov eax, [esp + 12]   ; saved EDI
+        call vga_print_hex
+        mov al, 0x0A
+        call vga_putchar
+        ; EBP
+        mov esi, msg_exc_ebp
+        call vga_print
+        mov eax, [esp + 20]   ; saved EBP
+        call vga_print_hex
+        mov al, ' '
+        call vga_putchar
+        ; ESP (pre-pushad, pre-exception stack pointer)
+        mov esi, msg_exc_esp
+        call vga_print
+        mov eax, [esp + 24]   ; orig ESP from pushad
+        call vga_print_hex
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Also echo to COM1 for remote debugging
+        call serial_exc_dump
+
+        pop eax
+        pop esi
+        ret
+
+;---------------------------------------
+; serial_exc_dump - Send exception info over COM1 serial port.
+; Called from within exc_dump_regs (push esi + push eax active there).
+; Stack layout when we execute here (after our own push esi + push eax):
+;   [esp+0]  saved eax (ours)   [esp+4]  saved esi (ours)
+;   [esp+8]  ret addr (call serial_exc_dump)
+;   [esp+12] saved eax (exc_dump_regs)  [esp+16] saved esi (exc_dump_regs)
+;   [esp+20] ret addr (call exc_dump_regs)
+;   pushad frame: EDI=+24, ESI=+28, EBP=+32, origESP=+36, EBX=+40, EDX=+44, ECX=+48, EAX=+52
+;---------------------------------------
+serial_exc_dump:
+        push esi
+        push eax
+        mov esi, msg_exception
+        call serial_print
+        mov esi, msg_exc_eip
+        call serial_print
+        mov eax, [exc_eip]
+        call serial_print_hex
+        mov esi, msg_exc_regs
+        call serial_print
+        mov esi, msg_exc_eax
+        call serial_print
+        mov eax, [esp + 52]     ; saved EAX from pushad
+        call serial_print_hex
+        mov esi, msg_exc_ebx
+        call serial_print
+        mov eax, [esp + 40]     ; saved EBX from pushad
+        call serial_print_hex
+        mov esi, msg_exc_ecx
+        call serial_print
+        mov eax, [esp + 48]     ; saved ECX from pushad
+        call serial_print_hex
+        mov esi, msg_exc_edx
+        call serial_print
+        mov eax, [esp + 44]     ; saved EDX from pushad
+        call serial_print_hex
+        pop eax
+        pop esi
+        ret
 
 irq_stub:
         pushad

@@ -49,15 +49,7 @@ ifeq ($(QEMU_NO_REBOOT),1)
 QEMU_RESET_FLAGS += -no-reboot
 endif
 
-QEMU_FLAGS = -cpu 486 \
-             -m 128 \
-             -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough \
-             -boot c \
-             -no-shutdown \
-		 $(QEMU_RESET_FLAGS) \
-		 $(QEMU_AUDIO_FLAGS) \
-             -netdev user,id=net0 \
-             -device rtl8139,netdev=net0
+QEMU_FLAGS = -cpu 486 -m 128 -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_AUDIO) -usb -device usb-mouse -netdev user,id=net0 -device rtl8139,netdev=net0 -serial tcp:127.0.0.1:4555,server=on,wait=off
 
 # For debugging
 QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
@@ -67,7 +59,10 @@ QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
 # Programs
 PROG_DIR = programs
 PROG_SRCS = $(wildcard $(PROG_DIR)/*.asm)
-PROG_BINS = $(PROG_SRCS:.asm=.bin)
+PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS))
+
+TEST_PROGS = programs/sbrk_test.asm programs/hello_test.asm
+
 
 # ISO packaging
 ISO_STAGING = .build/iso-root

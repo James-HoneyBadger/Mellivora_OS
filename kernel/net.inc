@@ -2961,7 +2961,7 @@ dns_handle_response:
 dns_cache_lookup:
         pushad
         mov edi, net_dns_cache
-        mov ecx, 8              ; DNS_CACHE_SIZE
+        mov ecx, 32             ; DNS_CACHE_SIZE
 .dns_cl:
         cmp dword [edi + 28], 0 ; IP field
         je .dns_cl_next
@@ -3012,7 +3012,7 @@ dns_cache_add:
         mov ebx, eax
         ; Find free slot or overwrite oldest
         mov edi, net_dns_cache
-        mov ecx, 8
+        mov ecx, 32
 .dns_ca_find:
         cmp dword [edi + 28], 0
         je .dns_ca_write

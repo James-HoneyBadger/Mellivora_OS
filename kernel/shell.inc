@@ -145,6 +145,10 @@ shell_main:
         cmp al, CTRL_C_CODE     ; Ctrl+C - cancel
         je .ctrl_c
 
+        ; v5.0: Ctrl+Z - send SIGTSTP to last background task
+        cmp al, 0x1A            ; Ctrl+Z
+        je .ctrl_z
+
         ; v4.0: Enhanced line editing shortcuts
         cmp al, 0x01            ; Ctrl+A - move to beginning of line
         je .ctrl_a
@@ -365,6 +369,35 @@ shell_main:
         xor ecx, ecx
         mov dword [line_len], 0
         jmp .prompt
+
+; v5.0: Ctrl+Z - send SIGTSTP to most recently launched background task
+.ctrl_z:
+        mov ebx, [last_bg_pid]
+        test ebx, ebx
+        jz .ctrl_z_none
+        mov ecx, SIGTSTP
+        mov eax, SYS_SIGNAL
+        int 0x80
+        cmp eax, 0
+        jne .ctrl_z_none
+        ; Print "[bg] Stopped PID <pid>"
+        push esi
+        mov esi, msg_bg_stopped
+        call vga_print
+        mov eax, [last_bg_pid]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+        pop esi
+        ; Clear last_bg_pid so a second Ctrl+Z doesn't re-stop
+        mov dword [last_bg_pid], 0
+        jmp .read_loop
+.ctrl_z_none:
+        push esi
+        mov esi, msg_bg_noproc
+        call vga_print
+        pop esi
+        jmp .read_loop
 
 .hist_clear_line:
         ; Erase current input on screen
@@ -1390,7 +1423,7 @@ shell_dispatch_core:
         ; Check if command starts with alias name
         push esi
         mov edi, edx
-        call str_starts_with
+        call str_compare
         pop esi
         jc .alias_found
         add edx, ALIAS_ENTRY_SIZE
@@ -4864,7 +4897,7 @@ cmd_hexdump_file:
         call .print_nibble
         pop eax
         and eax, 0x0F
-        call .print_nibble
+       
         mov al, ' '
         call vga_putchar
         inc edx
@@ -5429,14 +5462,27 @@ cmd_exec_program:
         mov byte  [edi + 5], 0xCD       ; int 0x80
         mov byte  [edi + 6], 0x80
 
-        ; 5. Allocate user stack for bg task (64KB = 16 pages)
+        ; 5. Allocate user stack for bg task: BG_STACK_PAGES usable + 1 guard page
+        ;    The first page of the allocation is marked non-present (guard page).
+        ;    Any stack overflow past the usable region causes a clean page fault.
         push ebx
-        mov ecx, BG_STACK_PAGES
+        mov ecx, BG_STACK_PAGES + 1    ; +1 for guard page at base
         call pmm_alloc_pages
         test eax, eax
         jz .bg_nomem_pop
-        mov [.bg_stack_addr], eax
-        add eax, (BG_STACK_PAGES * 4096) - 4   ; Stack top - 4 for trampoline
+        mov [.bg_stack_addr], eax       ; [.bg_stack_addr] = guard page base
+        ; Mark guard page as not-present (PG_PRESENT=0) to catch stack overflow
+        push ebx
+        push ecx
+        ; EAX = guard page virtual addr (identity-mapped: virt == phys)
+        mov ebx, 0                      ; phys = 0 (entry has no present bit)
+        xor ecx, ecx                    ; flags = 0  → not-present
+        call paging_map_page
+        pop ecx
+        pop ebx
+        ; Actual stack occupies pages 1..BG_STACK_PAGES of the allocation
+        mov eax, [.bg_stack_addr]
+        add eax, (BG_STACK_PAGES + 1) * 4096 - 4  ; Stack top - 4 for trampoline
         ; Push trampoline address as "return address" on ring-3 stack
         mov edx, [.bg_tramp_addr]
         mov [eax], edx
@@ -5467,7 +5513,8 @@ cmd_exec_program:
         mov dword [edi + TCB_PRIORITY], PRIO_LOW  ; Run at low priority
         pop eax                         ; EAX = PID
 
-        ; 8. Print "[1] <pid>" to confirm bg launch
+        ; 8. Save PID for Ctrl+Z and print "[bg] PID <pid>"
+        mov [last_bg_pid], eax
         mov byte [bg_launch_flag], 0
         mov byte [vga_color], COLOR_INFO
         mov esi, msg_bg_launched
@@ -5496,8 +5543,14 @@ cmd_exec_program:
         mov eax, [.bg_prog_addr]
         mov ecx, BG_PROG_PAGES
         call pmm_free_pages
+        ; Restore guard page PTE (identity-map it back) before freeing physical pages
         mov eax, [.bg_stack_addr]
-        mov ecx, BG_STACK_PAGES
+        push eax
+        mov ebx, eax
+        mov ecx, PG_PRESENT | PG_WRITABLE | PG_USER
+        call paging_map_page
+        pop eax
+        mov ecx, BG_STACK_PAGES + 1    ; Guard page + usable stack pages
         call pmm_free_pages
         mov byte [bg_launch_flag], 0
         jmp .not_found
@@ -5531,20 +5584,61 @@ shell_redir_reset:
 
 shell_prepare_redirection:
         pushad
+
+        ; --- DEBUG: Print line buffer at start ---
+        pushad
+        mov esi, .dbg_msg_spr
+        call vga_print
+        mov esi, line_buffer
+        call vga_print
+        call vga_newline
+        popad
+        ; --- END DEBUG ---
+
         call shell_redir_reset
         mov esi, line_buffer
 .spr_scan:
         mov al, [esi]
         test al, al
         jz .spr_ok
+
+        ; --- Quote state tracking ---
+        cmp al, '"'
+        jne .spr_try_single
+        cmp ebx, 2              ; Not if in single quotes
+        je .spr_scan_next
+        xor ebx, 1              ; Toggle double quote state
+        jmp .spr_scan_next
+.spr_try_single:
+        cmp al, "'"
+        jne .spr_check_redir
+        cmp ebx, 1              ; Not if in double quotes
+        je .spr_scan_next
+        xor ebx, 2              ; Toggle single quote state
+        jmp .spr_scan_next
+
+.spr_check_redir:
+        test ebx, ebx           ; Are we in quotes?
+        jnz .spr_scan_next      ; If so, skip redirection checks
+
+        ; --- Redirection character check (only if not in quotes) ---
         cmp al, '>'
         je .spr_stdout
         cmp al, '<'
         je .spr_stdin
+
+.spr_scan_next:
         inc esi
         jmp .spr_scan
 
 .spr_stdout:
+        ; --- DEBUG: Found stdout redirection ---
+        pushad
+        mov esi, .dbg_msg_stdout
+        call vga_print
+        popad
+        ; --- END DEBUG ---
+
         mov byte [esi], 0
         inc esi
         mov byte [stdout_redir_append], 0
@@ -5564,6 +5658,13 @@ shell_prepare_redirection:
         jmp .spr_scan
 
 .spr_stdin:
+        ; --- DEBUG: Found stdin redirection ---
+        pushad
+        mov esi, .dbg_msg_stdin
+        call vga_print
+        popad
+        ; --- END DEBUG ---
+
         mov byte [esi], 0
         inc esi
         call skip_spaces
@@ -5635,17 +5736,22 @@ shell_prepare_redirection:
         clc
         ret
 
+.dbg_msg_spr: db "SPR: ", 0
+.dbg_msg_stdout: db "SPR: > found", 0x0A, 0
+.dbg_msg_stdin: db "SPR: < found", 0x0A, 0
+
 shell_finish_redirection:
         pushad
         cmp byte [stdout_redir_active], 1
         jne .sfr_reset
 
+        ; If redirection was active but for an internal buffer (like a pipe
+        ; or command substitution), there's no file to write. Just reset.
+        cmp byte [redir_out_name], 0
+        je .sfr_reset
+
         mov eax, [stdout_redir_len]
         mov byte [redir_out_buf + eax], 0
-
-        cmp byte [stdout_redir_append], 1
-        jne .sfr_write_new
-
         mov esi, redir_out_name
         mov edi, PROGRAM_BASE
         call hbfs_read_file
@@ -5802,7 +5908,7 @@ shell_execute_pipeline:
 .pipe_len_ok:
         mov [pipe_input_len], eax
         mov byte [redir_out_buf + eax], 0
-        mov esi, redir_out_buf
+        mov esi, redir_out_name
         mov edi, redir_in_buf
         mov ecx, eax
         rep movsb
@@ -6119,16 +6225,6 @@ cmd_copy_file:
         pop edi
         pop ecx
 
-        ; load source content
-        push ecx
-        push edi
-        mov esi, wildcard_src_buf
-        mov edi, PROGRAM_BASE
-        call hbfs_read_file
-        pop edi
-        pop ecx
-        jc .cw_next
-
         ; build destination name
         mov esi, filename_buf2
         call str_has_asterisk
@@ -6139,21 +6235,32 @@ cmd_copy_file:
         jmp .cw_create
 
 .cw_expand:
-        mov esi, filename_buf2          ; template
-        mov edi, wildcard_dst_buf       ; output
-        mov edx, wildcard_src_buf       ; replacement text
+        mov esi, filename_buf2
+        mov edi, wildcard_dst_buf
+        mov edx, wildcard_src_buf
         call wildcard_expand_star
 
 .cw_create:
         push ecx
         push edi
         mov esi, wildcard_dst_buf
-        mov edi, PROGRAM_BASE
-        movzx edx, byte [last_file_type]
-        call hbfs_create_file
+        xor edx, edx
+.cw_copy_name:
+        cmp edx, HBFS_MAX_FILENAME
+        jge .cw_name_trunc
+        lodsb
+        mov [edi + edx], al
+        inc edx
+        test al, al
+        jnz .cw_copy_name
+        jmp .cw_name_done
+.cw_name_trunc:
+        mov byte [edi + HBFS_MAX_FILENAME], 0
+.cw_name_done:
+        call rtc_get_timestamp
+        mov [edi + DIRENT_MODIFIED], eax
         pop edi
         pop ecx
-        jc .cw_next
         inc ebx
 
 .cw_next:
@@ -6281,6 +6388,8 @@ cmd_rename_file:
         cmp ecx, 0
         je .rw_count_done
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        je .rw_count_next
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
         je .rw_count_next
 
         push ecx
