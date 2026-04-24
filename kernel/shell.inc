@@ -356,7 +356,6 @@ shell_main:
         call shell_tab_complete
         mov [line_len], ecx     ; cursor at end after tab-complete
         lea edi, [line_buffer + ecx]
-        mov [line_len], ecx     ; cursor at end after tab-complete
         jmp .read_loop
 
 .ctrl_c:

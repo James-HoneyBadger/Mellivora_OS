@@ -49,7 +49,7 @@ ifeq ($(QEMU_NO_REBOOT),1)
 QEMU_RESET_FLAGS += -no-reboot
 endif
 
-QEMU_FLAGS = -cpu 486 -m 128 -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_AUDIO) -usb -device usb-mouse -netdev user,id=net0 -device rtl8139,netdev=net0 -serial tcp:127.0.0.1:4555,server=on,wait=off
+QEMU_FLAGS = -cpu 486 -m 128 -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_AUDIO_FLAGS) $(QEMU_RESET_FLAGS) -netdev user,id=net0 -device rtl8139,netdev=net0 -serial tcp:127.0.0.1:4555,server=on,wait=off
 
 # For debugging
 QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \

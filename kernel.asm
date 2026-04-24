@@ -297,33 +297,6 @@ TSS_SEL             equ 0x28
 ; Program exit trampoline
 PROGRAM_EXIT_ADDR   equ PROGRAM_BASE + PROGRAM_MAX_SIZE - 16
 
-; Subsystem includes – each file corresponds to a logical kernel module.
-; The build still produces one flat binary; this split is for readability.
-; The order is important due to dependencies.
-;-----------------------------------------------------------------------
-%include "kernel/sched.inc"
-%include "kernel/vga.inc"
-%include "kernel/pic.inc"
-%include "kernel/idt.inc"
-%include "kernel/pit.inc"
-%include "kernel/pmm.inc"
-%include "kernel/ata.inc"
-%include "kernel/hbfs.inc"
-%include "kernel/filesearch.inc"
-%include "kernel/isr.inc"
-%include "kernel/ipc.inc"
-%include "kernel/net.inc"
-%include "kernel/paging.inc"
-%include "kernel/mouse.inc"
-%include "kernel/sb16.inc"
-%include "kernel/vbe.inc"
-%include "kernel/burrows.inc"
-%include "kernel/screensaver.inc"
-%include "kernel/shell.inc"
-%include "kernel/util.inc"
-%include "kernel/syscall.inc"
-%include "kernel/data.inc"
-
 ;=======================================================================
 ; KERNEL ENTRY POINT
 ;=======================================================================
@@ -394,3 +367,29 @@ kernel_entry:
 ;-----------------------------------------------------------------------
 ; boot_splash - Animated boot splash with ASCII art
 ;-----------------------------------------------------------------------
+
+; Subsystem includes – each file corresponds to a logical kernel module.
+; The build still produces one flat binary; this split is for readability.
+;-----------------------------------------------------------------------
+%include "kernel/sched.inc"
+%include "kernel/vga.inc"
+%include "kernel/pic.inc"
+%include "kernel/idt.inc"
+%include "kernel/pit.inc"
+%include "kernel/pmm.inc"
+%include "kernel/ata.inc"
+%include "kernel/hbfs.inc"
+%include "kernel/filesearch.inc"
+%include "kernel/isr.inc"
+%include "kernel/ipc.inc"
+%include "kernel/net.inc"
+%include "kernel/paging.inc"
+%include "kernel/mouse.inc"
+%include "kernel/sb16.inc"
+%include "kernel/vbe.inc"
+%include "kernel/burrows.inc"
+%include "kernel/screensaver.inc"
+%include "kernel/shell.inc"
+%include "kernel/util.inc"
+%include "kernel/syscall.inc"
+%include "kernel/data.inc"
