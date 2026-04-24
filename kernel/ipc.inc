@@ -38,6 +38,11 @@ ipc_init:
         mov ecx, (IPC_MAX_SHM * SHM_STRUCT_SIZE) / 4
         xor eax, eax
         rep stosd
+        ; Zero all semaphore structs
+        mov edi, ipc_sems
+        mov ecx, (IPC_MAX_SEM * SEM_STRUCT_SIZE) / 4
+        xor eax, eax
+        rep stosd
         popad
         ret
 
@@ -339,7 +344,142 @@ sys_shmaddr:
         iretd
 
 ;=======================================================================
+; SEMAPHORES
+;=======================================================================
+
+IPC_MAX_SEM     equ 8           ; Maximum semaphores
+
+; Semaphore struct offsets
+SEM_ACTIVE      equ 0           ; byte: 0=free, 1=active
+SEM_VALUE       equ 4           ; dword: current count
+SEM_STRUCT_SIZE equ 8
+
+;---------------------------------------
+; sys_sem_create - Create a new semaphore
+; EBX = initial value (0 = locked, 1+ = unlocked)
+; Returns: EAX = sem_id (0-based), or -1 on failure
+;---------------------------------------
+sys_sem_create:
+        push ecx
+        push edi
+        mov edi, ipc_sems
+        xor ecx, ecx
+.ssc_find:
+        cmp ecx, IPC_MAX_SEM
+        jge .ssc_fail
+        cmp byte [edi + SEM_ACTIVE], 0
+        je .ssc_found
+        add edi, SEM_STRUCT_SIZE
+        inc ecx
+        jmp .ssc_find
+.ssc_found:
+        mov byte [edi + SEM_ACTIVE], 1
+        mov [edi + SEM_VALUE], ebx      ; initial count
+        mov eax, ecx
+        pop edi
+        pop ecx
+        iretd
+.ssc_fail:
+        mov eax, -1
+        pop edi
+        pop ecx
+        iretd
+
+;---------------------------------------
+; sys_sem_wait - Decrement semaphore (P operation)
+; EBX = sem_id
+; Yields until value > 0, then decrements.
+; Returns: EAX = 0 on success, -1 on invalid id
+;---------------------------------------
+SEM_WAIT_RETRIES equ 500        ; max yields before giving up
+
+sys_sem_wait:
+        pushad
+        cmp ebx, IPC_MAX_SEM
+        jge .ssw_fail
+        mov eax, ebx
+        imul eax, SEM_STRUCT_SIZE
+        lea ebp, [ipc_sems + eax]
+        cmp byte [ebp + SEM_ACTIVE], 1
+        jne .ssw_fail
+
+        xor ecx, ecx            ; retry counter
+.ssw_spin:
+        cmp dword [ebp + SEM_VALUE], 0
+        jg .ssw_acquire
+        ; Semaphore unavailable — yield and retry
+        inc ecx
+        cmp ecx, SEM_WAIT_RETRIES
+        jge .ssw_timeout
+        push eax
+        push ebx
+        push ecx
+        push ebp
+        mov eax, SYS_YIELD
+        int 0x80
+        pop ebp
+        pop ecx
+        pop ebx
+        pop eax
+        jmp .ssw_spin
+.ssw_acquire:
+        dec dword [ebp + SEM_VALUE]
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.ssw_timeout:
+        ; Timed out — still return 0 (best-effort, non-blocking fallback)
+        dec dword [ebp + SEM_VALUE]
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.ssw_fail:
+        popad
+        mov eax, -1
+        iretd
+
+;---------------------------------------
+; sys_sem_post - Increment semaphore (V operation)
+; EBX = sem_id
+; Returns: EAX = 0 on success, -1 on invalid id
+;---------------------------------------
+sys_sem_post:
+        cmp ebx, IPC_MAX_SEM
+        jge .ssp_fail
+        mov eax, ebx
+        imul eax, SEM_STRUCT_SIZE
+        cmp byte [ipc_sems + eax + SEM_ACTIVE], 1
+        jne .ssp_fail
+        inc dword [ipc_sems + eax + SEM_VALUE]
+        xor eax, eax
+        iretd
+.ssp_fail:
+        mov eax, -1
+        iretd
+
+;---------------------------------------
+; sys_sem_close - Destroy a semaphore
+; EBX = sem_id
+; Returns: EAX = 0 on success, -1 on invalid id
+;---------------------------------------
+sys_sem_close:
+        cmp ebx, IPC_MAX_SEM
+        jge .ssclose_fail
+        mov eax, ebx
+        imul eax, SEM_STRUCT_SIZE
+        cmp byte [ipc_sems + eax + SEM_ACTIVE], 1
+        jne .ssclose_fail
+        mov byte [ipc_sems + eax + SEM_ACTIVE], 0
+        mov dword [ipc_sems + eax + SEM_VALUE], 0
+        xor eax, eax
+        iretd
+.ssclose_fail:
+        mov eax, -1
+        iretd
+
+;=======================================================================
 ; IPC Data
 ;=======================================================================
 ipc_pipes:      times (IPC_MAX_PIPES * PIPE_STRUCT_SIZE) db 0
 ipc_shm:        times (IPC_MAX_SHM * SHM_STRUCT_SIZE) db 0
+ipc_sems:       times (IPC_MAX_SEM * SEM_STRUCT_SIZE) db 0

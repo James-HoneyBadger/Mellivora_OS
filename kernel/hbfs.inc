@@ -1001,3 +1001,56 @@ sys_truncate:
         popad
         iretd
 .st_new_size: dd 0
+
+;---------------------------------------
+; sys_getmtime - Get last-modified timestamp of a file
+;   EBX = filename pointer
+; Returns: EAX = packed 32-bit timestamp (same format as rtc_get_timestamp)
+;          EAX = 0 if file not found
+; Also returns ECX = created timestamp
+;---------------------------------------
+sys_getmtime:
+        pushad
+        mov esi, ebx
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .sgmt_fail
+        mov eax, [edi + DIRENT_MODIFIED]
+        mov ecx, [edi + DIRENT_CREATED]
+        mov [esp + 28], eax     ; return modified in EAX
+        mov [esp + 24], ecx     ; return created in ECX
+        popad
+        iretd
+.sgmt_fail:
+        mov dword [esp + 28], 0
+        mov dword [esp + 24], 0
+        popad
+        iretd
+
+;---------------------------------------
+; sys_setmtime - Set last-modified timestamp of a file
+;   EBX = filename pointer
+;   ECX = new timestamp (packed 32-bit, 0 = use current RTC time)
+; Returns: EAX = 0 on success, -1 on failure
+;---------------------------------------
+sys_setmtime:
+        pushad
+        mov esi, ebx
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .ssmt_fail
+        ; If ECX == 0, use current RTC time
+        test ecx, ecx
+        jnz .ssmt_use_arg
+        call rtc_get_timestamp
+        mov ecx, eax
+.ssmt_use_arg:
+        mov [edi + DIRENT_MODIFIED], ecx
+        call hbfs_save_root_dir
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.ssmt_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd

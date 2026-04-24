@@ -1472,11 +1472,22 @@ lock_piece:
         movzx ebx, byte [edi + 1]
         add ebx, [cur_y]
 
+        ; bounds check: skip blocks outside the board
+        cmp eax, 0
+        jl .lp_next
+        cmp eax, BOARD_W
+        jge .lp_next
+        cmp ebx, 0
+        jl .lp_next
+        cmp ebx, BOARD_H
+        jge .lp_next
+
         imul edx, ebx, BOARD_W
         add edx, eax
         mov al, [lock_val]
         mov [board + edx], al
 
+.lp_next:
         add edi, 2
         inc ecx
         jmp .lp_loop
@@ -1503,25 +1514,24 @@ clear_lines:
         cmp ebx, 0
         jl .cl_score
 
-        ; test if row full
-        xor ecx, ecx
-        mov eax, 1
+        ; test if row full: count all filled cells
+        xor ecx, ecx            ; col
+        xor ebp, ebp            ; filled cell count
 .cl_test:
         cmp ecx, BOARD_W
         jge .cl_checked
         imul edx, ebx, BOARD_W
         add edx, ecx
         cmp byte [board + edx], 0
-        jne .cl_next_cell
-        xor eax, eax
-        jmp .cl_checked
+        je .cl_next_cell
+        inc ebp                 ; cell is filled
 .cl_next_cell:
         inc ecx
         jmp .cl_test
 
 .cl_checked:
-        test eax, eax
-        jz .cl_prev
+        cmp ebp, BOARD_W        ; all 10 cells filled?
+        jne .cl_prev            ; no -> not a full row
 
         ; full -> shift everything above down
         inc edi

@@ -524,21 +524,21 @@ update_bullets:
 
         ; Erase old position
         movzx ebx, byte [edi + 1]
-        movzx ecx, byte [edi + 2]
-        push ecx
+        movzx eax, byte [edi + 2]  ; y into eax (not ecx)
+        push ecx                    ; save loop counter
+        mov ecx, eax               ; y -> ecx for syscall
         mov eax, SYS_SETCURSOR
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, ' '
         int 0x80
-        pop ecx
+        pop ecx                     ; restore loop counter
 
         ; Move up
         dec byte [edi + 2]
         cmp byte [edi + 2], PLAY_TOP
         jle .ub_deactivate
 
-        ; Still need ecx for outer loop counter
         jmp .ub_next
 
 .ub_deactivate:
@@ -546,12 +546,8 @@ update_bullets:
 
 .ub_next:
         add edi, 8
-        ; Restore loop (we used ecx above - use separate counter)
-        jmp .ub_continue
-
-.ub_continue:
-        ; We need to track iterations separately
-        jmp .ub_done             ; simplified - just one pass
+        dec ecx
+        jnz .ub_loop
 
 .ub_done:
         popad

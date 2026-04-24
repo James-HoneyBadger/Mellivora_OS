@@ -162,6 +162,8 @@ shell_main:
         je .ctrl_w
         cmp al, 0x0C            ; Ctrl+L - clear screen, redraw prompt
         je .ctrl_l
+        cmp al, 0x12            ; Ctrl+R - reverse history search
+        je .ctrl_r
 
         ; Store character if buffer not full
         cmp ecx, LINE_BUFFER_SIZE - 1
@@ -323,6 +325,175 @@ shell_main:
         jmp .ctrl_l_redraw
 .ctrl_l_done:
         pop ecx
+        jmp .read_loop
+
+; v5.0: Ctrl+R - Incremental reverse history search
+; Shows "(reverse-i-search)`<query>': <match>" as user types.
+; Enter: accept match into line_buffer and execute.
+; Escape or Ctrl+C: cancel, restore previous input.
+.ctrl_r:
+        ; Erase current line input first
+        call .erase_input
+
+        ; Clear search buffer
+        mov dword [ctrl_r_search_len], 0
+        mov byte [ctrl_r_search_buf], 0
+
+        ; Show initial prompt
+        push esi
+        mov esi, msg_ctrl_r_prompt
+        call vga_print
+        mov esi, msg_ctrl_r_sep
+        call vga_print
+        pop esi
+
+.ctrl_r_read:
+        call kb_getchar
+
+        cmp al, 0x0D            ; Enter — accept match
+        je .ctrl_r_accept
+        cmp al, 0x1B            ; Escape — cancel
+        je .ctrl_r_cancel
+        cmp al, 0x03            ; Ctrl+C — cancel
+        je .ctrl_r_cancel
+        cmp al, 0x08            ; Backspace — delete last search char
+        je .ctrl_r_bs
+        cmp al, 0x7F
+        je .ctrl_r_bs
+
+        ; Printable char: append to search string
+        mov ebx, [ctrl_r_search_len]
+        cmp ebx, 255
+        jge .ctrl_r_read
+        mov [ctrl_r_search_buf + ebx], al
+        inc ebx
+        mov [ctrl_r_search_len], ebx
+        mov byte [ctrl_r_search_buf + ebx], 0
+        jmp .ctrl_r_do_search
+
+.ctrl_r_bs:
+        ; Remove last char from search string
+        mov ebx, [ctrl_r_search_len]
+        cmp ebx, 0
+        je .ctrl_r_read
+        dec ebx
+        mov [ctrl_r_search_len], ebx
+        mov byte [ctrl_r_search_buf + ebx], 0
+
+.ctrl_r_do_search:
+        ; Scan history backwards for a match
+        mov eax, [hist_count]
+        test eax, eax
+        jz .ctrl_r_no_match
+
+        ; Start from most recent (hist_count - 1) going backwards
+        mov ebp, [hist_count]   ; EBP = current search index (1-based, starts at hist_count)
+
+.ctrl_r_scan_loop:
+        cmp ebp, 0
+        je .ctrl_r_no_match
+        dec ebp
+
+        ; Check if hist_buf[ebp] contains ctrl_r_search_buf
+        push esi
+        mov eax, ebp
+        imul eax, HIST_ENTRY_SIZE
+        lea esi, [hist_buf + eax]   ; candidate history entry
+        mov edi, ctrl_r_search_buf  ; search string
+        call str_find_substr
+        pop esi
+        jc .ctrl_r_scan_loop        ; CF=1 = not found, try previous
+
+        ; Found a match — display it
+        push esi
+        ; Redraw search prompt (CR to start of line)
+        mov esi, msg_ctrl_r_prompt
+        call vga_print
+        mov esi, ctrl_r_search_buf
+        call vga_print
+        mov esi, msg_ctrl_r_sep
+        call vga_print
+
+        ; Show the matched history entry
+        mov eax, ebp
+        imul eax, HIST_ENTRY_SIZE
+        lea esi, [hist_buf + eax]
+.ctrl_r_show:
+        lodsb
+        cmp al, 0
+        je .ctrl_r_show_done
+        call vga_putchar
+        jmp .ctrl_r_show
+.ctrl_r_show_done:
+        ; Erase to end of line with spaces (clear leftover from longer previous match)
+        mov al, ' '
+        push ecx
+        mov ecx, 20             ; Pad with spaces to clear old text
+.ctrl_r_pad:
+        call vga_putchar
+        dec ecx
+        jnz .ctrl_r_pad
+        ; Back up over the spaces
+        mov ecx, 20
+.ctrl_r_unpad:
+        mov al, 0x08
+        call vga_putchar
+        dec ecx
+        jnz .ctrl_r_unpad
+        pop ecx
+        pop esi
+
+        ; Store current match index for accept
+        mov [ctrl_r_match_idx], ebp
+        mov byte [ctrl_r_have_match], 1
+        jmp .ctrl_r_read
+
+.ctrl_r_no_match:
+        ; No match found — show fail prompt
+        push esi
+        mov esi, msg_ctrl_r_fail
+        call vga_print
+        mov esi, ctrl_r_search_buf
+        call vga_print
+        mov esi, msg_ctrl_r_sep
+        call vga_print
+        pop esi
+        mov byte [ctrl_r_have_match], 0
+        jmp .ctrl_r_read
+
+.ctrl_r_accept:
+        ; Accept: copy matched entry to line_buffer
+        cmp byte [ctrl_r_have_match], 0
+        je .ctrl_r_cancel
+
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Copy matched entry to line_buffer
+        mov eax, [ctrl_r_match_idx]
+        imul eax, HIST_ENTRY_SIZE
+        lea esi, [hist_buf + eax]
+        mov edi, line_buffer
+        xor ecx, ecx
+.ctrl_r_copy:
+        lodsb
+        stosb
+        cmp al, 0
+        je .ctrl_r_copied
+        inc ecx
+        jmp .ctrl_r_copy
+.ctrl_r_copied:
+        mov [line_len], ecx
+        lea edi, [line_buffer + ecx]
+        jmp .execute
+
+.ctrl_r_cancel:
+        ; Cancel — clear line, return to normal read_loop
+        mov al, 0x0A
+        call vga_putchar
+        mov edi, line_buffer
+        xor ecx, ecx
+        mov dword [line_len], 0
         jmp .read_loop
 
 .backspace:
@@ -2314,18 +2485,11 @@ shell_dispatch_core:
         ret
 
 .cmd_whoami:
-        cmp byte [login_authenticated], 1
-        je .whoami_show
-        mov esi, .whoami_none
-        call vga_print
-        ret
-.whoami_show:
         mov esi, login_current_user
         call vga_print
         mov al, 0x0A
         call vga_putchar
         ret
-.whoami_none: db "Not logged in", 0x0A, 0
 
 .cmd_stat:
         call cmd_stat

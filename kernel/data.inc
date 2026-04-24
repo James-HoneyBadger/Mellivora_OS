@@ -153,7 +153,7 @@ version_text:
 
 shell_prompt_pre:  db "Lair:", 0
 shell_prompt_post: db "> ", 0
-default_path:      db "PATH=/bin:/games", 0
+default_path:      db "PATH=/bin:/games:/Burrows", 0
 path_env_name:     db "PATH", 0
 
 ; Command strings
@@ -527,6 +527,10 @@ msg_bg_launched: db "[bg] PID ", 0
 msg_bg_stopped: db 0x0A, "[bg] Stopped PID ", 0
 msg_bg_noproc:  db "Ctrl+Z: no background task to stop.", 0x0A, 0
 msg_bg_nomem:    db "bg: out of memory for background task", 0x0A, 0
+; v5.0: Ctrl+R reverse history search messages
+msg_ctrl_r_prompt: db 0x0D, "(reverse-i-search)`", 0
+msg_ctrl_r_sep:    db "': ", 0
+msg_ctrl_r_fail:   db 0x0D, "(failed reverse-i-search)`", 0
 msg_redir_syntax: db "Redirection syntax error.", 0x0A, 0
 msg_redir_in_err: db "Redirection input file error.", 0x0A, 0
 msg_redir_too_big: db "Redirection file too large.", 0x0A, 0
@@ -679,6 +683,12 @@ hist_count:     resd 1          ; Number of entries in history
 hist_browse:    resd 1          ; Current browse position
 line_len:       resd 1          ; Total chars in line_buffer (tracks end independent of cursor)
 
+; v5.0: Ctrl+R reverse history search
+ctrl_r_search_buf: resb 256     ; Incremental search string
+ctrl_r_search_len: resd 1       ; Length of current search string
+ctrl_r_match_idx:  resd 1       ; History index of current match
+ctrl_r_have_match: resb 1       ; 1 if we have a match, 0 otherwise
+
 idt_table:      resb 256 * 8   ; 256 IDT entries * 8 bytes each = 2KB
 
 ; Serial port
@@ -743,6 +753,14 @@ batch_line_buf:   resb LINE_BUFFER_SIZE
 batch_script_buf: resb BATCH_BUFFER_SIZE  ; 32KB batch script storage
 batch_running:    resb 1                  ; Guard against nested batch calls
 batch_resume_pos: resd 1                  ; Resume offset into batch_script_buf
+; v5.0: if/else/endif and for loop state
+batch_if_depth:   resb 1                  ; Nesting depth for if/else/endif
+batch_skip_else:  resb 1                  ; 1 = skip else/endif block after true-if
+batch_for_var:    resb 4                  ; For loop variable letter (null-padded)
+batch_for_val:    resb 256                ; Current for loop value (for %%var substitution)
+for_cmd_buf:      resb 512               ; For loop command template
+batch_cmp_str1:   resb 256               ; if "str1"=="str2" left operand
+batch_cmp_str2:   resb 256               ; if "str1"=="str2" right operand
 
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing

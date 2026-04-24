@@ -1,5 +1,52 @@
 # Mellivora OS - Changelog
 
+## v5.0.0 - The Hornet Release
+
+### Kernel — Semaphores (`kernel/ipc.inc`)
+
+- **`SYS_SEM_CREATE` (#88)**: Create a counting semaphore with an initial value. Returns a semaphore ID (0–7) or -1 on failure.
+- **`SYS_SEM_WAIT` (#89)**: Decrement (P/wait) a semaphore. If the value is 0, yields up to 500 times before returning -1 (non-blocking style consistent with pipe I/O).
+- **`SYS_SEM_POST` (#90)**: Increment (V/post) a semaphore.
+- **`SYS_SEM_CLOSE` (#91)**: Release a semaphore slot.
+- Up to 8 semaphores simultaneously. Semaphore state initialised in `ipc_init`.
+
+### Kernel — Synchronous Wait (`kernel/sched.inc`)
+
+- **`TASK_ZOMBIE` state (5)**: Tasks that call `sys_exit` now enter a zombie state instead of being freed immediately, preserving their slot until reaped by a parent.
+- **`SYS_WAITPID` (#92)**: Wait for a task by PID. Yields up to 2000 times polling for task completion, then reaps the zombie and returns its exit code. Returns -1 if the PID is not found.
+
+### Kernel — File Timestamps (`kernel/hbfs.inc`)
+
+- **`SYS_GETMTIME` (#93)**: Query a file's timestamps. Returns packed RTC `DIRENT_MODIFIED` timestamp in EAX and `DIRENT_CREATED` timestamp in ECX.
+- **`SYS_SETMTIME` (#94)**: Update a file's `DIRENT_MODIFIED` timestamp. Pass ECX=0 to use the current RTC time.
+
+### Shell — Ctrl+R Reverse History Search (`kernel/shell.inc`)
+
+- **Incremental reverse-i-search**: Press Ctrl+R at the shell prompt to start an interactive history search.
+- Shows `(reverse-i-search)\`<query>': <match>` while typing.
+- **Backspace** removes the last search character and re-searches.
+- **Enter** copies the matched command to the input line and executes it.
+- **Escape / Ctrl+C** cancels and returns to an empty prompt.
+
+### Batch Scripts — Structured Control Flow (`kernel/util.inc`)
+
+- **`if exist FILENAME cmd`**: Test for file existence. Works with the `not` modifier (`if not exist ...`).
+- **`if "STR1"=="STR2" cmd`**: String comparison. Supports `not` modifier.
+- **Block `if` / `else` / `endif`**: Multi-line conditional blocks. When an `if` line has no inline command the following lines form the block body; an optional `else` block is executed when the condition is false; `endif` closes the block. Nested `if`/`endif` pairs are handled correctly.
+- **`for %%x in (a b c) do cmd`**: Single-line for loop. Iterates over a space-separated list; `%%x` in the command template is substituted with each value in turn.
+- `else` and `endif` are now recognised as batch directives in `batch_run_loop`.
+
+### New Programs
+
+- **`strace`**: Syscall trace wrapper. Usage: `strace PROGRAM [args]`. Records the dmesg ring-buffer depth before running the target program and dumps all new log entries added during the run, providing a lightweight activity trace.
+- **`patch`**: Apply unified-style diff output to a file. Usage: `patch FILE PATCHFILE`. The patch file is the output of the `diff` utility (`< ` = remove, `> ` = insert). Applies all hunks and reports how many could not be matched.
+
+### Syscall Constants (`programs/syscalls.inc`)
+
+- Added constants for all v5.0 syscalls: `SYS_SEM_CREATE` through `SYS_SETMTIME` (88–94).
+
+---
+
 ## v4.0.0 - The Titan Release
 
 ### Kernel — Priority Scheduler (`kernel/sched.inc`)

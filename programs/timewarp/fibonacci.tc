@@ -1,0 +1,13 @@
+' fibonacci.tc - Fibonacci sequence in TempleCode BASIC
+' Prints the first 16 Fibonacci numbers
+
+PRINT "Fibonacci sequence:"
+LET A = 0
+LET B = 1
+FOR I = 1 TO 16
+PRINT A
+LET C = A + B
+LET A = B
+LET B = C
+NEXT
+END

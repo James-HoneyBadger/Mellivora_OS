@@ -299,24 +299,19 @@ player_shot:
         mov [shot_row], eax
 
         movzx eax, byte [input_buf + 1]
+        ; Check for "10" first (two-char column, e.g. "A10")
+        cmp eax, '1'
+        jne .not_col10
+        cmp byte [input_buf + 2], '0'
+        jne .not_col10
+        mov eax, 9              ; column 10 -> 0-based index 9
+        jmp .col_ok
+.not_col10:
         cmp eax, '1'
         jb .ask
         cmp eax, '9'
-        je .col9
-        cmp eax, '0'    ; '10'
-        je .col_check10
-        sub eax, '1'
-        jmp .col_ok
-.col9:
-        mov eax, 8
-        jmp .col_ok
-.col_check10:
-        ; Check for '10'
-        cmp byte [input_buf + 1], '1'
-        jne .ask
-        cmp byte [input_buf + 2], '0'
-        jne .ask
-        mov eax, 9
+        ja .ask
+        sub eax, '1'            ; '1'-'9' -> 0-8
 .col_ok:
         cmp eax, GRID_SIZE
         jge .ask

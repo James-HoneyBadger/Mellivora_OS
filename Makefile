@@ -59,9 +59,13 @@ QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
 # Programs
 PROG_DIR = programs
 PROG_SRCS = $(wildcard $(PROG_DIR)/*.asm)
-PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS))
+PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS)) programs/timewarp.bin
 
 TEST_PROGS = programs/sbrk_test.asm programs/hello_test.asm
+
+# TimeWarp lives in its own subdirectory
+programs/timewarp.bin: programs/timewarp/timewarp.asm programs/syscalls.inc $(wildcard programs/lib/*.inc)
+	$(NASM) -f bin -Iprograms/ -o $@ -l programs/timewarp.lst programs/timewarp/timewarp.asm
 
 
 # ISO packaging

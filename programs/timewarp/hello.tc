@@ -1,0 +1,8 @@
+' hello.tc - Hello World in TempleCode BASIC
+' Press F5 to run, Ctrl+Q to quit TimeWarp
+
+PRINT "Hello, World!"
+PRINT "Welcome to TimeWarp."
+PRINT "TempleCode supports BASIC, Logo, and PILOT."
+PRINT "This program demonstrates simple PRINT output."
+END

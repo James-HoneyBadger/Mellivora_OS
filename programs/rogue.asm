@@ -753,10 +753,10 @@ attack_monster:
         cmp dword [mon_hp + esi*4], 0
         jg .mon_alive
 
-        ; Monster killed
-        mov byte [mon_type + esi], MON_NONE
-        ; Give XP
+        ; Monster killed - read type BEFORE clearing
         movzx eax, byte [mon_type + esi]
+        mov byte [mon_type + esi], MON_NONE
+        ; Give XP based on monster type
         add eax, 2
         imul eax, [depth]
         add [player_xp], eax

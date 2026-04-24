@@ -1404,10 +1404,11 @@ random_event:
         jmp .evt_done
 
 .evt_bountiful:
-        ; Bountiful season: +50% harvest (applied before harvest calc)
-        mov eax, [acres_planted]
+        ; Bountiful season: +50% harvest (boost current year's already-computed harvest)
+        mov eax, [harvest_amount]
         shr eax, 1
-        add [acres_planted], eax
+        add [food], eax
+        add [harvest_amount], eax
         jmp .evt_done
 
 .evt_supply:

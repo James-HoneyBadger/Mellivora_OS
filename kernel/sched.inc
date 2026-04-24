@@ -20,6 +20,7 @@ TASK_READY   equ 1
 TASK_RUNNING equ 2
 TASK_BLOCKED equ 3          ; Blocked (sleeping / waiting on I/O)
 TASK_STOPPED equ 4          ; v4.0: Stopped by signal (SIGTSTP / Ctrl+Z)
+TASK_ZOMBIE  equ 5          ; v5.0: Exited, exit code not yet reaped
 
 ; Priority levels (v4.0)
 PRIO_HIGH    equ 0           ; System tasks, real-time — 4x quantum
@@ -240,16 +241,90 @@ sched_exit_task:
         sub eax, 4096
         call pmm_free_page
 
-        ; Clear the TCB
-        mov dword [edi + TCB_STATE], TASK_FREE
+        ; Clear execution fields but leave PID and exit code for waitpid
+        ; v5.0: TASK_ZOMBIE lets waitpid collect the exit code before reaping
+        mov dword [edi + TCB_STATE], TASK_ZOMBIE
         mov dword [edi + TCB_ESP], 0
         mov dword [edi + TCB_KSTACK], 0
+        ; Clear the bg-flag from TCB_EXIT_CODE (bit 31 = page marker, not real exit code)
+        ; Store 0 as exit code (real code was in EBX at sys_exit time)
+        mov dword [edi + TCB_EXIT_CODE], 0
 
         dec dword [task_count]
 
 .exit_done:
         popad
         ret
+
+;---------------------------------------
+; sys_waitpid - Wait for a task to exit
+; EBX = PID to wait for (-1 = any task)
+; Returns: EAX = exit code (0 if unknown/no-exit-code)
+;          On error (bad PID / no tasks): EAX = -1
+;---------------------------------------
+WAITPID_RETRIES equ 2000        ; max yields before giving up
+
+sys_waitpid:
+        pushad
+        cmp ebx, 0
+        jl .swp_fail            ; negative PID not supported (except -1)
+
+.swp_retry:
+        ; Scan task table for the requested PID
+        mov edi, task_table
+        xor ecx, ecx
+.swp_scan:
+        cmp ecx, MAX_TASKS
+        jge .swp_not_found
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .swp_next
+        cmp [edi + TCB_PID], ebx
+        je .swp_found_task
+.swp_next:
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .swp_scan
+
+.swp_found_task:
+        ; Task exists — check if it's a zombie (exited, code available)
+        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
+        je .swp_reap
+
+        ; Task still alive — yield and retry
+        mov eax, [esp + 16]     ; EBX (retry count) saved in pushad frame
+        inc eax
+        cmp eax, WAITPID_RETRIES
+        jge .swp_fail
+        mov [esp + 16], eax     ; store updated retry count back via EBX slot
+        push ebx
+        push ecx
+        push edi
+        mov eax, SYS_YIELD
+        int 0x80
+        pop edi
+        pop ecx
+        pop ebx
+        jmp .swp_retry
+
+.swp_reap:
+        ; Found zombie — collect exit code, then free the TCB slot
+        mov eax, [edi + TCB_EXIT_CODE]
+        mov dword [edi + TCB_STATE], TASK_FREE
+        ; Return exit code through pushad EAX slot
+        mov [esp + 28], eax
+        popad
+        iretd
+
+.swp_not_found:
+        ; PID not in table — task was never created or already reaped
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+.swp_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
 
 ;---------------------------------------
 ; sys_yield - SYS_YIELD syscall handler

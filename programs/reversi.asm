@@ -30,24 +30,27 @@ init_board:
 game_loop:
 .loop:
         ; Mark valid moves for black
+        mov byte [current_player], BLACK
         call mark_valid_moves
         call draw_board
         ; Check if black has moves
         call has_valid_moves
         test eax, eax
         jnz .black_turn
-        ; Black has no moves — check if white has any
+        ; Black has no moves — clear black's markers before checking white
+        call unmark_valid
         mov byte [current_player], WHITE
         call mark_valid_moves
         call has_valid_moves
         test eax, eax
         jz .game_over
-        ; White plays both turns — handled below
-        jmp .white_turn
+        ; White plays (black skipped this turn)
+        call ai_move
+        call unmark_valid
+        mov byte [current_player], BLACK
+        jmp .loop
 
 .black_turn:
-        mov byte [current_player], BLACK
-        call mark_valid_moves
         mov eax, SYS_PRINT
         mov ebx, msg_your_turn
         int 0x80

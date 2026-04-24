@@ -121,8 +121,16 @@ syscall_table:
         dd sys_truncate         ; 85  SYS_TRUNCATE
         dd sys_connect_nb       ; 86  SYS_CONNECT_NB
         dd sys_poll             ; 87  SYS_POLL
-        ; Reserved slots (88..127) — point to bad handler
-        times (SYSCALL_MAX - 88) dd syscall_handler.syscall_bad
+        ; v5.0 syscalls
+        dd sys_sem_create       ; 88  SYS_SEM_CREATE
+        dd sys_sem_wait         ; 89  SYS_SEM_WAIT
+        dd sys_sem_post         ; 90  SYS_SEM_POST
+        dd sys_sem_close        ; 91  SYS_SEM_CLOSE
+        dd sys_waitpid          ; 92  SYS_WAITPID
+        dd sys_getmtime         ; 93  SYS_GETMTIME
+        dd sys_setmtime         ; 94  SYS_SETMTIME
+        ; Reserved slots (95..127) — point to bad handler
+        times (SYSCALL_MAX - 95) dd syscall_handler.syscall_bad
 
 sys_exit:
         ; First check if this is a background task exiting

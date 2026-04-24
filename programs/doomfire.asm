@@ -97,9 +97,12 @@ fire_spread:
 .fs_clamp_ok:
 
         ; Random horizontal wind (-1, 0, or +1)
-        call rand_small
+        call rand_small                 ; 0 or 1 (left offset)
+        mov edi, eax                    ; save first random
+        call rand_small                 ; 0 or 1 (right offset)
+        sub edi, eax                    ; edi = -1 (left), 0 (stay), or +1 (right)
         mov esi, ecx
-        sub esi, eax
+        add esi, edi                    ; apply wind
         ; Clamp X to [0, FIRE_W-1]
         jns .fs_xok
         xor esi, esi

@@ -1,53 +1,51 @@
 ; timewarp.asm - Time Warp for Mellivora
 ; TempleCode IDE: editor, interpreter (BASIC + PILOT + Logo), turtle graphics
+; Standalone VBE graphics application — runs without Burrows desktop
 ; Based on Time Warp II by James-HoneyBadger
 %include "syscalls.inc"
-%include "lib/gui.inc"
 
 ;=======================================================================
 ; Constants
 ;=======================================================================
-WIN_X           equ 20
-WIN_Y           equ 5
-WIN_W           equ 596
-WIN_H           equ 420
+SCREEN_W        equ 1024
+SCREEN_H        equ 768
 
-; Editor panel (left side, top)
+; Editor panel (left side)
 ED_X            equ 0
-ED_Y            equ 24
-ED_W            equ 300
-ED_H            equ 240
+ED_Y            equ 28
+ED_W            equ 512
+ED_H            equ 480
 
-; Canvas panel (right side, top) - turtle graphics
-CV_X            equ 302
-CV_Y            equ 24
-CV_W            equ 294
-CV_H            equ 240
+; Canvas panel (right side) - turtle graphics
+CV_X            equ 514
+CV_Y            equ 28
+CV_W            equ 510
+CV_H            equ 480
 
 ; Output panel (bottom)
 OUT_X           equ 0
-OUT_Y           equ 266
-OUT_W           equ 596
-OUT_H           equ 134
+OUT_Y           equ 508
+OUT_W           equ 1024
+OUT_H           equ 240
 
 ; Toolbar
 TB_Y            equ 0
-TB_H            equ 24
+TB_H            equ 28
 
 ; Status bar
-SB_Y            equ 400
+SB_Y            equ 748
 SB_H            equ 20
 
 ; Editor settings
 MAX_LINES       equ 200
 LINE_LEN        equ 64
-VIS_LINES       equ 14          ; lines visible in editor
-ED_COLS         equ 36          ; chars visible per line
+VIS_LINES       equ 28          ; lines visible in editor  (ED_H / 16 - 2)
+ED_COLS         equ 60          ; chars visible per line
 
 ; Output settings
-OUT_LINES       equ 8           ; visible output lines
-OUT_COLS        equ 72          ; chars per output line
-OUT_LINE_LEN    equ 74
+OUT_LINES       equ 14          ; visible output lines     (OUT_H / 16 - 1)
+OUT_COLS        equ 126         ; chars per output line
+OUT_LINE_LEN    equ 128
 
 ; Interpreter settings
 VAR_COUNT       equ 26          ; A-Z
@@ -58,8 +56,8 @@ FOR_DEPTH       equ 8
 MAX_ITER        equ 50000
 
 ; Turtle settings
-TURTLE_CX       equ 147         ; center X of canvas (CV_W/2)
-TURTLE_CY       equ 120         ; center Y of canvas (CV_H/2)
+TURTLE_CX       equ 255         ; center X of canvas (CV_W/2)
+TURTLE_CY       equ 240         ; center Y of canvas (CV_H/2)
 
 ; Colors
 COL_BG          equ 0x002B2D30  ; editor dark bg
@@ -90,57 +88,77 @@ start:
         int 0x80
         mov [has_arg], al
 
-        ; Create window
-        mov eax, WIN_X
-        mov ebx, WIN_Y
-        mov ecx, WIN_W
-        mov edx, WIN_H
-        mov esi, title_str
-        call gui_create_window
+        ; Enter VBE 1024x768x32 mode
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 1
+        mov ecx, SCREEN_W
+        mov edx, SCREEN_H
+        mov esi, 32
+        int 0x80
         cmp eax, -1
-        je .exit
-        mov [win_id], eax
+        je .exit                        ; no VBE available
 
-        ; Initialize state
+        ; Retrieve framebuffer address (EAX) and compute pitch
+        mov eax, SYS_FRAMEBUF
+        xor ebx, ebx
+        int 0x80
+        mov [tw_fb_addr], eax
+        ; pitch = width * 4 bytes/pixel (32 bpp)
+        mov eax, SCREEN_W
+        shl eax, 2
+        mov [tw_fb_pitch], eax
+
+        ; Initialize editor and interpreter
         call init_editor
         call init_interpreter
 
-        ; Load file if argument given
+        ; Load file if a filename was passed on the command line
         cmp byte [has_arg], 0
         je .main_loop
         call load_file
 
-.main_loop:
-        call gui_compose
         call draw_all
-        call gui_flip
 
-        call gui_poll_event
-        cmp eax, EVT_CLOSE
-        je .close
-        cmp eax, EVT_KEY_PRESS
-        je .handle_key
-        cmp eax, EVT_MOUSE_CLICK
-        je .handle_click
-        jmp .main_loop
+.main_loop:
+        ; Poll keyboard — non-blocking
+        mov eax, SYS_READ_KEY
+        int 0x80
+        test eax, eax
+        jz .ml_mouse
 
-.handle_key:
-        mov eax, ebx
+        ; Ctrl+Q (17) = quit application
+        cmp eax, 17
+        je .do_exit
+
         call handle_keypress
+        call draw_all
         jmp .main_loop
 
-.handle_click:
-        ; EBX = x|y packed: x in high 16, y in low 16
-        mov eax, ebx
-        shr eax, 16                 ; x
-        mov edx, ebx
-        and edx, 0xFFFF             ; y
+.ml_mouse:
+        ; Poll mouse state
+        mov eax, SYS_MOUSE
+        int 0x80
+        ; EAX=x, EBX=y, ECX=buttons (bit 0 = left button)
+        test ecx, 1
+        jz .ml_no_click
+        ; Only trigger on new press, not held button
+        cmp byte [tw_mouse_was_down], 1
+        je .main_loop
+        mov byte [tw_mouse_was_down], 1
+        mov edx, ebx            ; y → EDX  (handle_mouse_click: EAX=x, EDX=y)
         call handle_mouse_click
+        call draw_all
         jmp .main_loop
 
-.close:
-        mov eax, [win_id]
-        call gui_destroy_window
+.ml_no_click:
+        mov byte [tw_mouse_was_down], 0
+        jmp .main_loop
+
+.do_exit:
+        ; Restore text mode before returning to shell
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2
+        int 0x80
 .exit:
         mov eax, SYS_EXIT
         int 0x80
@@ -199,86 +217,154 @@ draw_all:
         popad
         ret
 
+;=======================================================================
+; FRAMEBUFFER DRAWING PRIMITIVES
+; All coordinates are absolute screen pixels (no window offset).
+; tw_fb_addr and tw_fb_pitch must be initialised before calling.
+;=======================================================================
+
+;---------------------------------------
+; fb_fill_rect  EBX=x  ECX=y  EDX=w  ESI=h  EDI=color
+;---------------------------------------
+fb_fill_rect:
+        pushad
+        test edx, edx
+        jz .fr_done
+        test esi, esi
+        jz .fr_done
+        ; row_start = fb_addr + y*pitch + x*4
+        mov eax, [tw_fb_pitch]
+        imul eax, ecx
+        add eax, [tw_fb_addr]
+        lea eax, [eax + ebx*4]
+.fr_row:
+        test esi, esi
+        jz .fr_done
+        push eax
+        push ecx
+        mov ecx, edx
+.fr_pix:
+        mov [eax], edi
+        add eax, 4
+        dec ecx
+        jnz .fr_pix
+        pop ecx
+        pop eax
+        add eax, [tw_fb_pitch]
+        dec esi
+        jmp .fr_row
+.fr_done:
+        popad
+        ret
+
+;---------------------------------------
+; fb_draw_pixel  EBX=x  ECX=y  ESI=color
+;---------------------------------------
+fb_draw_pixel:
+        pushad
+        cmp ebx, 0
+        jl .fp_done
+        cmp ecx, 0
+        jl .fp_done
+        cmp ebx, SCREEN_W
+        jge .fp_done
+        cmp ecx, SCREEN_H
+        jge .fp_done
+        mov eax, [tw_fb_pitch]
+        imul eax, ecx
+        add eax, [tw_fb_addr]
+        lea eax, [eax + ebx*4]
+        mov [eax], esi
+.fp_done:
+        popad
+        ret
+
+;---------------------------------------
+; fb_draw_text  EBX=x  ECX=y  ESI=str_ptr  EDI=color
+; Delegates to SYS_FRAMEBUF(3) which uses the kernel-saved VGA font.
+;---------------------------------------
+fb_draw_text:
+        pushad
+        mov edx, ecx            ; y  → EDX
+        mov ecx, ebx            ; x  → ECX
+        ; ESI = str_ptr (already correct)
+        ; EDI = color   (already correct)
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 3
+        int 0x80
+        popad
+        ret
+
 ;---------------------------------------
 ; Draw toolbar
 ;---------------------------------------
 draw_toolbar:
         pushad
-        mov eax, [win_id]
         xor ebx, ebx
         xor ecx, ecx
-        mov edx, WIN_W
+        mov edx, SCREEN_W
         mov esi, TB_H
         mov edi, COL_TOOLBAR_BG
-        call gui_fill_rect
+        call fb_fill_rect
 
-        ; Run button (F5)
-        mov eax, [win_id]
+        ; Run button  (F5)
         mov ebx, 4
         mov ecx, 2
         mov edx, 40
         mov esi, 20
         mov edi, COL_BTN_RUN
-        call gui_fill_rect
-        mov eax, [win_id]
+        call fb_fill_rect
         mov ebx, 8
         mov ecx, 4
         mov esi, str_run
         mov edi, 0x00FFFFFF
-        call gui_draw_text
+        call fb_draw_text
 
         ; Stop button
-        mov eax, [win_id]
         mov ebx, 48
         mov ecx, 2
         mov edx, 40
         mov esi, 20
         mov edi, COL_BTN_STOP
-        call gui_fill_rect
-        mov eax, [win_id]
+        call fb_fill_rect
         mov ebx, 52
         mov ecx, 4
         mov esi, str_stop
         mov edi, 0x00FFFFFF
-        call gui_draw_text
+        call fb_draw_text
 
         ; Clear button
-        mov eax, [win_id]
         mov ebx, 92
         mov ecx, 2
         mov edx, 44
         mov esi, 20
         mov edi, COL_BTN
-        call gui_fill_rect
-        mov eax, [win_id]
+        call fb_fill_rect
         mov ebx, 96
         mov ecx, 4
         mov esi, str_clear
         mov edi, 0x00FFFFFF
-        call gui_draw_text
+        call fb_draw_text
 
         ; New button
-        mov eax, [win_id]
         mov ebx, 140
         mov ecx, 2
         mov edx, 36
         mov esi, 20
         mov edi, COL_BTN
-        call gui_fill_rect
-        mov eax, [win_id]
+        call fb_fill_rect
         mov ebx, 144
         mov ecx, 4
         mov esi, str_new
         mov edi, 0x00FFFFFF
-        call gui_draw_text
+        call fb_draw_text
 
-        ; Title
-        mov eax, [win_id]
+        ; Title centred in toolbar
         mov ebx, 350
         mov ecx, 4
         mov esi, str_title_bar
         mov edi, 0x00AAAAAA
-        call gui_draw_text
+        call fb_draw_text
 
         popad
         ret
@@ -289,13 +375,12 @@ draw_toolbar:
 draw_editor:
         pushad
         ; Background
-        mov eax, [win_id]
         mov ebx, ED_X
         mov ecx, ED_Y
         mov edx, ED_W
         mov esi, ED_H
         mov edi, COL_BG
-        call gui_fill_rect
+        call fb_fill_rect
 
         ; Draw visible lines
         xor ecx, ecx           ; line counter
@@ -322,7 +407,6 @@ draw_editor:
         inc eax               ; 1-based
         mov edi, line_num_buf
         call int_to_str
-        mov eax, [win_id]
         mov ebx, ED_X + 2
         pop eax                ; restore line index
         push eax
@@ -332,7 +416,7 @@ draw_editor:
         add ecx, ED_Y + 2
         mov esi, line_num_buf
         mov edi, COL_LINE_NUM
-        call gui_draw_text
+        call fb_draw_text
         pop eax
         pop ecx
         pop ecx
@@ -346,12 +430,11 @@ draw_editor:
         cmp byte [esi], 0
         je .skip_text
 
-        mov eax, [win_id]
         mov ebx, ED_X + 34
         imul ecx, 16
         add ecx, ED_Y + 2
         mov edi, COL_TEXT
-        call gui_draw_text
+        call fb_draw_text
 
 .skip_text:
         pop ecx
@@ -379,11 +462,10 @@ draw_editor:
         imul eax, 16
         add eax, ED_Y + 2
         mov ecx, eax
-        mov eax, [win_id]
         mov edx, 8
         mov esi, 16
         mov edi, COL_CURSOR
-        call gui_fill_rect
+        call fb_fill_rect
 
         ; Redraw character under cursor in black
         mov eax, [cur_line]
@@ -406,21 +488,18 @@ draw_editor:
         sub ecx, [scroll_y]
         imul ecx, 16
         add ecx, ED_Y + 2
-        mov eax, [win_id]
         mov esi, char_tmp
         mov edi, 0x00000000
-        call gui_draw_text
+        call fb_draw_text
 
 .ed_done:
         ; Separator line between editor and canvas
-        mov ecx, VIS_LINES + 1
-        mov eax, [win_id]
         mov ebx, ED_W
         mov ecx, ED_Y
         mov edx, 2
         mov esi, ED_H
         mov edi, COL_SEPARATOR
-        call gui_fill_rect
+        call fb_fill_rect
 
         popad
         ret
@@ -431,29 +510,26 @@ draw_editor:
 draw_canvas:
         pushad
         ; White background
-        mov eax, [win_id]
         mov ebx, CV_X
         mov ecx, CV_Y
         mov edx, CV_W
         mov esi, CV_H
         mov edi, COL_CANVAS_BG
-        call gui_fill_rect
+        call fb_fill_rect
 
-        ; Draw crosshair at center
-        mov eax, [win_id]
+        ; Crosshair at canvas centre
         mov ebx, CV_X + TURTLE_CX - 4
         mov ecx, CV_Y + TURTLE_CY
         mov edx, 9
         mov esi, 1
         mov edi, COL_CANVAS_GRID
-        call gui_fill_rect
-        mov eax, [win_id]
+        call fb_fill_rect
         mov ebx, CV_X + TURTLE_CX
         mov ecx, CV_Y + TURTLE_CY - 4
         mov edx, 1
         mov esi, 9
         mov edi, COL_CANVAS_GRID
-        call gui_fill_rect
+        call fb_fill_rect
 
         ; Replay all turtle strokes
         mov ecx, [stroke_count]
@@ -463,19 +539,17 @@ draw_canvas:
         mov esi, stroke_buf
 .stroke_loop:
         push ecx
-        ; Each stroke: word x, word y, dword color
+        ; stroke: word x, word y, dword color
         movzx ebx, word [esi]
         movzx edx, word [esi + 2]
         mov edi, [esi + 4]
         add ebx, CV_X
         add edx, CV_Y
 
-        ; Draw 1-pixel dot
-        mov eax, [win_id]
-        mov ecx, edx
         push esi
+        mov ecx, edx
         mov esi, edi
-        call gui_draw_pixel
+        call fb_draw_pixel
         pop esi
 
         pop ecx
@@ -484,77 +558,46 @@ draw_canvas:
         jnz .stroke_loop
 
 .draw_turtle_indicator:
-        ; Draw turtle triangle if visible
         cmp byte [turtle_visible], 0
         je .cv_done
 
-        ; Convert turtle position to canvas coords
+        ; Convert turtle coords (scaled by TRIG_SCALE) to screen pixels
         mov eax, [turtle_x]
-        sar eax, 10             ; divide by TRIG_SCALE
+        sar eax, 10             ; ÷ TRIG_SCALE
         add eax, TURTLE_CX
-        mov ebx, TURTLE_CY
+        add eax, CV_X           ; EAX = screen_x
         mov ecx, [turtle_y]
         sar ecx, 10
-        sub ebx, ecx            ; Y inverted
+        neg ecx
+        add ecx, TURTLE_CY
+        add ecx, CV_Y           ; ECX = screen_y  (y axis inverted)
 
-        ; Draw small diamond at turtle position
-        add eax, CV_X
-        add ebx, CV_Y
-        push eax
-        push ebx
-        mov eax, [win_id]
-        mov ecx, ebx
+        ; Draw a 5-pixel cross at the turtle position
+        ; fb_draw_pixel(EBX=x, ECX=y, ESI=color) — ECX preserved by pushad in fb_draw_pixel
         mov esi, COL_TURTLE
-        call gui_draw_pixel
-        ; +1,0
-        pop ebx
-        pop eax
-        push eax
-        push ebx
-        inc eax
-        mov ecx, ebx
-        push eax
-        mov eax, [win_id]
-        pop ebx
-        mov esi, COL_TURTLE
-        call gui_draw_pixel
-        ; -1,0
-        pop ebx
-        pop eax
-        push eax
-        push ebx
-        dec eax
-        mov ecx, ebx
-        push eax
-        mov eax, [win_id]
-        pop ebx
-        mov esi, COL_TURTLE
-        call gui_draw_pixel
-        ; 0,+1
-        pop ebx
-        pop eax
-        push eax
-        push ebx
+
+        mov ebx, eax
+        call fb_draw_pixel          ; centre  (x, y)
+
+        mov ebx, eax
         inc ebx
-        mov ecx, ebx
+        call fb_draw_pixel          ; (+1, y)
+
+        mov ebx, eax
         dec ebx
-        push eax
-        mov eax, [win_id]
-        pop ebx
-        dec ebx
+        call fb_draw_pixel          ; (-1, y)
+
+        push ecx
         inc ecx
-        mov esi, COL_TURTLE
-        call gui_draw_pixel
-        ; 0,-1
-        pop ebx
-        pop eax
-        dec ebx
-        mov ecx, ebx
-        push eax
-        mov eax, [win_id]
-        pop ebx
-        mov esi, COL_TURTLE
-        call gui_draw_pixel
+        mov ebx, eax
+        call fb_draw_pixel          ; (x, y+1)
+        pop ecx
+
+        push ecx
+        dec ecx
+        mov ebx, eax
+        call fb_draw_pixel          ; (x, y-1)
+        pop ecx
 
 .cv_done:
         popad
@@ -566,22 +609,20 @@ draw_canvas:
 draw_output:
         pushad
         ; Background
-        mov eax, [win_id]
         mov ebx, OUT_X
         mov ecx, OUT_Y
         mov edx, OUT_W
         mov esi, OUT_H
         mov edi, COL_OUTPUT_BG
-        call gui_fill_rect
+        call fb_fill_rect
 
-        ; Separator line
-        mov eax, [win_id]
+        ; Separator line at top of output panel
         mov ebx, OUT_X
         mov ecx, OUT_Y
         mov edx, OUT_W
         mov esi, 2
         mov edi, COL_SEPARATOR
-        call gui_fill_rect
+        call fb_fill_rect
 
         ; Draw output lines
         xor ecx, ecx
@@ -601,14 +642,13 @@ draw_output:
         cmp byte [esi], 0
         je .out_skip
 
-        mov eax, [win_id]
         mov ebx, OUT_X + 4
         pop ecx
         push ecx
         imul ecx, 16
         add ecx, OUT_Y + 4
         mov edi, COL_OUTPUT_TEXT
-        call gui_draw_text
+        call fb_draw_text
 
 .out_skip:
         pop ecx
@@ -624,19 +664,18 @@ draw_output:
 ;---------------------------------------
 draw_status:
         pushad
-        mov eax, [win_id]
-        xor ebx, ebx
+        mov ebx, 0
         mov ecx, SB_Y
-        mov edx, WIN_W
+        mov edx, SCREEN_W
         mov esi, SB_H
         mov edi, COL_STATUS_BG
-        call gui_fill_rect
+        call fb_fill_rect
 
-        ; Show line:col
+        ; Compose status text: "line:col  mode  hint"
         mov edi, status_buf
         mov eax, [cur_line]
         inc eax
-        call int_to_str_at       ; writes to EDI, advances EDI
+        call int_to_str_at       ; writes digits to EDI, advances EDI
         mov byte [edi], ':'
         inc edi
         mov eax, [cur_col]
@@ -647,7 +686,7 @@ draw_status:
         mov byte [edi], ' '
         inc edi
 
-        ; Show mode
+        ; Append mode string
         cmp byte [running], 0
         je .status_idle
         mov esi, str_running
@@ -655,7 +694,6 @@ draw_status:
 .status_idle:
         mov esi, str_ready
 .status_copy:
-        ; Copy mode string
 .sc_loop:
         lodsb
         test al, al
@@ -669,7 +707,7 @@ draw_status:
         mov byte [edi], ' '
         inc edi
 
-        ; Show F5=Run hint
+        ; Append hint
         mov esi, str_hint
 .sc2:
         lodsb
@@ -681,13 +719,11 @@ draw_status:
 .sc2d:
         mov byte [edi], 0
 
-        ; Draw status text
-        mov eax, [win_id]
         mov ebx, 4
         mov ecx, SB_Y + 2
         mov esi, status_buf
         mov edi, 0x00CCCCCC
-        call gui_draw_text
+        call fb_draw_text
 
         popad
         ret
@@ -955,13 +991,14 @@ editor_backspace:
         pop edi
         add edi, eax            ; append point
 
-        ; Copy current line to end of previous
+        ; Copy current line to end of previous (only actual content)
         mov eax, [cur_line]
         imul eax, LINE_LEN
         lea esi, [text_buf + eax]
-        mov ecx, LINE_LEN
-        sub ecx, [cur_col]
+        call strlen             ; eax = actual length of current line (esi preserved)
+        mov ecx, eax
         rep movsb
+        mov byte [edi], 0      ; null-terminate joined line
 
         ; Shift lines above current up
         mov ecx, [cur_line]
@@ -1418,9 +1455,7 @@ run_program:
         mov byte [running], 0
 
         ; Render final state
-        call gui_compose
         call draw_all
-        call gui_flip
 
         popad
         ret
@@ -1844,7 +1879,7 @@ try_basic_logo:
 
 ;----------- PRINT -----------
 do_print:
-        pop esi                 ; clean up push from try_basic_logo
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
 
         ; Empty PRINT = blank line
@@ -1948,10 +1983,10 @@ do_print:
 
 ;----------- LET -----------
 do_let:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
 
-        ; Skip optional LET keyword
+        ; Skip optional LET keyword (implicit LET has no keyword to skip)
         cmp byte [esi], 'L'
         jne .dl_var
         cmp byte [esi+1], 'E'
@@ -1995,7 +2030,7 @@ do_let:
 
 ;----------- IF -----------
 do_if:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
 
         ; Evaluate left expression
@@ -2137,7 +2172,7 @@ exec_line_inner:
 
 ;----------- FOR -----------
 do_for:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
 
         ; Get variable
@@ -2197,7 +2232,7 @@ do_for:
 
 ;----------- NEXT -----------
 do_next:
-        pop esi
+        pop eax                 ; discard saved ESI
         cmp dword [for_sp], 0
         je .next_err
 
@@ -2232,7 +2267,7 @@ do_next:
 
 ;----------- GOTO -----------
 do_goto:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
 
         ; Check if target is a label or number
@@ -2267,7 +2302,7 @@ do_goto:
 
 ;----------- GOSUB -----------
 do_gosub:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
 
         ; Push return address
@@ -2306,7 +2341,7 @@ do_gosub:
 
 ;----------- RETURN -----------
 do_return:
-        pop esi
+        pop eax                 ; discard saved ESI
         cmp dword [gosub_sp], 0
         je .ret_err
 
@@ -2323,7 +2358,7 @@ do_return:
 
 ;----------- INPUT -----------
 do_input:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
 
         ; Check for prompt string
@@ -2387,21 +2422,18 @@ do_input:
 
         ; Wait loop - render and poll until input is done
 .di_wait:
-        call gui_compose
         call draw_all
 
         ; Draw input text in output area
         cmp dword [input_len], 0
         je .di_no_text
-        mov eax, [win_id]
         mov ebx, OUT_X + 20
         mov ecx, OUT_Y + OUT_H - 18
         mov esi, input_buf
         mov edi, 0x00FFFFFF
-        call gui_draw_text
+        call fb_draw_text
 .di_no_text:
         ; Draw cursor
-        mov eax, [win_id]
         mov ebx, [input_len]
         imul ebx, 8
         add ebx, OUT_X + 20
@@ -2409,18 +2441,16 @@ do_input:
         mov edx, 8
         mov esi, 2
         mov edi, 0x00FFFFFF
-        call gui_fill_rect
+        call fb_fill_rect
 
-        call gui_flip
-        call gui_poll_event
-
-        cmp eax, EVT_CLOSE
+        ; Poll for keypress
+        mov eax, SYS_READ_KEY
+        int 0x80
+        test eax, eax
+        jz .di_wait
+        cmp eax, 27
         je .di_abort
-        cmp eax, EVT_KEY_PRESS
-        jne .di_wait
 
-        ; Handle key in input mode
-        mov eax, ebx
         call handle_keypress
 
         cmp byte [input_done], 1
@@ -2443,12 +2473,12 @@ do_input:
 
 ;----------- DIM (stub) -----------
 do_dim:
-        pop esi
+        pop eax                 ; discard saved ESI
         ret
 
 ;----------- END -----------
 do_end:
-        pop esi
+        pop eax                 ; discard saved ESI
         mov byte [running], 0
         ret
 
@@ -2469,7 +2499,7 @@ turtle_reset:
 
 ;----------- FORWARD -----------
 do_forward:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         call eval_expr          ; EAX = distance
 
@@ -2569,7 +2599,7 @@ do_forward:
 
 ;----------- BACK -----------
 do_back:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         call eval_expr
         neg eax
@@ -2635,7 +2665,7 @@ do_back:
 
 ;----------- LEFT -----------
 do_left:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         call eval_expr
         mov ecx, [turtle_heading]
@@ -2656,7 +2686,7 @@ do_left:
 
 ;----------- RIGHT -----------
 do_right:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         call eval_expr
         mov ecx, [turtle_heading]
@@ -2677,19 +2707,19 @@ do_right:
 
 ;----------- PENUP -----------
 do_penup:
-        pop esi
+        pop eax                 ; discard saved ESI
         mov byte [turtle_pen], 0
         ret
 
 ;----------- PENDOWN -----------
 do_pendown:
-        pop esi
+        pop eax                 ; discard saved ESI
         mov byte [turtle_pen], 1
         ret
 
 ;----------- HOME -----------
 do_home:
-        pop esi
+        pop eax                 ; discard saved ESI
         mov dword [turtle_x], 0
         mov dword [turtle_y], 0
         mov dword [turtle_heading], 0
@@ -2697,13 +2727,13 @@ do_home:
 
 ;----------- CLEARSCREEN -----------
 do_clearscreen:
-        pop esi
+        pop eax                 ; discard saved ESI
         call turtle_reset
         ret
 
 ;----------- SETCOLOR -----------
 do_setcolor:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         ; Parse color name or number
         call eval_expr
@@ -2746,7 +2776,7 @@ do_setcolor:
 
 ;----------- CIRCLE -----------
 do_circle:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         call eval_expr          ; radius in EAX
         push eax
@@ -2913,7 +2943,7 @@ do_circle:
 
 ;----------- REPEAT -----------
 do_repeat:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         call eval_expr          ; count
         push eax
@@ -2989,7 +3019,7 @@ do_repeat:
 
 ;----------- MAKE -----------
 do_make:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         ; MAKE "varname value
         cmp byte [esi], '"'
@@ -3021,7 +3051,7 @@ do_make:
 
 ;----------- SETXY -----------
 do_setxy:
-        pop esi
+        pop eax                 ; discard saved ESI — keep ESI at argument
         call skip_spaces
         call eval_expr          ; x
         push eax
@@ -3130,25 +3160,23 @@ exec_pilot_accept:
         call output_add_line
 
 .pa_wait:
-        call gui_compose
         call draw_all
 
         cmp dword [input_len], 0
         je .pa_no_text
-        mov eax, [win_id]
         mov ebx, OUT_X + 20
         mov ecx, OUT_Y + OUT_H - 18
         mov esi, input_buf
         mov edi, 0x00FFFFFF
-        call gui_draw_text
+        call fb_draw_text
 .pa_no_text:
-        call gui_flip
-        call gui_poll_event
-        cmp eax, EVT_CLOSE
+        ; Poll for keypress
+        mov eax, SYS_READ_KEY
+        int 0x80
+        test eax, eax
+        jz .pa_wait
+        cmp eax, 27
         je .pa_abort
-        cmp eax, EVT_KEY_PRESS
-        jne .pa_wait
-        mov eax, ebx
         call handle_keypress
         cmp byte [input_done], 1
         jne .pa_wait
@@ -4016,8 +4044,10 @@ sin_table:
 
 section .bss
 
-; Window
-win_id:         resd 1
+; Framebuffer state (filled by SYS_FRAMEBUF on startup)
+tw_fb_addr:     resd 1
+tw_fb_pitch:    resd 1
+tw_mouse_was_down: resb 1
 has_arg:        resb 1
 
 ; Editor state

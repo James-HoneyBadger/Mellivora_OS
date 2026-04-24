@@ -151,22 +151,9 @@ gui_desktop_main:
         call vga_print
         mov byte [vga_color], COLOR_DEFAULT
         ret
-.login_fail:
-        ; Login screen was already in graphics mode, so cancelled login
-        ; must restore the text console before returning to the shell.
-        call gui_exit_desktop
-        ret
 .no_vbe_msg: db "Error: VBE not available", 0x0A, 0
 .notify_welcome: db "Welcome to Mellivora OS!", 0
 .vbe_ok:
-
-        ; Show login screen (if not already logged in)
-        cmp byte [login_authenticated], 1
-        je .skip_login
-        call gui_login_screen
-        cmp byte [login_authenticated], 1
-        jne .login_fail
-.skip_login:
 
         ; Switch mouse to pixel-resolution tracking
         mov dword [mouse_max_x], GUI_SCREEN_W - 1
@@ -265,27 +252,15 @@ gui_exit_desktop:
         popad
         ret
 
-;=======================================================================
-; LOGIN SCREEN
-;=======================================================================
-; Graphical login with user selection and password entry
-
-LOGIN_BOX_W     equ 300
-LOGIN_BOX_H     equ 200
-LOGIN_BOX_X     equ (GUI_SCREEN_W - LOGIN_BOX_W) / 2
-LOGIN_BOX_Y     equ (GUI_SCREEN_H - LOGIN_BOX_H) / 2
-LOGIN_MAX_USERS equ 4
 LOGIN_NAME_LEN  equ 16
-LOGIN_PASS_LEN  equ 16
 
+; (login screen removed — single-user OS)
+; Stub retained only so the label address is valid if referenced.
 gui_login_screen:
-        pushad
+        mov byte [login_authenticated], 1
+        ret
 
-        ; Initialize login state
-        mov dword [login_sel_user], 0
-        mov dword [login_pass_len], 0
-        mov byte [login_error], 0
-        mov byte [login_authenticated], 0
+%if 0  ; login screen body removed
 
 .login_loop:
         ; Draw background — gradient blue
@@ -659,39 +634,10 @@ gui_login_screen:
         mov dword [login_pass_len], 0
         jmp .login_loop
 
-.login_cancelled:
-        mov byte [login_authenticated], 0
-        popad
-        ret
+%endif  ; end of removed login screen body
 
-.login_prev_btn: db 0
-.login_title:      db "Mellivora OS Login", 0
-.login_pass_label: db "Password:", 0
-.login_btn_text:   db "Login", 0
-.login_guest_text: db "Guest", 0
-.login_err_text:   db "Incorrect password", 0
-.login_guest_name: db "Guest", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-
-; User accounts — 4 users × 16 bytes name + 16 bytes password
-; Pre-configured: admin (password: admin), user (no password), Guest slot
-login_users:
-        db "admin", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; user 0
-        db "user", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; user 1
-        db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; user 2 (empty)
-        db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; user 3 (empty)
-
-login_passwords:
-        db "admin", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0   ; pass for user 0
-        db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; pass for user 1 (none)
-        db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; pass for user 2
-        db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; pass for user 3
-
-login_current_user: times LOGIN_NAME_LEN db 0
-login_authenticated: db 0
-login_sel_user:  dd 0
-login_pass_len:  dd 0
-login_pass_buf:  times LOGIN_PASS_LEN db 0
-login_error:     db 0
+login_current_user: db "user", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+login_authenticated: db 1
 
 ;=======================================================================
 ; FILE DIALOGS

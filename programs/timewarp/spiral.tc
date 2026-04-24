@@ -1,0 +1,12 @@
+' spiral.tc - Growing spiral in TempleCode Logo + BASIC
+' Combines turtle commands with BASIC control flow
+
+CS
+PENDOWN
+LET S = 2
+L:loop
+FORWARD S
+RIGHT 15
+LET S = S + 1
+IF S < 80 THEN GOTO loop
+END

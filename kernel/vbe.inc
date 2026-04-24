@@ -612,6 +612,7 @@ vbe_clear:
 ;   0 = get info -> EAX=lfb_addr, EBX=width, ECX=height, EDX=bpp
 ;   1 = set mode: ECX=width, EDX=height, ESI=bpp
 ;   2 = restore text mode
+;   3 = draw string: ECX=x, EDX=y, ESI=str_ptr, EDI=fg_color
 ;---------------------------------------
 sys_framebuf:
         cmp ebx, 0
@@ -620,38 +621,121 @@ sys_framebuf:
         je .fb_setmode
         cmp ebx, 2
         je .fb_restore
-        mov dword [esp + 28], -1
-        ret
+        cmp ebx, 3
+        je .fb_drawtext
+        xor eax, eax
+        dec eax                         ; EAX = -1
+        iretd
 
 .fb_info:
+        ; Return: EAX=lfb_addr, EBX=width, ECX=height, EDX=bpp
         mov eax, [vbe_lfb_addr]
-        mov [esp + 28], eax             ; EAX
-        mov eax, [vbe_width]
-        mov [esp + 16], eax             ; EBX
-        mov eax, [vbe_height]
-        mov [esp + 24], eax             ; ECX
-        mov eax, [vbe_bpp]
-        mov [esp + 20], eax             ; EDX
-        ret
+        mov ebx, [vbe_width]
+        mov ecx, [vbe_height]
+        mov edx, [vbe_bpp]
+        iretd
 
 .fb_setmode:
         cmp byte [vbe_available], 0
         je .fb_novbe
-        mov eax, ecx                   ; width
-        mov ebx, edx                   ; height
-        mov ecx, esi                   ; bpp
+        ; vbe_set_mode(EAX=width, EBX=height, ECX=bpp)
+        mov eax, ecx                    ; width (user ECX)
+        mov ecx, esi                    ; bpp (user ESI)
+        mov ebx, edx                    ; height (user EDX)
         call vbe_set_mode
-        mov dword [esp + 28], 0
-        ret
+        xor eax, eax
+        iretd
 
 .fb_restore:
         call vbe_restore_text
-        mov dword [esp + 28], 0
-        ret
+        xor eax, eax
+        iretd
 
 .fb_novbe:
-        mov dword [esp + 28], -1
-        ret
+        xor eax, eax
+        dec eax                         ; EAX = -1
+        iretd
+
+;---------------------------------------
+; SYS_FRAMEBUF(3) — draw null-terminated string directly to LFB
+; ECX=x, EDX=y, ESI=str_ptr, EDI=fg_color (32-bit RGB)
+; Uses the VGA font saved in vbe_font_save_buf (8x16, 32 bytes/glyph)
+;---------------------------------------
+.fb_drawtext:
+        cmp byte [vbe_active], 0
+        je .fb_novbe
+        pushad
+        mov [.fdt_x],   ecx
+        mov [.fdt_y],   edx
+        mov [.fdt_col], edi
+        mov ebp, esi                    ; EBP = string pointer
+
+.fdt_char:
+        movzx eax, byte [ebp]
+        test al, al
+        jz .fdt_done
+        ; glyph base = vbe_font_save_buf + char*32
+        imul eax, 32
+        add eax, vbe_font_save_buf      ; EAX = glyph row data pointer
+        ; draw 16 rows
+        xor edx, edx                    ; row counter
+
+.fdt_row:
+        cmp edx, 16
+        jge .fdt_next_char
+        movzx ecx, byte [eax + edx]    ; row bitmask (8 pixels)
+        ; y for this row
+        push eax
+        push edx
+        push ecx
+        mov ebx, [.fdt_y]
+        add ebx, edx                    ; EBX = screen_y + row
+        mov edx, [.fdt_x]              ; EDX = screen_x start
+        ; draw 8 bits MSB-first
+        xor esi, esi                    ; bit index 0..7
+
+.fdt_bit:
+        cmp esi, 8
+        jge .fdt_row_done
+        test ecx, 0x80
+        jz .fdt_skip_pixel
+        ; vbe_putpixel(EAX=x, EBX=y, ECX=color)
+        push eax
+        push ebx
+        push ecx
+        mov eax, edx
+        add eax, esi                    ; x = screen_x + bit
+        mov ecx, [.fdt_col]
+        call vbe_putpixel
+        pop ecx
+        pop ebx
+        pop eax
+
+.fdt_skip_pixel:
+        shl ecx, 1
+        inc esi
+        jmp .fdt_bit
+
+.fdt_row_done:
+        pop ecx
+        pop edx
+        pop eax
+        inc edx
+        jmp .fdt_row
+
+.fdt_next_char:
+        add dword [.fdt_x], 8          ; advance x by one char width
+        inc ebp
+        jmp .fdt_char
+
+.fdt_done:
+        popad
+        xor eax, eax
+        iretd
+
+.fdt_x:   dd 0
+.fdt_y:   dd 0
+.fdt_col: dd 0
 
 ;---------------------------------------
 ; cmd_gui_demo - Shell command `gui`:

@@ -454,11 +454,12 @@ Features:
 Directory Structure:
   /bin      - Utility programs (edit, calc, sort, grep, etc.)
   /games    - Games (snake, tetris, 2048, life, etc.)
+  /Burrows  - Burrows GUI desktop applications
   /samples  - C source code samples for the TCC compiler
   /docs     - Documentation and text files
 
 Type 'help' for a list of commands.
-Type 'set PATH /bin:/games' to configure program search path.
+Type 'set PATH /bin:/games:/Burrows' to configure program search path.
 
 Serial Console (COM1):
   Mellivora includes a bidirectional serial port driver on COM1
@@ -675,6 +676,12 @@ echo Done.
 """,
 }
 
+# Burrows GUI applications — go into /Burrows subdirectory
+BURROWS_PROGRAMS = {
+    'bcalc', 'bedit', 'bforager', 'bhive', 'bnotes', 'bpaint',
+    'bplayer', 'bsettings', 'bsheet', 'bsysmon', 'bterm', 'bview',
+}
+
 # Classify programs into categories for subdirectories
 GAME_PROGRAMS = {
     '2048', 'adventure', 'battleship', 'blackjack', 'breakout',
@@ -684,7 +691,7 @@ GAME_PROGRAMS = {
     'neurovault', 'nim', 'outbreak', 'piano', 'pipes', 'pong',
     'puzzle15', 'rain', 'reversi', 'rogue', 'simon', 'snake',
     'sokoban', 'solitaire', 'starfield', 'tetris', 'tictactoe',
-    'timewarp', 'wordle', 'worm',
+    'wordle', 'worm',
 }
 
 # Everything else in programs/ goes to /bin
@@ -710,8 +717,10 @@ def main():
     # Create subdirectories
     fs.create_subdir("bin")
     fs.create_subdir("games")
+    fs.create_subdir("Burrows")
     fs.create_subdir("samples")
     fs.create_subdir("docs")
+    fs.create_subdir("timewarp")
 
     # Add text files to appropriate directories
     doc_files = {'readme.txt', 'license.txt', 'notes.txt', 'todo.txt'}
@@ -734,7 +743,9 @@ def main():
                 with open(fpath, 'rb') as f:
                     data = f.read()
                 prog_name = fname[:-4]
-                if prog_name in GAME_PROGRAMS:
+                if prog_name in BURROWS_PROGRAMS:
+                    fs.add_file(prog_name, data, directory="Burrows")
+                elif prog_name in GAME_PROGRAMS:
                     fs.add_file(prog_name, data, directory="games")
                 else:
                     fs.add_file(prog_name, data, directory="bin")
@@ -749,6 +760,17 @@ def main():
                     data = f.read()
                 fs.add_file(fname, data.encode('ascii'),
                             directory="samples")
+
+    # Add TempleCode sample programs
+    timewarp_src = os.path.join(programs_dir, "timewarp")
+    if os.path.isdir(timewarp_src):
+        for fname in sorted(os.listdir(timewarp_src)):
+            if fname.endswith('.tc'):
+                fpath = os.path.join(timewarp_src, fname)
+                with open(fpath, 'r', encoding='ascii') as f:
+                    data = f.read()
+                fs.add_file(fname, data.encode('ascii'),
+                            directory="timewarp")
 
     fs.finalize()
 

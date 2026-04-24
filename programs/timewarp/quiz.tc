@@ -1,0 +1,27 @@
+' quiz.tc - Math quiz in TempleCode PILOT
+' Demonstrates T: (type), A: (accept), M: (match), Y:/N: (yes/no)
+
+R: TempleCode PILOT Math Quiz
+T: Math Quiz - three questions
+T: -----------------------
+
+T: Q1: What is 6 * 7?
+A: I
+M: 42
+Y: T: Correct! 6 * 7 = 42
+N: T: Wrong - the answer is 42
+
+T: Q2: What is 100 / 4?
+A: I
+M: 25
+Y: T: Correct! 100 / 4 = 25
+N: T: Wrong - the answer is 25
+
+T: Q3: What is 2 * 2 * 2 * 2?
+A: I
+M: 16
+Y: T: Correct! 2^4 = 16
+N: T: Wrong - the answer is 16
+
+T: Quiz complete. Goodbye!
+E:

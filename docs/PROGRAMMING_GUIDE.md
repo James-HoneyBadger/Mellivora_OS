@@ -16,7 +16,7 @@ compiler.
 6. [Screen Control](#screen-control)
 7. [Keyboard Input](#keyboard-input)
 8. [Timing & Sound](#timing--sound)
-9. [Memory Allocation](#memory-allocation)
+9. [Memory Management](#memory-management)
 10. [Directory Operations](#directory-operations)
 11. [Serial Port I/O](#serial-port-io)
 12. [Environment & Arguments](#environment--arguments)
@@ -670,7 +670,8 @@ For dynamic memory allocation similar to Unix, use `SYS_SBRK` to grow or shrink 
     - Zero: returns the current program break without changing it.
   - **Output:** `EAX` = the *old* program break address on success. On failure (e.g., requesting memory that would collide with the stack), returns `-1`.
 
-**Example: Requesting 4KB of memory**
+#### Example: Requesting 4KB of memory
+
 ```nasm
 mov eax, 23         ; SYS_SBRK
 mov ebx, 4096       ; Increment by 4096 bytes
@@ -682,7 +683,8 @@ je .error_handler
 ; ... use memory at [eax] ...
 ```
 
-**Example: Getting current break**
+#### Example: Getting current break
+
 ```nasm
 mov eax, 23
 mov ebx, 0

@@ -1,0 +1,8 @@
+' star.tc - Five-pointed star in TempleCode Logo
+' Uses REPEAT with turtle graphics
+
+CS
+PENDOWN
+SETCOLOR 4
+REPEAT 5 [FD 80 RT 144]
+END

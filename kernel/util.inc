@@ -3159,15 +3159,27 @@ batch_run_loop:
         cmp al, 0
         je .brl_line
 .brl_not_rem:
-        ; 3. goto directive
+        ; 3. v5.0: 'else' directive — if skip_else is set, skip to endif
+        call batch_check_else
+        jnc .brl_line           ; CF=0 = was an else
+
+        ; 4. v5.0: 'endif' directive — clear if-block state
+        call batch_check_endif
+        jnc .brl_line           ; CF=0 = was an endif
+
+        ; 5. goto directive
         call batch_check_goto
         jnc .brl_line           ; CF=0 = was a goto, ESI updated
 
-        ; 4. if directive
+        ; 6. if directive
         call batch_check_if
         jnc .brl_line           ; CF=0 = was an if, processed
 
-        ; 5. Check for @ prefix (silent execution)
+        ; 7. v5.0: for directive
+        call batch_check_for
+        jnc .brl_line           ; CF=0 = was a for loop, processed
+
+        ; 8. Check for @ prefix (silent execution)
         xor ebx, ebx            ; EBX = 0: echo
         cmp byte [batch_line_buf], '@'
         jne .brl_show_echo
@@ -3206,6 +3218,403 @@ batch_run_loop:
         jmp .brl_line
 .brl_done:
         mov byte [batch_running], 0
+        mov byte [batch_if_depth], 0
+        mov byte [batch_skip_else], 0
+        ret
+
+;---------------------------------------
+; batch_check_else - Handle 'else' block directive
+; CF=0: was an else (ESI unchanged, but if skip_else set then skip to endif)
+; CF=1: not an else
+;---------------------------------------
+batch_check_else:
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'e'
+        jne .bce_not
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'l'
+        jne .bce_not
+        mov al, [batch_line_buf+2]
+        or al, 0x20
+        cmp al, 's'
+        jne .bce_not
+        mov al, [batch_line_buf+3]
+        or al, 0x20
+        cmp al, 'e'
+        jne .bce_not
+        mov al, [batch_line_buf+4]
+        cmp al, ' '
+        je .bce_have_cmd
+        cmp al, 0
+        jne .bce_not
+        ; Bare 'else' — if skip_else is set, skip to endif
+.bce_bare:
+        cmp byte [batch_skip_else], 1
+        jne .bce_done_clc       ; We're in the false-if branch, now execute the else block
+        ; We're in the true-if branch, skip the else block
+        call batch_skip_to_endif
+.bce_done_clc:
+        clc
+        ret
+.bce_have_cmd:
+        ; 'else cmd' — run cmd only if skip_else is NOT set
+        cmp byte [batch_skip_else], 1
+        je .bce_done_clc        ; True branch was taken, skip this else command
+        mov edi, batch_line_buf + 5     ; command after 'else '
+        push esi
+        mov esi, edi
+        mov edi, line_buffer
+.bce_cp:
+        lodsb
+        stosb
+        test al, al
+        jnz .bce_cp
+        call shell_parse_cmd
+        pop esi
+        clc
+        ret
+.bce_not:
+        stc
+        ret
+
+;---------------------------------------
+; batch_check_endif - Handle 'endif' block directive
+; CF=0: was an endif
+; CF=1: not an endif
+;---------------------------------------
+batch_check_endif:
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'e'
+        jne .bcef_not
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'n'
+        jne .bcef_not
+        mov al, [batch_line_buf+2]
+        or al, 0x20
+        cmp al, 'd'
+        jne .bcef_not
+        mov al, [batch_line_buf+3]
+        or al, 0x20
+        cmp al, 'i'
+        jne .bcef_not
+        mov al, [batch_line_buf+4]
+        or al, 0x20
+        cmp al, 'f'
+        jne .bcef_not
+        mov al, [batch_line_buf+5]
+        cmp al, ' '
+        je .bcef_done
+        cmp al, 0
+        jne .bcef_not
+.bcef_done:
+        ; Clear if-block state
+        mov byte [batch_skip_else], 0
+        clc
+        ret
+.bcef_not:
+        stc
+        ret
+
+;---------------------------------------
+; batch_skip_to_endif - Skip ESI forward to the next 'endif' at current depth
+; Handles nested if/endif pairs.
+; Clobbers: EAX, EBX, ECX, EDI
+;---------------------------------------
+batch_skip_to_endif:
+        push esi
+        xor ecx, ecx            ; nesting depth (extra ifs we need to skip over)
+
+.bste_scan:
+        ; Read next line into a local scan buffer
+        cmp byte [esi], 0
+        je .bste_eof
+        ; Skip to next line start while peeking for if/endif
+        mov edi, batch_line_buf ; reuse batch_line_buf for scanning
+.bste_ln:
+        lodsb
+        cmp al, 0x0A
+        je .bste_check
+        cmp al, 0x0D
+        je .bste_ln
+        cmp al, 0
+        je .bste_check_last
+        mov [edi], al
+        inc edi
+        jmp .bste_ln
+.bste_check_last:
+        dec esi
+.bste_check:
+        mov byte [edi], 0
+        ; Is this line an 'if '? If so, increment depth
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'i'
+        jne .bste_try_endif
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'f'
+        jne .bste_try_endif
+        mov al, [batch_line_buf+2]
+        cmp al, ' '
+        jne .bste_try_endif
+        inc ecx                 ; nested if
+        jmp .bste_scan
+
+.bste_try_endif:
+        ; Is this line 'endif'?
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'e'
+        jne .bste_scan
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'n'
+        jne .bste_scan
+        mov al, [batch_line_buf+2]
+        or al, 0x20
+        cmp al, 'd'
+        jne .bste_scan
+        mov al, [batch_line_buf+3]
+        or al, 0x20
+        cmp al, 'i'
+        jne .bste_scan
+        mov al, [batch_line_buf+4]
+        or al, 0x20
+        cmp al, 'f'
+        jne .bste_scan
+        ; Found 'endif'
+        cmp ecx, 0
+        je .bste_found
+        dec ecx                 ; un-nest
+        jmp .bste_scan
+
+.bste_found:
+        ; ESI now points past the endif line — good
+        add esp, 4              ; discard saved ESI
+        mov byte [batch_skip_else], 0
+        ret
+
+.bste_eof:
+        pop esi                 ; restore original ESI on EOF
+        ret
+
+;---------------------------------------
+; batch_check_for - Handle 'for %%x in (list) do cmd' directive
+; CF=0: was a for loop, executed
+; CF=1: not a for loop
+;---------------------------------------
+batch_check_for:
+        ; Check for 'for ' prefix (case-insensitive)
+        mov al, [batch_line_buf]
+        or al, 0x20
+        cmp al, 'f'
+        jne .bcf_not
+        mov al, [batch_line_buf+1]
+        or al, 0x20
+        cmp al, 'o'
+        jne .bcf_not
+        mov al, [batch_line_buf+2]
+        or al, 0x20
+        cmp al, 'r'
+        jne .bcf_not
+        cmp byte [batch_line_buf+3], ' '
+        jne .bcf_not
+
+        ; Parse: for %%VAR in (list) do cmd
+        push esi
+        mov esi, batch_line_buf + 4
+        call skip_spaces
+
+        ; Expect '%%' prefix for variable
+        cmp byte [esi], '%'
+        jne .bcf_fail_pop
+        inc esi
+        cmp byte [esi], '%'
+        jne .bcf_fail_pop
+        inc esi
+
+        ; Get variable letter
+        mov al, [esi]
+        cmp al, 'a'
+        jl .bcf_fail_pop
+        cmp al, 'z'
+        jg .bcf_fail_pop
+        mov [batch_for_var], al
+        mov byte [batch_for_var+1], 0
+        inc esi
+        call skip_spaces
+
+        ; Expect 'in'
+        mov al, [esi]
+        or al, 0x20
+        cmp al, 'i'
+        jne .bcf_fail_pop
+        inc esi
+        mov al, [esi]
+        or al, 0x20
+        cmp al, 'n'
+        jne .bcf_fail_pop
+        inc esi
+        call skip_spaces
+
+        ; Expect '('
+        cmp byte [esi], '('
+        jne .bcf_fail_pop
+        inc esi
+        call skip_spaces
+
+        ; Remember start of list
+        push esi                ; PUSH: list start
+
+        ; Find 'do' keyword (to get command template)
+        ; Scan to ')' to find end of list, then skip to 'do'
+.bcf_find_close:
+        cmp byte [esi], 0
+        je .bcf_fail_list
+        cmp byte [esi], ')'
+        je .bcf_found_close
+        inc esi
+        jmp .bcf_find_close
+.bcf_found_close:
+        mov byte [esi], 0       ; null-terminate list (temp)
+        push esi                ; PUSH: ')' position
+        inc esi
+        call skip_spaces
+
+        ; Expect 'do'
+        mov al, [esi]
+        or al, 0x20
+        cmp al, 'd'
+        jne .bcf_fail_paren
+        inc esi
+        mov al, [esi]
+        or al, 0x20
+        cmp al, 'o'
+        jne .bcf_fail_paren
+        inc esi
+        cmp byte [esi], ' '
+        jne .bcf_fail_paren
+        call skip_spaces
+
+        ; ESI now points to command template (after 'do ')
+        ; Save command template to for_cmd_buf
+        mov edi, for_cmd_buf
+        xor ecx, ecx
+.bcf_cp_cmd:
+        lodsb
+        stosb
+        test al, al
+        jz .bcf_cmd_done
+        inc ecx
+        jmp .bcf_cp_cmd
+.bcf_cmd_done:
+
+        ; Restore ')' position and re-null-terminate
+        pop esi                 ; POP: ')' position
+        mov byte [esi], ')'     ; restore ')'
+
+        ; Restore list start
+        pop esi                 ; POP: list start
+
+        ; Iterate over the list
+.bcf_iter:
+        call skip_spaces
+        cmp byte [esi], ')'
+        je .bcf_iter_done
+        cmp byte [esi], 0
+        je .bcf_iter_done
+
+        ; Extract one list item to batch_for_val
+        mov edi, batch_for_val
+        xor ecx, ecx
+.bcf_item:
+        mov al, [esi]
+        cmp al, 0
+        je .bcf_item_end
+        cmp al, ')'
+        je .bcf_item_end
+        cmp al, ' '
+        je .bcf_item_end
+        stosb
+        inc esi
+        inc ecx
+        cmp ecx, 255
+        jb .bcf_item
+.bcf_item_end:
+        mov byte [edi], 0
+
+        ; Expand for_cmd_buf with %%VAR substitution into line_buffer
+        ; Simple: replace occurrences of "%%X" with batch_for_val
+        mov esi, for_cmd_buf
+        mov edi, line_buffer
+        movzx ebx, byte [batch_for_var]  ; the variable letter
+
+.bcf_expand:
+        lodsb
+        cmp al, 0
+        je .bcf_expand_done
+        cmp al, '%'
+        jne .bcf_novar
+        cmp byte [esi], '%'
+        jne .bcf_novar
+        ; Check if next char is our variable letter
+        mov ah, [esi+1]
+        or ah, 0x20
+        cmp ah, bl
+        je .bcf_subst
+        ; It's a %% but not our variable — output %%
+        stosb
+        lodsb                   ; consume second %
+        stosb
+        lodsb                   ; consume var letter
+        stosb
+        jmp .bcf_expand
+.bcf_subst:
+        add esi, 2              ; skip second '%' and variable letter
+        ; Copy batch_for_val into output
+        push esi
+        mov esi, batch_for_val
+.bcf_val_cp:
+        lodsb
+        test al, al
+        jz .bcf_val_done
+        stosb
+        jmp .bcf_val_cp
+.bcf_val_done:
+        pop esi
+        jmp .bcf_expand
+.bcf_novar:
+        stosb
+        jmp .bcf_expand
+.bcf_expand_done:
+        mov byte [edi], 0
+
+        ; Execute the expanded command
+        push esi
+        call shell_parse_cmd
+        pop esi
+        jmp .bcf_iter
+
+.bcf_iter_done:
+        pop esi                 ; restore outer batch ESI
+        clc
+        ret
+
+.bcf_fail_list:
+.bcf_fail_paren:
+        pop esi                 ; list start
+        pop esi                 ; outer batch ESI
+        clc                     ; still "consumed" — was syntactically a for
+        ret
+
+.bcf_fail_pop:
+        pop esi                 ; outer batch ESI
+.bcf_not:
+        stc
         ret
 
 ;---------------------------------------
@@ -3419,6 +3828,257 @@ batch_check_if:
         inc edi
         jmp .bci_sp2
 .bci_no_not:
+        ; Check for 'exist ' keyword (case-insensitive)
+        push edi                ; save condition start
+        mov al, [edi]
+        or al, 0x20
+        cmp al, 'e'
+        jne .bci_try_str
+        mov al, [edi+1]
+        or al, 0x20
+        cmp al, 'x'
+        jne .bci_try_str
+        mov al, [edi+2]
+        or al, 0x20
+        cmp al, 'i'
+        jne .bci_try_str
+        mov al, [edi+3]
+        or al, 0x20
+        cmp al, 's'
+        jne .bci_try_str
+        mov al, [edi+4]
+        or al, 0x20
+        cmp al, 't'
+        jne .bci_try_str
+        cmp byte [edi+5], ' '
+        jne .bci_try_str
+        ; 'exist FILENAME'
+        add esp, 4              ; discard EDI save
+        add edi, 6
+.bci_exist_sp:
+        cmp byte [edi], ' '
+        jne .bci_exist_fname
+        inc edi
+        jmp .bci_exist_sp
+.bci_exist_fname:
+        ; Copy filename to filename_buf
+        push edi
+        mov esi, edi
+        mov edi, filename_buf
+.bci_exist_cp:
+        lodsb
+        cmp al, 0
+        je .bci_exist_end
+        cmp al, ' '
+        je .bci_exist_end
+        stosb
+        jmp .bci_exist_cp
+.bci_exist_end:
+        mov byte [edi], 0
+        pop edi                 ; EDI = original filename start in batch_line_buf
+        ; EDI now points past the filename — find command part
+.bci_exist_skip:
+        mov al, [edi]
+        cmp al, 0
+        je .bci_exist_eval
+        cmp al, ' '
+        je .bci_exist_sp2
+        inc edi
+        jmp .bci_exist_skip
+.bci_exist_sp2:
+        inc edi
+        cmp byte [edi], ' '
+        je .bci_exist_sp2
+.bci_exist_eval:
+        ; EDI = command after filename (or end of line for block-if)
+        push edi                ; save command pointer
+        ; Check if file exists
+        mov esi, filename_buf
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        ; CF=1 means not found
+        pushf
+        pop eax
+        and eax, 1              ; EAX = 1 if not found (CF set = file absent)
+        ; condition_met = !CF XOR invert = !file_absent XOR invert
+        ; file_present = (CF=0), so condition = (1-EAX) XOR EBX
+        ; if EBX=0 (no 'not'): condition = (EAX == 0) i.e. file exists
+        ; if EBX=1 ('not'):    condition = (EAX == 1) i.e. file absent
+        xor eax, ebx            ; EAX = 0: condition not met; 1: met (with inversion)
+        ; But we need: met = file_present XOR EBX
+        ; file_present = (CF==0) = (EAX_before==0), so met = (1-EAX_cf) XOR EBX
+        ; We set EAX=CF(1=absent), so met = (1-EAX) XOR EBX
+        ; XOR gives: 1-EAX XOR EBX
+        ; Recalculate properly:
+        ; EAX here = CF XOR EBX (after our xor).  met = (CF==0) XOR EBX = !CF XOR EBX
+        ; !CF = 1-CF; !CF XOR EBX.  We have EAX = CF XOR EBX.
+        ; !CF XOR EBX = 1 XOR CF XOR EBX = 1 XOR EAX. So:
+        xor eax, 1              ; EAX = 1 means condition met
+        pop edi                 ; restore command pointer
+        pop esi                 ; restore batch loop ESI (PUSH#1)
+        test eax, eax
+        jz .bci_exist_not_met   ; condition not met
+        ; Condition met — execute command at EDI (or set skip_else for block-if)
+        cmp byte [edi], 0
+        jne .bci_exist_run_cmd
+        mov byte [batch_skip_else], 1
+        jmp .bci_done_clc
+.bci_exist_run_cmd:
+        push esi
+        mov esi, edi
+        mov edi, line_buffer
+.bci_exist_run:
+        lodsb
+        stosb
+        test al, al
+        jnz .bci_exist_run
+        call shell_parse_cmd
+        pop esi
+        jmp .bci_done_clc
+.bci_exist_not_met:
+        cmp byte [edi], 0
+        je .bci_exist_skip_blk
+        jmp .bci_done_clc       ; inline single-line skip — nothing to execute
+.bci_exist_skip_blk:
+        call batch_skip_to_endif
+        jmp .bci_done_clc
+
+.bci_try_str:
+        pop edi                 ; restore condition start
+        ; Check for '"str1"=="str2"' string comparison
+        cmp byte [edi], '"'
+        jne .bci_try_errorlevel
+        ; Parse: "STR1"=="STR2" cmd
+        push edi                ; save EDI for fallback
+        inc edi
+        ; Copy STR1
+        mov esi, batch_cmp_str1
+.bci_str1:
+        mov al, [edi]
+        cmp al, '"'
+        je .bci_str1_done
+        cmp al, 0
+        je .bci_str_fail
+        mov [esi], al
+        inc esi
+        inc edi
+        jmp .bci_str1
+.bci_str1_done:
+        mov byte [esi], 0
+        inc edi                 ; skip closing '"'
+        ; Expect '=='
+        cmp byte [edi], '='
+        jne .bci_str_fail
+        inc edi
+        cmp byte [edi], '='
+        jne .bci_str_fail
+        inc edi
+        ; Expect opening '"'
+        cmp byte [edi], '"'
+        jne .bci_str_fail
+        inc edi
+        ; Copy STR2
+        mov esi, batch_cmp_str2
+.bci_str2:
+        mov al, [edi]
+        cmp al, '"'
+        je .bci_str2_done
+        cmp al, 0
+        je .bci_str_fail
+        mov [esi], al
+        inc esi
+        inc edi
+        jmp .bci_str2
+.bci_str2_done:
+        mov byte [esi], 0
+        inc edi                 ; skip closing '"'
+        ; Skip spaces before command
+.bci_str_skip_sp:
+        cmp byte [edi], ' '
+        jne .bci_str_cmp
+        inc edi
+        jmp .bci_str_skip_sp
+.bci_str_cmp:
+        add esp, 4              ; discard saved EDI
+        ; Compare STR1 and STR2
+        push edi                ; save command pointer
+        mov esi, batch_cmp_str1
+        mov edi, batch_cmp_str2
+.bci_strcmp:
+        mov al, [esi]
+        mov cl, [edi]
+        cmp al, cl
+        jne .bci_str_neq
+        inc esi
+        inc edi
+        test al, al
+        jnz .bci_strcmp
+        ; Equal
+        pop edi                 ; restore command pointer
+        pop esi                 ; restore batch loop ESI
+        ; condition: equal XOR invert
+        test ebx, ebx           ; EBX=0: equal is true; EBX=1: equal is false (not eq)
+        jnz .bci_str_eq_skip    ; EBX=1 and equal: condition false
+        ; Execute command
+        cmp byte [edi], 0
+        jne .bci_str_eq_cmd
+        mov byte [batch_skip_else], 1   ; block-if, condition true
+        jmp .bci_done_clc
+.bci_str_eq_cmd:
+        push esi
+        mov esi, edi
+        mov edi, line_buffer
+.bci_str_run:
+        lodsb
+        stosb
+        test al, al
+        jnz .bci_str_run
+        call shell_parse_cmd
+        pop esi
+        jmp .bci_done_clc
+.bci_str_eq_skip:
+        cmp byte [edi], 0
+        je .bci_str_eq_blk_skip
+        jmp .bci_done_clc
+.bci_str_eq_blk_skip:
+        call batch_skip_to_endif
+        jmp .bci_done_clc
+.bci_str_neq:
+        ; Not equal
+        pop edi                 ; restore command pointer
+        pop esi                 ; restore batch loop ESI
+        test ebx, ebx           ; EBX=0: equal expected, not met; EBX=1: not-equal = met
+        jz .bci_str_neq_skip
+        ; Condition met
+        cmp byte [edi], 0
+        jne .bci_str_neq_cmd
+        mov byte [batch_skip_else], 1   ; block-if, condition true
+        jmp .bci_done_clc
+.bci_str_neq_cmd:
+        push esi
+        mov esi, edi
+        mov edi, line_buffer
+.bci_strnq_run:
+        lodsb
+        stosb
+        test al, al
+        jnz .bci_strnq_run
+        call shell_parse_cmd
+        pop esi
+        jmp .bci_done_clc
+.bci_str_neq_skip:
+        cmp byte [edi], 0
+        je .bci_str_neq_blk
+        jmp .bci_done_clc
+.bci_str_neq_blk:
+        call batch_skip_to_endif
+        jmp .bci_done_clc
+.bci_str_fail:
+        pop edi                 ; discard saved EDI
+        ; Fall through to errorlevel check (treat as unrecognised)
+        jmp .bci_el_fail
+
+.bci_try_errorlevel:
         ; Check for 'errorlevel ' keyword (case-insensitive)
         push edi                ; PUSH#2: saved EDI before keyword check
         push esi                ; PUSH#3: saved ESI (= batch loop ESI currently)
@@ -3523,6 +4183,13 @@ batch_check_if:
         jmp .bci_done_clc
 .bci_run_cmd:
         ; Copy EDI (command) to line_buffer and execute
+        cmp byte [edi], 0
+        jne .bci_inline_cmd
+        ; Block-if: condition true, mark so that when else is reached we skip it
+        mov byte [batch_skip_else], 1
+        pop esi                 ; restore PUSH#1 batch loop ESI
+        jmp .bci_done_clc
+.bci_inline_cmd:
         push esi                ; PUSH#2: save ESI around shell_parse_cmd
         mov esi, edi
         mov edi, line_buffer
@@ -3538,6 +4205,13 @@ batch_check_if:
 .bci_skip:
         ; Condition not met
         pop esi                 ; restore PUSH#1 batch loop ESI
+        ; If the if had no inline command it was a block-if; skip to else/endif
+        cmp byte [edi], 0
+        je .bci_skip_block
+        jmp .bci_done_clc
+.bci_skip_block:
+        ; Block-if condition failed: scan forward to else/endif
+        call batch_skip_to_endif
         jmp .bci_done_clc
 .bci_el_fail:
         ; Unrecognized condition keyword

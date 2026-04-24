@@ -1,0 +1,16 @@
+' count.tc - FOR/NEXT loop demo in TempleCode BASIC
+' Counts from 1 to 10, then sums 1+2+...+10
+
+PRINT "Counting 1 to 10:"
+FOR I = 1 TO 10
+PRINT I
+NEXT
+
+LET S = 0
+FOR I = 1 TO 10
+LET S = S + I
+NEXT
+
+PRINT "Sum 1..10 ="
+PRINT S
+END

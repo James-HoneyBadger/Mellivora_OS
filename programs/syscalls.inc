@@ -107,6 +107,15 @@ SYS_POLL        equ 87          ; Poll socket: EBX=fd ECX=events(1=in,2=out) EDX
 POLL_IN         equ 1           ; SYS_POLL event: data available to read
 POLL_OUT        equ 2           ; SYS_POLL event: socket ready to write
 
+; v5.0 syscalls
+SYS_SEM_CREATE  equ 88          ; Create semaphore: EBX=initial_val -> EAX=sem_id/-1
+SYS_SEM_WAIT    equ 89          ; Wait (P): EBX=sem_id -> EAX=0/-1
+SYS_SEM_POST    equ 90          ; Post (V): EBX=sem_id -> EAX=0/-1
+SYS_SEM_CLOSE   equ 91          ; Close semaphore: EBX=sem_id -> EAX=0/-1
+SYS_WAITPID     equ 92          ; Wait for task: EBX=pid -> EAX=exit_code/-1
+SYS_GETMTIME    equ 93          ; Get mtime: EBX=filename -> EAX=mtime ECX=ctime
+SYS_SETMTIME    equ 94          ; Set mtime: EBX=filename ECX=timestamp(0=now) -> EAX=0/-1
+
 ; v4.0 Priority levels
 PRIO_HIGH       equ 0
 PRIO_NORMAL     equ 1
