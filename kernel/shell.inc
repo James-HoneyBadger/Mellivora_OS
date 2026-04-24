@@ -4896,7 +4896,7 @@ cmd_hexdump_file:
         call .print_nibble
         pop eax
         and eax, 0x0F
-       
+
         mov al, ' '
         call vga_putchar
         inc edx
@@ -5584,16 +5584,6 @@ shell_redir_reset:
 shell_prepare_redirection:
         pushad
 
-        ; --- DEBUG: Print line buffer at start ---
-        pushad
-        mov esi, .dbg_msg_spr
-        call vga_print
-        mov esi, line_buffer
-        call vga_print
-        call vga_newline
-        popad
-        ; --- END DEBUG ---
-
         call shell_redir_reset
         mov esi, line_buffer
 .spr_scan:
@@ -5631,13 +5621,6 @@ shell_prepare_redirection:
         jmp .spr_scan
 
 .spr_stdout:
-        ; --- DEBUG: Found stdout redirection ---
-        pushad
-        mov esi, .dbg_msg_stdout
-        call vga_print
-        popad
-        ; --- END DEBUG ---
-
         mov byte [esi], 0
         inc esi
         mov byte [stdout_redir_append], 0
@@ -5657,13 +5640,6 @@ shell_prepare_redirection:
         jmp .spr_scan
 
 .spr_stdin:
-        ; --- DEBUG: Found stdin redirection ---
-        pushad
-        mov esi, .dbg_msg_stdin
-        call vga_print
-        popad
-        ; --- END DEBUG ---
-
         mov byte [esi], 0
         inc esi
         call skip_spaces
@@ -5734,10 +5710,6 @@ shell_prepare_redirection:
         popad
         clc
         ret
-
-.dbg_msg_spr: db "SPR: ", 0
-.dbg_msg_stdout: db "SPR: > found", 0x0A, 0
-.dbg_msg_stdin: db "SPR: < found", 0x0A, 0
 
 shell_finish_redirection:
         pushad

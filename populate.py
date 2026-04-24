@@ -670,8 +670,14 @@ echo Done.
 
 # Classify programs into categories for subdirectories
 GAME_PROGRAMS = {
-    '2048', 'galaga', 'guess', 'kingdom', 'life', 'maze', 'mine',
-    'neurovault', 'outbreak', 'snake', 'sokoban', 'tetris', 'piano',
+    '2048', 'adventure', 'battleship', 'blackjack', 'breakout',
+    'checkers', 'chess', 'connect4', 'doomfire', 'freecell',
+    'galaga', 'guess', 'hangman', 'kingdom', 'life', 'lights',
+    'lolcat', 'lunar', 'mastermind', 'matrix', 'maze', 'mine',
+    'neurovault', 'nim', 'outbreak', 'piano', 'pipes', 'pong',
+    'puzzle15', 'rain', 'reversi', 'rogue', 'simon', 'snake',
+    'sokoban', 'solitaire', 'starfield', 'tetris', 'tictactoe',
+    'timewarp', 'wordle', 'worm',
 }
 
 # Everything else in programs/ goes to /bin

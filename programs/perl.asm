@@ -843,18 +843,18 @@ do_print:
         je .dp_done
         cmp byte [esi], 0x27   ; closing '
         je .dp_sq_end
-        cmp byte [esi], '\\'
+        cmp byte [esi], '\'
         jne .dp_sq_char
         ; Escape: only \' and \\ in single quotes
         inc esi
         cmp byte [esi], 0x27
         je .dp_sq_char
-        cmp byte [esi], '\\'
+        cmp byte [esi], '\'
         je .dp_sq_char
         ; Print the backslash too
         push esi
         mov eax, SYS_PUTCHAR
-        mov ebx, '\\'
+        mov ebx, '\'
         int 0x80
         pop esi
 .dp_sq_char:
@@ -933,7 +933,7 @@ print_dq_string:
         je .pdq_interp_arr
 
         ; Check for escape sequences
-        cmp byte [esi], '\\'
+        cmp byte [esi], '\'
         je .pdq_escape
 
         ; Regular character
@@ -950,7 +950,7 @@ print_dq_string:
         je .pdq_esc_n
         cmp al, 't'
         je .pdq_esc_t
-        cmp al, '\\'
+        cmp al, '\'
         je .pdq_esc_bs
         cmp al, '"'
         je .pdq_esc_dq
@@ -959,7 +959,7 @@ print_dq_string:
         cmp al, '@'
         je .pdq_esc_at
         ; Unknown escape, print as-is
-        mov ebx, '\\'
+        mov ebx, '\'
         mov eax, SYS_PUTCHAR
         int 0x80
         movzx ebx, byte [esi]
@@ -975,7 +975,7 @@ print_dq_string:
         mov ebx, 0x09
         jmp .pdq_esc_out
 .pdq_esc_bs:
-        mov ebx, '\\'
+        mov ebx, '\'
         jmp .pdq_esc_out
 .pdq_esc_dq:
         mov ebx, '"'
@@ -1950,7 +1950,7 @@ skip_block:
 .sb_str_loop:
         cmp byte [esi], 0
         je .sb_loop
-        cmp byte [esi], '\\'
+        cmp byte [esi], '\'
         jne .sb_str_noesc
         inc esi
         cmp byte [esi], 0
@@ -1973,7 +1973,7 @@ skip_block:
         je .sb_loop
         cmp byte [esi], 0x27
         je .sb_sq_end
-        cmp byte [esi], '\\'
+        cmp byte [esi], '\'
         jne .sb_sq_noesc
         inc esi
         cmp byte [esi], 0
@@ -2741,7 +2741,7 @@ eval_primary:
         je .ep_dqs_done
         cmp byte [esi], '"'
         je .ep_dqs_end
-        cmp byte [esi], '\\'
+        cmp byte [esi], '\'
         je .ep_dqs_esc
         cmp byte [esi], '$'
         je .ep_dqs_interp
@@ -2838,12 +2838,12 @@ eval_primary:
         je .ep_sqs_done
         cmp byte [esi], 0x27
         je .ep_sqs_end
-        cmp byte [esi], '\\'
+        cmp byte [esi], '\'
         jne .ep_sqs_char
         ; Only \' and \\ in single quotes
         cmp byte [esi+1], 0x27
         je .ep_sqs_esc
-        cmp byte [esi+1], '\\'
+        cmp byte [esi+1], '\'
         je .ep_sqs_esc
         ; Literal backslash
 .ep_sqs_char:

@@ -35,9 +35,9 @@ SYS_SETCOLOR    equ 18
 SYS_MALLOC      equ 19
 SYS_FREE        equ 20
 SYS_EXEC        equ 21
-SYS_DISK_READ   equ 22
-SYS_DISK_WRITE  equ 23
-SYS_BEEP        equ 24
+SYS_DISK_READ   equ 22          ; Raw disk read (kernel-only; returns -1 from user programs)
+SYS_SBRK        equ 23          ; Adjust program break: EBX=increment -> EAX=old_brk/-1
+SYS_BEEP        equ 24          ; PC speaker beep: EBX=frequency_hz ECX=duration_ticks (1 tick=10ms at 100Hz)
 SYS_DATE        equ 25
 SYS_CHDIR       equ 26
 SYS_GETCWD      equ 27

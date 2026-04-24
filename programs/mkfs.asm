@@ -2,6 +2,11 @@
 ; Usage: mkfs <device>
 ; WARNING: This will destroy all data on the specified device!
 ; Requires confirmation: type YES
+;
+; NOTE: Raw disk write (SYS_DISK_WRITE) is a kernel-only operation and is
+; not accessible from user-space programs. This tool is provided as a
+; reference/template only. Disk formatting must be done at boot time or
+; via the kernel's built-in HBFS initialization routines.
 
 %include "syscalls.inc"
 
@@ -106,34 +111,13 @@ start:
         jmp .copy_label
 .label_done:
 
-        ; Write superblock (sector 0)
-        mov eax, SYS_DISK_WRITE
-        mov ebx, 0              ; LBA = 0
-        mov ecx, sector_buf
-        int 0x80
-        cmp eax, -1
-        je .write_fail
-
-        ; Write empty root directory (sector 1)
-        mov edi, sector_buf
-        mov ecx, SECTOR_SIZE
-        xor eax, eax
-        rep stosb
-        ; HBFS dir marker at start
-        mov dword [sector_buf], 0xFFFFFFFF  ; end-of-dir marker
-
-        mov eax, SYS_DISK_WRITE
-        mov ebx, 1              ; LBA = 1
-        mov ecx, sector_buf
-        int 0x80
-        cmp eax, -1
-        je .write_fail
-
+        ; Raw disk write is a kernel-only operation — always denied from
+        ; user-space programs. Print an explanatory error and exit.
         mov eax, SYS_PRINT
-        mov ebx, msg_done
+        mov ebx, msg_no_raw_write
         int 0x80
         mov eax, SYS_EXIT
-        xor ebx, ebx
+        mov ebx, 1
         int 0x80
 
 .cancelled:
@@ -179,6 +163,8 @@ msg_cancelled:  db "Cancelled.", 10, 0
 msg_formatting: db "Formatting... ", 0
 msg_done:       db "Done. HBFS filesystem created.", 10, 0
 msg_fail:       db "mkfs: disk write failed", 10, 0
+msg_no_raw_write: db "mkfs: raw disk write is not available from user programs.", 10
+                  db "      Disk formatting must be performed by the kernel.", 10, 0
 
 dev_label:      times 64 db 0
 arg_buf:        times 256 db 0
