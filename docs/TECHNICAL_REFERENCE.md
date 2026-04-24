@@ -266,9 +266,9 @@ a block allocation bitmap, and support for nested subdirectories.
 | Region | LBA Start | LBA Count | Size | Description |
 | --- | --- | --- | --- | --- |
 | Superblock | 417 | 1 | 512 B | Filesystem metadata |
-| Bitmap | 418 | 8 | 4 KB | Block allocation bitmap |
-| Root Directory | 426 | 128 | 64 KB | 16 blocks × 4 KB |
-| Data Area | 554 | — | — | File/directory data blocks |
+| Bitmap | 418 | 128 | 64 KB | 16 blocks × 8 sectors × 512 B |
+| Root Directory | 546 | 256 | 128 KB | 32 blocks × 4 KB |
+| Data Area | 802 | — | — | File/directory data blocks |
 
 ### Constants
 
@@ -279,16 +279,20 @@ a block allocation bitmap, and support for nested subdirectories.
 | `HBFS_SECTORS_PER_BLK` | 8 |
 | `HBFS_MAX_FILENAME` | 252 characters |
 | `HBFS_DIR_ENTRY_SIZE` | 288 bytes |
-| `HBFS_ROOT_DIR_BLOCKS` | 16 |
-| `HBFS_ROOT_DIR_SECTS` | 128 (16 × 8) |
-| `HBFS_ROOT_DIR_SIZE` | 65,536 bytes |
-| `HBFS_MAX_FILES` | 227 (65,536 / 288) |
-| `HBFS_SUBDIR_BLOCKS` | 4 |
-| `HBFS_SUBDIR_MAX_ENTRIES` | 56 (4 × 4096 / 288) |
+| `HBFS_BITMAP_BLOCKS` | 16 |
+| `HBFS_BITMAP_SIZE` | 65,536 bytes (64 KB) |
+| `HBFS_ROOT_DIR_BLOCKS` | 32 |
+| `HBFS_ROOT_DIR_SECTS` | 256 (32 × 8) |
+| `HBFS_ROOT_DIR_SIZE` | 131,072 bytes (128 KB) |
+| `HBFS_MAX_FILES` | 455 (131,072 / 288) |
+| `HBFS_SUBDIR_BLOCKS` | 16 |
+| `HBFS_SUBDIR_SIZE` | 65,536 bytes (64 KB) |
+| `HBFS_SUBDIR_MAX_ENTRIES` | 224 (65,536 / 288) |
 | `HBFS_SUPERBLOCK_LBA` | 417 |
 | `HBFS_BITMAP_START` | 418 |
-| `HBFS_ROOT_DIR_START` | 426 |
-| `HBFS_DATA_START` | 554 |
+| `HBFS_ROOT_DIR_START` | 546 |
+| `HBFS_DATA_START` | 802 |
+| `TOTAL_BLOCKS` | 524,288 (≈ 2 GB) |
 
 ### Superblock Structure (512 bytes at LBA 417)
 
@@ -296,11 +300,11 @@ a block allocation bitmap, and support for nested subdirectories.
 | --- | --- | --- | --- |
 | 0 | 4 | Magic (`'HBFS'`) | `0x48424653` |
 | 4 | 4 | Version | 1 |
-| 8 | 4 | Total blocks | 32,768 |
-| 12 | 4 | Free blocks | 32,768 |
-| 16 | 4 | Root directory LBA | 426 |
+| 8 | 4 | Total blocks | 524,288 |
+| 12 | 4 | Free blocks | (updated at populate time) |
+| 16 | 4 | Root directory LBA | 546 |
 | 20 | 4 | Bitmap start LBA | 418 |
-| 24 | 4 | Data start LBA | 554 |
+| 24 | 4 | Data start LBA | 802 |
 | 28 | 4 | Block size | 4096 |
 
 ### Directory Entry Structure (288 bytes)
@@ -319,9 +323,9 @@ a block allocation bitmap, and support for nested subdirectories.
 
 ### Block Allocation Bitmap
 
-- 8 sectors = 4096 bytes = 32,768 bits
+- 16 blocks = 128 sectors = 65,536 bytes
 - Each bit represents one 4 KB data block
-- 32,768 blocks × 4 KB = **128 MB** maximum filesystem size
+- 524,288 blocks × 4 KB = **2 GB** maximum filesystem size
 - Bit = 1 means allocated, bit = 0 means free
 
 ### File Types

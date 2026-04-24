@@ -60,8 +60,8 @@ press **Enter** to execute them. Type `help` to see all available commands.
 
 ### Command History
 
-The shell remembers the last 8 commands. Use **Up** and **Down** arrows to browse.
-Press **Enter** to re-execute a recalled command.
+The shell remembers the last **128 commands** (256 bytes each). Use **Up** and **Down** arrows to browse.
+Press **Enter** to re-execute a recalled command. Type `!N` to recall command N, or `!!` for the last one.
 
 ---
 
@@ -71,15 +71,15 @@ Mellivora organizes files into subdirectories:
 
 ```text
 /
-├── bin/          Utility programs (hello, edit, grep, sort, tcc, ...)
-├── games/        Games (snake, tetris, 2048, galaga, mine, ...)
-├── samples/      C source files (hello.c, fib.c, wumpus.c, ...)
-├── docs/         Documentation (readme, license, notes, ...)
-└── script.bat    Example batch script
+├── bin/          134 utility programs (edit, grep, sort, tcc, wget, nc, ...)
+├── games/         42 games (snake, tetris, 2048, galaga, chess, wordle, ...)
+├── samples/       17 source files (hello.c, fib.c, hello.pl, fizzbuzz.pl, ...)
+├── docs/           text files (readme.txt, license.txt, notes.txt, ...)
+└── script.bat      Example batch script
 ```
 
-Directories support up to 16 levels of nesting. The root directory holds up to 227
-entries; subdirectories hold up to 56 entries each.
+Directories support up to 16 levels of nesting. The root directory holds up to **455**
+entries; subdirectories hold up to **224** entries each.
 
 ---
 
@@ -381,7 +381,7 @@ Lair:/> set                   # List all variables
 Lair:/> unset name            # Remove a variable
 ```
 
-**Limits:** 16 variables, 128 bytes each (name + value combined).
+**Limits:** 32 variables, 128 bytes each (name + value combined).
 
 The `PATH` variable is special — it controls where the shell searches for programs.
 
@@ -449,7 +449,7 @@ Batch scripts can use:
 ## Programs
 
 Mellivora ships with a broad set of user-space programs organized in `/bin` and `/games`
-(currently 56 assembly programs).
+(176 assembly programs: 134 utilities in `/bin`, 42 games in `/games`).
 
 ### Games (in /games)
 
@@ -461,6 +461,23 @@ Mellivora ships with a broad set of user-space programs organized in `/bin` and 
 | `sokoban` | Arrow keys, R restart, ESC quit | Box-pushing puzzle |
 | `2048` | Arrow keys / WASD, ESC quit | Sliding number tiles |
 | `galaga` | ←→ move, Space shoot, ESC quit | Space shooter with enemy waves |
+| `chess` | Type moves (e.g. e2e4), ESC quit | Full chess with legal move validation |
+| `checkers` | Arrow keys, Space select/move, ESC quit | Checkers with forced-capture rules |
+| `blackjack` | Number keys for menu choices | Blackjack (21) card game |
+| `reversi` | Arrow keys, Enter place, ESC quit | Othello / Reversi strategy game |
+| `pong` | W/S keys (left), ↑↓ keys (right) | Two-paddle Pong |
+| `wordle` | Type 5-letter words, Enter | Six-guess word puzzle |
+| `rogue` | hjkl / arrow keys, ESC quit | ASCII dungeon crawler |
+| `freecell` | Arrow keys + Enter, ESC quit | FreeCell solitaire |
+| `adventure` | Text commands (GO, LOOK, TAKE, ...) | Interactive fiction text adventure |
+| `battleship` | Arrow keys, Space/Enter, ESC | Battleship fleet warfare |
+| `connect4` | Number keys 1–7 for column, ESC | Connect Four |
+| `mastermind` | Type color codes, Enter | Code-breaking game |
+| `hangman` | Type letters, Enter | Hangman word game |
+| `tictactoe` | Number keys 1–9 for position | Tic-tac-toe |
+| `nim` | Type number, Enter | Nim strategy game |
+| `simon` | Number keys 1–4 | Simon says memory game |
+| `puzzle15` | Arrow keys | Sliding 15-puzzle |
 | `guess` | Type numbers, Enter | Number guessing with hints |
 | `kingdom` | Number keys for menus | Medieval kingdom management simulation |
 | `life` | ESC quit | Conway's Game of Life (auto-running) |
@@ -468,6 +485,18 @@ Mellivora ships with a broad set of user-space programs organized in `/bin` and 
 | `neurovault` | Text commands (LOOK, GO, TAKE, etc.) | Sci-fi interactive fiction adventure |
 | `outbreak` | Number keys for menus | Zombie survival strategy game |
 | `piano` | Number keys 1–9, 0, -, =, etc. | PC speaker piano (15 notes) |
+| `doomfire` | ESC quit | Animated Doom fire effect |
+| `matrix` | ESC quit | Matrix rain animation |
+| `rain` | ESC quit | Rainfall animation |
+| `starfield` | ESC quit | Starfield fly-through |
+| `pipes` | ESC quit | Animated pipes screensaver |
+| `lunar` | Thrust/rotate keys, ESC quit | Lunar lander game |
+| `lights` | Arrow keys, Space toggle | Lights-out puzzle |
+| `timewarp` | ESC quit | Time warp visual effect |
+| `lolcat` | (pipe input) | Rainbow-colorize text output |
+| `solitaire` | Arrow keys + Enter, ESC quit | Klondike solitaire card game |
+| `worm` | Arrow keys | Multi-worm arena game |
+| `breakout` | ←→ move, ESC quit | Breakout / Arkanoid |
 
 ### Utilities (in /bin)
 
@@ -548,7 +577,7 @@ Hello, World!
 Lair:/>
 ```
 
-### Available C Samples (in /samples)
+### Available Samples (in /samples)
 
 | File | Description |
 | --- | --- |
@@ -563,6 +592,12 @@ Lair:/>
 | `boxes.c` | Box drawing demo |
 | `stars.c` | Starfield animation |
 | `echo.c` | Echo arguments |
+| `factorial.pl` | Factorial (Perl) |
+| `fizzbuzz.pl` | FizzBuzz (Perl) |
+| `guess.pl` | Number guessing game (Perl) |
+| `hello.pl` | Hello World (Perl) |
+| `strings.pl` | String operations demo (Perl) |
+| `arrays.pl` | Array operations demo (Perl) |
 
 ### Supported C Features
 
@@ -653,12 +688,11 @@ D=LightMagenta, E=Yellow, F=White
 
 ## Limitations
 
-- **Single-tasking:** Only one program runs at a time.
-- **No networking:** No network stack.
-- **No piping or redirection:** Commands cannot be chained with `|` or `>`.
-- **No file permissions:** All files accessible to all operations.
+- **No memory protection:** No paging; all tasks share the same flat address space.
+- **No file permissions enforcement:** chmod/chown store values but do not block access.
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
-- **128 MB RAM limit:** Physical memory manager supports up to 128 MB.
-- **Root: 227 files, Subdirs: 56 files:** Directory entry limits.
+- **128 MB RAM limit:** Physical memory manager supports up to 128 MB (E820 reported).
+- **Root: 455 files, Subdirs: 224 files:** Directory entry limits per HBFS layout.
 - **16-level directory nesting:** Maximum subdirectory depth.
 - **Tab completion:** Only completes filenames in the current directory (not PATH-aware).
+- **Single pipe stage:** Pipelines support one `|` separator per command line.

@@ -174,7 +174,10 @@ class FSImage:
 
     @staticmethod
     def _entry_used(directory_buf, off):
-        return directory_buf[off + 253] != FTYPE_FREE and directory_buf[off] != 0
+        return (
+            directory_buf[off + 253] != FTYPE_FREE
+            and directory_buf[off] != 0
+        )
 
     def _find_next_block(self):
         """Return the next free block after the highest used one."""
@@ -238,8 +241,10 @@ class FSImage:
                     continue
                 name = self._entry_name(directory_buf, off)
                 ftype = directory_buf[off + 253]
-                start_block = struct.unpack_from('<I', directory_buf, off + 260)[0]
-                block_count = struct.unpack_from('<I', directory_buf, off + 264)[0]
+                start_block = struct.unpack_from(
+                    '<I', directory_buf, off + 260)[0]
+                block_count = struct.unpack_from(
+                    '<I', directory_buf, off + 264)[0]
                 if block_count > 0:
                     self._mark_block_range(fresh, start_block, block_count)
                 entries.append((name, ftype, start_block, block_count))
@@ -306,7 +311,9 @@ class FSImage:
 
         root_slot = self._find_free_slot(self.root_dir, HBFS_MAX_FILES)
         if root_slot is None:
-            raise RuntimeError(f"Root directory full, cannot create /{dirname}")
+            raise RuntimeError(
+                f"Root directory full, cannot create /{dirname}"
+            )
 
         entry = create_dir_entry(
             filename=dirname,

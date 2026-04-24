@@ -125,42 +125,88 @@ int 0x80
 
 ```nasm
 ; Define these at the top of your program, or %include "syscalls.inc"
-SYS_EXIT        equ 0
-SYS_PUTCHAR     equ 1
-SYS_GETCHAR     equ 2
-SYS_PRINT       equ 3
-SYS_READ_KEY    equ 4
-SYS_OPEN        equ 5
-SYS_READ        equ 6
-SYS_WRITE       equ 7
-SYS_CLOSE       equ 8
-SYS_DELETE      equ 9
-SYS_SEEK        equ 10
-SYS_STAT        equ 11
-SYS_MKDIR       equ 12
-SYS_READDIR     equ 13
-SYS_SETCURSOR   equ 14
-SYS_GETTIME     equ 15
-SYS_SLEEP       equ 16
-SYS_CLEAR       equ 17
-SYS_SETCOLOR    equ 18
-SYS_MALLOC      equ 19
-SYS_FREE        equ 20
-SYS_EXEC        equ 21
-SYS_DISK_READ   equ 22
-SYS_SBRK        equ 23
-SYS_DISK_WRITE  equ 23
-SYS_BEEP        equ 24
-SYS_DATE        equ 25
-SYS_CHDIR       equ 26
-SYS_GETCWD      equ 27
-SYS_SERIAL      equ 28
-SYS_GETENV      equ 29
-SYS_FREAD       equ 30
-SYS_FWRITE      equ 31
-SYS_GETARGS     equ 32
-SYS_SERIAL_IN   equ 33
-SYS_SBRK         equ 34
+SYS_EXIT            equ 0   ; Terminate process
+SYS_PUTCHAR         equ 1   ; Print character: EBX=char
+SYS_GETCHAR         equ 2   ; Read character (blocking) -> EAX=char
+SYS_PRINT           equ 3   ; Print null-terminated string: EBX=ptr
+SYS_READ_KEY        equ 4   ; Read key (non-blocking) -> EAX=key or 0
+SYS_OPEN            equ 5   ; Open file: EBX=name ECX=mode -> EAX=fd
+SYS_READ            equ 6   ; Read from fd: EBX=fd ECX=buf EDX=len -> EAX=bytes
+SYS_WRITE           equ 7   ; Write to fd: EBX=fd ECX=buf EDX=len -> EAX=bytes
+SYS_CLOSE           equ 8   ; Close fd: EBX=fd
+SYS_DELETE          equ 9   ; Delete file: EBX=name -> EAX=0/-1
+SYS_SEEK            equ 10  ; Seek: EBX=fd ECX=offset EDX=whence -> EAX=pos
+SYS_STAT            equ 11  ; Stat: EBX=name ECX=buf -> EAX=0/-1
+SYS_MKDIR           equ 12  ; Create dir: EBX=name -> EAX=0/-1
+SYS_READDIR         equ 13  ; Read dir entry: EBX=buf ECX=index -> EAX=type ECX=size
+SYS_SETCURSOR       equ 14  ; Set cursor: EBX=col ECX=row
+SYS_GETTIME         equ 15  ; Get RTC time -> EAX=packed time
+SYS_SLEEP           equ 16  ; Sleep: EBX=ticks (100 ticks = 1 sec)
+SYS_CLEAR           equ 17  ; Clear screen
+SYS_SETCOLOR        equ 18  ; Set text color: EBX=fg ECX=bg
+SYS_MALLOC          equ 19  ; Allocate heap: EBX=size -> EAX=ptr
+SYS_FREE            equ 20  ; Free heap: EBX=ptr
+SYS_EXEC            equ 21  ; Execute program: EBX=name ECX=args -> EAX=0/-1
+SYS_DISK_READ       equ 22  ; Raw disk read (restricted from user-mode)
+SYS_SBRK            equ 23  ; Adjust program break: EBX=increment -> EAX=old_brk
+SYS_BEEP            equ 24  ; PC speaker beep: EBX=freq_hz ECX=duration_ticks
+SYS_DATE            equ 25  ; Get date -> EAX=day EBX=month ECX=year
+SYS_CHDIR           equ 26  ; Change directory: EBX=path -> EAX=0/-1
+SYS_GETCWD          equ 27  ; Get current dir: EBX=buf -> EAX=len
+SYS_SERIAL          equ 28  ; Write serial: EBX=char
+SYS_GETENV          equ 29  ; Get env var: EBX=name ECX=buf -> EAX=len/-1
+SYS_FREAD           equ 30  ; Read whole file: EBX=name ECX=buf -> EAX=bytes
+SYS_FWRITE          equ 31  ; Write file: EBX=name ECX=buf EDX=size ESI=type
+SYS_GETARGS         equ 32  ; Get command-line args: EBX=buf -> EAX=len
+SYS_SERIAL_IN       equ 33  ; Read serial: -> EAX=char or -1
+SYS_STDIN_READ      equ 34  ; Read piped stdin: EBX=buf -> EAX=bytes (-1=no pipe)
+SYS_YIELD           equ 35  ; Yield CPU to next task
+SYS_MOUSE           equ 36  ; Mouse state: -> EAX=x EBX=y ECX=buttons
+SYS_FRAMEBUF        equ 37  ; Framebuffer ops: EBX=sub (0=info,1=set,2=restore)
+SYS_GUI             equ 38  ; Burrows GUI sub-calls: EBX=sub
+SYS_SOCKET          equ 39  ; Create socket: EBX=type(1=TCP,2=UDP) -> EAX=fd
+SYS_CONNECT         equ 40  ; Connect: EBX=fd ECX=ip EDX=port -> EAX=0/-1
+SYS_SEND            equ 41  ; Send: EBX=fd ECX=buf EDX=len -> EAX=bytes
+SYS_RECV            equ 42  ; Recv: EBX=fd ECX=buf EDX=max -> EAX=bytes
+SYS_BIND            equ 43  ; Bind: EBX=fd ECX=port -> EAX=0/-1
+SYS_LISTEN          equ 44  ; Listen: EBX=fd -> EAX=0/-1
+SYS_ACCEPT          equ 45  ; Accept: EBX=fd -> EAX=new_fd
+SYS_DNS             equ 46  ; Resolve hostname: EBX=name -> EAX=ip (0=fail)
+SYS_SOCKCLOSE       equ 47  ; Close socket: EBX=fd
+SYS_PING            equ 48  ; ICMP ping: EBX=ip -> EAX=rtt/-1
+SYS_SETDATE         equ 49  ; Set RTC date: EBX=buf[sec,min,hr,day,mon,yr]
+SYS_AUDIO_PLAY      equ 50  ; Play PCM audio: EBX=buf ECX=len EDX=fmt
+SYS_AUDIO_STOP      equ 51  ; Stop audio playback
+SYS_AUDIO_STATUS    equ 52  ; Query audio: -> EAX=state EBX=present
+SYS_KILL            equ 53  ; Kill task: EBX=pid -> EAX=0/-1
+SYS_GETPID          equ 54  ; Get own PID -> EAX=pid
+SYS_CLIPBOARD_COPY  equ 55  ; Copy to clipboard: EBX=buf ECX=len
+SYS_CLIPBOARD_PASTE equ 56  ; Paste from clipboard: EBX=buf ECX=max -> EAX=len
+SYS_NOTIFY          equ 57  ; Show notification: EBX=text EDX=color
+SYS_FILE_OPEN_DLG   equ 58  ; File open dialog -> EAX=1/0 ECX=chosen name
+SYS_FILE_SAVE_DLG   equ 59  ; File save dialog -> EAX=1/0 ECX=chosen name
+SYS_PIPE_CREATE     equ 60  ; Create pipe -> EAX=pipe_id
+SYS_PIPE_WRITE      equ 61  ; Write pipe: EBX=id ECX=buf EDX=len
+SYS_PIPE_READ       equ 62  ; Read pipe: EBX=id ECX=buf EDX=max -> EAX=read
+SYS_PIPE_CLOSE      equ 63  ; Close pipe: EBX=id
+SYS_SHMGET          equ 64  ; Get shared memory: EBX=key ECX=size -> EAX=shm_id
+SYS_SHMADDR         equ 65  ; Map shared memory: EBX=shm_id -> EAX=ptr
+SYS_PROCLIST        equ 66  ; List tasks: EBX=slot ECX=buf(16B) -> EAX=0/-1
+SYS_MEMINFO         equ 67  ; Memory info: -> EAX=free_pages EBX=boot_free
+SYS_CHMOD           equ 68  ; Change permissions: EBX=name ECX=perms
+SYS_CHOWN           equ 69  ; Change owner: EBX=name ECX=uid
+SYS_SYMLINK         equ 70  ; Create symlink: EBX=linkname ECX=target
+SYS_READLINK        equ 71  ; Read symlink: EBX=linkname ECX=buf -> EAX=len
+SYS_SETPRIORITY     equ 72  ; Set task priority: EBX=pid(0=self) ECX=prio
+SYS_GETPRIORITY     equ 73  ; Get task priority: EBX=pid(0=self) -> EAX=prio
+SYS_SIGNAL          equ 74  ; Send signal: EBX=pid ECX=signum
+SYS_SETPGID         equ 75  ; Set PGID: EBX=pid ECX=pgid
+SYS_GETPGID         equ 76  ; Get PGID: EBX=pid -> EAX=pgid
+SYS_SIGMASK         equ 77  ; Signal mask: EBX=op ECX=mask -> EAX=old
+SYS_TASKNAME        equ 78  ; Set task name: EBX=name_ptr
+SYS_REALLOC         equ 79  ; Reallocate: EBX=ptr ECX=new_size EDX=old_size -> EAX=ptr
+SYS_GETENV_SLOT     equ 80  ; Get env slot: EBX=index ECX=buf(128) -> EAX=0/-1
+SYS_DMESG_WRITE     equ 81  ; Write to dmesg log: EBX=msg_ptr
 ```
 
 Or include the provided header:

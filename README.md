@@ -4,14 +4,14 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 80 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 56+ bundled assembly programs, and 11 C samples.
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 82 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 176 assembly programs, and 17 bundled samples (C and Perl).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** 3-stage BIOS boot flow into 32-bit protected mode
-- **Userland:** 50+ shell commands, 56 assembly programs, and 11 bundled C samples
+- **Userland:** 90+ shell commands, 176 assembly programs, and 17 bundled samples (C and Perl)
 - **Core pieces:** HBFS filesystem, ELF32 loader, PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, and release packaging
 
@@ -23,7 +23,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 - **32-bit protected mode** with flat memory model
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **80 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
+- **82 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 64 concurrent tasks
 - **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD
 - **Process groups** — PGID support for job control
@@ -39,13 +39,13 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 ### HB Lair Shell (v3.0)
 
-- **50+ built-in shell commands** with aliases: file management, text processing, system info, process control
+- **90+ built-in shell commands** with aliases: file management, text processing, system info, process control
 - **Tab completion**, **command history** (128 entries), **Ctrl+C** hard-abort with proper cleanup
 - **Enhanced line editing** — Ctrl+A/E (home/end), Ctrl+U (kill line), Ctrl+W (delete word), Ctrl+L (clear+redraw)
 - **Process management** — `ps`, `jobs`, `kill`, `bg`, `fg`, `nice` for task control
 - **Pipes, redirection, and chaining** — `|`, `>`, `>>`, `<`, `&&`, and `||` for shell workflows
 - **Alias system** — define custom command shortcuts
-- **32 environment variables** with `$VAR` expansion in echo and batch scripts
+- **32 environment variables** with `$VAR` expansion and `$(cmd)` command substitution, `$((expr))` arithmetic expansion
 - **Batch scripting** — execute `.bat` files with sequential command processing
 - **`source` / `.`** — execute scripts in current shell context
 - **PATH-based program search** — run programs from any directory
@@ -55,7 +55,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 ### HBFS Filesystem
 
 - **Honey Badger File System** — custom filesystem with 4 KB blocks
-- **455 entries** per root directory, **224 entries** per subdirectory
+- **455 entries** per root directory, **224 entries** per subdirectory (288-byte entries, 252-char max filename)
 - **File types**: text, executable, directory, batch script
 - **File descriptors**: open/read/write/close/seek (8 simultaneous FDs)
 - **Wildcards**: `*` and `?` pattern matching in `del` and `copy`
@@ -70,15 +70,16 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 - **Serial port** (COM1 at 115200 baud) for debug output
 - **RTC** real-time clock for date/time
 
-### Programs (56 assembly + 11 C samples)
+### Programs (176 assembly + 17 bundled samples)
 
-- **Games**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze, Kingdom, Outbreak, Neurovault
-- **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, and more
-- **Tools**: Text editor, hex viewer, file pager, CSV viewer
-- **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator
-- **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter
-- **API Libraries**: 6 reusable `.inc` libraries (string, I/O, math, VGA, memory, data structures)
-- **C samples**: Hello World, Fibonacci, primes, Tower of Hanoi, Hunt the Wumpus, and more
+- **Games (42)**: Snake, Tetris, Minesweeper, Sokoban, 2048, Galaga, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Chess, Checkers, Blackjack, Reversi, Pong, Wordle, Rogue, and more
+- **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, and more
+- **Tools**: Text editor, hex viewer, file pager, CSV viewer, dual-pane file manager (burrow)
+- **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator, Doom fire effect
+- **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter, Perl interpreter, Forth interpreter
+- **Network tools**: ping, wget, nc, ftp, telnet, irc, gopher, dig, traceroute, whois, daytime
+- **API Libraries**: 9 reusable `.inc` libraries (string, I/O, math, VGA, memory, data structures, net, GUI, more)
+- **Samples**: 12 C programs + 5 Perl scripts in `/samples`
 
 ---
 
@@ -124,6 +125,8 @@ Lair:/> snake                  # Play Snake!
 Lair:/> cd /                   # Back to root
 Lair:/> cat /docs/readme       # Read documentation
 Lair:/> tetris                 # Play Tetris (found via PATH)
+Lair:/> tcc /samples/hello.c   # Compile and run a C program
+Lair:/> perl /samples/hello.pl # Run a Perl script
 ```
 
 ---
@@ -134,11 +137,11 @@ Lair:/> tetris                 # Play Tetris (found via PATH)
 
 ```text
 /
-├── bin/          43 utility programs (hello, edit, grep, sort, tcc, ...)
-├── games/        13 games (snake, tetris, 2048, galaga, mine, ...)
-├── samples/      11 C source files (hello.c, fib.c, wumpus.c, ...)
-├── docs/          5 text files (readme, license, notes, todo, poem)
-└── script.bat     Example batch script
+├── bin/          134 utility programs (edit, grep, sort, tcc, wget, nc, ...)
+├── games/         42 games (snake, tetris, 2048, galaga, chess, wordle, ...)
+├── samples/       17 source files (hello.c, fib.c, hello.pl, fizzbuzz.pl, ...)
+├── docs/           text files (readme.txt, license.txt, notes.txt, ...)
+└── script.bat      Example batch script
 ```
 
 Programs in `/bin` and `/games` are in the default PATH, so they run from any directory.
@@ -165,11 +168,12 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (56 programs total)
+│   └── ...                 (176 programs total)
 ├── samples/                C source files for TCC
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c
 │   ├── hanoi.c, bf.c, wumpus.c, boxes.c, stars.c, echo.c
-│   └── ...                 (11 samples total)
+│   ├── hello.pl, factorial.pl, fizzbuzz.pl, guess.pl, strings.pl, arrays.pl
+│   └── ...                 (17 samples total)
 ├── tests/                  Regression test suite
 │   ├── test_build.sh       Build-time checks
 │   └── test_hbfs.py        HBFS filesystem integrity checks
@@ -210,6 +214,23 @@ Mellivora_OS/
 | `sokoban` | Box-pushing puzzle game with multiple levels |
 | `2048` | Sliding tile number game |
 | `galaga` | Space shooter with enemy waves |
+| `chess` | Full chess with legal move validation |
+| `checkers` | Checkers with forced-capture rules |
+| `blackjack` | Blackjack (21) card game |
+| `reversi` | Othello / Reversi strategy game |
+| `pong` | Two-paddle Pong |
+| `wordle` | Six-guess word puzzle |
+| `rogue` | ASCII dungeon crawler |
+| `freecell` | FreeCell solitaire card game |
+| `adventure` | Text adventure (interactive fiction) |
+| `battleship` | Battleship fleet warfare game |
+| `connect4` | Connect Four |
+| `mastermind` | Mastermind code-breaking game |
+| `hangman` | Hangman word game |
+| `tictactoe` | Tic-tac-toe |
+| `nim` | Nim strategy game |
+| `simon` | Simon says memory game |
+| `puzzle15` | Sliding 15-puzzle |
 | `guess` | Number guessing game with hints |
 | `kingdom` | Medieval kingdom management simulation |
 | `life` | Conway's Game of Life (78×23 grid) |
@@ -217,6 +238,20 @@ Mellivora_OS/
 | `neurovault` | Sci-fi dungeon crawler RPG |
 | `outbreak` | Zombie survival strategy game |
 | `piano` | PC speaker piano with 15 notes |
+| `doomfire` | Doom fire effect demo |
+| `matrix` | Matrix rain effect |
+| `rain` | Rainfall animation |
+| `starfield` | Starfield fly-through |
+| `pipes` | Animated pipes screensaver |
+| `lunar` | Lunar lander game |
+| `lights` | Lights-out puzzle |
+| `timewarp` | Time warp visual effect |
+| `lolcat` | Rainbow-colorize text output |
+| `solitaire` | Klondike solitaire card game |
+| `worm` | Multi-worm arena game |
+| `breakout` | Breakout / Arkanoid |
+
+> **42 games total** in `/games` — run any from anywhere thanks to PATH.
 
 ### Utilities
 
@@ -287,15 +322,15 @@ Mellivora_OS/
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | Compact entry file + 13 modular include files |
-| Kernel binary | ~238 KB |
-| Syscalls | 36 (via `INT 0x80`) |
-| Shell experience | 50+ commands, aliases, history, completion, batch files |
-| User programs | 56 assembly apps + 11 bundled C samples |
-| API libraries | 6 reusable `.inc` modules (95+ functions) |
-| Disk image | 64 MB HBFS image |
-| Files on disk | 73 files across 4 subdirectories |
-| Test coverage | 580+ regression and filesystem checks |
+| Kernel source | Entry file + 20 modular include files |
+| Syscalls | 82 (via `INT 0x80`) |
+| Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
+| User programs | 176 assembly apps (134 utilities + 42 games) |
+| Bundled samples | 17 (12 C + 5 Perl) in `/samples` |
+| API libraries | 9 reusable `.inc` modules in `programs/lib/` |
+| Disk image | 2 GB raw HBFS image |
+| HBFS root capacity | 455 files; 224 files per subdirectory |
+| Concurrent tasks | 64 (preemptive scheduler, 4 priority levels) |
 
 ---
 
