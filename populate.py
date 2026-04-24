@@ -603,7 +603,7 @@ Mellivora OS TODO List
 
 [x] Stage 1 boot loader with A20 gate
 [x] Stage 2 with E820 memory detection
-[x] Long mode switch with 64-bit GDT
+[x] 32-bit protected mode switch with flat GDT
 [x] VGA text mode driver (80x25, 16 colors)
 [x] PIC initialization and IRQ remapping
 [x] IDT with ISR/IRQ handlers
