@@ -1,121 +1,120 @@
-; galaga.asm - Galaga-style space shooter for Mellivora OS
-; VGA text mode, ASCII art sprites, multiple enemy types
+; galaga.asm - Galaga-style space shooter — VBE pixel graphics
 %include "syscalls.inc"
 
-; Game constants
-SCREEN_W        equ 80
-SCREEN_H        equ 25
-PLAY_TOP        equ 2           ; Top of play area
-PLAY_BOT        equ 23          ; Bottom of play area
-PLAYER_Y        equ 22          ; Player ship row
+; ─── Screen / layout ───────────────────────────────────────────────
+SCREEN_W        equ 640
+SCREEN_H        equ 480
+CHR_W           equ 8
+CHR_H           equ 16
+HUD_H           equ CHR_H
+
+; ─── Game constants (char-grid coords, same as original) ──────────
+PLAY_TOP        equ 2
+PLAY_BOT        equ 28
+PLAYER_Y        equ 27
 MAX_BULLETS     equ 8
 MAX_ENEMIES     equ 30
-MAX_STARS       equ 20
-TICK_SPEED      equ 4           ; Game tick delay (100Hz timer)
-ENEMY_MOVE_RATE equ 8           ; Ticks between enemy moves
-ENEMY_COLS      equ 10          ; Enemies per row
-ENEMY_ROWS      equ 3           ; Number of enemy rows
-BULLET_SPEED    equ 2           ; Ticks between bullet moves
+MAX_STARS       equ 40
+TICK_SPEED      equ 4
+ENEMY_MOVE_RATE equ 8
+ENEMY_COLS      equ 10
+ENEMY_ROWS      equ 3
 
-; Enemy types
+; ─── Enemy types ────────────────────────────────────────────────────
 ETYPE_NONE      equ 0
-ETYPE_BUG       equ 1           ; Basic enemy (10 pts)
-ETYPE_MOTH      equ 2           ; Medium enemy (20 pts)
-ETYPE_BOSS      equ 3           ; Boss enemy (30 pts)
+ETYPE_BUG       equ 1
+ETYPE_MOTH      equ 2
+ETYPE_BOSS      equ 3
+
+; ─── Sprite pixel sizes ─────────────────────────────────────────────
+PLR_W           equ 24
+PLR_H           equ 16
+ENE_W           equ 20
+ENE_H           equ 12
+BLT_W           equ 3
+BLT_H           equ 12
+STAR_SZ         equ 2
+
+; ─── Colors ─────────────────────────────────────────────────────────
+C_BG            equ 0x000000
+C_HUD           equ 0x000F3B
+C_HUD_TXT       equ 0xFFFFFF
+C_STAR          equ 0x444466
+C_PLR_BODY      equ 0x44AAFF
+C_PLR_ENG       equ 0xFFDD44
+C_BULLET        equ 0xFFFF44
+C_BUG           equ 0x22FF44
+C_MOTH          equ 0xFF44CC
+C_BOSS          equ 0xFF4422
+C_GOBOX         equ 0xAA0000
+C_GO_TXT        equ 0xFFFFFF
+
+; ─── Key codes ──────────────────────────────────────────────────────
+KEY_LEFT        equ 0x82
+KEY_RIGHT       equ 0x83
 
 start:
-        mov eax, SYS_CLEAR
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 1
+        mov ecx, SCREEN_W
+        mov edx, SCREEN_H
+        mov esi, 32
         int 0x80
+        cmp eax, -1
+        je exit_game
 
-        ; Seed random from timer
+        mov eax, SYS_FRAMEBUF
+        xor ebx, ebx
+        int 0x80
+        mov [fb_addr], eax
+        mov dword [fb_pitch], SCREEN_W * 4
+
         mov eax, SYS_GETTIME
         int 0x80
         mov [rand_seed], eax
 
 title_screen:
-        mov eax, SYS_CLEAR
-        int 0x80
+        xor ebx, ebx
+        xor ecx, ecx
+        mov edx, SCREEN_W
+        mov esi, SCREEN_H
+        xor edi, edi
+        call fb_fill_rect
 
-        ; Draw title
-        mov ebx, 25
-        mov ecx, 4
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0E
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_title
-        int 0x80
+        mov ebx, 220
+        mov ecx, 60
+        mov esi, msg_title
+        mov edi, 0xFFDD00
+        call fb_draw_text
 
-        mov ebx, 20
-        mov ecx, 7
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0A
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_subtitle
-        int 0x80
+        mov ebx, 170
+        mov ecx, 90
+        mov esi, msg_subtitle
+        mov edi, 0x44FF44
+        call fb_draw_text
 
-        ; Draw sample ship
-        mov ebx, 38
-        mov ecx, 10
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0F
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, ship_art1
-        int 0x80
-        mov ebx, 36
-        mov ecx, 11
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, ship_art2
-        int 0x80
+        mov ebx, 200
+        mov ecx, 140
+        mov esi, msg_enemies_demo
+        mov edi, 0xFF4444
+        call fb_draw_text
 
-        ; Draw sample enemies
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0C
-        int 0x80
-        mov ebx, 30
-        mov ecx, 14
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_enemies_demo
-        int 0x80
+        mov ebx, 160
+        mov ecx, 200
+        mov esi, msg_controls
+        mov edi, 0xAAAAAA
+        call fb_draw_text
 
-        mov ebx, 22
-        mov ecx, 17
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_controls
-        int 0x80
-
-        mov ebx, 22
-        mov ecx, 20
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0B
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_start
-        int 0x80
+        mov ebx, 196
+        mov ecx, 250
+        mov esi, msg_start
+        mov edi, 0x44CCFF
+        call fb_draw_text
 
 .wait_start:
         mov eax, SYS_GETCHAR
         int 0x80
-        cmp al, 27             ; ESC to quit
+        cmp al, 27
         je exit_game
         cmp al, ' '
         je new_game
@@ -124,7 +123,6 @@ title_screen:
         jmp .wait_start
 
 new_game:
-        ; Initialize game state
         mov dword [score], 0
         mov dword [lives], 3
         mov dword [level], 1
@@ -132,51 +130,34 @@ new_game:
         mov byte  [game_over], 0
 
 new_level:
-        ; Clear screen
-        mov eax, SYS_CLEAR
-        int 0x80
-
-        ; Initialize bullets
-        mov ecx, MAX_BULLETS
+        mov ecx, MAX_BULLETS * 2
         mov edi, bullets
         xor eax, eax
-        imul ecx, 8            ; 8 bytes per bullet
-        shr ecx, 2
         rep stosd
 
-        ; Initialize enemies for this level
         call init_enemies
-
-        ; Initialize stars
         call init_stars
 
         mov dword [tick_count], 0
-        mov dword [enemy_dir], 1        ; Moving right
+        mov dword [enemy_dir], 1
         mov dword [enemy_tick], 0
 
-        ; Draw HUD
-        call draw_hud
-
-;=== Main game loop ===
 game_loop:
-        ; Delay
         mov eax, SYS_SLEEP
         mov ebx, TICK_SPEED
         int 0x80
 
         inc dword [tick_count]
 
-        ; Poll keyboard
         mov eax, SYS_READ_KEY
         int 0x80
         test al, al
         jz .no_key
 
-        cmp al, 27             ; ESC
+        cmp al, 27
         je exit_game
         cmp al, 'q'
         je exit_game
-
         cmp al, KEY_LEFT
         je .move_left
         cmp al, 'a'
@@ -192,97 +173,78 @@ game_loop:
 .move_left:
         cmp dword [player_x], 1
         jle .no_key
-        ; Erase old ship
-        call erase_player
         dec dword [player_x]
         jmp .no_key
-
 .move_right:
-        cmp dword [player_x], SCREEN_W - 4
+        mov eax, SCREEN_W / CHR_W - 4
+        cmp [player_x], eax
         jge .no_key
-        call erase_player
         inc dword [player_x]
         jmp .no_key
-
 .fire:
         call fire_bullet
 
 .no_key:
-        ; Update bullets
         call update_bullets
-
-        ; Update enemies
         call update_enemies
-
-        ; Check collisions
         call check_collisions
 
-        ; Draw everything
+        call clear_frame
         call draw_stars
-        call draw_player
-        call draw_bullets
         call draw_enemies
+        call draw_bullets
+        call draw_player
         call draw_hud
 
-        ; Check game over
         cmp byte [game_over], 0
         jne game_over_screen
 
-        ; Check level complete (all enemies dead)
         call count_enemies
         cmp eax, 0
         jne game_loop
 
-        ; Level complete!
         inc dword [level]
-        ; Brief pause
         mov eax, SYS_SLEEP
         mov ebx, 100
         int 0x80
         jmp new_level
 
 ;=======================================================================
-; GAME OVER
-;=======================================================================
 game_over_screen:
         mov eax, SYS_SLEEP
         mov ebx, 50
         int 0x80
 
-        mov ebx, 30
-        mov ecx, 11
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x4F           ; White on red
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_game_over
-        int 0x80
+        mov ebx, 160
+        mov ecx, 200
+        mov edx, 320
+        mov esi, 80
+        mov edi, C_GOBOX
+        call fb_fill_rect
 
-        mov ebx, 28
-        mov ecx, 13
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0E
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_final_score
-        int 0x80
+        mov ebx, 208
+        mov ecx, 214
+        mov esi, msg_game_over
+        mov edi, C_GO_TXT
+        call fb_draw_text
+
+        mov ebx, 196
+        mov ecx, 238
+        mov esi, msg_final_score
+        mov edi, 0xFFDD44
+        call fb_draw_text
+
         mov eax, [score]
-        call print_dec
+        mov ebx, 340
+        mov ecx, 238
+        mov edi, 0xFFDD44
+        call fb_draw_num
 
-        mov ebx, 25
-        mov ecx, 16
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_play_again
-        int 0x80
+        mov ebx, 180
+        mov ecx, 262
+        mov esi, msg_play_again
+        mov edi, C_GO_TXT
+        call fb_draw_text
 
 .go_wait:
         mov eax, SYS_GETCHAR
@@ -300,39 +262,47 @@ game_over_screen:
         jmp .go_wait
 
 exit_game:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
-        mov eax, SYS_CLEAR
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2
         int 0x80
         mov eax, SYS_EXIT
+        xor ebx, ebx
         int 0x80
 
 ;=======================================================================
-; INIT ENEMIES
+; clear_frame
+;=======================================================================
+clear_frame:
+        xor ebx, ebx
+        mov ecx, HUD_H
+        mov edx, SCREEN_W
+        mov esi, SCREEN_H - HUD_H
+        xor edi, edi
+        call fb_fill_rect
+        ret
+
+;=======================================================================
+; init_enemies
 ;=======================================================================
 init_enemies:
         pushad
         mov edi, enemies
-        ; Clear all
         mov ecx, MAX_ENEMIES * 8
         xor eax, eax
         rep stosb
 
-        ; Create grid of enemies
         mov edi, enemies
-        xor ebx, ebx           ; row
+        xor ebx, ebx
 
 .ie_row:
         cmp ebx, ENEMY_ROWS
         jge .ie_done
-        xor ecx, ecx           ; col
+        xor ecx, ecx
 
 .ie_col:
         cmp ecx, ENEMY_COLS
         jge .ie_next_row
 
-        ; Enemy type based on row
         mov al, ETYPE_BUG
         cmp ebx, 0
         jne .ie_not_boss
@@ -343,18 +313,16 @@ init_enemies:
         jne .ie_set
         mov al, ETYPE_MOTH
 .ie_set:
-        mov [edi], al           ; type
-        ; X position: spread across screen
+        mov [edi], al
         mov eax, ecx
-        imul eax, 6             ; 6 chars apart
-        add eax, 10             ; offset from left
-        mov [edi + 1], al       ; x (byte)
-        ; Y position
+        imul eax, 6
+        add eax, 10
+        mov [edi + 1], al
         mov eax, ebx
-        imul eax, 2             ; 2 rows apart
+        imul eax, 2
         add eax, PLAY_TOP + 1
-        mov [edi + 2], al       ; y (byte)
-        mov byte [edi + 3], 0   ; anim frame
+        mov [edi + 2], al
+        mov byte [edi + 3], 0
 
         add edi, 8
         inc ecx
@@ -369,7 +337,7 @@ init_enemies:
         ret
 
 ;=======================================================================
-; INIT STARS (background)
+; init_stars
 ;=======================================================================
 init_stars:
         pushad
@@ -378,15 +346,15 @@ init_stars:
 .is_loop:
         call random
         xor edx, edx
-        mov ebx, SCREEN_W
+        mov ebx, SCREEN_W / CHR_W
         div ebx
-        mov [edi], dl           ; x
+        mov [edi], dl
         call random
         xor edx, edx
         mov ebx, PLAY_BOT - PLAY_TOP
         div ebx
         add dl, PLAY_TOP
-        mov [edi + 1], dl       ; y
+        mov [edi + 1], dl
         add edi, 2
         dec ecx
         jnz .is_loop
@@ -394,108 +362,55 @@ init_stars:
         ret
 
 ;=======================================================================
-; DRAW PLAYER SHIP
+; draw_player
 ;=======================================================================
 draw_player:
         pushad
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0F           ; Bright white
-        int 0x80
+        mov eax, [player_x]
+        imul eax, CHR_W
 
-        ; Top part: /A\
-        mov ebx, [player_x]
-        mov ecx, PLAYER_Y
-        mov eax, SYS_SETCURSOR
-        int 0x80
+        mov ebx, eax
+        mov ecx, PLAYER_Y * CHR_H
+        mov edx, PLR_W
+        mov esi, PLR_H / 2
+        mov edi, C_PLR_BODY
+        call fb_fill_rect
 
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0B           ; Cyan
-        int 0x80
-
-        mov eax, SYS_PUTCHAR
-        mov ebx, '/'
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0F
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 'A'
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0B
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '\'
-        int 0x80
-
-        ; Bottom part: ^^^
-        mov ebx, [player_x]
-        mov ecx, PLAYER_Y + 1
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0B
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '^'
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '^'
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '^'
-        int 0x80
-
+        mov eax, [player_x]
+        imul eax, CHR_W
+        add eax, 4
+        mov ebx, eax
+        mov ecx, PLAYER_Y * CHR_H + PLR_H / 2
+        mov edx, PLR_W - 8
+        mov esi, PLR_H / 2
+        mov edi, C_PLR_ENG
+        call fb_fill_rect
         popad
         ret
 
 ;=======================================================================
-; ERASE PLAYER
-;=======================================================================
-erase_player:
-        pushad
-        mov ebx, [player_x]
-        mov ecx, PLAYER_Y
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, str_erase3
-        int 0x80
-        mov ebx, [player_x]
-        mov ecx, PLAYER_Y + 1
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, str_erase3
-        int 0x80
-        popad
-        ret
-
-;=======================================================================
-; FIRE BULLET
+; fire_bullet
 ;=======================================================================
 fire_bullet:
         pushad
-        ; Find free bullet slot
         mov edi, bullets
         mov ecx, MAX_BULLETS
 
 .fb_find:
-        cmp byte [edi], 0       ; active?
+        cmp byte [edi], 0
         je .fb_slot
         add edi, 8
         dec ecx
         jnz .fb_find
-        jmp .fb_done             ; No free slot
+        jmp .fb_done
 
 .fb_slot:
-        mov byte [edi], 1       ; active
+        mov byte [edi], 1
         mov eax, [player_x]
-        inc eax                 ; Center of ship
-        mov [edi + 1], al       ; x
+        inc eax
+        mov [edi + 1], al
         mov al, PLAYER_Y - 1
-        mov [edi + 2], al       ; y
-        ; Play beep
+        mov [edi + 2], al
         mov eax, SYS_BEEP
         mov ebx, 2000
         mov ecx, 2
@@ -506,11 +421,10 @@ fire_bullet:
         ret
 
 ;=======================================================================
-; UPDATE BULLETS
+; update_bullets
 ;=======================================================================
 update_bullets:
         pushad
-        ; Only move on every other tick
         mov eax, [tick_count]
         and eax, 1
         jnz .ub_done
@@ -522,86 +436,76 @@ update_bullets:
         cmp byte [edi], 0
         je .ub_next
 
-        ; Erase old position
-        movzx ebx, byte [edi + 1]
-        movzx eax, byte [edi + 2]  ; y into eax (not ecx)
-        push ecx                    ; save loop counter
-        mov ecx, eax               ; y -> ecx for syscall
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-        pop ecx                     ; restore loop counter
-
-        ; Move up
         dec byte [edi + 2]
         cmp byte [edi + 2], PLAY_TOP
-        jle .ub_deactivate
-
+        jle .ub_deact
         jmp .ub_next
-
-.ub_deactivate:
+.ub_deact:
         mov byte [edi], 0
 
 .ub_next:
         add edi, 8
         dec ecx
         jnz .ub_loop
-
 .ub_done:
         popad
         ret
 
 ;=======================================================================
-; DRAW BULLETS
+; draw_bullets  (use EBP as loop index to keep struct ptr stable)
 ;=======================================================================
 draw_bullets:
         pushad
-        mov edi, bullets
-        mov ecx, MAX_BULLETS
+        xor ebp, ebp
 
 .db_loop:
+        cmp ebp, MAX_BULLETS
+        jge .db_done
+
+        mov eax, ebp
+        imul eax, 8
+        add eax, bullets
+        mov edi, eax
+
         cmp byte [edi], 0
         je .db_next
 
-        movzx ebx, byte [edi + 1]
+        movzx eax, byte [edi + 1]
+        imul eax, CHR_W
+        add eax, (CHR_W - BLT_W) / 2
+        mov ebx, eax
+
         movzx eax, byte [edi + 2]
-        push ecx
+        imul eax, CHR_H
         mov ecx, eax
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0E           ; Yellow
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '|'
-        int 0x80
-        pop ecx
+
+        mov edx, BLT_W
+        mov esi, BLT_H
+        mov edi, C_BULLET
+        call fb_fill_rect
 
 .db_next:
-        add edi, 8
-        dec ecx
-        jnz .db_loop
+        inc ebp
+        jmp .db_loop
+.db_done:
         popad
         ret
 
 ;=======================================================================
-; UPDATE ENEMIES
+; update_enemies
 ;=======================================================================
 update_enemies:
         pushad
         inc dword [enemy_tick]
         mov eax, [enemy_tick]
 
-        ; Adjust speed based on level
         mov ebx, ENEMY_MOVE_RATE
         mov ecx, [level]
         cmp ecx, 4
         jle .ue_speed_ok
         mov ecx, 4
 .ue_speed_ok:
-        sub ebx, ecx           ; Faster each level
+        sub ebx, ecx
         cmp ebx, 2
         jge .ue_speed_set
         mov ebx, 2
@@ -611,62 +515,50 @@ update_enemies:
         cmp edx, 0
         jne .ue_done
 
-        ; Erase all enemies first
-        call erase_enemies
-
-        ; Check if any enemy at edge
         mov edi, enemies
         mov ecx, MAX_ENEMIES
-        xor ebx, ebx           ; need_drop flag
+        xor ebx, ebx
 
 .ue_check_edge:
         cmp byte [edi], ETYPE_NONE
-        je .ue_check_next
+        je .ue_ce_next
         movzx eax, byte [edi + 1]
         cmp dword [enemy_dir], 1
         jne .ue_check_left
-        cmp eax, SCREEN_W - 4
+        cmp eax, SCREEN_W / CHR_W - 4
         jge .ue_hit_edge
-        jmp .ue_check_next
+        jmp .ue_ce_next
 .ue_check_left:
         cmp eax, 2
         jle .ue_hit_edge
-        jmp .ue_check_next
+        jmp .ue_ce_next
 .ue_hit_edge:
         mov ebx, 1
-.ue_check_next:
+.ue_ce_next:
         add edi, 8
         dec ecx
         jnz .ue_check_edge
 
-        ; Move enemies
         mov edi, enemies
         mov ecx, MAX_ENEMIES
-
 .ue_move:
         cmp byte [edi], ETYPE_NONE
         je .ue_move_next
-
         cmp ebx, 1
         je .ue_drop
-        ; Move horizontally
         mov al, [edi + 1]
         add al, byte [enemy_dir]
         mov [edi + 1], al
         jmp .ue_move_next
-
 .ue_drop:
-        inc byte [edi + 2]      ; Drop down
-        ; Check if reached player
+        inc byte [edi + 2]
         cmp byte [edi + 2], PLAYER_Y - 1
         jge .ue_reached_player
-
 .ue_move_next:
         add edi, 8
         dec ecx
         jnz .ue_move
 
-        ; Reverse direction if hit edge
         cmp ebx, 1
         jne .ue_done
         neg dword [enemy_dir]
@@ -681,126 +573,94 @@ update_enemies:
         ret
 
 ;=======================================================================
-; ERASE ENEMIES
-;=======================================================================
-erase_enemies:
-        pushad
-        mov edi, enemies
-        mov ecx, MAX_ENEMIES
-
-.ee_loop:
-        cmp byte [edi], ETYPE_NONE
-        je .ee_next
-
-        push ecx
-        movzx ebx, byte [edi + 1]
-        movzx ecx, byte [edi + 2]
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, str_erase3
-        int 0x80
-        pop ecx
-
-.ee_next:
-        add edi, 8
-        dec ecx
-        jnz .ee_loop
-        popad
-        ret
-
-;=======================================================================
-; DRAW ENEMIES
+; draw_enemies  (use EBP as loop index)
 ;=======================================================================
 draw_enemies:
         pushad
-        mov edi, enemies
-        mov ecx, MAX_ENEMIES
+        xor ebp, ebp
 
 .de_loop:
+        cmp ebp, MAX_ENEMIES
+        jge .de_done
+
+        mov eax, ebp
+        imul eax, 8
+        add eax, enemies
+        mov edi, eax
+
         cmp byte [edi], ETYPE_NONE
         je .de_next
 
-        push ecx
-        ; Set cursor
-        movzx ebx, byte [edi + 1]
-        movzx ecx, byte [edi + 2]
-        mov eax, SYS_SETCURSOR
-        int 0x80
+        movzx eax, byte [edi + 1]
+        imul eax, CHR_W
+        mov ebx, eax
 
-        ; Set color based on type
+        movzx eax, byte [edi + 2]
+        imul eax, CHR_H
+        mov ecx, eax
+
         movzx eax, byte [edi]
         cmp al, ETYPE_BOSS
         je .de_boss
         cmp al, ETYPE_MOTH
         je .de_moth
-        ; Bug
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0A           ; Green
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, enemy_bug
-        int 0x80
-        jmp .de_drawn
-
+        mov edi, C_BUG
+        jmp .de_draw
 .de_moth:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0D           ; Magenta
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, enemy_moth
-        int 0x80
-        jmp .de_drawn
-
+        mov edi, C_MOTH
+        jmp .de_draw
 .de_boss:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0C           ; Red
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, enemy_boss
-        int 0x80
-
-.de_drawn:
-        pop ecx
+        mov edi, C_BOSS
+.de_draw:
+        mov edx, ENE_W
+        mov esi, ENE_H
+        call fb_fill_rect
 
 .de_next:
-        add edi, 8
-        dec ecx
-        jnz .de_loop
+        inc ebp
+        jmp .de_loop
+.de_done:
         popad
         ret
 
 ;=======================================================================
-; DRAW STARS
+; draw_stars  (use EBP as loop index)
 ;=======================================================================
 draw_stars:
         pushad
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x08           ; Dark gray
-        int 0x80
-
-        mov edi, stars
-        mov ecx, MAX_STARS
+        xor ebp, ebp
 
 .ds_loop:
-        push ecx
-        movzx ebx, byte [edi]
-        movzx ecx, byte [edi + 1]
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '.'
-        int 0x80
-        pop ecx
+        cmp ebp, MAX_STARS
+        jge .ds_done
 
-        add edi, 2
-        dec ecx
-        jnz .ds_loop
+        mov eax, ebp
+        imul eax, 2
+        add eax, stars
+        mov edi, eax
+
+        movzx eax, byte [edi]
+        imul eax, CHR_W
+        mov ebx, eax
+
+        movzx eax, byte [edi + 1]
+        imul eax, CHR_H
+        mov ecx, eax
+
+        mov edx, STAR_SZ
+        mov esi, STAR_SZ
+        mov edi, C_STAR
+        call fb_fill_rect
+
+.ds_next:
+        inc ebp
+        jmp .ds_loop
+.ds_done:
         popad
         ret
 
 ;=======================================================================
-; CHECK COLLISIONS (bullets vs enemies)
+; check_collisions
 ;=======================================================================
 check_collisions:
         pushad
@@ -811,7 +671,6 @@ check_collisions:
         cmp byte [esi], 0
         je .cc_next_bullet
 
-        ; Check against all enemies
         mov edi, enemies
         push ecx
         mov ecx, MAX_ENEMIES
@@ -820,37 +679,21 @@ check_collisions:
         cmp byte [edi], ETYPE_NONE
         je .cc_next_enemy
 
-        ; Compare positions
-        movzx eax, byte [esi + 1]       ; bullet x
-        movzx ebx, byte [edi + 1]       ; enemy x
+        movzx eax, byte [esi + 1]
+        movzx ebx, byte [edi + 1]
         sub eax, ebx
         cmp eax, -1
         jl .cc_next_enemy
         cmp eax, 3
         jg .cc_next_enemy
 
-        movzx eax, byte [esi + 2]       ; bullet y
-        movzx ebx, byte [edi + 2]       ; enemy y
+        movzx eax, byte [esi + 2]
+        movzx ebx, byte [edi + 2]
         cmp eax, ebx
         jne .cc_next_enemy
 
-        ; HIT! Deactivate both
-        mov byte [esi], 0       ; bullet gone
+        mov byte [esi], 0
 
-        ; Erase enemy at old position
-        push ecx
-        movzx ebx, byte [edi + 1]
-        movzx ecx, byte [edi + 2]
-        push eax
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, str_erase3
-        int 0x80
-        pop eax
-        pop ecx
-
-        ; Score based on type
         movzx eax, byte [edi]
         cmp al, ETYPE_BOSS
         je .cc_boss_pts
@@ -866,7 +709,6 @@ check_collisions:
 .cc_kill:
         mov byte [edi], ETYPE_NONE
 
-        ; Explosion beep
         push ecx
         mov eax, SYS_BEEP
         mov ebx, 200
@@ -893,7 +735,7 @@ check_collisions:
         ret
 
 ;=======================================================================
-; COUNT REMAINING ENEMIES -> EAX
+; count_enemies -> EAX
 ;=======================================================================
 count_enemies:
         push ecx
@@ -914,82 +756,71 @@ count_enemies:
         ret
 
 ;=======================================================================
-; DRAW HUD (heads-up display)
+; draw_hud
 ;=======================================================================
 draw_hud:
         pushad
-        ; Top bar
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x1F           ; White on blue
-        int 0x80
 
         xor ebx, ebx
         xor ecx, ecx
-        mov eax, SYS_SETCURSOR
-        int 0x80
+        mov edx, SCREEN_W
+        mov esi, HUD_H
+        mov edi, C_HUD
+        call fb_fill_rect
 
-        ; Fill top line
-        mov ecx, SCREEN_W
-.hud_fill:
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-        dec ecx
-        jnz .hud_fill
-
-        ; Score
-        mov ebx, 1
+        mov ebx, 4
         xor ecx, ecx
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, hud_score
-        int 0x80
+        mov esi, hud_score
+        mov edi, C_HUD_TXT
+        call fb_draw_text
+
         mov eax, [score]
-        call print_dec
-
-        ; Lives
-        mov ebx, 30
+        mov ebx, 60
         xor ecx, ecx
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, hud_lives
-        int 0x80
+        mov edi, 0xFFFF44
+        call fb_draw_num
+
+        mov ebx, 160
+        xor ecx, ecx
+        mov esi, hud_lives
+        mov edi, C_HUD_TXT
+        call fb_draw_text
+
         mov eax, [lives]
-        call print_dec
-
-        ; Level
-        mov ebx, 50
+        mov ebx, 216
         xor ecx, ecx
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, hud_level
-        int 0x80
+        mov edi, 0x44FF44
+        call fb_draw_num
+
+        mov ebx, 290
+        xor ecx, ecx
+        mov esi, hud_level
+        mov edi, C_HUD_TXT
+        call fb_draw_text
+
         mov eax, [level]
-        call print_dec
-
-        ; Enemies remaining
-        mov ebx, 65
+        mov ebx, 346
         xor ecx, ecx
-        mov eax, SYS_SETCURSOR
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, hud_enemies
-        int 0x80
-        call count_enemies
-        call print_dec
+        mov edi, 0x44CCFF
+        call fb_draw_num
 
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
+        mov ebx, 430
+        xor ecx, ecx
+        mov esi, hud_enemies
+        mov edi, C_HUD_TXT
+        call fb_draw_text
+
+        call count_enemies
+        mov ebx, 500
+        xor ecx, ecx
+        mov edi, 0xFF8844
+        call fb_draw_num
 
         popad
         ret
 
 ;=======================================================================
-; RANDOM NUMBER GENERATOR
+; random -> EAX
 ;=======================================================================
 random:
         push ebx
@@ -1005,53 +836,131 @@ random:
         ret
 
 ;=======================================================================
-; DATA
+; VBE HELPERS
 ;=======================================================================
 
-; Title screen
-msg_title:      db "=== G A L A G A ===", 0
-msg_subtitle:   db "Space Shooter for Mellivora OS", 0
-ship_art1:      db "/A\", 0
-ship_art2:      db "^^^^^", 0
-msg_enemies_demo: db "{@@} <**> (##)", 0
-msg_controls:   db "Left/Right or A/D: Move  Space: Fire", 0
-msg_start:      db "Press SPACE or ENTER to start!", 0
+; fb_fill_rect: EBX=x, ECX=y, EDX=w, ESI=h, EDI=color
+fb_fill_rect:
+        pushad
+        test edx, edx
+        jz .ffr_done
+        test esi, esi
+        jz .ffr_done
+        mov eax, ecx
+        imul eax, [fb_pitch]
+        add eax, [fb_addr]
+        lea eax, [eax + ebx*4]
+.ffr_row:
+        push eax
+        push edx
+        mov ecx, edx
+.ffr_col:
+        mov [eax], edi
+        add eax, 4
+        dec ecx
+        jnz .ffr_col
+        pop edx
+        pop eax
+        add eax, [fb_pitch]
+        dec esi
+        jnz .ffr_row
+.ffr_done:
+        popad
+        ret
 
-; HUD
-hud_score:      db "Score: ", 0
-hud_lives:      db "Lives: ", 0
-hud_level:      db "Level: ", 0
-hud_enemies:    db "Foes: ", 0
+; fb_draw_text: EBX=x, ECX=y, ESI=str_ptr, EDI=color
+fb_draw_text:
+        pushad
+        mov edx, ecx
+        mov ecx, ebx
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 3
+        int 0x80
+        popad
+        ret
 
-; Game over
-msg_game_over:  db " G A M E   O V E R ", 0
+; itoa: EAX=number -> num_buf
+itoa:
+        pushad
+        mov edi, num_buf + 11
+        mov byte [edi], 0
+        dec edi
+        test eax, eax
+        jnz .itoa_d
+        mov byte [edi], '0'
+        dec edi
+        jmp .itoa_cp
+.itoa_d:
+        mov ecx, 10
+.itoa_lp:
+        test eax, eax
+        jz .itoa_cp
+        xor edx, edx
+        div ecx
+        add dl, '0'
+        mov [edi], dl
+        dec edi
+        jmp .itoa_lp
+.itoa_cp:
+        inc edi
+        mov esi, edi
+        mov edi, num_buf
+.itoa_mv:
+        mov al, [esi]
+        mov [edi], al
+        inc esi
+        inc edi
+        test al, al
+        jnz .itoa_mv
+        popad
+        ret
+
+; fb_draw_num: EAX=number, EBX=x, ECX=y, EDI=color
+fb_draw_num:
+        push esi
+        push ebx
+        push ecx
+        push edi
+        call itoa
+        pop edi
+        pop ecx
+        pop ebx
+        mov esi, num_buf
+        call fb_draw_text
+        pop esi
+        ret
+
+;=======================================================================
+; DATA
+;=======================================================================
+msg_title:       db "=== G A L A G A ===", 0
+msg_subtitle:    db "Space Shooter for Mellivora OS", 0
+msg_enemies_demo: db "{Boss}  {Moth}  <Bug>", 0
+msg_controls:    db "Left/Right or A/D: Move   Space: Fire", 0
+msg_start:       db "Press SPACE or ENTER to start!", 0
+hud_score:       db "Score: ", 0
+hud_lives:       db "Lives: ", 0
+hud_level:       db "Level: ", 0
+hud_enemies:     db "Foes: ", 0
+msg_game_over:   db " G A M E   O V E R ", 0
 msg_final_score: db "Final Score: ", 0
-msg_play_again: db "Play again? (Y/N)", 0
+msg_play_again:  db "Play again? (Y/N)", 0
 
-; Enemy sprites (3 chars wide)
-enemy_bug:      db "<*>", 0
-enemy_moth:     db "{@}", 0
-enemy_boss:     db "[#]", 0
+score:           dd 0
+lives:           dd 3
+level:           dd 1
+player_x:        dd 38
+game_over:       db 0
+tick_count:      dd 0
+enemy_dir:       dd 1
+enemy_tick:      dd 0
+rand_seed:       dd 0
 
-; Erase strings
-str_erase3:     db "   ", 0
+bullets:         times MAX_BULLETS * 8 db 0
+enemies:         times MAX_ENEMIES * 8 db 0
+stars:           times MAX_STARS * 2   db 0
 
-; Game state
-score:          dd 0
-lives:          dd 3
-level:          dd 1
-player_x:       dd 38
-game_over:      db 0
-tick_count:     dd 0
-enemy_dir:      dd 1
-enemy_tick:     dd 0
-rand_seed:      dd 0
-
-; Bullets: active(1), x(1), y(1), reserved(5) = 8 bytes each
-bullets:        times MAX_BULLETS * 8 db 0
-
-; Enemies: type(1), x(1), y(1), frame(1), reserved(4) = 8 bytes each
-enemies:        times MAX_ENEMIES * 8 db 0
-
-; Stars: x(1), y(1) = 2 bytes each
-stars:          times MAX_STARS * 2 db 0
+section .bss
+fb_addr:         resd 1
+fb_pitch:        resd 1
+num_buf:         resb 12

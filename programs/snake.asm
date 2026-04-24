@@ -1,79 +1,110 @@
-; snake.asm - Snake game for Mellivora OS
-; Converted from asm_snake (MIT License) by pmikkelsen
-; 32-bit protected mode, uses INT 0x80 syscalls + direct VGA
+; snake.asm - Snake game for Mellivora OS — VBE pixel graphics
 %include "syscalls.inc"
 
-; Game constants
-BOARD_W         equ 78          ; playfield width (inside border)
-BOARD_H         equ 23          ; playfield height (inside border)
-MAX_SNAKE       equ 500         ; max snake segments
-TICK_DELAY      equ 8           ; game speed (ticks between moves, 100Hz timer)
+SCREEN_W        equ 640
+SCREEN_H        equ 480
+; Board dimensions in cells (border cells included in pixel layout)
+BOARD_W         equ 78          ; inner play columns
+BOARD_H         equ 54          ; inner play rows (expanded to fill screen)
+MAX_SNAKE       equ 500
+TICK_DELAY      equ 8
 
-; Direction constants
+; Each cell = 8×8 pixels. Total with borders = (78+2)×8=640, (54+2)×8=448+32=480
+CELL            equ 8
+; Pixel offset of inner board (cell 1,1 maps to pixel BOFF_X, BOFF_Y+HUD_H)
+HUD_H           equ 24          ; score bar height in pixels
+BOFF_X          equ 0           ; border col 0 starts at x=0
+BOFF_Y          equ HUD_H       ; border row 0 starts at y=HUD_H
+
+; Colors
+C_BG            equ 0x000000
+C_BORDER        equ 0x00CCCC
+C_HEAD          equ 0x00FF44
+C_BODY          equ 0x007700
+C_FOOD          equ 0xFF2200
+C_SCORE         equ 0xFFFF00
+C_GAMEOVER_BG   equ 0xCC0000
+C_GAMEOVER_TXT  equ 0xFFFFFF
+
+; Arrow key codes
+KEY_UP          equ 0x80
+KEY_DOWN        equ 0x81
+KEY_LEFT        equ 0x82
+KEY_RIGHT       equ 0x83
+
+; Direction
 DIR_UP          equ 0
 DIR_DOWN        equ 1
 DIR_LEFT        equ 2
 DIR_RIGHT       equ 3
 
 start:
-        mov eax, SYS_CLEAR
+        ; Init VBE 640x480x32
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 1
+        mov ecx, SCREEN_W
+        mov edx, SCREEN_H
+        mov esi, 32
         int 0x80
+        cmp eax, -1
+        je exit_game
 
-        ; Seed random from timer
+        mov eax, SYS_FRAMEBUF
+        xor ebx, ebx
+        int 0x80
+        mov [fb_addr], eax
+        mov dword [fb_pitch], SCREEN_W * 4
+
+        ; Seed random
         mov eax, SYS_GETTIME
         int 0x80
         mov [rand_seed], eax
 
 new_game:
-        ; Initialize game state
         mov dword [direction], DIR_RIGHT
         mov dword [snake_len], 3
         mov dword [score], 0
         mov byte  [game_over], 0
 
-        ; Place snake in center
-        mov eax, 40             ; x
+        ; Place snake near centre
+        mov eax, BOARD_W / 2 + 2
         mov [snake_x], eax
+        dec eax
         mov [snake_x + 4], eax
+        dec eax
         mov [snake_x + 8], eax
-        mov eax, 12             ; y
+        mov eax, BOARD_H / 2
         mov [snake_y], eax
         mov [snake_y + 4], eax
         mov [snake_y + 8], eax
-        ; Initial body offsets
-        mov dword [snake_x + 4], 39     ; one behind head
-        mov dword [snake_x + 8], 38     ; two behind head
 
-        ; Clear screen and draw border
-        mov eax, SYS_CLEAR
-        int 0x80
+        ; Clear screen and draw board
+        xor ebx, ebx
+        xor ecx, ecx
+        mov edx, SCREEN_W
+        mov esi, SCREEN_H
+        mov edi, C_BG
+        call fb_fill_rect
+
         call draw_border
-
-        ; Place first food
         call place_food
-
-        ; Draw initial score
         call draw_score
 
 ;=== Main game loop ===
 game_loop:
-        ; Delay
         mov eax, SYS_SLEEP
         mov ebx, TICK_DELAY
         int 0x80
 
-        ; Poll keyboard (non-blocking)
         mov eax, SYS_READ_KEY
         int 0x80
         test al, al
         jz .no_key
 
-        ; Process key
-        cmp al, 27              ; ESC
+        cmp al, 27
         je exit_game
         cmp al, 'q'
         je exit_game
-
         cmp al, KEY_UP
         je .go_up
         cmp al, 'w'
@@ -94,7 +125,7 @@ game_loop:
 
 .go_up:
         cmp dword [direction], DIR_DOWN
-        je .no_key              ; can't reverse
+        je .no_key
         mov dword [direction], DIR_UP
         jmp .no_key
 .go_down:
@@ -114,7 +145,7 @@ game_loop:
         jmp .no_key
 
 .no_key:
-        ; Save old tail position before shifting
+        ; Save old tail
         mov ecx, [snake_len]
         dec ecx
         mov eax, [snake_x + ecx*4]
@@ -122,13 +153,12 @@ game_loop:
         mov eax, [snake_y + ecx*4]
         mov [old_tail_y], eax
 
-        ; Move snake: shift body
+        ; Shift body
         mov ecx, [snake_len]
-        dec ecx                 ; start from tail
+        dec ecx
 .shift_body:
         cmp ecx, 0
         jle .shift_done
-        ; snake_x[ecx] = snake_x[ecx-1]
         mov eax, ecx
         dec eax
         mov edx, [snake_x + eax*4]
@@ -139,7 +169,7 @@ game_loop:
         jmp .shift_body
 .shift_done:
 
-        ; Move head based on direction
+        ; Move head
         mov eax, [direction]
         cmp eax, DIR_UP
         je .move_up
@@ -147,7 +177,6 @@ game_loop:
         je .move_down
         cmp eax, DIR_LEFT
         je .move_left
-        ; DIR_RIGHT
         inc dword [snake_x]
         jmp .moved
 .move_up:
@@ -160,7 +189,7 @@ game_loop:
         dec dword [snake_x]
 .moved:
 
-        ; Check wall collision
+        ; Wall collision
         mov eax, [snake_x]
         cmp eax, 1
         jl .die
@@ -172,7 +201,7 @@ game_loop:
         cmp eax, BOARD_H
         jg .die
 
-        ; Check self collision
+        ; Self collision
         mov ecx, 1
 .self_check:
         cmp ecx, [snake_len]
@@ -188,15 +217,13 @@ game_loop:
         jmp .self_check
 .no_collision:
 
-        ; Check food collision
+        ; Food collision
         mov eax, [snake_x]
         cmp eax, [food_x]
         jne .no_food
         mov eax, [snake_y]
         cmp eax, [food_y]
         jne .no_food
-
-        ; Eat food!
         inc dword [score]
         mov eax, [snake_len]
         cmp eax, MAX_SNAKE - 1
@@ -207,140 +234,129 @@ game_loop:
         call draw_score
 
 .no_food:
-        ; Erase old tail (using saved position from before shift)
+        ; Erase old tail cell
         mov eax, [old_tail_x]
         mov ebx, [old_tail_y]
-        call vga_put_space
+        call erase_cell
 
-        ; Draw snake
+        ; Redraw snake + food
         call draw_snake
-
-        ; Draw food
-        mov eax, [food_x]
-        mov ebx, [food_y]
-        mov cl, '*'
-        mov ch, 0x0C            ; bright red
-        call vga_putchar_at
+        call draw_food_cell
 
         jmp game_loop
 
 .die:
-        ; Game over
         call show_game_over
         jmp new_game
 
-;=== Draw border ===
+;=== draw_border ===
 draw_border:
         pushad
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0B           ; cyan
-        int 0x80
+        ; Top border (row 0)
+        xor ebx, ebx
+        mov ecx, BOFF_Y
+        mov edx, SCREEN_W
+        mov esi, CELL
+        mov edi, C_BORDER
+        call fb_fill_rect
 
-        ; Top border
-        mov eax, SYS_SETCURSOR
+        ; Bottom border (row BOARD_H+1)
         xor ebx, ebx
-        xor ecx, ecx
-        int 0x80
-        mov ecx, VGA_WIDTH
-.top:
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xC4           ; horizontal line char ─
-        int 0x80
-        dec ecx
-        jnz .top
+        mov ecx, BOFF_Y + (BOARD_H + 1) * CELL
+        mov edx, SCREEN_W
+        mov esi, CELL
+        mov edi, C_BORDER
+        call fb_fill_rect
 
-        ; Bottom border
-        mov eax, SYS_SETCURSOR
+        ; Left border (col 0)
         xor ebx, ebx
-        mov ecx, VGA_HEIGHT - 1
-        int 0x80
-        mov ecx, VGA_WIDTH
-.bottom:
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0xC4
-        int 0x80
-        dec ecx
-        jnz .bottom
+        mov ecx, BOFF_Y
+        mov edx, CELL
+        mov esi, (BOARD_H + 2) * CELL
+        mov edi, C_BORDER
+        call fb_fill_rect
 
-        ; Left/right borders
-        mov edx, 1
-.sides:
-        cmp edx, VGA_HEIGHT - 1
-        jge .sides_done
-        ; Left
-        mov eax, SYS_SETCURSOR
-        xor ebx, ebx
-        mov ecx, edx
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '|'
-        int 0x80
-        ; Right
-        mov eax, SYS_SETCURSOR
-        mov ebx, VGA_WIDTH - 1
-        mov ecx, edx
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '|'
-        int 0x80
-        inc edx
-        jmp .sides
-.sides_done:
-
-        ; Corners
-        ; Top-left
-        mov cl, '+'
-        mov ch, 0x0B
-        xor eax, eax
-        xor ebx, ebx
-        call vga_putchar_at
-        ; Top-right
-        mov eax, VGA_WIDTH - 1
-        xor ebx, ebx
-        call vga_putchar_at
-        ; Bottom-left
-        xor eax, eax
-        mov ebx, VGA_HEIGHT - 1
-        call vga_putchar_at
-        ; Bottom-right
-        mov eax, VGA_WIDTH - 1
-        mov ebx, VGA_HEIGHT - 1
-        call vga_putchar_at
+        ; Right border (col BOARD_W+1)
+        mov ebx, (BOARD_W + 1) * CELL
+        mov ecx, BOFF_Y
+        mov edx, CELL
+        mov esi, (BOARD_H + 2) * CELL
+        mov edi, C_BORDER
+        call fb_fill_rect
 
         popad
         ret
 
-;=== Draw snake ===
+;=== draw_snake ===
 draw_snake:
         pushad
-        ; Draw head
+        ; Head
         mov eax, [snake_x]
         mov ebx, [snake_y]
-        mov cl, '@'
-        mov ch, 0x0A            ; bright green
-        call vga_putchar_at
+        mov edi, C_HEAD
+        call draw_cell
 
-        ; Draw body
+        ; Body
         mov edx, 1
 .body_loop:
         cmp edx, [snake_len]
         jge .body_done
         mov eax, [snake_x + edx*4]
         mov ebx, [snake_y + edx*4]
-        mov cl, 'o'
-        mov ch, 0x02            ; dark green
-        call vga_putchar_at
+        mov edi, C_BODY
+        call draw_cell
         inc edx
         jmp .body_loop
 .body_done:
         popad
         ret
 
-;=== Place food at random location ===
+;=== draw_cell: EAX=board_x, EBX=board_y, EDI=color ===
+; board_x in 1..BOARD_W, board_y in 1..BOARD_H
+draw_cell:
+        push ebx
+        push ecx
+        push edx
+        push esi
+        ; pixel_x = col * CELL, pixel_y = BOFF_Y + row * CELL
+        mov ecx, eax
+        imul ecx, CELL
+        mov edx, ebx
+        imul edx, CELL
+        add edx, BOFF_Y
+        mov ebx, ecx            ; ebx = pixel_x
+        mov ecx, edx            ; ecx = pixel_y
+        mov edx, CELL
+        mov esi, CELL
+        call fb_fill_rect
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+;=== erase_cell: EAX=board_x, EBX=board_y ===
+erase_cell:
+        push edi
+        mov edi, C_BG
+        call draw_cell
+        pop edi
+        ret
+
+;=== draw_food_cell ===
+draw_food_cell:
+        pushad
+        mov eax, [food_x]
+        mov ebx, [food_y]
+        mov edi, C_FOOD
+        call draw_cell
+        popad
+        ret
+
+;=== place_food ===
 place_food:
         pushad
 .retry:
-        ; Random X: 1 to BOARD_W
         call rand
         xor edx, edx
         mov ebx, BOARD_W
@@ -348,7 +364,6 @@ place_food:
         inc edx
         mov [food_x], edx
 
-        ; Random Y: 1 to BOARD_H
         call rand
         xor edx, edx
         mov ebx, BOARD_H
@@ -356,7 +371,6 @@ place_food:
         inc edx
         mov [food_y], edx
 
-        ; Make sure food isn't on snake
         xor ecx, ecx
 .check_snake:
         cmp ecx, [snake_len]
@@ -366,124 +380,106 @@ place_food:
         jne .next_seg
         mov eax, [food_y]
         cmp eax, [snake_y + ecx*4]
-        je .retry               ; on snake, try again
+        je .retry
 .next_seg:
         inc ecx
         jmp .check_snake
 .food_ok:
+        ; Draw the food
+        mov eax, [food_x]
+        mov ebx, [food_y]
+        mov edi, C_FOOD
+        call draw_cell
         popad
         ret
 
-;=== Draw score ===
+;=== draw_score ===
 draw_score:
         pushad
-        ; Put score in top-right area of border
-        mov eax, SYS_SETCURSOR
-        mov ebx, 2
+        ; Clear HUD bar
+        xor ebx, ebx
         xor ecx, ecx
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0E           ; yellow
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_score
-        int 0x80
+        mov edx, SCREEN_W
+        mov esi, HUD_H
+        xor edi, edi
+        call fb_fill_rect
+
+        mov ebx, 8
+        mov ecx, 4
+        mov esi, str_score
+        mov edi, C_SCORE
+        call fb_draw_text
+
         mov eax, [score]
-        call print_dec
-        mov eax, SYS_PRINT
-        mov ebx, msg_space
-        int 0x80
+        mov ebx, 8 + 8 * 7
+        mov ecx, 4
+        mov edi, C_SCORE
+        call fb_draw_num
+
+        ; Controls hint
+        mov ebx, 300
+        mov ecx, 4
+        mov esi, str_controls
+        mov edi, 0x888888
+        call fb_draw_text
+
         popad
         ret
 
-;=== Show game over ===
+;=== show_game_over ===
 show_game_over:
         pushad
-        ; Draw "GAME OVER" centered
-        mov eax, SYS_SETCURSOR
-        mov ebx, 30
-        mov ecx, 11
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x4F           ; white on red
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_gameover
-        int 0x80
+        ; Darken center
+        mov ebx, 160
+        mov ecx, 200
+        mov edx, 320
+        mov esi, 80
+        mov edi, C_GAMEOVER_BG
+        call fb_fill_rect
 
-        mov eax, SYS_SETCURSOR
-        mov ebx, 25
-        mov ecx, 13
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0F           ; bright white
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_final_score
-        int 0x80
-        mov eax, [score]
-        call print_dec
+        mov ebx, 180
+        mov ecx, 208
+        mov esi, str_gameover
+        mov edi, C_GAMEOVER_TXT
+        call fb_draw_text
 
-        mov eax, SYS_SETCURSOR
-        mov ebx, 22
-        mov ecx, 15
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_restart
-        int 0x80
+        mov ebx, 170
+        mov ecx, 232
+        mov esi, str_restart
+        mov edi, C_GAMEOVER_TXT
+        call fb_draw_text
 
-        ; Wait for keypress
 .wait_key:
         mov eax, SYS_GETCHAR
         int 0x80
-        cmp al, 27              ; ESC
+        cmp al, 27
         je exit_game
         cmp al, 'q'
         je exit_game
         cmp al, 'r'
         jne .wait_key
 
-        ; Clear and restart
-        mov eax, SYS_CLEAR
-        int 0x80
+        ; Redraw border area before restart
+        xor ebx, ebx
+        mov ecx, HUD_H
+        mov edx, SCREEN_W
+        mov esi, SCREEN_H - HUD_H
+        xor edi, edi
+        call fb_fill_rect
+        call draw_border
+
         popad
         ret
 
 exit_game:
-        mov eax, SYS_CLEAR
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2
         int 0x80
         mov eax, SYS_EXIT
+        xor ebx, ebx
         int 0x80
 
-;=== Put char at screen position (direct VGA) ===
-; EAX = x, EBX = y, CL = char, CH = color attribute
-vga_putchar_at:
-        pushad
-        imul ebx, VGA_WIDTH * 2
-        lea edi, [VGA_BASE + ebx + eax*2]
-        mov [edi], cl
-        mov [edi+1], ch
-        popad
-        ret
-
-;=== Put space at screen position ===
-; EAX = x, EBX = y
-vga_put_space:
-        pushad
-        imul ebx, VGA_WIDTH * 2
-        lea edi, [VGA_BASE + ebx + eax*2]
-        mov byte [edi], ' '
-        mov byte [edi+1], 0x00 ; black on black
-        popad
-        ret
-
-;=== Simple PRNG (LCG) ===
+;=== rand ===
 rand:
         push ebx
         push ecx
@@ -492,20 +488,115 @@ rand:
         imul eax, ecx
         add eax, 12345
         mov [rand_seed], eax
-        shr eax, 16             ; use upper bits (better distribution)
+        shr eax, 16
         and eax, 0x7FFF
         pop ecx
         pop ebx
         ret
 
-;=== Data ===
-msg_score:      db " Score: ", 0
-msg_space:      db "  ", 0
-msg_gameover:   db "  GAME OVER  ", 0
-msg_final_score: db "Final Score: ", 0
-msg_restart:    db "Press R to restart, ESC to quit", 0
+;=======================================================================
+; VBE HELPERS
+;=======================================================================
 
-;=== BSS (uninitialized data at end) ===
+; fb_fill_rect: EBX=x, ECX=y, EDX=w, ESI=h, EDI=color
+fb_fill_rect:
+        pushad
+        test edx, edx
+        jz .ffr_done
+        test esi, esi
+        jz .ffr_done
+        mov eax, ecx
+        imul eax, [fb_pitch]
+        add eax, [fb_addr]
+        lea eax, [eax + ebx*4]
+.ffr_row:
+        push eax
+        push edx
+        mov ecx, edx
+.ffr_col:
+        mov [eax], edi
+        add eax, 4
+        dec ecx
+        jnz .ffr_col
+        pop edx
+        pop eax
+        add eax, [fb_pitch]
+        dec esi
+        jnz .ffr_row
+.ffr_done:
+        popad
+        ret
+
+; fb_draw_text: EBX=x, ECX=y, ESI=str_ptr, EDI=color
+fb_draw_text:
+        pushad
+        mov edx, ecx
+        mov ecx, ebx
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 3
+        int 0x80
+        popad
+        ret
+
+; itoa: EAX=number → decimal string in num_buf
+itoa:
+        pushad
+        mov edi, num_buf + 11
+        mov byte [edi], 0
+        dec edi
+        test eax, eax
+        jnz .itoa_d
+        mov byte [edi], '0'
+        dec edi
+        jmp .itoa_cp
+.itoa_d:
+        mov ecx, 10
+.itoa_lp:
+        test eax, eax
+        jz .itoa_cp
+        xor edx, edx
+        div ecx
+        add dl, '0'
+        mov [edi], dl
+        dec edi
+        jmp .itoa_lp
+.itoa_cp:
+        inc edi
+        mov esi, edi
+        mov edi, num_buf
+.itoa_mv:
+        mov al, [esi]
+        mov [edi], al
+        inc esi
+        inc edi
+        test al, al
+        jnz .itoa_mv
+        popad
+        ret
+
+; fb_draw_num: EAX=number, EBX=x, ECX=y, EDI=color
+fb_draw_num:
+        push esi
+        push ebx
+        push ecx
+        push edi
+        call itoa
+        pop edi
+        pop ecx
+        pop ebx
+        mov esi, num_buf
+        call fb_draw_text
+        pop esi
+        ret
+
+;=======================================================================
+; DATA
+;=======================================================================
+str_score:      db "Score: ", 0
+str_controls:   db "WASD/Arrows=Move  Q=Quit", 0
+str_gameover:   db "  GAME OVER  ", 0
+str_restart:    db "R=Restart  Q/ESC=Quit", 0
+
 direction:      dd 0
 snake_len:      dd 0
 score:          dd 0
@@ -513,7 +604,13 @@ food_x:         dd 0
 food_y:         dd 0
 rand_seed:      dd 0
 game_over:      db 0
-snake_x:        times MAX_SNAKE dd 0
-snake_y:        times MAX_SNAKE dd 0
 old_tail_x:     dd 0
 old_tail_y:     dd 0
+
+snake_x:        times MAX_SNAKE dd 0
+snake_y:        times MAX_SNAKE dd 0
+
+section .bss
+fb_addr:        resd 1
+fb_pitch:       resd 1
+num_buf:        resb 12

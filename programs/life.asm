@@ -1,79 +1,52 @@
-; life.asm - Conway's Game of Life for Mellivora OS
-; 78x23 grid, runs until Ctrl+C / 'q'
+; life.asm - Conway's Game of Life — VBE pixel graphics
+; 78x23 grid rendered as 8×20-pixel cells on 640×480 screen.
+; Press q/ESC to quit, r to reset.
 %include "syscalls.inc"
 
-GRID_W  equ 78
-GRID_H  equ 23
-GRID_SZ equ GRID_W * GRID_H
+SCREEN_W        equ 640
+SCREEN_H        equ 480
+GRID_W          equ 78
+GRID_H          equ 23
+GRID_SZ         equ GRID_W * GRID_H
+CELL_W          equ 8           ; pixels per cell horizontally
+CELL_H          equ 20          ; pixels per cell vertically
+BOARD_X         equ 8           ; left offset  (8 + 78*8 = 632, centred)
+BOARD_Y         equ 10          ; top offset   (10 + 23*20 = 470)
+STATUS_Y        equ 470         ; status bar y position
+COLOR_ALIVE     equ 0x00FF44    ; bright green
+COLOR_DEAD      equ 0x000000    ; black
+COLOR_TEXT      equ 0xFFFF00    ; yellow status text
 
 start:
-        ; Clear screen
-        mov eax, SYS_CLEAR
+        ; Set VBE mode 640x480x32
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 1
+        mov ecx, SCREEN_W
+        mov edx, SCREEN_H
+        mov esi, 32
         int 0x80
+        cmp eax, -1
+        je .exit_novbe
 
-        ; Seed with a few patterns
+        ; Get framebuffer info
+        mov eax, SYS_FRAMEBUF
+        xor ebx, ebx
+        int 0x80
+        mov [fb_addr], eax
+        mov dword [fb_pitch], SCREEN_W * 4
+
         call seed_grid
 
 .main_loop:
-        ; Draw grid
-        mov eax, SYS_SETCURSOR
-        xor ebx, ebx
-        xor ecx, ecx
-        int 0x80
+        call draw_all
 
-        mov esi, grid_a
-        xor edx, edx           ; row counter
-.draw_row:
-        xor ecx, ecx           ; col counter
-.draw_col:
-        mov al, [esi]
-        cmp al, 1
-        je .draw_alive
-        mov ebx, ' '
-        jmp .draw_put
-.draw_alive:
-        mov ebx, 0xDB          ; block char
-.draw_put:
-        mov eax, SYS_PUTCHAR
-        int 0x80
-        inc esi
-        inc ecx
-        cmp ecx, GRID_W
-        jl .draw_col
-        ; Newline
-        mov eax, SYS_PUTCHAR
-        mov ebx, 0x0A
-        int 0x80
-        inc edx
-        cmp edx, GRID_H
-        jl .draw_row
-
-        ; Status line
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0E
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_gen
-        int 0x80
-        mov eax, [generation]
-        call print_dec
-        mov eax, SYS_PRINT
-        mov ebx, msg_quit
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
-
-        ; Compute next generation
         call step_generation
         inc dword [generation]
 
-        ; Delay
         mov eax, SYS_SLEEP
-        mov ebx, 8              ; ~80ms
+        mov ebx, 8
         int 0x80
 
-        ; Check for key press
         mov eax, SYS_READ_KEY
         int 0x80
         cmp eax, -1
@@ -82,10 +55,12 @@ start:
         je .quit
         cmp al, 'Q'
         je .quit
+        cmp al, 27
+        je .quit
         cmp al, 'r'
         je .reset
-        cmp al, 27              ; ESC
-        je .quit
+        cmp al, 'R'
+        je .reset
         jmp .main_loop
 
 .reset:
@@ -94,16 +69,100 @@ start:
         jmp .main_loop
 
 .quit:
-        mov eax, SYS_CLEAR
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2
         int 0x80
+.exit_novbe:
         mov eax, SYS_EXIT
+        xor ebx, ebx
         int 0x80
 
 ;---------------------------------------
-; Seed grid with glider, blinker, etc.
+; draw_all — render entire grid + status
+;---------------------------------------
+draw_all:
+        pushad
+        xor edx, edx            ; row
+.da_row:
+        cmp edx, GRID_H
+        jge .da_status
+        xor ecx, ecx            ; col
+.da_col:
+        cmp ecx, GRID_W
+        jge .da_next_row
+
+        ; Cell address
+        mov eax, edx
+        imul eax, GRID_W
+        add eax, ecx
+        movzx eax, byte [grid_a + eax]
+
+        ; Choose color
+        test eax, eax
+        jz .da_dead
+        mov edi, COLOR_ALIVE
+        jmp .da_draw
+.da_dead:
+        mov edi, COLOR_DEAD
+
+.da_draw:
+        push ecx
+        push edx
+        mov ebx, ecx
+        imul ebx, CELL_W
+        add ebx, BOARD_X
+        mov ecx, edx
+        imul ecx, CELL_H
+        add ecx, BOARD_Y
+        mov edx, CELL_W
+        mov esi, CELL_H
+        call fb_fill_rect
+        pop edx
+        pop ecx
+
+        inc ecx
+        jmp .da_col
+.da_next_row:
+        inc edx
+        jmp .da_row
+
+.da_status:
+        ; Clear status bar
+        xor ebx, ebx
+        mov ecx, STATUS_Y
+        mov edx, SCREEN_W
+        mov esi, SCREEN_H - STATUS_Y
+        xor edi, edi
+        call fb_fill_rect
+
+        ; "Gen: " label
+        mov ebx, 8
+        mov ecx, STATUS_Y + 2
+        mov esi, str_gen
+        mov edi, COLOR_TEXT
+        call fb_draw_text
+
+        ; Generation number
+        mov eax, [generation]
+        mov ebx, 8 + 8 * 5      ; after "Gen: " (5 chars × 8px)
+        mov ecx, STATUS_Y + 2
+        mov edi, COLOR_TEXT
+        call fb_draw_num
+
+        ; Controls hint
+        mov ebx, 260
+        mov ecx, STATUS_Y + 2
+        mov esi, str_controls
+        mov edi, 0x888888
+        call fb_draw_text
+
+        popad
+        ret
+
+;---------------------------------------
+; seed_grid
 ;---------------------------------------
 seed_grid:
-        ; Clear both grids
         mov edi, grid_a
         mov ecx, GRID_SZ
         xor al, al
@@ -141,27 +200,24 @@ seed_grid:
         ret
 
 ;---------------------------------------
-; Step one generation: grid_a -> grid_b, then copy back
+; step_generation - grid_a → grid_b, copy back
 ;---------------------------------------
 step_generation:
         pushad
-        ; Clear grid_b
         mov edi, grid_b
         mov ecx, GRID_SZ
         xor al, al
         rep stosb
 
-        xor edx, edx           ; row
+        xor edx, edx            ; row
 .sg_row:
-        xor ecx, ecx           ; col
+        xor ecx, ecx            ; col
 .sg_col:
-        ; Count neighbors of (edx, ecx)
-        xor ebx, ebx           ; neighbor count
-        ; Check all 8 directions
+        xor ebx, ebx            ; neighbor count
+        ; top row
         mov eax, edx
-        dec eax                 ; row-1
+        dec eax
         js .sg_skip_top
-        ; top-left
         mov esi, ecx
         dec esi
         js .sg_no_tl
@@ -171,13 +227,11 @@ step_generation:
         add bl, [grid_a + eax]
         pop eax
 .sg_no_tl:
-        ; top
         push eax
         imul eax, GRID_W
         add eax, ecx
         add bl, [grid_a + eax]
         pop eax
-        ; top-right
         mov esi, ecx
         inc esi
         cmp esi, GRID_W
@@ -188,7 +242,7 @@ step_generation:
         add bl, [grid_a + eax]
         pop eax
 .sg_skip_top:
-        ; left
+        ; middle row (left + right)
         mov esi, ecx
         dec esi
         js .sg_no_l
@@ -197,7 +251,6 @@ step_generation:
         add eax, esi
         add bl, [grid_a + eax]
 .sg_no_l:
-        ; right
         mov esi, ecx
         inc esi
         cmp esi, GRID_W
@@ -212,7 +265,6 @@ step_generation:
         inc eax
         cmp eax, GRID_H
         jge .sg_skip_bot
-        ; bottom-left
         mov esi, ecx
         dec esi
         js .sg_no_bl
@@ -222,13 +274,11 @@ step_generation:
         add bl, [grid_a + eax]
         pop eax
 .sg_no_bl:
-        ; bottom
         push eax
         imul eax, GRID_W
         add eax, ecx
         add bl, [grid_a + eax]
         pop eax
-        ; bottom-right
         mov esi, ecx
         inc esi
         cmp esi, GRID_W
@@ -245,13 +295,11 @@ step_generation:
         add eax, ecx
         cmp byte [grid_a + eax], 1
         je .sg_alive
-        ; Dead cell: birth if 3 neighbors
         cmp bl, 3
         jne .sg_next
         mov byte [grid_b + eax], 1
         jmp .sg_next
 .sg_alive:
-        ; Alive: survive if 2 or 3
         cmp bl, 2
         je .sg_survive
         cmp bl, 3
@@ -267,7 +315,6 @@ step_generation:
         cmp edx, GRID_H
         jl .sg_row
 
-        ; Copy grid_b -> grid_a
         mov esi, grid_b
         mov edi, grid_a
         mov ecx, GRID_SZ
@@ -275,16 +322,114 @@ step_generation:
         popad
         ret
 
-;---------------------------------------
-; Data
-;---------------------------------------
-generation: dd 0
-msg_gen:    db " Gen: ", 0
-msg_quit:   db "  [q]uit [r]eset", 0
+;=======================================================================
+; VBE HELPERS
+;=======================================================================
 
-;---------------------------------------
+; fb_fill_rect: EBX=x, ECX=y, EDX=w, ESI=h, EDI=color
+fb_fill_rect:
+        pushad
+        test edx, edx
+        jz .ffr_done
+        test esi, esi
+        jz .ffr_done
+        mov eax, ecx
+        imul eax, [fb_pitch]
+        add eax, [fb_addr]
+        lea eax, [eax + ebx*4]
+.ffr_row:
+        push eax
+        push edx
+        mov ecx, edx
+.ffr_col:
+        mov [eax], edi
+        add eax, 4
+        dec ecx
+        jnz .ffr_col
+        pop edx
+        pop eax
+        add eax, [fb_pitch]
+        dec esi
+        jnz .ffr_row
+.ffr_done:
+        popad
+        ret
+
+; fb_draw_text: EBX=x, ECX=y, ESI=str_ptr, EDI=color
+fb_draw_text:
+        pushad
+        mov edx, ecx
+        mov ecx, ebx
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 3
+        int 0x80
+        popad
+        ret
+
+; itoa: EAX=number → null-terminated decimal in num_buf
+itoa:
+        pushad
+        mov edi, num_buf + 11
+        mov byte [edi], 0
+        dec edi
+        test eax, eax
+        jnz .itoa_digits
+        mov byte [edi], '0'
+        dec edi
+        jmp .itoa_copy
+.itoa_digits:
+        mov ecx, 10
+.itoa_lp:
+        test eax, eax
+        jz .itoa_copy
+        xor edx, edx
+        div ecx
+        add dl, '0'
+        mov [edi], dl
+        dec edi
+        jmp .itoa_lp
+.itoa_copy:
+        inc edi
+        mov esi, edi
+        mov edi, num_buf
+.itoa_cp:
+        mov al, [esi]
+        mov [edi], al
+        inc esi
+        inc edi
+        test al, al
+        jnz .itoa_cp
+        popad
+        ret
+
+; fb_draw_num: EAX=number, EBX=x, ECX=y, EDI=color
+fb_draw_num:
+        push esi
+        push ebx
+        push ecx
+        push edi
+        call itoa
+        pop edi
+        pop ecx
+        pop ebx
+        mov esi, num_buf
+        call fb_draw_text
+        pop esi
+        ret
+
+;=======================================================================
+; DATA
+;=======================================================================
+generation:     dd 0
+str_gen:        db "Gen: ", 0
+str_controls:   db "[q]uit  [r]eset", 0
+
+;=======================================================================
 ; BSS
-;---------------------------------------
+;=======================================================================
 section .bss
-grid_a: resb GRID_SZ
-grid_b: resb GRID_SZ
+grid_a:         resb GRID_SZ
+grid_b:         resb GRID_SZ
+fb_addr:        resd 1
+fb_pitch:       resd 1
+num_buf:        resb 12

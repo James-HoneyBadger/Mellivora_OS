@@ -1,19 +1,62 @@
-; pong.asm - Classic Pong game for Mellivora OS
-; Single player vs CPU. First to 11 wins.
-;
-; Controls: W/S or Up/Down to move paddle. Q to quit.
+; pong.asm - Classic Pong — VBE pixel graphics
+; Single player vs CPU, first to 11 wins.
+; Controls: W/S or Up/Down to move paddle.
 
 %include "syscalls.inc"
 
+SCREEN_W        equ 640
+SCREEN_H        equ 480
+HUD_H           equ 28          ; score bar height
+
+; Game board in logical units (unchanged from original for physics)
 BOARD_W         equ 60
 BOARD_H         equ 22
 PADDLE_H        equ 5
-BALL_SPEED      equ 5           ; ticks per frame
+BALL_SPEED      equ 5
 WIN_SCORE       equ 11
 
+; Scale factors: logical → pixels
+; Play area: 600×440 starting at (20, HUD_H+10)
+AREA_X          equ 20
+AREA_Y          equ HUD_H + 10
+SCALE_X         equ 10          ; 60 * 10 = 600
+SCALE_Y         equ 20          ; 22 * 20 = 440
+
+; Derived pixel geometry
+PADDLE_PX_W     equ 10
+PADDLE_PX_H     equ PADDLE_H * SCALE_Y
+BALL_PX         equ 12
+
+; Colors
+C_BG            equ 0x000000
+C_HUD           equ 0x001A44
+C_BORDER        equ 0x444444
+C_P1_PADDLE     equ 0x00CCFF
+C_P2_PADDLE     equ 0xFF4444
+C_BALL          equ 0xFFFF00
+C_TEXT          equ 0xFFFFFF
+C_CENTER        equ 0x333333
+
+; Key codes
+KEY_UP          equ 0x80
+KEY_DOWN        equ 0x81
+
 start:
-        mov eax, SYS_CLEAR
+        ; Init VBE
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 1
+        mov ecx, SCREEN_W
+        mov edx, SCREEN_H
+        mov esi, 32
         int 0x80
+        cmp eax, -1
+        je .exit_novbe
+
+        mov eax, SYS_FRAMEBUF
+        xor ebx, ebx
+        int 0x80
+        mov [fb_addr], eax
+        mov dword [fb_pitch], SCREEN_W * 4
 
         call init_game
 
@@ -33,28 +76,26 @@ start:
 
 .show_winner:
         call draw_board
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0E
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 10
-        int 0x80
 
+        ; Show winner text
+        mov ebx, AREA_X + 200
+        mov ecx, AREA_Y + 180
         cmp dword [p1_score], WIN_SCORE
         je .p1_wins
-        mov eax, SYS_PRINT
-        mov ebx, msg_cpu_wins
-        int 0x80
-        jmp .wait_end
+        mov esi, msg_cpu_wins
+        jmp .show_msg
 .p1_wins:
-        mov eax, SYS_PRINT
-        mov ebx, msg_you_win
-        int 0x80
+        mov esi, msg_you_win
+.show_msg:
+        mov edi, 0xFFFF44
+        call fb_draw_text
 
-.wait_end:
-        mov eax, SYS_PRINT
-        mov ebx, msg_restart
-        int 0x80
+        mov ebx, AREA_X + 160
+        mov ecx, AREA_Y + 210
+        mov esi, msg_restart
+        mov edi, C_TEXT
+        call fb_draw_text
+
 .we_key:
         mov eax, SYS_GETCHAR
         int 0x80
@@ -69,8 +110,10 @@ start:
         jmp .we_key
 
 .exit:
-        mov eax, SYS_CLEAR
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2
         int 0x80
+.exit_novbe:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
@@ -88,13 +131,11 @@ init_game:
 reset_ball:
         mov dword [ball_x], BOARD_W / 2
         mov dword [ball_y], BOARD_H / 2
-        ; Alternate serve direction
         neg dword [ball_dx]
         cmp dword [ball_dx], 0
         jne .rb_ok
         mov dword [ball_dx], 1
 .rb_ok:
-        ; Random vertical direction
         mov eax, SYS_GETTIME
         int 0x80
         and eax, 1
@@ -148,11 +189,9 @@ check_input_pong:
 ;---------------------------------------
 move_cpu:
         pushad
-        ; Simple AI: track ball y
         mov eax, [ball_y]
         mov ebx, [p2_y]
         add ebx, PADDLE_H / 2
-
         cmp eax, ebx
         jl .mc_up
         cmp eax, ebx
@@ -176,7 +215,6 @@ move_cpu:
 ;---------------------------------------
 move_ball:
         pushad
-        ; Move ball
         mov eax, [ball_x]
         add eax, [ball_dx]
         mov [ball_x], eax
@@ -185,7 +223,6 @@ move_ball:
         add ebx, [ball_dy]
         mov [ball_y], ebx
 
-        ; Top/bottom wall bounce
         cmp ebx, 0
         jle .mb_bounce_v
         cmp ebx, BOARD_H - 1
@@ -194,7 +231,6 @@ move_ball:
 
 .mb_bounce_v:
         neg dword [ball_dy]
-        ; Clamp
         cmp dword [ball_y], 0
         jge .mb_clamp_top_ok
         mov dword [ball_y], 1
@@ -205,11 +241,10 @@ move_ball:
         mov [ball_y], eax
 
 .mb_check_paddles:
-        ; Left paddle (player 1 at x=1)
         cmp dword [ball_x], 2
         jne .mb_check_right
         cmp dword [ball_dx], 0
-        jg .mb_check_right      ; moving right, ignore
+        jg .mb_check_right
         mov eax, [ball_y]
         cmp eax, [p1_y]
         jl .mb_p2_scores
@@ -217,13 +252,10 @@ move_ball:
         add ecx, PADDLE_H
         cmp eax, ecx
         jge .mb_p2_scores
-        ; Hit paddle!
         neg dword [ball_dx]
-        ; Add spin based on hit position
         mov eax, [ball_y]
         sub eax, [p1_y]
         sub eax, PADDLE_H / 2
-        ; If hit top half, ball goes up; bottom half, down
         cmp eax, 0
         jl .mb_spin_up1
         mov dword [ball_dy], 1
@@ -242,12 +274,11 @@ move_ball:
         jmp .mb_done
 
 .mb_check_right:
-        ; Right paddle (CPU at x=BOARD_W-2)
         mov eax, BOARD_W - 3
         cmp [ball_x], eax
         jne .mb_check_oob
         cmp dword [ball_dx], 0
-        jl .mb_check_oob       ; moving left, ignore
+        jl .mb_check_oob
         mov eax, [ball_y]
         cmp eax, [p2_y]
         jl .mb_p1_scores
@@ -255,7 +286,6 @@ move_ball:
         add ecx, PADDLE_H
         cmp eax, ecx
         jge .mb_p1_scores
-        ; Hit paddle
         neg dword [ball_dx]
         mov eax, [ball_y]
         sub eax, [p2_y]
@@ -279,7 +309,6 @@ move_ball:
         jmp .mb_done
 
 .mb_check_oob:
-        ; Out of bounds left
         cmp dword [ball_x], 0
         jg .mb_check_oob_r
         inc dword [p2_score]
@@ -304,202 +333,254 @@ move_ball:
         ret
 
 ;---------------------------------------
+; draw_board — full VBE frame redraw
+;---------------------------------------
 draw_board:
         pushad
 
-        mov eax, SYS_SETCURSOR
+        ; Background
         xor ebx, ebx
         xor ecx, ecx
-        int 0x80
+        mov edx, SCREEN_W
+        mov esi, SCREEN_H
+        mov edi, C_BG
+        call fb_fill_rect
 
-        ; Score header
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0F           ; white
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_player
-        int 0x80
+        ; HUD bar
+        xor ebx, ebx
+        xor ecx, ecx
+        mov edx, SCREEN_W
+        mov esi, HUD_H
+        mov edi, C_HUD
+        call fb_fill_rect
+
+        ; HUD text: "YOU: X  vs  CPU: X"
+        mov ebx, 20
+        mov ecx, 6
+        mov esi, str_you
+        mov edi, C_TEXT
+        call fb_draw_text
+
         mov eax, [p1_score]
-        call print_dec
-        mov eax, SYS_PRINT
-        mov ebx, msg_vs
-        int 0x80
+        mov ebx, 20 + 5 * 8
+        mov ecx, 6
+        mov edi, C_TEXT
+        call fb_draw_num
+
+        mov ebx, 160
+        mov ecx, 6
+        mov esi, str_vs
+        mov edi, C_TEXT
+        call fb_draw_text
+
         mov eax, [p2_score]
-        call print_dec
-        mov eax, SYS_PRINT
-        mov ebx, msg_cpu
-        int 0x80
+        mov ebx, 200
+        mov ecx, 6
+        mov edi, C_TEXT
+        call fb_draw_num
 
-        ; Pad line
-        mov ecx, 30
-.db_hpad:
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-        dec ecx
-        jnz .db_hpad
-        mov eax, SYS_PUTCHAR
-        mov ebx, 10
-        int 0x80
+        mov ebx, 240
+        mov ecx, 6
+        mov esi, str_cpu
+        mov edi, C_TEXT
+        call fb_draw_text
 
-        ; Top border
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x08
-        int 0x80
-        mov ecx, BOARD_W + 2
-.db_top:
-        mov eax, SYS_PUTCHAR
-        mov ebx, '-'
-        int 0x80
-        dec ecx
-        jnz .db_top
-        mov eax, SYS_PUTCHAR
-        mov ebx, 10
-        int 0x80
+        ; Controls hint
+        mov ebx, 400
+        mov ecx, 6
+        mov esi, msg_controls
+        mov edi, 0x777777
+        call fb_draw_text
 
-        ; Board rows
-        xor ebp, ebp            ; row 0..BOARD_H-1
-.db_row:
+        ; Top / bottom play-area borders
+        xor ebx, ebx
+        mov ecx, AREA_Y - 2
+        mov edx, SCREEN_W
+        mov esi, 2
+        mov edi, C_BORDER
+        call fb_fill_rect
+
+        xor ebx, ebx
+        mov ecx, AREA_Y + BOARD_H * SCALE_Y
+        mov edx, SCREEN_W
+        mov esi, 2
+        mov edi, C_BORDER
+        call fb_fill_rect
+
+        ; Centre dotted line (use EBP as row counter, saved/restored around call)
+        xor ebp, ebp            ; row counter
+.db_center:
         cmp ebp, BOARD_H
-        jge .db_bottom
+        jge .db_paddles
 
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x08
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '|'
-        int 0x80
+        ; Draw dash only on even rows
+        test ebp, 1
+        jnz .db_center_next
 
-        ; Columns
-        xor edi, edi
-.db_col:
-        cmp edi, BOARD_W
-        jge .db_rend
-
-        ; Center line
-        mov eax, BOARD_W / 2
-        cmp edi, eax
-        jne .db_not_center
-        ; Draw dotted center line
+        ; Pixel y for this dash
         mov eax, ebp
-        and eax, 1
-        jnz .db_not_center
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x08
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, ':'
-        int 0x80
-        jmp .db_next
+        imul eax, SCALE_Y
+        add eax, AREA_Y + 2     ; small inset
 
-.db_not_center:
-        ; Check player paddle (x=1)
-        cmp edi, 1
-        jne .db_not_p1
-        cmp ebp, [p1_y]
-        jl .db_not_p1
-        mov eax, [p1_y]
-        add eax, PADDLE_H
-        cmp ebp, eax
-        jge .db_not_p1
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0B           ; cyan
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '#'
-        int 0x80
-        jmp .db_next
+        push ebp                ; save row counter across call
+        mov ebx, BOARD_W / 2 * SCALE_X + AREA_X
+        mov ecx, eax
+        mov edx, 2
+        mov esi, SCALE_Y - 4
+        mov edi, C_CENTER
+        call fb_fill_rect
+        pop ebp                 ; restore row counter
 
-.db_not_p1:
-        ; Check CPU paddle (x=BOARD_W-2)
-        mov eax, BOARD_W - 2
-        cmp edi, eax
-        jne .db_not_p2
-        cmp ebp, [p2_y]
-        jl .db_not_p2
-        mov eax, [p2_y]
-        add eax, PADDLE_H
-        cmp ebp, eax
-        jge .db_not_p2
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0C           ; red
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '#'
-        int 0x80
-        jmp .db_next
-
-.db_not_p2:
-        ; Check ball
-        cmp edi, [ball_x]
-        jne .db_empty
-        cmp ebp, [ball_y]
-        jne .db_empty
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x0E           ; yellow
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 'O'
-        int 0x80
-        jmp .db_next
-
-.db_empty:
-        mov eax, SYS_PUTCHAR
-        mov ebx, ' '
-        int 0x80
-
-.db_next:
-        inc edi
-        jmp .db_col
-
-.db_rend:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x08
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, '|'
-        int 0x80
-        mov eax, SYS_PUTCHAR
-        mov ebx, 10
-        int 0x80
-
+.db_center_next:
         inc ebp
-        jmp .db_row
+        jmp .db_center
 
-.db_bottom:
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x08
-        int 0x80
-        mov ecx, BOARD_W + 2
-.db_bot:
-        mov eax, SYS_PUTCHAR
-        mov ebx, '-'
-        int 0x80
-        dec ecx
-        jnz .db_bot
+.db_paddles:
+        ; Player 1 paddle (left side, col 1)
+        mov eax, [p1_y]
+        imul eax, SCALE_Y
+        add eax, AREA_Y
+        mov ebx, AREA_X + SCALE_X      ; col 1 * SCALE_X
+        mov ecx, eax
+        mov edx, PADDLE_PX_W
+        mov esi, PADDLE_PX_H
+        mov edi, C_P1_PADDLE
+        call fb_fill_rect
 
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_controls
-        int 0x80
+        ; Player 2 paddle (right side, col BOARD_W-2)
+        mov eax, [p2_y]
+        imul eax, SCALE_Y
+        add eax, AREA_Y
+        mov ebx, AREA_X + (BOARD_W - 2) * SCALE_X
+        mov ecx, eax
+        mov edx, PADDLE_PX_W
+        mov esi, PADDLE_PX_H
+        mov edi, C_P2_PADDLE
+        call fb_fill_rect
+
+        ; Ball
+        mov eax, [ball_x]
+        imul eax, SCALE_X
+        add eax, AREA_X
+        mov ebx, eax
+        mov eax, [ball_y]
+        imul eax, SCALE_Y
+        add eax, AREA_Y
+        mov ecx, eax
+        mov edx, BALL_PX
+        mov esi, BALL_PX
+        mov edi, C_BALL
+        call fb_fill_rect
 
         popad
         ret
 
-;=======================================
-; Data
-;=======================================
-msg_player:     db " YOU: ", 0
-msg_vs:         db "  vs  ", 0
-msg_cpu:        db " CPU", 0
-msg_you_win:    db "  YOU WIN!", 10, 0
-msg_cpu_wins:   db "  CPU WINS!", 10, 0
-msg_restart:    db "  R=Restart  Q=Quit", 10, 0
-msg_controls:   db 10, " W/S=Move  Q=Quit  First to 11 wins", 10, 0
+;=======================================================================
+; VBE HELPERS
+;=======================================================================
 
-; Game state
+; fb_fill_rect: EBX=x, ECX=y, EDX=w, ESI=h, EDI=color
+fb_fill_rect:
+        pushad
+        test edx, edx
+        jz .ffr_done
+        test esi, esi
+        jz .ffr_done
+        mov eax, ecx
+        imul eax, [fb_pitch]
+        add eax, [fb_addr]
+        lea eax, [eax + ebx*4]
+.ffr_row:
+        push eax
+        push edx
+        mov ecx, edx
+.ffr_col:
+        mov [eax], edi
+        add eax, 4
+        dec ecx
+        jnz .ffr_col
+        pop edx
+        pop eax
+        add eax, [fb_pitch]
+        dec esi
+        jnz .ffr_row
+.ffr_done:
+        popad
+        ret
+
+; fb_draw_text: EBX=x, ECX=y, ESI=str_ptr, EDI=color
+fb_draw_text:
+        pushad
+        mov edx, ecx
+        mov ecx, ebx
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 3
+        int 0x80
+        popad
+        ret
+
+; itoa: EAX=number → decimal string in num_buf
+itoa:
+        pushad
+        mov edi, num_buf + 11
+        mov byte [edi], 0
+        dec edi
+        test eax, eax
+        jnz .itoa_d
+        mov byte [edi], '0'
+        dec edi
+        jmp .itoa_cp
+.itoa_d:
+        mov ecx, 10
+.itoa_lp:
+        test eax, eax
+        jz .itoa_cp
+        xor edx, edx
+        div ecx
+        add dl, '0'
+        mov [edi], dl
+        dec edi
+        jmp .itoa_lp
+.itoa_cp:
+        inc edi
+        mov esi, edi
+        mov edi, num_buf
+.itoa_mv:
+        mov al, [esi]
+        mov [edi], al
+        inc esi
+        inc edi
+        test al, al
+        jnz .itoa_mv
+        popad
+        ret
+
+; fb_draw_num: EAX=number, EBX=x, ECX=y, EDI=color
+fb_draw_num:
+        push esi
+        push ebx
+        push ecx
+        push edi
+        call itoa
+        pop edi
+        pop ecx
+        pop ebx
+        mov esi, num_buf
+        call fb_draw_text
+        pop esi
+        ret
+
+;=======================================================================
+; DATA
+;=======================================================================
+str_you:        db "YOU: ", 0
+str_vs:         db " vs ", 0
+str_cpu:        db " CPU", 0
+msg_you_win:    db "  YOU WIN!", 0
+msg_cpu_wins:   db "  CPU WINS!", 0
+msg_restart:    db "  R=Restart  Q=Quit", 0
+msg_controls:   db "W/S=Move  Q=Quit", 0
+
 p1_y:           dd 0
 p2_y:           dd 0
 p1_score:       dd 0
@@ -509,3 +590,8 @@ ball_y:         dd BOARD_H / 2
 ball_dx:        dd 1
 ball_dy:        dd 1
 game_over:      db 0
+
+section .bss
+fb_addr:        resd 1
+fb_pitch:       resd 1
+num_buf:        resb 12

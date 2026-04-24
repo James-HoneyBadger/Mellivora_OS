@@ -1,29 +1,42 @@
-; doomfire.asm - Doom fire effect demo
-; Usage: doomfire
+; doomfire.asm - Doom fire effect demo — VBE pixel graphics
 ; Press any key to exit.
 
 %include "syscalls.inc"
 
+SCREEN_W        equ 640
+SCREEN_H        equ 480
 FIRE_W          equ 80
-FIRE_H          equ 25
+FIRE_H          equ 48         ; 48 * 10 = 480
 FIRE_SIZE       equ FIRE_W * FIRE_H
-TICK_DELAY      equ 2           ; ~50ms per frame
-
-; Fire intensity palette: character + color attribute
-; Intensity 0-7: black to white-hot
-NUM_SHADES      equ 8
+CELL_W          equ 8          ; pixels per fire cell (80*8=640)
+CELL_H          equ 10         ; pixels per fire cell (48*10=480)
+TICK_DELAY      equ 2
+NUM_SHADES      equ 37         ; 0=cold black, 36=white-hot
 
 start:
-        ; Clear screen
-        mov eax, SYS_CLEAR
+        ; Set VBE mode 640x480x32
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 1
+        mov ecx, SCREEN_W
+        mov edx, SCREEN_H
+        mov esi, 32
         int 0x80
+        cmp eax, -1
+        je .exit_novbe
 
-        ; Seed random state from clock ticks
+        ; Get framebuffer info
+        mov eax, SYS_FRAMEBUF
+        xor ebx, ebx
+        int 0x80
+        mov [fb_addr], eax
+        mov dword [fb_pitch], SCREEN_W * 4
+
+        ; Seed random
         mov eax, SYS_GETTIME
         int 0x80
         mov [rand_state], eax
 
-        ; Initialize fire buffer to zero (cold)
+        ; Clear fire buffer to zero
         mov edi, fire_buf
         mov ecx, FIRE_SIZE
         xor eax, eax
@@ -35,75 +48,72 @@ start:
         mov al, NUM_SHADES - 1
         rep stosb
 
+        ; Black out screen
+        xor ebx, ebx
+        xor ecx, ecx
+        mov edx, SCREEN_W
+        mov esi, SCREEN_H
+        xor edi, edi
+        call fb_fill_rect
+
 .main_loop:
-        ; Check for keypress — exit on any key
         mov eax, SYS_READ_KEY
         int 0x80
         test eax, eax
         jnz .exit
 
-        ; Propagate fire upward
         call fire_spread
-
-        ; Render fire to screen
         call fire_render
 
-        ; Delay
         mov eax, SYS_SLEEP
         mov ebx, TICK_DELAY
         int 0x80
-
         jmp .main_loop
 
 .exit:
-        ; Reset color and clear
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2
         int 0x80
-        mov eax, SYS_CLEAR
-        int 0x80
+.exit_novbe:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
 
 ;---------------------------------------
-; fire_spread - Propagate fire from bottom up
-; Each pixel samples the pixel below (with random decay)
+; fire_spread - propagate fire upward
 ;---------------------------------------
 fire_spread:
         pushad
-        ; Process rows 0..(FIRE_H-2), each pixel looks at row below
-        mov edx, 0              ; Y = 0
+        mov edx, 0
 .fs_row:
         cmp edx, FIRE_H - 1
         jge .fs_done
-        xor ecx, ecx           ; X = 0
+        xor ecx, ecx
 .fs_col:
         cmp ecx, FIRE_W
         jge .fs_next_row
 
-        ; Source = fire_buf[(Y+1)*FIRE_W + X]
+        ; Source pixel below
         mov eax, edx
         inc eax
         imul eax, FIRE_W
         add eax, ecx
-        movzx ebx, byte [fire_buf + eax]  ; source intensity
+        movzx ebx, byte [fire_buf + eax]
 
-        ; Random decay (0-1)
+        ; Random decay
         call rand_small
         sub ebx, eax
         jns .fs_clamp_ok
         xor ebx, ebx
 .fs_clamp_ok:
 
-        ; Random horizontal wind (-1, 0, or +1)
-        call rand_small                 ; 0 or 1 (left offset)
-        mov edi, eax                    ; save first random
-        call rand_small                 ; 0 or 1 (right offset)
-        sub edi, eax                    ; edi = -1 (left), 0 (stay), or +1 (right)
+        ; Random wind
+        call rand_small
+        mov edi, eax
+        call rand_small
+        sub edi, eax
         mov esi, ecx
-        add esi, edi                    ; apply wind
-        ; Clamp X to [0, FIRE_W-1]
+        add esi, edi
         jns .fs_xok
         xor esi, esi
 .fs_xok:
@@ -112,7 +122,6 @@ fire_spread:
         mov esi, FIRE_W - 1
 .fs_xok2:
 
-        ; Destination = fire_buf[Y*FIRE_W + adjusted_X]
         mov eax, edx
         imul eax, FIRE_W
         add eax, esi
@@ -128,49 +137,36 @@ fire_spread:
         ret
 
 ;---------------------------------------
-; fire_render - Draw fire buffer to screen
+; fire_render - draw fire to VBE framebuffer
 ;---------------------------------------
 fire_render:
         pushad
-        xor edx, edx           ; Y = 0
+        xor edx, edx            ; row
 .fr_row:
         cmp edx, FIRE_H
         jge .fr_done
-        ; Set cursor to start of row
-        mov eax, SYS_SETCURSOR
-        xor ebx, ebx
-        mov ecx, edx
-        int 0x80
-
-        xor ecx, ecx           ; X = 0
+        xor ecx, ecx            ; col
 .fr_col:
         cmp ecx, FIRE_W
         jge .fr_next_row
 
-        ; Get intensity
+        ; Intensity → palette color
         mov eax, edx
         imul eax, FIRE_W
         add eax, ecx
         movzx eax, byte [fire_buf + eax]
+        mov edi, [fire_palette + eax * 4]
 
-        ; Look up color and character
+        ; Draw CELL_W × CELL_H block
         push ecx
         push edx
-        movzx ebx, byte [palette_color + eax]
-        mov eax, SYS_SETCOLOR
-        int 0x80
-        pop edx
-        pop ecx
-
-        push ecx
-        push edx
-        mov eax, edx
-        imul eax, FIRE_W
-        add eax, ecx
-        movzx eax, byte [fire_buf + eax]
-        movzx ebx, byte [palette_char + eax]
-        mov eax, SYS_PUTCHAR
-        int 0x80
+        mov ebx, ecx
+        imul ebx, CELL_W
+        mov ecx, edx
+        imul ecx, CELL_H
+        mov edx, CELL_W
+        mov esi, CELL_H
+        call fb_fill_rect
         pop edx
         pop ecx
 
@@ -184,8 +180,7 @@ fire_render:
         ret
 
 ;---------------------------------------
-; rand_small - Return 0 or 1 in EAX
-; Simple LCG: state = state * 1103515245 + 12345
+; rand_small — returns 0 or 1 in EAX
 ;---------------------------------------
 rand_small:
         push ebx
@@ -198,28 +193,57 @@ rand_small:
         pop ebx
         ret
 
-; Fire intensity palette
-; Shade 0=cold (black), 7=hottest (white)
-palette_color:
-        db 0x00         ; 0: black on black
-        db 0x04         ; 1: dark red on black
-        db 0x0C         ; 2: bright red on black
-        db 0x06         ; 3: brown/orange on black
-        db 0x0E         ; 4: yellow on black
-        db 0x0E         ; 5: yellow on black
-        db 0x0F         ; 6: white on black
-        db 0x0F         ; 7: bright white on black
+;=======================================================================
+; VBE HELPERS
+;=======================================================================
 
-palette_char:
-        db ' '          ; 0: empty
-        db 0xB0         ; 1: light shade
-        db 0xB1         ; 2: medium shade
-        db 0xB1         ; 3: medium shade
-        db 0xB2         ; 4: dark shade
-        db 0xDB         ; 5: full block
-        db 0xDB         ; 6: full block
-        db 0xDB         ; 7: full block
+; fb_fill_rect: EBX=x, ECX=y, EDX=w, ESI=h, EDI=color
+fb_fill_rect:
+        pushad
+        test edx, edx
+        jz .ffr_done
+        test esi, esi
+        jz .ffr_done
+        mov eax, ecx
+        imul eax, [fb_pitch]
+        add eax, [fb_addr]
+        lea eax, [eax + ebx*4]
+.ffr_row:
+        push eax
+        push edx
+        mov ecx, edx
+.ffr_col:
+        mov [eax], edi
+        add eax, 4
+        dec ecx
+        jnz .ffr_col
+        pop edx
+        pop eax
+        add eax, [fb_pitch]
+        dec esi
+        jnz .ffr_row
+.ffr_done:
+        popad
+        ret
 
-; Data
+;=======================================================================
+; DATA
+;=======================================================================
+
+; 37-shade fire palette: black → red → orange → yellow → white
+fire_palette:
+        dd 0x000000, 0x0D0000, 0x1A0000, 0x260000, 0x330000
+        dd 0x400000, 0x4D0000, 0x5A0000, 0x660000, 0x730000
+        dd 0x800000, 0x8C0000, 0x990000, 0xA60000, 0xB30000
+        dd 0xBF0000, 0xCC0000, 0xD90000, 0xE60000, 0xFF0000
+        dd 0xFF1A00, 0xFF3300, 0xFF4D00, 0xFF6600, 0xFF8000
+        dd 0xFF9900, 0xFFB300, 0xFFCC00, 0xFFE600, 0xFFFF00
+        dd 0xFFFF33, 0xFFFF66, 0xFFFF99, 0xFFFFCC, 0xFFFFE6
+        dd 0xFFFFF0, 0xFFFFFF
+
 rand_state:     dd 0
 fire_buf:       times FIRE_SIZE db 0
+
+section .bss
+fb_addr:        resd 1
+fb_pitch:       resd 1
