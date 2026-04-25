@@ -20,11 +20,12 @@ compiler.
 10. [Directory Operations](#directory-operations)
 11. [Serial Port I/O](#serial-port-io)
 12. [Environment & Arguments](#environment--arguments)
-13. [Game Loop Pattern](#game-loop-pattern)
-14. [Building Assembly Programs](#building-assembly-programs)
-15. [C Programming with TCC](#c-programming-with-tcc)
-16. [Debugging Tips](#debugging-tips)
-17. [Complete Syscall Table](#complete-syscall-table)
+13. [VBE Pixel Graphics](#vbe-pixel-graphics)
+14. [Game Loop Pattern](#game-loop-pattern)
+15. [Building Assembly Programs](#building-assembly-programs)
+16. [C Programming with TCC](#c-programming-with-tcc)
+17. [Debugging Tips](#debugging-tips)
+18. [Complete Syscall Table](#complete-syscall-table)
 
 ---
 
@@ -162,7 +163,7 @@ SYS_SERIAL_IN       equ 33  ; Read serial: -> EAX=char or -1
 SYS_STDIN_READ      equ 34  ; Read piped stdin: EBX=buf -> EAX=bytes (-1=no pipe)
 SYS_YIELD           equ 35  ; Yield CPU to next task
 SYS_MOUSE           equ 36  ; Mouse state: -> EAX=x EBX=y ECX=buttons
-SYS_FRAMEBUF        equ 37  ; Framebuffer ops: EBX=sub (0=info,1=set,2=restore)
+SYS_FRAMEBUF        equ 37  ; Framebuffer ops: EBX=sub (0=info,1=set,2=restore,3=text,4=present)
 SYS_GUI             equ 38  ; Burrows GUI sub-calls: EBX=sub
 SYS_SOCKET          equ 39  ; Create socket: EBX=type(1=TCP,2=UDP) -> EAX=fd
 SYS_CONNECT         equ 40  ; Connect: EBX=fd ECX=ip EDX=port -> EAX=0/-1
@@ -207,6 +208,13 @@ SYS_TASKNAME        equ 78  ; Set task name: EBX=name_ptr
 SYS_REALLOC         equ 79  ; Reallocate: EBX=ptr ECX=new_size EDX=old_size -> EAX=ptr
 SYS_GETENV_SLOT     equ 80  ; Get env slot: EBX=index ECX=buf(128) -> EAX=0/-1
 SYS_DMESG_WRITE     equ 81  ; Write to dmesg log: EBX=msg_ptr
+SYS_SEM_CREATE      equ 88  ; Create semaphore: EBX=initial_value -> EAX=sem_id/-1
+SYS_SEM_WAIT        equ 89  ; Wait (P) semaphore: EBX=sem_id -> EAX=0/-1
+SYS_SEM_POST        equ 90  ; Post (V) semaphore: EBX=sem_id -> EAX=0
+SYS_SEM_CLOSE       equ 91  ; Close semaphore: EBX=sem_id -> EAX=0
+SYS_WAITPID         equ 92  ; Wait for task: EBX=pid -> EAX=exit_code/-1
+SYS_GETMTIME        equ 93  ; Get file timestamps: EBX=name -> EAX=mtime ECX=ctime
+SYS_SETMTIME        equ 94  ; Set file mtime: EBX=name ECX=timestamp(0=now) -> EAX=0/-1
 ```
 
 Or include the provided header:
@@ -828,6 +836,201 @@ var_name: db "PATH", 0
 
 ---
 
+## VBE Pixel Graphics
+
+Mellivora supports high-resolution 32 bpp framebuffer modes via the `SYS_FRAMEBUF`
+syscall (37). All VBE programs use **double buffering** — render to a shadow buffer,
+then call `SYS_FRAMEBUF/4` to blit it to the screen.
+
+### Setup
+
+```nasm
+; 1. Enter VBE mode (640×480×32)
+mov eax, SYS_FRAMEBUF
+mov ebx, 1          ; sub: set mode
+mov ecx, 640        ; width
+mov edx, 480        ; height
+mov esi, 32         ; bpp
+int 0x80
+
+; 2. Get shadow buffer address + dimensions
+mov eax, SYS_FRAMEBUF
+xor ebx, ebx        ; sub: get info
+int 0x80
+; EAX = shadow buffer address
+; EBX = width (pixels)
+; ECX = height (pixels)
+; EDX = bits per pixel
+mov [fb_addr],   eax
+mov [fb_width],  ebx
+mov [fb_height], ecx
+; pitch = width * bytes_per_pixel
+mov eax, ebx
+imul eax, 4
+mov [fb_pitch], eax
+```
+
+### Drawing Pixels
+
+Write 32-bit `0x00RRGGBB` values directly to the shadow buffer:
+
+```nasm
+; Plot pixel at (x, y) with color
+; EBX=x, ECX=y, EDX=color (0x00RRGGBB)
+plot_pixel:
+    mov eax, [fb_pitch]
+    imul eax, ecx           ; y * pitch
+    add eax, [fb_addr]
+    lea eax, [eax + ebx*4]  ; + x * 4
+    mov [eax], edx
+    ret
+```
+
+### Filling a Rectangle
+
+```nasm
+; EBX=left, ECX=top, EDX=width, ESI=height, EDI=color
+fill_rect:
+    pushad
+    mov ebp, ecx            ; save top
+.row:
+    test esi, esi
+    jz .done
+    mov eax, [fb_pitch]
+    imul eax, ebp
+    add eax, [fb_addr]
+    lea eax, [eax + ebx*4]
+    push ecx
+    mov ecx, edx
+.col:
+    mov [eax], edi
+    add eax, 4
+    dec ecx
+    jnz .col
+    pop ecx
+    inc ebp
+    dec esi
+    jmp .row
+.done:
+    popad
+    ret
+```
+
+### Present (Double Buffer Flip)
+
+Call once per frame after all rendering:
+
+```nasm
+mov eax, SYS_FRAMEBUF
+mov ebx, 4          ; sub: present — blit shadow -> LFB
+int 0x80
+```
+
+### Restoring Text Mode
+
+```nasm
+mov eax, SYS_FRAMEBUF
+mov ebx, 2          ; sub: restore text mode
+int 0x80
+```
+
+### Drawing Text in VBE Mode
+
+```nasm
+; ECX=x, EDX=y, ESI=string_ptr, EDI=fg_color (0x00RRGGBB)
+mov eax, SYS_FRAMEBUF
+mov ebx, 3          ; sub: draw text
+mov ecx, 100        ; x pixel position
+mov edx, 50         ; y pixel position
+mov esi, my_string
+mov edi, 0xFFFFFF   ; white
+int 0x80
+```
+
+### VBE Game Loop Pattern
+
+```nasm
+; Initialize VBE (see Setup above)
+
+game_loop:
+    ; 1. Non-blocking key check
+    mov eax, SYS_READ_KEY
+    xor ebx, ebx
+    int 0x80
+    test eax, eax
+    jz .no_key
+    ; handle key in EAX ...
+.no_key:
+
+    ; 2. Update game state
+    call update
+
+    ; 3. Clear shadow buffer
+    pushad
+    mov edi, [fb_addr]
+    xor eax, eax
+    mov ecx, [fb_pitch]
+    imul ecx, [fb_height]
+    shr ecx, 2          ; dwords
+    rep stosd
+    popad
+
+    ; 4. Render to shadow buffer
+    call draw_frame
+
+    ; 5. Flip: blit shadow -> real LFB
+    mov eax, SYS_FRAMEBUF
+    mov ebx, 4
+    int 0x80
+
+    ; 6. Frame cap
+    mov eax, SYS_SLEEP
+    mov ebx, 2          ; ~20 ms
+    int 0x80
+
+    jmp game_loop
+```
+
+### Common VBE Constants
+
+| Constant | Value | Description |
+| --------- | ----- | ----------- |
+| `SYS_FRAMEBUF` | 37 | Framebuffer syscall |
+| `SYS_FRAMEBUF_INFO` | 0 | Sub: get info |
+| `SYS_FRAMEBUF_SETMODE` | 1 | Sub: set mode |
+| `SYS_FRAMEBUF_RESTORE` | 2 | Sub: restore text |
+| `SYS_FRAMEBUF_TEXT` | 3 | Sub: draw text |
+| `SYS_FRAMEBUF_PRESENT` | 4 | Sub: blit shadow→LFB |
+
+### Sprite Drawing
+
+Use `%include "sprite.inc"` for pixel-art sprites (see `API_REFERENCE.md` for the full
+`sprite.inc` documentation):
+
+```nasm
+%include "syscalls.inc"
+%include "sprite.inc"   ; provides sprite_draw, sprite_draw_opaque, etc.
+
+SPRITE_BEGIN spr_coin, 8, 8
+  dd 0x00000000, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0x00000000
+  dd 0xFFFFD700, 0xFFFFFF00, 0xFFFFFF00, 0xFFFFD700, 0xFFFFD700, 0xFFFFFF00, 0xFFFFFF00, 0xFFFFD700
+  dd 0xFFFFD700, 0xFFFFFF00, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFFF00, 0xFFFFD700
+  dd 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700
+  dd 0xFFFFD700, 0xFFFFFF00, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFFF00, 0xFFFFD700
+  dd 0xFFFFD700, 0xFFFFFF00, 0xFFFFFF00, 0xFFFFD700, 0xFFFFD700, 0xFFFFFF00, 0xFFFFFF00, 0xFFFFD700
+  dd 0x00000000, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0xFFFFD700, 0x00000000
+  dd 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
+SPRITE_END
+
+    ; Draw coin at (100, 200) — transparent pixels skipped automatically
+    mov ebx, 100
+    mov ecx, 200
+    mov esi, spr_coin
+    call sprite_draw
+```
+
+---
+
 ## Game Loop Pattern
 
 Here's the standard pattern used by games like Snake, Tetris, and 2048:
@@ -1140,7 +1343,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 36 syscalls:
+Quick reference for all 94 syscalls. See `programs/syscalls.inc` for the authoritative list.
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |
@@ -1166,8 +1369,8 @@ Quick reference for all 36 syscalls:
 | 19 | MALLOC | size | — | — | addr or 0 |
 | 20 | FREE | addr | size | — | 0 |
 | 21 | EXEC | filename | — | — | 0 |
-| 22 | DISK_READ | LBA | count | buffer | 0/-1 |
-| 23 | DISK_WRITE | LBA | count | buffer | 0/-1 |
+| 22 | DISK_READ | LBA | count | buffer | 0/-1 (denied Ring 3) |
+| 23 | DISK_WRITE | LBA | count | buffer | 0/-1 (denied Ring 3) |
 | 24 | BEEP | freq | duration | — | 0 |
 | 25 | DATE | 6-byte buf | — | — | year |
 | 26 | CHDIR | dirname | — | — | 0/-1 |
@@ -1180,3 +1383,56 @@ Quick reference for all 36 syscalls:
 | 33 | SERIAL_IN | — | — | — | char |
 | 34 | STDIN_READ | buffer | — | — | bytes/-1 |
 | 35 | YIELD | — | — | — | 0 |
+| 36 | MOUSE | — | — | — | EAX=x, EBX=y, ECX=buttons |
+| 37 | FRAMEBUF | sub (0–4) | varies | varies | varies |
+| 38 | GUI | sub-function | varies | varies | varies |
+| 39 | SOCKET | type (1=TCP, 2=UDP) | — | — | fd or -1 |
+| 40 | CONNECT | fd | ip | port | 0/-1 |
+| 41 | SEND | fd | buffer | len | bytes |
+| 42 | RECV | fd | buffer | max | bytes |
+| 43 | BIND | fd | port | — | 0/-1 |
+| 44 | LISTEN | fd | — | — | 0/-1 |
+| 45 | ACCEPT | fd | — | — | new fd |
+| 46 | DNS | hostname | — | — | ip (0=fail) |
+| 47 | SOCKCLOSE | fd | — | — | 0 |
+| 48 | PING | ip | — | — | rtt/-1 |
+| 49 | SETDATE | buf | century | — | 0 |
+| 50 | AUDIO_PLAY | buf | len | fmt | 0/-1 |
+| 51 | AUDIO_STOP | — | — | — | 0 |
+| 52 | AUDIO_STATUS | — | — | — | EAX=state, EBX=present |
+| 53 | KILL | pid | — | — | 0/-1 |
+| 54 | GETPID | — | — | — | pid |
+| 55 | CLIPBOARD_COPY | buf | len | — | 0 |
+| 56 | CLIPBOARD_PASTE | buf | max | — | len |
+| 57 | NOTIFY | text | — | color | 0 |
+| 58 | FILE_OPEN_DLG | title | — | filter | EAX=1/0, ECX=name |
+| 59 | FILE_SAVE_DLG | title | — | filter | EAX=1/0, ECX=name |
+| 60 | PIPE_CREATE | — | — | — | pipe_id |
+| 61 | PIPE_WRITE | id | buf | len | written |
+| 62 | PIPE_READ | id | buf | max | read |
+| 63 | PIPE_CLOSE | id | — | — | 0 |
+| 64 | SHMGET | key | size | — | shm_id |
+| 65 | SHMADDR | shm_id | — | — | ptr |
+| 66 | PROCLIST | slot | buf (48 B) | — | 0/-1 |
+| 67 | MEMINFO | — | — | — | EAX=free_pages, EBX=total |
+| 68 | CHMOD | filename | perms | — | 0/-1 |
+| 69 | CHOWN | filename | uid | — | 0/-1 |
+| 70 | SYMLINK | linkname | target | — | 0/-1 |
+| 71 | READLINK | linkname | buf | — | len/-1 |
+| 72 | SETPRIORITY | pid (0=self) | prio | — | 0/-1 |
+| 73 | GETPRIORITY | pid (0=self) | — | — | prio/-1 |
+| 74 | SIGNAL | pid | signum | — | 0/-1 |
+| 75 | SETPGID | pid (0=self) | pgid | — | 0/-1 |
+| 76 | GETPGID | pid (0=self) | — | — | pgid/-1 |
+| 77 | SIGMASK | op (0–3) | mask | — | old_mask/-1 |
+| 78 | TASKNAME | name_ptr | — | — | 0 |
+| 79 | REALLOC | ptr | new_size | old_size | new_ptr or 0 |
+| 80 | GETENV_SLOT | index | buf (128 B) | — | 0/-1 |
+| 81 | DMESG_WRITE | msg_ptr | — | — | 0 |
+| 88 | SEM_CREATE | initial_value | — | — | sem_id/-1 |
+| 89 | SEM_WAIT | sem_id | — | — | 0/-1 |
+| 90 | SEM_POST | sem_id | — | — | 0 |
+| 91 | SEM_CLOSE | sem_id | — | — | 0 |
+| 92 | WAITPID | pid | — | — | exit_code/-1 |
+| 93 | GETMTIME | filename | — | — | EAX=mtime, ECX=ctime |
+| 94 | SETMTIME | filename | timestamp (0=now) | — | 0/-1 |

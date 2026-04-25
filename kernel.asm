@@ -317,6 +317,15 @@ kernel_entry:
         xor eax, eax
         rep stosd
 
+        ; Initialize x87 FPU: clear CR0.EM (emulation), set CR0.MP (coprocessor
+        ; present).  Without this, any user program that executes a float
+        ; instruction will raise a #NM (Device Not Available) fault.
+        mov eax, cr0
+        and eax, ~(1 << 2)     ; Clear EM bit (bit 2)
+        or  eax,  (1 << 1)     ; Set  MP bit (bit 1)
+        mov cr0, eax
+        fninit                  ; Initialize FPU to known state
+
         ; Initialize current directory to root
         mov dword [current_dir_lba], HBFS_ROOT_DIR_START
         mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS

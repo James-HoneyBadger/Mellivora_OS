@@ -9,11 +9,15 @@
 #
 # Target: i486+ emulation via QEMU
 #
+# Parallel program compilation is enabled automatically when make -j is
+# not already set.  Override with:  make programs NPROC=1
+#
 
 NASM = nasm
 QEMU = qemu-system-i386
 DD = dd
 UNAME_S := $(shell uname -s)
+NPROC ?= $(shell nproc 2>/dev/null || echo 4)
 
 # Output
 IMAGE = mellivora.img
@@ -156,8 +160,9 @@ debug: $(IMAGE)
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_DEBUG_FLAGS)
 
-# Build all sample programs
-programs: $(PROG_BINS)
+# Build all sample programs (parallel by default)
+programs:
+	$(MAKE) -j$(NPROC) $(PROG_BINS)
 
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
@@ -170,6 +175,15 @@ populate: $(IMAGE) programs populate.py
 # Full build: OS + programs + populated filesystem
 full: $(IMAGE) programs populate
 	@echo "=== Full build complete ==="
+
+# Rebuild kernel only and write it into the existing disk image.
+# Skips program compilation and filesystem population — fastest
+# iteration loop when only kernel/*.inc or kernel.asm changed.
+kernel-only: $(KERNEL_BIN) kernel_sectors.inc $(STAGE2_BIN)
+	@echo "=== Patching kernel into $(IMAGE) ==="
+	$(DD) if=$(STAGE2_BIN) of=$(IMAGE) bs=512 seek=1  conv=notrunc status=none
+	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
+	@echo "=== kernel-only update complete ==="
 
 # Shared helper: copy docs into staging tree
 define stage_iso_docs
@@ -252,7 +266,8 @@ help:
 	@echo "  Build"
 	@echo "    make all          Build disk image (boot + stage2 + kernel)"
 	@echo "    make full         Full build: boot + kernel + 131 programs + filesystem"
-	@echo "    make programs     Build all user-space programs only"
+	@echo "    make programs     Build all user-space programs (parallel, uses \$$(nproc) jobs)"
+	@echo "    make kernel-only  Rebuild kernel only and patch into image (fast iteration)"
 	@echo "    make populate     Populate filesystem (requires programs)"
 	@echo ""
 	@echo "  Run"

@@ -18,6 +18,7 @@ and 224 entries per subdirectory.
 import struct
 import sys
 import os
+import json
 
 # HBFS constants (must match kernel.asm)
 SECTOR_SIZE = 512
@@ -50,6 +51,33 @@ FTYPE_BATCH = 4
 def lba_to_offset(lba):
     """Convert LBA sector number to byte offset in image."""
     return lba * SECTOR_SIZE
+
+
+# ---------------------------------------------------------------------------
+# Incremental populate cache
+# ---------------------------------------------------------------------------
+_CACHE_FILE = ".populate_cache"
+
+
+def _load_cache():
+    """Load mtime cache from disk.  Returns {} if missing or corrupt."""
+    try:
+        with open(_CACHE_FILE, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _save_cache(cache):
+    """Persist mtime cache to disk."""
+    try:
+        with open(_CACHE_FILE, "w") as f:
+            json.dump(cache, f, indent=2)
+    except OSError as exc:
+        print(f"  WARNING: could not write cache file: {exc}")
 
 
 def read_sectors(img, lba, count):
@@ -714,6 +742,12 @@ def main():
 
     fs = FSImage(image_path)
 
+    # Load mtime cache — used to skip unchanged binaries when the filesystem
+    # is being preserved (incremental mode).
+    cache = _load_cache()
+    new_cache = {}
+    skipped = 0
+
     # Create subdirectories
     fs.create_subdir("bin")
     fs.create_subdir("games")
@@ -740,9 +774,34 @@ def main():
         for fname in sorted(os.listdir(programs_dir)):
             if fname.endswith('.bin'):
                 fpath = os.path.join(programs_dir, fname)
+                mtime = os.path.getmtime(fpath)
+                new_cache[fname] = mtime
+
+                prog_name = fname[:-4]
+                # Determine target directory (used for skip check below)
+                if prog_name in BURROWS_PROGRAMS:
+                    target_dir = "Burrows"
+                elif prog_name in GAME_PROGRAMS:
+                    target_dir = "games"
+                else:
+                    target_dir = "bin"
+
+                # Incremental skip: if the image already has a valid HBFS,
+                # the file hasn't changed since the last populate, and the
+                # entry is already present in the correct subdirectory, we
+                # can skip the (expensive) block-allocation + write.
+                if fs.preserve_mode and cache.get(fname) == mtime:
+                    sd = fs.subdirs.get(target_dir)
+                    if sd is not None:
+                        slot = fs._find_entry_slot(
+                            sd['data'], HBFS_SUBDIR_MAX_FILES, prog_name
+                        )
+                        if slot is not None:
+                            skipped += 1
+                            continue
+
                 with open(fpath, 'rb') as f:
                     data = f.read()
-                prog_name = fname[:-4]
                 if prog_name in BURROWS_PROGRAMS:
                     fs.add_file(prog_name, data, directory="Burrows")
                 elif prog_name in GAME_PROGRAMS:
@@ -773,6 +832,11 @@ def main():
                             directory="timewarp")
 
     fs.finalize()
+
+    # Persist mtime cache for next run
+    _save_cache(new_cache)
+    if skipped:
+        print(f"  ({skipped} unchanged binaries skipped — incremental mode)")
 
 
 if __name__ == '__main__':

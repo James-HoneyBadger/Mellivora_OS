@@ -14,9 +14,11 @@
 ; bars, a mouse cursor, and waits for a keypress before switching back
 ; to VGA text mode.
 ;
-; SYS_FRAMEBUF (37): EBX=0 get info (ret EAX=addr,EBX=w,ECX=h,EDX=bpp)
+; SYS_FRAMEBUF (37): EBX=0 get info (ret EAX=shadow_buf,EBX=w,ECX=h,EDX=bpp)
 ;                     EBX=1 set mode  ECX=width EDX=height ESI=bpp
 ;                     EBX=2 restore text mode
+;                     EBX=3 draw text  ECX=x EDX=y ESI=str_ptr EDI=fg_color
+;                     EBX=4 present   blit shadow_buf -> LFB (double-buffer flip)
 ;=======================================================================
 
 ; BGA I/O ports

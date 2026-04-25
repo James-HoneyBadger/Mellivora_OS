@@ -455,17 +455,17 @@ Mellivora ships with a broad set of user-space programs organized in `/bin` and 
 
 | Program | Controls | Description |
 | --- | --- | --- |
-| `snake` | Arrow keys, ESC | Classic snake — eat food, grow, don't crash |
-| `tetris` | ←→ move, ↑ rotate, ↓ soft drop, Space hard drop, ESC quit | Tetris with 7 pieces, scoring, and levels |
+| `snake` | Arrow keys, ESC | Classic snake — eat food, grow, don't crash (VBE) |
+| `tetris` | ←→ move, ↑ rotate, ↓ soft drop, Space hard drop, ESC quit | Tetris with 7 pieces, scoring, and levels (VBE) |
 | `mine` | Arrow keys, Space reveal, F flag, ESC quit | Minesweeper |
 | `sokoban` | Arrow keys, R restart, ESC quit | Box-pushing puzzle |
 | `2048` | Arrow keys / WASD, ESC quit | Sliding number tiles |
-| `galaga` | ←→ move, Space shoot, ESC quit | Space shooter with enemy waves |
+| `galaga` | ←→ move, Space shoot, ESC quit | Space shooter with pixel-art sprites and enemy waves (VBE) |
 | `chess` | Type moves (e.g. e2e4), ESC quit | Full chess with legal move validation |
 | `checkers` | Arrow keys, Space select/move, ESC quit | Checkers with forced-capture rules |
 | `blackjack` | Number keys for menu choices | Blackjack (21) card game |
 | `reversi` | Arrow keys, Enter place, ESC quit | Othello / Reversi strategy game |
-| `pong` | W/S keys (left), ↑↓ keys (right) | Two-paddle Pong |
+| `pong` | W/S keys (left), ↑↓ keys (right) | Two-paddle Pong (VBE) |
 | `wordle` | Type 5-letter words, Enter | Six-guess word puzzle |
 | `rogue` | hjkl / arrow keys, ESC quit | ASCII dungeon crawler |
 | `freecell` | Arrow keys + Enter, ESC quit | FreeCell solitaire |
@@ -480,19 +480,19 @@ Mellivora ships with a broad set of user-space programs organized in `/bin` and 
 | `puzzle15` | Arrow keys | Sliding 15-puzzle |
 | `guess` | Type numbers, Enter | Number guessing with hints |
 | `kingdom` | Number keys for menus | Medieval kingdom management simulation |
-| `life` | ESC quit | Conway's Game of Life (auto-running) |
+| `life` | ESC quit | Conway's Game of Life — auto-running simulation (VBE) |
 | `maze` | ESC quit | Random maze generation + BFS solve |
 | `neurovault` | Text commands (LOOK, GO, TAKE, etc.) | Sci-fi interactive fiction adventure |
 | `outbreak` | Number keys for menus | Zombie survival strategy game |
 | `piano` | Number keys 1–9, 0, -, =, etc. | PC speaker piano (15 notes) |
-| `doomfire` | ESC quit | Animated Doom fire effect |
+| `doomfire` | ESC quit | Animated Doom fire effect (VBE) |
 | `matrix` | ESC quit | Matrix rain animation |
 | `rain` | ESC quit | Rainfall animation |
 | `starfield` | ESC quit | Starfield fly-through |
 | `pipes` | ESC quit | Animated pipes screensaver |
 | `lunar` | Thrust/rotate keys, ESC quit | Lunar lander game |
 | `lights` | Arrow keys, Space toggle | Lights-out puzzle |
-| `timewarp` | ESC quit | Time warp visual effect |
+| `timewarp` | ESC quit, F-keys toolbar | TempleCode IDE — BASIC/PILOT/Logo interpreter with turtle graphics canvas |
 | `lolcat` | (pipe input) | Rainbow-colorize text output |
 | `solitaire` | Arrow keys + Enter, ESC quit | Klondike solitaire card game |
 | `worm` | Arrow keys | Multi-worm arena game |

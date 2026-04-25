@@ -798,6 +798,95 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 
 ---
 
+## VBE/BGA Graphics Driver (`kernel/vbe.inc`)
+
+### Overview
+
+Mellivora uses the **Bochs VBE Extensions (BGA)** to set high-resolution linear
+framebuffer (LFB) modes from 32-bit protected mode without requiring BIOS INT 10h.
+QEMU exposes a compatible BGA adapter on the virtual VGA device.
+
+### BGA I/O Ports
+
+| Port | Name | Description |
+| ---- | ---- | ----------- |
+| `0x01CE` | `VBE_DISPI_IOPORT_INDEX` | Select BGA register index |
+| `0x01CF` | `VBE_DISPI_IOPORT_DATA` | Read/write selected register |
+
+### BGA Register Map
+
+| Index | Name | Description |
+| ----- | ---- | ----------- |
+| 0 | `VBE_DISPI_INDEX_ID` | BGA version ID (`0xB0C0`–`0xB0C5`) |
+| 1 | `VBE_DISPI_INDEX_XRES` | Horizontal resolution in pixels |
+| 2 | `VBE_DISPI_INDEX_YRES` | Vertical resolution in pixels |
+| 3 | `VBE_DISPI_INDEX_BPP` | Bits per pixel (8/15/16/24/32) |
+| 4 | `VBE_DISPI_INDEX_ENABLE` | Enable/disable (`0x01` \| `0x40` for LFB) |
+| 10 | `VBE_DISPI_INDEX_FB_ADDR` | LFB physical base address (Bochs ≥2.7) |
+
+### LFB Address Discovery
+
+1. Read BGA register 10 (`VBE_DISPI_INDEX_FB_ADDR`). If non-zero, that is the LFB base.
+2. Otherwise, read PCI BAR 0 of the VGA device (Bus 0, Device 2, Function 0) via
+   config address `0x80001010`. Mask off the lowest 4 bits.
+3. Fallback: use `0xFD000000` (standard QEMU/Bochs mapping).
+
+The LFB is identity-mapped by the paging subsystem (`paging_map_lfb`) so that
+kernel and user-mode pixel writes go directly to video RAM.
+
+### Double Buffering — Shadow Buffer
+
+To eliminate screen tearing, a **shadow buffer** the same size as the LFB is
+allocated via `pmm_alloc_pages` and lives entirely within the first 128 MB of physical
+memory (identity-mapped, accessible from Ring 3).
+
+| Variable | Description |
+| -------- | ----------- |
+| `vbe_shadow_buf` | Physical address of shadow buffer (0 = not yet allocated) |
+| `vbe_shadow_pages` | Page count of the current shadow allocation |
+
+Programs obtain the shadow buffer address via `SYS_FRAMEBUF/0` and render all pixels
+there. When the frame is complete, `SYS_FRAMEBUF/4` blits the shadow buffer to the real
+LFB with a `rep movsd` (single contiguous copy, width×height×Bpp/4 dwords).
+
+If a subsequent mode change requires more pages than currently allocated,
+`vbe_set_mode` allocates a new, larger shadow buffer and updates `vbe_shadow_pages`.
+This prevents buffer-overrun crashes when a small-mode program (e.g. 640×480) is
+followed by a large-mode program (e.g. 1024×768).
+
+### Key Routines (VBE)
+
+| Routine | Description |
+| ------- | ----------- |
+| `vbe_init` | Detect BGA adapter, read LFB address, identity-map LFB pages |
+| `vbe_set_mode` | Program BGA registers, allocate/resize shadow buffer, enable LFB mode |
+| `vbe_restore_text` | Disable BGA, re-enable VGA Mode 3, restore VGA font from save buffer |
+| `sys_framebuf` | Syscall handler for `SYS_FRAMEBUF` sub-functions 0–4 |
+
+### `SYS_FRAMEBUF` Sub-Functions
+
+| EBX | Sub-function | Input | Return |
+| --- | ------------ | ----- | ------ |
+| 0 | **get info** | — | EAX=shadow_buf addr, EBX=width, ECX=height, EDX=bpp |
+| 1 | **set mode** | ECX=width, EDX=height, ESI=bpp | EAX=0/-1 |
+| 2 | **restore text** | — | EAX=0 |
+| 3 | **draw text** | ECX=x, EDX=y, ESI=str_ptr, EDI=fg_color | EAX=0 |
+| 4 | **present frame** | — | EAX=0 (blits shadow→LFB) |
+
+Sub-function 0 returns the shadow buffer address (not the raw LFB) so that programs
+draw into the back buffer automatically. Direct LFB access is provided as fallback only
+if the shadow buffer has not yet been allocated.
+
+### Supported Modes
+
+| Resolution | BPP | Shadow size | Pages |
+| ---------- | --- | ----------- | ----- |
+| 640×480 | 32 | 1.2 MB | 300 |
+| 800×600 | 32 | 1.83 MB | 469 |
+| 1024×768 | 32 | 3.0 MB | 768 |
+
+---
+
 ## Syscall Interface
 
 All syscalls are invoked via `INT 0x80`. Register conventions:
@@ -847,7 +936,7 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 34 | `SYS_STDIN_READ` | EBX=buf | EAX=bytes read (-1 if no piped input) |
 | 35 | `SYS_YIELD` | — | EAX=0 (cooperative yield) |
 | 36 | `SYS_MOUSE` | — | EAX=x, EBX=y, ECX=buttons |
-| 37 | `SYS_FRAMEBUF` | EBX=sub (0=info,1=set,2=restore) | varies |
+| 37 | `SYS_FRAMEBUF` | EBX=sub (0=info,1=set,2=restore,3=drawtext,4=present) | varies |
 | 38 | `SYS_GUI` | EBX=sub-function | varies |
 | 39 | `SYS_SOCKET` | EBX=type (1=TCP,2=UDP) | EAX=fd |
 | 40 | `SYS_CONNECT` | EBX=fd, ECX=ip, EDX=port | EAX=0/-1 |
@@ -890,8 +979,17 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 77 | `SYS_SIGMASK` | EBX=op (0-3), ECX=mask | EAX=old_mask/-1 |
 | 78 | `SYS_TASKNAME` | EBX=name ptr (max 15 chars) | EAX=0 |
 | 79 | `SYS_REALLOC` | EBX=ptr, ECX=new_size, EDX=old_size | EAX=new_ptr (0=fail) |
+| 80 | `SYS_GETENV_SLOT` | EBX=index, ECX=buf (128 B) | EAX=0/-1 |
+| 81 | `SYS_DMESG_WRITE` | EBX=msg_ptr | EAX=0 |
+| 88 | `SYS_SEM_CREATE` | EBX=initial_value | EAX=sem_id/-1 |
+| 89 | `SYS_SEM_WAIT` | EBX=sem_id | EAX=0/-1 |
+| 90 | `SYS_SEM_POST` | EBX=sem_id | EAX=0 |
+| 91 | `SYS_SEM_CLOSE` | EBX=sem_id | EAX=0 |
+| 92 | `SYS_WAITPID` | EBX=pid | EAX=exit_code/-1 |
+| 93 | `SYS_GETMTIME` | EBX=filename | EAX=mtime, ECX=ctime |
+| 94 | `SYS_SETMTIME` | EBX=filename, ECX=timestamp (0=now) | EAX=0/-1 |
 
-**Total: 80 syscalls (0–79).**
+**Total: 94 syscalls defined (0–94, with gaps at 82–87).**
 
 ---
 

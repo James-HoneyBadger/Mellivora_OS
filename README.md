@@ -4,7 +4,7 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 82 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 176 assembly programs, and 17 bundled samples (C and Perl).
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 94 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 176 assembly programs, and 17 bundled samples (C and Perl).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
@@ -23,12 +23,13 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 - **32-bit protected mode** with flat memory model
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **82 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
+- **94 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 64 concurrent tasks
 - **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD
 - **Process groups** — PGID support for job control
 - **ELF32 loader** — supports flat binaries and ELF executables
 - **Physical memory manager** with bitmap allocator (malloc/free/realloc for user programs)
+- **VBE/BGA graphics driver** — high-resolution framebuffer modes (640×480, 800×600, 1024×768 at 32 bpp) with double buffering via `SYS_FRAMEBUF/4` shadow-buffer blitting
 - **Three-stage boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
 ### Ratel Init System
@@ -78,7 +79,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 - **Demos**: Mandelbrot renderer, piano, banner, colors, calendar, calculator, Doom fire effect
 - **Languages**: TCC (Tiny C Compiler), BASIC interpreter, Brainfuck interpreter, Perl interpreter, Forth interpreter
 - **Network tools**: ping, wget, nc, ftp, telnet, irc, gopher, dig, traceroute, whois, daytime
-- **API Libraries**: 9 reusable `.inc` libraries (string, I/O, math, VGA, memory, data structures, net, GUI, more)
+- **API Libraries**: 10 reusable `.inc` libraries (string, I/O, math, VGA, memory, data structures, net, GUI, sprite, more)
 - **Samples**: 12 C programs + 5 Perl scripts in `/samples`
 
 ---
@@ -155,7 +156,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry + modular includes (13 files in `kernel/`)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v1.15)
+├── CHANGELOG.md            Version history (v1.0 → v6.0)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers
@@ -245,7 +246,7 @@ Mellivora_OS/
 | `pipes` | Animated pipes screensaver |
 | `lunar` | Lunar lander game |
 | `lights` | Lights-out puzzle |
-| `timewarp` | Time warp visual effect |
+| `timewarp` | TempleCode IDE — BASIC/PILOT/Logo interpreter with turtle graphics canvas |
 | `lolcat` | Rainbow-colorize text output |
 | `solitaire` | Klondike solitaire card game |
 | `worm` | Multi-worm arena game |
@@ -274,7 +275,7 @@ Mellivora_OS/
 | `basic` | BASIC language interpreter (interactive & file mode) |
 | `bf` | Brainfuck interpreter |
 
-### API Libraries (`programs/lib/`)
+### API Libraries (`programs/lib/` and `programs/`)
 
 | Library | Functions | Description |
 | --------- | --------- | ------------- |
@@ -284,6 +285,9 @@ Mellivora_OS/
 | `vga.inc` | 15+ | VGA text mode, cursor, color, UI drawing |
 | `mem.inc` | 10+ | Heap allocation, pool/arena allocators |
 | `data.inc` | 10+ | Stacks, queues, bitmaps, dynamic arrays |
+| `net.inc` | 10+ | TCP/UDP sockets, DNS, ICMP ping |
+| `gui.inc` | 10+ | Burrows desktop GUI wrappers |
+| `sprite.inc` | 4 | VBE sprite drawing: alpha, opaque, color-key, scaled |
 
 ---
 

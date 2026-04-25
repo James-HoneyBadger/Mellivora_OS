@@ -1,5 +1,73 @@
 # Mellivora OS - Changelog
 
+## v6.0.0 - The Pixel Release
+
+### Kernel — VBE Double Buffering (`kernel/vbe.inc`)
+
+- **Shadow buffer double buffering**: `SYS_FRAMEBUF/1` (set mode) now allocates a PMM-backed
+  shadow buffer the same size as the framebuffer. Programs render into the shadow buffer
+  (returned by `SYS_FRAMEBUF/0`) rather than the real LFB, eliminating tearing.
+- **`SYS_FRAMEBUF/4` — present frame**: New sub-function blits the full shadow buffer to the
+  LFB with a single `rep movsd`. Call once per frame after all rendering is complete.
+- **Size-aware reallocation**: `vbe_shadow_pages` tracks the allocated page count. When a new
+  mode is set that requires more pages than the current allocation, the shadow buffer is
+  reallocated. Prevents crashes where a 640×480 game's undersized buffer was reused for
+  a 1024×768 program.
+- **Vsync hang fix**: Removed the `port 0x3DA` vertical-blank poll loop from the present path.
+  The VGA input status register bit 3 does not toggle in QEMU BGA mode, causing an infinite
+  kernel-mode hang. The blit now runs unconditionally.
+
+### Programs — Sprite Library (`programs/sprite.inc`)
+
+- **New file `programs/sprite.inc`**: Reusable sprite drawing library for VBE programs.
+  - `sprite_draw` (EBX=x, ECX=y, ESI=sprite_ptr): draw with per-pixel alpha (alpha=0 → skip).
+  - `sprite_draw_opaque` (EBX=x, ECX=y, ESI=sprite_ptr): draw ignoring alpha — fastest path.
+  - `sprite_draw_key` (EBX=x, ECX=y, ESI=sprite_ptr, EDI=key): color-key transparency.
+  - `sprite_draw_scaled` (EBX=x, ECX=y, ESI=sprite_ptr, EDX=shift): nearest-neighbour scale
+    by 2^shift (e.g. EDX=1 → 2×, EDX=2 → 4×).
+  - `SPRITE_BEGIN name, width, height` / `SPRITE_END` macros for inline sprite data.
+  - Sprite pixel format: `dd width, height` then `width*height` pixels as `0xAARRGGBB`.
+
+### Programs — Galaga Sprites (`programs/galaga_sprites.inc`)
+
+- **New file `programs/galaga_sprites.inc`**: Pixel-art sprite data for galaga.
+  Five sprites defined with the `sprite.inc` format:
+  `spr_player` (24×16), `spr_bug` (20×12), `spr_moth` (20×12), `spr_boss` (20×12),
+  `spr_bullet` (3×12). Transparent pixels use alpha=0x00.
+
+### Programs — Sprite Test (`programs/spritetest.asm`)
+
+- **New file `programs/spritetest.asm`**: Interactive test program demonstrating all four
+  `sprite.inc` routines side by side in a 640×480×32 VBE window.
+
+### Programs — VBE Game Fixes
+
+- **`programs/galaga.asm`**: Replaced direct pixel-fill rendering with `sprite.inc` calls for
+  the player ship, enemy bugs/moths/boss, and bullets. Added `SYS_FRAMEBUF/4` present call
+  in the main game loop for double-buffered output.
+- **`programs/doomfire.asm`, `programs/life.asm`, `programs/pong.asm`,
+  `programs/snake.asm`, `programs/tetris.asm`**: Added `SYS_FRAMEBUF/4` present call at
+  the end of each frame to make rendered output visible when double buffering is active.
+
+### Programs — Timewarp (TempleCode IDE) Fixes
+
+- **Startup blank screen**: The UI was not drawn when `timewarp` was launched without a
+  file argument. Fixed by always calling `draw_all` before entering the main event loop,
+  regardless of whether an argument was supplied.
+- **Stack corruption in bare `PRINT`**: `do_print`'s `.dp_blank` handler had a spurious
+  `pop esi` after `call output_add_line`. This consumed the `call try_basic_logo` return
+  address from the stack, causing `ret` to jump to a saved register value (EDI from
+  `exec_line`'s `pushad` frame, e.g. `0xe3`) instead of the correct return point.
+  Fixed by removing the erroneous `pop esi`.
+- Added `SYS_FRAMEBUF/4` present call inside `draw_all` so every full redraw is
+  committed to the screen.
+
+### Build & Tests
+
+- `kernel_sectors.inc`: Corrected `KERNEL_SECTORS` value to match actual kernel binary size.
+
+---
+
 ## v5.0.0 - The Hornet Release
 
 ### Kernel — Semaphores (`kernel/ipc.inc`)
@@ -23,7 +91,7 @@
 ### Shell — Ctrl+R Reverse History Search (`kernel/shell.inc`)
 
 - **Incremental reverse-i-search**: Press Ctrl+R at the shell prompt to start an interactive history search.
-- Shows `(reverse-i-search)\`<query>': <match>` while typing.
+- Shows `(reverse-i-search)\`QUERY': MATCH` while typing.
 - **Backspace** removes the last search character and re-searches.
 - **Enter** copies the matched command to the input line and executes it.
 - **Escape / Ctrl+C** cancels and returns to an empty prompt.
@@ -39,7 +107,7 @@
 ### New Programs
 
 - **`strace`**: Syscall trace wrapper. Usage: `strace PROGRAM [args]`. Records the dmesg ring-buffer depth before running the target program and dumps all new log entries added during the run, providing a lightweight activity trace.
-- **`patch`**: Apply unified-style diff output to a file. Usage: `patch FILE PATCHFILE`. The patch file is the output of the `diff` utility (`< ` = remove, `> ` = insert). Applies all hunks and reports how many could not be matched.
+- **`patch`**: Apply unified-style diff output to a file. Usage: `patch FILE PATCHFILE`. The patch file is the output of the `diff` utility (`<` = remove, `>` = insert). Applies all hunks and reports how many could not be matched.
 
 ### Syscall Constants (`programs/syscalls.inc`)
 

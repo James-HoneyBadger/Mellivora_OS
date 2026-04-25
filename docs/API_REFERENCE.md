@@ -640,3 +640,131 @@ message: db "Hello, Burrows!", 0
 section .bss
 win:     resd 1
 ```
+
+---
+
+## sprite.inc — VBE Sprite Drawing
+
+Pixel-art sprite drawing routines for VBE framebuffer programs. Lives at
+`programs/sprite.inc` (not inside `lib/`). Include after `syscalls.inc` in any
+VBE program that has already called `SYS_FRAMEBUF/0` to obtain `fb_addr` and
+`fb_pitch`.
+
+```nasm
+%include "syscalls.inc"
+%include "sprite.inc"
+```
+
+The calling program must expose two dword variables in its BSS section that the
+library reads directly:
+
+```nasm
+section .bss
+fb_addr:  resd 1    ; base address of the shadow buffer (from SYS_FRAMEBUF/0)
+fb_pitch: resd 1    ; bytes per row = width * bytes_per_pixel
+```
+
+### Sprite Format
+
+Sprites are plain inline data — no external file needed:
+
+```text
+dd  width              ; sprite width in pixels
+dd  height             ; sprite height in pixels
+dd  pixel[0]           ; top-left pixel, 0xAARRGGBB
+dd  pixel[1]           ; row-major order
+...
+dd  pixel[width*height-1]
+```
+
+**Alpha channel** (bits 24–31): `0x00xxxxxx` = fully transparent (pixel is skipped);
+any non-zero alpha is treated as fully opaque.
+
+### Macros
+
+| Macro | Arguments | Description |
+| --------- | ---------- | ------------- |
+| `SPRITE_BEGIN` | `name, width, height` | Emit label + `dd width, height` header |
+| `SPRITE_END` | — | No-op placeholder for readability |
+
+```nasm
+; Define a 4×4 white square with a transparent centre
+SPRITE_BEGIN my_spr, 4, 4
+  dd 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
+  dd 0xFFFFFFFF, 0x00000000, 0x00000000, 0xFFFFFFFF
+  dd 0xFFFFFFFF, 0x00000000, 0x00000000, 0xFFFFFFFF
+  dd 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
+SPRITE_END
+```
+
+### Drawing Routines
+
+| Routine | Input | Description |
+| ----------- | ------- | ------------- |
+| `sprite_draw` | EBX=x, ECX=y, ESI=sprite_ptr | Draw with per-pixel alpha (alpha=0 → skip) |
+| `sprite_draw_opaque` | EBX=x, ECX=y, ESI=sprite_ptr | Draw every pixel, ignore alpha (fastest) |
+| `sprite_draw_key` | EBX=x, ECX=y, ESI=sprite_ptr, EDI=color_key | Color-key: skip pixels whose low 24 bits == color_key |
+| `sprite_draw_scaled` | EBX=x, ECX=y, ESI=sprite_ptr, EDX=scale_shift | Nearest-neighbour scale by 2^scale_shift (1=2×, 2=4×) |
+
+All routines preserve all registers except flags (via `pushad`/`popad`).
+
+### Example: Sprite in a VBE Game Loop
+
+```nasm
+%include "syscalls.inc"
+%include "sprite.inc"
+
+SPRITE_BEGIN spr_ship, 8, 8
+  dd 0x00000000, 0x00000000, 0xFF00FF00, 0x00000000, 0x00000000, 0x00000000, 0xFF00FF00, 0x00000000
+  dd 0x00000000, 0xFF00FF00, 0xFF00FFFF, 0xFF00FF00, 0xFF00FF00, 0xFF00FF00, 0xFF00FFFF, 0xFF00FF00
+  dd 0xFF00FF00, 0xFF00FFFF, 0xFFFFFFFF, 0xFF00FFFF, 0xFF00FFFF, 0xFFFFFFFF, 0xFF00FFFF, 0xFF00FF00
+  dd 0xFF00FF00, 0xFF00FFFF, 0xFFFFFFFF, 0xFF00FFFF, 0xFF00FFFF, 0xFFFFFFFF, 0xFF00FFFF, 0xFF00FF00
+  dd 0x00000000, 0xFF00FF00, 0xFF00FFFF, 0xFF00FF00, 0xFF00FF00, 0xFF00FFFF, 0xFF00FF00, 0x00000000
+  dd 0x00000000, 0x00000000, 0xFF00FF00, 0x00000000, 0x00000000, 0xFF00FF00, 0x00000000, 0x00000000
+  dd 0x00000000, 0x00000000, 0xFF808000, 0xFF808000, 0xFF808000, 0xFF808000, 0x00000000, 0x00000000
+  dd 0x00000000, 0xFF808000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0xFF808000, 0x00000000
+SPRITE_END
+
+start:
+    ; Enter 640x480x32 mode
+    mov eax, SYS_FRAMEBUF
+    mov ebx, 1
+    mov ecx, 640
+    mov edx, 480
+    mov esi, 32
+    int 0x80
+
+    ; Get shadow buffer address
+    mov eax, SYS_FRAMEBUF
+    xor ebx, ebx
+    int 0x80
+    mov [fb_addr], eax      ; shadow buffer pointer
+    mov eax, ebx
+    imul eax, 4             ; pitch = width * 4
+    mov [fb_pitch], eax
+
+game_loop:
+    ; ... clear shadow buffer, update game state ...
+
+    ; Draw ship at (x, y)
+    mov ebx, [ship_x]
+    mov ecx, [ship_y]
+    mov esi, spr_ship
+    call sprite_draw
+
+    ; Present: blit shadow -> real LFB
+    mov eax, SYS_FRAMEBUF
+    mov ebx, 4
+    int 0x80
+
+    mov eax, SYS_SLEEP
+    mov ebx, 2              ; ~20 ms frame cap
+    int 0x80
+    jmp game_loop
+
+section .bss
+fb_addr:  resd 1
+fb_pitch: resd 1
+ship_x:   resd 1
+ship_y:   resd 1
+```

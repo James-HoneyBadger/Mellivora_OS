@@ -4867,6 +4867,8 @@ shell_tab_complete:
 .tc_af_type:
         mov ecx, [.tc_count]
 .tc_af_copy:
+        cmp ecx, LINE_BUFFER_SIZE - 2   ; -2: reserve room for trailing space + NUL
+        jge .tc_af_space
         lodsb
         cmp al, 0
         je .tc_af_space
@@ -4906,6 +4908,8 @@ shell_tab_complete:
         mov ecx, [.tc_count]
         add esi, ecx
 .tc_type:
+        cmp ecx, LINE_BUFFER_SIZE - 2   ; -2: reserve room for trailing space + NUL
+        jge .tc_space
         lodsb
         cmp al, 0
         je .tc_space

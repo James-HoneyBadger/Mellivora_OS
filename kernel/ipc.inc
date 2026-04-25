@@ -105,7 +105,10 @@ sys_pipe_write:
         cmp dword [ebp + PIPE_COUNT], IPC_PIPE_SIZE
         jge .spw_done           ; buffer full
 
-        ; Write one byte
+        ; Write one byte — disable interrupts around the cursor update
+        ; to prevent a context switch leaving PIPE_WRITE_POS and PIPE_COUNT
+        ; inconsistent if another task reads mid-update.
+        cli
         mov eax, [ebp + PIPE_WRITE_POS]
         movzx ecx, byte [esi + edi]
         mov [ebp + PIPE_BUF + eax], cl
@@ -118,6 +121,7 @@ sys_pipe_write:
 .spw_no_wrap:
         mov [ebp + PIPE_WRITE_POS], eax
         inc dword [ebp + PIPE_COUNT]
+        sti
         inc edi
         jmp .spw_loop
 
@@ -200,7 +204,9 @@ sys_pipe_read:
         cmp dword [ebp + PIPE_COUNT], 0
         je .spr_done            ; buffer empty
 
-        ; Read one byte
+        ; Read one byte — disable interrupts around the cursor update
+        ; to prevent a context switch mid-update.
+        cli
         mov eax, [ebp + PIPE_READ_POS]
         movzx ecx, byte [ebp + PIPE_BUF + eax]
         mov [edi + esi], cl
@@ -213,6 +219,7 @@ sys_pipe_read:
 .spr_no_wrap:
         mov [ebp + PIPE_READ_POS], eax
         dec dword [ebp + PIPE_COUNT]
+        sti
         inc esi
         jmp .spr_loop
 
