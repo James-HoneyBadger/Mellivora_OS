@@ -132,8 +132,8 @@ main_loop:
         call auto_drop
         call render_frame
 
-        mov eax, SYS_SLEEP
-        mov ebx, FRAME_SLEEP
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
         int 0x80
         jmp main_loop
 

@@ -114,10 +114,10 @@ start:
 
         ; Load file if a filename was passed on the command line
         cmp byte [has_arg], 0
-        je .main_loop
+        je .no_arg
         call load_file
-
-        call draw_all
+.no_arg:
+        call draw_all           ; initial draw so the UI appears immediately
 
 .main_loop:
         ; Poll keyboard — non-blocking
@@ -214,6 +214,9 @@ draw_all:
         call draw_canvas
         call draw_output
         call draw_status
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
+        int 0x80
         popad
         ret
 
@@ -1978,7 +1981,6 @@ do_print:
 .dp_blank:
         mov esi, str_empty
         call output_add_line
-        pop esi
         ret
 
 ;----------- LET -----------

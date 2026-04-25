@@ -65,6 +65,11 @@ start:
         je .show_winner
 
         call draw_board
+
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
+        int 0x80
+
         call check_input_pong
         call move_ball
         call move_cpu

@@ -243,6 +243,10 @@ game_loop:
         call draw_snake
         call draw_food_cell
 
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
+        int 0x80
+
         jmp game_loop
 
 .die:

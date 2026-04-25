@@ -65,8 +65,8 @@ start:
         call fire_spread
         call fire_render
 
-        mov eax, SYS_SLEEP
-        mov ebx, TICK_DELAY
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
         int 0x80
         jmp .main_loop
 

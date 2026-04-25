@@ -189,6 +189,25 @@ vbe_set_mode:
         jnz .map_fb_loop
 
         mov byte [vbe_active], 1
+
+        ; Allocate shadow buffer for double buffering.
+        ; Reallocate whenever the current mode needs more pages than previously allocated.
+        ; pages = ceil(width * height * Bpp / 4096)
+        mov eax, [vbe_width]
+        imul eax, [vbe_height]
+        imul eax, [vbe_Bpp]
+        add eax, 4095
+        shr eax, 12             ; round up to page count
+        cmp eax, [vbe_shadow_pages]
+        jle .shadow_ready       ; existing allocation is large enough — reuse it
+        ; Need a larger buffer: allocate fresh (old pages remain allocated but unused)
+        mov ecx, eax
+        call pmm_alloc_pages
+        test eax, eax
+        jz .shadow_ready        ; alloc failed — keep old buffer (or none)
+        mov [vbe_shadow_buf], eax
+        mov [vbe_shadow_pages], ecx
+.shadow_ready:
         popad
         ret
 
@@ -609,10 +628,11 @@ vbe_clear:
 ;---------------------------------------
 ; sys_framebuf - SYS_FRAMEBUF syscall handler
 ; EBX = sub-function:
-;   0 = get info -> EAX=lfb_addr, EBX=width, ECX=height, EDX=bpp
+;   0 = get info -> EAX=shadow_buf (or lfb if no shadow), EBX=width, ECX=height, EDX=bpp
 ;   1 = set mode: ECX=width, EDX=height, ESI=bpp
 ;   2 = restore text mode
 ;   3 = draw string: ECX=x, EDX=y, ESI=str_ptr, EDI=fg_color
+;   4 = present frame: vsync wait + blit shadow buf -> LFB
 ;---------------------------------------
 sys_framebuf:
         cmp ebx, 0
@@ -623,13 +643,20 @@ sys_framebuf:
         je .fb_restore
         cmp ebx, 3
         je .fb_drawtext
+        cmp ebx, 4
+        je .fb_present
         xor eax, eax
         dec eax                         ; EAX = -1
         iretd
 
 .fb_info:
-        ; Return: EAX=lfb_addr, EBX=width, ECX=height, EDX=bpp
-        mov eax, [vbe_lfb_addr]
+        ; Return shadow buf addr (programs render there; SYS_FRAMEBUF/4 blits to LFB)
+        ; Fall back to real LFB if shadow buf not yet allocated.
+        mov eax, [vbe_shadow_buf]
+        test eax, eax
+        jnz .fb_info_ret
+        mov eax, [vbe_lfb_addr]         ; fallback: direct LFB
+.fb_info_ret:
         mov ebx, [vbe_width]
         mov ecx, [vbe_height]
         mov edx, [vbe_bpp]
@@ -656,6 +683,30 @@ sys_framebuf:
         dec eax                         ; EAX = -1
         iretd
 
+.fb_present:
+        ; Blit shadow buffer -> real LFB.
+        ; Called once per game frame after all rendering is done.
+        ; Note: vsync wait removed — port 0x3DA bit 3 may never toggle
+        ; in QEMU BGA mode causing an indefinite hang.
+        cmp byte [vbe_active], 0
+        je .fb_present_ret
+        cmp dword [vbe_shadow_buf], 0
+        je .fb_present_ret              ; no shadow buf — nothing to blit
+        pushad
+        mov esi, [vbe_shadow_buf]
+        mov edi, [vbe_lfb_addr]
+        mov eax, [vbe_width]
+        imul eax, [vbe_height]
+        imul eax, [vbe_Bpp]             ; total bytes
+        shr eax, 2                      ; convert to dwords
+        mov ecx, eax
+        cld
+        rep movsd
+        popad
+.fb_present_ret:
+        xor eax, eax
+        iretd
+
 ;---------------------------------------
 ; SYS_FRAMEBUF(3) — draw null-terminated string directly to LFB
 ; ECX=x, EDX=y, ESI=str_ptr, EDI=fg_color (32-bit RGB)
@@ -664,6 +715,14 @@ sys_framebuf:
 .fb_drawtext:
         cmp byte [vbe_active], 0
         je .fb_novbe
+        ; Redirect pixel writes to shadow buffer (if allocated) so that
+        ; text is included in the double-buffered frame.
+        mov eax, [vbe_shadow_buf]
+        test eax, eax
+        jz .fdt_start
+        xchg eax, [vbe_lfb_addr]       ; temporarily swap shadow into lfb_addr
+        mov [.fdt_saved_lfb], eax       ; save real LFB addr for restore
+.fdt_start:
         pushad
         mov [.fdt_x],   ecx
         mov [.fdt_y],   edx
@@ -730,12 +789,20 @@ sys_framebuf:
 
 .fdt_done:
         popad
+        ; Restore real LFB addr if we swapped it for shadow buf
+        mov eax, [.fdt_saved_lfb]
+        test eax, eax
+        jz .fdt_ret
+        mov [vbe_lfb_addr], eax
+        mov dword [.fdt_saved_lfb], 0
+.fdt_ret:
         xor eax, eax
         iretd
 
-.fdt_x:   dd 0
-.fdt_y:   dd 0
-.fdt_col: dd 0
+.fdt_x:         dd 0
+.fdt_y:         dd 0
+.fdt_col:       dd 0
+.fdt_saved_lfb: dd 0
 
 ;---------------------------------------
 ; cmd_gui_demo - Shell command `gui`:
@@ -852,6 +919,8 @@ vbe_height:     dd 0
 vbe_bpp:        dd 0
 vbe_Bpp:        dd 0            ; bytes per pixel
 vbe_pitch:      dd 0
+vbe_shadow_buf: dd 0            ; shadow/back buffer for double buffering (0 = not allocated)
+vbe_shadow_pages: dd 0          ; allocated size of shadow buffer in pages
 vbe_font_saved: db 0
         align 4
 vbe_font_save_buf: times 8192 db 0  ; 256 chars * 32 bytes/char for VGA font

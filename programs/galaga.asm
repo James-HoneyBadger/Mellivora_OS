@@ -1,5 +1,7 @@
 ; galaga.asm - Galaga-style space shooter — VBE pixel graphics
 %include "syscalls.inc"
+%include "sprite.inc"
+%include "galaga_sprites.inc"
 
 ; ─── Screen / layout ───────────────────────────────────────────────
 SCREEN_W        equ 640
@@ -111,6 +113,10 @@ title_screen:
         mov edi, 0x44CCFF
         call fb_draw_text
 
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
+        int 0x80
+
 .wait_start:
         mov eax, SYS_GETCHAR
         int 0x80
@@ -196,6 +202,10 @@ game_loop:
         call draw_player
         call draw_hud
 
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
+        int 0x80
+
         cmp byte [game_over], 0
         jne game_over_screen
 
@@ -245,6 +255,10 @@ game_over_screen:
         mov esi, msg_play_again
         mov edi, C_GO_TXT
         call fb_draw_text
+
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
+        int 0x80
 
 .go_wait:
         mov eax, SYS_GETCHAR
@@ -368,23 +382,10 @@ draw_player:
         pushad
         mov eax, [player_x]
         imul eax, CHR_W
-
         mov ebx, eax
         mov ecx, PLAYER_Y * CHR_H
-        mov edx, PLR_W
-        mov esi, PLR_H / 2
-        mov edi, C_PLR_BODY
-        call fb_fill_rect
-
-        mov eax, [player_x]
-        imul eax, CHR_W
-        add eax, 4
-        mov ebx, eax
-        mov ecx, PLAYER_Y * CHR_H + PLR_H / 2
-        mov edx, PLR_W - 8
-        mov esi, PLR_H / 2
-        mov edi, C_PLR_ENG
-        call fb_fill_rect
+        mov esi, spr_player
+        call sprite_draw
         popad
         ret
 
@@ -479,10 +480,8 @@ draw_bullets:
         imul eax, CHR_H
         mov ecx, eax
 
-        mov edx, BLT_W
-        mov esi, BLT_H
-        mov edi, C_BULLET
-        call fb_fill_rect
+        mov esi, spr_bullet
+        call sprite_draw
 
 .db_next:
         inc ebp
@@ -604,17 +603,15 @@ draw_enemies:
         je .de_boss
         cmp al, ETYPE_MOTH
         je .de_moth
-        mov edi, C_BUG
+        mov esi, spr_bug
         jmp .de_draw
 .de_moth:
-        mov edi, C_MOTH
+        mov esi, spr_moth
         jmp .de_draw
 .de_boss:
-        mov edi, C_BOSS
+        mov esi, spr_boss
 .de_draw:
-        mov edx, ENE_W
-        mov esi, ENE_H
-        call fb_fill_rect
+        call sprite_draw
 
 .de_next:
         inc ebp

@@ -40,6 +40,10 @@ start:
 .main_loop:
         call draw_all
 
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 4
+        int 0x80
+
         call step_generation
         inc dword [generation]
 
