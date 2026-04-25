@@ -141,10 +141,15 @@ isr_page_fault:
 
         pushad
 
-        ; If we're in GUI mode, restore text mode first so errors are visible
+        ; If in GUI or VBE mode, restore text so the error is visible
         cmp byte [gui_desktop_active], 0
-        je .pf_text_ok
+        je .pf_check_vbe
         mov byte [gui_desktop_active], 0
+        call vbe_restore_text
+        jmp .pf_text_ok
+.pf_check_vbe:
+        cmp byte [vbe_active], 0
+        je .pf_text_ok
         call vbe_restore_text
 .pf_text_ok:
 

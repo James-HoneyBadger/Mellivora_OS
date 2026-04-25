@@ -687,62 +687,32 @@ draw_border_vbe:
 ; ===========================================================================
 draw_board_vbe:
         pushad
-        xor edx, edx            ; y
+        xor ebp, ebp            ; linear cell index 0..BOARD_CELLS-1
 
-.dbv_row:
-        cmp edx, BOARD_H
+.dbv_loop:
+        cmp ebp, BOARD_CELLS
         jge .dbv_done
-        xor ecx, ecx            ; x
 
-.dbv_col:
-        cmp ecx, BOARD_W
-        jge .dbv_next_row
+        ; col = ebp % BOARD_W,  row = ebp / BOARD_W
+        mov eax, ebp
+        xor edx, edx
+        mov ecx, BOARD_W
+        div ecx                 ; eax = row, edx = col
 
-        ; board index = y*BOARD_W + x
-        push edx
-        push ecx
-        imul eax, edx, BOARD_W
-        add eax, ecx
-        movzx eax, byte [board + eax]
-
-        ; Pixel coords
-        mov ebx, ecx
-        imul ebx, CELL
+        ; pixel x = col*CELL + BOARD_PX_X  → EBX
+        imul ebx, edx, CELL
         add ebx, BOARD_PX_X
 
-        mov ecx, edx            ; y already in edx before push
-        pop edx                 ; restore x into edx temporarily... wait
-        ; ecx = y (was edx), edx = x (restored from stack)
-        ; Actually we pushed edx(row) then ecx(col); let's use the right order
-        pop ecx                 ; ecx = col (x)
-        pop edx                 ; edx = row (y)   ← oops we only pushed 2 values
-        ; Actually: push edx(y-row), push ecx(x-col) → pop order: col, row
-        ; We need to redo this cleanly with EBP
+        ; pixel y = row*CELL + BOARD_PX_Y  → ECX
+        imul ecx, eax, CELL
+        add ecx, BOARD_PX_Y
 
-        ; Redo without confusing pushes — use board offset in EBP
-        imul ebp, edx, BOARD_W
-        add ebp, ecx
-        movzx eax, byte [board + ebp]
-
-        ; Pixel x
-        mov ebx, ecx
-        imul ebx, CELL
-        add ebx, BOARD_PX_X
-
-        ; Pixel y
-        push eax
-        mov eax, edx
-        imul eax, CELL
-        add eax, BOARD_PX_Y
-        mov ecx, eax
-        pop eax
-
-        ; Color
-        test eax, eax
+        ; cell value
+        movzx esi, byte [board + ebp]
+        test esi, esi
         jz .dbv_empty
-
-        dec eax
-        mov edi, [piece_rgb + eax * 4]
+        dec esi
+        mov edi, [piece_rgb + esi * 4]
         jmp .dbv_fill
 
 .dbv_empty:
@@ -751,16 +721,9 @@ draw_board_vbe:
 .dbv_fill:
         mov edx, CELL - 1
         mov esi, CELL - 1
-        call fb_fill_rect
-
-.dbv_next_col:
-        ; Restore loop variables — we haven't trashed edx/ecx, EBP preserved in fb_fill_rect
-        inc ecx
-        jmp .dbv_col
-
-.dbv_next_row:
-        inc edx
-        jmp .dbv_row
+        call fb_fill_rect       ; preserves EBP via pushad/popad
+        inc ebp
+        jmp .dbv_loop
 
 .dbv_done:
         popad
@@ -788,6 +751,7 @@ draw_current_piece_vbe:
         jge .dcp_done
 
         push ecx
+        push edi                  ; save piece data ptr
         movzx eax, byte [edi]
         add eax, [cur_x]
         movzx edx, byte [edi + 1]
@@ -811,8 +775,9 @@ draw_current_piece_vbe:
         call fb_fill_rect
 
 .dcp_next:
-        pop ecx
+        pop edi                   ; restore piece data ptr
         add edi, 2
+        pop ecx
         inc ecx
         jmp .dcp_loop
 
@@ -844,6 +809,7 @@ draw_next_piece_vbe:
         jge .dnp_done
 
         push ecx
+        push edi                  ; save piece data ptr
         movzx eax, byte [edi]
         movzx edx, byte [edi + 1]
 
@@ -858,8 +824,9 @@ draw_next_piece_vbe:
         mov edi, ebp
         call fb_fill_rect
 
-        pop ecx
+        pop edi                   ; restore piece data ptr
         add edi, 2
+        pop ecx
         inc ecx
         jmp .dnp_loop
 

@@ -180,7 +180,7 @@ vbe_set_mode:
         mov ecx, 2048                   ; 2048 pages = 8 MB
 .map_fb_loop:
         push ecx
-        mov ecx, 0x03                   ; PG_PRESENT | PG_WRITABLE
+        mov ecx, 0x07                   ; PG_PRESENT | PG_WRITABLE | PG_USER
         call paging_map_page
         pop ecx
         add eax, 4096
