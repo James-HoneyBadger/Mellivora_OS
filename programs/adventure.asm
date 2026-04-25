@@ -796,10 +796,10 @@ read_input:
 .ri_store:
         mov [edi + ecx], al
         inc ecx
-        ; Echo character
+        ; Echo character — load EBX before overwriting EAX with syscall number
         push ecx
-        mov eax, SYS_PUTCHAR
         movzx ebx, al
+        mov eax, SYS_PUTCHAR
         int 0x80
         pop ecx
         jmp .ri_loop
