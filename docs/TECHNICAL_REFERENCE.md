@@ -18,18 +18,23 @@ anyone who wants to understand how the system works under the hood.
 8. [PATH Search Mechanism](#path-search-mechanism)
 9. [Path-Aware File I/O](#path-aware-file-io)
 10. [ATA/IDE Disk Driver](#ataide-disk-driver)
-11. [VGA Text Mode](#vga-text-mode)
-12. [Keyboard Driver](#keyboard-driver)
-13. [PIT Timer](#pit-timer)
-14. [Serial Port](#serial-port)
-15. [PC Speaker](#pc-speaker)
-16. [Process Execution](#process-execution)
-17. [Syscall Interface](#syscall-interface)
-18. [Shell Architecture](#shell-architecture)
-19. [Environment Variables](#environment-variables)
-20. [Alias System](#alias-system)
-21. [Command History](#command-history)
-22. [Tab Completion](#tab-completion)
+11. [ATA Bus Master DMA](#ata-bus-master-dma)
+12. [PCI Bus Driver](#pci-bus-driver)
+13. [AC'97 Audio Driver](#ac97-audio-driver)
+14. [VirtIO Devices](#virtio-devices)
+15. [VGA Text Mode](#vga-text-mode)
+16. [VBE/BGA Graphics Driver](#vbebga-graphics-driver-kernelvbeinc)
+17. [Keyboard Driver](#keyboard-driver)
+18. [PIT Timer](#pit-timer)
+19. [Serial Port](#serial-port)
+20. [PC Speaker](#pc-speaker)
+21. [Process Execution](#process-execution)
+22. [Syscall Interface](#syscall-interface)
+23. [Shell Architecture](#shell-architecture)
+24. [Environment Variables](#environment-variables)
+25. [Alias System](#alias-system)
+26. [Command History](#command-history)
+27. [Tab Completion](#tab-completion)
 
 ---
 
@@ -82,10 +87,22 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
    - IDT setup (256 entries)
    - PIT timer (100 Hz)
    - Keyboard driver
+   - PMM (using E820 map)
    - ATA/IDE disk detection
    - Serial port (COM1 at 115200 baud)
-   - PMM (using E820 map)
    - TSS (Ring 3 support)
+   - Scheduler (`sched_init`)
+   - IPC — pipes, shared memory, semaphores
+   - Network stack
+   - Paging / LFB identity mapping
+   - PS/2 mouse
+   - SB16 audio
+   - VBE/BGA graphics
+   - PCI bus enumeration
+   - AC'97 audio
+   - ATA Bus Master DMA
+   - VirtIO devices
+   - Burrows desktop compositor
    - HBFS filesystem
    - Default environment variables
 2. Prints the HB Lair banner
@@ -98,10 +115,10 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
 | 0 | 512 B | MBR bootloader (boot.asm) |
 | 1–32 | 16 KB | Stage 2 loader (stage2.asm) |
 | 33+ | Variable | Kernel (kernel.asm + include modules) |
-| 417 | 512 B | HBFS Superblock |
-| 418–545 | 64 KB | Block allocation bitmap |
-| 546–801 | 128 KB | Root directory (32 blocks) |
-| 802+ | — | Data blocks (4 KB each) |
+| 4096 | 512 B | HBFS Superblock |
+| 4097–4224 | 64 KB | Block allocation bitmap |
+| 4225–4480 | 128 KB | Root directory (32 blocks) |
+| 4481+ | — | Data blocks (4 KB each) |
 
 ---
 
@@ -265,10 +282,10 @@ a block allocation bitmap, and support for nested subdirectories.
 
 | Region | LBA Start | LBA Count | Size | Description |
 | --- | --- | --- | --- | --- |
-| Superblock | 417 | 1 | 512 B | Filesystem metadata |
-| Bitmap | 418 | 128 | 64 KB | 16 blocks × 8 sectors × 512 B |
-| Root Directory | 546 | 256 | 128 KB | 32 blocks × 4 KB |
-| Data Area | 802 | — | — | File/directory data blocks |
+| Superblock | 4096 | 1 | 512 B | Filesystem metadata |
+| Bitmap | 4097 | 128 | 64 KB | 16 blocks × 8 sectors × 512 B |
+| Root Directory | 4225 | 256 | 128 KB | 32 blocks × 4 KB |
+| Data Area | 4481 | — | — | File/directory data blocks |
 
 ### Constants
 
@@ -288,13 +305,13 @@ a block allocation bitmap, and support for nested subdirectories.
 | `HBFS_SUBDIR_BLOCKS` | 16 |
 | `HBFS_SUBDIR_SIZE` | 65,536 bytes (64 KB) |
 | `HBFS_SUBDIR_MAX_ENTRIES` | 224 (65,536 / 288) |
-| `HBFS_SUPERBLOCK_LBA` | 417 |
-| `HBFS_BITMAP_START` | 418 |
-| `HBFS_ROOT_DIR_START` | 546 |
-| `HBFS_DATA_START` | 802 |
+| `HBFS_SUPERBLOCK_LBA` | 4096 |
+| `HBFS_BITMAP_START` | 4097 |
+| `HBFS_ROOT_DIR_START` | 4225 |
+| `HBFS_DATA_START` | 4481 |
 | `TOTAL_BLOCKS` | 524,288 (≈ 2 GB) |
 
-### Superblock Structure (512 bytes at LBA 417)
+### Superblock Structure (512 bytes at LBA 4096)
 
 | Offset | Size | Field | Default |
 | --- | --- | --- | --- |
@@ -302,9 +319,9 @@ a block allocation bitmap, and support for nested subdirectories.
 | 4 | 4 | Version | 1 |
 | 8 | 4 | Total blocks | 524,288 |
 | 12 | 4 | Free blocks | (updated at populate time) |
-| 16 | 4 | Root directory LBA | 546 |
-| 20 | 4 | Bitmap start LBA | 418 |
-| 24 | 4 | Data start LBA | 802 |
+| 16 | 4 | Root directory LBA | 4225 |
+| 20 | 4 | Bitmap start LBA | 4097 |
+| 24 | 4 | Data start LBA | 4481 |
 | 28 | 4 | Block size | 4096 |
 
 ### Directory Entry Structure (288 bytes)
@@ -528,6 +545,131 @@ Lair:/> diff /docs/a /docs/b   # Both files resolved transparently
 
 `SYS_DISK_READ` and `SYS_DISK_WRITE` are denied to user programs — the syscall handler
 checks `program_running` and returns -1 if a user program attempts raw disk access.
+
+---
+
+## ATA Bus Master DMA
+
+### Overview (`kernel/atadma.inc`)
+
+Extends the base ATA PIO driver with DMA read support.  Detects an Intel PIIX3/4 IDE
+controller (PCI 8086:7010 or 8086:7111) and, if found, provides a faster DMA path for
+bulk sector reads.
+
+### Detection & Setup
+
+| Step | Description |
+| --- | --- |
+| PCI scan | Calls `pci_find_device(0x8086, 0x7010/0x7111)` |
+| BAR 4 read | Obtains Bus Master IDE I/O base (16-byte range) |
+| PRD table | 4 KB contiguous buffer, aligned to 4 KB page boundary |
+| Bounce buffer | 4 KB page for DMA target; physical address stored in PRD |
+
+### Key Routine
+
+| Routine | Parameters | Description |
+| --- | --- | --- |
+| `atadma_read_sectors` | EAX=LBA, ECX=count (≤8), EDI=dest | DMA read then `memcpy` to dest; falls back to `ata_read_sectors` if DMA unavailable |
+
+---
+
+## PCI Bus Driver
+
+### Overview (`kernel/pci.inc`)
+
+Generic PCI bus enumerator.  Scans buses 0–7, all 32 devices, all 8 functions using
+configuration mechanism 1 (port `0xCF8`/`0xCFC`).  Builds an in-memory device table
+of up to 64 entries.
+
+### I/O Ports
+
+| Port | Description |
+| --- | --- |
+| `0xCF8` | PCI CONFIG_ADDRESS (write to select bus/device/function/register) |
+| `0xCFC` | PCI CONFIG_DATA (read/write selected register) |
+
+### Device Table Entry (16 bytes)
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 2 | Vendor ID |
+| 2 | 2 | Device ID |
+| 4 | 1 | Bus number |
+| 5 | 1 | Device number |
+| 6 | 1 | Function number |
+| 7 | 1 | Reserved |
+| 8 | 4 | BAR 0 |
+| 12 | 4 | BAR 1 |
+
+### Key Routines (PCI)
+
+| Routine | Parameters | Description |
+| --- | --- | --- |
+| `pci_init` | — | Enumerate all PCI devices, populate table |
+| `pci_find_device` | EBX=vendor, ECX=device_id | EAX = device table index / -1 |
+| `pci_read_config32` | EBX=bdf, ECX=offset | EAX = dword |
+| `pci_write_config32` | EBX=bdf, ECX=offset, EDX=value | — |
+| `pci_read_bar` | EBX=bdf, ECX=bar_index | EAX = BAR value (mask applied) |
+
+### `SYS_PCI_FIND` (syscall 101)
+
+User programs can query the PCI table: `EBX=vendor_id ECX=device_id → EAX=bdf or -1`.
+
+---
+
+## AC'97 Audio Driver
+
+### Overview (`kernel/ac97.inc`)
+
+Intel AC'97 audio controller driver for ICH2/3/4 (PCI 8086:2415, 8086:2425, 8086:2445).
+Uses PCI Bus Master DMA for PCM playback.  Falls back gracefully if device not present.
+
+### Buffer Descriptor List (BDL)
+
+| Property | Value |
+| --- | --- |
+| Entries | 32 (each 8 bytes: physical address + control/length word) |
+| Ping-pong buffers | 2 × 32 KB (each holds ~185 ms of 16-bit 44100 Hz stereo) |
+| Loop mode | Last Valid Index wraps to ping-pong boundary |
+
+### Initialization (`ac97_init`)
+
+1. `pci_find_device(0x8086, 0x2415/0x2425/0x2445)` — bail if absent
+2. Read NAM BAR (I/O, ~256 bytes) and NABM BAR (Bus Master, ~64 bytes)
+3. Cold reset NAM, wait for codec ready
+4. Set master volume and PCM out volume to max
+5. Allocate BDL and ping-pong buffers via `pmm_alloc_pages`
+6. Load BDL address into PCM Out Base Address register
+
+### Hooks
+
+`SYS_AUDIO_PLAY` dispatches to `sb16_play` first; if SB16 is absent, it tries `ac97_play`.
+
+---
+
+## VirtIO Devices
+
+### Overview (`kernel/virtio.inc`)
+
+VirtIO PCI legacy driver (spec 0.9.5).  Supports two device classes:
+
+| Device | PCI IDs | Description |
+| --- | --- | --- |
+| **virtio-blk** | 1AF4:1001 / 1AF4:1042 | Virtqueue-based block device |
+| **virtio-net** | 1AF4:1000 / 1AF4:1041 | Network device (MAC read + feature negotiation) |
+
+### virtio-blk Read Path
+
+1. Build a 3-descriptor chain in the virtqueue: header → data buffer → status byte
+2. Post descriptor index to the Available Ring
+3. Notify device via BAR0+`0x10` (Queue Notify)
+4. Poll Used Ring for completion
+5. Return data to caller via `virtio_blk_read(EAX=LBA, ECX=count, EDI=dest)`
+
+### Initialization
+
+`virtio_init` is called from `kernel_entry` after `atadma_init`.  Scans for virtio-blk
+and virtio-net using `pci_find_device`; silently skips if neither is present.
 
 ---
 
@@ -885,6 +1027,24 @@ if the shadow buffer has not yet been allocated.
 | 800×600 | 32 | 1.83 MB | 469 |
 | 1024×768 | 32 | 3.0 MB | 768 |
 
+### Drawing Primitives (v8.5+)
+
+These syscalls operate directly on the shadow buffer.  Call `SYS_DIRTY_PRESENT` or
+`SYS_FRAMEBUF/4` to flush the updated region to the LFB.
+
+| Syscall | # | Arguments | Description |
+| ------- | - | --------- | ----------- |
+| `SYS_DRAW_LINE` | 95 | EBX=x0, ECX=y0, EDX=x1, ESI=y1, EDI=color | Bresenham line |
+| `SYS_DRAW_TRIANGLE` | 96 | EBX=x0\|(y0<<16), ECX=x1\|(y1<<16), EDX=x2\|(y2<<16), ESI=color | Scanline-filled triangle |
+| `SYS_BLIT` | 97 | EBX=src_ptr, ECX=dst_x, EDX=dst_y, ESI=w\|(h<<16), EDI=colorkey | Sprite blit with color key |
+| `SYS_DIRTY_PRESENT` | 98 | — | Flush smallest bounding box of changed pixels to LFB |
+| `SYS_PSF_LOAD` | 99 | EBX=filename_ptr | Load PSF2 bitmap font (≤256 KB) |
+| `SYS_PSF_CHAR` | 100 | EBX=x, ECX=y, EDX=codepoint, ESI=fg_color | Render PSF2 glyph into shadow buffer |
+
+**Dirty-rectangle tracking:** `vbe_dirty_present` maintains a bounding box of all
+pixels modified since the last present and copies only that region to the LFB, saving
+memory bandwidth for partial-update animations.
+
 ---
 
 ## Syscall Interface
@@ -981,6 +1141,12 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 79 | `SYS_REALLOC` | EBX=ptr, ECX=new_size, EDX=old_size | EAX=new_ptr (0=fail) |
 | 80 | `SYS_GETENV_SLOT` | EBX=index, ECX=buf (128 B) | EAX=0/-1 |
 | 81 | `SYS_DMESG_WRITE` | EBX=msg_ptr | EAX=0 |
+| 82 | `SYS_DMESG_READ` | EBX=index, ECX=buf (128 B) | EAX=0/-1 |
+| 83 | `SYS_RENAME` | EBX=old_name, ECX=new_name | EAX=0/-1 |
+| 84 | `SYS_RMDIR` | EBX=dirname | EAX=0/-1 |
+| 85 | `SYS_TRUNCATE` | EBX=filename, ECX=new_size | EAX=0/-1 |
+| 86 | `SYS_CONNECT_NB` | EBX=fd, ECX=ip, EDX=port | EAX=0/-2/-1 (non-blocking) |
+| 87 | `SYS_POLL` | EBX=fd, ECX=events (1=in,2=out), EDX=timeout_ms | EAX=ready_mask |
 | 88 | `SYS_SEM_CREATE` | EBX=initial_value | EAX=sem_id/-1 |
 | 89 | `SYS_SEM_WAIT` | EBX=sem_id | EAX=0/-1 |
 | 90 | `SYS_SEM_POST` | EBX=sem_id | EAX=0 |
@@ -988,8 +1154,16 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 92 | `SYS_WAITPID` | EBX=pid | EAX=exit_code/-1 |
 | 93 | `SYS_GETMTIME` | EBX=filename | EAX=mtime, ECX=ctime |
 | 94 | `SYS_SETMTIME` | EBX=filename, ECX=timestamp (0=now) | EAX=0/-1 |
+| 95 | `SYS_DRAW_LINE` | EBX=x0, ECX=y0, EDX=x1, ESI=y1, EDI=color | EAX=0 |
+| 96 | `SYS_DRAW_TRIANGLE` | EBX=x0\|(y0<<16), ECX=x1\|(y1<<16), EDX=x2\|(y2<<16), ESI=color | EAX=0 |
+| 97 | `SYS_BLIT` | EBX=src_ptr, ECX=dst_x, EDX=dst_y, ESI=w\|(h<<16), EDI=colorkey | EAX=0 |
+| 98 | `SYS_DIRTY_PRESENT` | — | EAX=0 (flush dirty rect to LFB) |
+| 99 | `SYS_PSF_LOAD` | EBX=filename_ptr | EAX=0/-1 |
+| 100 | `SYS_PSF_CHAR` | EBX=x, ECX=y, EDX=codepoint, ESI=fg_color | EAX=0 |
+| 101 | `SYS_PCI_FIND` | EBX=vendor_id, ECX=device_id | EAX=bdf/-1 |
+| 102 | `SYS_GETPPID` | — | EAX=parent PID |
 
-**Total: 95 syscalls defined (0–94, no gaps).**
+**Total: 103 syscalls defined (0–102, no gaps).**
 
 ---
 

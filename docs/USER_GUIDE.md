@@ -71,8 +71,9 @@ Mellivora organizes files into subdirectories:
 
 ```text
 /
-├── bin/          126 utility programs (edit, grep, sort, tcc, wget, nc, ...)
+├── bin/          171 utility programs (edit, grep, sort, tcc, sed, awk, top, tar, ...)
 ├── games/         27 games (snake, tetris, galaga, pacman, rogue, robotown, ...)
+├── Burrows/       12 GUI apps (bedit, bforager, bhive, bterm, bsheet, ...)
 ├── samples/       19 source files (hello.c, fib.c, hello.pl, fizzbuzz.pl, hello.bas, ...)
 ├── docs/           text files (readme.txt, license.txt, notes.txt, ...)
 └── script.bat      Example batch script
@@ -448,8 +449,9 @@ Batch scripts can use:
 
 ## Programs
 
-Mellivora ships with a broad set of user-space programs organized in `/bin` and `/games`
-(176 assembly programs: 134 utilities in `/bin`, 42 games in `/games`).
+Mellivora ships with a broad set of user-space programs organized in `/bin`, `/games`,
+and `/Burrows` (210 assembly programs: 171 utilities in `/bin`, 27 games in `/games`,
+12 Burrows GUI apps in `/Burrows`).
 
 ### Games (in /games)
 
@@ -462,6 +464,7 @@ Mellivora ships with a broad set of user-space programs organized in `/bin` and 
 | `blackjack` | Number keys for menu choices | Blackjack (21) card game |
 | `rogue` | hjkl / arrow keys, ESC quit | ASCII dungeon crawler |
 | `freecell` | Arrow keys + Enter, ESC quit | FreeCell solitaire |
+| `iago` | Arrow keys + Enter, ESC quit | Reversi / Othello board game |
 | `adventure` | Text commands (GO, LOOK, TAKE, ...) | Interactive fiction text adventure |
 | `connect4` | Number keys 1–7 for column, ESC | Connect Four |
 | `mastermind` | Type color codes, Enter | Code-breaking game |
@@ -482,6 +485,7 @@ Mellivora ships with a broad set of user-space programs organized in `/bin` and 
 | `lunar` | Thrust/rotate keys, ESC quit | Lunar lander game |
 | `solitaire` | Arrow keys + Enter, ESC quit | Klondike solitaire card game |
 | `worm` | Arrow keys | Multi-worm arena game |
+| `robotown` | Arrow keys, ESC quit | Robot city-building strategy game |
 
 **Persistent high scores (v6.5+)** — most games now save your best
 score (or total wins) to `/scores/<game>` and play short win/lose audio
@@ -502,12 +506,18 @@ cues at the end of each round. Wired games include: `tetris`,
 | `grep` | `grep PATTERN FILE` | Search for pattern in file |
 | `sort` | `sort FILE` | Sort file lines alphabetically |
 | `hexdump` | `hexdump FILE` | Hex + ASCII file dump |
-| `sed` | `sed SEARCH REPLACE FILE` | Stream editor (search & replace) |
+| `sed` | `sed [-n] [-e SCRIPT] [SCRIPT] [FILE]` | Full-featured stream editor (`s///g`, `d`, `p`, `=`, `q`, `y///`, ranges) |
 | `cut` | `cut -f LIST [-d C] FILE` | Field extractor (supports lists/ranges like `1,3,5-7`) |
 | `tr` | `tr SET1 SET2 FILE` | Character translator |
 | `tee` | `tee INPUTFILE OUTPUTFILE` | Print file and copy it to another file |
 | `head` | `head [-n NUM] [FILE]` | Print first N lines (default 10) |
 | `tail` | `tail [-n NUM] [FILE]` | Print last N lines (default 10) |
+| `more` | `more [FILE]` | Page through file (Space = next page, Enter = line, Q = quit) |
+| `awk` | `awk [-F SEP] 'PROG' [FILE]` | Pattern/action text processor (`$n`, `NR`, `NF`, `gsub`, `BEGIN`/`END`) |
+| `tar` | `tar c\|x\|t ARCHIVE [FILES]` | HBTAR1.0 archive: create, extract, list (up to 64 files × 64 KB each) |
+| `top` | `top` | Real-time process monitor with memory bar (refreshes every second) |
+| `nm` | `nm FILE [FILE ...]` | ELF32 symbol table reader (address, type, name) |
+| `pciinfo` | `pciinfo` | List all detected PCI devices with bus:device.function addresses |
 | `rev` | `rev [FILE]` | Reverse each line (chars in reverse order) |
 | `yes` | `yes [STRING]` | Output STRING repeatedly (default "y") until interrupted |
 | `true` | `true` | Exit with success code (for scripts) |
@@ -524,7 +534,16 @@ cues at the end of each round. Wired games include: `tetris`,
 | `pager` | `pager FILE` | Page-by-page file viewer |
 | `cal` | `cal` | Calendar for current month |
 | `calc` | `calc` | Interactive calculator (+, -, *, /, %) |
-| `mandel` | `mandel` | Mandelbrot set renderer |
+| `mandel` | `mandel` | Classic Mandelbrot renderer (text-mode) |
+| `mandelbrot` | `mandelbrot` | Mandelbrot set at 640×480×32 bpp; rainbow escape-time palette (VBE) |
+| `julia` | `julia` | Interactive Julia set renderer — arrow keys move `c`, +/- zoom (VBE) |
+| `cube` | `cube` | Perspective-projected rotating wireframe cube (VBE) |
+| `breakout` | `breakout` | Breakout/Arkanoid clone: 5×10 bricks, 3 lives, ←→ paddle (VBE) |
+| `blitdemo` | `blitdemo` | Bouncing color-keyed sprite demo (VBE) |
+| `gfxdemo` | `gfxdemo` | Scrolling rainbow gradient + bouncing sprite (VBE) |
+| `gfxplasma` | `gfxplasma` | Classic sum-of-sines plasma effect 640×480 (VBE) |
+| `audiodemo` | `audiodemo` | Probes SB16/AC'97, plays PC-speaker melody, then 16-bit PCM playback |
+| `soundviz` | `soundviz` | SB16 chord sequence with animated waveform visualizer (VBE) |
 | `basic` | `basic` | GW-BASIC-style interpreter with strings, `WHILE/WEND`, `DATA/READ`, and file mode |
 | `banner` | `banner` | Colorful ASCII art banner |
 | `colors` | `colors` | VGA color palette demo |

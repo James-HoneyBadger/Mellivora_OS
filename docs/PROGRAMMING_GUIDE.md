@@ -22,11 +22,12 @@ compiler.
 12. [Environment & Arguments](#environment--arguments)
 13. [VBE Pixel Graphics](#vbe-pixel-graphics)
 14. [Game Loop Pattern](#game-loop-pattern)
-15. [Shared VBE UI Library (v6.1+)](#shared-vbe-ui-library-v61)
-16. [Building Assembly Programs](#building-assembly-programs)
-17. [C Programming with TCC](#c-programming-with-tcc)
-18. [Debugging Tips](#debugging-tips)
-19. [Complete Syscall Table](#complete-syscall-table)
+15. [VBE Drawing Primitives (v8.5+)](#vbe-drawing-primitives-v85)
+16. [Shared VBE UI Library (v6.1+)](#shared-vbe-ui-library-v61)
+17. [Building Assembly Programs](#building-assembly-programs)
+18. [C Programming with TCC](#c-programming-with-tcc)
+19. [Debugging Tips](#debugging-tips)
+20. [Complete Syscall Table](#complete-syscall-table)
 
 ---
 
@@ -209,12 +210,33 @@ SYS_TASKNAME        equ 78  ; Set task name: EBX=name_ptr
 SYS_REALLOC         equ 79  ; Reallocate: EBX=ptr ECX=new_size EDX=old_size -> EAX=ptr
 SYS_GETENV_SLOT     equ 80  ; Get env slot: EBX=index ECX=buf(128) -> EAX=0/-1
 SYS_DMESG_WRITE     equ 81  ; Write to dmesg log: EBX=msg_ptr
+SYS_DMESG_READ      equ 82  ; Read dmesg: EBX=index ECX=dest_buf(128) -> EAX=0/-1
+SYS_RENAME          equ 83  ; Rename file/dir: EBX=old_name ECX=new_name -> EAX=0/-1
+SYS_RMDIR           equ 84  ; Remove empty dir: EBX=name -> EAX=0/-1
+SYS_TRUNCATE        equ 85  ; Truncate file: EBX=name ECX=new_size -> EAX=0/-1
+SYS_CONNECT_NB      equ 86  ; Non-blocking connect: EBX=fd ECX=ip EDX=port -> EAX=0/-2/-1
+SYS_POLL            equ 87  ; Poll socket: EBX=fd ECX=events(1=in,2=out) EDX=timeout_ms -> EAX=mask
+SYS_SEM_CREATE      equ 88  ; Create semaphore: EBX=initial_val -> EAX=sem_id/-1
+SYS_SEM_WAIT        equ 89  ; Wait (P): EBX=sem_id -> EAX=0/-1
+SYS_SEM_POST        equ 90  ; Post (V): EBX=sem_id -> EAX=0
+SYS_SEM_CLOSE       equ 91  ; Close semaphore: EBX=sem_id -> EAX=0/-1
+SYS_WAITPID         equ 92  ; Wait for task: EBX=pid -> EAX=exit_code/-1
+SYS_GETMTIME        equ 93  ; Get mtime: EBX=filename -> EAX=mtime ECX=ctime
+SYS_SETMTIME        equ 94  ; Set mtime: EBX=filename ECX=timestamp(0=now) -> EAX=0/-1
+; v8.5 graphics primitives, PSF2 fonts, PCI, process
+SYS_DRAW_LINE       equ 95  ; Bresenham line: EBX=x0 ECX=y0 EDX=x1 ESI=y1 EDI=color
+SYS_DRAW_TRIANGLE   equ 96  ; Filled triangle: EBX=x0|(y0<<16) ECX=x1|(y1<<16) EDX=x2|(y2<<16) ESI=color
+SYS_BLIT            equ 97  ; Sprite blit: EBX=src ECX=dst_x EDX=dst_y ESI=w|(h<<16) EDI=colorkey
+SYS_DIRTY_PRESENT   equ 98  ; Flush dirty rect to LFB (no args)
+SYS_PSF_LOAD        equ 99  ; Load PSF2 font: EBX=filename -> EAX=0/-1
+SYS_PSF_CHAR        equ 100 ; Render glyph: EBX=x ECX=y EDX=codepoint ESI=fg_color
+SYS_PCI_FIND        equ 101 ; PCI find: EBX=vendor_id ECX=device_id -> EAX=bdf/-1
+SYS_GETPPID         equ 102 ; Get parent PID -> EAX=ppid
 ```
 
-> The numbers above match `programs/syscalls.inc`. Earlier versions of this
-> guide listed `SYS_SEM_*`, `SYS_WAITPID`, `SYS_GETMTIME`, and `SYS_SETMTIME`
-> at numbers 88-94; those syscalls were never implemented and have been
-> removed.
+> The numbers above match `programs/syscalls.inc`. All syscalls 0–102 are
+> implemented. Include `syscalls.inc` at the top of every program for the
+> authoritative list.
 
 Or include the provided header:
 
@@ -1092,6 +1114,82 @@ game_loop:
 ; --- Data ---
 game_over: db 0
 goodbye_msg: db "Thanks for playing!", 10, 0
+```
+
+---
+
+## VBE Drawing Primitives (v8.5+)
+
+These syscalls draw directly into the shadow buffer.  After rendering a frame, call
+`SYS_DIRTY_PRESENT` (98) or `SYS_FRAMEBUF/4` to push changes to the screen.
+
+### Line Drawing — `SYS_DRAW_LINE` (95)
+
+```nasm
+; Draw a red line from (10,10) to (200,150)
+mov eax, 95         ; SYS_DRAW_LINE
+mov ebx, 10         ; x0
+mov ecx, 10         ; y0
+mov edx, 200        ; x1
+mov esi, 150        ; y1
+mov edi, 0x00FF0000 ; color (ARGB red)
+int 0x80
+```
+
+### Filled Triangle — `SYS_DRAW_TRIANGLE` (96)
+
+Pack each vertex as `x | (y << 16)` in a single register:
+
+```nasm
+mov eax, 96
+mov ebx, (100) | (50  << 16)   ; vertex 0: (100, 50)
+mov ecx, (200) | (200 << 16)   ; vertex 1: (200, 200)
+mov edx, (50)  | (200 << 16)   ; vertex 2: (50,  200)
+mov esi, 0x0000FF00             ; green fill
+int 0x80
+```
+
+### Sprite Blit — `SYS_BLIT` (97)
+
+```nasm
+; Blit a 16×16 sprite from 'sprite_data', colorkey = magenta (0x00FF00FF)
+mov eax, 97
+mov ebx, sprite_data    ; source pointer (in shadow-buffer format)
+mov ecx, 64             ; dst_x
+mov edx, 48             ; dst_y
+mov esi, 16 | (16 << 16); width | (height << 16)
+mov edi, 0x00FF00FF     ; color key (transparent color)
+int 0x80
+```
+
+### Dirty-Rectangle Present — `SYS_DIRTY_PRESENT` (98)
+
+Flushes only the bounding box of pixels changed since the last present — faster than
+a full `SYS_FRAMEBUF/4` blit for partial-screen animations:
+
+```nasm
+mov eax, 98     ; SYS_DIRTY_PRESENT
+int 0x80
+```
+
+### PSF2 Bitmap Font — `SYS_PSF_LOAD` / `SYS_PSF_CHAR` (99–100)
+
+```nasm
+; Load a PSF2 font from HBFS
+mov eax, 99             ; SYS_PSF_LOAD
+mov ebx, font_filename  ; pointer to null-terminated filename
+int 0x80
+; EAX = 0 on success, -1 on failure
+
+; Render a glyph
+mov eax, 100            ; SYS_PSF_CHAR
+mov ebx, 100            ; x
+mov ecx, 50             ; y
+mov edx, 'A'            ; Unicode codepoint
+mov esi, 0x00FFFFFF     ; foreground color (white)
+int 0x80
+
+font_filename: db "unifont.psf", 0
 ```
 
 ---

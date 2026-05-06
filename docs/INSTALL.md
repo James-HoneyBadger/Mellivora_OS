@@ -18,7 +18,7 @@ This guide covers everything you need to build, run, and test the OS.
 | ------ | --------- | --------- |
 | **NASM** | 2.15+ | Netwide Assembler — assembles all `.asm` sources |
 | **GNU Make** | 4.0+ | Build orchestration |
-| **QEMU** | 6.0+ | `qemu-system-i386` — i486-compatible emulator for testing |
+| **QEMU** | 6.0+ | `qemu-system-x86_64` — i486-compatible emulator for testing |
 | **Python 3** | 3.6+ | Runs `populate.py` to populate the filesystem |
 | **dd** | any | Disk image construction (standard on Linux/macOS) |
 
@@ -90,7 +90,7 @@ This single command:
 4. Creates a 2 GB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (176 programs + 17 samples + docs)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (210 programs + 17 samples + docs)
 
 ### Build Targets
 
