@@ -1150,3 +1150,13 @@ sched_get_current_task:
         pop edx
         pop edi
         ret
+
+;---------------------------------------
+; sys_getppid - return parent PID of calling task
+; For now the shell is always the parent, PID=0.
+; Returns: EAX = parent PID
+;---------------------------------------
+sys_getppid:
+        ; All user programs are launched by the shell, which has PID 0
+        mov dword [esp + 28], 0     ; EAX slot in pushad frame
+        iretd

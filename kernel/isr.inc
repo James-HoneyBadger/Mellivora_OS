@@ -336,6 +336,13 @@ irq_keyboard:
         ; Read scancode from keyboard controller
         in al, KB_DATA
 
+        ; Handle E0 extended prefix
+        cmp al, 0xE0
+        je .set_e0_prefix
+        ; Check for E0-prefixed extended key
+        cmp byte [e0_prefix], 1
+        je .handle_extended
+
         ; Check if it's a key release (bit 7 set)
         test al, 0x80
         jnz .key_up
@@ -412,6 +419,12 @@ irq_keyboard:
         jmp shell_main
 .no_ctrl:
 .store_key:
+        ; If in scrollback view, restore live screen first
+        cmp dword [scroll_view], 0
+        je .sb_live
+        mov dword [scroll_view], 0
+        call vga_restore_live
+.sb_live:
         ; Check if buffer is full before writing
         mov ebx, [kb_write_idx]
         lea ecx, [ebx + 1]
@@ -459,6 +472,52 @@ irq_keyboard:
 
 .shift_off:
         and byte [kb_shift], ~1
+
+; E0 prefix and extended key handlers
+.set_e0_prefix:
+        mov byte [e0_prefix], 1
+        jmp .eoi
+
+.handle_extended:
+        mov byte [e0_prefix], 0
+        ; Key release for extended key — ignore
+        test al, 0x80
+        jnz .eoi
+        ; Arrow keys — inject virtual key codes into keyboard buffer
+        cmp al, 0x48            ; Up arrow
+        je .ext_up
+        cmp al, 0x50            ; Down arrow
+        je .ext_down
+        cmp al, 0x4B            ; Left arrow
+        je .ext_left
+        cmp al, 0x4D            ; Right arrow
+        je .ext_right
+        ; Scrollback only when no program is running
+        cmp byte [program_running], 0
+        jne .eoi
+        cmp al, 0x49            ; PgUp
+        je .ext_pgup
+        cmp al, 0x51            ; PgDn
+        je .ext_pgdn
+        jmp .eoi
+.ext_up:
+        mov al, KEY_UP
+        jmp .store_key
+.ext_down:
+        mov al, KEY_DOWN
+        jmp .store_key
+.ext_left:
+        mov al, KEY_LEFT
+        jmp .store_key
+.ext_right:
+        mov al, KEY_RIGHT
+        jmp .store_key
+.ext_pgup:
+        call vga_do_scroll_back
+        jmp .eoi
+.ext_pgdn:
+        call vga_do_scroll_fwd
+        jmp .eoi
 
 .eoi:
         mov al, 0x20

@@ -610,6 +610,22 @@ topic_table:
         TOPIC n_theme,   p_theme,   s_theme
         TOPIC n_tutorial,p_tutorial,s_tutorial
         TOPIC n_pkginfo, p_pkginfo, s_pkginfo
+        TOPIC n_more,    p_more,    s_more
+        TOPIC n_sed,     p_sed,     s_sed
+        TOPIC n_awk,     p_awk,     s_awk
+        TOPIC n_top,     p_top,     s_top
+        TOPIC n_tar,     p_tar,     s_tar
+        TOPIC n_nm,      p_nm,      s_nm
+        TOPIC n_pciinfo, p_pciinfo, s_pciinfo
+        TOPIC n_audiodemo,p_audiodemo,s_audiodemo
+        TOPIC n_blitdemo,p_blitdemo,s_blitdemo
+        TOPIC n_gfxdemo, p_gfxdemo, s_gfxdemo
+        TOPIC n_gfxplasma,p_gfxplasma,s_gfxplasma
+        TOPIC n_soundviz,p_soundviz,s_soundviz
+        TOPIC n_breakout,p_breakout,s_breakout
+        TOPIC n_cube,    p_cube,    s_cube
+        TOPIC n_julia,   p_julia,   s_julia
+        TOPIC n_mandelbrot,p_mandelbrot,s_mandelbrot
         dd 0, 0, 0              ; sentinel
 
 ;------------------------------------------------------------
@@ -663,6 +679,22 @@ n_journal:  db "journal", 0
 n_theme:    db "theme", 0
 n_tutorial: db "tutorial", 0
 n_pkginfo:  db "pkginfo", 0
+n_more:     db "more", 0
+n_sed:      db "sed", 0
+n_awk:      db "awk", 0
+n_top:      db "top", 0
+n_tar:      db "tar", 0
+n_nm:       db "nm", 0
+n_pciinfo:  db "pciinfo", 0
+n_audiodemo: db "audiodemo", 0
+n_blitdemo: db "blitdemo", 0
+n_gfxdemo:  db "gfxdemo", 0
+n_gfxplasma: db "gfxplasma", 0
+n_soundviz: db "soundviz", 0
+n_breakout: db "breakout", 0
+n_cube:     db "cube", 0
+n_julia:    db "julia", 0
+n_mandelbrot: db "mandelbrot", 0
 
 ;------------------------------------------------------------
 ; Summaries (one-line, shown by `man` and `man -k`)
@@ -715,6 +747,22 @@ s_journal:  db "Append timestamped entries to a personal journal", 0
 s_theme:    db "Switch the system color theme", 0
 s_tutorial: db "Interactive welcome tutorial for new users", 0
 s_pkginfo:  db "Print Mellivora system identification info", 0
+s_more:     db "Page through text files or piped input", 0
+s_sed:      db "Stream editor for filtering and transforming text", 0
+s_awk:      db "Pattern-action text processor", 0
+s_top:      db "Real-time process and memory monitor", 0
+s_tar:      db "Create, extract and list HBTAR archives", 0
+s_nm:       db "List symbol table entries from ELF32 binaries", 0
+s_pciinfo:  db "Display detected PCI hardware devices", 0
+s_audiodemo: db "Demonstrate audio output capabilities", 0
+s_blitdemo: db "Sprite blit animation demo (VBE)", 0
+s_gfxdemo:  db "VBE graphics primitives demo", 0
+s_gfxplasma: db "Animated plasma effect on VBE framebuffer", 0
+s_soundviz: db "SB16 audio waveform visualizer (VBE)", 0
+s_breakout: db "Breakout/Arkanoid clone (VBE, arrow keys)", 0
+s_cube:     db "Rotating 3-D wireframe cube (VBE)", 0
+s_julia:    db "Interactive Julia set renderer (VBE)", 0
+s_mandelbrot: db "Mandelbrot set renderer (VBE fixed-point)", 0
 
 ;------------------------------------------------------------
 ; Page bodies
@@ -1390,6 +1438,262 @@ p_pkginfo:
         db "    to include in bug reports.", 0x0A, 0x0A
         db "SEE ALSO", 0x0A
         db "    meminfo, df, credits", 0x0A, 0
+
+p_more:
+        db "MORE(1)             Mellivora OS Manual             MORE(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    more - page through text file or piped input", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    more [FILE]", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Displays FILE (or stdin if omitted) one screen at a time.", 0x0A
+        db "    Pause at each page; press SPACE for the next page,", 0x0A
+        db "    ENTER for one more line, or Q to quit.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    cat, grep, head, tail", 0x0A, 0
+
+p_sed:
+        db "SED(1)              Mellivora OS Manual              SED(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    sed - stream editor for filtering and transforming text", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    sed [-n] [-e SCRIPT] [SCRIPT] [FILE]", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Applies editing commands to each line of FILE (or stdin).", 0x0A, 0x0A
+        db "COMMANDS", 0x0A
+        db "    s/FIND/REPL/[g]  Substitute (g=global)", 0x0A
+        db "    d                Delete line", 0x0A
+        db "    p                Print line", 0x0A
+        db "    =                Print line number", 0x0A
+        db "    q                Quit", 0x0A
+        db "    y/SRC/DST/       Transliterate characters", 0x0A, 0x0A
+        db "ADDRESS FORMS", 0x0A
+        db "    N        line number    $  last line", 0x0A
+        db "    /regex/  regex match    N,M  range", 0x0A, 0x0A
+        db "OPTIONS", 0x0A
+        db "    -n   suppress automatic print", 0x0A
+        db "    -e SCRIPT  specify script on command line", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    awk, grep", 0x0A, 0
+
+p_awk:
+        db "AWK(1)              Mellivora OS Manual              AWK(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    awk - pattern-action text processor", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    awk [-F SEP] 'PROGRAM' [FILE]", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Reads lines from FILE (or stdin) and runs PROGRAM for each", 0x0A
+        db "    line that matches the pattern.", 0x0A, 0x0A
+        db "PATTERNS", 0x0A
+        db "    BEGIN     run before first line", 0x0A
+        db "    END       run after last line", 0x0A
+        db "    /regex/   lines matching regex", 0x0A
+        db "    NR==N     specific line number", 0x0A
+        db "    (empty)   every line", 0x0A, 0x0A
+        db "ACTIONS", 0x0A
+        db "    print [EXPR,...]    print fields or strings", 0x0A
+        db "    gsub(PAT,REPL)      global substitute on $0", 0x0A
+        db "    sub(PAT,REPL)       single substitute on $0", 0x0A, 0x0A
+        db "VARIABLES", 0x0A
+        db "    $0    whole line  $N  Nth field  NR  line#  NF  field count", 0x0A, 0x0A
+        db "OPTIONS", 0x0A
+        db "    -F SEP  set field separator (default space)", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    sed, grep", 0x0A, 0
+
+p_top:
+        db "TOP(1)              Mellivora OS Manual              TOP(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    top - real-time process and memory monitor", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    top", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Displays a live-updating table of all running tasks.", 0x0A
+        db "    Shows slot, PID, state, priority, and task name.", 0x0A
+        db "    A memory usage bar shows used/total physical pages.", 0x0A
+        db "    Refreshes every second.", 0x0A, 0x0A
+        db "KEYS", 0x0A
+        db "    q / ESC   quit", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    ps, meminfo", 0x0A, 0
+
+p_tar:
+        db "TAR(1)              Mellivora OS Manual              TAR(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    tar - create, extract, and list HBTAR archives", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    tar c ARCHIVE FILE [FILE ...]   create", 0x0A
+        db "    tar x ARCHIVE                  extract", 0x0A
+        db "    tar t ARCHIVE                  list contents", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Uses the HBTAR1.0 flat binary archive format.", 0x0A
+        db "    Each entry stores a 256-byte padded name and file data.", 0x0A
+        db "    Supports up to 64 files, 64 KB each.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    cp, mv", 0x0A, 0
+
+p_nm:
+        db "NM(1)               Mellivora OS Manual               NM(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    nm - list symbol table entries from ELF32 binaries", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    nm FILE [FILE ...]", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Reads the SHT_SYMTAB section of each ELF32 binary and", 0x0A
+        db "    prints: address, type letter, and symbol name.", 0x0A, 0x0A
+        db "TYPE LETTERS", 0x0A
+        db "    T/t  text (code)   D/d  data   B/b  BSS", 0x0A
+        db "    R/r  read-only     U    undefined   A  absolute", 0x0A
+        db "    (uppercase = global, lowercase = local)", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    dis, debug", 0x0A, 0
+
+p_pciinfo:
+        db "PCIINFO(1)          Mellivora OS Manual          PCIINFO(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    pciinfo - display detected PCI hardware devices", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    pciinfo", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Queries the kernel PCI device table via SYS_PCI_FIND (101)", 0x0A
+        db "    and lists known hardware (network cards, audio, IDE, etc.)", 0x0A
+        db "    with their bus:device.function addresses.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    audiodemo, pkginfo", 0x0A, 0
+
+p_audiodemo:
+        db "AUDIODEMO(1)        Mellivora OS Manual        AUDIODEMO(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    audiodemo - demonstrate audio output capabilities", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    audiodemo", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Probes for audio hardware (SB16 and AC'97 via PCI),", 0x0A
+        db "    plays a short melody on the PC speaker, then attempts", 0x0A
+        db "    16-bit PCM playback via SYS_AUDIO_PLAY if SB16 is present.", 0x0A
+        db "    Press any key to exit after the melody.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    soundviz, pciinfo, play", 0x0A, 0
+
+p_blitdemo:
+        db "BLITDEMO(1)         Mellivora OS Manual         BLITDEMO(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    blitdemo - sprite blit animation demo", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    blitdemo", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Demonstrates direct-write sprite blitting with color-key", 0x0A
+        db "    transparency on the 640x480 VBE framebuffer.", 0x0A
+        db "    A 16x16 diamond sprite bounces around the screen.", 0x0A
+        db "    Press any key to exit.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    gfxdemo, gfxplasma, soundviz", 0x0A, 0
+
+p_gfxdemo:
+        db "GFXDEMO(1)          Mellivora OS Manual          GFXDEMO(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    gfxdemo - VBE graphics primitives demo", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    gfxdemo", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Renders a scrolling rainbow gradient background with a", 0x0A
+        db "    bouncing sprite and title overlay using the 640x480 VBE", 0x0A
+        db "    framebuffer shadow buffer.", 0x0A
+        db "    Press any key to exit.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    blitdemo, gfxplasma, cube", 0x0A, 0
+
+p_gfxplasma:
+        db "GFXPLASMA(1)        Mellivora OS Manual        GFXPLASMA(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    gfxplasma - animated plasma effect on VBE framebuffer", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    gfxplasma", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Classic plasma: sum of sine waves evaluated per pixel and", 0x0A
+        db "    mapped to a rotating rainbow palette. Renders 320x240 cells", 0x0A
+        db "    as 2x2 blocks to fill 640x480. Loops continuously.", 0x0A
+        db "    Press any key to exit.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    gfxdemo, blitdemo, julia", 0x0A, 0
+
+p_soundviz:
+        db "SOUNDVIZ(1)         Mellivora OS Manual         SOUNDVIZ(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    soundviz - SB16 audio waveform visualizer", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    soundviz", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Plays a three-note chord sequence (C4, E4, G4) via SB16", 0x0A
+        db "    while drawing an animated waveform on the 640x480 VBE", 0x0A
+        db "    framebuffer. Each note triggers a coloured expanding ring.", 0x0A
+        db "    Falls back to PC-speaker beeps if SB16 is absent.", 0x0A
+        db "    Press any key to exit.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    audiodemo, gfxdemo, play", 0x0A, 0
+
+p_breakout:
+        db "BREAKOUT(1)         Mellivora OS Manual         BREAKOUT(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    breakout - Breakout/Arkanoid clone", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    breakout", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Classic brick-breaking game on the 640x480 VBE framebuffer.", 0x0A
+        db "    Five rows of ten bricks; ball bounces off walls, paddle,", 0x0A
+        db "    and bricks. Three lives.", 0x0A, 0x0A
+        db "CONTROLS", 0x0A
+        db "    LEFT / RIGHT arrow keys  move paddle", 0x0A
+        db "    Q / any non-arrow key    quit", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    cube, julia, galaga", 0x0A, 0
+
+p_cube:
+        db "CUBE(1)             Mellivora OS Manual             CUBE(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    cube - rotating 3-D wireframe cube", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    cube", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Renders a perspective-projected unit cube rotating around", 0x0A
+        db "    the Y and X axes using 16.16 fixed-point sine/cosine tables.", 0x0A
+        db "    Edges are drawn with SYS_DRAW_LINE into the shadow buffer.", 0x0A
+        db "    Press any key to exit.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    julia, mandelbrot, gfxdemo", 0x0A, 0
+
+p_julia:
+        db "JULIA(1)            Mellivora OS Manual            JULIA(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    julia - interactive Julia set renderer", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    julia", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Renders the Julia set for z -> z^2 + c using 16.16", 0x0A
+        db "    fixed-point arithmetic. Renders 320x240 scaled to 640x480.", 0x0A, 0x0A
+        db "CONTROLS", 0x0A
+        db "    Arrow keys   move Julia parameter c (re/im) by 0.02", 0x0A
+        db "    + / -        zoom in / out", 0x0A
+        db "    R            reset to default view", 0x0A
+        db "    Any other    exit", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    mandelbrot, cube, gfxplasma", 0x0A, 0
+
+p_mandelbrot:
+        db "MANDELBROT(1)       Mellivora OS Manual       MANDELBROT(1)", 0x0A, 0x0A
+        db "NAME", 0x0A
+        db "    mandelbrot - Mandelbrot set renderer", 0x0A, 0x0A
+        db "SYNOPSIS", 0x0A
+        db "    mandelbrot", 0x0A, 0x0A
+        db "DESCRIPTION", 0x0A
+        db "    Renders the Mandelbrot set at 640x480x32bpp using direct", 0x0A
+        db "    shadow-buffer writes and 16.16 fixed-point arithmetic.", 0x0A
+        db "    Rainbow colour-escape palette; black interior. Renders", 0x0A
+        db "    progressively (flushes every 32 rows).", 0x0A
+        db "    Press any key to exit.", 0x0A, 0x0A
+        db "SEE ALSO", 0x0A
+        db "    julia, cube, gfxplasma", 0x0A, 0
 
 ;============================================================
 ; Buffers

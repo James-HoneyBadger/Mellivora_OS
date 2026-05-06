@@ -4,7 +4,7 @@
 ;=======================================================================
 
 IPC_MAX_PIPES   equ 8
-IPC_PIPE_SIZE   equ 4096        ; 4 KB per pipe
+IPC_PIPE_SIZE   equ 16384       ; 16 KB per pipe
 IPC_MAX_SHM     equ 4
 IPC_SHM_SIZE    equ 4096        ; 4 KB per shared memory region
 

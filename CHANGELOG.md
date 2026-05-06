@@ -1,5 +1,85 @@
 # Mellivora OS - Changelog
 
+## v8.5.0 - Expanded graphics, audio, and I/O subsystems
+
+### New modules
+
+- **`kernel/pci.inc`** — Generic PCI bus enumeration (buses 0–7).  Scans all
+  devices/functions, builds a 64-entry device table.  Exposes `pci_find_device`,
+  `pci_read_config32`, `pci_write_config32`, `pci_read_bar`.
+  New syscall **SYS_PCI_FIND (101)**: EBX=vendor, ECX=device_id → EAX=bdf or -1.
+
+- **`kernel/ac97.inc`** — Intel AC'97 audio controller driver (ICH2/3/4,
+  8086:2415/2425/2445).  Uses PCI Bus Master DMA for playback.  Allocates
+  32-entry Buffer Descriptor List and two 32 KB ping-pong buffers.
+  Falls back gracefully if device absent.  Hooks into `SYS_AUDIO_PLAY`.
+
+- **`kernel/atadma.inc`** — ATA Bus Master IDE DMA extension.  Detects Intel
+  PIIX3/4 IDE controller (8086:7010/7111) via PCI, allocates a PRD table and
+  a 4 KB bounce buffer.  Provides `atadma_read_sectors` (up to 8 sectors per
+  call).  Falls back to existing PIO path if unavailable.
+
+- **`kernel/virtio.inc`** — VirtIO PCI legacy driver (spec 0.9.5).
+  - **virtio-blk** (1AF4:1001/1042): virtqueue-based block device with
+    3-descriptor request chains and polled completion.
+    Provides `virtio_blk_read`.
+  - **virtio-net** (1AF4:1000/1041): negotiation + MAC address read.
+
+### Graphics upgrades (kernel/vbe.inc additions)
+
+- **Bresenham line** — `vbe_draw_line` / **SYS_DRAW_LINE (95)**
+- **Scanline triangle fill** — `vbe_fill_triangle` / **SYS_DRAW_TRIANGLE (96)**
+- **Sprite blit with color key** — `vbe_sprite_blit` / **SYS_BLIT (97)**
+- **Dirty-rectangle tracking** — `vbe_dirty_present` / **SYS_DIRTY_PRESENT (98)**
+  Maintains the smallest bounding box of modified pixels and bulk-blits only
+  that region from shadow buffer to LFB.
+- **PSF2 bitmap font loader** — **SYS_PSF_LOAD (99)** / **SYS_PSF_CHAR (100)**
+  Loads any PSF2 font from HBFS (up to 256 KB), renders individual glyphs
+  into the framebuffer.
+
+### Kernel wiring
+
+- `pci_init`, `ac97_init`, `atadma_init`, `virtio_init` called from `kernel_entry`
+  after `sb16_init`, before `burrows_init`.
+- New includes added in correct dependency order.
+
+### New programs (v8.5.0)
+
+- **`more [FILE]`** — paging text viewer (23 lines/page; SPACE=next, ENTER=line, Q=quit).
+- **`pciinfo`** — queries `SYS_PCI_FIND` to list all detected PCI devices with
+  bus:device.function addresses.
+- **`audiodemo`** — probes SB16 and AC'97 via PCI, plays a PC-speaker melody,
+  then attempts 16-bit PCM playback via `SYS_AUDIO_PLAY`.
+- **`soundviz`** — SB16 chord sequence (C4, E4, G4) with an animated waveform
+  visualizer on the 640×480 VBE framebuffer.
+- **`blitdemo`** — bouncing 16×16 color-keyed sprite via direct shadow-buffer writes.
+- **`gfxdemo`** — scrolling rainbow gradient background + bouncing square sprite
+  with title overlay; demonstrates the shadow-buffer flip workflow.
+- **`gfxplasma`** — classic sum-of-sines plasma effect rendered as 320×240 → 2×2
+  blocks on the 640×480 framebuffer.
+- **`breakout`** — Breakout/Arkanoid clone: 5 × 10 bricks, three lives,
+  LEFT/RIGHT arrows to move paddle.
+- **`cube`** — perspective-projected rotating wireframe cube using 16.16
+  fixed-point sine tables and `SYS_DRAW_LINE`.
+- **`julia`** — interactive Julia set renderer (arrow keys move *c*, +/- zoom, R reset).
+- **`mandelbrot`** — Mandelbrot set at 640×480×32 bpp; progressive rendering,
+  rainbow escape-time palette.
+- **`sed [-n] [-e SCRIPT] [SCRIPT] [FILE]`** — stream editor: `s///g`, `d`, `p`,
+  `=`, `q`, `y///`, line/regex/range addressing.
+- **`awk [-F SEP] 'PROG' [FILE]`** — pattern/action processor: `$n`, `NR`, `NF`,
+  `print`, `gsub()`, `sub()`, `/regex/`, `BEGIN`/`END` blocks.
+- **`top`** — real-time process monitor using `SYS_PROCLIST` (all 128 slots) and
+  `SYS_MEMINFO` with a used/free memory bar; refreshes every second.
+- **`tar c|x|t ARCHIVE [FILES]`** — HBTAR1.0 flat archive: create, extract, list;
+  up to 64 files × 64 KB each.
+- **`nm FILE [FILE ...]`** — ELF32 symbol table reader: parses `SHT_SYMTAB` /
+  `SHT_STRTAB`, prints address, type letter (T/D/B/R/U), and name.
+
+### Manual pages
+
+- All 16 new programs above added to `man.asm` with full NAME / SYNOPSIS /
+  DESCRIPTION / CONTROLS / SEE ALSO sections.
+
 ## v8.4.2 - `del` is now persistent across `make full`
 
 ### Fix

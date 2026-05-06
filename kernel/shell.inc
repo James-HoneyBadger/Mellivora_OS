@@ -41,6 +41,30 @@ shell_main:
         call batch_run_loop
 .no_batch_resume:
 
+        ; Continue pending && / || chain left by an external program
+        cmp byte [cond_pending_buf], 0
+        je .no_cond_pending
+        movzx eax, byte [cond_pending_op]
+        mov esi, cond_pending_buf
+        mov edi, line_buffer
+        call str_copy
+        mov byte [cond_pending_buf], 0
+        mov byte [cond_pending_op], 0
+        cmp al, '&'
+        jne .cp_check_or
+        cmp dword [shell_last_status], 0
+        jne .no_cond_pending        ; && and previous failed: skip
+        jmp .cp_exec
+.cp_check_or:
+        cmp al, '|'
+        jne .cp_exec
+        cmp dword [shell_last_status], 0
+        je .no_cond_pending         ; || and previous succeeded: skip
+.cp_exec:
+        mov esi, line_buffer
+        call shell_parse_cmd
+.no_cond_pending:
+
         ; Set default PATH
         mov esi, default_path
         call env_set_str
@@ -524,7 +548,7 @@ shell_main:
 ;---------------------------------------
 ; Save current line_buffer to history ring
 ;---------------------------------------
-HIST_MAX        equ 128
+HIST_MAX        equ 256
 HIST_ENTRY_SIZE equ 256
 
 shell_save_history:
@@ -575,6 +599,10 @@ shell_parse_cmd:
         ; --- Check for trailing '&' (background job request) ---
         call shell_strip_bg_ampersand
 
+        ; --- Semicolon separator: split on ';' and run each segment ---
+        call shell_execute_semicolons
+        jc .parse_done
+
         call shell_execute_conditionals
         jc .parse_done
 
@@ -602,6 +630,97 @@ shell_parse_cmd:
 shell_status_fail:
         mov dword [shell_last_status], 1
         ret
+
+;---------------------------------------
+; shell_execute_semicolons - Split line_buffer on ';' and run each segment.
+; Does NOT split on ';' inside '&&'/'||' sequences (those are handled later).
+; Returns CF=1 if split occurred (caller should skip further dispatch),
+;         CF=0 if no semicolon found (caller continues normally).
+;---------------------------------------
+shell_execute_semicolons:
+        pushad
+        ; Scan for ';' not inside quotes, not part of &&/||
+        mov esi, line_buffer
+.ses_scan:
+        mov al, [esi]
+        test al, al
+        jz .ses_none
+        cmp al, ';'
+        je .ses_found
+        inc esi
+        jmp .ses_scan
+.ses_none:
+        popad
+        clc
+        ret
+.ses_found:
+        ; Copy line_buffer to semi_work_buf
+        mov esi, line_buffer
+        mov edi, semi_work_buf
+        call str_copy
+        mov byte [ses_running], 1
+        mov esi, semi_work_buf
+.ses_stage:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ses_done
+
+        ; Find next ';'
+        mov edi, esi
+.ses_find:
+        mov al, [esi]
+        test al, al
+        jz .ses_last
+        cmp al, ';'
+        je .ses_split
+        inc esi
+        jmp .ses_find
+.ses_split:
+        mov byte [esi], 0
+        mov ebx, esi
+        inc ebx                 ; ebx = start of remainder
+        jmp .ses_exec
+.ses_last:
+        xor ebx, ebx            ; no more segments
+
+.ses_exec:
+        ; Copy segment to line_buffer and run it
+        push esi
+        push ebx
+        mov esi, edi
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ses_next
+        mov edi, line_buffer
+        call str_copy
+        call shell_execute_conditionals
+        jc .ses_next2
+        call shell_execute_pipeline
+        jc .ses_next2
+        call shell_prepare_redirection
+        jc .ses_next2
+        call shell_expand_globs
+        mov esi, line_buffer
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ses_next2
+        call shell_dispatch_core
+        call shell_finish_redirection
+.ses_next2:
+.ses_next:
+        pop ebx
+        pop esi
+        cmp ebx, 0
+        je .ses_done
+        mov esi, ebx
+        jmp .ses_stage
+
+.ses_done:
+        popad
+        stc
+        ret
+
+ses_running: db 0
 
 ;---------------------------------------
 ; shell_print_elapsed - Print elapsed time since time_start_ticks
@@ -857,6 +976,25 @@ shell_expand_cmdsubst:
         jz .ecs_finish
         cmp al, '$'
         jne .ecs_pass
+        ; $? — last exit code
+        cmp byte [esi + 1], '?'
+        jne .ecs_not_question
+        add esi, 2
+        push esi
+        mov eax, [shell_last_status]
+        call vga_dec_to_str
+        mov esi, dec_str_buf
+.ecs_q_splice:
+        lodsb
+        test al, al
+        jz .ecs_q_done
+        mov [edi + ecx], al
+        inc ecx
+        jmp .ecs_q_splice
+.ecs_q_done:
+        pop esi
+        jmp .ecs_scan
+.ecs_not_question:
         cmp byte [esi + 1], '('
         jne .ecs_pass
         ; Found '$(' — check for '$(('
@@ -1353,8 +1491,25 @@ shell_execute_conditionals:
         je .sec_syntax
         mov edi, line_buffer
         call str_copy
+        ; Save remaining chain so external programs can resume it via shell_main
+        cmp ebx, 0
+        je .sec_no_pending
+        push esi
+        mov esi, ebx
+        mov edi, cond_pending_buf
+        call str_copy
+        mov al, [cond_next_op]
+        mov [cond_pending_op], al
+        pop esi
+        jmp .sec_run_cmd
+.sec_no_pending:
+        mov byte [cond_pending_buf], 0
+        mov byte [cond_pending_op], 0
+.sec_run_cmd:
         mov esi, line_buffer
         call shell_parse_cmd
+        ; Returned normally (builtin) — clear pending so shell_main won't re-run it
+        mov byte [cond_pending_buf], 0
 
 .sec_continue:
         mov al, [cond_next_op]
@@ -1648,6 +1803,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_sleep
 
+        mov edi, cmd_watch_str
+        call str_starts_with
+        jc .cmd_watch
+
         mov edi, cmd_color_str
         call str_starts_with
         jc .cmd_color
@@ -1749,10 +1908,58 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_source
 
+        ; Scripting constructs
+        mov edi, cmd_if_str
+        call str_starts_with
+        jc .cmd_if
+
+        mov edi, cmd_while_str
+        call str_starts_with
+        jc .cmd_while
+
+        mov edi, cmd_for_str
+        call str_starts_with
+        jc .cmd_for
+
+        mov edi, cmd_test_str
+        call str_starts_with
+        jc .cmd_test
+
+        mov edi, cmd_lbracket_str
+        call str_starts_with
+        jc .cmd_test
+
+        mov edi, cmd_function_def_str
+        call str_starts_with
+        jc .cmd_func_def
+
+        mov edi, cmd_break_str
+        call str_starts_with
+        jc .cmd_break
+
+        mov edi, cmd_continue_str
+        call str_starts_with
+        jc .cmd_continue
+
+        mov edi, cmd_return_str
+        call str_starts_with
+        jc .cmd_return
+
+        mov edi, cmd_case_str
+        call str_starts_with
+        jc .cmd_case
+
+        ; Check for user-defined shell function call
+        call shell_func_call
+        jnc .func_called
+
         ; Unknown command - try to execute as program
         mov esi, line_buffer
         call cmd_exec_program
         jc .unknown
+        ret
+
+.func_called:
         ret
 
 .unknown:
@@ -2257,6 +2464,11 @@ shell_dispatch_core:
         call cmd_sleep
         ret
 
+.cmd_watch:
+        call skip_spaces
+        call cmd_watch
+        ret
+
 .cmd_color:
         call skip_spaces
         call cmd_color
@@ -2479,6 +2691,82 @@ shell_dispatch_core:
         call vga_reset_color
         ret
 .source_usage_str: db "Usage: source <script>", 0x0A, 0
+
+;=========================================================
+; SCRIPTING BUILTINS
+;=========================================================
+
+;----------------------------------------------------------
+; if <cmd>; then ... [elif <cmd>; then ...] [else ...] fi
+; Parses the current interactive line OR batch_line_buf.
+; For interactive use, the whole if block must be on a
+; single line using semicolons:
+;   if test $x -eq 5; then echo yes; fi
+;----------------------------------------------------------
+.cmd_if:
+        call skip_spaces
+        call cmd_if_builtin
+        ret
+
+;----------------------------------------------------------
+; while <cmd>; do ... done
+;----------------------------------------------------------
+.cmd_while:
+        call skip_spaces
+        call cmd_while_builtin
+        ret
+
+;----------------------------------------------------------
+; for var in word...; do ... done
+;----------------------------------------------------------
+.cmd_for:
+        call skip_spaces
+        call cmd_for_builtin
+        ret
+
+;----------------------------------------------------------
+; test expr  /  [ expr ]
+;----------------------------------------------------------
+.cmd_test:
+        call skip_spaces
+        call cmd_test_builtin
+        ret
+
+;----------------------------------------------------------
+; funcname() { ... }  — define a shell function
+;----------------------------------------------------------
+.cmd_func_def:
+        call cmd_func_define
+        ret
+
+;----------------------------------------------------------
+; break / continue / return — set flow-control flag
+;----------------------------------------------------------
+.cmd_break:
+        mov byte [sh_flow_flag], SH_FLOW_BREAK
+        ret
+
+.cmd_continue:
+        mov byte [sh_flow_flag], SH_FLOW_CONTINUE
+        ret
+
+.cmd_return:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .return_zero
+        call parse_decimal
+        mov [shell_last_status], eax
+.return_zero:
+        mov byte [sh_flow_flag], SH_FLOW_RETURN
+        ret
+
+;----------------------------------------------------------
+; case WORD in pat) ... ;; esac
+;----------------------------------------------------------
+.cmd_case:
+        call skip_spaces
+        call cmd_case_builtin
+        ret
 
 .cmd_ping:
         call cmd_ping
@@ -3501,6 +3789,107 @@ cmd_sleep:
 .sleep_usage:
         mov byte [vga_color], COLOR_ERROR
         mov esi, msg_sleep_usage
+        call vga_print
+        call vga_reset_color
+        popad
+        ret
+
+;---------------------------------------
+; Command: watch - Repeat a command every N seconds
+; Usage: watch N command...
+;---------------------------------------
+cmd_watch:
+        pushad
+        ; Parse integer interval
+        xor eax, eax
+.watch_parse_n:
+        movzx ecx, byte [esi]
+        cmp cl, '0'
+        jb .watch_got_n
+        cmp cl, '9'
+        ja .watch_got_n
+        imul eax, 10
+        sub cl, '0'
+        add eax, ecx
+        inc esi
+        jmp .watch_parse_n
+.watch_got_n:
+        cmp eax, 0
+        je .watch_usage
+        mov [watch_interval], eax
+        ; Skip space
+        cmp byte [esi], ' '
+        jne .watch_no_space
+        inc esi
+.watch_no_space:
+        ; Copy remaining command into watch_cmd_buf
+        mov edi, watch_cmd_buf
+        mov ecx, 255
+.watch_copy_cmd:
+        lodsb
+        cmp al, 0
+        je .watch_cmd_done
+        stosb
+        dec ecx
+        jnz .watch_copy_cmd
+.watch_cmd_done:
+        mov byte [edi], 0
+
+.watch_loop:
+        ; Ctrl-C check
+        cmp byte [ctrl_c_flag], 0
+        jne .watch_ctrlc
+
+        ; Clear screen
+        call vga_clear
+        ; Print header
+        mov esi, msg_watch_hdr
+        call vga_print
+        mov esi, watch_cmd_buf
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        mov esi, msg_watch_sep
+        call vga_print
+
+        ; Execute the command
+        mov esi, watch_cmd_buf
+        mov edi, line_buffer
+        mov ecx, 255
+.watch_copy_lb:
+        lodsb
+        stosb
+        cmp al, 0
+        je .watch_exec
+        dec ecx
+        jnz .watch_copy_lb
+.watch_exec:
+        mov esi, line_buffer
+        call shell_dispatch_core
+
+        ; Sleep N seconds
+        mov eax, [watch_interval]
+        imul eax, 100
+        mov ebx, [tick_count]
+        add ebx, eax
+.watch_sleep:
+        hlt
+        cmp byte [ctrl_c_flag], 0
+        jne .watch_ctrlc
+        mov eax, [tick_count]
+        cmp eax, ebx
+        jl .watch_sleep
+
+        jmp .watch_loop
+
+.watch_ctrlc:
+        mov byte [ctrl_c_flag], 0
+        popad
+        ret
+
+.watch_usage:
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_watch_usage
         call vga_print
         call vga_reset_color
         popad
@@ -4614,6 +5003,12 @@ cmd_more_file:
         mov eax, [cmd_flag_num]
         mov [.more_page], eax
 .more_default_page:
+        cmp byte [esi], 0
+        jne .more_from_file
+        call shell_use_stdin_as_input
+        jc .more_not_found
+        jmp .more_have_buf
+.more_from_file:
         mov edi, PROGRAM_BASE   ; Use program area as temp buffer
         call hbfs_read_file
         jc .more_not_found
@@ -4624,7 +5019,7 @@ cmd_more_file:
         mov ecx, PROGRAM_MAX_SIZE - 1
 .more_size_ok:
         mov byte [PROGRAM_BASE + ecx], 0
-
+.more_have_buf:
         mov esi, PROGRAM_BASE
         xor ecx, ecx            ; Line counter
 
@@ -5832,7 +6227,7 @@ shell_execute_pipeline:
 .pipe_len_ok:
         mov [pipe_input_len], eax
         mov byte [redir_out_buf + eax], 0
-        mov esi, redir_out_name
+        mov esi, redir_out_buf
         mov edi, redir_in_buf
         mov ecx, eax
         rep movsb
@@ -7332,4 +7727,1047 @@ parse_decimal:
         inc esi
         jmp .pd_loop
 .pd_done:
+        ret
+
+
+;=======================================================================
+; PHASE 1 SCRIPTING BUILTIN IMPLEMENTATIONS
+;=======================================================================
+
+; Flow-control flags
+SH_FLOW_NONE     equ 0
+SH_FLOW_BREAK    equ 1
+SH_FLOW_CONTINUE equ 2
+SH_FLOW_RETURN   equ 3
+
+;-----------------------------------------------------------------------
+; cmd_test_builtin — evaluate POSIX test expression
+; ESI = arguments (after 'test' or '[')
+; Sets shell_last_status: 0=true, 1=false
+;-----------------------------------------------------------------------
+cmd_test_builtin:
+        pushad
+        call skip_spaces
+        cmp byte [esi], 0
+        je .test_false
+
+        cmp byte [esi], '-'
+        jne .test_binary
+
+        movzx eax, byte [esi + 1]
+        cmp al, 'n'
+        je .test_n
+        cmp al, 'z'
+        je .test_z
+        cmp al, 'f'
+        je .test_f
+        cmp al, 'd'
+        je .test_d
+        cmp al, 'e'
+        je .test_e
+        jmp .test_false
+
+.test_n:
+        add esi, 2
+        call skip_spaces
+        cmp byte [esi], 0
+        jne .test_true
+        jmp .test_false
+
+.test_z:
+        add esi, 2
+        call skip_spaces
+        cmp byte [esi], 0
+        je .test_true
+        jmp .test_false
+
+.test_f:
+        add esi, 2
+        call skip_spaces
+        call .test_file_exists
+        jnc .test_true
+        jmp .test_false
+
+.test_d:
+        add esi, 2
+        call skip_spaces
+        call .test_file_exists
+        jnc .test_true
+        jmp .test_false
+
+.test_e:
+        add esi, 2
+        call skip_spaces
+        call .test_file_exists
+        jnc .test_true
+        jmp .test_false
+
+.test_binary:
+        mov edi, test_lhs_buf
+        call .test_read_token
+        call skip_spaces
+        cmp byte [esi], 0
+        je .test_false
+        mov edi, test_op_buf
+        call .test_read_token
+        call skip_spaces
+        mov edi, test_rhs_buf
+        call .test_read_token
+
+        ; Dispatch on operator
+        push esi
+        mov esi, test_op_buf
+        mov edi, .op_eq
+        call str_compare
+        jz .test_str_eq
+        mov edi, .op_ne
+        call str_compare
+        jz .test_str_ne
+        mov edi, .op_ieq
+        call str_compare
+        jz .test_int_op
+        mov edi, .op_ine
+        call str_compare
+        jz .test_int_op
+        mov edi, .op_ilt
+        call str_compare
+        jz .test_int_op
+        mov edi, .op_ile
+        call str_compare
+        jz .test_int_op
+        mov edi, .op_igt
+        call str_compare
+        jz .test_int_op
+        mov edi, .op_ige
+        call str_compare
+        jz .test_int_op
+        pop esi
+        jmp .test_false
+
+.test_str_eq:
+        pop esi
+        mov esi, test_lhs_buf
+        mov edi, test_rhs_buf
+        call str_compare
+        jz .test_true
+        jmp .test_false
+
+.test_str_ne:
+        pop esi
+        mov esi, test_lhs_buf
+        mov edi, test_rhs_buf
+        call str_compare
+        jnz .test_true
+        jmp .test_false
+
+.test_int_op:
+        pop esi
+        push esi
+        mov esi, test_lhs_buf
+        call parse_decimal
+        mov ecx, eax
+        mov esi, test_rhs_buf
+        call parse_decimal
+        mov edx, eax
+        pop esi
+        ; Re-check operator
+        push esi
+        mov esi, test_op_buf
+        mov edi, .op_ieq
+        call str_compare
+        jz .ti_eq
+        mov edi, .op_ine
+        call str_compare
+        jz .ti_ne
+        mov edi, .op_ilt
+        call str_compare
+        jz .ti_lt
+        mov edi, .op_ile
+        call str_compare
+        jz .ti_le
+        mov edi, .op_igt
+        call str_compare
+        jz .ti_gt
+        ; -ge
+        pop esi
+        cmp ecx, edx
+        jge .test_true
+        jmp .test_false
+.ti_eq:
+        pop esi
+        cmp ecx, edx
+        je .test_true
+        jmp .test_false
+.ti_ne:
+        pop esi
+        cmp ecx, edx
+        jne .test_true
+        jmp .test_false
+.ti_lt:
+        pop esi
+        cmp ecx, edx
+        jl .test_true
+        jmp .test_false
+.ti_le:
+        pop esi
+        cmp ecx, edx
+        jle .test_true
+        jmp .test_false
+.ti_gt:
+        pop esi
+        cmp ecx, edx
+        jg .test_true
+        jmp .test_false
+
+.test_true:
+        popad
+        mov dword [shell_last_status], 0
+        ret
+.test_false:
+        popad
+        mov dword [shell_last_status], 1
+        ret
+
+; Read a whitespace-delimited token from ESI into EDI (null-term)
+.test_read_token:
+.trt_lp:
+        mov al, [esi]
+        cmp al, 0
+        je .trt_done
+        cmp al, ' '
+        je .trt_done
+        cmp al, 9
+        je .trt_done
+        cmp al, ']'
+        je .trt_done
+        stosb
+        inc esi
+        jmp .trt_lp
+.trt_done:
+        mov byte [edi], 0
+        ret
+
+; Check if filename at ESI exists in filesystem; CF=1 not found, CF=0 found
+.test_file_exists:
+        push esi
+        push edi
+        mov edi, test_lhs_buf
+.tfe_copy:
+        mov al, [esi]
+        cmp al, 0
+        je .tfe_end
+        cmp al, ' '
+        je .tfe_end
+        stosb
+        inc esi
+        jmp .tfe_copy
+.tfe_end:
+        mov byte [edi], 0
+        mov esi, test_lhs_buf
+        call hbfs_find_file
+        pop edi
+        pop esi
+        ret
+
+.op_eq:  db "=",   0
+.op_ne:  db "!=",  0
+.op_ieq: db "-eq", 0
+.op_ine: db "-ne", 0
+.op_ilt: db "-lt", 0
+.op_ile: db "-le", 0
+.op_igt: db "-gt", 0
+.op_ige: db "-ge", 0
+
+;-----------------------------------------------------------------------
+; cmd_if_builtin — if cmd; then body [elif cmd; then body] [else body] fi
+; Single-line form only (interactive):
+;   if test $x -eq 1; then echo yes; else echo no; fi
+;-----------------------------------------------------------------------
+cmd_if_builtin:
+        pushad
+        mov edi, if_work_buf
+        call str_copy
+        mov esi, if_work_buf
+
+.if_parse_cond:
+        mov edi, if_cond_buf
+        call .if_extract_to_keyword
+        ; EDX: 0=then 1=else 2=fi 3=elif
+        cmp edx, 0
+        jne .if_done
+
+        ; Evaluate condition
+        push esi
+        mov esi, if_cond_buf
+        mov edi, line_buffer
+        call str_copy
+        mov esi, line_buffer
+        call shell_parse_cmd
+        pop esi
+
+        mov eax, [shell_last_status]
+        push eax
+
+.if_parse_body:
+        mov edi, if_body_buf
+        call .if_extract_to_keyword
+        ; EDX: 0=then 1=else 2=fi 3=elif
+        pop eax
+        push eax
+
+        cmp edx, 2
+        je .if_exec_then_fi
+        cmp edx, 1
+        je .if_exec_then_else
+        cmp edx, 3
+        je .if_exec_then_elif
+        jmp .if_done
+
+.if_exec_then_fi:
+        pop eax
+        test eax, eax
+        jnz .if_done
+        mov esi, if_body_buf
+        call .if_run_segment
+        jmp .if_done
+
+.if_exec_then_else:
+        pop eax
+        push eax
+        test eax, eax
+        jnz .if_try_else
+        push esi
+        mov esi, if_body_buf
+        call .if_run_segment
+        pop esi
+.if_skip_to_fi:
+        mov edi, if_body_buf
+        call .if_extract_to_keyword
+        cmp edx, 2
+        jne .if_skip_to_fi
+        pop eax
+        jmp .if_done
+
+.if_try_else:
+        pop eax
+        mov edi, if_body_buf
+        call .if_extract_to_keyword
+        cmp edx, 2
+        je .if_done
+        mov esi, if_body_buf
+        call .if_run_segment
+        jmp .if_done
+
+.if_exec_then_elif:
+        pop eax
+        test eax, eax
+        jnz .if_elif_false
+        push esi
+        mov esi, if_body_buf
+        call .if_run_segment
+        pop esi
+        jmp .if_skip_to_fi
+.if_elif_false:
+        xor eax, eax
+        push eax
+        jmp .if_parse_cond
+
+.if_done:
+        popad
+        ret
+
+; Extract from ESI to keyword into EDI buffer. EDX = 0/1/2/3 (then/else/fi/elif)
+.if_extract_to_keyword:
+        push eax
+        push ecx
+.iek_loop:
+        mov al, [esi]
+        test al, al
+        jz .iek_eof
+        cmp al, ';'
+        je .iek_semi
+        cmp al, 0x0A
+        je .iek_semi
+        ; Check keyword match
+        push esi
+        push edi
+        mov edi, .kw_then
+        call str_starts_with
+        jc .iek_kw_then
+        pop edi
+        pop esi
+        push esi
+        push edi
+        mov edi, .kw_else
+        call str_starts_with
+        jc .iek_kw_else
+        pop edi
+        pop esi
+        push esi
+        push edi
+        mov edi, .kw_fi
+        call str_starts_with
+        jc .iek_kw_fi
+        pop edi
+        pop esi
+        push esi
+        push edi
+        mov edi, .kw_elif
+        call str_starts_with
+        jc .iek_kw_elif
+        pop edi
+        pop esi
+        stosb
+        inc esi
+        jmp .iek_loop
+.iek_semi:
+        inc esi
+        call skip_spaces
+        push esi
+        push edi
+        mov edi, .kw_then
+        call str_starts_with
+        jc .iek_kw_then
+        pop edi
+        pop esi
+        push esi
+        push edi
+        mov edi, .kw_else
+        call str_starts_with
+        jc .iek_kw_else
+        pop edi
+        pop esi
+        push esi
+        push edi
+        mov edi, .kw_fi
+        call str_starts_with
+        jc .iek_kw_fi
+        pop edi
+        pop esi
+        push esi
+        push edi
+        mov edi, .kw_elif
+        call str_starts_with
+        jc .iek_kw_elif
+        pop edi
+        pop esi
+        mov al, ';'
+        stosb
+        jmp .iek_loop
+
+.iek_kw_then:
+        pop edi
+        pop esi
+        mov byte [edi], 0
+        add esi, 4
+        call skip_spaces
+        mov edx, 0
+        pop ecx
+        pop eax
+        ret
+
+.iek_kw_else:
+        pop edi
+        pop esi
+        mov byte [edi], 0
+        add esi, 4
+        call skip_spaces
+        mov edx, 1
+        pop ecx
+        pop eax
+        ret
+
+.iek_kw_fi:
+        pop edi
+        pop esi
+        mov byte [edi], 0
+        add esi, 2
+        call skip_spaces
+        mov edx, 2
+        pop ecx
+        pop eax
+        ret
+
+.iek_kw_elif:
+        pop edi
+        pop esi
+        mov byte [edi], 0
+        add esi, 4
+        call skip_spaces
+        mov edx, 3
+        pop ecx
+        pop eax
+        ret
+
+.iek_eof:
+        mov byte [edi], 0
+        mov edx, 2
+        pop ecx
+        pop eax
+        ret
+
+; Run semicolon-separated commands in body string at ESI
+.if_run_segment:
+        push eax
+        push esi
+        push edi
+.irs_loop:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .irs_done
+        mov edi, if_cmd_buf
+.irs_cmd:
+        mov al, [esi]
+        cmp al, 0
+        je .irs_exec
+        cmp al, ';'
+        je .irs_exec_semi
+        stosb
+        inc esi
+        jmp .irs_cmd
+.irs_exec_semi:
+        inc esi
+.irs_exec:
+        mov byte [edi], 0
+        push esi
+        mov esi, if_cmd_buf
+        call skip_spaces
+        cmp byte [esi], 0
+        pop esi
+        je .irs_loop
+        push esi
+        mov esi, if_cmd_buf
+        mov edi, line_buffer
+        call str_copy
+        mov esi, line_buffer
+        call shell_parse_cmd
+        pop esi
+        cmp byte [sh_flow_flag], SH_FLOW_NONE
+        jne .irs_done
+        jmp .irs_loop
+.irs_done:
+        pop edi
+        pop esi
+        pop eax
+        ret
+
+.kw_then: db "then", 0
+.kw_else: db "else", 0
+.kw_fi:   db "fi",   0
+.kw_elif: db "elif", 0
+
+;-----------------------------------------------------------------------
+; cmd_while_builtin — while cond; do body; done
+;-----------------------------------------------------------------------
+cmd_while_builtin:
+        pushad
+        mov edi, while_work_buf
+        call str_copy
+        mov esi, while_work_buf
+
+.wh_top:
+        push esi
+        mov edi, while_cond_buf
+        call .wh_extract_to_do
+        mov eax, esi
+        pop esi
+        mov esi, eax
+
+        push esi
+        mov esi, while_cond_buf
+        mov edi, line_buffer
+        call str_copy
+        mov esi, line_buffer
+        call shell_parse_cmd
+        pop esi
+        cmp dword [shell_last_status], 0
+        jne .wh_done
+
+        push esi
+        mov edi, while_body_buf
+        call .wh_extract_to_done
+        pop esi
+
+        push esi
+        mov esi, while_body_buf
+        call cmd_if_builtin.if_run_segment
+        pop esi
+
+        cmp byte [sh_flow_flag], SH_FLOW_BREAK
+        je .wh_break
+        cmp byte [sh_flow_flag], SH_FLOW_CONTINUE
+        je .wh_continue
+        cmp byte [sh_flow_flag], SH_FLOW_RETURN
+        je .wh_done
+
+        ; Reset cond pointer and re-check
+        mov esi, while_work_buf
+        jmp .wh_top
+
+.wh_continue:
+        mov byte [sh_flow_flag], SH_FLOW_NONE
+        mov esi, while_work_buf
+        jmp .wh_top
+
+.wh_break:
+        mov byte [sh_flow_flag], SH_FLOW_NONE
+
+.wh_done:
+        popad
+        ret
+
+.wh_extract_to_do:
+        push eax
+.wetd_lp:
+        mov al, [esi]
+        test al, al
+        jz .wetd_done
+        cmp al, ';'
+        je .wetd_semi
+        stosb
+        inc esi
+        jmp .wetd_lp
+.wetd_semi:
+        inc esi
+        call skip_spaces
+        push esi
+        push edi
+        mov edi, .wh_kw_do
+        call str_starts_with
+        jnc .wetd_no_do
+        pop edi
+        pop esi
+        call skip_spaces
+        jmp .wetd_done
+.wetd_no_do:
+        pop edi
+        pop esi
+        mov al, ';'
+        stosb
+        jmp .wetd_lp
+.wetd_done:
+        mov byte [edi], 0
+        pop eax
+        ret
+
+.wh_extract_to_done:
+        push eax
+.wetdn_lp:
+        mov al, [esi]
+        test al, al
+        jz .wetdn_done
+        push esi
+        push edi
+        mov edi, .wh_kw_done
+        call str_starts_with
+        jnc .wetdn_no_done
+        pop edi
+        pop esi
+        add esi, 4
+        call skip_spaces
+        jmp .wetdn_done
+.wetdn_no_done:
+        pop edi
+        pop esi
+        stosb
+        inc esi
+        jmp .wetdn_lp
+.wetdn_done:
+        mov byte [edi], 0
+        pop eax
+        ret
+
+.wh_kw_do:   db "do",   0
+.wh_kw_done: db "done", 0
+
+;-----------------------------------------------------------------------
+; cmd_for_builtin — for VAR in word ...; do body; done
+;-----------------------------------------------------------------------
+cmd_for_builtin:
+        pushad
+        mov edi, for_work_buf
+        call str_copy
+        mov esi, for_work_buf
+
+        call skip_spaces
+        mov edi, for_var_buf
+.for_var:
+        mov al, [esi]
+        cmp al, ' '
+        je .for_var_done
+        cmp al, 0
+        je .for_var_done
+        stosb
+        inc esi
+        jmp .for_var
+.for_var_done:
+        mov byte [edi], 0
+        call skip_spaces
+
+        mov edi, .for_kw_in
+        call str_starts_with
+        jnc .for_done
+
+        call skip_spaces
+        mov edi, for_list_buf
+.for_list:
+        mov al, [esi]
+        cmp al, 0
+        je .for_list_done
+        cmp al, ';'
+        je .for_list_done
+        stosb
+        inc esi
+        jmp .for_list
+.for_list_done:
+        mov byte [edi], 0
+        cmp al, ';'
+        jne .for_find_do
+        inc esi
+.for_find_do:
+        call skip_spaces
+        mov edi, .for_kw_do
+        call str_starts_with
+        jnc .for_done
+        call skip_spaces
+
+        mov edi, for_body_buf
+        call cmd_while_builtin.wh_extract_to_done
+
+        mov ebp, for_list_buf
+
+.for_next_word:
+        ; Skip spaces in word list
+.for_skip_sp:
+        cmp byte [ebp], ' '
+        jne .for_skip_sp_done
+        inc ebp
+        jmp .for_skip_sp
+.for_skip_sp_done:
+        cmp byte [ebp], 0
+        je .for_done
+
+        mov edi, for_iter_buf
+.for_word:
+        mov al, [ebp]
+        cmp al, 0
+        je .for_word_done
+        cmp al, ' '
+        je .for_word_done
+        stosb
+        inc ebp
+        jmp .for_word
+.for_word_done:
+        mov byte [edi], 0
+
+        push ebp
+        mov esi, for_var_buf
+        mov edi, for_iter_buf
+        call env_set_kv
+
+        mov esi, for_body_buf
+        call cmd_if_builtin.if_run_segment
+        pop ebp
+
+        cmp byte [sh_flow_flag], SH_FLOW_BREAK
+        je .for_break
+        cmp byte [sh_flow_flag], SH_FLOW_CONTINUE
+        je .for_continue
+        cmp byte [sh_flow_flag], SH_FLOW_RETURN
+        je .for_done
+        jmp .for_next_word
+
+.for_continue:
+        mov byte [sh_flow_flag], SH_FLOW_NONE
+        jmp .for_next_word
+
+.for_break:
+        mov byte [sh_flow_flag], SH_FLOW_NONE
+
+.for_done:
+        popad
+        ret
+
+.for_kw_in: db "in", 0
+.for_kw_do: db "do", 0
+
+;-----------------------------------------------------------------------
+; cmd_case_builtin — case WORD in pat) body;; ... esac
+;-----------------------------------------------------------------------
+cmd_case_builtin:
+        pushad
+        call skip_spaces
+        mov edi, case_word_buf
+.ccase_word:
+        mov al, [esi]
+        cmp al, ' '
+        je .ccase_word_done
+        cmp al, 0
+        je .ccase_word_done
+        stosb
+        inc esi
+        jmp .ccase_word
+.ccase_word_done:
+        mov byte [edi], 0
+        call skip_spaces
+
+        mov edi, .case_kw_in
+        call str_starts_with
+        jnc .ccase_done
+        call skip_spaces
+
+.ccase_next_pat:
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ccase_done
+        push esi
+        push edi
+        mov edi, .case_kw_esac
+        call str_starts_with
+        jnc .ccase_not_esac
+        pop edi
+        pop esi
+        add esi, 4
+        jmp .ccase_done
+.ccase_not_esac:
+        pop edi
+        pop esi
+
+        mov edi, case_pat_buf
+.ccase_pat:
+        mov al, [esi]
+        cmp al, 0
+        je .ccase_done
+        cmp al, ')'
+        je .ccase_pat_done
+        stosb
+        inc esi
+        jmp .ccase_pat
+.ccase_pat_done:
+        mov byte [edi], 0
+        inc esi
+        call skip_spaces
+
+        mov edi, case_body_buf
+.ccase_body:
+        cmp byte [esi], 0
+        je .ccase_match
+        cmp byte [esi], ';'
+        jne .ccase_body_char
+        cmp byte [esi + 1], ';'
+        je .ccase_body_end
+.ccase_body_char:
+        mov al, [esi]
+        stosb
+        inc esi
+        jmp .ccase_body
+.ccase_body_end:
+        add esi, 2
+        call skip_spaces
+.ccase_match:
+        mov byte [edi], 0
+
+        push esi
+        mov esi, case_pat_buf
+        mov edi, case_word_buf
+        call wildcard_match
+        pop esi
+        jnc .ccase_next_pat
+
+        mov esi, case_body_buf
+        call cmd_if_builtin.if_run_segment
+        jmp .ccase_done
+
+.ccase_done:
+        popad
+        ret
+
+.case_kw_in:   db "in",   0
+.case_kw_esac: db "esac", 0
+
+;-----------------------------------------------------------------------
+; cmd_func_define — define a shell function
+; 'function NAME() { body }' or 'function NAME { body }'
+; ESI points to rest of line after 'function '
+;-----------------------------------------------------------------------
+cmd_func_define:
+        pushad
+        call skip_spaces
+
+        mov edi, func_def_name
+.cfd_name:
+        mov al, [esi]
+        cmp al, '('
+        je .cfd_got_name
+        cmp al, ' '
+        je .cfd_got_name
+        cmp al, 0
+        je .cfd_done
+        stosb
+        inc esi
+        jmp .cfd_name
+.cfd_got_name:
+        mov byte [edi], 0
+
+.cfd_to_brace:
+        mov al, [esi]
+        cmp al, '{'
+        je .cfd_got_brace
+        cmp al, 0
+        je .cfd_done
+        inc esi
+        jmp .cfd_to_brace
+.cfd_got_brace:
+        inc esi
+        call skip_spaces
+
+        mov edi, func_def_body
+.cfd_body:
+        mov al, [esi]
+        cmp al, '}'
+        je .cfd_body_done
+        cmp al, 0
+        je .cfd_body_done
+        stosb
+        inc esi
+        jmp .cfd_body
+.cfd_body_done:
+        mov byte [edi], 0
+
+        ; Find free/matching slot in function table
+        mov ecx, SHELL_FUNC_MAX
+        mov edi, shell_func_table
+.cfd_find_slot:
+        cmp byte [edi], 0
+        je .cfd_store
+        push esi
+        push edi
+        mov esi, func_def_name
+        call str_compare
+        pop edi
+        pop esi
+        jz .cfd_store
+        add edi, SHELL_FUNC_ENTRY_SIZE
+        dec ecx
+        jnz .cfd_find_slot
+        jmp .cfd_done
+
+.cfd_store:
+        push edi
+        mov esi, func_def_name
+        mov ecx, SHELL_FUNC_NAME_LEN - 1
+.cfd_cpname:
+        lodsb
+        stosb
+        test al, al
+        jz .cfd_cpname_done
+        dec ecx
+        jnz .cfd_cpname
+.cfd_cpname_done:
+        mov byte [edi], 0
+        pop edi
+        add edi, SHELL_FUNC_NAME_LEN
+
+        mov esi, func_def_body
+        mov ecx, SHELL_FUNC_BODY_LEN - 1
+.cfd_cpbody:
+        lodsb
+        stosb
+        test al, al
+        jz .cfd_done
+        dec ecx
+        jnz .cfd_cpbody
+        mov byte [edi], 0
+
+.cfd_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; shell_func_call — look up first word of line_buffer as a function name
+; CF=0 if found and executed, CF=1 if not found
+;-----------------------------------------------------------------------
+shell_func_call:
+        pushad
+        mov esi, line_buffer
+        call skip_spaces
+        mov edi, func_call_name
+.sfc_name:
+        mov al, [esi]
+        cmp al, 0
+        je .sfc_name_done
+        cmp al, ' '
+        je .sfc_name_done
+        stosb
+        inc esi
+        jmp .sfc_name
+.sfc_name_done:
+        mov byte [edi], 0
+        cmp byte [func_call_name], 0
+        je .sfc_notfound
+
+        mov ecx, SHELL_FUNC_MAX
+        mov edi, shell_func_table
+.sfc_search:
+        cmp byte [edi], 0
+        je .sfc_next
+        push esi
+        push edi
+        push ecx
+        mov esi, func_call_name
+        call str_compare
+        pop ecx
+        pop edi
+        pop esi
+        jz .sfc_found
+.sfc_next:
+        add edi, SHELL_FUNC_ENTRY_SIZE
+        dec ecx
+        jnz .sfc_search
+
+.sfc_notfound:
+        popad
+        stc
+        ret
+
+.sfc_found:
+        add edi, SHELL_FUNC_NAME_LEN
+        push edi
+        mov esi, edi
+        call cmd_if_builtin.if_run_segment
+        pop edi
+        popad
+        clc
+        ret
+
+;-----------------------------------------------------------------------
+; env_set_kv — set environment variable NAME=VALUE
+; ESI = name, EDI = value
+;-----------------------------------------------------------------------
+env_set_kv:
+        pushad
+        mov ebx, env_kv_buf
+        push edi
+.eskv_name:
+        mov al, [esi]
+        test al, al
+        jz .eskv_eq
+        mov [ebx], al
+        inc esi
+        inc ebx
+        jmp .eskv_name
+.eskv_eq:
+        mov byte [ebx], '='
+        inc ebx
+        pop esi
+.eskv_val:
+        mov al, [esi]
+        mov [ebx], al
+        inc esi
+        inc ebx
+        test al, al
+        jnz .eskv_val
+        mov esi, env_kv_buf
+        call env_set_str
+        popad
         ret

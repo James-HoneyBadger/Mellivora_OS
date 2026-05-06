@@ -14,7 +14,7 @@
 #
 
 NASM = nasm
-QEMU = qemu-system-i386
+QEMU = flatpak-spawn --host qemu-system-x86_64
 DD = dd
 UNAME_S := $(shell uname -s)
 # Phase 3.1: portable parallelism detection — try Linux nproc, then BSD/macOS
@@ -40,13 +40,14 @@ KERNEL_SRC = kernel.asm
 # Override manually when needed, e.g.:
 #   make run QEMU_AUDIO_BACKEND=alsa
 #   make run QEMU_AUDIO_BACKEND=pa
-QEMU_AUDIO_BACKEND ?= none
+QEMU_AUDIO_BACKEND ?= pa
 ifeq ($(UNAME_S),Darwin)
-QEMU_AUDIO_BACKEND ?= coreaudio
+QEMU_AUDIO_BACKEND = coreaudio
 endif
 
 QEMU_AUDIO_FLAGS = -audiodev $(QEMU_AUDIO_BACKEND),id=snd0 \
-			 -machine pcspk-audiodev=snd0,usb=off
+			 -machine pcspk-audiodev=snd0,usb=off \
+			 -device sb16,audiodev=snd0
 
 # Reboot behavior: allow guest reboot by default.
 # Set QEMU_NO_REBOOT=1 to make QEMU exit on guest reset.
@@ -55,7 +56,7 @@ ifeq ($(QEMU_NO_REBOOT),1)
 QEMU_RESET_FLAGS += -no-reboot
 endif
 
-QEMU_FLAGS = -cpu 486 -m 128 -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_AUDIO_FLAGS) $(QEMU_RESET_FLAGS) -netdev user,id=net0 -device rtl8139,netdev=net0 -serial tcp:127.0.0.1:4555,server=on,wait=off
+QEMU_FLAGS = -cpu 486 -m 128 -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_AUDIO_FLAGS) $(QEMU_RESET_FLAGS) -netdev user,id=net0 -device rtl8139,netdev=net0
 
 # For debugging
 QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
@@ -95,12 +96,17 @@ KERNEL_INCS = $(wildcard kernel/*.inc)
 
 # Assemble 32-bit kernel
 $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS)
-	$(NASM) -f bin -O0 -o $@ -l $(@:.bin=.lst) $<
+	$(NASM) -f bin -O0 -w-zeroing -o $@ -l $(@:.bin=.lst) $<
 
 # Generate kernel_sectors.inc from kernel binary size
 # This computes ceil(size / 512) so stage2 loads exactly the right amount.
 kernel_sectors.inc: $(KERNEL_BIN)
 	@KSECTORS=$$(( ($$(wc -c < $(KERNEL_BIN)) + 511) / 512 )); \
+		if [ $$KSECTORS -gt 4062 ]; then \
+			echo "  ERROR: kernel is $$KSECTORS sectors (> 4062). HBFS_SUPERBLOCK_LBA=4096"; \
+			echo "  Update HBFS_SUPERBLOCK_LBA in kernel.asm AND populate.py."; \
+			exit 1; \
+		fi; \
 		if [ $$KSECTORS -gt 2048 ]; then \
 			echo "  ERROR: kernel is $$KSECTORS sectors (> 2048 = 1 MB) \
 			and will overflow the stage-2 load buffer at 0x20000."; \
@@ -176,7 +182,12 @@ populate: $(IMAGE) programs populate.py
 	$(POPULATE) $(IMAGE) $(PROG_DIR)
 
 # Full build: OS + programs + populated filesystem
-full: $(IMAGE) programs populate
+full: $(IMAGE) programs
+	# Always write the latest kernel before repopulating the filesystem.
+	# populate.py updates mellivora.img's mtime, so the $(IMAGE) rule is
+	# skipped on subsequent builds — this dd ensures kernel is always current.
+	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
+	$(POPULATE) $(IMAGE) $(PROG_DIR)
 	@echo "=== Full build complete ==="
 
 # Rebuild kernel only and write it into the existing disk image.

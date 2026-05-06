@@ -4,7 +4,7 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 95 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 199 assembly programs, and 19 bundled samples (C, Perl, and BASIC).
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 102 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 211 assembly programs, and 19 bundled samples (C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
@@ -23,7 +23,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 - **32-bit protected mode** with flat memory model
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **95 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
+- **102 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 64 concurrent tasks
 - **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD
 - **Process groups** — PGID support for job control
@@ -34,7 +34,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 ### Ratel Init System
 
-- **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS
+- **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS, scheduler, IPC, networking, paging, mouse, SB16, VBE, PCI, AC'97, ATA DMA, VirtIO
 - **Filesystem mount** — HBFS detection, validation, and auto-format
 - **Shell handoff** — drops into HB Lair interactive prompt after init completes
 
@@ -65,18 +65,24 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 - **VGA** text mode (80×25, 16 colors)
 - **PS/2 keyboard** with shift, ctrl, and special key support
+- **PS/2 mouse** — 3-byte packet, IRQ12, cursor tracking
 - **ATA PIO** disk with LBA48 addressing
+- **ATA Bus Master DMA** — Intel PIIX3/4 IDE controller, PRD-based DMA reads
 - **PIT timer** at 100 Hz
 - **PC speaker** for sound/music
+- **Sound Blaster 16** ISA DMA PCM playback
+- **AC'97 audio** — Intel ICH2/3/4 PCI DMA playback
 - **Serial port** (COM1 at 115200 baud) for debug output
 - **RTC** real-time clock for date/time
+- **PCI bus** — enumeration (buses 0–7), 64-entry device table
+- **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
 
-### Programs (199 assembly + 19 bundled samples)
+### Programs (211 assembly + 19 bundled samples)
 
-- **Games (27)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, and more
-- **HBU (Honey Badger Utilities)**: grep, sort, sed, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, and more
-- **Tools**: Text editor, hex viewer, file pager, CSV viewer, dual-pane file manager (burrow)
-- **Demos**: Mandelbrot renderer, banner, colors, calendar, calculator, Doom fire effect
+- **Games (31)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
+- **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
+- **Tools**: Text editor, hex viewer, file pager (`more`/`pager`), CSV viewer, dual-pane file manager (burrow), `top` process monitor
+- **Demos**: Mandelbrot/Julia renderers, plasma effect, VBE sprite blit, rotating cube, banner, colors, Doom fire effect
 - **Languages**: TCC (Tiny C Compiler), BASIC interpreter (`basic` + `basicc` compiler), Brainfuck interpreter, Perl interpreter, Forth interpreter
 - **Network tools**: ping, wget, nc, ftp, telnet, irc, gopher, dig, traceroute, whois, daytime
 - **Daily-driver suite (new)**: `tutorial`, `pkginfo`, `meminfo`, `journal`, `bcal`, `theme`, `tag`, `histgrep`, `bnotify`, `mkprog`, `dnslook`, `play`, `nim`, `plasma`, `tldr`, `todo`, `pomodoro`, `morse`, `wiki`, `color`, `stopwatch`, `countdown`, `passgen`, `dice`, `coin`, `tip`, `roll`, `pick`, `reverse`, `upper`, `lower`, `countc`
@@ -157,7 +163,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry + modular includes (22 files in `kernel/`)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v7.5.0)
+├── CHANGELOG.md            Version history (v1.0 → v8.5.0)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers
@@ -239,8 +245,11 @@ Mellivora_OS/
 | `worm` | Multi-worm arena game |
 | `pacman` | Pac-Man-style 21×21 maze chase — eat dots and power pellets, hunt or flee 4 ghosts |
 | `iago` | Othello / Reversi — VBE board with greedy-AI opponent and persistent wins |
+| `raycaster` | Wolfenstein 3D-style raycaster — fixed-point 16.16 math, WASD movement |
+| `robotown` | Robot Town — logic-puzzle adventure inspired by Robot Odyssey |
+| `breakout` | Breakout/Arkanoid clone — 5×10 bricks, three lives, LEFT/RIGHT paddle |
 
-> **27 games total** in `/games` — run any from anywhere thanks to PATH.
+> **31 games total** in `/games` — run any from anywhere thanks to PATH.
 
 ### Utilities
 
@@ -260,6 +269,13 @@ Mellivora_OS/
 | `cal` | Calendar with current day highlighted |
 | `calc` | Interactive calculator (+, -, ×, ÷, %) |
 | `mandel` | Mandelbrot set renderer (fixed-point) |
+| `mandelbrot` | Full-color Mandelbrot at 640×480×32 bpp, rainbow escape-time palette |
+| `julia` | Interactive Julia set renderer — arrow keys move *c*, +/- zoom |
+| `more` | Paging text viewer — SPACE=next page, ENTER=line, Q=quit |
+| `top` | Real-time process monitor with memory bar, refreshes every second |
+| `tar` | HBTAR1.0 flat archive — create, extract, list (up to 64 files) |
+| `nm` | ELF32 symbol table reader — address, type, and name |
+| `awk` | Pattern/action processor — `$n`, `NR`, `NF`, `print`, `gsub`, `/regex/`, `BEGIN`/`END` |
 | `basic` | GW-BASIC-style interpreter with strings, loops, DATA/READ, and file mode |
 | `bf` | Brainfuck interpreter |
 
@@ -314,10 +330,10 @@ Mellivora_OS/
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | Entry file + 22 modular include files |
-| Syscalls | 95 (via `INT 0x80`) |
+| Kernel source | Entry file + 26 modular include files |
+| Syscalls | 102 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 199 assembly apps (145 utilities + 12 Burrows + 42 games) |
+| User programs | 211 assembly apps |
 | Bundled samples | 19 (11 C + 6 Perl + 2 BAS) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |

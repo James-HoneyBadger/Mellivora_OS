@@ -108,7 +108,7 @@ banner_str:
         db "    | |  | |  __/ | | |\ V / (_) | | | (_| || |_| |___) |                ", 0x0A
         db "    |_|  |_|\___|_|_|_| \_/ \___/|_|  \__,_| \___/|____/                 ", 0x0A
         db "                                                                          ", 0x0A
-        db "       HB Lair v7.0 - Honey Badger Lair  |  The Hercules Release          ", 0x0A, 0
+        db "       HB Lair v8.5 - Honey Badger Lair  |  Expanded Graphics & I/O       ", 0x0A, 0
 
 motd_str:
         db 0x0A
@@ -118,13 +118,13 @@ msg_boot_time:  db "  Boot complete in ", 0
 msg_boot_suf:   db "s", 0x0A, 0x0A, 0
 
 version_text:
-        db "Mellivora OS v7.0.0 - The Hercules Release", 0x0A
+        db "Mellivora OS v8.5.0 - Expanded Graphics, Audio & I/O", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
-        db "  Shell:         HB Lair v7.0 (Honey Badger Lair)", 0x0A
+        db "  Shell:         HB Lair v8.5 (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
-        db "  Disk:          ATA PIO, LBA48 (up to 128 PB)", 0x0A
+        db "  Disk:          ATA PIO + Bus Master DMA, LBA48 (up to 128 PB)", 0x0A
         db "  Filesystem:    HBFS (Honey Badger File System)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
         db "    Max files:   455 root / 224 per subdirectory", 0x0A
@@ -136,8 +136,10 @@ version_text:
         db "  Display:       VGA 80x25 text, 16 colors", 0x0A
         db "  Serial:        COM1 at 115200 baud", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
-        db "  Audio:         Sound Blaster 16 (ISA DMA)", 0x0A
-        db "  Syscalls:      INT 0x80 (80 syscalls)", 0x0A
+        db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
+        db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
+        db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
+        db "  Syscalls:      INT 0x80 (102 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Scheduler:     Priority-based preemptive (128 tasks, 4 levels)", 0x0A
         db "  Signals:       POSIX-style (INT/KILL/TERM/TSTP/CONT/USR1/USR2)", 0x0A
@@ -210,6 +212,7 @@ cmd_alias_str:  db "alias", 0
 cmd_history_str: db "history", 0
 cmd_which_str:  db "which", 0
 cmd_sleep_str:  db "sleep", 0
+cmd_watch_str:  db "watch", 0
 cmd_color_str:  db "color", 0
 cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
@@ -236,6 +239,18 @@ cmd_nice_str:   db "nice", 0
 cmd_export_str: db "export", 0
 cmd_source_str: db "source", 0
 cmd_dotcmd_str: db ".", 0
+
+; Phase 1 scripting command strings
+cmd_if_str:           db "if ", 0
+cmd_while_str:        db "while ", 0
+cmd_for_str:          db "for ", 0
+cmd_test_str:         db "test ", 0
+cmd_lbracket_str:     db "[ ", 0
+cmd_function_def_str: db "function ", 0
+cmd_break_str:        db "break", 0
+cmd_continue_str:     db "continue", 0
+cmd_return_str:       db "return", 0
+cmd_case_str:         db "case ", 0
 
 ; v4.0 process/signal messages
 msg_no_jobs:    db "  No background jobs.", 0x0A, 0
@@ -348,7 +363,7 @@ help_help_gui:
         db "Enter Burrows desktop (640x480 graphical mode). Press any key to exit.", 0x0A, 0
 
 help_text:
-        db "HB Lair v7.0 Commands:", 0x0A
+        db "HB Lair v8.5 Commands:", 0x0A
         db "  help       - Show this help (help <cmd> for details)", 0x0A
         db "  ver        - System information", 0x0A
         db "  clear/cls  - Clear screen", 0x0A
@@ -593,6 +608,9 @@ msg_bad_hist: db "!: event not found", 0x0A, 0
 msg_table_full: db "Alias table full.", 0x0A, 0
 msg_file_colon: db ": ", 0
 msg_sleep_usage: db "Usage: sleep SECONDS", 0x0A, 0
+msg_watch_hdr:  db "--- watch: ", 0
+msg_watch_sep:  db "----------------------------------------", 0x0A, 0
+msg_watch_usage: db "Usage: watch N command", 0x0A, 0
 
 ;=======================================================================
 ; SCANCODE TRANSLATION TABLES
@@ -789,6 +807,9 @@ pipe_work_buf:       resb LINE_BUFFER_SIZE
 cond_work_buf:       resb LINE_BUFFER_SIZE
 cond_next_op:        resb 1
 cond_prev_op:        resb 1
+cond_pending_buf:    resb LINE_BUFFER_SIZE  ; remaining &&/|| chain for external programs
+cond_pending_op:     resb 1                 ; operator connecting prev result to pending
+semi_work_buf:       resb LINE_BUFFER_SIZE  ; semicolon-split work buffer
 
 ; Alias table (16 entries: 32 byte name + 224 byte command = 256 per entry)
 ALIAS_MAX        equ 16
@@ -1009,5 +1030,66 @@ scr_bounce_x:     resd 1
 scr_bounce_y:     resd 1
 scr_bounce_dx:    resd 1
 scr_bounce_dy:    resd 1
+
+watch_interval:   resd 1
+watch_cmd_buf:    resb 256
+
+; Scrollback buffer (ring buffer of lines)
+SCROLL_LINES     equ 100
+scroll_buf:      resb SCROLL_LINES * VGA_WIDTH * 2   ; 16000 bytes
+scroll_count:    resd 1          ; how many lines stored (capped at SCROLL_LINES)
+scroll_head:     resd 1          ; index of next slot to write
+scroll_view:     resd 1          ; 0 = live; >0 = scrolled back N lines
+live_screen:     resb VGA_SIZE   ; snapshot of current visible screen (4000 bytes)
+e0_prefix:       resb 1          ; non-zero if last scancode was 0xE0
+rsb_v:           resd 1          ; temp for vga_render_scrollback
+
+; ---- Phase 1 Scripting Builtins ----
+
+; Shell flow-control flag
+sh_flow_flag:    resb 1          ; SH_FLOW_NONE/BREAK/CONTINUE/RETURN
+
+; test builtin buffers
+test_lhs_buf:    resb 256
+test_op_buf:     resb 16
+test_rhs_buf:    resb 256
+
+; if builtin buffers
+if_work_buf:     resb LINE_BUFFER_SIZE
+if_cond_buf:     resb LINE_BUFFER_SIZE
+if_body_buf:     resb LINE_BUFFER_SIZE
+if_cmd_buf:      resb LINE_BUFFER_SIZE
+
+; while builtin buffers
+while_work_buf:  resb LINE_BUFFER_SIZE
+while_cond_buf:  resb LINE_BUFFER_SIZE
+while_body_buf:  resb LINE_BUFFER_SIZE
+
+; for builtin buffers
+for_work_buf:    resb LINE_BUFFER_SIZE
+for_var_buf:     resb 64
+for_list_buf:    resb LINE_BUFFER_SIZE
+for_body_buf:    resb LINE_BUFFER_SIZE
+for_iter_buf:    resb 256
+
+; case builtin buffers
+case_word_buf:   resb 256
+case_pat_buf:    resb 256
+case_body_buf:   resb LINE_BUFFER_SIZE
+
+; env_set_kv scratch
+env_kv_buf:      resb 512
+
+; Shell function table
+SHELL_FUNC_MAX       equ 16
+SHELL_FUNC_NAME_LEN  equ 64
+SHELL_FUNC_BODY_LEN  equ 512
+SHELL_FUNC_ENTRY_SIZE equ SHELL_FUNC_NAME_LEN + SHELL_FUNC_BODY_LEN
+shell_func_table:    resb SHELL_FUNC_MAX * SHELL_FUNC_ENTRY_SIZE
+
+; Shell function define/call scratch
+func_def_name:   resb 64
+func_def_body:   resb 512
+func_call_name:  resb 64
 
 bss_end:

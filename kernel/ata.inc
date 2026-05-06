@@ -80,10 +80,8 @@ ata_init:
 
         mov esi, msg_ata_ok
         call vga_print
-
-        ; Print disk size in MB
         mov eax, [ata_total_sectors]
-        shr eax, 11             ; Sectors / 2048 = MB
+        shr eax, 11
         call vga_print_dec
         mov esi, msg_mb
         call vga_print

@@ -4,10 +4,10 @@ populate.py - Populate a Mellivora OS disk image with sample files.
 
 Writes files directly into the HBFS filesystem on the disk image.
 This understands the on-disk HBFS layout:
-  - Superblock at LBA 417
-  - Block allocation bitmap at LBA 418 (128 sectors = 16 blocks)
-  - Root directory at LBA 546 (256 sectors = 32 blocks)
-  - Data area starts at LBA 802
+  - Superblock at LBA 4096 (well past kernel end at LBA ~1601)
+  - Block allocation bitmap at LBA 4097 (128 sectors = 16 blocks)
+  - Root directory at LBA 4225 (256 sectors = 32 blocks)
+  - Data area starts at LBA 4481
 
 Each data block is 4096 bytes (8 sectors).
 Each directory entry is 288 bytes.
@@ -25,15 +25,18 @@ SECTOR_SIZE = 512
 BLOCK_SIZE = 4096
 SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE  # 8
 HBFS_MAGIC = 0x48424653  # 'HBFS'
-HBFS_SUPERBLOCK_LBA = 417
-HBFS_BITMAP_START = 418
+# HBFS on-disk layout — must match HBFS_SUPERBLOCK_LBA in kernel.asm.
+# All derived constants are computed relative to HBFS_SUPERBLOCK_LBA so
+# only ONE value needs updating if the layout ever changes.
+HBFS_SUPERBLOCK_LBA = 4096
 HBFS_BITMAP_BLOCKS = 16
 HBFS_BITMAP_SIZE = HBFS_BITMAP_BLOCKS * BLOCK_SIZE   # 65536 bytes
-HBFS_ROOT_DIR_START = 546
+HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
 HBFS_ROOT_DIR_BLOCKS = 32
 HBFS_ROOT_DIR_SECTS = HBFS_ROOT_DIR_BLOCKS * SECTORS_PER_BLOCK  # 256
 HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE          # 131072
-HBFS_DATA_START = 802
+HBFS_ROOT_DIR_START = HBFS_BITMAP_START + HBFS_BITMAP_BLOCKS * SECTORS_PER_BLOCK
+HBFS_DATA_START = HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE      # 455
 HBFS_MAX_FILENAME = 252
@@ -528,7 +531,7 @@ class FSImage:
 
 TEXT_FILES = {
     "readme.txt": """\
-Mellivora OS v4.0 - The Titan Release
+Mellivora OS v8.5.0 - Expanded Graphics, Audio & I/O
 ==========================================
 
 Welcome to Mellivora OS, a 32-bit protected mode operating system

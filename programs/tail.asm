@@ -58,7 +58,7 @@ start:
 
 .parse_done:
         cmp dword [filename], 0
-        je .usage
+        je .try_stdin
 
         ; Read entire file
         mov eax, SYS_FREAD
@@ -68,7 +68,17 @@ start:
         cmp eax, 0
         jle .file_err
         mov [file_size], eax
+        jmp .do_tail
 
+.try_stdin:
+        mov eax, SYS_STDIN_READ
+        mov ebx, file_buf
+        int 0x80
+        cmp eax, 0
+        jl .usage
+        mov [file_size], eax
+
+.do_tail:
         ; Count total newlines in file
         mov esi, file_buf
         xor ecx, ecx           ; total newlines

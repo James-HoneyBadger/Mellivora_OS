@@ -33,6 +33,9 @@ vga_clear:
         rep stosw
         mov dword [vga_cursor_x], 0
         mov dword [vga_cursor_y], 0
+        ; Reset scrollback to live view and snapshot
+        mov dword [scroll_view], 0
+        call vga_save_live
         call vga_update_cursor
         pop eax
         ret
@@ -40,6 +43,7 @@ vga_clear:
 ; Print single character in AL
 vga_putchar:
         pushad
+        pushf                           ; Save caller's interrupt flag state
 
         cli                             ; Protect redirection state from interrupts
         cmp byte [stdout_redir_active], 1
@@ -62,12 +66,12 @@ vga_putchar:
         inc dword [stdout_redir_len]
 
 .vp_redir_done:
-        sti
+        popf                            ; Restore caller's interrupt flag
         popad
         ret
 
 .vp_normal:
-        sti
+        popf                            ; Restore caller's interrupt flag (only sti if caller had IF=1)
 
         cmp al, 0x0A            ; Line feed?
         je .newline
@@ -158,7 +162,41 @@ vga_putchar:
 ; Scroll screen up one line
 vga_scroll:
         pushad
-        ; Copy lines 1..24 to lines 0..23
+
+        ; Snapshot current live screen (before scroll) so scrollback render
+        ; can show the live rows.  Only when we are in live view.
+        cmp dword [scroll_view], 0
+        jne .sb_skip_snap
+        call vga_save_live
+.sb_skip_snap:
+
+        ; ---- Save line 0 to scrollback ring buffer ----
+        ; dest = scroll_buf + scroll_head * VGA_WIDTH*2
+        mov eax, [scroll_head]
+        imul eax, VGA_WIDTH * 2
+        lea edi, [scroll_buf + eax]
+        mov esi, VGA_BASE
+        mov ecx, VGA_WIDTH * 2 / 4
+        rep movsd
+
+        ; Advance head
+        mov eax, [scroll_head]
+        inc eax
+        cmp eax, SCROLL_LINES
+        jl .sb_no_wrap
+        xor eax, eax
+.sb_no_wrap:
+        mov [scroll_head], eax
+
+        ; Increment count (capped)
+        mov eax, [scroll_count]
+        cmp eax, SCROLL_LINES
+        jge .sb_capped
+        inc eax
+        mov [scroll_count], eax
+.sb_capped:
+
+        ; ---- Copy lines 1..24 to lines 0..23 ----
         mov esi, VGA_BASE + VGA_WIDTH * 2
         mov edi, VGA_BASE
         mov ecx, VGA_WIDTH * (VGA_HEIGHT - 1) * 2 / 4
@@ -170,6 +208,132 @@ vga_scroll:
         mov al, ' '
         mov ecx, VGA_WIDTH
         rep stosw
+        popad
+        ret
+
+; vga_do_scroll_back — scroll back one screen (25 lines)
+; Called from IRQ keyboard on PgUp when not in a program
+vga_do_scroll_back:
+        pushad
+        mov eax, [scroll_view]
+        add eax, VGA_HEIGHT
+        ; Cap at scroll_count
+        mov ebx, [scroll_count]
+        cmp eax, ebx
+        jle .sb_ok
+        mov eax, ebx
+.sb_ok:
+        mov [scroll_view], eax
+        call vga_render_scrollback
+        popad
+        ret
+
+; vga_do_scroll_fwd — scroll forward one screen (25 lines)
+vga_do_scroll_fwd:
+        pushad
+        mov eax, [scroll_view]
+        sub eax, VGA_HEIGHT
+        cmp eax, 0
+        jge .sf_ok
+        xor eax, eax
+.sf_ok:
+        mov [scroll_view], eax
+        cmp eax, 0
+        je .restore_live
+        call vga_render_scrollback
+        jmp .sf_done
+.restore_live:
+        call vga_restore_live
+.sf_done:
+        popad
+        ret
+
+; vga_save_live — copy current VGA framebuffer to live_screen
+vga_save_live:
+        push esi
+        push edi
+        push ecx
+        mov esi, VGA_BASE
+        mov edi, live_screen
+        mov ecx, VGA_SIZE / 4
+        rep movsd
+        pop ecx
+        pop edi
+        pop esi
+        ret
+
+; vga_restore_live — restore live_screen to VGA framebuffer
+vga_restore_live:
+        push esi
+        push edi
+        push ecx
+        mov esi, live_screen
+        mov edi, VGA_BASE
+        mov ecx, VGA_SIZE / 4
+        rep movsd
+        pop ecx
+        pop edi
+        pop esi
+        ret
+
+; vga_render_scrollback — render scrollback buffer given scroll_view
+; scroll_view = V means we show history lines starting V lines back
+vga_render_scrollback:
+        pushad
+        mov esi, [scroll_view]      ; V (save in esi initially; then reuse)
+        mov [rsb_v], esi
+        xor ebx, ebx               ; screen row r
+.rsb_row:
+        cmp ebx, VGA_HEIGHT
+        jge .rsb_done
+
+        mov edi, VGA_BASE
+        mov eax, ebx
+        imul eax, VGA_WIDTH * 2
+        add edi, eax               ; dest = VGA row r
+
+        mov esi, [rsb_v]
+        cmp ebx, esi               ; r < V ?
+        jge .rsb_from_live
+
+        ; Source from ring buffer
+        mov eax, [scroll_head]
+        sub eax, esi               ; scroll_head - V
+        add eax, ebx               ; + r
+        ; Normalise modulo SCROLL_LINES
+.rsb_mod:
+        cmp eax, 0
+        jge .rsb_mod_pos
+        add eax, SCROLL_LINES
+        jmp .rsb_mod
+.rsb_mod_pos:
+        cmp eax, SCROLL_LINES
+        jl .rsb_mod_ok
+        sub eax, SCROLL_LINES
+        jmp .rsb_mod_pos
+.rsb_mod_ok:
+        imul eax, VGA_WIDTH * 2
+        mov esi, scroll_buf
+        add esi, eax
+        mov ecx, VGA_WIDTH * 2 / 4
+        rep movsd
+        jmp .rsb_next
+
+.rsb_from_live:
+        ; Source from live_screen at row (r - V)
+        mov eax, ebx
+        mov esi, [rsb_v]
+        sub eax, esi
+        imul eax, VGA_WIDTH * 2
+        mov esi, live_screen
+        add esi, eax
+        mov ecx, VGA_WIDTH * 2 / 4
+        rep movsd
+
+.rsb_next:
+        inc ebx
+        jmp .rsb_row
+.rsb_done:
         popad
         ret
 

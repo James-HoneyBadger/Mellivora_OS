@@ -126,14 +126,19 @@ HBFS_ROOT_DIR_SECTS  equ HBFS_ROOT_DIR_BLOCKS * HBFS_SECTORS_PER_BLK ; 256 secto
 HBFS_ROOT_DIR_SIZE   equ HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE      ; 131072 bytes
 HBFS_MAX_FILES       equ HBFS_ROOT_DIR_SIZE / HBFS_DIR_ENTRY_SIZE    ; 455 entries
 HBFS_SUBDIR_BLOCKS   equ 16           ; Subdirectories get 16 blocks (224 entries each)
-HBFS_SUPERBLOCK_LBA  equ 417           ; After kernel area (LBA 33 + 384 sectors)
-HBFS_BITMAP_START    equ 418           ; Block allocation bitmap start
+; HBFS on-disk layout — all LBAs derived from HBFS_SUPERBLOCK_LBA.
+; HBFS_SUPERBLOCK_LBA must be > (33 + KERNEL_SECTORS). Kernel is currently
+; ~1569 sectors (ends at LBA 1601). 4096 provides ample headroom for growth.
+; If kernel ever exceeds 4062 sectors (~2 MB), update this value AND the
+; matching constant in populate.py.
+HBFS_SUPERBLOCK_LBA  equ 4096          ; First LBA of HBFS (well past kernel end)
+HBFS_BITMAP_START    equ HBFS_SUPERBLOCK_LBA + 1
 HBFS_BITMAP_BLOCKS   equ 16            ; 16 blocks for bitmap (covers 524288 blocks)
 HBFS_BITMAP_SECTS    equ HBFS_BITMAP_BLOCKS * HBFS_SECTORS_PER_BLK ; 128 sectors
 HBFS_BITMAP_SIZE     equ HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE       ; 65536 bytes
 HBFS_TOTAL_BLOCKS    equ 524288        ; Total filesystem blocks (2 GB)
-HBFS_ROOT_DIR_START  equ 546           ; Root directory (256 sectors = 32 blocks)
-HBFS_DATA_START      equ 802           ; Data blocks start here
+HBFS_ROOT_DIR_START  equ HBFS_BITMAP_START + HBFS_BITMAP_SECTS      ; = HBFS_SUPERBLOCK_LBA + 129
+HBFS_DATA_START      equ HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS  ; = HBFS_SUPERBLOCK_LBA + 385
 
 ; File types (stored at byte 253 of directory entry)
 FTYPE_FREE          equ 0
@@ -170,7 +175,7 @@ SYS_EXEC            equ 21
 SYS_DISK_READ       equ 22
 SYS_SBRK            equ 23      ; Adjust program break: EBX=increment -> EAX=old_brk/-1
 
-LINE_BUFFER_SIZE    equ 512
+LINE_BUFFER_SIZE    equ 1024
 BATCH_BUFFER_SIZE   equ 32768           ; 32KB max batch script
 
 ; Directory entry field offsets
@@ -263,6 +268,30 @@ SYS_SIGMASK         equ 77      ; Signal mask: EBX=op ECX=mask -> EAX=old_mask/-
 SYS_TASKNAME        equ 78      ; Set task name: EBX=name_ptr -> EAX=0
 SYS_REALLOC         equ 79      ; Realloc: EBX=ptr ECX=new_size -> EAX=new_ptr/0
 
+; v8.0 graphics/IO syscalls (slots 80-101)
+SYS_DMESG_WRITE     equ 80
+SYS_DMESG_READ      equ 82
+SYS_RENAME          equ 83
+SYS_RMDIR           equ 84
+SYS_TRUNCATE        equ 85
+SYS_CONNECT_NB      equ 86
+SYS_POLL            equ 87
+SYS_SEM_CREATE      equ 88
+SYS_SEM_WAIT        equ 89
+SYS_SEM_POST        equ 90
+SYS_SEM_CLOSE       equ 91
+SYS_WAITPID         equ 92
+SYS_GETMTIME        equ 93
+SYS_SETMTIME        equ 94
+SYS_DRAW_LINE       equ 95      ; Draw Bresenham line: EBX=x0 ECX=y0 EDX=x1 ESI=y1 EDI=color
+SYS_DRAW_TRIANGLE   equ 96      ; Fill triangle: EBX=x0|(y0<<16) ECX=x1|(y1<<16) EDX=x2|(y2<<16) ESI=color
+SYS_BLIT            equ 97      ; Sprite blit: EBX=src ECX=dx EDX=dy ESI=w|(h<<16) EDI=colorkey
+SYS_DIRTY_PRESENT   equ 98      ; Present dirty rect to LFB
+SYS_PSF_LOAD        equ 99      ; Load PSF2 font: EBX=filename -> EAX=0/-1
+SYS_PSF_CHAR        equ 100     ; Draw PSF2 char: EBX=x ECX=y EDX=codepoint ESI=fg_color
+SYS_PCI_FIND        equ 101     ; Find PCI device: EBX=vendor ECX=device_id -> EAX=bdf/-1
+SYS_GETPPID         equ 102     ; Get parent PID -> EAX=ppid
+
 ; File descriptor constants
 FD_MAX              equ 8
 FD_ENTRY_SIZE       equ 32
@@ -349,6 +378,10 @@ kernel_entry:
         call mouse_init
         call sb16_init
         call vbe_init
+        call pci_init
+        call ac97_init
+        call atadma_init
+        call virtio_init
         call burrows_init
 
         ; Drain any stale bytes from the 8042 output buffer so that
@@ -396,6 +429,10 @@ kernel_entry:
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"
 %include "kernel/vbe.inc"
+%include "kernel/pci.inc"
+%include "kernel/ac97.inc"
+%include "kernel/atadma.inc"
+%include "kernel/virtio.inc"
 %include "kernel/burrows.inc"
 %include "kernel/screensaver.inc"
 %include "kernel/shell.inc"

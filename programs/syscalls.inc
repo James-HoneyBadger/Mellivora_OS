@@ -116,6 +116,16 @@ SYS_WAITPID     equ 92          ; Wait for task: EBX=pid -> EAX=exit_code/-1
 SYS_GETMTIME    equ 93          ; Get mtime: EBX=filename -> EAX=mtime ECX=ctime
 SYS_SETMTIME    equ 94          ; Set mtime: EBX=filename ECX=timestamp(0=now) -> EAX=0/-1
 
+; v8.5 syscalls — new graphics primitives, sprite blit, PSF2 fonts, PCI
+SYS_DRAW_LINE     equ 95  ; EBX=x0 ECX=y0 EDX=x1 ESI=y1 EDI=color
+SYS_DRAW_TRIANGLE equ 96  ; EBX=x0|(y0<<16) ECX=x1|(y1<<16) EDX=x2|(y2<<16) ESI=color
+SYS_BLIT          equ 97  ; EBX=src ECX=dst_x EDX=dst_y ESI=w|(h<<16) EDI=colorkey
+SYS_DIRTY_PRESENT equ 98  ; no args — flush dirty shadow rect to LFB
+SYS_PSF_LOAD      equ 99  ; EBX=filename_ptr -> EAX=0 success / -1 fail
+SYS_PSF_CHAR      equ 100 ; EBX=x ECX=y EDX=codepoint ESI=fg_color
+SYS_PCI_FIND      equ 101 ; EBX=vendor_id ECX=device_id -> EAX=bdf or -1
+SYS_GETPPID       equ 102 ; -> EAX=parent PID
+
 ; v4.0 Priority levels
 PRIO_HIGH       equ 0
 PRIO_NORMAL     equ 1

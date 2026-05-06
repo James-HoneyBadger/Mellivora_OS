@@ -1523,6 +1523,24 @@ env_expand:
         stosb
         jmp .ee_loop
 .ee_var:
+        ; $? — last exit code
+        cmp byte [esi], '?'
+        jne .ee_not_question
+        inc esi
+        push esi
+        mov eax, [shell_last_status]
+        call vga_dec_to_str
+        mov esi, dec_str_buf
+.ee_q_cp:
+        lodsb
+        test al, al
+        jz .ee_q_done
+        stosb
+        jmp .ee_q_cp
+.ee_q_done:
+        pop esi
+        jmp .ee_loop
+.ee_not_question:
         push edi
         mov edi, env_name_buf
 .ee_rname:

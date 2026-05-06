@@ -102,86 +102,84 @@ detect_memory:
         call print16
 
         ;---------------------------------------
-        ; Load kernel from disk into LOW MEMORY at KERNEL_TMPBUF
-        ; (0x20000). 192KB kernel fits easily below 640KB.
-        ; We will copy it to 1MB after entering protected mode.
+        ; Kernel loaded in 64KB chunks: BIOS int 0x13 to 0x10000, then
+        ; INT 0x15/0x87 copies each chunk to its destination above 1 MB.
         ;---------------------------------------
 load_kernel:
         mov si, msg_load_kern
         call print16
 
-        ; Default: kernel loaded from disk into temp buffer.
-        mov dword [kernel_src_lin], KERNEL_TMPBUF_LIN
+        mov dword [cur_lba],    33
+        mov word  [sectors_left], KERNEL_SECTORS
+        mov dword [kern_dest],  0x00100000   ; running 32-bit physical destination
 
-        ; El Torito ISO path: if BIOS preloaded the kernel (boot-load-size
-        ; covers MBR + stage2 + kernel), it sits at PRELOAD_KERNEL_ADDR.
-        ; Detect by checking for the kernel's known first 8 bytes.
-        cmp dword [PRELOAD_KERNEL_ADDR], 0x0010B866
-        jne .load_from_disk
-        cmp dword [PRELOAD_KERNEL_ADDR + 4], 0x66D88E66
-        jne .load_from_disk
-        ; Kernel is preloaded — skip slow disk reads.
-        mov dword [kernel_src_lin], PRELOAD_KERNEL_ADDR
-        jmp .load_done
-
-.load_from_disk:
-        ; Kernel on disk starts at LBA 33 (after boot + stage2)
-        mov dword [cur_lba], 33
-        mov word [sectors_left], KERNEL_SECTORS
-        mov word [load_seg], KERNEL_TMPBUF_SEG  ; Start segment = 0x2000
-
-.load_chunk:
+.lk_chunk:
         cmp word [sectors_left], 0
-        je .load_done
+        je  .lk_done
 
-        ; How many sectors this chunk? Min(sectors_left, 32)
-        ; Some BIOS/El Torito paths are unreliable with larger transfers.
+        ; sectors this pass = min(sectors_left, 128)  [128 sectors = 64 KB]
         mov ax, [sectors_left]
-        cmp ax, 32
-        jle .chunk_ok
-        mov ax, 32
-.chunk_ok:
+        cmp ax, 128
+        jle .lk_size_ok
+        mov ax, 128
+.lk_size_ok:
         mov [chunk_size], ax
 
-        ; Set up DAP for reading into [load_seg]:0x0000
+        ; ---- INT 0x13 read to 0x1000:0x0000 (linear 0x10000) ----
         mov byte [kern_dap], 16
         mov byte [kern_dap+1], 0
         mov [kern_dap+2], ax            ; sector count
-        mov word [kern_dap+4], 0x0000   ; offset always 0
-        mov bx, [load_seg]
-        mov [kern_dap+6], bx            ; segment advances each chunk
+        mov word [kern_dap+4], 0x0000   ; buffer offset
+        mov word [kern_dap+6], 0x1000   ; buffer segment -> linear 0x10000
         mov eax, [cur_lba]
         mov [kern_dap+8], eax
         mov dword [kern_dap+12], 0
-
-        ; Read from disk (prefer LBA, fall back to CHS for legacy BIOS / ISO boot)
+        mov word [load_seg], 0x1000     ; CHS fallback segment
         call read_kernel_chunk
-        jc .load_fail
+        jc  .lk_fail
 
-        ; Advance LBA
+        ; Advance LBA counter
         movzx eax, word [chunk_size]
-        add [cur_lba], eax
+        add   [cur_lba], eax
+        mov   ax, [chunk_size]
+        sub   [sectors_left], ax
 
-        ; Advance load segment: seg += chunk_size * 512 / 16 = chunk_size * 32
-        mov ax, [chunk_size]
-        shl ax, 5               ; * 32 = paragraphs per chunk
-        add [load_seg], ax
+        ; ---- INT 0x15/0x87: copy 0x10000 -> kern_dest ----
+        ; Fill destination descriptor (entry 3, bytes 24..31) with kern_dest
+        mov eax, [kern_dest]
+        mov [xmem_gdt + 24 + 2], ax     ; base bits 0-15
+        shr eax, 16
+        mov [xmem_gdt + 24 + 4], al     ; base bits 16-23
+        mov [xmem_gdt + 24 + 7], ah     ; base bits 24-31
 
-        ; Decrease remaining
-        mov ax, [chunk_size]
-        sub [sectors_left], ax
+        ; CX = words to move = chunk_size * 256  (512 bytes / 2 per sector)
+        mov  ax, [chunk_size]
+        shl  ax, 8                      ; * 256 words/sector
+        mov  cx, ax
+        push es
+        xor  bx, bx
+        mov  es, bx                     ; ES:SI -> xmem_gdt at segment 0
+        mov  si, xmem_gdt
+        mov  ah, 0x87
+        int  0x15
+        pop  es
+        jc  .lk_fail
 
-        ; Print a dot for progress
+        ; Advance destination
+        movzx eax, word [chunk_size]
+        shl   eax, 9                    ; * 512 bytes
+        add   [kern_dest], eax
+
         mov al, '.'
         call putchar16
-        jmp .load_chunk
+        jmp .lk_chunk
 
-.load_done:
+.lk_done:
         mov si, msg_ok
         call print16
         jmp enter_pmode
 
-.load_fail:
+.lk_fail:
         mov si, msg_load_fail
         call print16
         jmp halt16
@@ -375,7 +373,8 @@ putchar16:
 
 pmode_entry:
         ; Set up 32-bit segment registers
-        mov ax, 0x10            ; Data segment selector
+        cld
+        mov ax, 0x10            ; flat 4 GB data selector
         mov ds, ax
         mov es, ax
         mov fs, ax
@@ -386,21 +385,12 @@ pmode_entry:
         ; Store boot drive and memory map info at known location
         ; The kernel expects these at 0x500 (BIOS-safe area)
         movzx eax, byte [boot_drive]
-        mov [0x500], eax                ; Boot drive number
+        mov [0x500], eax
         movzx eax, word [memory_map_count]
-        mov [0x504], eax                ; Memory map entry count
-        mov dword [0x508], memory_map   ; Pointer to memory map data
+        mov [0x504], eax
+        mov dword [0x508], memory_map
 
-        ; Copy kernel to 1MB from selected source buffer.
-        ; Source is disk-loaded 0x20000 (raw disk boot) or BIOS-preloaded
-        ; 0xBE00 (ISO boot with full preload via boot-load-size).
-        cld
-        mov esi, [kernel_src_lin]
-        mov edi, 0x00100000             ; Dest: 1MB
-        mov ecx, (KERNEL_SECTORS * 512) / 4  ; Dword count
-        rep movsd
-
-        ; Jump to kernel at 1MB
+        ; Kernel already at 0x100000 — jump straight to it
         jmp 0x08:0x00100000
 
 ;=======================================================
@@ -408,11 +398,12 @@ pmode_entry:
 ;=======================================================
 [BITS 16]
 
-KERNEL_TMPBUF_SEG equ 0x2000   ; Segment for temp buffer (linear 0x20000)
-KERNEL_TMPBUF_OFF equ 0x0000   ; Offset for temp buffer
-KERNEL_TMPBUF_LIN equ 0x20000  ; Linear address of temp buffer (seg*16+off)
-PRELOAD_KERNEL_ADDR equ 0xBE00 ; Kernel location when preloaded by BIOS
-                               ; (0x7C00 + 33 * 512)
+KERNEL_TMPBUF_SEG equ 0x2000   ; (legacy, unused)
+KERNEL_TMPBUF_OFF equ 0x0000
+KERNEL_TMPBUF_LIN equ 0x20000
+PRELOAD_KERNEL_ADDR equ 0xBE00
+BOUNCE_SEG      equ 0x0C00
+BOUNCE_LIN      equ 0xC000
 
 ; KERNEL_SECTORS is generated by the build system in kernel_sectors.inc
 ; It equals ceil(kernel.bin size / 512), ensuring we always load the
@@ -427,7 +418,27 @@ load_seg:       dw 0
 sectors_left:   dw 0
 chunk_size:     dw 0
 memory_map_count: dw 0
-kernel_src_lin: dd KERNEL_TMPBUF_LIN
+kern_dest:      dd 0x00100000   ; running 32-bit destination for INT 0x15/0x87 loader
+
+; INT 0x15/0x87 extended-memory descriptor table (8 entries x 8 bytes)
+; Entry 2 = source (always 0x10000); entry 3 = dest (filled at runtime)
+xmem_gdt:
+        times 2*8 db 0          ; entries 0,1: zeros (unused)
+        ; Entry 2: source = 0x10000
+        dw 0xFFFF               ; limit 0-15
+        dw 0x0000               ; base 0-15
+        db 0x01                 ; base 16-23  (0x01 0000 = 0x10000)
+        db 0x93                 ; access: present, DPL0, data R/W
+        db 0x00                 ; G=0, 16-bit, limit 16-19=0
+        db 0x00                 ; base 24-31
+        ; Entry 3: destination (base filled at runtime)
+        dw 0xFFFF               ; limit 0-15
+        dw 0x0000               ; base 0-15 (filled)
+        db 0x00                 ; base 16-23 (filled)
+        db 0x93                 ; access
+        db 0x00                 ; flags
+        db 0x00                 ; base 24-31 (filled)
+        times 4*8 db 0          ; entries 4-7: zeros
 
 kern_dap:       times 16 db 0
 

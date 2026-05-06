@@ -652,7 +652,15 @@ vbe_putpixel:
         imul ebx, [vbe_pitch]
         imul eax, [vbe_Bpp]
         add ebx, eax
-        add ebx, [vbe_lfb_addr]
+        ; Write to shadow buffer if one is allocated; otherwise write directly
+        ; to the LFB.  This makes all draw primitives (draw_line, fill_triangle,
+        ; sprite_blit, etc.) honour double-buffering automatically.
+        mov eax, [vbe_shadow_buf]
+        test eax, eax
+        jnz .pp_use_buf
+        mov eax, [vbe_lfb_addr]
+.pp_use_buf:
+        add ebx, eax
         mov [ebx], ecx
         popad
         ret
@@ -1082,3 +1090,616 @@ vbe_shadow_pages: dd 0          ; allocated size of shadow buffer in pages
 vbe_font_saved: db 0
         align 4
 vbe_font_save_buf: times 8192 db 0  ; 256 chars * 32 bytes/char for VGA font
+
+; -----------------------------------------------------------------------
+; Dirty-rectangle tracking (smallest enclosing rectangle of modified area)
+; Reset to "nothing dirty" after each present (x0=MAX,y0=MAX,x1=0,y1=0).
+; -----------------------------------------------------------------------
+vbe_dirty_x0:   dd 0xFFFFFFFF
+vbe_dirty_y0:   dd 0xFFFFFFFF
+vbe_dirty_x1:   dd 0
+vbe_dirty_y1:   dd 0
+
+; PSF2 font support
+PSF2_MAGIC          equ 0x864AB572
+psf_loaded:         db 0
+                    db 0, 0, 0
+psf_buf:            dd 0        ; pointer to font data (PMM-allocated)
+psf_glyph_size:     dd 0        ; bytes per glyph
+psf_num_glyphs:     dd 0
+psf_glyph_w:        dd 0
+psf_glyph_h:        dd 0
+psf_bytes_per_row:  dd 0        ; ceil(width/8)
+
+;=======================================================================
+; DRAWING PRIMITIVES — added in v8.0
+;=======================================================================
+
+;---------------------------------------
+; _vbe_dirty_expand - expand dirty rect to include (EAX=x, EDX=y)
+; Preserves all registers.
+;---------------------------------------
+_vbe_dirty_expand:
+        push eax
+        push edx
+        cmp eax, [vbe_dirty_x0]
+        jge .de_x0ok
+        mov [vbe_dirty_x0], eax
+.de_x0ok:
+        cmp eax, [vbe_dirty_x1]
+        jle .de_x1ok
+        mov [vbe_dirty_x1], eax
+.de_x1ok:
+        cmp edx, [vbe_dirty_y0]
+        jge .de_y0ok
+        mov [vbe_dirty_y0], edx
+.de_y0ok:
+        cmp edx, [vbe_dirty_y1]
+        jle .de_y1ok
+        mov [vbe_dirty_y1], edx
+.de_y1ok:
+        pop edx
+        pop eax
+        ret
+
+;---------------------------------------
+; vbe_dirty_reset - mark entire dirty rect as clean
+;---------------------------------------
+vbe_dirty_reset:
+        mov dword [vbe_dirty_x0], 0xFFFFFFFF
+        mov dword [vbe_dirty_y0], 0xFFFFFFFF
+        mov dword [vbe_dirty_x1], 0
+        mov dword [vbe_dirty_y1], 0
+        ret
+
+;---------------------------------------
+; vbe_draw_line - Bresenham integer line
+; EAX=x0, EBX=y0, ECX=x1, EDX=y1, ESI=color
+;---------------------------------------
+vbe_draw_line:
+        pushad
+        mov [.x0], eax
+        mov [.y0], ebx
+        mov [.x1], ecx
+        mov [.y1], edx
+        mov [.color], esi
+        ; adx = abs(x1-x0), sx = sign
+        sub ecx, eax
+        jge .l_sxp
+        neg ecx
+        mov dword [.sx], -1
+        jmp .l_sxd
+.l_sxp: mov dword [.sx], 1
+.l_sxd: mov [.adx], ecx
+        ; ady = abs(y1-y0), sy = sign
+        mov edx, [.y1]
+        sub edx, ebx
+        jge .l_syp
+        neg edx
+        mov dword [.sy], -1
+        jmp .l_syd
+.l_syp: mov dword [.sy], 1
+.l_syd: mov [.ady], edx
+        ; err = adx - ady
+        mov eax, [.adx]
+        sub eax, [.ady]
+        mov [.err], eax
+        mov eax, [.x0]
+        mov ebx, [.y0]
+.l_loop:
+        mov ecx, [.color]
+        call vbe_putpixel
+        ; expand dirty rect
+        mov edx, ebx
+        call _vbe_dirty_expand
+        cmp eax, [.x1]
+        jne .l_cont
+        cmp ebx, [.y1]
+        je  .l_done
+.l_cont:
+        mov esi, [.err]
+        lea edi, [esi * 2]
+        mov ecx, [.ady]
+        neg ecx
+        cmp edi, ecx
+        jle .l_skx
+        sub esi, [.ady]
+        add eax, [.sx]
+.l_skx:
+        cmp edi, [.adx]
+        jge .l_sky
+        add esi, [.adx]
+        add ebx, [.sy]
+.l_sky:
+        mov [.err], esi
+        jmp .l_loop
+.l_done:
+        popad
+        ret
+.x0: dd 0
+.y0: dd 0
+.x1: dd 0
+.y1: dd 0
+.sx: dd 0
+.sy: dd 0
+.adx: dd 0
+.ady: dd 0
+.err: dd 0
+.color: dd 0
+
+;---------------------------------------
+; vbe_fill_triangle - Filled triangle (scanline rasterizer)
+; EAX=x0,EBX=y0, ECX=x1,EDX=y1, ESI=x2,EDI=y2
+; color is passed on stack: push color before call, then call
+;---------------------------------------
+vbe_fill_triangle:
+        pushad
+        mov [.v + 0],  eax
+        mov [.v + 4],  ebx
+        mov [.v + 8],  ecx
+        mov [.v + 12], edx
+        mov [.v + 16], esi
+        mov [.v + 20], edi
+        mov eax, [esp + 36]     ; color arg (pushad=32b + retaddr=4 = 36 from ESP)
+        mov [.tc], eax
+        call .sort3y
+        ; Check degenerate (all same Y)
+        mov eax, [.v + 4]
+        cmp eax, [.v + 20]
+        je  .ft_done
+        ; total height = y2 - y0
+        mov ecx, [.v + 20]
+        sub ecx, [.v + 4]   ; ecx = total_h
+        mov ebx, [.v + 4]   ; ebx = current y (row)
+.ft_scan:
+        cmp ebx, [.v + 20]
+        jg  .ft_done
+        ; Long edge x: v0.x + (v2.x-v0.x)*(y-v0.y)/total_h
+        mov eax, ebx
+        sub eax, [.v + 4]       ; eax = y - y0
+        mov esi, [.v + 16]
+        sub esi, [.v + 0]       ; esi = x2 - x0
+        imul esi, eax           ; esi = (x2-x0)*(y-y0)
+        mov eax, esi
+        cdq
+        idiv ecx                ; eax = (x2-x0)*(y-y0)/total_h
+        add eax, [.v + 0]       ; eax = long_x
+        mov [.lx], eax
+        ; Short edge: upper half (y0..y1) or lower half (y1..y2)
+        cmp ebx, [.v + 12]
+        jge .ft_lower
+        ; Upper half: v0 -> v1
+        mov edx, [.v + 12]
+        sub edx, [.v + 4]       ; edx = seg_h = y1 - y0
+        test edx, edx
+        jz  .ft_skip_horiz
+        mov eax, ebx
+        sub eax, [.v + 4]       ; eax = y - y0
+        mov esi, [.v + 8]
+        sub esi, [.v + 0]       ; esi = x1 - x0
+        imul esi, eax
+        mov eax, esi
+        cdq
+        idiv edx
+        add eax, [.v + 0]       ; eax = short_x
+        jmp .ft_draw_span
+.ft_lower:
+        ; Lower half: v1 -> v2
+        mov edx, [.v + 20]
+        sub edx, [.v + 12]      ; edx = seg_h = y2 - y1
+        test edx, edx
+        jz  .ft_skip_horiz
+        mov eax, ebx
+        sub eax, [.v + 12]      ; eax = y - y1
+        mov esi, [.v + 16]
+        sub esi, [.v + 8]       ; esi = x2 - x1
+        imul esi, eax
+        mov eax, esi
+        cdq
+        idiv edx
+        add eax, [.v + 8]       ; eax = short_x
+.ft_draw_span:
+        ; EAX = short_x, [.lx] = long_x, EBX = row
+        ; Ensure ECX=left_x <= EAX=right_x
+        mov ecx, [.lx]
+        cmp ecx, eax
+        jle .ft_span_ok
+        xchg eax, ecx
+.ft_span_ok:
+        push eax                ; save right_x (loop bound)
+.ft_hloop:
+        cmp ecx, [esp]          ; left_x <= right_x?
+        jg  .ft_hdone
+        mov  eax, ecx           ; EAX = current column x
+        ; EBX = row y
+        mov  [.ft_col], ecx     ; save column
+        mov  ecx, [.tc]         ; ECX = fill color
+        call vbe_putpixel       ; draw pixel at (eax, ebx) color ecx
+        mov  ecx, [.ft_col]     ; restore column
+        inc  ecx
+        jmp  .ft_hloop
+.ft_hdone:
+        pop eax                 ; balance push eax
+.ft_skip_horiz:
+        ; Expand dirty rect
+        mov eax, [.lx]
+        mov edx, ebx
+        call _vbe_dirty_expand
+        inc ebx
+        jmp .ft_scan
+.ft_done:
+        popad
+        ret
+
+; Sort .v[0..2] by Y ascending (3-pass bubble)
+.sort3y:
+        ; Pass 1: compare v0.y vs v1.y
+        mov eax, [.v + 4]
+        cmp eax, [.v + 12]
+        jle .s01
+        mov ecx, [.v + 0]
+        xchg ecx, [.v + 8]
+        mov [.v + 0], ecx
+        mov ecx, [.v + 4]
+        xchg ecx, [.v + 12]
+        mov [.v + 4], ecx
+.s01:
+        ; Pass 2: compare v0.y vs v2.y
+        mov eax, [.v + 4]
+        cmp eax, [.v + 20]
+        jle .s02
+        mov ecx, [.v + 0]
+        xchg ecx, [.v + 16]
+        mov [.v + 0], ecx
+        mov ecx, [.v + 4]
+        xchg ecx, [.v + 20]
+        mov [.v + 4], ecx
+.s02:
+        ; Pass 3: compare v1.y vs v2.y
+        mov eax, [.v + 12]
+        cmp eax, [.v + 20]
+        jle .s12
+        mov ecx, [.v + 8]
+        xchg ecx, [.v + 16]
+        mov [.v + 8], ecx
+        mov ecx, [.v + 12]
+        xchg ecx, [.v + 20]
+        mov [.v + 12], ecx
+.s12:
+        ret
+
+; Vertex buffer and scratch vars
+.v:      dd 0, 0, 0, 0, 0, 0   ; x0,y0, x1,y1, x2,y2
+.lx:     dd 0
+.tc:     dd 0
+.ft_col: dd 0
+
+;---------------------------------------
+; vbe_sprite_blit - Color-key transparent blit
+; EBX=src_ptr (32bpp rows), ECX=dst_x, EDX=dst_y, ESI=width, EDI=height
+; Color key is read from [sys_blit.bl_key] (set by sys_blit before calling)
+; color_key = -1 to disable transparency
+;---------------------------------------
+vbe_sprite_blit:
+        pushad
+        cmp byte [vbe_active], 0
+        je  .vsb_done
+        mov [.sb_src], ebx
+        mov [.sb_dx],  ecx
+        mov [.sb_dy],  edx
+        mov [.sb_w],   esi
+        mov [.sb_h],   edi
+        ; Row loop
+        xor edi, edi            ; row counter
+.vsb_row:
+        cmp edi, [.sb_h]
+        jge .vsb_done
+        xor esi, esi            ; col counter
+.vsb_col:
+        cmp esi, [.sb_w]
+        jge .vsb_next_row
+        ; Load source pixel (32bpp ARGB or XRGB)
+        mov eax, [.sb_src]
+        mov ecx, edi
+        imul ecx, [.sb_w]
+        add  ecx, esi
+        mov  eax, [eax + ecx * 4]
+        and  eax, 0x00FFFFFF    ; strip alpha
+        ; Color key check
+        cmp dword [sys_blit.bl_key], -1
+        je  .vsb_draw
+        cmp eax, [sys_blit.bl_key]
+        je  .vsb_skip_px
+.vsb_draw:
+        push eax
+        mov eax, [.sb_dx]
+        add eax, esi
+        mov ebx, [.sb_dy]
+        add ebx, edi
+        cmp eax, 0
+        jl  .vsb_skip2
+        cmp eax, [vbe_width]
+        jge .vsb_skip2
+        cmp ebx, 0
+        jl  .vsb_skip2
+        cmp ebx, [vbe_height]
+        jge .vsb_skip2
+        mov ecx, [esp]          ; restore pixel color
+        call vbe_putpixel
+        mov edx, ebx
+        call _vbe_dirty_expand
+.vsb_skip2:
+        pop eax
+.vsb_skip_px:
+        inc esi
+        jmp .vsb_col
+.vsb_next_row:
+        inc edi
+        jmp .vsb_row
+.vsb_done:
+        popad
+        ret
+
+.sb_src: dd 0
+.sb_dx:  dd 0
+.sb_dy:  dd 0
+.sb_w:   dd 0
+.sb_h:   dd 0
+
+;---------------------------------------
+; vbe_dirty_present - Blit shadow -> LFB (full blit, resets dirty rect)
+;---------------------------------------
+vbe_dirty_present:
+        pushad
+        cmp byte [vbe_active], 0
+        je  .vdp_done
+        cmp dword [vbe_shadow_buf], 0
+        je  .vdp_done
+        cmp dword [vbe_dirty_x0], 0xFFFFFFFF
+        je  .vdp_done           ; nothing dirty
+        ; Full shadow blit (simple, correct)
+        mov esi, [vbe_shadow_buf]
+        mov edi, [vbe_lfb_addr]
+        mov eax, [vbe_width]
+        imul eax, [vbe_height]
+        imul eax, [vbe_Bpp]
+        shr eax, 2
+        mov ecx, eax
+        cld
+        rep movsd
+        call vbe_dirty_reset
+.vdp_done:
+        popad
+        ret
+
+;---------------------------------------
+; Syscall handlers for new primitives
+;---------------------------------------
+
+; SYS_DRAW_LINE (95): EBX=x0, ECX=y0, EDX=x1, ESI=y1, EDI=color
+sys_draw_line:
+        cmp byte [vbe_active], 0
+        je  .done
+        mov eax, ebx
+        mov ebx, ecx
+        mov ecx, edx
+        mov edx, esi
+        mov esi, edi
+        call vbe_draw_line
+.done:  xor eax, eax
+        iretd
+
+; SYS_DRAW_TRIANGLE (96): EBX=x0|(y0<<16), ECX=x1|(y1<<16), EDX=x2|(y2<<16), ESI=color
+sys_draw_triangle:
+        cmp byte [vbe_active], 0
+        je  .sdt_done
+        ; Unpack packed coords into scratch vars using EAX/EDI as temp
+        movzx eax, bx
+        mov [.t_x0], eax
+        mov eax, ebx
+        shr eax, 16
+        mov [.t_y0], eax
+        movzx eax, cx
+        mov [.t_x1], eax
+        mov eax, ecx
+        shr eax, 16
+        mov [.t_y1], eax
+        movzx eax, dx
+        mov [.t_x2], eax
+        mov eax, edx
+        shr eax, 16
+        mov [.t_y2], eax
+        mov [.t_col], esi
+        ; Set up all six register args then push color and call
+        mov eax, [.t_x0]
+        mov ebx, [.t_y0]
+        mov ecx, [.t_x1]
+        mov edx, [.t_y1]
+        mov esi, [.t_x2]
+        mov edi, [.t_y2]
+        push dword [.t_col]
+        call vbe_fill_triangle
+        add esp, 4
+.sdt_done:
+        xor eax, eax
+        iretd
+.t_x0: dd 0
+.t_y0: dd 0
+.t_x1: dd 0
+.t_y1: dd 0
+.t_x2: dd 0
+.t_y2: dd 0
+.t_col: dd 0
+
+; SYS_BLIT (97): EBX=src_ptr, ECX=dst_x, EDX=dst_y, ESI=width, EDI=height
+;               color_key passed as dword at [ESP+4] before syscall (user pushes it)
+;               Simplified: treat EDI>>16 as height, low 16 of EDI as color_key flag
+;               Actual: EBX=src, ECX=dx, EDX=dy, ESI=w|(h<<16), EDI=colorkey
+sys_blit:
+        cmp byte [vbe_active], 0
+        je  .sbl_done
+        mov eax, ebx
+        call validate_user_ptr
+        jc  .sbl_done
+        ; Unpack width/height from ESI
+        movzx eax, si
+        mov [.bl_src], ebx
+        mov [.bl_dx],  ecx
+        mov [.bl_dy],  edx
+        mov [.bl_w],   eax
+        mov eax, esi
+        shr eax, 16
+        mov [.bl_h],   eax
+        mov [.bl_key], edi
+        ; Set up register args for vbe_sprite_blit
+        mov ebx, [.bl_src]
+        mov ecx, [.bl_dx]
+        mov edx, [.bl_dy]
+        mov esi, [.bl_w]
+        mov edi, [.bl_h]
+        call vbe_sprite_blit
+.sbl_done:
+        xor eax, eax
+        iretd
+.bl_src: dd 0
+.bl_dx:  dd 0
+.bl_dy:  dd 0
+.bl_w:   dd 0
+.bl_h:   dd 0
+.bl_key: dd 0
+
+; SYS_DIRTY_PRESENT (98): present dirty rect, no args
+sys_dirty_present:
+        call vbe_dirty_present
+        xor eax, eax
+        iretd
+
+;=======================================================================
+; PSF2 FONT SUPPORT — v8.0
+;=======================================================================
+
+; SYS_PSF_LOAD (99): EBX=filename_ptr -> EAX=0/-1
+sys_psf_load:
+        pushad
+        mov eax, ebx
+        call validate_user_ptr
+        jc  .psf_l_fail
+        ; Allocate 256 KB for font data
+        mov ecx, 64
+        call pmm_alloc_pages
+        test eax, eax
+        jz  .psf_l_fail
+        mov [psf_buf], eax
+        ; Load file
+        mov esi, ebx
+        mov edi, [psf_buf]
+        call hbfs_read_file
+        jc  .psf_l_free
+        ; Verify magic
+        mov edi, [psf_buf]
+        cmp dword [edi], PSF2_MAGIC
+        jne .psf_l_free
+        ; Parse header: header_size at +8, num_glyphs at +16, glyph_size at +20,
+        ;               height at +24, width at +28
+        mov eax, [edi + 16]
+        mov [psf_num_glyphs], eax
+        mov eax, [edi + 20]
+        mov [psf_glyph_size], eax
+        mov eax, [edi + 24]
+        mov [psf_glyph_h], eax
+        mov eax, [edi + 28]
+        mov [psf_glyph_w], eax
+        add eax, 7
+        shr eax, 3
+        mov [psf_bytes_per_row], eax
+        mov byte [psf_loaded], 1
+        popad
+        xor eax, eax
+        iretd
+.psf_l_free:
+        mov eax, [psf_buf]
+        mov ecx, 64
+        call pmm_free_pages
+        mov dword [psf_buf], 0
+.psf_l_fail:
+        popad
+        mov eax, -1
+        iretd
+
+; SYS_PSF_CHAR (100): EBX=x, ECX=y, EDX=codepoint, ESI=fg_color
+sys_psf_char:
+        cmp byte [vbe_active], 0
+        je  .spc_done
+        cmp byte [psf_loaded], 0
+        je  .spc_vga_fb          ; fall back to SYS_FRAMEBUF text draw
+        ; Bounds-check codepoint
+        cmp edx, [psf_num_glyphs]
+        jae .spc_done
+        ; Glyph pointer
+        push esi
+        mov esi, [psf_buf]
+        mov eax, [esi + 8]      ; header_size
+        add esi, eax            ; skip header
+        mov eax, [psf_glyph_size]
+        imul eax, edx           ; codepoint * bytes_per_glyph
+        add esi, eax            ; esi = glyph data
+        ; Save args
+        mov [.spc_x], ebx
+        mov [.spc_y], ecx
+        pop eax
+        mov [.spc_fg], eax
+        ; Render glyph rows
+        xor edi, edi            ; row counter
+.spc_row:
+        cmp edi, [psf_glyph_h]
+        jge .spc_done
+        xor ecx, ecx            ; col counter
+        push esi
+.spc_byte_loop:
+        mov eax, ecx
+        shr eax, 3              ; byte index = col/8
+        cmp eax, [psf_bytes_per_row]
+        jge .spc_next_row
+        movzx edx, byte [esi + eax]
+        ; bit within byte: 7 - (col mod 8) for MSB-first
+        mov eax, ecx
+        and eax, 7
+        mov ebx, 7
+        sub ebx, eax
+        bt  edx, ebx            ; test bit
+        jnc .spc_no_px
+        ; Check within glyph width
+        cmp ecx, [psf_glyph_w]
+        jge .spc_no_px
+        push ecx
+        push edi
+        mov eax, [.spc_x]
+        add eax, ecx
+        mov ebx, [.spc_y]
+        add ebx, edi
+        mov ecx, [.spc_fg]
+        call vbe_putpixel
+        mov edx, ebx
+        call _vbe_dirty_expand
+        pop edi
+        pop ecx
+.spc_no_px:
+        inc ecx
+        cmp ecx, [psf_glyph_w]
+        jl  .spc_byte_loop
+.spc_next_row:
+        pop esi
+        add esi, [psf_bytes_per_row]
+        inc edi
+        jmp .spc_row
+.spc_vga_fb:
+        ; Reuse vbe_draw_text path: store single char string and call sys_framebuf
+        ; Simple: just use SYS_FRAMEBUF draw text call path
+        ; (psf not loaded — silently do nothing; caller should use SYS_FRAMEBUF/3)
+.spc_done:
+        xor eax, eax
+        iretd
+
+.spc_x:  dd 0
+.spc_y:  dd 0
+.spc_fg: dd 0

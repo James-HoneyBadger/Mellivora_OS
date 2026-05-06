@@ -151,8 +151,17 @@ syscall_table:
         dd sys_waitpid          ; 92  SYS_WAITPID
         dd sys_getmtime         ; 93  SYS_GETMTIME
         dd sys_setmtime         ; 94  SYS_SETMTIME
-        ; Reserved slots (95..127) — point to bad handler
-        times (SYSCALL_MAX - 95) dd syscall_handler.syscall_bad
+        ; v8.0 graphics & I/O syscalls (95..101)
+        dd sys_draw_line        ; 95  SYS_DRAW_LINE
+        dd sys_draw_triangle    ; 96  SYS_DRAW_TRIANGLE
+        dd sys_blit             ; 97  SYS_BLIT
+        dd sys_dirty_present    ; 98  SYS_DIRTY_PRESENT
+        dd sys_psf_load         ; 99  SYS_PSF_LOAD
+        dd sys_psf_char         ; 100 SYS_PSF_CHAR
+        dd sys_pci_find         ; 101 SYS_PCI_FIND
+        dd sys_getppid          ; 102 SYS_GETPPID
+        ; Reserved slots (103..127) — point to bad handler
+        times (SYSCALL_MAX - 103) dd syscall_handler.syscall_bad
 
 sys_exit:
         ; First check if this is a background task exiting
