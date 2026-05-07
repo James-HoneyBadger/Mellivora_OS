@@ -1,61 +1,48 @@
-; periodic.asm - Graphical Periodic Table of the Elements for Mellivora OS
+; periodic.asm - Periodic Table of the Elements
+; Standalone fullscreen VBE graphics application - NOT a Burrows desktop app.
+; Mellivora OS v9.0
 ;
-; Burrows GUI application (1000x680 window).
-;
-; Layout:
-;   Row 0-39  px  : Title bar (dark blue)
-;   Row 40-43  px  : gap
-;   Grid: 18 cols × 9 rows of 48×44 px cells  (cols 0..17, rows 0..8)
-;         positioned at GRID_X=4, GRID_Y=44
-;         → right edge at 4 + 18*48 = 868
-;   Info panel: x=870..998, y=44..439  (element details)
-;   Legend bar: y=440..461
-;
-; Controls:
-;   Arrow keys / left-click   — navigate / select
-;   Q / Esc / close button    — exit
-;
-; Info panel shows: full name, symbol, atomic number, category (with
-; colour swatch), electron configuration, and two educational facts.
+; Controls: arrow keys = navigate | Q / Esc = quit
+; Screen:   1024x768x32, fullscreen
 ;
 %include "syscalls.inc"
-%include "lib/gui.inc"
+%include "lib/vbe_game.inc"
+%include "lib/font.inc"
 
-; === Window geometry ===
-WIN_W           equ 1000
-WIN_H           equ 680
+; -----------------------------------------------------------------------
+; Layout (1024x768)
+; -----------------------------------------------------------------------
+CELL_W      equ 46
+CELL_H      equ 40
+GRID_X      equ 4
+GRID_Y      equ 34
+TABLE_COLS  equ 18
+TABLE_ROWS  equ 9
+; INFO panel: GRID_X + TABLE_COLS*CELL_W + 4 = 4 + 828 + 4 = 836
+INFO_X      equ 836
+INFO_Y      equ GRID_Y
+INFO_W      equ 184
+INFO_H      equ TABLE_ROWS * CELL_H    ; 360
+INFO_R      equ INFO_X + INFO_W        ; 1020 - right clip edge
+LEG_Y       equ INFO_Y + INFO_H + 6   ; 400
+LEG_H       equ 66
 
-; === Grid ===
-GRID_X          equ 4
-GRID_Y          equ 44
-CELL_W          equ 48
-CELL_H          equ 44
-TABLE_COLS      equ 18
-TABLE_ROWS      equ 9
-
-; === Info panel ===
-INFO_X          equ 870         ; 4 + 18*48 + 2
-INFO_Y          equ GRID_Y
-INFO_W          equ WIN_W - INFO_X - 2
-INFO_H          equ TABLE_ROWS * CELL_H   ; 396
-
-; === Legend bar ===
-LEG_Y           equ INFO_Y + INFO_H + 4   ; 444
-LEG_H           equ 22
-
-; === Palette ===
-COL_BG          equ 0x00141820
-COL_TITLE_BG    equ 0x00243050
-COL_GRID_BG     equ 0x001A2030
+; -----------------------------------------------------------------------
+; Palette
+; -----------------------------------------------------------------------
+COL_BG          equ 0x00101820
+COL_TITLE_BG    equ 0x00182840
+COL_GRID_BG     equ 0x00182030
 COL_INFO_BG     equ 0x001C2840
-COL_INFO_HDR    equ 0x00304878
-COL_INFO_TXT    equ 0x00D0E0F0
+COL_INFO_HDR    equ 0x00283860
+COL_INFO_TXT    equ 0x00C0D0E0
 COL_INFO_VAL    equ 0x00A8D4FF
 COL_INFO_ACC    equ 0x0060C0FF
-COL_LEGEND_BG   equ 0x00181E28
+COL_LEGEND_BG   equ 0x00141C28
 COL_SEP         equ 0x00304860
+COL_CURSOR      equ 0x00E0E0FF
 
-; Category cell background colours
+; Category cell colours
 COL_ALKALI      equ 0x00B03018
 COL_ALKALINE    equ 0x00905010
 COL_TRANS       equ 0x00205870
@@ -67,7 +54,7 @@ COL_NOBLE       equ 0x00104070
 COL_LANTHANIDE  equ 0x00804820
 COL_ACTINIDE    equ 0x00803020
 
-; Category index constants (match elem_category bytes)
+; Category index constants
 CAT_NONE        equ 0
 CAT_ALKALI      equ 1
 CAT_ALKALINE    equ 2
@@ -80,246 +67,178 @@ CAT_NOBLE       equ 8
 CAT_LANTHANIDE  equ 9
 CAT_ACTINIDE    equ 10
 
-;=======================================================================
+; -----------------------------------------------------------------------
 start:
-        ; Activate VBE (1024x768x32) so gui_flip can write to the LFB.
-        ; Required when the program is launched from the text-mode shell
-        ; before the Burrows desktop has called vbe_set_mode.  Safe to
-        ; call again from within the desktop — it just re-sets the same mode.
-        mov eax, SYS_FRAMEBUF
-        mov ebx, 1
-        mov ecx, 1024
-        mov edx, 768
-        mov esi, 32
-        int 0x80
-        cmp eax, -1
-        je .exit
+; -----------------------------------------------------------------------
+        VBE_GAME_INIT
 
-        mov eax, 20
-        mov ebx, 20
-        mov ecx, WIN_W
-        mov edx, WIN_H
-        mov esi, win_title
-        call gui_create_window
-        cmp eax, -1
-        je .exit
-        mov [win_id], eax
-
-        mov dword [sel_col], 0
-        mov dword [sel_row], 0
+        mov dword [cur_col], 0
+        mov dword [cur_row], 0
 
         call render_all
-        call gui_compose
-        call gui_flip
+        VBE_GAME_PRESENT
 
-;=======================================================================
+; -----------------------------------------------------------------------
 .main_loop:
-        call gui_poll_event
-        cmp eax, EVT_NONE
-        je .idle
-        cmp eax, EVT_CLOSE
-        je .close
-        cmp eax, EVT_KEY_PRESS
-        je .key
-        cmp eax, EVT_MOUSE_CLICK
-        je .click
-        jmp .main_loop
+        VBE_GAME_POLL_KEY
+        cmp eax, -1
+        je .main_loop
 
-.idle:
-        mov eax, SYS_SLEEP
-        mov ebx, 5
-        int 0x80
-        jmp .main_loop
-
-.key:
-        cmp bl, 'q'
-        je .close
-        cmp bl, 'Q'
-        je .close
-        cmp bl, 27
-        je .close
-        cmp bl, KEY_UP
+        cmp al, KEY_ESC
+        je .exit
+        cmp al, 'q'
+        je .exit
+        cmp al, 'Q'
+        je .exit
+        cmp al, KEY_UP
         je .ku
-        cmp bl, KEY_DOWN
+        cmp al, KEY_DOWN
         je .kd
-        cmp bl, KEY_LEFT
+        cmp al, KEY_LEFT
         je .kl
-        cmp bl, KEY_RIGHT
+        cmp al, KEY_RIGHT
         je .kr
         jmp .main_loop
 
-.ku:    cmp dword [sel_row], 0
+.ku:
+        cmp dword [cur_row], 0
         je .main_loop
-        dec dword [sel_row]
+        dec dword [cur_row]
         call skip_empty_up
         jmp .redraw
-.kd:    mov eax, [sel_row]
+.kd:
+        mov eax, [cur_row]
         cmp eax, TABLE_ROWS - 1
         jge .main_loop
-        inc dword [sel_row]
+        inc dword [cur_row]
         call skip_empty_down
         jmp .redraw
-.kl:    cmp dword [sel_col], 0
+.kl:
+        cmp dword [cur_col], 0
         je .main_loop
-        dec dword [sel_col]
+        dec dword [cur_col]
         call skip_empty_left
         jmp .redraw
-.kr:    mov eax, [sel_col]
+.kr:
+        mov eax, [cur_col]
         cmp eax, TABLE_COLS - 1
         jge .main_loop
-        inc dword [sel_col]
+        inc dword [cur_col]
         call skip_empty_right
         jmp .redraw
 
-.click:
-        ; EBX = click x, ECX = click y (relative to window client area)
-        sub ebx, GRID_X
-        jl .main_loop
-        sub ecx, GRID_Y
-        jl .main_loop
-        cmp ebx, TABLE_COLS * CELL_W
-        jge .main_loop
-        cmp ecx, TABLE_ROWS * CELL_H
-        jge .main_loop
-        ; col = ebx / CELL_W
-        push edx
-        mov eax, ebx
-        xor edx, edx
-        mov ebx, CELL_W
-        div ebx
-        mov [sel_col], eax
-        ; row = ecx / CELL_H
-        mov eax, ecx
-        xor edx, edx
-        mov ebx, CELL_H
-        div ebx
-        mov [sel_row], eax
-        pop edx
-        ; Reject empty cells
-        mov eax, [sel_row]
-        imul eax, TABLE_COLS
-        add eax, [sel_col]
-        movzx eax, byte [table_layout + eax]
-        test eax, eax
-        jz .main_loop
-
 .redraw:
         call render_all
-        call gui_compose
-        call gui_flip
+        VBE_GAME_PRESENT
         jmp .main_loop
 
-.close:
-        mov eax, [win_id]
-        call gui_destroy_window
 .exit:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
 
-;=======================================================================
-; skip_empty_* — after moving cursor, advance past empty cells
-;=======================================================================
-%macro SKIP_EMPTY 2 ; %1 = variable, %2 = direction (+1 or -1), %3=%4 boundary
-%endmacro
-
+; -----------------------------------------------------------------------
+; skip_empty_right / left / down / up
+; -----------------------------------------------------------------------
 skip_empty_right:
         push eax
         push ecx
-.ser_l: mov eax, [sel_row]
+.ser_l:
+        mov eax, [cur_row]
         imul eax, TABLE_COLS
-        add eax, [sel_col]
+        add eax, [cur_col]
         movzx ecx, byte [table_layout + eax]
         test ecx, ecx
         jnz .ser_e
-        cmp dword [sel_col], TABLE_COLS - 1
+        cmp dword [cur_col], TABLE_COLS - 1
         je .ser_e
-        inc dword [sel_col]
+        inc dword [cur_col]
         jmp .ser_l
-.ser_e: pop ecx
+.ser_e:
+        pop ecx
         pop eax
         ret
 
 skip_empty_left:
         push eax
         push ecx
-.sel_l: mov eax, [sel_row]
+.sel_l:
+        mov eax, [cur_row]
         imul eax, TABLE_COLS
-        add eax, [sel_col]
+        add eax, [cur_col]
         movzx ecx, byte [table_layout + eax]
         test ecx, ecx
         jnz .sel_e
-        cmp dword [sel_col], 0
+        cmp dword [cur_col], 0
         je .sel_e
-        dec dword [sel_col]
+        dec dword [cur_col]
         jmp .sel_l
-.sel_e: pop ecx
+.sel_e:
+        pop ecx
         pop eax
         ret
 
 skip_empty_down:
         push eax
         push ecx
-.sed_l: mov eax, [sel_row]
+.sed_l:
+        mov eax, [cur_row]
         imul eax, TABLE_COLS
-        add eax, [sel_col]
+        add eax, [cur_col]
         movzx ecx, byte [table_layout + eax]
         test ecx, ecx
         jnz .sed_e
-        cmp dword [sel_row], TABLE_ROWS - 1
+        cmp dword [cur_row], TABLE_ROWS - 1
         je .sed_e
-        inc dword [sel_row]
+        inc dword [cur_row]
         jmp .sed_l
-.sed_e: pop ecx
+.sed_e:
+        pop ecx
         pop eax
         ret
 
 skip_empty_up:
         push eax
         push ecx
-.seu_l: mov eax, [sel_row]
+.seu_l:
+        mov eax, [cur_row]
         imul eax, TABLE_COLS
-        add eax, [sel_col]
+        add eax, [cur_col]
         movzx ecx, byte [table_layout + eax]
         test ecx, ecx
         jnz .seu_e
-        cmp dword [sel_row], 0
+        cmp dword [cur_row], 0
         je .seu_e
-        dec dword [sel_row]
+        dec dword [cur_row]
         jmp .seu_l
-.seu_e: pop ecx
+.seu_e:
+        pop ecx
         pop eax
         ret
 
-;=======================================================================
-; render_all - Full window repaint
-;=======================================================================
+; -----------------------------------------------------------------------
+; render_all - full screen repaint
+; -----------------------------------------------------------------------
 render_all:
         pushad
-        ; --- background ---
-        mov eax, [win_id]
-        xor ebx, ebx
-        xor ecx, ecx
-        mov edx, WIN_W
-        mov esi, WIN_H
-        mov edi, COL_BG
-        call gui_fill_rect
+        mov edx, COL_BG
+        call vbe_clear_screen
 
-        ; --- title bar ---
-        mov eax, [win_id]
+        ; Title bar background
         xor ebx, ebx
         xor ecx, ecx
-        mov edx, WIN_W
-        mov esi, 40
+        mov edx, 1024
+        mov esi, 30
         mov edi, COL_TITLE_BG
-        call gui_fill_rect
+        call vbe_fill_rect
 
-        mov eax, [win_id]
-        mov ebx, 10
+        ; Title text
+        mov ebx, 8
         mov ecx, 10
-        mov esi, title_str
-        mov edi, 0x00A0C8FF
-        call gui_draw_text
+        mov edx, title_str
+        mov esi, 0x00A0C8FF
+        mov eax, 1
+        call vbe_draw_str
 
         call draw_grid
         call draw_info_panel
@@ -327,24 +246,24 @@ render_all:
         popad
         ret
 
-;=======================================================================
-; draw_grid - Render all element cells
-;=======================================================================
+; -----------------------------------------------------------------------
+; draw_grid - render all element cells
+; -----------------------------------------------------------------------
 draw_grid:
         pushad
         mov dword [dg_row], 0
-.row:
+.dgr:
         mov eax, [dg_row]
         cmp eax, TABLE_ROWS
-        jge .done
+        jge .dg_done
 
         mov dword [dg_col], 0
-.col:
+.dgc:
         mov eax, [dg_col]
         cmp eax, TABLE_COLS
-        jge .next_row
+        jge .dg_nr
 
-        ; pixel origin of this cell
+        ; Cell pixel origin
         mov eax, [dg_col]
         imul eax, CELL_W
         add eax, GRID_X
@@ -355,442 +274,506 @@ draw_grid:
         add eax, GRID_Y
         mov [dg_py], eax
 
-        ; element number at this grid position
+        ; Which element lives here?
         mov eax, [dg_row]
         imul eax, TABLE_COLS
         add eax, [dg_col]
         movzx eax, byte [table_layout + eax]
         mov [dg_elem], eax
-
         test eax, eax
-        jz .empty_cell
+        jz .dg_empty
 
-        ; ---- filled cell ----
-        ; Is this the selected cell?
+        ; Is this the cursor position?
         mov eax, [dg_row]
-        cmp eax, [sel_row]
-        jne .normal_cell
+        cmp eax, [cur_row]
+        jne .dg_normal
         mov eax, [dg_col]
-        cmp eax, [sel_col]
-        jne .normal_cell
+        cmp eax, [cur_col]
+        jne .dg_normal
 
-        ; Selected: white background
-        mov eax, [win_id]
+        ; Cursor: bright highlight
         mov ebx, [dg_px]
         mov ecx, [dg_py]
         mov edx, CELL_W - 1
         mov esi, CELL_H - 1
-        mov edi, 0x00FFFFFF
-        call gui_fill_rect
-        mov dword [dg_sel], 1
-        jmp .draw_border
+        mov edi, COL_CURSOR
+        call vbe_fill_rect
+        jmp .dg_text
 
-.normal_cell:
+.dg_normal:
         ; Category colour background
-        mov dword [dg_sel], 0
         mov eax, [dg_elem]
-        call get_cat_color              ; EAX = colour
-        mov [dg_color], eax
-        mov eax, [win_id]
+        call get_cat_color
         mov ebx, [dg_px]
         mov ecx, [dg_py]
         mov edx, CELL_W - 1
         mov esi, CELL_H - 1
-        mov edi, [dg_color]
-        call gui_fill_rect
+        mov edi, eax
+        call vbe_fill_rect
 
-.draw_border:
-        ; Top border line (1 px dark)
-        mov eax, [win_id]
-        mov ebx, [dg_px]
-        mov ecx, [dg_py]
-        mov edx, CELL_W - 1
-        mov esi, 1
-        mov edi, COL_BG
-        call gui_fill_rect
-
-        ; Atomic number (top-left, small)
-        mov eax, [dg_elem]
-        mov edi, dg_numbuf
-        call uint_to_str
-
-        cmp dword [dg_sel], 1
-        je .num_black
-        mov edi, 0x00B0C8D8
-        jmp .num_draw
-.num_black:
-        mov edi, 0x00202020
-.num_draw:
-        mov eax, [win_id]
+.dg_text:
+        ; Atomic number top-left (scale=1)
         mov ebx, [dg_px]
         add ebx, 2
         mov ecx, [dg_py]
-        add ecx, 3
-        mov esi, dg_numbuf
-        call gui_draw_text
+        add ecx, 2
+        mov edx, [dg_elem]
+        mov esi, 0x00C0D0E0
+        mov eax, 1
+        call vbe_draw_num
 
-        ; Symbol (centred-ish)
+        ; Build symbol string in dg_symbuf
         mov eax, [dg_elem]
         dec eax
         shl eax, 1
-        lea eax, [symbols + eax]
-        movzx ebx, byte [eax]
-        mov [dg_symbuf], bl
-        movzx ebx, byte [eax + 1]
-        cmp bl, ' '
-        je .sym1
-        mov [dg_symbuf + 1], bl
+        lea edx, [symbols + eax]
+        movzx eax, byte [edx]
+        mov [dg_symbuf], al
+        movzx eax, byte [edx + 1]
+        cmp al, ' '
+        je .dg_sym1
+        mov [dg_symbuf + 1], al
         mov byte [dg_symbuf + 2], 0
-        jmp .sym_ok
-.sym1:  mov byte [dg_symbuf + 1], 0
-.sym_ok:
-        cmp dword [dg_sel], 1
-        je .sym_black
-        mov edi, 0x00FFFFFF
-        jmp .sym_draw
-.sym_black:
-        mov edi, 0x00101010
-.sym_draw:
-        mov eax, [win_id]
+        jmp .dg_sym_ok
+.dg_sym1:
+        mov byte [dg_symbuf + 1], 0
+.dg_sym_ok:
+        ; Draw symbol centred, scale=2, uppercase-safe
         mov ebx, [dg_px]
-        add ebx, 12
+        add ebx, 4
         mov ecx, [dg_py]
-        add ecx, 20
-        mov esi, dg_symbuf
-        call gui_draw_text
+        add ecx, 14
+        mov edx, dg_symbuf
+        mov esi, 0x00FFFFFF
+        mov eax, 2
+        call draw_str_uc
+        jmp .dg_nc
 
-        jmp .next_col
-
-.empty_cell:
-        ; Dark background for empty grid positions
-        mov eax, [win_id]
+.dg_empty:
         mov ebx, [dg_px]
         mov ecx, [dg_py]
         mov edx, CELL_W - 1
         mov esi, CELL_H - 1
         mov edi, COL_GRID_BG
-        call gui_fill_rect
+        call vbe_fill_rect
 
-.next_col:
+.dg_nc:
         inc dword [dg_col]
-        jmp .col
-
-.next_row:
+        jmp .dgc
+.dg_nr:
         inc dword [dg_row]
-        jmp .row
-
-.done:
+        jmp .dgr
+.dg_done:
         popad
         ret
 
-;=======================================================================
-; draw_info_panel - Right-side element detail panel
-;=======================================================================
+; -----------------------------------------------------------------------
+; draw_info_panel - right-hand element detail panel
+; -----------------------------------------------------------------------
 draw_info_panel:
         pushad
 
-        ; Background
-        mov eax, [win_id]
+        ; Panel background
         mov ebx, INFO_X
         mov ecx, INFO_Y
         mov edx, INFO_W
         mov esi, INFO_H
         mov edi, COL_INFO_BG
-        call gui_fill_rect
+        call vbe_fill_rect
 
         ; Header strip
-        mov eax, [win_id]
         mov ebx, INFO_X
         mov ecx, INFO_Y
         mov edx, INFO_W
-        mov esi, 28
+        mov esi, 22
         mov edi, COL_INFO_HDR
-        call gui_fill_rect
+        call vbe_fill_rect
 
-        mov eax, [win_id]
-        mov ebx, INFO_X + 5
+        mov ebx, INFO_X + 4
         mov ecx, INFO_Y + 7
-        mov esi, hdr_info_str
-        mov edi, 0x0090B8E0
-        call gui_draw_text
+        mov edx, hdr_info_str
+        mov esi, 0x0090B8E0
+        mov eax, 1
+        call vbe_draw_str
 
-        ; Get selected element
-        mov eax, [sel_row]
+        ; Which element is the cursor on?
+        mov eax, [cur_row]
         imul eax, TABLE_COLS
-        add eax, [sel_col]
+        add eax, [cur_col]
         movzx eax, byte [table_layout + eax]
         test eax, eax
-        jz .no_elem
+        jz .dip_none
         mov [dip_elem], eax
 
-        ; ---- Element name (accent colour) ----
+        ; Element name (accent colour, uppercase)
         mov eax, [dip_elem]
         dec eax
-        call get_name_ptr               ; EBX = name string ptr
-        mov eax, [win_id]
-        mov ecx, INFO_X + 4
-        mov edx, INFO_Y + 32
-        mov esi, ebx
-        mov edi, COL_INFO_ACC
-        ; gui_draw_text: EAX=win_id EBX=x ECX=y ESI=text EDI=color
-        mov ebx, ecx
-        mov ecx, edx
-        call gui_draw_text
-
-        ; ---- Symbol ----
-        mov eax, [win_id]
+        call get_name_ptr           ; EBX = name ptr
+        mov [dip_ptr_tmp], ebx
         mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 50
-        mov esi, lbl_sym
-        mov edi, COL_INFO_TXT
-        call gui_draw_text
+        mov ecx, INFO_Y + 26
+        mov edx, [dip_ptr_tmp]
+        mov esi, COL_INFO_ACC
+        mov eax, 1
+        call draw_str_uc
 
-        ; build sym_buf
+        ; Separator line
+        mov ebx, INFO_X + 2
+        mov ecx, INFO_Y + 40
+        mov edx, INFO_W - 4
+        mov esi, 1
+        mov edi, COL_SEP
+        call vbe_fill_rect
+
+        ; "SYMBOL:" label
+        mov ebx, INFO_X + 4
+        mov ecx, INFO_Y + 46
+        mov edx, lbl_sym
+        mov esi, COL_INFO_TXT
+        mov eax, 1
+        call vbe_draw_str
+
+        ; Symbol value
         mov eax, [dip_elem]
         dec eax
         shl eax, 1
-        lea eax, [symbols + eax]
-        movzx ebx, byte [eax]
-        mov [sym_buf], bl
-        movzx ebx, byte [eax + 1]
-        cmp bl, ' '
-        je .sym1c
-        mov [sym_buf + 1], bl
+        lea edx, [symbols + eax]
+        movzx eax, byte [edx]
+        mov [sym_buf], al
+        movzx eax, byte [edx + 1]
+        cmp al, ' '
+        je .dip_sym1
+        mov [sym_buf + 1], al
         mov byte [sym_buf + 2], 0
-        jmp .sym_ok2
-.sym1c: mov byte [sym_buf + 1], 0
-.sym_ok2:
+        jmp .dip_sym_ok
+.dip_sym1:
+        mov byte [sym_buf + 1], 0
+.dip_sym_ok:
+        mov ebx, INFO_X + 80
+        mov ecx, INFO_Y + 46
+        mov edx, sym_buf
+        mov esi, COL_INFO_VAL
+        mov eax, 1
+        call draw_str_uc
 
-        mov eax, [win_id]
-        mov ebx, INFO_X + 72
-        mov ecx, INFO_Y + 50
-        mov esi, sym_buf
-        mov edi, COL_INFO_VAL
-        call gui_draw_text
-
-        ; ---- Atomic number ----
-        mov eax, [win_id]
+        ; "ATOMIC #:" label
         mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 66
-        mov esi, lbl_anum
-        mov edi, COL_INFO_TXT
-        call gui_draw_text
+        mov ecx, INFO_Y + 58
+        mov edx, lbl_anum
+        mov esi, COL_INFO_TXT
+        mov eax, 1
+        call vbe_draw_str
 
+        ; Atomic number value
+        mov ebx, INFO_X + 80
+        mov ecx, INFO_Y + 58
+        mov edx, [dip_elem]
+        mov esi, COL_INFO_VAL
+        mov eax, 1
+        call vbe_draw_num
+
+        ; "CATEGORY:" label
+        mov ebx, INFO_X + 4
+        mov ecx, INFO_Y + 70
+        mov edx, lbl_cat
+        mov esi, COL_INFO_TXT
+        mov eax, 1
+        call vbe_draw_str
+
+        ; Colour swatch (10x10 px)
         mov eax, [dip_elem]
-        mov edi, tmp_buf
-        call uint_to_str
-
-        mov eax, [win_id]
-        mov ebx, INFO_X + 72
-        mov ecx, INFO_Y + 66
-        mov esi, tmp_buf
-        mov edi, COL_INFO_VAL
-        call gui_draw_text
-
-        ; ---- Category ----
-        mov eax, [win_id]
+        call get_cat_color
         mov ebx, INFO_X + 4
         mov ecx, INFO_Y + 82
-        mov esi, lbl_cat
-        mov edi, COL_INFO_TXT
-        call gui_draw_text
-
-        ; Colour swatch (12×12)
-        mov eax, [dip_elem]
-        call get_cat_color              ; EAX = colour
-        mov [dip_col_tmp], eax
-
-        mov eax, [win_id]
-        mov ebx, INFO_X + 72
-        mov ecx, INFO_Y + 84
-        mov edx, 12
-        mov esi, 12
-        mov edi, [dip_col_tmp]
-        call gui_fill_rect
+        mov edx, 10
+        mov esi, 10
+        mov edi, eax
+        call vbe_fill_rect
 
         ; Category name
         mov eax, [dip_elem]
-        call get_cat_name_ptr           ; EBX = name ptr
-        mov eax, [win_id]
-        mov ecx, INFO_X + 88
-        mov edx, INFO_Y + 82
-        mov esi, ebx
-        mov edi, COL_INFO_VAL
-        mov ebx, ecx
-        mov ecx, edx
-        call gui_draw_text
-
-        ; ---- Electron configuration ----
-        mov eax, [win_id]
-        mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 106
-        mov esi, lbl_config
-        mov edi, COL_INFO_TXT
-        call gui_draw_text
-
-        mov eax, [dip_elem]
-        call get_config_ptr             ; EBX = config string ptr
-        mov eax, [win_id]
-        mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 120
-        mov esi, ebx
-        ; BUG: esi clobbered by call — redo:
-        mov eax, [dip_elem]
-        call get_config_ptr
+        call get_cat_name_ptr       ; EBX = name ptr
         mov [dip_ptr_tmp], ebx
-        mov eax, [win_id]
-        mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 120
-        mov esi, [dip_ptr_tmp]
-        mov edi, COL_INFO_VAL
-        call gui_draw_text
+        mov ebx, INFO_X + 18
+        mov ecx, INFO_Y + 82
+        mov edx, [dip_ptr_tmp]
+        mov esi, COL_INFO_VAL
+        mov eax, 1
+        call draw_str_uc
 
-        ; ---- Separator ----
-        mov eax, [win_id]
+        ; "CONFIG:" label
         mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 140
-        mov edx, INFO_W - 8
+        mov ecx, INFO_Y + 100
+        mov edx, lbl_config
+        mov esi, COL_INFO_TXT
+        mov eax, 1
+        call vbe_draw_str
+
+        ; Electron configuration value
+        mov eax, [dip_elem]
+        call get_config_ptr         ; EBX = config str ptr
+        mov [dip_ptr_tmp], ebx
+        mov ebx, INFO_X + 4
+        mov ecx, INFO_Y + 112
+        mov edx, [dip_ptr_tmp]
+        mov esi, COL_INFO_VAL
+        mov eax, 1
+        call draw_str_uc
+
+        ; Separator
+        mov ebx, INFO_X + 2
+        mov ecx, INFO_Y + 128
+        mov edx, INFO_W - 4
         mov esi, 1
         mov edi, COL_SEP
-        call gui_fill_rect
+        call vbe_fill_rect
 
-        ; ---- Did you know? ----
-        mov eax, [win_id]
+        ; "DID YOU KNOW?" label
         mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 148
-        mov esi, lbl_fact
-        mov edi, 0x0080B0C8
-        call gui_draw_text
+        mov ecx, INFO_Y + 134
+        mov edx, lbl_fact
+        mov esi, 0x0080B0C8
+        mov eax, 1
+        call vbe_draw_str
 
         ; Fact line 1
         mov eax, [dip_elem]
         call get_fact_ptr
         mov [dip_ptr_tmp], ebx
-
-        mov eax, [win_id]
         mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 162
-        mov esi, [dip_ptr_tmp]
-        mov edi, 0x0098B0B8
-        call gui_draw_text
+        mov ecx, INFO_Y + 148
+        mov edx, [dip_ptr_tmp]
+        mov esi, 0x0098B4BC
+        mov eax, 1
+        call draw_str_uc_wrap
 
         ; Fact line 2
         mov eax, [dip_elem]
         call get_fact2_ptr
         mov [dip_ptr_tmp], ebx
-
-        mov eax, [win_id]
         mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + 178
-        mov esi, [dip_ptr_tmp]
-        mov edi, 0x0098B0B8
-        call gui_draw_text
+        mov ecx, INFO_Y + 180
+        mov edx, [dip_ptr_tmp]
+        mov esi, 0x0098B4BC
+        mov eax, 1
+        call draw_str_uc_wrap
 
-        ; ---- Navigation hint (bottom) ----
-        mov eax, [win_id]
+        ; Navigation hint at panel bottom
         mov ebx, INFO_X + 4
-        mov ecx, INFO_Y + INFO_H - 18
-        mov esi, nav_hint
-        mov edi, 0x00485868
-        call gui_draw_text
+        mov ecx, INFO_Y + INFO_H - 14
+        mov edx, nav_hint
+        mov esi, 0x00485868
+        mov eax, 1
+        call vbe_draw_str
 
-        jmp .end
+        jmp .dip_end
 
-.no_elem:
-        mov eax, [win_id]
+.dip_none:
         mov ebx, INFO_X + 4
         mov ecx, INFO_Y + 40
-        mov esi, no_elem_str
-        mov edi, 0x00506070
-        call gui_draw_text
-.end:
+        mov edx, no_elem_str
+        mov esi, 0x00506070
+        mov eax, 1
+        call vbe_draw_str
+
+.dip_end:
         popad
         ret
 
-;=======================================================================
-; draw_legend - Bottom colour key bar
-;=======================================================================
+; -----------------------------------------------------------------------
+; draw_legend - two rows of 5 category colour-key swatches
+; -----------------------------------------------------------------------
 draw_legend:
         pushad
 
         ; Background
-        mov eax, [win_id]
         xor ebx, ebx
         mov ecx, LEG_Y
-        mov edx, WIN_W
+        mov edx, 1024
         mov esi, LEG_H
         mov edi, COL_LEGEND_BG
-        call gui_fill_rect
+        call vbe_fill_rect
 
-        ; "Legend:" label
-        mov eax, [win_id]
+        ; "LEGEND:" label
         mov ebx, 4
-        mov ecx, LEG_Y + 5
-        mov esi, lbl_legend
-        mov edi, 0x00708090
-        call gui_draw_text
+        mov ecx, LEG_Y + 4
+        mov edx, lbl_legend
+        mov esi, 0x00708090
+        mov eax, 1
+        call vbe_draw_str
 
-        ; Iterate through 10 category entries
-        mov dword [leg_x], 58   ; start after "Legend: " label
-        mov dword [leg_idx], 1  ; start at CAT_ALKALI
+        mov dword [leg_idx], 1
+        mov dword [leg_x], 56
+        mov dword [leg_row], LEG_Y + 2
 
 .leg_loop:
         mov eax, [leg_idx]
         cmp eax, 11
         jge .leg_done
 
-        ; Swatch (12×14)
-        call get_cat_color_by_idx       ; EAX = colour (arg already in EAX)
-        mov [leg_col_tmp], eax
-
-        mov eax, [win_id]
+        ; Colour swatch
+        call get_cat_color_by_idx
         mov ebx, [leg_x]
-        mov ecx, LEG_Y + 4
+        mov ecx, [leg_row]
+        add ecx, 2
         mov edx, 12
         mov esi, 14
-        mov edi, [leg_col_tmp]
-        call gui_fill_rect
+        mov edi, eax
+        call vbe_fill_rect
 
-        ; Label
+        ; Label pointer
         mov eax, [leg_idx]
         dec eax
         shl eax, 2
-        mov esi, [cat_leg_labels + eax]
+        mov edx, [cat_leg_labels + eax]
 
-        mov eax, [win_id]
-        mov ebx, [leg_x]
-        add ebx, 14
-        mov ecx, LEG_Y + 5
-        mov edi, 0x00A0B0C0
-        call gui_draw_text
-
-        ; Advance x: swatch(12) + gap(4) + text width
-        ; Approximate text width: count string chars * 8 + 10
-        push esi
+        ; Measure string length before drawing
+        push edx
+        mov esi, edx
         xor ecx, ecx
-.leg_strlen:
+.leg_sl:
         cmp byte [esi], 0
-        je .leg_strlen_done
+        je .leg_sl_e
         inc esi
         inc ecx
-        jmp .leg_strlen
-.leg_strlen_done:
-        pop esi
-        ; advance = 12 + 4 + ecx*8 + 6
-        imul ecx, 8
-        add ecx, 22             ; 12 swatch + 4 gap + 6 extra
+        jmp .leg_sl
+.leg_sl_e:
+        mov [leg_tmplen], ecx
+        pop edx
+
+        ; Draw label
+        mov ebx, [leg_x]
+        add ebx, 14
+        mov ecx, [leg_row]
+        add ecx, 4
+        mov esi, 0x00A0B0C0
+        mov eax, 1
+        call vbe_draw_str
+
+        ; Advance x: 12 (swatch) + 2 (gap) + strlen*6 + 6 (trailing)
+        mov ecx, [leg_tmplen]
+        imul ecx, 6
+        add ecx, 20
         add [leg_x], ecx
 
+        ; After 5 entries start row 2
         inc dword [leg_idx]
+        mov eax, [leg_idx]
+        cmp eax, 6
+        jne .leg_loop
+        mov dword [leg_x], 56
+        mov eax, [leg_row]
+        add eax, 30
+        mov [leg_row], eax
         jmp .leg_loop
 
 .leg_done:
         popad
         ret
 
-;=======================================================================
+; -----------------------------------------------------------------------
+; draw_str_uc - draw string converting lowercase a-z -> A-Z
+; EBX=x  ECX=y  EDX=str_ptr  ESI=colour  EAX=scale
+; All registers preserved.
+; -----------------------------------------------------------------------
+draw_str_uc:
+        pushad
+        mov [_dsu_x],   ebx
+        mov [_dsu_y],   ecx
+        mov [_dsu_ptr], edx
+        mov [_dsu_col], esi
+        mov [_dsu_scl], eax
+.dsu_loop:
+        mov esi, [_dsu_ptr]
+        movzx edx, byte [esi]
+        test edx, edx
+        jz .dsu_done
+        inc dword [_dsu_ptr]
+        cmp edx, 'a'
+        jl .dsu_draw
+        cmp edx, 'z'
+        jg .dsu_draw
+        sub edx, 0x20           ; to uppercase
+.dsu_draw:
+        mov ebx, [_dsu_x]
+        mov ecx, [_dsu_y]
+        mov esi, [_dsu_col]
+        mov eax, [_dsu_scl]
+        call vbe_draw_char      ; EBX=x ECX=y EDX=char ESI=col EAX=scale
+        ; Advance x by (FONT_W + 1) * scale
+        mov eax, [_dsu_scl]
+        imul eax, FONT_W + 1
+        add [_dsu_x], eax
+        jmp .dsu_loop
+.dsu_done:
+        popad
+        ret
+
+_dsu_x:   dd 0
+_dsu_y:   dd 0
+_dsu_ptr: dd 0
+_dsu_col: dd 0
+_dsu_scl: dd 0
+
+; -----------------------------------------------------------------------
+; draw_str_uc_wrap - draw_str_uc with line wrap at INFO_R - 4
+; EBX=x  ECX=y  EDX=str_ptr  ESI=colour  EAX=scale
+; All registers preserved.
+; -----------------------------------------------------------------------
+draw_str_uc_wrap:
+        pushad
+        mov [_dsw_x],   ebx
+        mov [_dsw_y],   ecx
+        mov [_dsw_ptr], edx
+        mov [_dsw_col], esi
+        mov [_dsw_scl], eax
+.dsw_loop:
+        mov esi, [_dsw_ptr]
+        movzx edx, byte [esi]
+        test edx, edx
+        jz .dsw_done
+        inc dword [_dsw_ptr]
+        cmp edx, 'a'
+        jl .dsw_draw
+        cmp edx, 'z'
+        jg .dsw_draw
+        sub edx, 0x20
+.dsw_draw:
+        ; Wrap check: will next char overflow?
+        mov eax, [_dsw_scl]
+        imul eax, FONT_W + 1
+        mov ebx, [_dsw_x]
+        add ebx, eax
+        cmp ebx, INFO_R - 4
+        jle .dsw_ok
+        ; Wrap to next line
+        mov dword [_dsw_x], INFO_X + 4
+        mov eax, [_dsw_scl]
+        imul eax, FONT_H + 2
+        add [_dsw_y], eax
+.dsw_ok:
+        mov ebx, [_dsw_x]
+        mov ecx, [_dsw_y]
+        mov esi, [_dsw_col]
+        mov eax, [_dsw_scl]
+        call vbe_draw_char
+        mov eax, [_dsw_scl]
+        imul eax, FONT_W + 1
+        add [_dsw_x], eax
+        jmp .dsw_loop
+.dsw_done:
+        popad
+        ret
+
+_dsw_x:   dd 0
+_dsw_y:   dd 0
+_dsw_ptr: dd 0
+_dsw_col: dd 0
+_dsw_scl: dd 0
+
+; -----------------------------------------------------------------------
 ; get_cat_color_by_idx: EAX = category index -> EAX = colour
-;=======================================================================
+; -----------------------------------------------------------------------
 get_cat_color_by_idx:
         cmp eax, CAT_ALKALI
         je .c1
@@ -814,30 +797,30 @@ get_cat_color_by_idx:
         je .c10
         mov eax, COL_GRID_BG
         ret
-.c1:  mov eax, COL_ALKALI      ; ret
-      ret
-.c2:  mov eax, COL_ALKALINE    ; ret
-      ret
-.c3:  mov eax, COL_TRANS       ; ret
-      ret
-.c4:  mov eax, COL_BASIC       ; ret
-      ret
-.c5:  mov eax, COL_SEMIMETAL   ; ret
-      ret
-.c6:  mov eax, COL_NONMETAL    ; ret
-      ret
-.c7:  mov eax, COL_HALOGEN     ; ret
-      ret
-.c8:  mov eax, COL_NOBLE       ; ret
-      ret
-.c9:  mov eax, COL_LANTHANIDE  ; ret
-      ret
-.c10: mov eax, COL_ACTINIDE    ; ret
-      ret
+.c1:    mov eax, COL_ALKALI
+        ret
+.c2:    mov eax, COL_ALKALINE
+        ret
+.c3:    mov eax, COL_TRANS
+        ret
+.c4:    mov eax, COL_BASIC
+        ret
+.c5:    mov eax, COL_SEMIMETAL
+        ret
+.c6:    mov eax, COL_NONMETAL
+        ret
+.c7:    mov eax, COL_HALOGEN
+        ret
+.c8:    mov eax, COL_NOBLE
+        ret
+.c9:    mov eax, COL_LANTHANIDE
+        ret
+.c10:   mov eax, COL_ACTINIDE
+        ret
 
-;=======================================================================
+; -----------------------------------------------------------------------
 ; get_cat_color: EAX = element# (1-based) -> EAX = colour
-;=======================================================================
+; -----------------------------------------------------------------------
 get_cat_color:
         push ebx
         dec eax
@@ -851,9 +834,9 @@ get_cat_color:
         pop ebx
         ret
 
-;=======================================================================
+; -----------------------------------------------------------------------
 ; get_cat_name_ptr: EAX = element# (1-based) -> EBX = ptr to category name
-;=======================================================================
+; -----------------------------------------------------------------------
 get_cat_name_ptr:
         push eax
         dec eax
@@ -870,19 +853,19 @@ get_cat_name_ptr:
         pop eax
         ret
 
-;=======================================================================
-; get_name_ptr: EAX = 0-based index -> EBX = ptr to name
-;=======================================================================
+; -----------------------------------------------------------------------
+; get_name_ptr: EAX = 0-based index -> EBX = ptr to element name
+; -----------------------------------------------------------------------
 get_name_ptr:
         push ecx
         mov ebx, elem_names
         mov ecx, eax
         test ecx, ecx
         jz .done
-.loop:  cmp byte [ebx], 0
+.loop:
+        cmp byte [ebx], 0
         jne .next
         dec ecx
-        js .done
         jz .found
 .next:  inc ebx
         jmp .loop
@@ -890,9 +873,9 @@ get_name_ptr:
 .done:  pop ecx
         ret
 
-;=======================================================================
-; get_config_ptr: EAX = element# (1-based) -> EBX = ptr to config string
-;=======================================================================
+; -----------------------------------------------------------------------
+; get_config_ptr: EAX = element# (1-based) -> EBX = config string
+; -----------------------------------------------------------------------
 get_config_ptr:
         push eax
         push ecx
@@ -901,7 +884,8 @@ get_config_ptr:
         mov ebx, elem_configs
         test ecx, ecx
         jz .done
-.loop:  cmp byte [ebx], 0
+.loop:
+        cmp byte [ebx], 0
         jne .next
         dec ecx
         jz .found
@@ -912,19 +896,20 @@ get_config_ptr:
         pop eax
         ret
 
-;=======================================================================
+; -----------------------------------------------------------------------
 ; get_fact_ptr: EAX = element# (1-based) -> EBX = first fact line
-;=======================================================================
+; -----------------------------------------------------------------------
 get_fact_ptr:
         push eax
         push ecx
         dec eax
         mov ecx, eax
-        shl ecx, 1              ; 2 null-separated entries per element
+        shl ecx, 1
         mov ebx, elem_facts
         test ecx, ecx
         jz .done
-.loop:  cmp byte [ebx], 0
+.loop:
+        cmp byte [ebx], 0
         jne .next
         dec ecx
         jz .found
@@ -935,20 +920,21 @@ get_fact_ptr:
         pop eax
         ret
 
-;=======================================================================
+; -----------------------------------------------------------------------
 ; get_fact2_ptr: EAX = element# (1-based) -> EBX = second fact line
-;=======================================================================
+; -----------------------------------------------------------------------
 get_fact2_ptr:
         push eax
         push ecx
         dec eax
         mov ecx, eax
         shl ecx, 1
-        inc ecx                 ; second entry
+        inc ecx
         mov ebx, elem_facts
         test ecx, ecx
         jz .done
-.loop:  cmp byte [ebx], 0
+.loop:
+        cmp byte [ebx], 0
         jne .next
         dec ecx
         jz .found
@@ -956,45 +942,6 @@ get_fact2_ptr:
         jmp .loop
 .found: inc ebx
 .done:  pop ecx
-        pop eax
-        ret
-
-;=======================================================================
-; uint_to_str: EAX = value, EDI = dest buffer -> null-terminated decimal
-;=======================================================================
-uint_to_str:
-        push eax
-        push ebx
-        push ecx
-        push edx
-        push edi
-        mov ebx, 10
-        xor ecx, ecx
-        test eax, eax
-        jnz .loop
-        mov byte [edi], '0'
-        mov byte [edi + 1], 0
-        jmp .done
-.loop:  test eax, eax
-        jz .emit
-        xor edx, edx
-        div ebx
-        add dl, '0'
-        push edx
-        inc ecx
-        jmp .loop
-.emit:  test ecx, ecx
-        jz .term
-        pop edx
-        mov [edi], dl
-        inc edi
-        dec ecx
-        jmp .emit
-.term:  mov byte [edi], 0
-.done:  pop edi
-        pop edx
-        pop ecx
-        pop ebx
         pop eax
         ret
 
@@ -1574,36 +1521,30 @@ leg_lanthanide: db "Lanthanide",0
 leg_actinide:   db "Actinide",0
 
 ; Strings
-win_title:  db "Periodic Table of the Elements - Mellivora OS",0
-title_str:  db "  Periodic Table of the Elements  |  118 Elements  |  Q/Esc to exit",0
-hdr_info_str: db "Element Information",0
 lbl_sym:    db "Symbol:",0
 lbl_anum:   db "Atomic #:",0
 lbl_cat:    db "Category:",0
-lbl_config: db "Electron Config:",0
+lbl_config: db "Config:",0
 lbl_fact:   db "Did you know?",0
 lbl_legend: db "Legend:",0
-nav_hint:   db "Arrow keys or click to explore",0
-no_elem_str:db "(no element selected)",0
+nav_hint:   db "Arrow keys to navigate | Q/Esc quit",0
+no_elem_str:db "(no element here)",0
+title_str:  db "Periodic Table of the Elements  |  118 Elements  |  Q/Esc to exit",0
+hdr_info_str: db "Element Info",0
 
 ; BSS
-win_id:         dd 0
-sel_col:        dd 0
-sel_row:        dd 0
+cur_col:        dd 0
+cur_row:        dd 0
 dg_row:         dd 0
 dg_col:         dd 0
 dg_px:          dd 0
 dg_py:          dd 0
 dg_elem:        dd 0
-dg_sel:         dd 0
-dg_color:       dd 0
-dg_numbuf:      times 8 db 0
 dg_symbuf:      times 4 db 0
 dip_elem:       dd 0
-dip_col_tmp:    dd 0
 dip_ptr_tmp:    dd 0
 leg_x:          dd 0
 leg_idx:        dd 0
-leg_col_tmp:    dd 0
+leg_row:        dd 0
+leg_tmplen:     dd 0
 sym_buf:        times 4 db 0
-tmp_buf:        times 12 db 0
