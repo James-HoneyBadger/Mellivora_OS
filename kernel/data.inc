@@ -667,6 +667,7 @@ default_color:  resb 1
 
 tick_count:     resd 1
 total_free_pages: resd 1
+buddy_free_list:  resd 12          ; v9.0: per-order buddy allocator free-list heads
 
 kb_buffer:      resb KB_BUFFER_SIZE
 kb_read_idx:    resd 1
@@ -683,6 +684,9 @@ hbfs_block_buf:  resb HBFS_BLOCK_SIZE     ; General block buffer (4KB)
 hbfs_bitmap_buf: resb HBFS_BITMAP_SIZE     ; Bitmap buffer (64KB)
 dir_cache_lba:   resd 1                     ; LBA of cached directory (0 = invalid)
 dir_cache_sects: resd 1                     ; Sector count of cached directory
+; v9.0 HBFS v2 journal runtime state
+hbfs_journal_ptr:   resd 1      ; Next journal sector offset (0 = at HBFS_JOURNAL_LBA)
+hbfs_journal_dirty: resd 1      ; 0=clean 1=transaction active
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE
@@ -879,7 +883,16 @@ task_current:     resd 1                              ; Index of current running
 task_count:       resd 1                              ; Number of active tasks
 sched_tick:       resd 1                              ; Tick counter for current time slice
 task_create_name: resb 16                             ; v4.0: Name for next task to create
-task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 68 = 8704 bytes)
+; v9.0 fork scratch — kernel-only temporaries used by sys_fork
+fork_parent_pid:  resd 1
+fork_parent_tcb:  resd 1
+fork_child_tcb:   resd 1
+fork_child_kstop: resd 1
+fork_child_kesp:  resd 1
+fork_child_ubase: resd 1
+fork_child_ustop: resd 1
+fork_child_pid_slot: resd 1  ; slot index that becomes child PID
+task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 72 = 9216 bytes v9.0)
 
 ; Networking state (RTL8139 NIC)
 net_state:        resd 1          ; NET_STATE_NONE / FOUND / UP

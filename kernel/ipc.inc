@@ -497,3 +497,242 @@ sys_sem_close:
 ipc_pipes:      times (IPC_MAX_PIPES * PIPE_STRUCT_SIZE) db 0
 ipc_shm:        times (IPC_MAX_SHM * SHM_STRUCT_SIZE) db 0
 ipc_sems:       times (IPC_MAX_SEM * SEM_STRUCT_SIZE) db 0
+
+;=======================================================================
+; POSIX MESSAGE QUEUES (v9.0) — SYS_MSGQ_* (slots 112-115)
+;
+; Message queue layout:
+;   MSGQ_ACTIVE   equ 0     ; dword: 0=free, 1=active
+;   MSGQ_MAX_MSGS equ 4     ; dword: max messages in queue
+;   MSGQ_MSG_SIZE equ 8     ; dword: bytes per message
+;   MSGQ_WR_IDX   equ 12    ; dword: write index (0..MAX_MSGS-1)
+;   MSGQ_RD_IDX   equ 16    ; dword: read index
+;   MSGQ_COUNT    equ 20    ; dword: current message count
+;   MSGQ_BUF      equ 24    ; MAX_MSGS * MSG_SIZE bytes of data
+;
+; Maximum message queues, messages per queue, bytes per message:
+;=======================================================================
+MSGQ_MAX_QUEUES equ 8
+MSGQ_MAX_MSGS   equ 16           ; messages per queue
+MSGQ_MAX_MSIZE  equ 256          ; max bytes per message
+MSGQ_STRUCT_HDR equ 24           ; header size before buf
+MSGQ_BUF_SIZE   equ (MSGQ_MAX_MSGS * MSGQ_MAX_MSIZE)
+MSGQ_STRUCT_SIZE equ (MSGQ_STRUCT_HDR + MSGQ_BUF_SIZE)
+
+MSGQ_ACTIVE     equ 0
+MSGQ_MAX_MSGS_O equ 4
+MSGQ_MSG_SIZE_O equ 8
+MSGQ_WR_IDX     equ 12
+MSGQ_RD_IDX     equ 16
+MSGQ_COUNT      equ 20
+MSGQ_BUF        equ 24
+
+;---------------------------------------
+; sys_msgq_create — Create a message queue
+; EBX = max_msgs (capped at MSGQ_MAX_MSGS)
+; ECX = msg_size (bytes, capped at MSGQ_MAX_MSIZE)
+; Returns: EAX = queue handle (0-based), or -1 on failure
+;---------------------------------------
+sys_msgq_create:
+        pushad
+        ; Find a free slot
+        mov esi, msgq_pool
+        xor edx, edx
+.smqc_scan:
+        cmp edx, MSGQ_MAX_QUEUES
+        jge .smqc_fail
+        cmp dword [esi + MSGQ_ACTIVE], 0
+        je .smqc_found
+        add esi, MSGQ_STRUCT_SIZE
+        inc edx
+        jmp .smqc_scan
+.smqc_found:
+        ; Clamp parameters
+        mov eax, ebx
+        cmp eax, 0
+        jle .smqc_fail
+        cmp eax, MSGQ_MAX_MSGS
+        jle .smqc_nmsgs_ok
+        mov eax, MSGQ_MAX_MSGS
+.smqc_nmsgs_ok:
+        mov ecx, ecx            ; msg_size already in ECX
+        cmp ecx, 0
+        jle .smqc_fail
+        cmp ecx, MSGQ_MAX_MSIZE
+        jle .smqc_msz_ok
+        mov ecx, MSGQ_MAX_MSIZE
+.smqc_msz_ok:
+        ; Zero the struct
+        push edi
+        push ecx
+        push eax
+        mov edi, esi
+        mov ecx, MSGQ_STRUCT_SIZE / 4
+        xor eax, eax
+        rep stosd
+        pop eax
+        pop ecx
+        pop edi
+        ; Initialize fields
+        mov dword [esi + MSGQ_ACTIVE],     1
+        mov [esi + MSGQ_MAX_MSGS_O],  eax
+        mov [esi + MSGQ_MSG_SIZE_O],  ecx
+        mov dword [esi + MSGQ_WR_IDX],     0
+        mov dword [esi + MSGQ_RD_IDX],     0
+        mov dword [esi + MSGQ_COUNT],      0
+        ; Return handle = slot index
+        mov dword [esp + 28], edx
+        popad
+        iretd
+.smqc_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_msgq_send — Send a message
+; EBX = queue handle
+; ECX = user data pointer
+; EDX = size (bytes, must be <= queue's msg_size)
+; Returns: EAX = 0 on success, -1 on failure/full
+;---------------------------------------
+sys_msgq_send:
+        pushad
+        ; Validate handle
+        cmp ebx, MSGQ_MAX_QUEUES
+        jge .smqs_fail
+        mov eax, ebx
+        imul eax, MSGQ_STRUCT_SIZE
+        lea esi, [msgq_pool + eax]
+        cmp dword [esi + MSGQ_ACTIVE], 1
+        jne .smqs_fail
+        ; Check not full
+        mov eax, [esi + MSGQ_COUNT]
+        cmp eax, [esi + MSGQ_MAX_MSGS_O]
+        jge .smqs_full
+        ; Validate user pointer
+        mov eax, ecx
+        call validate_user_ptr
+        jc .smqs_fail
+        ; Clamp size to queue's msg_size
+        mov eax, edx
+        cmp eax, [esi + MSGQ_MSG_SIZE_O]
+        jle .smqs_sz_ok
+        mov eax, [esi + MSGQ_MSG_SIZE_O]
+.smqs_sz_ok:
+        ; Compute dest = &buf[wr_idx * msg_size]
+        push esi
+        mov edi, [esi + MSGQ_WR_IDX]
+        imul edi, [esi + MSGQ_MSG_SIZE_O]
+        add edi, esi
+        add edi, MSGQ_BUF
+        ; Copy data
+        push eax
+        push ecx
+        mov esi, ecx            ; user ptr
+        mov ecx, eax            ; size
+        rep movsb
+        pop ecx
+        pop eax
+        pop esi
+        ; Advance write index (circular)
+        mov eax, [esi + MSGQ_WR_IDX]
+        inc eax
+        cmp eax, [esi + MSGQ_MAX_MSGS_O]
+        jl .smqs_no_wr_wrap
+        xor eax, eax
+.smqs_no_wr_wrap:
+        mov [esi + MSGQ_WR_IDX], eax
+        inc dword [esi + MSGQ_COUNT]
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.smqs_full:
+.smqs_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_msgq_recv — Receive a message
+; EBX = queue handle
+; ECX = user buffer pointer
+; EDX = max bytes to copy
+; Returns: EAX = bytes copied, -1 on failure/empty
+;---------------------------------------
+sys_msgq_recv:
+        pushad
+        ; Validate handle
+        cmp ebx, MSGQ_MAX_QUEUES
+        jge .smqr_fail
+        mov eax, ebx
+        imul eax, MSGQ_STRUCT_SIZE
+        lea esi, [msgq_pool + eax]
+        cmp dword [esi + MSGQ_ACTIVE], 1
+        jne .smqr_fail
+        ; Check not empty
+        cmp dword [esi + MSGQ_COUNT], 0
+        je .smqr_empty
+        ; Validate user pointer
+        mov eax, ecx
+        call validate_user_ptr
+        jc .smqr_fail
+        ; Compute src = &buf[rd_idx * msg_size]
+        push esi
+        mov eax, [esi + MSGQ_RD_IDX]
+        imul eax, [esi + MSGQ_MSG_SIZE_O]
+        add eax, esi
+        add eax, MSGQ_BUF           ; eax = src ptr
+        ; Determine copy size
+        mov edi, ecx                ; user dest
+        mov ecx, [esi + MSGQ_MSG_SIZE_O]
+        cmp ecx, edx
+        jle .smqr_sz_ok
+        mov ecx, edx
+.smqr_sz_ok:
+        push ecx
+        push esi
+        mov esi, eax               ; src
+        rep movsb
+        pop esi
+        pop ecx
+        pop esi
+        ; Advance read index
+        mov eax, [esi + MSGQ_RD_IDX]
+        inc eax
+        cmp eax, [esi + MSGQ_MAX_MSGS_O]
+        jl .smqr_no_rd_wrap
+        xor eax, eax
+.smqr_no_rd_wrap:
+        mov [esi + MSGQ_RD_IDX], eax
+        dec dword [esi + MSGQ_COUNT]
+        mov [esp + 28], ecx        ; return bytes copied
+        popad
+        iretd
+.smqr_empty:
+.smqr_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_msgq_close — Destroy a message queue
+; EBX = queue handle
+; Returns: EAX = 0 on success, -1 on failure
+;---------------------------------------
+sys_msgq_close:
+        cmp ebx, MSGQ_MAX_QUEUES
+        jge .smqclose_fail
+        mov eax, ebx
+        imul eax, MSGQ_STRUCT_SIZE
+        cmp dword [msgq_pool + eax + MSGQ_ACTIVE], 1
+        jne .smqclose_fail
+        mov dword [msgq_pool + eax + MSGQ_ACTIVE], 0
+        xor eax, eax
+        iretd
+.smqclose_fail:
+        mov eax, -1
+        iretd
+
+; Message queue pool storage
+msgq_pool:      times (MSGQ_MAX_QUEUES * MSGQ_STRUCT_SIZE) db 0

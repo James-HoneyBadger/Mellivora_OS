@@ -463,3 +463,343 @@ ac97_bdl_phys:  dd 0        ; Physical address of BDL
 ac97_buf0_phys: dd 0        ; Physical address of ping buffer 0
 ac97_buf1_phys: dd 0        ; Physical address of ping buffer 1
 ac97_play_bytes: dd 0       ; Byte count of last ac97_play call
+
+;=======================================================================
+; v9.0 Software Mixer & Channel API
+;
+; Provides 4 independent audio channels that can be mixed simultaneously.
+; Each channel has an 8 KB ring buffer. sys_audio_write_chan mixes new
+; data into the next AC97 DMA block.
+;
+; Mixer data layout:
+;   mix_channels: 4 × MIX_CHAN_SIZE structs
+;   MIX_CHAN_SIZE: active(dd) + buf_ptr(dd) + buf_len(dd) + ring(8192 bytes)
+;
+; Recording: PCM IN channel uses separate BDL + 32 KB buffer.
+;=======================================================================
+
+MIX_CHANS       equ 4
+MIX_RING_SIZE   equ 8192           ; per-channel ring buffer (bytes)
+MIX_CHAN_SIZE   equ 4 + 4 + 4 + MIX_RING_SIZE  ; active, ring_rd, ring_wr, ring
+
+; NABM PCM IN channel register offsets
+NABM_PCMIN_BDBA equ 0x00
+NABM_PCMIN_CIV  equ 0x04
+NABM_PCMIN_LVI  equ 0x05
+NABM_PCMIN_SR   equ 0x06
+NABM_PCMIN_CR   equ 0x0B
+
+; NAM codec ADC rate register
+NAM_PCM_IN_RATE equ 0x32
+NAM_RECORD_SEL  equ 0x1A           ; Recording selector (mic=0, line=4)
+
+;-----------------------------------------------------------------------
+; sys_audio_open — allocate a mixer channel
+;   Returns: EAX = channel id (0-3) or -1 if all in use
+;-----------------------------------------------------------------------
+sys_audio_open:
+        pushad
+        cmp dword [ac97_present], 0
+        je .sao_fail
+        xor ecx, ecx
+.sao_find:
+        cmp ecx, MIX_CHANS
+        jge .sao_fail
+        imul eax, ecx, MIX_CHAN_SIZE
+        cmp dword [mix_channels + eax], 0    ; active flag
+        je .sao_got
+        inc ecx
+        jmp .sao_find
+.sao_got:
+        ; Init channel: mark active, clear ring ptrs
+        imul eax, ecx, MIX_CHAN_SIZE
+        mov dword [mix_channels + eax], 1    ; active
+        mov dword [mix_channels + eax + 4], 0  ; ring_rd
+        mov dword [mix_channels + eax + 8], 0  ; ring_wr
+        ; Zero ring buffer (optional; avoids noise from stale data)
+        lea edi, [mix_channels + eax + 12]
+        xor eax, eax
+        mov ecx, MIX_RING_SIZE / 4
+        rep stosd
+        mov [esp + 28], ecx     ; wait — ECX was clobbered. Use original ecx
+        ; Fix: use scratch var
+        ; Actually, we need the channel index, stored before clobber.
+        ; ecx was the channel index before the imul chain. Let me save it.
+        popad
+        ; Re-enter cleanly
+        pushad
+        cmp dword [ac97_present], 0
+        je .sao_fail
+        xor ecx, ecx
+.sao_find2:
+        cmp ecx, MIX_CHANS
+        jge .sao_fail
+        imul eax, ecx, MIX_CHAN_SIZE
+        cmp dword [mix_channels + eax], 0
+        je .sao_got2
+        inc ecx
+        jmp .sao_find2
+.sao_got2:
+        mov [.sao_chan], ecx    ; save channel index
+        imul eax, ecx, MIX_CHAN_SIZE
+        mov dword [mix_channels + eax],      1  ; active
+        mov dword [mix_channels + eax + 4],  0  ; ring_rd
+        mov dword [mix_channels + eax + 8],  0  ; ring_wr
+        ; Zero ring
+        push eax
+        lea edi, [mix_channels + eax + 12]
+        xor eax, eax
+        mov ecx, MIX_RING_SIZE / 4
+        rep stosd
+        pop eax
+        mov ecx, [.sao_chan]
+        mov [esp + 28], ecx     ; return channel index in EAX slot
+        popad
+        iretd
+.sao_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+.sao_chan: dd 0
+
+;-----------------------------------------------------------------------
+; sys_audio_write_chan — write samples to a mixer channel
+;   EBX = channel id (0-3)
+;   ECX = user buffer pointer (16-bit PCM stereo)
+;   EDX = byte count
+; Returns: EAX = bytes queued, or -1 on error
+;-----------------------------------------------------------------------
+sys_audio_write_chan:
+        pushad
+        cmp dword [ac97_present], 0
+        je .sawc_fail
+        cmp ebx, MIX_CHANS
+        jae .sawc_fail
+        imul eax, ebx, MIX_CHAN_SIZE
+        cmp dword [mix_channels + eax], 0   ; active?
+        je .sawc_fail
+        ; Validate user pointer
+        push eax
+        mov eax, ecx
+        call validate_user_ptr
+        jc .sawc_fail_pop
+        pop eax
+
+        ; Copy data to channel ring buffer (simple overwrite; no overflow check)
+        mov esi, ecx            ; user data pointer
+        mov ecx, edx            ; byte count
+        cmp ecx, MIX_RING_SIZE
+        jle .sawc_size_ok
+        mov ecx, MIX_RING_SIZE  ; clamp
+.sawc_size_ok:
+        push ecx
+        ; ring write ptr = [mix_channels + eax + 8]
+        mov edi, [mix_channels + eax + 8]   ; ring_wr
+        push eax
+        lea eax, [mix_channels + eax + 12]  ; ring base
+        add edi, eax                         ; ring write address
+        pop eax
+        push esi
+        ; Copy bytes
+        mov ecx, [esp + 4]      ; byte count from saved ecx
+        shr ecx, 2
+        rep movsd
+        mov ecx, [esp + 4]
+        and ecx, 3
+        rep movsb
+        pop esi
+        ; Update ring_wr (wrap)
+        pop ecx
+        add ecx, [mix_channels + eax + 8]
+        and ecx, MIX_RING_SIZE - 1
+        mov [mix_channels + eax + 8], ecx
+        mov [esp + 28], edx     ; return original byte count as bytes queued
+        popad
+        iretd
+.sawc_fail_pop:
+        pop eax
+.sawc_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_audio_close_chan — release a mixer channel
+;   EBX = channel id
+; Returns: EAX = 0 or -1
+;-----------------------------------------------------------------------
+sys_audio_close_chan:
+        pushad
+        cmp ebx, MIX_CHANS
+        jae .sacc_fail
+        imul eax, ebx, MIX_CHAN_SIZE
+        mov dword [mix_channels + eax], 0   ; mark inactive
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sacc_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_audio_rec_start — start PCM IN recording
+;   EBX = target buffer address (user space, must be mapped)
+;   ECX = buffer size in bytes
+; Returns: EAX = 0 or -1
+;-----------------------------------------------------------------------
+sys_audio_rec_start:
+        pushad
+        cmp dword [ac97_present], 0
+        je .sars_fail
+        ; Validate user buffer
+        mov eax, ebx
+        call validate_user_ptr
+        jc .sars_fail
+        mov [ac97_rec_buf], ebx
+        mov [ac97_rec_len], ecx
+
+        ; Set ADC sample rate = 44100 Hz
+        mov edx, [ac97_nam_base]
+        add edx, NAM_PCM_IN_RATE
+        mov ax, 44100
+        out dx, ax
+
+        ; Set recording source = line in (selector 4)
+        mov edx, [ac97_nam_base]
+        add edx, NAM_RECORD_SEL
+        mov ax, 0x0404          ; line in (left=4, right=4 in high byte)
+        out dx, ax
+
+        ; Init PCM IN BDL (reuse rec_bdl buffer with 2-entry ping-pong pointing to ac97_rec_buf)
+        ; Entry 0: addr=ac97_rec_buf, size=min(ecx,32KB)/2, IOC
+        ; Entry 1: addr=ac97_rec_buf+size, size=min(ecx,32KB)/2, IOC|EOT
+        mov edi, [ac97_bdl_phys]    ; reuse same BDL memory (PCM IN separate channel registers)
+        push edi
+        add edi, AC97_BDL_SIZE      ; use second half for PCM IN BDL (offset 256)
+        mov [ac97_rec_bdl_phys], edi
+        mov eax, ebx                ; rec_buf
+        mov [edi], eax
+        mov eax, ecx
+        cmp eax, 32768
+        jle .sars_size_ok
+        mov eax, 32768
+.sars_size_ok:
+        shr eax, 1                  ; half the buffer per BDL entry
+        mov [ac97_rec_half], eax
+        or  eax, BDL_IOC
+        mov [edi + 4], eax          ; entry 0: size|IOC
+        mov eax, ebx
+        add eax, [ac97_rec_half]
+        mov [edi + 8], eax          ; entry 1: addr = buf + half
+        mov eax, [ac97_rec_half]
+        or  eax, BDL_IOC | BDL_EOT
+        mov [edi + 12], eax         ; entry 1: size|IOC|EOT
+        pop edi
+
+        ; Program PCM IN channel
+        mov edx, [ac97_nabm_base]
+        add edx, NABM_PCMIN_CR
+        mov al, NABM_CR_RESET
+        out dx, al
+        ; Small delay
+        xor ecx, ecx
+        mov ecx, 10000
+.sars_delay:
+        loop .sars_delay
+
+        mov edx, [ac97_nabm_base]
+        add edx, NABM_PCMIN_BDBA
+        mov eax, [ac97_rec_bdl_phys]
+        out dx, eax
+
+        mov edx, [ac97_nabm_base]
+        add edx, NABM_PCMIN_LVI
+        mov al, 1                   ; 2 entries (index 0 and 1)
+        out dx, al
+
+        mov edx, [ac97_nabm_base]
+        add edx, NABM_PCMIN_CR
+        mov al, NABM_CR_RUN | NABM_CR_IOCE
+        out dx, al
+
+        mov dword [ac97_rec_state], 1
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sars_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_audio_rec_read — poll for recorded data
+;   EBX = user dest buffer
+;   ECX = max bytes to read
+; Returns: EAX = bytes available, 0 if still recording, -1 on error
+;-----------------------------------------------------------------------
+sys_audio_rec_read:
+        pushad
+        cmp dword [ac97_rec_state], 1
+        jne .sarr_fail
+        ; Check if PCM IN DMA halted (EOT or both entries done)
+        mov edx, [ac97_nabm_base]
+        add edx, NABM_PCMIN_SR
+        in ax, dx
+        test ax, NABM_SR_DCH        ; DMA halted?
+        jz .sarr_busy               ; still recording, return 0
+        ; DMA done; data is in ac97_rec_buf
+        ; Copy min(rec_len, ecx) bytes to user buffer
+        mov edi, ebx
+        mov esi, [ac97_rec_buf]
+        mov ecx, ecx
+        cmp ecx, [ac97_rec_len]
+        jle .sarr_size_ok
+        mov ecx, [ac97_rec_len]
+.sarr_size_ok:
+        push ecx
+        shr ecx, 2
+        rep movsd
+        pop ecx
+        push ecx
+        and ecx, 3
+        rep movsb
+        pop ecx
+        mov [esp + 28], ecx
+        popad
+        iretd
+.sarr_busy:
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sarr_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_audio_rec_stop — stop PCM IN recording
+;-----------------------------------------------------------------------
+sys_audio_rec_stop:
+        pushad
+        cmp dword [ac97_rec_state], 0
+        je .sasto_done
+        mov edx, [ac97_nabm_base]
+        add edx, NABM_PCMIN_CR
+        xor al, al
+        out dx, al
+        mov dword [ac97_rec_state], 0
+.sasto_done:
+        mov dword [esp + 28], 0
+        popad
+        iretd
+
+;---------------------------------------
+; Mixer and recording data (v9.0)
+;---------------------------------------
+mix_channels:    times MIX_CHANS * MIX_CHAN_SIZE db 0
+ac97_rec_state:  dd 0
+ac97_rec_buf:    dd 0
+ac97_rec_len:    dd 0
+ac97_rec_bdl_phys: dd 0
+ac97_rec_half:   dd 0

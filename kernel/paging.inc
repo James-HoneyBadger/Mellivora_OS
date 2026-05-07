@@ -24,6 +24,14 @@ PAGE_TABLE_BASE  equ 0x00381000     ; First page table (128 KB for 32 tables)
 PAGING_MAP_MB    equ 128            ; How many MB to identity-map
 PAGING_MAP_TABLES equ PAGING_MAP_MB / 4  ; 32 page tables
 
+; v9.0 Demand-paging extension:
+;   Virtual 128MB–512MB (PDEs 32–127) backed by empty page tables.
+;   Physical pages are allocated on first access.
+DEMAND_MAP_TABLES equ 96           ; Extra page tables: covers 96×4MB = 384MB
+DEMAND_TABLE_BASE equ PAGE_TABLE_BASE + PAGING_MAP_TABLES * 4096  ; 0x3A1000
+USER_DEMAND_BASE  equ 0x08000000   ; Start of demand-paged zone (128MB)
+USER_DEMAND_MAX   equ 0x20000000   ; End of demand-paged zone  (512MB)
+
 ; Page entry flags
 PG_PRESENT       equ 0x01
 PG_WRITABLE      equ 0x02
@@ -82,7 +90,7 @@ paging_init:
         xor ecx, ecx
 .fill_pde:
         cmp ecx, PAGING_MAP_TABLES
-        jge .enable
+        jge .demand_init
 
         mov eax, esi
         or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
@@ -92,6 +100,39 @@ paging_init:
         add esi, 4096
         inc ecx
         jmp .fill_pde
+
+.demand_init:
+        ;-----------------------------------
+        ; Step 3b: Build demand-paged page
+        ;          tables for 128MB–512MB
+        ;-----------------------------------
+        ; EDI still points to PDE 32 (128MB)
+        ; Allocate DEMAND_MAP_TABLES zeroed page tables
+        mov esi, DEMAND_TABLE_BASE
+        xor ecx, ecx
+.demand_pt_loop:
+        cmp ecx, DEMAND_MAP_TABLES
+        jge .enable
+
+        ; Zero this page table (all PTEs not-present)
+        push ecx
+        push edi
+        mov  edi, esi
+        xor  eax, eax
+        mov  ecx, 1024
+        rep  stosd
+        pop  edi
+        pop  ecx
+
+        ; Install PDE pointing to this empty page table
+        mov  eax, esi
+        or   eax, PG_PRESENT | PG_WRITABLE | PG_USER
+        mov  [edi], eax
+
+        add  edi, 4
+        add  esi, 4096
+        inc  ecx
+        jmp  .demand_pt_loop
 
 .enable:
         ;-----------------------------------
@@ -139,6 +180,67 @@ isr_page_fault:
         mov [pf_addr], eax
         pop eax
 
+        ;-----------------------------------
+        ; v9.0 Demand-paging fast path:
+        ;   User-mode, not-present fault in
+        ;   the demand-paged zone → alloc.
+        ;-----------------------------------
+        push eax
+        push ecx
+        push edx
+
+        ; Check: user-mode fault (error bit 2)
+        mov  eax, [pf_errcode]
+        test eax, 0x04
+        jz   .pf_kernel_fault
+
+        ; Check: not-present fault (error bit 0 clear)
+        test eax, 0x01
+        jnz  .pf_kernel_fault
+
+        ; Check: faulting address in demand zone [USER_DEMAND_BASE, USER_DEMAND_MAX)
+        mov  eax, [pf_addr]
+        cmp  eax, USER_DEMAND_BASE
+        jb   .pf_kernel_fault
+        cmp  eax, USER_DEMAND_MAX
+        jae  .pf_kernel_fault
+
+        ; Allocate a physical page
+        call pmm_alloc_page      ; EAX = phys addr or 0
+        test eax, eax
+        jz   .pf_oom
+
+        ; Map virtual fault address → physical page
+        ; paging_map_page(EAX=virt, EBX=phys, ECX=flags)
+        mov  ecx, eax            ; save phys
+        mov  ebx, eax            ; phys
+        mov  eax, [pf_addr]
+        and  eax, 0xFFFFF000     ; page-align
+        push ecx
+        mov  ecx, PG_PRESENT | PG_WRITABLE | PG_USER
+        call paging_map_page     ; EAX=virt, EBX=phys, ECX=flags
+        pop  ecx
+
+        ; Success — return to faulting instruction
+        pop  edx
+        pop  ecx
+        pop  eax
+        add  esp, 4             ; remove error code
+        iretd
+
+.pf_oom:
+        ; Out of memory — fall through to crash handler
+        pop  edx
+        pop  ecx
+        pop  eax
+        jmp  .pf_show_error
+
+.pf_kernel_fault:
+        pop  edx
+        pop  ecx
+        pop  eax
+
+.pf_show_error:
         pushad
 
         ; If in GUI or VBE mode, restore text so the error is visible

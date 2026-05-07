@@ -494,12 +494,23 @@ irq_keyboard:
         je .ext_right
         ; Scrollback only when no program is running
         cmp byte [program_running], 0
-        jne .eoi
+        jne .ext_pgup_prog
         cmp al, 0x49            ; PgUp
         je .ext_pgup
         cmp al, 0x51            ; PgDn
         je .ext_pgdn
         jmp .eoi
+.ext_pgup_prog:
+        ; Forward PgUp/PgDn to running program's key buffer (v9.0)
+        cmp al, 0x49
+        jne .ext_pgdn_prog
+        mov al, KEY_PGUP
+        jmp .store_key
+.ext_pgdn_prog:
+        cmp al, 0x51
+        jne .eoi
+        mov al, KEY_PGDN
+        jmp .store_key
 .ext_up:
         mov al, KEY_UP
         jmp .store_key

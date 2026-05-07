@@ -49,6 +49,19 @@ hbfs_init:
         mov esi, msg_hbfs_found
         call vga_print
 
+        ; v9.0: Check for journal recovery (v2 only)
+        cmp dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jne .hbfs_v1_mount          ; v1: no journal
+        ; Init journal runtime state from superblock
+        mov  eax, [hbfs_super_buf + HBFS_SB_JRNL_PTR]
+        mov  [hbfs_journal_ptr], eax
+        cmp  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 1
+        jne  .hbfs_journal_clean    ; state=0: clean, skip recovery
+        ; Dirty journal: replay UNDO log (restore pre-images)
+        call hbfs_journal_recover
+.hbfs_journal_clean:
+        mov  dword [hbfs_journal_dirty], 0
+.hbfs_v1_mount:
         ; Load root directory
         call hbfs_load_root_dir
 
@@ -80,13 +93,16 @@ hbfs_format:
 
         mov edi, hbfs_super_buf
         mov dword [edi + 0], HBFS_MAGIC
-        mov dword [edi + 4], 1                  ; Version
+        mov dword [edi + 4], HBFS_VERSION_V2        ; v9.0: version 2
         mov dword [edi + 8], HBFS_TOTAL_BLOCKS  ; Total blocks
         mov dword [edi + 12], HBFS_TOTAL_BLOCKS ; Free blocks
         mov dword [edi + 16], HBFS_ROOT_DIR_START; Root dir LBA
         mov dword [edi + 20], HBFS_BITMAP_START  ; Bitmap start LBA
         mov dword [edi + 24], HBFS_DATA_START    ; Data start LBA
         mov dword [edi + 28], HBFS_BLOCK_SIZE
+        ; v9.0 journal fields
+        mov dword [edi + HBFS_SB_JRNL_STATE], 0 ; journal state = clean
+        mov dword [edi + HBFS_SB_JRNL_PTR],   0 ; write pointer = 0
 
         ; Write superblock
         mov eax, HBFS_SUPERBLOCK_LBA
@@ -112,6 +128,52 @@ hbfs_format:
         dec ebx
         jmp .fmt_bmp_loop
 .fmt_bmp_done:
+        ; v9.0: Mark first HBFS_JOURNAL_BLOCKS blocks as used (journal reserved area).
+        ; Read the first bitmap sector, set bits 0..HBFS_JOURNAL_BLOCKS-1, write back.
+        push eax
+        push ecx
+        push esi
+        push edi
+        mov  eax, HBFS_BITMAP_START
+        mov  ecx, 1
+        mov  edi, hbfs_block_buf
+        call ata_read_sectors
+        ; Set first HBFS_JOURNAL_BLOCKS bits in bitmap
+        mov  ecx, HBFS_JOURNAL_BLOCKS
+        xor  edx, edx
+.fmt_jrnl_mark:
+        bts  dword [hbfs_block_buf], edx
+        inc  edx
+        loop .fmt_jrnl_mark
+        ; Write back updated bitmap sector
+        mov  eax, HBFS_BITMAP_START
+        mov  ecx, 1
+        mov  esi, hbfs_block_buf
+        call ata_write_sectors
+        ; Zero the journal area itself (HBFS_JOURNAL_SECTS sectors at HBFS_JOURNAL_LBA)
+        mov  edi, hbfs_block_buf
+        xor  eax, eax
+        mov  ecx, HBFS_BLOCK_SIZE / 4
+        rep  stosd
+        mov  eax, HBFS_JOURNAL_LBA
+        mov  ebx, HBFS_JOURNAL_BLOCKS
+.fmt_jrnl_zero:
+        test ebx, ebx
+        jz   .fmt_jrnl_done
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  esi, hbfs_block_buf
+        call ata_write_sectors
+        add  eax, HBFS_SECTORS_PER_BLK
+        dec  ebx
+        jmp  .fmt_jrnl_zero
+.fmt_jrnl_done:
+        ; Init journal runtime state
+        mov  dword [hbfs_journal_ptr],   0
+        mov  dword [hbfs_journal_dirty],  0
+        pop  edi
+        pop  esi
+        pop  ecx
+        pop  eax
 
         ; Zero out root directory (256 sectors = 32 blocks)
         ; Use a loop to write all blocks
@@ -134,7 +196,245 @@ hbfs_format:
         popad
         ret
 
-; Load current directory into memory (with cache)
+;=======================================================================
+; HBFS v2 Write-Ahead Journal (v9.0)
+;
+; Each transaction:
+;   1. hbfs_journal_begin   — marks superblock state = 1 (in-progress)
+;   2. hbfs_journal_log_sector(EAX=lba) — saves OLD sector content
+;      to journal before the caller writes new content
+;   3. hbfs_journal_commit  — writes commit marker + clears state
+;
+; On mount with state=1: hbfs_journal_recover replays pre-images (UNDO).
+;
+; Journal layout in the data area (HBFS_JOURNAL_LBA):
+;   Sector 0 per entry: header [JRNL magic][type][target LBA][padding]
+;   Sector 1 per entry: 512 bytes of original sector content
+;   Two sectors per logged sector; journal wraps around at HBFS_JOURNAL_SECTS.
+;   Commit entry: single header sector with type = HBFS_JRNL_T_COMMIT.
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; hbfs_journal_begin — start a metadata transaction
+; Sets superblock journal state = 1 and resets the write pointer.
+; All registers preserved.
+;-----------------------------------------------------------------------
+hbfs_journal_begin:
+        ; Skip if not a v2 filesystem
+        cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jne  .hjb_done
+        ; Reset pointer and set state in the in-memory superblock
+        mov  dword [hbfs_journal_ptr],   0
+        mov  dword [hbfs_journal_dirty],  1
+        mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 1
+        ; Flush superblock to disk immediately (so crash leaves state=1)
+        push eax
+        push ecx
+        push esi
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call ata_write_sectors
+        pop  esi
+        pop  ecx
+        pop  eax
+.hjb_done:
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_journal_log_sector — save one sector's original content to journal
+;   In:  EAX = disk LBA to log
+;   Logs 2 journal sectors: header + original data.
+;   All registers preserved.  Does nothing for v1 or if journal full.
+;-----------------------------------------------------------------------
+hbfs_journal_log_sector:
+        ; Skip if not v2
+        cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jne  .hjls_done
+        cmp  dword [hbfs_journal_dirty], 1
+        jne  .hjls_done
+
+        pushad
+
+        ; Check there's room for 2 more sectors (need ptr+1 < HBFS_JOURNAL_SECTS-1)
+        mov  edx, [hbfs_journal_ptr]
+        add  edx, 2
+        cmp  edx, HBFS_JOURNAL_SECTS
+        jge  .hjls_full             ; journal full — skip logging this sector
+
+        ; Compute LBA of next journal slot
+        mov  edx, [hbfs_journal_ptr]
+        lea  edi, [HBFS_JOURNAL_LBA + edx]  ; journal write LBA
+
+        ; --- Write journal header sector ---
+        ; Use hbfs_block_buf (first 512 bytes) as the header sector
+        ; (caller is not currently doing file I/O, so this is safe)
+        mov  esi, hbfs_block_buf
+        push eax                    ; save target LBA
+        mov  dword [esi + 0], HBFS_JRNL_MAGIC
+        mov  dword [esi + 4], HBFS_JRNL_T_PRE
+        mov  eax, [esp]             ; target LBA
+        mov  [esi + 8], eax
+        mov  dword [esi + 12], 0    ; reserved
+        pop  eax
+
+        ; Zero the rest of the header sector
+        push esi
+        push edi
+        add  esi, 16
+        xor  ecx, ecx
+        mov  ecx, (512 - 16) / 4
+        push eax
+        xor  eax, eax
+        rep  stosd
+        pop  eax
+        pop  edi
+        pop  esi
+
+        ; Write header to current journal slot
+        push eax
+        push ecx
+        mov  eax, edi
+        mov  ecx, 1
+        call ata_write_sectors
+        pop  ecx
+        pop  eax
+
+        ; --- Read and write the original data sector ---
+        inc  edi                    ; next journal sector
+
+        ; Read original sector into hbfs_block_buf+512
+        push eax
+        push ecx
+        mov  ecx, 1
+        lea  esi, [hbfs_block_buf + 512]
+        call ata_read_sectors       ; EAX = target LBA
+        ; Write original data to journal
+        mov  eax, edi
+        mov  ecx, 1
+        call ata_write_sectors
+        pop  ecx
+        pop  eax
+
+        ; Advance journal pointer by 2
+        add  dword [hbfs_journal_ptr], 2
+        ; Update in-memory superblock ptr field (flushed at commit)
+        mov  edx, [hbfs_journal_ptr]
+        mov  [hbfs_super_buf + HBFS_SB_JRNL_PTR], edx
+
+.hjls_full:
+        popad
+.hjls_done:
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_journal_commit — close a transaction
+; Writes a commit sector and resets the journal state to clean.
+; All registers preserved.
+;-----------------------------------------------------------------------
+hbfs_journal_commit:
+        cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jne  .hjc_done
+        cmp  dword [hbfs_journal_dirty], 1
+        jne  .hjc_done
+
+        pushad
+
+        ; Write commit marker at current journal pointer
+        mov  edx, [hbfs_journal_ptr]
+        cmp  edx, HBFS_JOURNAL_SECTS
+        jge  .hjc_flush             ; no room — skip marker (still mark clean)
+
+        lea  edi, [HBFS_JOURNAL_LBA + edx]
+        mov  esi, hbfs_block_buf
+        mov  dword [esi + 0], HBFS_JRNL_MAGIC
+        mov  dword [esi + 4], HBFS_JRNL_T_COMMIT
+        mov  dword [esi + 8], 0
+        mov  dword [esi + 12], 0
+        mov  eax, edi
+        mov  ecx, 1
+        call ata_write_sectors
+
+.hjc_flush:
+        ; Reset journal state and flush superblock
+        mov  dword [hbfs_journal_dirty], 0
+        mov  dword [hbfs_journal_ptr],   0
+        mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 0
+        mov  dword [hbfs_super_buf + HBFS_SB_JRNL_PTR],   0
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call ata_write_sectors
+
+        popad
+.hjc_done:
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_journal_recover — replay UNDO log after unclean shutdown
+; Called from hbfs_init when superblock state == 1 (in-progress).
+; Restores each pre-image sector to its original location.
+; All registers preserved.
+;-----------------------------------------------------------------------
+hbfs_journal_recover:
+        pushad
+
+        mov  ebx, 0             ; journal sector index
+
+.hjr_scan:
+        ; Check if we've scanned all journal sectors
+        cmp  ebx, HBFS_JOURNAL_SECTS
+        jge  .hjr_done
+
+        ; Read journal header sector at this index
+        lea  eax, [HBFS_JOURNAL_LBA + ebx]
+        mov  ecx, 1
+        lea  edi, [hbfs_block_buf + 1024]  ; temp at +1024 (doesn't stomp first 1024)
+        call ata_read_sectors
+        jc   .hjr_done                     ; read error — stop recovery
+
+        ; Check magic
+        cmp  dword [hbfs_block_buf + 1024], HBFS_JRNL_MAGIC
+        jne  .hjr_done              ; no valid entry — done
+
+        ; Check type
+        mov  edx, [hbfs_block_buf + 1024 + 4]
+        cmp  edx, HBFS_JRNL_T_COMMIT
+        je   .hjr_done              ; found commit — transaction was OK, stop undo
+
+        cmp  edx, HBFS_JRNL_T_PRE
+        jne  .hjr_next              ; unknown type — skip
+
+        ; Pre-image entry: read the data sector (index+1) and write to target LBA
+        mov  edi, [hbfs_block_buf + 1024 + 8]  ; target LBA
+        inc  ebx
+        lea  eax, [HBFS_JOURNAL_LBA + ebx]
+        mov  ecx, 1
+        lea  esi, [hbfs_block_buf + 512]
+        call ata_read_sectors
+        jc   .hjr_next              ; read error on data — skip
+
+        ; Restore original content to target LBA
+        mov  eax, edi
+        mov  ecx, 1
+        mov  esi, hbfs_block_buf + 512
+        call ata_write_sectors
+
+.hjr_next:
+        inc  ebx
+        jmp  .hjr_scan
+
+.hjr_done:
+        ; Reset journal state
+        mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 0
+        mov  dword [hbfs_super_buf + HBFS_SB_JRNL_PTR],   0
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call ata_write_sectors
+
+        popad
+        ret
 ; Returns: CF set on read error
 hbfs_load_root_dir:
         pushad
@@ -296,8 +596,9 @@ hbfs_alloc_blocks:
         call ata_read_sectors
 
         ; Scan for N contiguous free bits
-        xor edx, edx           ; Current block number
-        mov ecx, HBFS_TOTAL_BLOCKS ; Total blocks in bitmap
+        ; v9.0: start from HBFS_JOURNAL_BLOCKS to skip journal reserved area
+        mov edx, HBFS_JOURNAL_BLOCKS   ; Start block (skip journal)
+        mov ecx, HBFS_TOTAL_BLOCKS
 
 .scan_start:
         cmp edx, ecx
@@ -1058,5 +1359,99 @@ sys_setmtime:
         iretd
 .ssmt_fail:
         mov dword [esp + 28], -1
+        popad
+        iretd
+
+;=======================================================================
+; sys_defrag — SYS_DEFRAG (104) — HBFS v2 Filesystem Maintenance
+;
+; Performs three maintenance tasks:
+;   1. Recounts free blocks and updates the superblock.
+;   2. Scans bitmap for fragmented (non-contiguous) free runs.
+;   3. Journals the updated superblock for crash safety.
+;
+; Full block-relocation defrag is a v9.x TODO.
+;
+; Returns: EAX = number of fragmented free runs detected, or -1 on error.
+;=======================================================================
+sys_defrag:
+        pushad
+
+        ; Load bitmap from disk
+        call hbfs_load_bitmap
+        jc   .sdf_fail
+
+        ; 1. Count free blocks and fragmented free-run boundaries
+        xor  ecx, ecx           ; ECX = free block count
+        xor  edx, edx           ; EDX = fragmented run count
+        xor  ebx, ebx           ; EBX = block index
+        xor  esi, esi           ; ESI = previous block was free (0=no 1=yes)
+
+.sdf_scan:
+        cmp  ebx, HBFS_TOTAL_BLOCKS
+        jge  .sdf_scan_done
+
+        mov  eax, ebx
+        shr  eax, 3             ; byte index in bitmap
+        mov  edi, ebx
+        and  edi, 7             ; bit index
+        bt   dword [hbfs_bitmap_buf + eax], edi
+        jc   .sdf_used          ; bit set = used
+
+        ; Block is free
+        inc  ecx                ; increment free count
+        cmp  esi, 0             ; was previous block free?
+        jne  .sdf_cont_run      ; yes → continuing run
+        inc  edx                ; no → new fragmented run starts
+        mov  esi, 1             ; mark: previous is now free
+        jmp  .sdf_next_block
+
+.sdf_cont_run:
+        jmp  .sdf_next_block
+
+.sdf_used:
+        mov  esi, 0             ; previous block used
+.sdf_next_block:
+        inc  ebx
+        jmp  .sdf_scan
+
+.sdf_scan_done:
+        ; Subtract 1 from run count if we had exactly 1 contiguous run (not fragmented)
+        cmp  edx, 1
+        jle  .sdf_no_fragment_adj
+        dec  edx                ; runs > 1 means at least 1 boundary = that many gaps
+.sdf_no_fragment_adj:
+
+        ; 2. Update free block count in superblock
+        mov  [hbfs_super_buf + 12], ecx
+
+        ; 3. Journal and flush the updated superblock
+        cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jne  .sdf_flush         ; v1: no journal
+        call hbfs_journal_begin
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        call hbfs_journal_log_sector
+.sdf_flush:
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call ata_write_sectors
+        jc   .sdf_fail_commit
+        cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jne  .sdf_done
+        call hbfs_journal_commit
+
+.sdf_done:
+        ; Return fragmented run count in EAX
+        mov  [esp + 28], edx
+        popad
+        iretd
+
+.sdf_fail_commit:
+        cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jne  .sdf_fail
+        call hbfs_journal_commit  ; still commit (clears dirty state)
+.sdf_fail:
+        mov  dword [esp + 28], -1
         popad
         iretd

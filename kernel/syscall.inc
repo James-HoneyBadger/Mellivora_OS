@@ -11,13 +11,12 @@
 
 SYSCALL_MAX     equ 128         ; Table capacity (0..127)
 
-; --- Phase 1.2: user pointer validation -----------------------------------
+; --- Phase 1.2 v9.0: user pointer validation --------------------------------
 ; A valid user pointer must lie in [PROGRAM_BASE, USER_PTR_MAX).
-;   PROGRAM_BASE = 0x00200000  rejects NULL, real-mode IVT/BDA, kernel image
-;   USER_PTR_MAX = 0x08000000  rejects anything beyond the 128 MB identity
-;                              map; catches obviously bogus addresses without
-;                              breaking PMM-allocated user heap pointers.
-USER_PTR_MAX    equ 0x08000000
+;   PROGRAM_BASE  = 0x00200000  rejects NULL, real-mode IVT/BDA, kernel image
+;   USER_PTR_MAX  = 0x20000000  512 MB — covers the 128 MB identity-mapped zone
+;                               PLUS the 384 MB v9.0 demand-paged extension.
+USER_PTR_MAX    equ 0x20000000
 
 ; validate_user_ptr - sanity-check a single user pointer.
 ;   In : EAX = pointer
@@ -160,8 +159,22 @@ syscall_table:
         dd sys_psf_char         ; 100 SYS_PSF_CHAR
         dd sys_pci_find         ; 101 SYS_PCI_FIND
         dd sys_getppid          ; 102 SYS_GETPPID
-        ; Reserved slots (103..127) — point to bad handler
-        times (SYSCALL_MAX - 103) dd syscall_handler.syscall_bad
+        ; v9.0 syscalls
+        dd sys_fork             ; 103 SYS_FORK
+        dd sys_defrag           ; 104 SYS_DEFRAG           (HBFS v2)
+        dd sys_tls_connect      ; 105 SYS_TLS_CONNECT      (stub)
+        dd sys_audio_rec_start  ; 106 SYS_AUDIO_RECORD_START
+        dd sys_audio_rec_read   ; 107 SYS_AUDIO_RECORD_READ
+        dd sys_audio_rec_stop   ; 108 SYS_AUDIO_RECORD_STOP
+        dd sys_audio_open       ; 109 SYS_AUDIO_OPEN
+        dd sys_audio_write_chan ; 110 SYS_AUDIO_WRITE
+        dd sys_audio_close_chan ; 111 SYS_AUDIO_CLOSE_CHAN
+        dd sys_msgq_create      ; 112 SYS_MSGQ_CREATE
+        dd sys_msgq_send        ; 113 SYS_MSGQ_SEND
+        dd sys_msgq_recv        ; 114 SYS_MSGQ_RECV
+        dd sys_msgq_close       ; 115 SYS_MSGQ_CLOSE
+        ; Reserved slots (116..127) — point to bad handler
+        times (SYSCALL_MAX - 116) dd syscall_handler.syscall_bad
 
 sys_exit:
         ; First check if this is a background task exiting
@@ -610,3 +623,25 @@ sys_sbrk:
         iretd
 
 .old_brk: dd 0
+
+;=======================================================================
+; v9.0 Stub syscall handlers (104-115)
+; Full implementations land in later phases (Phases 2, 5).
+; All return EAX = -1 (ENOSYS) until implemented.
+;=======================================================================
+
+; 104 SYS_DEFRAG — implemented in kernel/hbfs.inc
+; sys_defrag label defined there; forward reference resolved at link time.
+
+; 105 SYS_TLS_CONNECT — implemented in kernel/net.inc (v9.0).
+; Forward reference resolved at link time.
+
+; 106-111 SYS_AUDIO_RECORD_* and SYS_AUDIO_OPEN/WRITE/CLOSE
+; All implemented in kernel/ac97.inc (v9.0).
+; Forward references resolved at link time by NASM include order.
+
+; 112-115 SYS_MSGQ_* — POSIX message queues implemented in kernel/ipc.inc (v9.0).
+; The label aliases below are removed; syscall table (dd sys_msgq_create etc.)
+; resolves directly to the functions defined in ipc.inc.
+; (No stubs needed — ipc.inc defines: sys_msgq_create, sys_msgq_send,
+;  sys_msgq_recv, sys_msgq_close with full iretd handlers.)

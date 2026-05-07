@@ -1,32 +1,38 @@
-; bterm.asm - BTerm - Burrows Terminal Emulator
-; A full shell-like terminal running inside a GUI window.
+; bterm.asm - BTerm - Burrows Terminal Emulator v9.0
 ; Supports: ls, cat, cd, pwd, mkdir, rm, touch, echo, clear,
 ;           date, help, exit, ver, size, hex, write, whoami
+; v9.0: 80x24 viewport, 200-line scrollback, per-line ANSI color, PgUp/PgDn
 
 %include "syscalls.inc"
 %include "lib/gui.inc"
 
-TERM_LINES      equ 18          ; visible output lines
-TERM_COLS       equ 58          ; chars per line
-INPUT_MAX       equ 58          ; max input length
+TERM_LINES      equ 24          ; visible output lines
+TERM_COLS       equ 80          ; chars per line (v9.0: was 58)
+INPUT_MAX       equ 78          ; max input length
 FILE_BUF_SIZE   equ 32768       ; 32 KB file read buffer
+SCROLL_LINES    equ 200         ; scrollback buffer depth (v9.0)
+SCROLL_LSIZE    equ 84          ; bytes per scroll line (80 chars+null+3 pad)
+; ANSI color indices: 0=green 1=white 2=red 3=yellow 4=blue 5=magenta 6=cyan 7=gray
+TERM_COLOR_DEFAULT equ 0
 
 start:
-        ; Create window
-        mov eax, 40             ; x
-        mov ebx, 40             ; y
-        mov ecx, 480            ; w
-        mov edx, 320            ; h
+        ; Create window (v9.0: 80x24 terminal needs wider window)
+        mov eax, 20             ; x
+        mov ebx, 20             ; y
+        mov ecx, 680            ; w (80 chars * 8px + 40px padding)
+        mov edx, 430            ; h (24 lines * 16px + 46px padding)
         mov esi, title_str
         call gui_create_window
         cmp eax, -1
         je .exit
         mov [win_id], eax
 
-        ; Initialize terminal state
+        ; Initialize terminal state (v9.0)
         mov dword [input_len], 0
         mov byte [input_buf], 0
-        mov dword [num_lines], 0
+        mov dword [scroll_count], 0
+        mov dword [view_offset], 0
+        mov byte [cur_color], TERM_COLOR_DEFAULT
 
         ; Show welcome
         mov esi, msg_welcome
@@ -52,6 +58,11 @@ start:
         je .handle_enter
         cmp bl, 8               ; Backspace
         je .handle_bs
+        ; v9.0: PgUp / PgDn for scrollback
+        cmp bl, KEY_PGUP
+        je .handle_pgup
+        cmp bl, KEY_PGDN
+        je .handle_pgdn
         cmp bl, 32
         jl .main_loop
         cmp bl, 126
@@ -74,14 +85,43 @@ start:
         mov byte [input_buf + ecx], 0
         jmp .main_loop
 
+.handle_pgup:
+        ; Scroll back by TERM_LINES/2 lines
+        mov eax, [view_offset]
+        add eax, TERM_LINES / 2
+        ; Clamp to max scroll (scroll_count - TERM_LINES)
+        mov ecx, [scroll_count]
+        sub ecx, TERM_LINES
+        jle .pgup_clamp_zero
+        cmp eax, ecx
+        jle .pgup_store
+        mov eax, ecx
+        jmp .pgup_store
+.pgup_clamp_zero:
+        xor eax, eax
+.pgup_store:
+        mov [view_offset], eax
+        jmp .main_loop
+
+.handle_pgdn:
+        ; Scroll forward by TERM_LINES/2 lines
+        mov eax, [view_offset]
+        sub eax, TERM_LINES / 2
+        jge .pgdn_store
+        xor eax, eax
+.pgdn_store:
+        mov [view_offset], eax
+        jmp .main_loop
+
 .handle_enter:
         ; Show prompt line in output
         call term_add_prompt_line
         ; Execute
         call term_exec_cmd
-        ; Reset input
+        ; Reset input, scroll to bottom
         mov dword [input_len], 0
         mov byte [input_buf], 0
+        mov dword [view_offset], 0
         jmp .main_loop
 
 .close:
@@ -93,37 +133,56 @@ start:
         int 0x80
 
 ;---------------------------------------
-; term_draw_content - Draw terminal text
+; term_draw_content - Draw terminal text (v9.0: scrollback support)
 ;---------------------------------------
 term_draw_content:
         pushad
-        ; Clear content area
+        ; Clear content area (v9.0 wider window)
         mov eax, [win_id]
         mov ebx, 0
         mov ecx, 0
-        mov edx, 480
-        mov esi, 320
+        mov edx, 680
+        mov esi, 430
         mov edi, 0x00101010     ; dark bg
         call gui_fill_rect
 
-        ; Draw output lines
+        ; Compute display start line: max(0, scroll_count - TERM_LINES - view_offset)
+        mov eax, [scroll_count]
+        sub eax, TERM_LINES
+        sub eax, [view_offset]
+        test eax, eax
+        jge .start_ok
+        xor eax, eax
+.start_ok:
+        mov [.draw_start], eax
+
+        ; Draw output lines (ECX = display line 0..TERM_LINES-1, EDX = y)
         xor ecx, ecx
         mov edx, 4
 .draw_lines:
-        cmp ecx, [num_lines]
-        jge .draw_prompt
         cmp ecx, TERM_LINES
         jge .draw_prompt
+        ; Logical line index in scroll buffer
+        mov eax, [.draw_start]
+        add eax, ecx            ; EAX = logical line index
+        cmp eax, [scroll_count]
+        jge .draw_prompt        ; past last written line
+
         push ecx
         push edx
-        mov eax, ecx
-        shl eax, 6             ; * 64 bytes per line
-        lea esi, [output_buf + eax]
+        mov ecx, edx            ; ECX = y_pos for gui_draw_text
+
+        ; Line pointer and color
+        imul ebx, eax, SCROLL_LSIZE
+        lea esi, [scroll_buf + ebx]     ; text pointer
+        movzx ebx, byte [scroll_colors + eax]  ; color index 0-7
+        shl ebx, 2
+        mov edi, [term_colors + ebx]    ; ARGB pixel color
+
         mov eax, [win_id]
-        mov ebx, 4
-        mov ecx, edx
-        mov edi, 0x0000CC00     ; green text
-        call gui_draw_text
+        mov ebx, 4              ; x
+        call gui_draw_text      ; (eax=win_id, ebx=x, ecx=y, esi=str, edi=color)
+
         pop edx
         pop ecx
         add edx, 16
@@ -160,10 +219,7 @@ term_draw_content:
 
         popad
         ret
-
-;---------------------------------------
-; term_exec_cmd - Execute the input buffer command
-;---------------------------------------
+.draw_start: dd 0
 term_exec_cmd:
         pushad
         cmp dword [input_len], 0
@@ -791,29 +847,38 @@ term_exec_cmd:
         ret
 
 ;---------------------------------------
-; term_add_line - Add string to output buffer
-; ESI = string
+; term_add_line - Add string to scrollback buffer (v9.0)
+; ESI = string, uses cur_color for color attribute
 ;---------------------------------------
 term_add_line:
         pushad
-        mov ecx, [num_lines]
-        cmp ecx, TERM_LINES
+        ; If scroll buffer full, shift all lines up by 1
+        mov ecx, [scroll_count]
+        cmp ecx, SCROLL_LINES
         jl .add
-        ; Scroll up
+        ; Shift: memmove(scroll_buf, scroll_buf+SCROLL_LSIZE, (SCROLL_LINES-1)*SCROLL_LSIZE)
         cld
-        mov edi, output_buf
         push esi
-        mov esi, output_buf + 64
-        mov ecx, (TERM_LINES - 1) * 64 / 4
+        mov edi, scroll_buf
+        mov esi, scroll_buf + SCROLL_LSIZE
+        mov ecx, (SCROLL_LINES - 1) * SCROLL_LSIZE / 4
         rep movsd
+        ; Shift colors
+        push esi
+        mov edi, scroll_colors
+        mov esi, scroll_colors + 1
+        mov ecx, SCROLL_LINES - 1
+        rep movsb
         pop esi
-        mov ecx, TERM_LINES - 1
-        mov [num_lines], ecx
+        pop esi
+        mov ecx, SCROLL_LINES - 1
+        mov [scroll_count], ecx
 .add:
-        mov eax, [num_lines]
-        shl eax, 6
-        lea edi, [output_buf + eax]
-        mov ecx, 63
+        ; Write string to scroll_buf[scroll_count]
+        mov eax, [scroll_count]
+        imul eax, SCROLL_LSIZE
+        lea edi, [scroll_buf + eax]
+        mov ecx, TERM_COLS
 .copy:
         lodsb
         stosb
@@ -823,36 +888,47 @@ term_add_line:
         jnz .copy
         mov byte [edi], 0
 .pad:
-        inc dword [num_lines]
+        ; Write color attribute
+        mov eax, [scroll_count]
+        movzx ebx, byte [cur_color]
+        mov [scroll_colors + eax], bl
+        inc dword [scroll_count]
         popad
         ret
 
 ;---------------------------------------
-; term_add_prompt_line - Add "> <input>" line
+; term_add_prompt_line - Add "> <input>" line (v9.0)
 ;---------------------------------------
 term_add_prompt_line:
         pushad
-        mov ecx, [num_lines]
-        cmp ecx, TERM_LINES
+        ; If full, shift up
+        mov ecx, [scroll_count]
+        cmp ecx, SCROLL_LINES
         jl .add
         cld
-        mov edi, output_buf
         push esi
-        mov esi, output_buf + 64
-        mov ecx, (TERM_LINES - 1) * 64 / 4
+        mov edi, scroll_buf
+        mov esi, scroll_buf + SCROLL_LSIZE
+        mov ecx, (SCROLL_LINES - 1) * SCROLL_LSIZE / 4
         rep movsd
+        push esi
+        mov edi, scroll_colors
+        mov esi, scroll_colors + 1
+        mov ecx, SCROLL_LINES - 1
+        rep movsb
         pop esi
-        mov ecx, TERM_LINES - 1
-        mov [num_lines], ecx
+        pop esi
+        mov ecx, SCROLL_LINES - 1
+        mov [scroll_count], ecx
 .add:
-        mov eax, [num_lines]
-        shl eax, 6
-        lea edi, [output_buf + eax]
+        mov eax, [scroll_count]
+        imul eax, SCROLL_LSIZE
+        lea edi, [scroll_buf + eax]
         mov byte [edi], '>'
         mov byte [edi+1], ' '
         add edi, 2
         mov esi, input_buf
-        mov ecx, 61
+        mov ecx, TERM_COLS - 2
 .copy:
         lodsb
         stosb
@@ -862,7 +938,10 @@ term_add_prompt_line:
         jnz .copy
         mov byte [edi], 0
 .done:
-        inc dword [num_lines]
+        ; Color: white (1) for prompt line
+        mov eax, [scroll_count]
+        mov byte [scroll_colors + eax], 1
+        inc dword [scroll_count]
         popad
         ret
 
@@ -1104,8 +1183,8 @@ cmd_help:       db "help", 0
 cmd_exit:       db "exit", 0
 
 ; Messages
-msg_welcome:    db "Mellivora Terminal v2.2", 0
-msg_version:    db "Mellivora OS v8.5.0", 0
+msg_welcome:    db "Mellivora Terminal v9.0 (80x24)", 0
+msg_version:    db "Mellivora OS v9.0", 0
 msg_whoami:     db "root", 0
 msg_unknown:    db "Unknown command. Type 'help'.", 0
 msg_ok:         db "OK", 0
@@ -1129,11 +1208,28 @@ msg_help4:      db " help exit", 0
 ; Variables
 win_id:         dd 0
 input_len:      dd 0
-num_lines:      dd 0
+num_lines:      dd 0            ; kept for compat (= scroll_count)
+scroll_count:   dd 0            ; v9.0: total lines in scroll buffer
+view_offset:    dd 0            ; v9.0: lines scrolled back from bottom
+cur_color:      db 0            ; v9.0: current line color index (0=green)
+                db 0, 0, 0      ; padding
+
+; Color table (v9.0): indexed by color index 0-7
+term_colors:
+        dd 0x0000CC00   ; 0 = green (default output)
+        dd 0x00FFFFFF   ; 1 = white (prompt)
+        dd 0x00FF4444   ; 2 = red   (errors)
+        dd 0x00FFCC00   ; 3 = yellow (warnings)
+        dd 0x004488FF   ; 4 = blue
+        dd 0x00FF88FF   ; 5 = magenta
+        dd 0x0044FFFF   ; 6 = cyan
+        dd 0x00888888   ; 7 = gray
 
 ; Buffers
-input_buf:      times 64 db 0
+input_buf:      times 84 db 0
 tmp_buf:        times 128 db 0
 fmt_buf:        times 128 db 0
-output_buf:     times TERM_LINES * 64 db 0
+; v9.0 scrollback buffer
+scroll_buf:     times SCROLL_LINES * SCROLL_LSIZE db 0
+scroll_colors:  times SCROLL_LINES db 0
 file_buf:       times FILE_BUF_SIZE db 0

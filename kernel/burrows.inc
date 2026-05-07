@@ -39,6 +39,8 @@ WIN_SAVE_X      equ 92          ; saved x before maximize
 WIN_SAVE_Y      equ 96          ; saved y before maximize
 WIN_SAVE_W      equ 100         ; saved w before maximize
 WIN_SAVE_H      equ 104         ; saved h before maximize
+WIN_WORKSPACE   equ 108         ; v9.0: virtual desktop (0-3; 0xFF = show on all)
+WIN_ALPHA       equ 109         ; v9.0: opacity 0-255 (255 = fully opaque)
 
 ; Window decoration sizes
 TITLEBAR_H      equ 22
@@ -128,6 +130,7 @@ burrows_init:
         mov byte [gui_menu_open], 0
         mov byte [gui_exit_flag], 0
         mov byte [gui_dragging], 0
+        mov byte [gui_active_workspace], 0  ; v9.0: start on desktop 0
         popad
         ret
 
@@ -1994,6 +1997,11 @@ gui_create_window:
         mov eax, [gui_next_z]
         mov [ebp + WIN_Z], eax
 
+        ; v9.0: new-window placed on current workspace; alpha = fully opaque
+        movzx eax, byte [gui_active_workspace]
+        mov [ebp + WIN_WORKSPACE], al
+        mov byte [ebp + WIN_ALPHA], 255
+
         ; Set focused
         mov [gui_focused_win], edi
         inc dword [gui_win_count]
@@ -2233,6 +2241,14 @@ gui_draw_all_windows:
         jz .aw_skip
         test dword [esi + WIN_FLAGS], 0x02  ; visible?
         jz .aw_skip
+        ; v9.0: skip windows on other workspaces (0xFF = show on all)
+        movzx eax, byte [esi + WIN_WORKSPACE]
+        cmp al, 0xFF
+        je .aw_ws_ok
+        movzx ebx, byte [gui_active_workspace]
+        cmp al, bl
+        jne .aw_skip
+.aw_ws_ok:
         mov eax, [esi + WIN_Z]
         cmp eax, [.aw_min_z]
         jge .aw_skip
@@ -2537,9 +2553,190 @@ gui_draw_window_n:
         pop edx
         pop ecx
 
+        ; v9.0: Apply alpha transparency if WIN_ALPHA < 255
+        movzx eax, byte [ebp + WIN_ALPHA]
+        cmp al, 255
+        je .wn_done
+        ; Compute full window bounding box for the blend pass
+        mov ecx, [ebp + WIN_X]
+        mov edx, [ebp + WIN_Y]
+        mov esi, [ebp + WIN_W]
+        mov edi, [ebp + WIN_H]
+        sub ecx, BORDER_W           ; full rect x
+        sub edx, TITLEBAR_H         ; full rect y
+        add esi, 2 * BORDER_W       ; full rect w
+        add edi, TITLEBAR_H + BORDER_W  ; full rect h
+        ; EAX = alpha, ECX = x, EDX = y, ESI = w, EDI = h
+        call gui_alpha_blend_rect
+
 .wn_done:
         popad
         ret
+
+;=======================================================================
+; gui_alpha_blend_rect — v9.0 per-window alpha transparency
+;
+; Blends a rectangular region of the back buffer against the desktop
+; background color using the given alpha value.
+;
+;   In:  EAX = alpha (0=transparent, 255=fully opaque)
+;        ECX = rect x, EDX = rect y, ESI = rect width, EDI = rect height
+;   All registers preserved.
+;   Formula (per channel, fast /256 approx):
+;     out = (buf * alpha + bg * (255-alpha)) >> 8
+;=======================================================================
+gui_alpha_blend_rect:
+        pushad
+        ; Nothing to do for fully opaque or zero-size rects
+        cmp eax, 255
+        jge .gab_done
+        test esi, esi
+        jz .gab_done
+        test edi, edi
+        jz .gab_done
+
+        ; Save alpha and inverse alpha
+        mov [.gab_alpha],  eax
+        mov ebx, 255
+        sub ebx, eax
+        mov [.gab_ialpha], ebx
+
+        ; Clamp x1, y1 to screen bounds
+        test ecx, ecx
+        jge .gab_x1_ok
+        xor ecx, ecx
+.gab_x1_ok:
+        test edx, edx
+        jge .gab_y1_ok
+        xor edx, edx
+.gab_y1_ok:
+
+        ; Compute x2 = min(x1+w, GUI_SCREEN_W)
+        mov ebx, ecx
+        add ebx, esi
+        cmp ebx, GUI_SCREEN_W
+        jle .gab_x2_ok
+        mov ebx, GUI_SCREEN_W
+.gab_x2_ok:
+        mov [.gab_x1], ecx
+        mov [.gab_x2], ebx
+
+        ; Compute y2 = min(y1+h, GUI_SCREEN_H)
+        mov ebx, edx
+        add ebx, edi
+        cmp ebx, GUI_SCREEN_H
+        jle .gab_y2_ok
+        mov ebx, GUI_SCREEN_H
+.gab_y2_ok:
+        mov [.gab_y1], edx
+        mov [.gab_y2], ebx
+
+        ; Extract desktop background R, G, B from theme
+        ; [gui_theme + THEME_DESKTOP_BG] = dword 0x00RRGGBB
+        mov esi, [gui_theme + THEME_DESKTOP_BG]
+        mov eax, esi
+        and eax, 0xFF               ; B (bits 0-7)
+        mov [.gab_bg_b], eax
+        shr esi, 8
+        mov eax, esi
+        and eax, 0xFF               ; G
+        mov [.gab_bg_g], eax
+        shr esi, 8
+        mov eax, esi
+        and eax, 0xFF               ; R
+        mov [.gab_bg_r], eax
+
+        ; Row loop — EDX = current y
+        mov edx, [.gab_y1]
+.gab_row:
+        cmp edx, [.gab_y2]
+        jge .gab_done
+
+        ; Row base address in back buffer (GUI_PITCH = 4096 = 1<<12)
+        mov eax, edx
+        shl eax, 12                 ; eax = y * 4096
+        add eax, GUI_BACKBUF        ; eax = row base ptr
+
+        ; Col loop — ECX = current x
+        mov ecx, [.gab_x1]
+.gab_col:
+        cmp ecx, [.gab_x2]
+        jge .gab_next_row
+
+        ; Pixel address = row_base + x * 4
+        mov ebp, eax                ; preserve row_base
+        lea ebp, [ebp + ecx * 4]
+
+        ; Read pixel 0x00RRGGBB into ESI
+        mov esi, [ebp]
+
+        ; Blend Blue (bits 0-7)
+        mov ebx, esi
+        and ebx, 0xFF
+        imul ebx, [.gab_alpha]
+        push edx
+        mov edx, [.gab_bg_b]
+        imul edx, [.gab_ialpha]
+        add ebx, edx
+        pop edx
+        shr ebx, 8
+        mov [.gab_tmp_b], ebx
+
+        ; Blend Green (bits 8-15)
+        shr esi, 8
+        mov ebx, esi
+        and ebx, 0xFF
+        imul ebx, [.gab_alpha]
+        push edx
+        mov edx, [.gab_bg_g]
+        imul edx, [.gab_ialpha]
+        add ebx, edx
+        pop edx
+        shr ebx, 8
+        mov [.gab_tmp_g], ebx
+
+        ; Blend Red (bits 16-23)
+        shr esi, 8
+        mov ebx, esi
+        and ebx, 0xFF
+        imul ebx, [.gab_alpha]
+        push edx
+        mov edx, [.gab_bg_r]
+        imul edx, [.gab_ialpha]
+        add ebx, edx
+        pop edx
+        shr ebx, 8                  ; EBX = blended_R
+
+        ; Pack result 0x00RRGGBB and write back
+        shl ebx, 16                 ; R in bits 16-23
+        mov edi, [.gab_tmp_g]
+        shl edi, 8
+        or  ebx, edi
+        or  ebx, [.gab_tmp_b]
+        mov [ebp], ebx
+
+        inc ecx
+        jmp .gab_col
+
+.gab_next_row:
+        inc edx
+        jmp .gab_row
+
+.gab_done:
+        popad
+        ret
+; Local data
+.gab_alpha:  dd 0
+.gab_ialpha: dd 0
+.gab_x1:     dd 0
+.gab_x2:     dd 0
+.gab_y1:     dd 0
+.gab_y2:     dd 0
+.gab_bg_r:   dd 0
+.gab_bg_g:   dd 0
+.gab_bg_b:   dd 0
+.gab_tmp_b:  dd 0
+.gab_tmp_g:  dd 0
 
 ;=======================================================================
 ; TASKBAR
@@ -3097,14 +3294,21 @@ gui_handle_input:
 .hi_no_rclick:
         ; Handle drag in progress
         cmp byte [gui_dragging], 1
-        jne .hi_check_release
+        jne .hi_check_resize
         call gui_handle_drag
 
+.hi_check_resize:
+        ; v9.0: Handle edge resize in progress
+        cmp byte [gui_resizing], 1
+        jne .hi_check_release
+        call gui_handle_resize
+
 .hi_check_release:
-        ; Mouse release ends drag
+        ; Mouse release ends drag and resize
         test cl, 0x01
         jnz .hi_hover
         mov byte [gui_dragging], 0
+        mov byte [gui_resizing], 0
 
 .hi_hover:
         ; Update menu hover
@@ -3136,12 +3340,31 @@ gui_handle_input:
         je .hi_esc
         cmp al, 0x8E           ; Alt+Tab (special code)
         je .hi_alt_tab
+        ; v9.0: Ctrl+Alt+1-4 → switch virtual desktop
+        cmp al, 0x91           ; Ctrl+Alt+1 (kernel keyboard driver code)
+        je .hi_ws1
+        cmp al, 0x92           ; Ctrl+Alt+2
+        je .hi_ws2
+        cmp al, 0x93           ; Ctrl+Alt+3
+        je .hi_ws3
+        cmp al, 0x94           ; Ctrl+Alt+4
+        je .hi_ws4
         jmp .hi_done
 
 .hi_alt_tab:
         ; Cycle to next visible window
         call gui_cycle_window
         jmp .hi_done
+
+; v9.0: Virtual desktop switch helpers
+.hi_ws1: mov byte [gui_active_workspace], 0
+         jmp .hi_done
+.hi_ws2: mov byte [gui_active_workspace], 1
+         jmp .hi_done
+.hi_ws3: mov byte [gui_active_workspace], 2
+         jmp .hi_done
+.hi_ws4: mov byte [gui_active_workspace], 3
+         jmp .hi_done
 
 .hi_esc:
         ; ESC closes menus if open, else exits desktop
@@ -3293,7 +3516,50 @@ gui_handle_window_click:
         jmp .wc_done
 
 .wc_not_min:
-        ; --- Check title bar (start drag) ---
+        ; --- v9.0: Check edge resize zones (4-pixel hit zones) ---
+        ; Right edge: [win_x+win_w-4, win_x+win_w] in x, [win_y-TITLEBAR_H, win_y+win_h] in y
+        ; Bottom edge: [win_x, win_x+win_w] in x, [win_y+win_h-4, win_y+win_h] in y
+        xor ecx, ecx                ; ECX = edge flags: bit0=right, bit1=bottom
+        ; Check right edge X range
+        mov edx, [ebx + WIN_X]
+        add edx, [ebx + WIN_W]
+        sub edx, 4                  ; right_x - 4
+        cmp dword [mouse_x], edx
+        jl .wc_check_bottom
+        add edx, 4
+        cmp dword [mouse_x], edx
+        jg .wc_check_bottom
+        or ecx, 0x01                ; right edge hit
+.wc_check_bottom:
+        ; Check bottom edge Y range
+        mov edx, [ebx + WIN_Y]
+        add edx, [ebx + WIN_H]
+        sub edx, 4                  ; bottom_y - 4
+        cmp dword [mouse_y], edx
+        jl .wc_edge_done
+        add edx, 4
+        cmp dword [mouse_y], edx
+        jg .wc_edge_done
+        or ecx, 0x02                ; bottom edge hit
+.wc_edge_done:
+        test ecx, ecx
+        jz .wc_check_titlebar_drag  ; no edge hit, check title drag
+        ; Start resize
+        mov byte [gui_resizing], 1
+        mov [gui_resize_win], eax
+        mov [gui_resize_edge], cl
+        ; Save original mouse position and window dimensions
+        mov edx, [mouse_x]
+        mov [gui_resize_mx0], edx
+        mov edx, [mouse_y]
+        mov [gui_resize_my0], edx
+        mov edx, [ebx + WIN_W]
+        mov [gui_resize_w0], edx
+        mov edx, [ebx + WIN_H]
+        mov [gui_resize_h0], edx
+        jmp .wc_done
+
+.wc_check_titlebar_drag:
         mov ecx, [ebx + WIN_Y]
         sub ecx, TITLEBAR_H
         cmp dword [mouse_y], ecx
@@ -3323,6 +3589,51 @@ gui_handle_window_click:
 gui_handle_drag:
         pushad
         mov eax, [gui_drag_win]
+
+;---------------------------------------
+; gui_handle_resize - Resize window with mouse (v9.0)
+; Called when gui_resizing==1. Uses gui_resize_* scratch vars.
+;---------------------------------------
+gui_handle_resize:
+        pushad
+        mov eax, [gui_resize_win]
+        cmp eax, MAX_WINDOWS
+        jge .hrs_done
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+
+        ; Delta from original mouse position
+        mov ebx, [mouse_x]
+        sub ebx, [gui_resize_mx0]
+        mov ecx, [mouse_y]
+        sub ecx, [gui_resize_my0]
+
+        ; Apply right-edge resize
+        test byte [gui_resize_edge], 0x01
+        jz .hrs_no_right
+        mov edx, [gui_resize_w0]
+        add edx, ebx                ; new_w = orig_w + dx
+        cmp edx, 64                 ; minimum width 64px
+        jge .hrs_right_ok
+        mov edx, 64
+.hrs_right_ok:
+        mov [eax + WIN_W], edx
+.hrs_no_right:
+
+        ; Apply bottom-edge resize
+        test byte [gui_resize_edge], 0x02
+        jz .hrs_done
+        mov edx, [gui_resize_h0]
+        add edx, ecx                ; new_h = orig_h + dy
+        cmp edx, 32                 ; minimum height 32px
+        jge .hrs_bottom_ok
+        mov edx, 32
+.hrs_bottom_ok:
+        mov [eax + WIN_H], edx
+
+.hrs_done:
+        popad
+        ret
         cmp eax, MAX_WINDOWS
         jge .dr_done
         imul eax, WIN_STRUCT_SIZE
@@ -6084,9 +6395,18 @@ gui_exit_flag:      db 0
 gui_menu_open:      db 0
 gui_ctx_open:       db 0
 gui_dragging:       db 0
+gui_active_workspace: db 0         ; v9.0: current virtual desktop (0-3)
+gui_resizing:       db 0           ; v9.0: edge-resize in progress
+gui_resize_edge:    db 0           ; v9.0: bit0=right, bit1=bottom
+                    db 0, 0        ; padding
 gui_drag_win:       dd 0
 gui_drag_off_x:     dd 0
 gui_drag_off_y:     dd 0
+gui_resize_win:     dd 0           ; v9.0: window being resized
+gui_resize_mx0:     dd 0           ; initial mouse x for resize
+gui_resize_my0:     dd 0           ; initial mouse y
+gui_resize_w0:      dd 0           ; original window width
+gui_resize_h0:      dd 0           ; original window height
 gui_focused_win:    dd -1
 gui_win_count:      dd 0
 gui_next_z:         dd 0

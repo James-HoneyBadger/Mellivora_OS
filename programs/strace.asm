@@ -1,12 +1,12 @@
-; strace.asm - Syscall trace wrapper for Mellivora OS
+; strace.asm - Syscall trace wrapper for Mellivora OS (v9.0)
 ; Usage: strace <program> [args]
 ; Records the dmesg log before running the program, then after it exits
 ; shows all new kernel log entries (which include syscall traces if the
-; kernel was built with SYS_DMESG_WRITE instrumentation), effectively
-; tracing activity logged during the program's run.
+; kernel was built with SYS_DMESG_WRITE instrumentation).
 ;
-; strace itself writes a SYS_DMESG_WRITE "strace: start" marker so the
-; starting position in the log is unambiguous.
+; v9.0 enhancement: uses SYS_FORK (103) to launch the target program as a
+; true child process. The parent waits via SYS_WAITPID and annotates
+; dmesg output with the child PID and any fork() syscall events detected.
 
 %include "syscalls.inc"
 
@@ -74,12 +74,67 @@ start:
 .cmd_done:
         mov byte [edi], 0
 
-        ; ----- Execute the target program -----
+        ; ----- Execute the target program via SYS_FORK + SYS_EXEC -----
+        ; v9.0: fork() so the kernel records child PID in dmesg.
+        mov eax, SYS_FORK
+        int 0x80
+        cmp eax, 0
+        je .child_exec          ; child: EAX=0
+        cmp eax, -1
+        je .exec_legacy         ; fork unsupported — fall back to direct exec
+
+        ; Parent: EAX = child PID
+        mov [child_pid], eax
+        ; Print child PID
+        push esi                 ; save esi (may be clobbered)
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x0B
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, msg_child_pid
+        int 0x80
+        mov eax, [child_pid]
+        mov ebx, num_buf
+        call int_to_dec
+        mov eax, SYS_PRINT
+        mov ebx, num_buf
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 0x0A
+        int 0x80
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x07
+        int 0x80
+        pop esi
+
+        ; Wait for child to finish
+.wait_loop:
+        mov eax, SYS_WAITPID
+        mov ebx, [child_pid]
+        int 0x80
+        cmp eax, 0
+        je .wait_loop
+        mov [exec_result], eax
+        jmp .exec_done
+
+.child_exec:
+        ; Child process: exec the program
         mov eax, SYS_EXEC
         mov ebx, exec_cmd_buf
         int 0x80
-        ; SYS_EXEC returns here after the child completes (synchronous in Mellivora)
+        ; If exec fails
+        mov eax, SYS_EXIT
+        mov ebx, 1
+        int 0x80
+
+.exec_legacy:
+        ; Fallback: run directly (v8 compat — no fork)
+        mov eax, SYS_EXEC
+        mov ebx, exec_cmd_buf
+        int 0x80
         mov [exec_result], eax
+
+.exec_done:
 
         ; ----- Print exit status -----
         mov eax, SYS_SETCOLOR
@@ -133,9 +188,20 @@ start:
         mov eax, SYS_PRINT
         mov ebx, msg_idx_close
         int 0x80
+        ; Highlight fork/child events in a different color
+        mov esi, dmesg_line_buf
+        mov edi, str_fork_kw
+        call line_contains_substr
+        jnc .dump_normal_color
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x0E               ; yellow for fork events
+        int 0x80
+        jmp .dump_print_line
+.dump_normal_color:
         mov eax, SYS_SETCOLOR
         mov ebx, 0x07               ; white
         int 0x80
+.dump_print_line:
         mov eax, SYS_PRINT
         mov ebx, dmesg_line_buf
         int 0x80
@@ -160,6 +226,50 @@ start:
         mov eax, SYS_EXIT
         mov ebx, 1
         int 0x80
+
+; -----------------------------------------------------------------------
+; line_contains_substr — check if null-terminated [ESI] contains [EDI]
+; Returns: carry set if found, clear if not
+;-----------------------------------------------------------------------
+line_contains_substr:
+        push esi
+        push edi
+        push ebx
+.lcs_outer:
+        cmp byte [esi], 0
+        je .lcs_not_found
+        ; Try to match starting here
+        push esi
+        push edi
+.lcs_inner:
+        movzx eax, byte [edi]
+        test al, al
+        jz .lcs_found_here
+        movzx ebx, byte [esi]
+        cmp al, bl
+        jne .lcs_inner_fail
+        inc esi
+        inc edi
+        jmp .lcs_inner
+.lcs_found_here:
+        pop edi
+        pop esi
+        pop ebx
+        pop edi
+        pop esi
+        stc
+        ret
+.lcs_inner_fail:
+        pop edi
+        pop esi
+        inc esi
+        jmp .lcs_outer
+.lcs_not_found:
+        pop ebx
+        pop edi
+        pop esi
+        clc
+        ret
 
 ;---------------------------------------
 ; int_to_dec - convert EAX to null-terminated decimal string at [EBX]
@@ -216,11 +326,14 @@ skip_spaces:
 
 msg_usage:      db "Usage: strace <program> [args]", 0x0A, 0
 msg_hdr:        db "strace: tracing ", 0
+msg_child_pid:  db "strace: child pid = ", 0
 msg_start_marker: db "strace: --- start ---", 0
 msg_exit:       db "strace: exit status = ", 0
 msg_sep:        db "--- dmesg trace ---", 0x0A, 0
 msg_idx_open:   db "[", 0
 msg_idx_close:  db "] ", 0
+
+str_fork_kw:    db "fork", 0    ; keyword to highlight in dmesg output
 
 ; -----------------------------------------------------------------------
 ; BSS / uninitialised variables
@@ -229,6 +342,7 @@ msg_idx_close:  db "] ", 0
 pre_count:      resd 1          ; dmesg entry count before program ran
 exec_result:    resd 1          ; return value from SYS_EXEC
 arg_len:        resd 1
+child_pid:      resd 1          ; v9.0: PID of forked child
 
 arg_buf:        resb ARG_BUF_MAX
 exec_cmd_buf:   resb ARG_BUF_MAX

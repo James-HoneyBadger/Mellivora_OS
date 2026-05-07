@@ -60,7 +60,8 @@ TCB_SIG_MASK equ 52         ; Signal mask (blocked signals, 32 bits)
 TCB_PGID     equ 56         ; Process group ID (v4.0)
 TCB_EXIT_CODE equ 60        ; Exit code (v4.0)
 TCB_BRK      equ 64         ; Program break address (for sbrk)
-TCB_SIZE     equ 68
+TCB_PPID     equ 68         ; v9.0: Parent PID (set on fork; 0 = shell)
+TCB_SIZE     equ 72         ; Bytes per TCB (was 68 in v8.x)
 
 MAX_TASKS    equ 128         ; v5.0: Doubled from 64
 
@@ -1153,10 +1154,172 @@ sched_get_current_task:
 
 ;---------------------------------------
 ; sys_getppid - return parent PID of calling task
-; For now the shell is always the parent, PID=0.
-; Returns: EAX = parent PID
+; Returns: EAX = parent PID (0 = shell/init)
 ;---------------------------------------
 sys_getppid:
-        ; All user programs are launched by the shell, which has PID 0
-        mov dword [esp + 28], 0     ; EAX slot in pushad frame
+        ; Find RUNNING task and read TCB_PPID
+        mov edi, task_table
+        xor ecx, ecx
+.gpp_find:
+        cmp ecx, MAX_TASKS
+        jge .gpp_shell
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je .gpp_found
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .gpp_find
+.gpp_found:
+        mov eax, [edi + TCB_PPID]
+        iretd
+.gpp_shell:
+        xor eax, eax
+        iretd
+
+;=======================================================================
+; sys_fork — SYS_FORK (103) — Create child process (v9.0)
+;
+; Returns: EAX = child PID to parent, 0 to child, -1 on error.
+;
+; The child starts at the same user EIP as the parent (the instruction
+; after "int 0x80") with EAX=0.  Both receive their own kernel and user
+; stacks (BG_STACK_PAGES pages copied from parent).  Address space is
+; shared (vfork-style) until per-process page tables land in v9.x.
+;=======================================================================
+sys_fork:
+        pushad
+
+        ;--- 1. Find the RUNNING task (parent) ---
+        mov  edi, task_table
+        xor  edx, edx
+.fork_find_parent:
+        cmp  edx, MAX_TASKS
+        jge  .fork_fail         ; Not inside a task (shell context)
+        cmp  dword [edi + TCB_STATE], TASK_RUNNING
+        je   .fork_have_parent
+        add  edi, TCB_SIZE
+        inc  edx
+        jmp  .fork_find_parent
+
+.fork_have_parent:
+        ; EDI = parent TCB; save key fields
+        mov  eax, [edi + TCB_PID]
+        mov  [fork_parent_pid], eax
+        mov  [fork_parent_tcb], edi
+
+        ;--- 2. Find a free TCB slot for the child ---
+        mov  esi, task_table
+        xor  edx, edx
+.fork_find_slot:
+        cmp  edx, MAX_TASKS
+        jge  .fork_fail
+        cmp  dword [esi + TCB_STATE], TASK_FREE
+        je   .fork_have_slot
+        add  esi, TCB_SIZE
+        inc  edx
+        jmp  .fork_find_slot
+
+.fork_have_slot:
+        ; ESI = child TCB, EDX = child slot index (= child PID)
+        mov  [fork_child_tcb], esi
+        mov  [fork_child_pid_slot], edx
+
+        ;--- 3. Allocate child kernel stack (4 KB page) ---
+        call pmm_alloc_page
+        test eax, eax
+        jz   .fork_fail
+        add  eax, 4096              ; kstack_top
+        mov  [fork_child_kstop], eax
+
+        ;--- 4. Allocate child user stack (BG_STACK_PAGES + 1 pages) ---
+        ; +1 for guard page (same layout as sched_create_task)
+        push edx
+        mov  ecx, BG_STACK_PAGES + 1
+        call pmm_alloc_pages
+        pop  edx
+        test eax, eax
+        jz   .fork_fail_kstack      ; OOM — release kernel stack
+
+        mov  [fork_child_ubase], eax
+        mov  ebx, eax
+        add  ebx, (BG_STACK_PAGES + 1) * 4096
+        mov  [fork_child_ustop], ebx
+
+        ;--- 5. Copy parent user stack → child user stack ---
+        ; Parent stack occupies [TCB_USTACK - BG_STACK_PAGES*4096, TCB_USTACK)
+        ; (The guard page is one page BELOW the base, at TCB_USTACK - (BG+1)*4096)
+        mov  edi, [fork_parent_tcb]
+        mov  esi, [edi + TCB_USTACK]
+        sub  esi, (BG_STACK_PAGES + 1) * 4096  ; start of parent allocation
+        mov  edi, [fork_child_ubase]             ; start of child allocation
+        mov  ecx, (BG_STACK_PAGES + 1) * 4096 / 4
+        rep  movsd
+
+        ;--- 6. Build child kernel-stack frame ---
+        ; Current parent kernel stack (ESP after our pushad) layout:
+        ;   [esp+ 0..31] = pushad frame (EDI ESI EBP _ EBX EDX ECX EAX)
+        ;   [esp+32..51] = CPU IRETD frame (EIP CS EFLAGS ESP3 SS3)
+        ; Copy 52 bytes → child kernel stack, then patch EAX=0 and ESP3.
+        mov  edi, [fork_child_kstop]
+        sub  edi, 52                ; child kernel ESP
+        mov  [fork_child_kesp], edi
+        mov  esi, esp               ; parent kernel ESP (pushad is top of frame)
+        mov  ecx, 52 / 4
+        rep  movsd
+
+        ; Patch EAX slot in child pushad frame = 0 (child return value)
+        ; pushad frame: [esp+0]=EDI [+4]=ESI [+8]=EBP [+12]=ESP_orig
+        ;               [+16]=EBX  [+20]=EDX [+24]=ECX [+28]=EAX
+        mov  edi, [fork_child_kesp]
+        mov  dword [edi + 28], 0    ; child EAX = 0
+
+        ; Patch ESP3 in child IRETD frame (at frame+32+12 = frame+44)
+        ; ESP3 = child stack base + same offset as parent within stack
+        mov  eax, [esp + 44]        ; parent's ESP3 from IRETD frame
+        mov  ebx, [fork_parent_tcb]
+        mov  ecx, [ebx + TCB_USTACK]
+        sub  ecx, (BG_STACK_PAGES + 1) * 4096  ; parent stack base
+        sub  eax, ecx               ; offset of parent ESP3 within stack
+        mov  ecx, [fork_child_ubase]
+        add  eax, ecx               ; child ESP3 = child_base + offset
+        mov  [edi + 44], eax        ; patch into child frame
+
+        ;--- 7. Populate child TCB ---
+        ; Copy parent TCB as base (inherits open files, env, signals, brk, etc.)
+        mov  esi, [fork_parent_tcb]
+        mov  edi, [fork_child_tcb]
+        mov  ecx, TCB_SIZE / 4
+        rep  movsd
+
+        ; Overwrite child-specific fields
+        mov  edi, [fork_child_tcb]
+        mov  eax, [fork_child_pid_slot]
+        mov  [edi + TCB_PID],    eax        ; child PID = slot index
+        mov  eax, [fork_parent_pid]
+        mov  [edi + TCB_PPID],   eax        ; parent PID
+        mov  dword [edi + TCB_STATE], TASK_READY
+        mov  eax, [fork_child_kstop]
+        mov  [edi + TCB_KSTACK], eax
+        mov  eax, [fork_child_ustop]
+        mov  [edi + TCB_USTACK], eax
+        mov  eax, [fork_child_kesp]
+        mov  [edi + TCB_ESP],    eax
+        mov  dword [edi + TCB_SIG_PEND], 0  ; clear pending signals for child
+
+        inc  dword [task_count]
+
+        ;--- 8. Return child PID to parent ---
+        mov  eax, [fork_child_pid_slot]
+        mov  [esp + 28], eax        ; patch EAX in parent pushad frame
+
+        popad
+        iretd
+
+.fork_fail_kstack:
+        ; Release kernel stack page before failing
+        mov  eax, [fork_child_kstop]
+        sub  eax, 4096
+        call pmm_free_page
+.fork_fail:
+        mov  dword [esp + 28], -1
+        popad
         iretd

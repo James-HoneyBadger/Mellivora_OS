@@ -106,6 +106,8 @@ KEY_UP              equ 0x80
 KEY_DOWN            equ 0x81
 KEY_LEFT            equ 0x82
 KEY_RIGHT           equ 0x83
+KEY_PGUP            equ 0x84        ; v9.0: Page Up
+KEY_PGDN            equ 0x85        ; v9.0: Page Down
 
 ; ATA status bits
 ATA_SR_BSY          equ 0x80
@@ -139,6 +141,21 @@ HBFS_BITMAP_SIZE     equ HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE       ; 65536 byte
 HBFS_TOTAL_BLOCKS    equ 524288        ; Total filesystem blocks (2 GB)
 HBFS_ROOT_DIR_START  equ HBFS_BITMAP_START + HBFS_BITMAP_SECTS      ; = HBFS_SUPERBLOCK_LBA + 129
 HBFS_DATA_START      equ HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS  ; = HBFS_SUPERBLOCK_LBA + 385
+
+; v9.0 HBFS v2 — Write-Ahead Journal constants
+; The journal occupies the first HBFS_JOURNAL_BLOCKS data-area blocks.
+; File allocation is forced to start at block HBFS_JOURNAL_BLOCKS, so
+; journal sectors are never overwritten by file data.
+HBFS_VERSION_V2      equ 2
+HBFS_JOURNAL_BLOCKS  equ 4            ; 4 blocks × 4KB = 16KB journal area
+HBFS_JOURNAL_SECTS   equ HBFS_JOURNAL_BLOCKS * HBFS_SECTORS_PER_BLK ; 32 sectors
+HBFS_JOURNAL_LBA     equ HBFS_DATA_START  ; Journal starts at first data LBA
+HBFS_JRNL_MAGIC      equ 0x4A524E4C   ; 'JRNL'
+HBFS_JRNL_T_PRE      equ 1            ; Journal entry type: pre-image
+HBFS_JRNL_T_COMMIT   equ 2            ; Journal entry type: commit
+; Offsets within the 512-byte superblock for journal fields
+HBFS_SB_JRNL_STATE   equ 40          ; dword: 0=clean 1=transaction-in-progress
+HBFS_SB_JRNL_PTR     equ 44          ; dword: next journal sector index (0 = first)
 
 ; File types (stored at byte 253 of directory entry)
 FTYPE_FREE          equ 0
