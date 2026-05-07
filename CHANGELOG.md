@@ -1,5 +1,94 @@
 # Mellivora OS - Changelog
 
+## v9.0.0 - Buddy allocator, demand paging, fork(), HBFS v2, GUI enhancements, IPv6, TLS, POSIX msgq
+
+### Memory management (kernel/pmm.inc, kernel/paging.inc)
+
+- **Buddy allocator** — `pmm.inc` now implements a two-level buddy system (order 0 = 4 KB,
+  order 9 = 2 MB) on top of the bitmap-based free-page tracker.  `pmm_alloc_pages(n)` and
+  `pmm_free_pages(base, n)` coalesce buddies on free.  Page-fault handler integrated.
+- **Demand paging** — `paging.inc` adds a demand-paging region per process starting at
+  `USER_DEMAND_BASE (0x08000000)`.  Page-fault handler (#PF via IDT vector 14) maps physical
+  pages on first access; `SYS_MMAP (103)` / `SYS_MUNMAP (104)` exposed to userspace.
+
+### Process model (kernel/sched.inc, kernel/syscall.inc)
+
+- **`SYS_FORK (60)`** — duplicates calling process's page-directory, stack, and register
+  state.  Returns child PID to parent, 0 to child.  Child is immediately runnable.
+- **`SYS_EXEC (61)`** — loads a flat binary from HBFS into a fresh address space and jumps
+  to offset 0.
+- **`SYS_WAITPID (62)`** — blocks parent until named child exits; returns child exit code.
+
+### File system (kernel/hbfs.inc)
+
+- **HBFS v2 journal** — 16-entry write-ahead journal records `(block, old_data, new_data)`
+  before every metadata write; `hbfs_journal_replay` replays or discards on mount.
+- **Defragmenter** — `hbfs_defrag` compacts live blocks toward LBA 0; exposed as
+  `SYS_FS_DEFRAG (113)`.
+- **Limits raised** — max filename length 64 B → 128 B; max open files 8 → 16.
+
+### Burrows desktop (kernel/burrows.inc)
+
+- **Virtual desktops** — 4 workspaces; Super+1..4 to switch, Super+Shift+1..4 to move a
+  window.  Active desktop stored per window; switching hides/shows without destroying state.
+- **Alpha-blend** — `gui_alpha_blend_rect(x, y, w, h, color, alpha)` porter-duff over the
+  framebuffer; used for window shadows and notification badges.  Fixed 32-bit register usage
+  (`sil`/`dil` replaced with `mov+and` idiom for 32-bit NASM compatibility).
+- **Edge resize** — 6-pixel resize border on all four window edges; cursor changes to resize
+  arrow in border regions.
+
+### Terminal (programs/bterm.asm)
+
+- 80×24 character cell grid with 200-line scrollback ring buffer.
+- ANSI SGR colour (`\e[30m`–`\e[37m` fg, `\e[40m`–`\e[47m` bg, `\e[0m` reset).
+- PgUp / PgDn scroll through scrollback; Home returns to bottom.
+
+### Networking (kernel/net.inc)
+
+- **IPv6 / ICMPv6** — Ethernet type 0x86DD demux; `ipv6_handle` processes 40-byte fixed
+  header; ICMPv6 echo-request/reply (types 128/129) fully handled.
+- **TLS stub** — `SYS_TLS_CONNECT (105)`: EBX=ip, ECX=port, EDX=handle_ptr → EAX=0/-1.
+  Performs TCP connect then records `(ip, port)` for subsequent send/recv.
+
+### Audio (kernel/ac97.inc)
+
+- AC'97 mixer channel: treble, bass, PCM-in gain knobs wired.
+- PCM recording: `SYS_AUDIO_REC_START (106)`, `SYS_AUDIO_REC_READ (107)`,
+  `SYS_AUDIO_REC_STOP (108)`.
+- Mixer channels: `SYS_AUDIO_OPEN (109)`, `SYS_AUDIO_WRITE (110)`,
+  `SYS_AUDIO_CLOSE_CHAN (111)`.
+
+### IPC (kernel/ipc.inc)
+
+- **POSIX message queues** — kernel-managed pool of 8 queues, 16 messages × 256 B each.
+  `SYS_MSGQ_CREATE (112)`, `SYS_MSGQ_SEND (113)`, `SYS_MSGQ_RECV (114)`,
+  `SYS_MSGQ_CLOSE (115)`.
+
+### New programs (v9.0.0)
+
+- **`chess`** — VBE 1024×768 chess game with greedy-material AI.  Arrow keys to move cursor,
+  Enter to select/place piece, R to reset, ESC to quit.
+- **`vsh`** — Veritas Shell: fork/exec model, 24-entry command history (↑/↓), built-ins
+  `cd`, `echo`, `history`, `uname`, `help`, `exit`.
+- **`curl [-X POST] [-d data] host path`** — HTTP/1.0 GET or POST client over raw TCP.
+  Uses `SYS_DNS`, `SYS_SOCKET`, `SYS_CONNECT`, `SYS_SEND`, `SYS_RECV`.
+- **`rec [-t secs] [-o file]`** — Records PCM audio via `SYS_AUDIO_REC_*` and writes a
+  valid 44-byte RIFF/WAV file.
+- **`mix file1 file2`** — Mixes two 16-bit mono WAV files sample-by-sample (clamp to
+  ±32767) and plays the result through an AC'97 mixer channel.
+
+### Enhanced programs
+
+- **`strace`** — now uses `SYS_FORK` to trace a child process; highlights fork events in
+  yellow; `SYS_WAITPID` loop monitors child exit.
+
+### Syscall table
+
+Slots 0–115 fully wired.  New additions this release: 60–62 (fork/exec/waitpid), 103–104
+(mmap/munmap), 105 (tls_connect), 106–111 (audio rec + mixer), 112–115 (msgq).
+
+---
+
 ## v8.5.0 - Expanded graphics, audio, and I/O subsystems
 
 ### New modules
