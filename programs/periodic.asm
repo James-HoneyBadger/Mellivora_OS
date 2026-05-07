@@ -133,6 +133,10 @@ start:
         jmp .main_loop
 
 .exit:
+        ; Restore text mode before returning to shell
+        mov eax, SYS_FRAMEBUF
+        mov ebx, 2
+        int 0x80
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
