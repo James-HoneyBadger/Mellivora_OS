@@ -12,7 +12,7 @@ WAV_BLK_ALIGN    equ WAV_CHANNELS * (WAV_BITS / 8)   ; 4 bytes/sample
 WAV_BYTE_RATE    equ WAV_SAMPLE_RATE * WAV_BLK_ALIGN  ; 176400 bytes/sec
 REC_BUF_SIZE     equ 176400 * 3   ; 3 seconds max @ 44100 Hz stereo 16-bit = 529200 bytes
 ; Limit to demand-paged user memory capacity (512 KB safe in user space)
-REC_BUF_SAFE     equ 524288       ; 512 KB = ~2.97 seconds
+REC_BUF_SAFE     equ 512000       ; 500 KB ≈ 2.9 seconds (fits two copies in < 1 MB binary)
 
 start:
         ; Parse arguments

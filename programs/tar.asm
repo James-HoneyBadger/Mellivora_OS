@@ -12,7 +12,7 @@ MAGIC_LEN       equ 8
 HDR_SIZE        equ 12          ; magic(8) + count(4)
 ENTRY_NAME_LEN  equ 256
 ENTRY_HDR_SIZE  equ 260         ; name(256) + size(4)
-MAX_FILES       equ 64
+MAX_FILES       equ 8
 MAX_FILE_SIZE   equ 65536       ; 64 KB per file
 MAX_ARCHIVE     equ (HDR_SIZE + MAX_FILES * (ENTRY_HDR_SIZE + MAX_FILE_SIZE))
 

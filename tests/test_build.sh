@@ -68,7 +68,7 @@ check "stage2.bin <= 16384 bytes (32 sectors)" "[[ ${STAGE2_SIZE:-0} -le 16384 ]
 
 KERNEL_SIZE=$(file_sz kernel.bin)
 check "kernel.bin exists"       "[[ ${KERNEL_SIZE:-0} -gt 0 ]]"
-check "kernel.bin <= 640 KB"    "[[ ${KERNEL_SIZE:-0} -le 655360 ]]"
+check "kernel.bin <= 1 MB"      "[[ ${KERNEL_SIZE:-0} -le 1048576 ]]"
 check "kernel.bin > 100 KB"     "[[ ${KERNEL_SIZE:-0} -ge 102400 ]]"
 
 IMG_SIZE=$(file_sz "$IMG")
@@ -98,8 +98,8 @@ echo ""
 
 # ---------- HBFS superblock ----------
 echo "[HBFS superblock]"
-# Superblock is at LBA 417 = byte offset 417*512 = 213504
-SB_OFF=$((417 * 512))
+# Superblock is at LBA 4096 = byte offset 4096*512 = 2097152
+SB_OFF=$((4096 * 512))
 MAGIC=$(hex_bytes "$IMG" "$SB_OFF" 4)
 # HBFS_MAGIC = 0x48424653 -> little-endian on disk: 53 46 42 48
 check "Superblock magic = HBFS" "[[ '$MAGIC' == '53464248' ]]"
@@ -114,8 +114,8 @@ echo ""
 
 # ---------- HBFS bitmap sanity ----------
 echo "[HBFS bitmap]"
-# Bitmap at LBA 418 = offset 418*512 = 214016
-BM_OFF=$((418 * 512))
+# Bitmap at LBA 4097 = offset 4097*512 = 2097664
+BM_OFF=$((4097 * 512))
 # First byte should not be 0x00 (at least some blocks allocated)
 FIRST_BM=$(hex_bytes "$IMG" "$BM_OFF" 1)
 check "Bitmap first byte != 0 (blocks allocated)" "[[ '$FIRST_BM' != '00' ]]"
@@ -124,8 +124,8 @@ echo ""
 
 # ---------- Root directory ----------
 echo "[HBFS root directory]"
-# Root dir at LBA 546 = offset 546*512 = 279552
-RD_OFF=$((546 * 512))
+# Root dir at LBA 4225 = offset 4225*512 = 2163200
+RD_OFF=$((4225 * 512))
 # First entry should have a non-null first byte (filename)
 FIRST_ENTRY=$(hex_bytes "$IMG" "$RD_OFF" 1)
 check "Root dir first entry not empty" "[[ '$FIRST_ENTRY' != '00' ]]"
@@ -162,7 +162,7 @@ subprocess.run(['make', 'full'], stdout=subprocess.DEVNULL,
                stderr=subprocess.DEVNULL, check=True)
 
 with open('mellivora.img', 'rb') as f:
-    f.seek(546 * 512)
+    f.seek(4225 * 512)
     root = f.read(32 * 4096)
 
 bin_start = None
@@ -177,7 +177,7 @@ if bin_start is None:
     raise SystemExit(0)
 
 with open('mellivora.img', 'rb') as f:
-    f.seek((802 + bin_start * 8) * 512)
+    f.seek((4481 + bin_start * 8) * 512)
     data = f.read(16 * 4096)
 
 print('yes' if marker.encode('ascii') + b'\x00' in data else 'no')
@@ -321,6 +321,9 @@ echo "[NOBITS / section .bss warnings]"
 NOBITS_HITS=0
 for lst in kernel.lst programs/*.lst; do
     [[ ! -f "$lst" ]] && continue
+    # nm.lst parses ELF and legitimately contains "SHT_NOBITS" as a constant
+    # name in comments — skip it to avoid false positives.
+    [[ "$(basename "$lst")" == "nm.lst" ]] && continue
     if grep -qi 'nobits' "$lst" 2>/dev/null; then
         fail "$(basename "$lst") contains NOBITS warning"
         ((NOBITS_HITS++))
