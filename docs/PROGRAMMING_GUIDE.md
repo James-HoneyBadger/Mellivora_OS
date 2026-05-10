@@ -232,9 +232,23 @@ SYS_PSF_LOAD        equ 99  ; Load PSF2 font: EBX=filename -> EAX=0/-1
 SYS_PSF_CHAR        equ 100 ; Render glyph: EBX=x ECX=y EDX=codepoint ESI=fg_color
 SYS_PCI_FIND        equ 101 ; PCI find: EBX=vendor_id ECX=device_id -> EAX=bdf/-1
 SYS_GETPPID         equ 102 ; Get parent PID -> EAX=ppid
+; v9.0 process, filesystem, audio, and IPC additions
+SYS_FORK            equ 103 ; Fork process -> EAX=child_pid (parent) / 0 (child) / -1
+SYS_DEFRAG          equ 104 ; Defragment HBFS -> EAX=0/-1
+SYS_TLS_CONNECT     equ 105 ; TLS stub over TCP fd: EBX=fd -> EAX=0/-1
+SYS_AUDIO_REC_START equ 106 ; Start AC97 recording: EBX=buf ECX=max -> EAX=0/-1
+SYS_AUDIO_REC_READ  equ 107 ; Read recorded PCM: EBX=buf ECX=max -> EAX=bytes/-1
+SYS_AUDIO_REC_STOP  equ 108 ; Stop recording -> EAX=0
+SYS_AUDIO_OPEN      equ 109 ; Open mixer channel: EBX=fmt ECX=rate -> EAX=ch/-1
+SYS_AUDIO_WRITE     equ 110 ; Write mixer channel: EBX=ch ECX=buf EDX=len -> EAX=bytes
+SYS_AUDIO_CLOSE_CHAN equ 111 ; Close mixer channel: EBX=ch -> EAX=0
+SYS_MSGQ_CREATE     equ 112 ; Create POSIX msg queue: EBX=key ECX=max_msgs -> EAX=qid/-1
+SYS_MSGQ_SEND       equ 113 ; Send message: EBX=qid ECX=buf EDX=len -> EAX=0/-1
+SYS_MSGQ_RECV       equ 114 ; Receive message: EBX=qid ECX=buf EDX=max -> EAX=bytes/-1
+SYS_MSGQ_CLOSE      equ 115 ; Destroy queue: EBX=qid -> EAX=0/-1
 ```
 
-> The numbers above match `programs/syscalls.inc`. All syscalls 0–102 are
+> The numbers above match `programs/syscalls.inc`. All syscalls 0–115 are
 > implemented. Include `syscalls.inc` at the top of every program for the
 > authoritative list.
 

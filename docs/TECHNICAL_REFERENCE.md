@@ -1162,8 +1162,21 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 100 | `SYS_PSF_CHAR` | EBX=x, ECX=y, EDX=codepoint, ESI=fg_color | EAX=0 |
 | 101 | `SYS_PCI_FIND` | EBX=vendor_id, ECX=device_id | EAX=bdf/-1 |
 | 102 | `SYS_GETPPID` | — | EAX=parent PID |
+| 103 | `SYS_FORK` | — | EAX=child PID (parent) / 0 (child) / -1 (error) |
+| 104 | `SYS_DEFRAG` | — | EAX=0/-1 (defragment HBFS) |
+| 105 | `SYS_TLS_CONNECT` | EBX=fd | EAX=0/-1 (TLS stub over existing TCP fd) |
+| 106 | `SYS_AUDIO_REC_START` | EBX=buf, ECX=max | EAX=0/-1 |
+| 107 | `SYS_AUDIO_REC_READ` | EBX=buf, ECX=max | EAX=bytes/-1 |
+| 108 | `SYS_AUDIO_REC_STOP` | — | EAX=0 |
+| 109 | `SYS_AUDIO_OPEN` | EBX=fmt, ECX=rate | EAX=channel/-1 |
+| 110 | `SYS_AUDIO_WRITE` | EBX=channel, ECX=buf, EDX=len | EAX=bytes |
+| 111 | `SYS_AUDIO_CLOSE_CHAN` | EBX=channel | EAX=0 |
+| 112 | `SYS_MSGQ_CREATE` | EBX=key, ECX=max_msgs | EAX=qid/-1 |
+| 113 | `SYS_MSGQ_SEND` | EBX=qid, ECX=buf, EDX=len | EAX=0/-1 |
+| 114 | `SYS_MSGQ_RECV` | EBX=qid, ECX=buf, EDX=max | EAX=bytes/-1 |
+| 115 | `SYS_MSGQ_CLOSE` | EBX=qid | EAX=0/-1 |
 
-**Total: 103 syscalls defined (0–102, no gaps).**
+**Total: 116 syscalls defined (0–115, no gaps).**
 
 ---
 

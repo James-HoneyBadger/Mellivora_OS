@@ -4,14 +4,14 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 102 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 211 assembly programs, and 19 bundled samples (C, Perl, and BASIC).
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 116 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 218 assembly programs, and 19 bundled samples (C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** 3-stage BIOS boot flow into 32-bit protected mode
-- **Userland:** 90+ shell commands, 199 assembly programs, and 19 bundled samples (C, Perl, and BASIC)
+- **Userland:** 90+ shell commands, 218 assembly programs, and 19 bundled samples (C, Perl, and BASIC)
 - **Core pieces:** HBFS filesystem, ELF32 loader, PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, and release packaging
 
@@ -23,7 +23,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 - **32-bit protected mode** with flat memory model
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **102 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, ...)
+- **116 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, fork, mmap, msgq, ...)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 64 concurrent tasks
 - **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD
 - **Process groups** — PGID support for job control
@@ -77,7 +77,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 - **PCI bus** — enumeration (buses 0–7), 64-entry device table
 - **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
 
-### Programs (211 assembly + 19 bundled samples)
+### Programs (218 assembly + 19 bundled samples)
 
 - **Games (31)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
@@ -163,7 +163,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry + modular includes (22 files in `kernel/`)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v8.5.0)
+├── CHANGELOG.md            Version history (v1.0 → v9.0.0)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers
@@ -176,7 +176,7 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (199 programs total)
+│   └── ...                 (218 programs total)
 ├── samples/                C, Perl, and BASIC source files
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c, hanoi.c
 │   ├── bf.c, wumpus.c, boxes.c, stars.c, echo.c
@@ -331,9 +331,9 @@ Mellivora_OS/
 | Metric | Value |
 | -------- | ------- |
 | Kernel source | Entry file + 26 modular include files |
-| Syscalls | 102 (via `INT 0x80`) |
+| Syscalls | 116 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 211 assembly apps |
+| User programs | 218 assembly apps |
 | Bundled samples | 19 (11 C + 6 Perl + 2 BAS) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |

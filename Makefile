@@ -13,8 +13,8 @@
 # not already set.  Override with:  make programs NPROC=1
 #
 
-NASM = nasm
-QEMU = flatpak-spawn --host qemu-system-x86_64
+NASM = $(if $(wildcard /usr/bin/flatpak-spawn),nasm,$(if $(shell command -v nasm 2>/dev/null),nasm,flatpak run --command=nasm com.visualstudio.code))
+QEMU = $(if $(wildcard /usr/bin/flatpak-spawn),/usr/bin/flatpak-spawn --host qemu-system-x86_64,qemu-system-x86_64)
 DD = dd
 UNAME_S := $(shell uname -s)
 # Phase 3.1: portable parallelism detection — try Linux nproc, then BSD/macOS

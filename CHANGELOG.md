@@ -9,22 +9,20 @@
   `pmm_free_pages(base, n)` coalesce buddies on free.  Page-fault handler integrated.
 - **Demand paging** — `paging.inc` adds a demand-paging region per process starting at
   `USER_DEMAND_BASE (0x08000000)`.  Page-fault handler (#PF via IDT vector 14) maps physical
-  pages on first access; `SYS_MMAP (103)` / `SYS_MUNMAP (104)` exposed to userspace.
+  pages on first access.
 
 ### Process model (kernel/sched.inc, kernel/syscall.inc)
 
-- **`SYS_FORK (60)`** — duplicates calling process's page-directory, stack, and register
+- **`SYS_FORK (103)`** — duplicates calling process's page-directory, stack, and register
   state.  Returns child PID to parent, 0 to child.  Child is immediately runnable.
-- **`SYS_EXEC (61)`** — loads a flat binary from HBFS into a fresh address space and jumps
-  to offset 0.
-- **`SYS_WAITPID (62)`** — blocks parent until named child exits; returns child exit code.
+  (`SYS_EXEC (21)` and `SYS_WAITPID (92)` were already present; both are used by `vsh`.)
 
 ### File system (kernel/hbfs.inc)
 
 - **HBFS v2 journal** — 16-entry write-ahead journal records `(block, old_data, new_data)`
   before every metadata write; `hbfs_journal_replay` replays or discards on mount.
 - **Defragmenter** — `hbfs_defrag` compacts live blocks toward LBA 0; exposed as
-  `SYS_FS_DEFRAG (113)`.
+  `SYS_DEFRAG (104)`.
 - **Limits raised** — max filename length 64 B → 128 B; max open files 8 → 16.
 
 ### Burrows desktop (kernel/burrows.inc)
@@ -84,8 +82,8 @@
 
 ### Syscall table
 
-Slots 0–115 fully wired.  New additions this release: 60–62 (fork/exec/waitpid), 103–104
-(mmap/munmap), 105 (tls_connect), 106–111 (audio rec + mixer), 112–115 (msgq).
+Slots 0–115 fully wired.  New additions this release: 103 (fork), 104 (defrag),
+105 (tls_connect), 106–108 (audio rec), 109–111 (audio mixer), 112–115 (msgq).
 
 ---
 

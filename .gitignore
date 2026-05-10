@@ -23,3 +23,4 @@ __pycache__/
 *~
 *.swp
 .vscode/
+.populate_cache

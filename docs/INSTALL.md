@@ -226,10 +226,10 @@ LBA Range       Size        Content
 LBA 0           512 B       Stage 1 boot sector (MBR)
 LBA 1–32        16 KB       Stage 2 loader
 LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size)
-LBA 417         512 B       HBFS superblock
-LBA 418–545     64 KB       Block allocation bitmap
-LBA 546–801     128 KB      Root directory (32 blocks, 455 entries)
-LBA 802+        ~2 GB       Data blocks (4 KB each)
+LBA 4096        512 B       HBFS superblock
+LBA 4097–4224   64 KB       Block allocation bitmap
+LBA 4225–4480   128 KB      Root directory (32 blocks, 455 entries)
+LBA 4481+       ~2 GB       Data blocks (4 KB each)
 ```
 
 ### On-Disk Directory Structure
@@ -298,13 +298,13 @@ sync
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (16-bit real mode)
 ├── stage2.asm              Stage 2 loader (A20, E820, protected mode switch)
-├── kernel.asm              Kernel entry and include graph (main file + 13 include modules)
+├── kernel.asm              Kernel entry and include graph (main file + 26 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (current: v8.5.0)
+├── CHANGELOG.md            Version history (current: v9.0.0)
 ├── README.md               Project overview
 │
-├── programs/               User-space assembly programs (~290 total)
+├── programs/               User-space assembly programs (~218 total)
 │   ├── syscalls.inc        Shared constants and helpers
 │   ├── hello.asm           ... through ...
 │   └── wc.asm
