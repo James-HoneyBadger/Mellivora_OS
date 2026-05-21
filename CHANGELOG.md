@@ -1,5 +1,483 @@
 # Mellivora OS - Changelog
 
+## v12.1.0 - Architectural correctness sprint: per-task fd isolation, blocking waitpid, W^X trampoline, errno, bug fixes
+
+### Overview
+
+Corrects eleven architectural and correctness issues identified after the v12.0 POSIX sprint.
+No new user-visible syscalls except `SYS_GETERRNO` (181). Build remains a flat NASM binary.
+
+### Per-task file descriptor isolation (kernel/sched.inc, kernel/data.inc, kernel/isr.inc, kernel/syscall.inc)
+
+Previously the global `fd_table` was shared by all 128 tasks, so concurrent tasks could
+corrupt each other's open file state. Each task now has a private 4 KB fd-table page.
+
+- **`TCB_FD_TABLE_PTR`** (offset 120) — pointer to task's private fd snapshot page.
+- **`sched_create_task`**: allocates and zero-fills a 4 KB PMM page, stores it in `TCB_FD_TABLE_PTR`.
+- **`sched_exit_task`** / **`sched_deliver_signals .sdel_default`** / **`sys_kill`**: all
+  three task-termination paths now free the private fd page.
+- **`sched_swap_fd_tables`** — new helper called at every context switch point
+  (`irq_timer`, `sys_yield`, `sys_sleep`, `sys_pause`, `sys_sigsuspend`, `sys_waitpid`):
+  saves the global `fd_table` into the outgoing task's private page (or `shell_fd_table`
+  when returning to the shell), then loads the incoming task's private page (or
+  `shell_fd_table`) into `fd_table`.
+- **`shell_fd_table`** (kernel/data.inc): new 256-byte BSS array holds the shell's own fd
+  snapshot so the shell's state persists across task switches.
+
+### `TCB_SIZE` grows from 116 to 128 bytes
+
+Three new fields appended to the TCB:
+
+| Field | Offset | Description |
+|-------|--------|-------------|
+| `TCB_WAIT_PID`     | 116 | PID being waited on in `sys_waitpid` (0 = not waiting) |
+| `TCB_FD_TABLE_PTR` | 120 | Physical address of private fd-table page |
+| `TCB_ERRNO`        | 124 | Per-task `errno` value |
+
+### Blocking `sys_waitpid` (kernel/sched.inc)
+
+The previous implementation spun up to 2 000 times calling `int 0x80 / SYS_YIELD` from
+ring-0, which is a no-op on this kernel (PIT only preempts ring-3 code). Ring-3 callers
+would effectively hang the system.
+
+- Ring-3 callers are now **truly blocked**: `TCB_STATE = TASK_BLOCKED`, `TCB_WAIT_PID`
+  set to the target PID (or -1 for any child), ESP saved in `TCB_ESP`, and the scheduler
+  immediately switches to the next READY task. If no task is ready, execution returns to
+  the shell (which runs ring-0 and is never preempted).
+- `sched_exit_task` scans for any `TASK_BLOCKED` task whose `TCB_WAIT_PID` matches the
+  dying child's PID, writes the exit code into its saved `[TCB_ESP+28]` (EAX slot), sets
+  the task `TASK_READY`, and clears `TCB_WAIT_PID`. The woken task resumes from its
+  `iretd` with the correct exit code in EAX.
+- Shell (ring-0) callers fall through immediately with -1 if the child is not already a
+  zombie (non-blocking single scan only).
+
+### Read-only signal trampoline / W^X fix (kernel/paging.inc, kernel/sched.inc)
+
+The sigreturn stub (`MOV EAX,144; INT 0x80; NOP`) was previously written directly to the
+user stack on every signal delivery, making the user stack both writable and executable
+(W^X violation). The stack is no longer executable in systems that enforce it.
+
+- **`sigreturn_trampoline_init`** (kernel/paging.inc): allocates one physical page, writes
+  the 8-byte stub, then maps it **read-only** (`PG_PRESENT | PG_USER`, no `PG_WRITABLE`)
+  at `SIGRETURN_TRAMPOLINE_VADDR = 0x1FFFF000` (last page of the 128–512 MB demand zone).
+  Called from `paging_init` after paging is enabled.
+- `sched_deliver_signals` now sets `[new_esp + 0] = SIGRETURN_TRAMPOLINE_VADDR` instead
+  of a stack-local return address, and zeros the previously-used stub bytes `[new_esp+24..31]`.
+
+### `sys_geterrno` — per-task errno (kernel/syscall.inc, kernel.asm)
+
+- New syscall **181 `SYS_GETERRNO`**: returns `TCB_ERRNO` for the running task (0 from shell).
+- Errno constants added to `kernel.asm`: `ENOENT=2`, `EBADF=9`, `ENOMEM=12`, `EACCES=13`,
+  `EFAULT=14`, `EINVAL=22`, `EMFILE=24`, `ENOTTY=25`, `ENOSYS=38`.
+
+### `sys_fcntl` fd validation fix (kernel/syscall.inc)
+
+- Added `cmp ebx, FD_MAX; jge .fcntl_badf` bounds check at entry.
+- `F_GETFL` and `F_SETFL` now check `FD_FLAG_CLOSED` and return -1 for closed fds.
+
+### `sys_ioctl` security and correctness fix (kernel/syscall.inc)
+
+- **`TIOCGWINSZ`**: calls `validate_user_ptr(EDX)` before writing `winsize` struct.
+  A null or out-of-range pointer now returns -1 instead of faulting or corrupting kernel memory.
+- Unknown ioctl requests now return **-1** (was 0, masking errors from callers).
+
+### `sys_mmap` / `sys_munmap` register fixes (kernel/syscall.inc)
+
+- **`sys_mmap`**: aligned byte length is now right-shifted by 12 (`shr eax, 12`) before
+  passing to `pmm_alloc_pages`, which expects a *page count*, not a byte count.
+- **`sys_munmap`**: `EAX = EBX` (address) and `ECX = page count` are now set correctly
+  before calling `pmm_free_pages`. Previous code had a no-op `mov ebx, ebx` and left
+  EAX/ECX undefined.
+
+### `sys_ftruncate` block deallocation (kernel/syscall.inc)
+
+When the new size is smaller than the current size, excess HBFS blocks are now freed:
+```
+if new_block_count < old_block_count:
+    hbfs_free_blocks(start_block + new_count, old_count - new_count)
+    fd_entry[block_count] = new_block_count
+fd_entry[size] = new_size
+```
+
+### `sys_recvfrom` from-address fill (kernel/syscall.inc)
+
+Previously a stub (`jmp sys_recv`) that silently dropped the `from*` argument. Now a full
+implementation: performs the same receive logic as `sys_recv`, then—if `EDI` (the `from*`
+pointer) is non-null and passes `validate_user_ptr`—fills a `sockaddr_in` with
+`AF_INET`, `SOCK_REMOTE_PORT`, and `SOCK_REMOTE_IP` from the socket struct.
+
+---
+
+## v12.0.0 - POSIX compliance sprint: 36 new syscalls (145–180), TCB extension
+
+### Overview
+
+This release makes a major step toward POSIX compliance by adding 36 new system calls
+covering FD operations, session management, signal extensions, environment queries,
+identity management, networking extensions, and terminal (termios) control.
+
+### TCB extension (kernel/sched.inc)
+
+`TCB_SIZE` grows from 88 to 116 bytes. Seven new fields:
+
+| Field | Offset | Description |
+|-------|--------|-------------|
+| `TCB_EUID` | 88 | Effective UID |
+| `TCB_EGID` | 92 | Effective GID |
+| `TCB_SID`  | 96 | Session ID |
+| `TCB_UMASK` | 100 | File creation mask |
+| `TCB_ITIMER_VAL` | 104 | Interval timer current value (ticks) |
+| `TCB_ITIMER_INT` | 108 | Interval timer interval (ticks) |
+| `TCB_SAVED_MASK` | 112 | Saved signal mask (for `sigsuspend`) |
+
+`sched_create_task` initialises: `EUID=UID`, `EGID=GID`, `SID=own PID`, `UMASK=022`, itimer fields=0.
+`sys_fork` child inherits EUID/EGID and clears itimer and saved mask.
+
+### Scheduler fixes (kernel/sched.inc, kernel/isr.inc)
+
+- **`sched_wake_sleepers`**: added guard `TCB_WAKEUP==0 → skip` so tasks blocked
+  indefinitely (via `pause`/`sigsuspend`) are not prematurely woken by the clock.
+- **`sys_signal` wake path**: when a non-SIGKILL/non-term signal is delivered to a
+  `TASK_BLOCKED` task (e.g. sleeping in `pause`), the task is set `TASK_READY` so it
+  gets scheduled and `sched_deliver_signals` fires.
+- **`sched_check_itimers`**: new function, called from `irq_timer` after `sched_check_alarms`,
+  decrements `TCB_ITIMER_VAL` for each non-free task; when it reaches 0, sets SIGALRM
+  pending, wakes blocked tasks, and reloads from `TCB_ITIMER_INT` (0 = one-shot, disarm).
+
+### New syscalls (kernel/syscall.inc, programs/syscalls.inc)
+
+#### FD operations (145–151)
+
+| # | Name | Description |
+|---|------|-------------|
+| 145 | `SYS_FSTAT` | stat an open fd → fills 12-byte stat_buf |
+| 146 | `SYS_FTRUNCATE` | truncate file by fd to new size (in-memory) |
+| 147 | `SYS_FCHMOD` | change mode by fd (stub, accepted) |
+| 148 | `SYS_FCHOWN` | change owner by fd (stub, accepted) |
+| 149 | `SYS_FSYNC` | flush fd to storage (write-through, no-op) |
+| 150 | `SYS_LINK` | hard-link: creates new dirent sharing same blocks |
+| 151 | `SYS_ISATTY` | returns 1 for fd 0–2 (stdin/stdout/stderr) |
+
+#### Session management (152–156)
+
+| # | Name | Description |
+|---|------|-------------|
+| 152 | `SYS_SETSID` | create new session (fails if already group leader) |
+| 153 | `SYS_GETSID` | get session ID by PID (0 = self) |
+| 154 | `SYS_WAIT` | reap any zombie child (`WNOHANG` semantics) |
+| 155 | `SYS_PAUSE` | block until any signal arrives (returns −1/EINTR) |
+| 156 | `SYS_UMASK` | set/query file creation mask; pass 0xFFFFFFFF to query |
+
+#### Signal extensions (157–160)
+
+| # | Name | Description |
+|---|------|-------------|
+| 157 | `SYS_SIGPENDING` | write pending unblocked signals to caller's sigset |
+| 158 | `SYS_SIGSUSPEND` | atomically set mask, block until signal; restores old mask |
+| 159 | `SYS_SETITIMER` | set/query `ITIMER_REAL` interval timer (usec precision, 100 Hz) |
+| 160 | `SYS_GETITIMER` | query `ITIMER_REAL` current value |
+
+#### Environment / system info (161–165)
+
+| # | Name | Description |
+|---|------|-------------|
+| 161 | `SYS_SETENV` | set/add environment variable with optional overwrite |
+| 162 | `SYS_UNSETENV` | remove environment variable |
+| 163 | `SYS_UNAME` | fill utsname: `Mellivora` / `12.0.0` / `i386` |
+| 164 | `SYS_UTIME` | update file mtime (utimbuf or current timestamp) |
+| 165 | `SYS_SYSCONF` | query `_SC_*` constants: ARG_MAX, CLK_TCK, OPEN_MAX, etc. |
+
+#### Identity (166–169)
+
+| # | Name | Description |
+|---|------|-------------|
+| 166 | `SYS_SETEUID` | set effective UID (root or matching real UID allowed) |
+| 167 | `SYS_SETEGID` | set effective GID |
+| 168 | `SYS_SETREUID` | set real+effective UID (−1 = keep current) |
+| 169 | `SYS_SETREGID` | set real+effective GID |
+
+#### Networking extensions (170–176)
+
+| # | Name | Description |
+|---|------|-------------|
+| 170 | `SYS_SENDTO` | send with optional UDP destination; delegates to `sys_send` |
+| 171 | `SYS_RECVFROM` | receive; delegates to `sys_recv` |
+| 172 | `SYS_SETSOCKOPT` | set socket option (`SO_REUSEADDR` stored, rest accepted) |
+| 173 | `SYS_GETSOCKOPT` | get `SO_TYPE` (SOCK_STREAM/SOCK_DGRAM) |
+| 174 | `SYS_GETSOCKNAME` | return local `sockaddr_in` (local port, `0.0.0.0`) |
+| 175 | `SYS_GETPEERNAME` | return remote `sockaddr_in` |
+| 176 | `SYS_SHUTDOWN` | close one or both socket halves (`SHUT_RD/WR/RDWR`) |
+
+#### Terminal control (177–180)
+
+| # | Name | Description |
+|---|------|-------------|
+| 177 | `SYS_TCGETATTR` | return cooked-mode termios for fd 0–2 |
+| 178 | `SYS_TCSETATTR` | store termios in `tty_termios` shadow (fd 0–2) |
+| 179 | `SYS_TCDRAIN` | no-op (write-through I/O) |
+| 180 | `SYS_TCFLUSH` | no-op |
+
+### New constants (programs/syscalls.inc)
+
+`SYS_FSTAT=145` … `SYS_TCFLUSH=180`, plus: `_SC_ARG_MAX`, `_SC_CLK_TCK`, `_SC_OPEN_MAX`,
+`_SC_PAGESIZE`, `ITIMER_REAL`, `SHUT_RD/WR/RDWR`, `AF_INET`, termios flag constants.
+
+### Data (kernel/data.inc)
+
+- `tty_termios`: 36-byte BSS buffer for `tcsetattr`/`tcgetattr` shadow.
+
+---
+
+## v11.0.0 - User-space signal delivery, AHCI/e1000 drivers, GDB stub, 144 syscalls
+
+### User-space signal handlers
+
+- **`TCB_SIG_HAND`** (`kernel/sched.inc`) — new TCB field (offset 84) holds a pointer to a
+  lazily-allocated 4 KB PMM page used as a 32-dword handler table (one slot per signal).
+  `TCB_SIZE` grows from 84 to 88 bytes.  Child tasks start with `TCB_SIG_HAND = 0`
+  (table not yet allocated); `sys_fork` clears the field so children inherit only default
+  actions, not handler function pointers.
+- **`SIG_DFL` / `SIG_IGN`** — new constants (`sched.inc` / `syscalls.inc`).  `SIG_DFL = 0`
+  means restore the kernel default action; `SIG_IGN = 1` silently discards the signal.
+- **`sched_deliver_signals`** (`kernel/sched.inc`) — called by `irq_timer` every context
+  switch with `EBX = TCB pointer` and `EDI = iretd frame base address`.  For each pending,
+  unmasked signal it builds a 28-byte *signal frame* on the user stack:
+  ```
+  [new_esp +  0]  return address  → points to inline sigreturn stub
+  [new_esp +  4]  signum          (cdecl argument)
+  [new_esp +  8]  saved EIP       (interrupted ring-3 EIP)
+  [new_esp + 12]  saved EFLAGS
+  [new_esp + 16]  saved ESP       (original user stack pointer)
+  [new_esp + 20]  stub: MOV EAX,144 / INT 0x80 / NOP (8 bytes)
+  ```
+  The iretd frame `EIP3` is redirected to the user handler and `ESP3` is set to `new_esp`.
+  When the handler returns it lands on the stub which transparently invokes `sys_sigreturn`.
+  Default actions: SIGKILL/SIGTERM/SIGINT → terminate task; SIGTSTP → pause; SIGCONT → no-op;
+  all others → terminate.
+- **`irq_timer`** (`kernel/isr.inc`) — updated to call `sched_deliver_signals` on both the
+  "stay on current task" and "switch to new task" paths before performing `iretd`.
+
+### New syscalls
+
+- **`SYS_SIGACTION` (143)** — install or query a signal handler.
+  `EBX = signum`, `ECX = handler (fn ptr / SIG_DFL / SIG_IGN)`, `EDX = ptr to receive old
+  handler (or 0)`.  Validates signum, rejects SIGKILL.  Allocates the 4 KB handler table
+  on first use (zero-filled = all SIG_DFL).  Returns 0 on success, -1 on error.
+- **`SYS_SIGRETURN` (144)** — return from a signal handler.  Called automatically by the
+  inline stub on the user stack.  Restores the saved EIP, EFLAGS, and ESP from the signal
+  frame, discarding the signal stack entirely.  No user arguments needed.
+
+### Kernel drivers (carried from previous development sprint)
+
+- **AHCI SATA driver** (`kernel/ahci.inc`) — full AHCI HBA detection via PCI scan; maps
+  one AHCI port (first populated port found), initialises command-list / FIS / command-table
+  in PMM-allocated memory, and exposes `ahci_read_sectors`, `ahci_write_sectors`, and
+  `ahci_flush`.  `ahci_present` flag lets VFS/HBFS fall back to legacy ATA when no AHCI
+  controller is available.
+- **Intel e1000 NIC driver** (`kernel/e1000.inc`) — probes PCI for common Intel GbE device
+  IDs (82540EM, 82545EM, 82543GC, 82544GC); reads MAC from `RAL0`/`RAH0`; initialises 8
+  TX and 8 RX descriptors with 2048-byte buffers; hooks into the existing `net_send_frame`
+  dispatcher (`NIC_TYPE_E1000 = 2`).
+- **GDB remote stub** (`kernel/gdbstub.inc`) — hooks INT 1 (single-step) and INT 3
+  (breakpoint) via `idt_set_gate`; implements the GDB RSP packet protocol over COM1
+  (blocking I/O); supports `?`, `g`, `G`, `p`, `P`, `m`, `M`, `c`, `s`, `Z0`, `z0`,
+  and `k` commands; 32 software breakpoint slots; 1024-byte packet buffer.
+
+### New programs
+
+- **`trap`** — demo that installs a SIGUSR1 handler via `SYS_SIGACTION`, prints its PID,
+  sleeps in a loop, and prints a message each time the signal is delivered.  Exits after
+  three received signals.  Useful for testing the signal delivery path end-to-end.
+
+### API changes
+
+- `programs/syscalls.inc` — new constants `SYS_SIGACTION = 143`, `SYS_SIGRETURN = 144`,
+  `SIG_DFL = 0`, `SIG_IGN = 1`.
+- Syscall table now has 144 defined entries (was 142).
+
+---
+
+## v10.0.0 - UEFI boot, VFS layer, HBFS v3, compositor IPC, 140 syscalls, package manager
+
+### Boot & architecture
+
+- **UEFI bootloader** (`boot/uefi_loader.c`) — PE32+ EFI application built with gnu-efi;
+  detects UEFI vs BIOS at boot time, sets up GOP framebuffer, memory map, and hands off to
+  the kernel via a `BOOT_INFO` struct.  `make uefi` produces `boot/uefi_loader.efi`;
+  `make run-uefi` launches QEMU with OVMF firmware and a GPT/FAT ESP image.
+- **x86-64 long-mode path** (`stage2.asm`) — Stage 2 now optionally transitions to 64-bit
+  long mode when compiled with `-DKERNEL_64BIT=1` (`make 64bit`).  PAE paging, GDT64, and
+  a minimal long-mode entry stub are conditionally assembled; the 32-bit protected-mode
+  path is unchanged.
+- **`BOOTINFO_UEFI_MAGIC` / `UEFI_BOOT_MAGIC`** — kernel detects UEFI vs BIOS at runtime
+  by inspecting the boot-info magic passed from Stage 2.
+
+### Virtual filesystem (`kernel/vfs.inc`)
+
+- **VFS abstraction layer** — unified `vfs_open / vfs_read / vfs_write / vfs_readdir /
+  vfs_stat / vfs_mkdir / vfs_unlink` front-ends dispatch to pluggable backend drivers via
+  a mount table (up to 8 mounts, `VFS_MAX_MOUNTS`).
+- **Four built-in backends** — HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`).
+- **procfs** — `/proc/uptime`, `/proc/meminfo`, `/proc/version`, `/proc/cpuinfo`, and
+  `/proc/<pid>/status` (reports task name from TCB).
+- **devfs** — `/dev/null`, `/dev/zero`, `/dev/random` (LCG), `/dev/tty` (serial loopback).
+- **tmpfs** — in-memory files backed by PMM pages; up to `TMPFS_MAX_FILES` entries.
+- **`/dev/full`** — new devfs node (`DEV_FULL`); reads return zero bytes (like `/dev/zero`),
+  writes always return -1 (ENOSPC simulation); enumerated by `vfs_dev_readdir`.
+- **64 virtual file descriptors** (`VFS_MAX_FDS`, `VFD_SIZE = 32`) per system (expanded
+  from per-process FD_MAX = 8 for legacy syscalls).
+- **VFS-aware shell navigation** — `cmd_cd_internal` (`.cd_enter_subdir`) now recognises
+  `/proc`, `/dev`, and `/tmp` as valid virtual-directory targets at root level; sets
+  `current_dir_lba = 0xFFFFFFFF` (sentinel) so `build_cwd_path` produces e.g. `/proc`
+  which `vfs_route` correctly dispatches to procfs.  Guard at the top of `.cd_enter_subdir`
+  prevents HBFS ATA reads when the CWD is a virtual directory.
+- **VFS-aware `ls`** — `cmd_list_dir` detects the `0xFFFFFFFF` sentinel LBA and, instead
+  of calling `hbfs_load_root_dir`, iterates `vfs_readdir` in a loop to list entries from
+  the active VFS backend (procfs, devfs, or tmpfs).
+
+### HBFS v3 (`kernel/hbfs.inc`, `kernel.asm`)
+
+- **File permissions** (`HBFS_DE_MODE`) — Unix-style 12-bit mode field in every directory
+  entry; `hbfs_check_permission(EBX=dirent, ECX=requested)` enforces owner/group/other
+  rwx bits.
+- **Extended attributes** (`HBFS_DE_XATTR_LBA`, `HBFS_DE_XATTR_COUNT`) — each file can
+  have an xattr block holding up to `HBFS_XATTR_PER_BLOCK` key/value pairs;
+  `hbfs_xattr_get` and `hbfs_xattr_set` are the kernel API;
+  `SYS_GETXATTR (141)` / `SYS_SETXATTR (142)` expose them to user-space programs.
+  `sys_setxattr` upgrades the on-disk filesystem from v2 to v3 and sets
+  `HBFS_FEAT_XATTR` in the superblock on first use.  `sys_getxattr` checks the
+  feature flag and returns -1 on a filesystem that has never written any xattrs.
+- **Feature flags** (`HBFS_SB_FEATURES`) — `HBFS_FEAT_JOURNAL` (existing), `HBFS_FEAT_XATTR`,
+  `HBFS_FEAT_PERM`; superblock validated on mount.
+- **Dirent layout v3** — new constants `HBFS_DE_NAME=0`, `HBFS_DE_TYPE=253`,
+  `HBFS_DE_SIZE=256`, `HBFS_DE_BLOCK=260`, `HBFS_DE_MTIME=272`, `HBFS_DE_MODE=276`,
+  `HBFS_DE_XATTR_LBA=280`, `HBFS_DE_XATTR_COUNT=284`; entry size raised to
+  `HBFS_DIR_ENTRY_SIZE = 288`.
+- **`hbfs_xattr_set` key-update fix** — the scan loop now performs a real `repe cmpsb`
+  key comparison against each occupied slot; on a match the value field is updated
+  in-place instead of creating a duplicate entry (previously the comparison was a no-op
+  stub).  Stack-offset bugs in the new-slot write path (wrong frame offsets for `key_ptr`
+  and `val_ptr` after two intermediate pushes) are also corrected; key and value pointers
+  are now saved to static locals (`hxs_key_ptr`, `hxs_val_ptr`) immediately after
+  `pushad` to avoid frame-offset arithmetic errors.
+- **`sys_defrag` Phase 2 — block relocation** (`SYS_DEFRAG = 104`) — replaces the v9 stub
+  that only counted fragmentation.  For each non-free, non-directory directory entry the
+  defragmenter scans the bitmap for the lowest free contiguous run entirely before the
+  file's current start block; if found it copies all file sectors using `hbfs_block_buf`
+  as a 512-byte staging buffer, updates the bitmap (destination bits set before source
+  bits cleared to prevent double-use), and writes the new start block back to the
+  directory entry.  Phase 1 fragmentation counting is retained; EAX returns the frag-run
+  count measured before relocation.  Bitmap and root directory are flushed to disk, and
+  the superblock is journalled on HBFS v2+ volumes.
+- **Journal version check fix** — all journal entry points (`hbfs_journal_begin`,
+  `hbfs_journal_log_sector`, `hbfs_journal_commit`, and `sys_defrag`) previously accepted
+  only `HBFS_VERSION_V2` exactly.  Comparisons changed to `jb HBFS_VERSION_V2` so that
+  v3 filesystems receive identical journal protection; v1 volumes continue to skip the
+  journal.  `hbfs_init` likewise uses `jb` so v3 mounts trigger journal-recovery scanning
+  on unclean shutdown.
+
+### Syscall interface (`kernel/syscall.inc`, `programs/syscalls.inc`)
+
+- **142 syscalls** — table extended to 256 entries; new POSIX-compat range 116–142:
+  - `SYS_DUP (116)`, `SYS_DUP2 (117)`, `SYS_FCNTL (118)`, `SYS_IOCTL (119)`,
+    `SYS_MMAP (120)`, `SYS_MUNMAP (121)`, `SYS_MPROTECT (122)`, `SYS_SELECT (123)`,
+    `SYS_CLOCK_GETTIME (124)`, `SYS_NANOSLEEP (125)`, `SYS_GETTIMEOFDAY (126)`,
+    `SYS_GETUID (127)`, `SYS_SETUID (128)`, `SYS_GETGID (129)`, `SYS_SETGID (130)`,
+    `SYS_GETEUID (131)`, `SYS_GETEGID (132)`, `SYS_ACCESS (133)`, `SYS_PIPE2 (134)`,
+    `SYS_SURFACE_CREATE (135)`, `SYS_SURFACE_COMMIT (136)`, `SYS_SURFACE_DESTROY (137)`,
+    `SYS_SURFACE_MOVE (138)`, `SYS_SURFACE_RESIZE (139)`, `SYS_ALARM (140)`,
+    `SYS_GETXATTR (141)`, `SYS_SETXATTR (142)`.
+- **`SYS_CHMOD (68)` / `SYS_CHOWN (69)` upgraded to v3** — syscall table entries 68/69
+  now dispatch to `sys_chmod_v3` / `sys_chown_v3`, which perform a real read-modify-write
+  of the on-disk directory sector via `hbfs_flush_dir_entry`; they also auto-upgrade the
+  superblock to `HBFS_VERSION_V3` and set `HBFS_FEAT_PERMS` on first use.
+- **`SYS_GETXATTR (141)` / `SYS_SETXATTR (142)`** — user-space interface to the HBFS v3
+  xattr kernel API (`hbfs_xattr_get` / `hbfs_xattr_set`).  Both validate all three user
+  pointers before touching filesystem state.  `SYS_SETXATTR` upgrades the filesystem to
+  v3 and sets `HBFS_FEAT_XATTR` in the superblock on first use; the updated directory
+  entry (with new `XATTR_LBA` / `XATTR_COUNT`) is persisted via `hbfs_save_root_dir`.
+- **`programs/syscalls.inc`** — constant definitions for all 142 syscalls.
+- **`SYS_NANOSLEEP (132)` improved** — now delegates to `sys_sleep` after converting the
+  timespec to PIT ticks (100 Hz); uses `TASK_BLOCKED` + `sched_wake_sleepers` when the
+  scheduler is active, falls back to a `hlt`-loop in single-task context.
+- **`SYS_MPROTECT (123)` real PTE walk** — replaces previous stub; walks the two-level
+  page directory (PDI = virt >> 22, PTI = (virt >> 12) & 0x3FF) for every page in the
+  requested range; sets/clears `PG_WRITABLE` and `PG_PRESENT` in each PTE according to
+  the `PROT_READ / PROT_WRITE / PROT_EXEC / PROT_NONE` flags; issues `invlpg` after each
+  PTE update; returns `EFAULT` if any page is not present.
+- **`SYS_GETUID/GETEUID/GETGID/GETEGID/SETUID/SETGID`** — syscalls now read and write
+  `TCB_UID` / `TCB_GID` fields in the running task's TCB; `setuid`/`setgid` enforce POSIX
+  rules (root UID == 0 may set any value; non-root may only re-set their own ID).
+
+### Memory management (`kernel/pmm.inc`, `kernel/sched.inc`)
+
+- **PMM buddy coalescing** (`pmm_free_coalesce`) — when a page (or page range) is freed,
+  the allocator now searches the free list of the same buddy order for the freed block's
+  buddy partner (XOR of page number with `1 << order`).  On match the buddy is unlinked
+  and the merged block is promoted to `order + 1` and the coalesce loop repeats up to
+  `BUDDY_ORDERS - 1`; bitmap bits are cleared as part of the same operation.
+  `pmm_free_page` and `pmm_free_pages` both call `pmm_free_coalesce` instead of
+  `pmm_push_free_block`, resulting in maximal free-block consolidation at every free.
+- **Multi-user TCB fields** — `TCB_UID = 72`, `TCB_GID = 76` added to the Task Control
+  Block; `TCB_SIZE` raised from 72 to 80 bytes.  New tasks inherit UID/GID = 0 (root) via
+  the existing `rep stosd` zero-initialisation in `sched_create_task`.
+- **`TCB_ALARM` field + `sys_alarm` (SYS_ALARM = 140)** — `TCB_ALARM = 80` stores a PIT
+  tick deadline (0 = no alarm); `TCB_SIZE` raised to 84 bytes.  `sched_check_alarms()` is
+  called from `irq_timer` on every tick and sets `TCB_SIG_PEND |= (1 << SIGALRM)` when the
+  deadline is reached, then clears `TCB_ALARM`.  `sys_alarm(seconds)` programs the alarm
+  and returns the number of seconds remaining before any previously-set alarm would have
+  fired (0 if none); passing 0 cancels any pending alarm.  Child tasks created by `fork`
+  do not inherit the parent's alarm.  `SYS_ALARM = 140` added to `programs/syscalls.inc`.
+- **`sys_access` fix** (`SYS_ACCESS = 133`) — corrected three bugs: (1) missing
+  `hbfs_load_root_dir` call before `hbfs_find_entry` (the directory buffer could be stale);
+  (2) wrong `pushad`-frame stack offset (`[esp+8]` = EBP instead of `[esp+24]` = ECX) used
+  to read the POSIX mode argument; (3) hardcoded UID = 0 replaced with real `TCB_UID` /
+  `TCB_GID` read from the running task's TCB via `sched_get_current_task`.
+
+### Networking (`kernel/net.inc`)
+
+- **ICMPv6 echo reply checksum** (RFC 4443) — `ipv6_handle` now computes the correct
+  one's-complement checksum over the ICMPv6 pseudo-header (source address, destination
+  address, payload length, next-header = 58) plus the full ICMPv6 payload before
+  transmitting each echo reply; the checksum field at ICMPv6 header offset +2 is written
+  in-place after folding the 32-bit accumulator to 16 bits.
+
+### Shell (`kernel/shell.inc`)
+
+- **`ls -s` sort-by-size** — new flag to `cmd_list_dir`; collects pointers to all valid
+  HBFS directory entries into `path_search_buf`, insertion-sorts them descending by file
+  size (`[entry + 256]`), then displays the sorted list in long format (type indicator,
+  right-aligned 9-digit size, `YYYY-MM-DD HH:MM` timestamp, filename).  Uses
+  index-based array access (`path_search_buf + 4 + ebx*4`) with `pushad`/`popad` register
+  discipline to avoid clobbering the VGA print register contract under NASM `-O0`.
+
+### Compositor IPC (`kernel/ipc.inc`)
+
+- **Compositor surface API** — kernel-managed pixel buffers (`ipc_surface_table`,
+  `SURF_MAX = 16`); surfaces have id, owner PID, width/height, z-order, position, and a
+  PMM-backed pixel buffer.  `ipc_surface_create / commit / destroy / move / resize`
+  implement the five new syscalls.
+- **`vbe_compositor_refresh`** — wakes the Burrows compositor task (by PID stored in
+  `burrows_compositor_pid`) whenever a surface is created, committed, moved, or destroyed.
+- **`ipc_find_surface`** — helper to locate a surface entry by ID in O(SURF_MAX) time.
+
+### Package manager (`tools/hbpkg.c`)
+
+- **`hbpkg`** — self-contained C tool (compiled by `make hbpkg`) to create, inspect, and
+  install `.hbpkg` archives.  Supports `create <dir> <pkg>`, `inspect <pkg>`, and
+  `install <pkg> <dest>` subcommands.  Header: magic `HBPKG`, version, file count, and
+  per-file records (path + size + data).
+
+### Build system (`Makefile`)
+
+- **`make uefi`** — cross-compiles UEFI loader via gnu-efi → `.so` → objcopy `.efi`.
+- **`make run-uefi`** — creates GPT+FAT ESP image and launches QEMU with OVMF.
+- **`make 64bit`** — assembles `kernel64.bin` + `stage2-64.bin` with `-DKERNEL_64BIT=1`.
+- **`make hbpkg`** — compiles `tools/hbpkg.c` to `tools/hbpkg`.
+- **`make count`** — now counts `.c` source files alongside `.asm` / `.inc`.
+
+---
+
 ## v9.0.0 - Buddy allocator, demand paging, fork(), HBFS v2, GUI enhancements, IPv6, TLS, POSIX msgq
 
 ### Memory management (kernel/pmm.inc, kernel/paging.inc)

@@ -73,6 +73,9 @@ shell_main:
         cmp byte [boot_motd_shown], 0
         jne .no_motd
         mov byte [boot_motd_shown], 1
+        call vga_clear
+        mov esi, banner_str
+        call vga_print_color
         mov byte [vga_color], COLOR_INFO
         mov esi, motd_str
         call vga_print
@@ -4204,13 +4207,23 @@ cmd_mouse_status:
 ;---------------------------------------
 ; Command: dir/ls - List directory
 ; Flags: -l  long format (type, size, blocks, name)
-;        -s  sort by size (largest first) — not yet, just reserved
+;        -s  sort by size, largest first (pointer sort + long display)
 ;---------------------------------------
 cmd_list_dir:
         pushad
+        ; VFS virtual directories (proc/dev/tmp): bypass HBFS listing
+        cmp dword [current_dir_lba], 0xFFFFFFFF
+        jne .cld_hbfs_ok
+        jmp .cld_vfs_list       ; unconditional near jump — no short-range limit
+.cld_hbfs_ok:
         call hbfs_load_root_dir
 
-        ; Check for -l flag (bit 11 = 'l' - 'a')
+        ; Check for -s flag (sort by size, largest first)
+        mov eax, 18             ; 's' - 'a'
+        call test_flag
+        jc .sort_format
+
+        ; Check for -l flag (long format)
         mov eax, 11             ; 'l' - 'a'
         call test_flag
         jc .long_format
@@ -4460,6 +4473,313 @@ cmd_list_dir:
         mov esi, msg_dir_files
         call vga_print
 
+        popad
+        ret
+
+;---------------------------------------
+; -s: sort entries by size (largest first) then display in long format.
+; Collects valid-entry pointers into path_search_buf, insertion-sorts
+; them descending by file size, then prints each entry.
+;---------------------------------------
+.sort_format:
+        ; Phase 1: collect pointers of valid entries
+        ; path_search_buf[0]   = count (dword)
+        ; path_search_buf[4..] = entry pointers (dwords)
+        call hbfs_get_max_entries
+        mov ecx, eax            ; ECX = total dir slots
+        mov edi, hbfs_dir_buf
+        mov esi, path_search_buf + 4
+        xor ebx, ebx            ; EBX = valid count
+.sf_col:
+        test ecx, ecx
+        jz .sf_col_done
+        cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        je .sf_col_next
+        mov [esi], edi
+        add esi, 4
+        inc ebx
+.sf_col_next:
+        add edi, HBFS_DIR_ENTRY_SIZE
+        dec ecx
+        jmp .sf_col
+.sf_col_done:
+        mov [path_search_buf], ebx      ; save count
+
+        ; Phase 2: insertion sort descending by [ptr + 256] (file size)
+        ; EBX = count
+        cmp ebx, 2
+        jl .sf_print            ; 0 or 1 entries: already sorted
+        mov ecx, ebx
+        dec ecx                 ; N-1 outer passes
+        mov esi, path_search_buf + 8    ; start from element [1]
+.sf_outer:
+        mov edi, esi            ; insertion slot
+        mov eax, [esi]          ; current entry ptr
+        mov edx, [eax + 256]    ; current file size
+.sf_inner:
+        cmp edi, path_search_buf + 4   ; at array start?
+        jbe .sf_place
+        mov ebx, [edi - 4]      ; previous entry ptr
+        cmp edx, [ebx + 256]    ; current > previous?
+        jnbe .sf_place          ; no: stop shifting
+        mov [edi], ebx          ; shift previous right
+        sub edi, 4
+        jmp .sf_inner
+.sf_place:
+        mov [edi], eax          ; place current element
+        add esi, 4
+        dec ecx
+        jnz .sf_outer
+
+.sf_print:
+        ; Phase 3: print in long format (header + sorted entries + summary)
+        mov byte [vga_color], COLOR_HEADER
+        mov esi, dir_header
+        call vga_print
+        call vga_reset_color
+        mov esi, dir_separator
+        call vga_print
+
+        mov ecx, [path_search_buf]      ; entry count
+        xor ebx, ebx                    ; printed count
+        test ecx, ecx
+        jnz .sf_ploop                   ; non-zero: run loop (+7 bytes forward)
+        jmp .sf_pdone                   ; zero: skip to summary
+.sf_ploop:
+        push ecx                        ; save remaining count
+        mov eax, ebx
+        shl eax, 2
+        mov edi, [path_search_buf + 4 + eax]   ; current entry ptr
+
+        ; Type indicator + color
+        cmp byte [edi + 253], FTYPE_DIR
+        je .sf_ptype_dir
+        cmp byte [edi + 253], FTYPE_EXEC
+        je .sf_ptype_exec
+        cmp byte [edi + 253], FTYPE_BATCH
+        je .sf_ptype_batch
+        cmp byte [edi + 253], FTYPE_LINK
+        je .sf_ptype_link
+        call vga_reset_color
+        push esi
+        mov esi, type_text
+        call vga_print
+        pop esi
+        jmp .sf_psize
+.sf_ptype_dir:
+        mov byte [vga_color], COLOR_INFO
+        push esi
+        mov esi, type_dir
+        call vga_print
+        pop esi
+        jmp .sf_psize
+.sf_ptype_exec:
+        mov byte [vga_color], COLOR_EXEC
+        push esi
+        mov esi, type_exec
+        call vga_print
+        pop esi
+        jmp .sf_psize
+.sf_ptype_batch:
+        mov byte [vga_color], COLOR_BATCH
+        push esi
+        mov esi, type_batch
+        call vga_print
+        pop esi
+        jmp .sf_psize
+.sf_ptype_link:
+        mov byte [vga_color], COLOR_INFO
+        push esi
+        mov esi, type_link
+        call vga_print
+        pop esi
+
+.sf_psize:
+        call vga_reset_color
+        mov al, ' '
+        call vga_putchar
+        mov eax, [edi + 256]    ; file size
+        mov edx, 9
+        call vga_print_dec_width
+        mov al, ' '
+        call vga_putchar
+
+        ; Timestamp (packed RTC at [edi+272])
+        push ebx
+        mov ebx, [edi + 272]
+        mov eax, ebx
+        shr eax, 25
+        and eax, 0x7F
+        add eax, 2000
+        call vga_print_dec
+        mov al, '-'
+        call vga_putchar
+        mov eax, ebx
+        shr eax, 21
+        and eax, 0x0F
+        cmp eax, 10
+        jge .sf_mon_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.sf_mon_ok:
+        call vga_print_dec
+        mov al, '-'
+        call vga_putchar
+        mov eax, ebx
+        shr eax, 16
+        and eax, 0x1F
+        cmp eax, 10
+        jge .sf_day_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.sf_day_ok:
+        call vga_print_dec
+        mov al, ' '
+        call vga_putchar
+        mov eax, ebx
+        shr eax, 11
+        and eax, 0x1F
+        cmp eax, 10
+        jge .sf_hr_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.sf_hr_ok:
+        call vga_print_dec
+        mov al, ':'
+        call vga_putchar
+        mov eax, ebx
+        shr eax, 5
+        and eax, 0x3F
+        cmp eax, 10
+        jge .sf_mn_ok
+        push eax
+        mov al, '0'
+        call vga_putchar
+        pop eax
+.sf_mn_ok:
+        call vga_print_dec
+        pop ebx
+
+        mov al, ' '
+        call vga_putchar
+        push esi
+        mov esi, edi            ; filename at offset 0
+        call vga_print
+        pop esi
+        call vga_reset_color
+        mov al, 0x0A
+        call vga_putchar
+
+        pop ecx                 ; restore remaining count
+        inc ebx                 ; advance index / printed count
+        dec ecx
+        jz .sf_pnext_done
+        jmp .sf_ploop
+.sf_pnext_done:
+        jmp .sf_pdone
+.sf_pdone:
+        mov esi, msg_dir_count
+        call vga_print
+        mov eax, ebx
+        call vga_print_dec
+        mov esi, msg_dir_files
+        call vga_print
+        popad
+        ret
+
+;---------------------------------------
+; VFS virtual-directory listing for cmd_list_dir
+; Used when current_dir_lba == 0xFFFFFFFF (proc/dev/tmp)
+;---------------------------------------
+.cld_vfs_list:
+        ; Build CWD path into path_search_buf (e.g. "/proc")
+        mov edi, path_search_buf
+        call build_cwd_path
+        xor ebp, ebp            ; EBP = entry index
+        xor ebx, ebx            ; EBX = file count
+        xor edx, edx            ; EDX = column counter
+
+.cld_vfs_loop:
+        ; vfs_readdir(EBX=path, ECX=name_buf, EDX=index) -> EAX=type or -1
+        push ebp
+        push ebx
+        push edx
+        mov  ebx, path_search_buf
+        lea  ecx, [path_search_buf + 256]
+        mov  edx, ebp
+        call vfs_readdir
+        pop  edx
+        pop  ebx
+        pop  ebp
+        cmp  eax, -1
+        je   .cld_vfs_done
+
+        ; Set display colour by entry type
+        cmp  eax, FTYPE_DIR
+        je   .cld_vfs_dir
+        cmp  eax, FTYPE_EXEC
+        je   .cld_vfs_exec
+        call vga_reset_color
+        jmp  .cld_vfs_print
+.cld_vfs_dir:
+        mov  byte [vga_color], COLOR_INFO
+        jmp  .cld_vfs_print
+.cld_vfs_exec:
+        mov  byte [vga_color], COLOR_EXEC
+
+.cld_vfs_print:
+        push esi
+        push ecx
+        lea  esi, [path_search_buf + 256]   ; name scratch
+        xor  ecx, ecx
+.cld_vfs_nm:
+        lodsb
+        test al, al
+        jz   .cld_vfs_pad
+        call vga_putchar
+        inc  ecx
+        jmp  .cld_vfs_nm
+.cld_vfs_pad:
+        cmp  ecx, 16
+        jge  .cld_vfs_col
+        mov  al, ' '
+        call vga_putchar
+        inc  ecx
+        jmp  .cld_vfs_pad
+.cld_vfs_col:
+        pop  ecx
+        pop  esi
+        call vga_reset_color
+        inc  ebx                ; count++
+        inc  edx                ; column++
+        cmp  edx, 4
+        jl   .cld_vfs_no_nl
+        mov  al, 0x0A
+        call vga_putchar
+        xor  edx, edx
+.cld_vfs_no_nl:
+        inc  ebp                ; next index
+        jmp  .cld_vfs_loop
+
+.cld_vfs_done:
+        ; Trailing newline if not at column 0
+        test edx, edx
+        jz   .cld_vfs_sum
+        mov  al, 0x0A
+        call vga_putchar
+.cld_vfs_sum:
+        mov  esi, msg_dir_count
+        call vga_print
+        mov  eax, ebx
+        call vga_print_dec
+        mov  esi, msg_dir_files
+        call vga_print
         popad
         ret
 

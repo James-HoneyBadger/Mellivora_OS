@@ -806,6 +806,8 @@ sys_framebuf:
         je .fb_drawtext
         cmp ebx, 4
         je .fb_present
+        cmp ebx, 5
+        je .fb_surfbuf
         xor eax, eax
         dec eax                         ; EAX = -1
         iretd
@@ -969,6 +971,28 @@ sys_framebuf:
 .fdt_col:       dd 0
 .fdt_saved_lfb: dd 0
 .fdt_remaining: dd 0
+
+;---------------------------------------
+; SYS_FRAMEBUF(5) — query compositor surface pixel buffer address
+; ECX = surface id (returned by SYS_SURFACE_CREATE)
+; Returns EAX = buffer pointer, or -1 on failure
+;---------------------------------------
+.fb_surfbuf:
+        push ebx
+        mov ebx, ecx            ; ipc_find_surface expects id in EBX
+        call ipc_find_surface   ; ESI <- pointer to surface entry (0 on fail)
+        test esi, esi
+        jz .fbs_fail
+        mov eax, [esi + SURF_BUF_PTR]
+        pop ebx
+        iretd
+.fbs_fail:
+        pop ebx
+        xor eax, eax
+        dec eax                 ; EAX = -1
+        iretd
+
+
 
 ;---------------------------------------
 ; cmd_gui_demo - Shell command `gui`:

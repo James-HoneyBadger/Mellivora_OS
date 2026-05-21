@@ -16,9 +16,10 @@
 ; Seeding: pmm_free_region uses greedy largest-aligned-block strategy so
 ;   boot-time memory is placed on the highest-possible-order lists.
 ;
-; Coalescing: split-only in v9.0 (no buddy merging on free); external
-;   fragmentation accumulates over uptime but demand-paging workloads
-;   mostly use order-0 blocks.  Full coalescing is a v9.x TODO.
+; Coalescing: v10 adds buddy merging on free (pmm_free_coalesce).
+;   When freeing a block, its buddy is looked up on the same-order free
+;   list.  If found, the two are merged and the process repeats at the
+;   next order, reducing fragmentation over the allocator's lifetime.
 ;
 ; Public API (unchanged from v8.x):
 ;   pmm_init         — build free lists from E820 memory map
@@ -251,10 +252,94 @@ pmm_alloc_page:
 ;-----------------------------------------------------------------------
 pmm_free_page:
         pushad
-        shr  eax, 12                ; page number → EDX
+        shr  eax, 12                ; page number
         mov  edx, eax
         xor  ecx, ecx               ; order 0
-        call pmm_push_free_block
+        call pmm_free_coalesce      ; merge with buddy if available
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; pmm_free_coalesce — free one buddy block, merging with its buddy
+;                     if it is on the same-order free list.
+;   In:  EDX = page number, ECX = order
+;   Clears bitmap bits, then repeatedly tries to merge with buddy
+;   up to BUDDY_ORDERS-1, finally links the (possibly enlarged) block.
+;   All registers preserved (uses pushad/popad).
+;-----------------------------------------------------------------------
+pmm_free_coalesce:
+        pushad
+
+        ;--- Clear bitmap bits for [EDX .. EDX+(1<<ECX)-1] ---
+        mov edi, edx
+        mov esi, 1
+        shl esi, cl                 ; block_pages = 1 << order
+.pfc_bm_clear:
+        test esi, esi
+        jz   .pfc_bm_done
+        mov  eax, edi
+        shr  eax, 3                 ; byte offset in bitmap
+        mov  ebx, edi
+        and  ebx, 7                 ; bit offset
+        btr  dword [PMM_BITMAP + eax], ebx
+        inc  edi
+        dec  esi
+        jmp  .pfc_bm_clear
+.pfc_bm_done:
+
+        ;--- Coalesce loop: try to merge with buddy at each order ---
+.pfc_coalesce_loop:
+        cmp  ecx, BUDDY_ORDERS - 1  ; at max order?
+        jl   .pfc_can_coalesce
+        jmp  .pfc_link_done         ; yes — just link
+.pfc_can_coalesce:
+        ; Compute buddy page = page XOR (1 << order)
+        push ecx
+        mov  eax, 1
+        shl  eax, cl                ; 1 << order
+        pop  ecx
+        mov  esi, edx
+        xor  esi, eax               ; ESI = buddy page number
+
+        ; Scan buddy_free_list[ECX] for ESI
+        ; EDI = ptr to the 'next' field of the previous list node
+        ;       (initially = address of list head)
+        lea  edi, [buddy_free_list + ecx*4]
+        mov  ebx, [edi]             ; EBX = first page in list
+.pfc_scan:
+        cmp  ebx, PMM_FREE_LIST_NIL
+        je   .pfc_not_found
+        cmp  ebx, esi               ; is this our buddy?
+        je   .pfc_found
+        ; Advance: EDI = addr of EBX's next field; EBX = EBX.next
+        mov  eax, ebx
+        shl  eax, 12                ; page → physical address
+        mov  edi, eax               ; EDI = &(EBX.next)
+        mov  ebx, [edi]             ; EBX = next page
+        jmp  .pfc_scan
+
+.pfc_found:
+        ; Unlink buddy from free list: [EDI] = buddy.next
+        mov  eax, ebx               ; EBX = buddy page
+        shl  eax, 12
+        mov  eax, [eax]             ; buddy.next
+        mov  [edi], eax             ; prev.next = buddy.next
+        ; Merged block starts at lower of the two page addresses
+        cmp  edx, esi
+        jbe  .pfc_keep_page
+        mov  edx, esi               ; use buddy's (lower) page
+.pfc_keep_page:
+        inc  ecx                    ; raise order
+        jmp  .pfc_coalesce_loop
+
+.pfc_not_found:
+.pfc_link_done:
+        ; Link the (possibly merged) block onto buddy_free_list[ECX]
+        mov  eax, edx
+        shl  eax, 12                ; merged block physical address
+        mov  esi, [buddy_free_list + ecx*4]
+        mov  [eax], esi             ; merged.next = old head
+        mov  [buddy_free_list + ecx*4], edx  ; head = merged page
         popad
         ret
 
@@ -326,7 +411,7 @@ pmm_free_pages:
         shr  eax, 12            ; page number
         mov  edx, eax           ; EDX = page
         mov  ecx, ebx           ; ECX = order
-        call pmm_push_free_block
+        call pmm_free_coalesce  ; coalesce with buddy if available
 
         pop  esi
         pop  ebx

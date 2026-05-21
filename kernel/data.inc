@@ -101,55 +101,63 @@ str_copy:
 ;=======================================================================
 
 banner_str:
-        db COLOR_HEADER
-        db "     __  __      _ _ _                        ___  ____                  ", 0x0A
-        db "    |  \/  | ___| | (_)_   _____  _ __ __ _  / _ \/ ___|                 ", 0x0A
-        db "    | |\/| |/ _ \ | | \ \ / / _ \| '__/ _` || | | \___ \                 ", 0x0A
-        db "    | |  | |  __/ | | |\ V / (_) | | | (_| || |_| |___) |                ", 0x0A
-        db "    |_|  |_|\___|_|_|_| \_/ \___/|_|  \__,_| \___/|____/                 ", 0x0A
-        db "                                                                          ", 0x0A
-        db "       HB Lair v9.0 - Honey Badger Lair  |  Buddy Alloc, Paging, Fork, HBFS v2", 0x0A, 0
+        db COLOR_HEADER                                     ; color prefix byte
+        db 0xC9                                             ; ╔
+        times 78 db 0xCD                                   ; ══...══
+        db 0xBB, 0x0A                                      ; ╗\n
+        db 0xBA, "      Mellivora OS  v10.0.0          Honey Badger Operating System           ", 0xBA, 0x0A
+        db 0xCC                                             ; ╠
+        times 78 db 0xCD                                   ; ══...══
+        db 0xB9, 0x0A                                      ; ╣\n
+        db 0xBA, "  HBFS v3  ", 0xF9, "  142 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA, 0x0A
+        db 0xC8                                             ; ╚
+        times 78 db 0xCD                                   ; ══...══
+        db 0xBC, 0x0A, 0                                   ; ╝\n\0
 
 motd_str:
-        db 0x0A
-        db "  Welcome to the Lair!  Type 'help' for commands, 'ver' for system info.", 0x0A, 0
+        db "  Type 'help' for commands  |  'ver' for system info  |  'burrows' for the GUI", 0x0A, 0
 
 msg_boot_time:  db "  Boot complete in ", 0
-msg_boot_suf:   db "s", 0x0A, 0x0A, 0
+msg_boot_suf:   db "s", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v9.0.0 - Buddy Alloc, Demand Paging, Fork, HBFS v2, IPv6, POSIX msgq", 0x0A
+        db "Mellivora OS v10.0.0 - HBFS v3, 142 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
-        db "  Shell:         HB Lair v9.0 (Honey Badger Lair)", 0x0A
+        db "  Shell:         HB Lair v10.0 (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
         db "  Disk:          ATA PIO + Bus Master DMA, LBA48 (up to 128 PB)", 0x0A
-        db "  Filesystem:    HBFS (Honey Badger File System)", 0x0A
+        db "  Filesystem:    HBFS v3 (Honey Badger File System, version 3)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
         db "    Max files:   455 root / 224 per subdirectory", 0x0A
         db "    Max name:    252 characters", 0x0A
         db "    Multi-block: Files can span multiple blocks", 0x0A
         db "    Subdirs:     mkdir / cd / pwd", 0x0A
+        db "    Permissions: Unix chmod/chown + UID/GID per file", 0x0A
+        db "    Ext attrs:   xattr get/set (SYS_GETXATTR=141, SYS_SETXATTR=142)", 0x0A
+        db "  VFS Layer:     procfs / devfs / tmpfs virtual filesystem mounts", 0x0A
         db "  Timer:         PIT at 100 Hz", 0x0A
         db "  Keyboard:      PS/2 with shift/ctrl support", 0x0A
-        db "  Display:       VGA 80x25 text, 16 colors", 0x0A
+        db "  Display:       VGA 80x25 text, 16 colors + VBE 640x480 framebuffer", 0x0A
         db "  Serial:        COM1 at 115200 baud", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (102 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (142 syscalls)", 0x0A
+        db "  UEFI Boot:     Tianocore EDK2 UEFI loader (boot/uefi_loader.c)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
+        db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
         db "  Scheduler:     Priority-based preemptive (128 tasks, 4 levels)", 0x0A
         db "  Signals:       POSIX-style (INT/KILL/TERM/TSTP/CONT/USR1/USR2)", 0x0A
-        db "  Shell:         Tab, history, Ctrl+A/E/U/W/K/L/C", 0x0A
+        db "  Line Editor:   Tab completion, history, Ctrl+A/E/U/W/K/L/C", 0x0A
         db "  Programs:      Flat binary + ELF32 (ring 3)", 0x0A
         db "  Arguments:     Command-line args via SYS_GETARGS", 0x0A
         db "  Env vars:      set/unset with $VAR expansion (32 vars)", 0x0A
         db "  File I/O:      open/read/write/close/seek (fd)", 0x0A
         db "  IPC:           Pipes (8) + shared memory (4)", 0x0A
-        db "  Networking:    TCP/IP (RTL8139, ARP, DHCP, DNS)", 0x0A
+        db "  Networking:    TCP/IP (RTL8139, ARP, DHCP, DNS, IPv6)", 0x0A
         db "  Scripts:       Batch file execution", 0x0A
         db "  Security:      Raw disk access denied to ring 3", 0x0A, 0
 
@@ -538,7 +546,6 @@ msg_wild_needs_star: db "For multiple wildcard matches, destination must include
 msg_write_prompt: db "Type content (empty line to end):", 0x0A, 0
 msg_write_err:  db "Write error!", 0x0A, 0
 msg_unknown_cmd: db "Unknown command. Type 'help'.", 0x0A, 0
-msg_bg_unsupported: db "Note: background jobs (&) not yet supported; running in foreground.", 0x0A, 0
 msg_bg_launched: db "[bg] PID ", 0
 msg_bg_stopped: db 0x0A, "[bg] Stopped PID ", 0
 msg_bg_noproc:  db "Ctrl+Z: no background task to stop.", 0x0A, 0
@@ -745,11 +752,18 @@ nice_priority:    resd 1           ; v4.0: Priority for next spawned task
 ; TSS structure (104 bytes)
 tss_struct:     resb 104
 
-; File descriptor table (8 fds * 32 bytes)
+; Global (shell) file descriptor table (8 fds * 32 bytes)
 fd_table:       resb FD_MAX * FD_ENTRY_SIZE
+; Shell private fd table snapshot (saved/restored on shell↔task context switches)
+shell_fd_table: resb FD_MAX * FD_ENTRY_SIZE
+; Physical address of the sigreturn trampoline page (set by sigreturn_trampoline_init)
+sigreturn_trampoline_phys: resd 1
 
 ; Environment variables (16 * 128 = 2KB)
 env_table:      resb ENV_MAX * ENV_ENTRY_SIZE
+
+; TTY termios shadow (36 bytes, initialised by sys_tcsetattr)
+tty_termios:    resb 36
 env_name_buf:   resb 64
 env_temp_buf:   resb LINE_BUFFER_SIZE
 expand_buf:     resb LINE_BUFFER_SIZE
@@ -892,9 +906,11 @@ fork_child_kesp:  resd 1
 fork_child_ubase: resd 1
 fork_child_ustop: resd 1
 fork_child_pid_slot: resd 1  ; slot index that becomes child PID
-task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 72 = 9216 bytes v9.0)
+task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 128 = 16384 bytes v12.0)
 
 ; Networking state (RTL8139 NIC)
+net_nic_type:     resb 1          ; 0=none 1=RTL8139 2=e1000
+                  resb 3          ; alignment
 net_state:        resd 1          ; NET_STATE_NONE / FOUND / UP
 net_pci_bus:      resb 1
 net_pci_dev:      resb 1
@@ -1104,5 +1120,14 @@ shell_func_table:    resb SHELL_FUNC_MAX * SHELL_FUNC_ENTRY_SIZE
 func_def_name:   resb 64
 func_def_body:   resb 512
 func_call_name:  resb 64
+
+; v10.0 — VFS abstraction layer tables
+vfs_mount_table: resb VFS_MAX_MOUNTS * VFS_MT_SIZE
+vfs_fd_table:    resb VFS_MAX_FDS * VFD_SIZE
+tmpfs_table:     resb TMPFS_MAX_FILES * TMPF_ESIZE
+proc_scratch_buf: resb 512
+
+; v10.0 — HBFS v3 sector scratch buffer (used by hbfs_flush_dir_entry)
+hbfs_sector_rw_buf: resb 512
 
 bss_end:

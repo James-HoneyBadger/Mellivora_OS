@@ -157,6 +157,55 @@ HBFS_JRNL_T_COMMIT   equ 2            ; Journal entry type: commit
 HBFS_SB_JRNL_STATE   equ 40          ; dword: 0=clean 1=transaction-in-progress
 HBFS_SB_JRNL_PTR     equ 44          ; dword: next journal sector index (0 = first)
 
+; v10.0 HBFS v3 — Permissions, UID/GID, xattr, extended filename
+; Directory entry layout is unchanged in byte count (288 bytes) but the
+; previously-reserved bytes [276-287] now carry permission metadata:
+;
+;   [276-277]  mode     word  : Unix-style permission bits (12 low bits used)
+;                               bit 11 = setuid, bit 10 = setgid, bit 9 = sticky
+;                               bits 8-6 = owner rwx, bits 5-3 = group rwx,
+;                               bits 2-0 = world rwx
+;   [278-279]  uid      word  : owner user  ID  (0 = root)
+;   [280-281]  gid      word  : owner group ID  (0 = root)
+;   [282-283]  xattr_count  word  : number of xattr entries (0 = none)
+;   [284-287]  xattr_lba    dword : LBA of first xattr block (0 = none)
+;
+; xattr block layout (one 4 KB block per file, up to 16 xattr entries):
+;   Each entry: key(64 bytes) + value(64 bytes) = 128 bytes; 32 entries / block
+;
+HBFS_VERSION_V3      equ 3
+
+; Directory entry v3 field offsets (relative to entry start)
+HBFS_DE_NAME         equ 0            ; filename  (253 bytes, null-terminated)
+HBFS_DE_TYPE         equ 253          ; file type (byte)
+HBFS_DE_FLAGS        equ 254          ; flags     (word)
+HBFS_DE_SIZE         equ 256          ; file size (dword)
+HBFS_DE_BLOCK        equ 260          ; start block (dword)
+HBFS_DE_BLKCNT       equ 264          ; block count (dword)
+HBFS_DE_CTIME        equ 268          ; created timestamp (dword)
+HBFS_DE_MTIME        equ 272          ; modified timestamp (dword)
+; Previously reserved [276-287] — now v3 permission fields:
+HBFS_DE_MODE         equ 276          ; Unix permission bits (word)
+HBFS_DE_UID          equ 278          ; owner UID (word)
+HBFS_DE_GID          equ 280          ; owner GID (word)
+HBFS_DE_XATTR_COUNT  equ 282          ; xattr count (word)
+HBFS_DE_XATTR_LBA    equ 284          ; xattr block LBA (dword)
+
+; Default permission modes
+HBFS_MODE_FILE_DEF   equ 0o644        ; rw-r--r-- (default file)
+HBFS_MODE_DIR_DEF    equ 0o755        ; rwxr-xr-x (default directory)
+HBFS_MODE_EXEC_DEF   equ 0o755        ; rwxr-xr-x (executable)
+
+; xattr block constants
+HBFS_XATTR_KEY_LEN   equ 64
+HBFS_XATTR_VAL_LEN   equ 64
+HBFS_XATTR_ENTRY_SIZE equ (HBFS_XATTR_KEY_LEN + HBFS_XATTR_VAL_LEN)  ; 128 bytes
+HBFS_XATTR_PER_BLOCK equ (HBFS_BLOCK_SIZE / HBFS_XATTR_ENTRY_SIZE)    ; 32 entries
+
+; v10.0: UEFI boot detection (set by uefi_loader.c at 0x528)
+BOOTINFO_UEFI_MAGIC  equ 0x528
+UEFI_BOOT_MAGIC      equ 0xEF100000
+
 ; File types (stored at byte 253 of directory entry)
 FTYPE_FREE          equ 0
 FTYPE_TEXT          equ 1              ; Text file
@@ -309,6 +358,24 @@ SYS_PSF_CHAR        equ 100     ; Draw PSF2 char: EBX=x ECX=y EDX=codepoint ESI=
 SYS_PCI_FIND        equ 101     ; Find PCI device: EBX=vendor ECX=device_id -> EAX=bdf/-1
 SYS_GETPPID         equ 102     ; Get parent PID -> EAX=ppid
 
+; v12.0 POSIX syscalls (103-180 in syscall.inc)
+; SYS_GETERRNO — retrieve per-task errno
+SYS_GETERRNO        equ 181     ; Get errno: -> EAX=errno
+
+; Signal trampoline — read-only page mapped at top of demand zone
+SIGRETURN_TRAMPOLINE_VADDR equ 0x1FFFF000   ; Last page of demand zone (128–512MB)
+
+; errno constants (POSIX E-values)
+ENOENT              equ 2       ; No such file or directory
+EBADF               equ 9       ; Bad file descriptor
+ENOMEM              equ 12      ; Out of memory
+EACCES              equ 13      ; Permission denied
+EFAULT              equ 14      ; Bad address
+EINVAL              equ 22      ; Invalid argument
+EMFILE              equ 24      ; Too many open files
+ENOTTY              equ 25      ; Not a typewriter (ioctl on wrong fd type)
+ENOSYS              equ 38      ; Function not implemented
+
 ; File descriptor constants
 FD_MAX              equ 8
 FD_ENTRY_SIZE       equ 32
@@ -391,6 +458,7 @@ kernel_entry:
         call sched_init
         call ipc_init
         call net_init
+        call e1000_init
         call paging_init
         call mouse_init
         call sb16_init
@@ -398,8 +466,10 @@ kernel_entry:
         call pci_init
         call ac97_init
         call atadma_init
+        call ahci_init
         call virtio_init
         call burrows_init
+        call gdbstub_init
 
         ; Drain any stale bytes from the 8042 output buffer so that
         ; enabling interrupts does not deliver a spurious keyboard event.
@@ -419,6 +489,7 @@ kernel_entry:
 
         ; Initialize filesystem
         call hbfs_init
+        call vfs_init
 
         ; Enter the command shell
         jmp shell_main
@@ -438,6 +509,7 @@ kernel_entry:
 %include "kernel/pmm.inc"
 %include "kernel/ata.inc"
 %include "kernel/hbfs.inc"
+%include "kernel/vfs.inc"
 %include "kernel/filesearch.inc"
 %include "kernel/isr.inc"
 %include "kernel/ipc.inc"
@@ -449,8 +521,11 @@ kernel_entry:
 %include "kernel/pci.inc"
 %include "kernel/ac97.inc"
 %include "kernel/atadma.inc"
+%include "kernel/ahci.inc"
+%include "kernel/e1000.inc"
 %include "kernel/virtio.inc"
 %include "kernel/burrows.inc"
+%include "kernel/gdbstub.inc"
 %include "kernel/screensaver.inc"
 %include "kernel/shell.inc"
 %include "kernel/util.inc"

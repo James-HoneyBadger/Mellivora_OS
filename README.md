@@ -4,16 +4,16 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS filesystem, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 116 syscalls, priority-based preemptive scheduling, signal support, an in-OS Tiny C Compiler, 218 assembly programs, and 19 bundled samples (C, Perl, and BASIC).
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 140 syscalls, priority-based preemptive scheduling, signal support, a VFS abstraction layer, compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 218 assembly programs, and 19 bundled samples (C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
-- **Boot path:** 3-stage BIOS boot flow into 32-bit protected mode
+- **Boot path:** BIOS 3-stage boot or UEFI (gnu-efi PE32+) into 32-bit protected mode; optional x86-64 long-mode path
 - **Userland:** 90+ shell commands, 218 assembly programs, and 19 bundled samples (C, Perl, and BASIC)
-- **Core pieces:** HBFS filesystem, ELF32 loader, PMM allocator, serial/VGA/ATA drivers
-- **Developer-ready:** API docs, programming guide, regression tests, and release packaging
+- **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
+- **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
 
 ---
 
@@ -21,16 +21,19 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 
 ### Kernel & Architecture
 
-- **32-bit protected mode** with flat memory model
+- **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`)
+- **UEFI boot** — `boot/uefi_loader.efi` (gnu-efi PE32+) for UEFI firmware; `make uefi` / `make run-uefi`
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **116 syscalls** via `INT 0x80` (POSIX-inspired: open, read, write, close, seek, stat, mkdir, signals, priorities, fork, mmap, msgq, ...)
+- **140 syscalls** via `INT 0x80` — full POSIX-compat range 116–139 added in v10 (dup, pipe2, mmap, mprotect, getpid, chmod, chown, nanosleep, clock_gettime, compositor surfaces)
+- **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 64 concurrent tasks
 - **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD
 - **Process groups** — PGID support for job control
 - **ELF32 loader** — supports flat binaries and ELF executables
-- **Physical memory manager** with bitmap allocator (malloc/free/realloc for user programs)
-- **VBE/BGA graphics driver** — high-resolution framebuffer modes (640×480, 800×600, 1024×768 at 32 bpp) with double buffering via `SYS_FRAMEBUF/4` shadow-buffer blitting
-- **Three-stage boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
+- **Physical memory manager** with buddy allocator (order 0–9; malloc/free/realloc for user programs)
+- **VBE/BGA graphics driver** — high-resolution framebuffer modes (640×480, 800×600, 1024×768 at 32 bpp) with double buffering
+- **Compositor surface IPC** — kernel-managed pixel buffers with z-order and dirty-rect compositing (SYS_SURFACE_CREATE/COMMIT/DESTROY/MOVE/RESIZE)
+- **Three-stage BIOS boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
 ### Ratel Init System
 
@@ -53,12 +56,16 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 - **Full path support** — `cat /docs/readme`, `run /bin/hello`, `diff /docs/a /docs/b`
 - **Multi-level subdirectories** — up to 16 levels deep with `cd`, `mkdir`, `pwd`
 
-### HBFS Filesystem
+### HBFS Filesystem (v3)
 
-- **Honey Badger File System** — custom filesystem with 4 KB blocks
-- **455 entries** per root directory, **224 entries** per subdirectory (288-byte entries, 252-char max filename)
+- **Honey Badger File System v3** — custom filesystem with 4 KB blocks and write-ahead journal
+- **455 entries** per root directory, **224 entries** per subdirectory (288-byte entries, 253-char max filename)
 - **File types**: text, executable, directory, batch script
-- **File descriptors**: open/read/write/close/seek (8 simultaneous FDs)
+- **File permissions** — Unix-style 12-bit mode (`HBFS_DE_MODE`); owner/group/other rwx enforced by `hbfs_check_permission`
+- **Extended attributes** — per-file xattr block; `hbfs_xattr_get` / `hbfs_xattr_set` kernel API
+- **Feature flags** — superblock `HBFS_SB_FEATURES`: journal, xattr, permissions
+- **VFS integration** — accessed via the VFS layer; raw `fd_open` / `fd_read` / `fd_write` still available
+- **File descriptors**: open/read/write/close/seek (8 legacy FDs; 64 VFS FDs)
 - **Wildcards**: `*` and `?` pattern matching in `del` and `copy`
 
 ### Drivers

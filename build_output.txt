@@ -1,0 +1,14 @@
+nasm -f bin -O0 -w-zeroing -o kernel.bin -l kernel.lst kernel.asm
+kernel/gdbstub.inc:172: error: comma, decorator or end of line expected, got 38
+kernel/data.inc:1038: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1039: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1040: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1041: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1042: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1043: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1045: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1046: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1047: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1048: warning: forward reference in RESx can have unpredictable results [-w+forward]
+kernel/data.inc:1049: warning: forward reference in RESx can have unpredictable results [-w+forward]
+make: *** [Makefile:124: kernel.bin] Error 1

@@ -1756,32 +1756,101 @@ cmd_cd_internal:
 ; Pushes current dir onto stack, switches to new dir
 ; Returns CF set on failure
 .cd_enter_subdir:
-        ; Load current directory and find the named entry
+        ; Guard: VFS virtual dirs are flat — no further cd inside them
+        cmp dword [current_dir_lba], 0xFFFFFFFF
+        jne .cdes_guard_ok
+        stc
+        ret
+.cdes_guard_ok:
+        ; HBFS lookup in current directory
         call hbfs_load_root_dir
         push esi
         mov esi, filename_buf
         call hbfs_find_file
         pop esi
-        jc .cd_sub_fail
+        jc  .cdes_not_hbfs      ; not found in HBFS → check VFS mounts
+        ; HBFS found: must be a directory
         cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
-        jne .cd_sub_fail
+        je  .cdes_enter_hbfs_jmp ; unconditional near jump
+        stc
+        ret
+.cdes_enter_hbfs_jmp:
+        jmp .cdes_enter_hbfs
 
-        ; Push current directory onto stack
-        mov eax, [dir_depth]
-        cmp eax, DIR_STACK_MAX
-        jge .cd_sub_fail        ; stack full
+.cdes_not_hbfs:
+        ; Check VFS mount points: only accessible directly from root
+        cmp dword [dir_depth], 0
+        je  .cdes_vfs_name_check
+        stc
+        ret
 
-        ; Calculate stack entry address: dir_stack + depth * DIR_STACK_ENTRY_SIZE
-        push edi                ; save dir entry pointer
+.cdes_vfs_name_check:
+        mov esi, filename_buf
+        mov edi, .cd_vname_proc
+        call str_compare        ; EAX=0 if equal
+        jz  .cdes_enter_vfs
+        mov esi, filename_buf
+        mov edi, .cd_vname_dev
+        call str_compare
+        jz  .cdes_enter_vfs
+        mov esi, filename_buf
+        mov edi, .cd_vname_tmp
+        call str_compare
+        jz  .cdes_enter_vfs
+        stc
+        ret
+
+.cdes_enter_vfs:
+        ; Push root state onto dir_stack[0] and mark entry as virtual
+        mov eax, [dir_depth]    ; = 0
         imul eax, DIR_STACK_ENTRY_SIZE
         lea ebx, [dir_stack + eax]
-        ; Save current state (interrupts off to keep dir globals consistent)
         cli
         mov eax, [current_dir_lba]
         mov [ebx], eax
         mov eax, [current_dir_sects]
         mov [ebx + 4], eax
-        ; Copy current_dir_name
+        push esi
+        lea edi, [ebx + 8]
+        mov esi, current_dir_name   ; "/" at root
+.cd_vfs_push_nm:
+        lodsb
+        stosb
+        cmp al, 0
+        jne .cd_vfs_push_nm
+        pop esi
+        inc dword [dir_depth]
+        mov dword [current_dir_lba],   0xFFFFFFFF  ; VFS sentinel
+        mov dword [current_dir_sects], 0
+        push esi
+        mov esi, filename_buf
+        mov edi, current_dir_name
+.cd_vfs_cur_nm:
+        lodsb
+        stosb
+        cmp al, 0
+        jne .cd_vfs_cur_nm
+        pop esi
+        sti
+        clc
+        ret                     ; success — no ata_read_sectors for virtual dir
+
+.cdes_enter_hbfs:
+        ; Push current directory onto stack
+        mov eax, [dir_depth]
+        cmp eax, DIR_STACK_MAX
+        jne .cdes_hbfs_push_ok
+        stc
+        ret
+.cdes_hbfs_push_ok:
+        push edi                ; save dir entry pointer
+        imul eax, DIR_STACK_ENTRY_SIZE
+        lea ebx, [dir_stack + eax]
+        cli
+        mov eax, [current_dir_lba]
+        mov [ebx], eax
+        mov eax, [current_dir_sects]
+        mov [ebx + 4], eax
         push esi
         lea edi, [ebx + 8]
         mov esi, current_dir_name
@@ -1791,7 +1860,6 @@ cmd_cd_internal:
         cmp al, 0
         jne .cd_push_name
         pop esi
-
         inc dword [dir_depth]
         pop edi                 ; restore dir entry pointer
 
@@ -1814,20 +1882,19 @@ cmd_cd_internal:
         cmp al, 0
         jne .cd_ent_name
         pop esi
-        sti                     ; state consistent, re-enable interrupts
+        sti
 
         ; Load the new directory contents
         mov eax, [current_dir_lba]
         mov ecx, [current_dir_sects]
         mov edi, hbfs_dir_buf
         call ata_read_sectors
-
         clc
         ret
 
-.cd_sub_fail:
-        stc
-        ret
+.cd_vname_proc: db "proc", 0
+.cd_vname_dev:  db "dev",  0
+.cd_vname_tmp:  db "tmp",  0
 
 ; Pop one level from the directory stack (cd ..)
 ; If already at root, do nothing
@@ -2264,29 +2331,74 @@ sys_stdin_read:
         iretd
 
 ;--- Read entire file into buffer ---
-; EBX = filename, ECX = buffer pointer
+; EBX = filename/path, ECX = buffer pointer
 ; Returns EAX = bytes read (0 if not found)
 sys_fread:
-        pushad
-        mov esi, ebx            ; filename
-        mov edi, [esp + 24]     ; recover original ECX (dest buffer) from pushad frame
-        call hbfs_read_file     ; ESI=filename, EDI=dest buffer; returns ECX=size, CF on error
-        jc .fread_fail
-        ; ECX = file size returned by hbfs_read_file
-        mov [esp + 28], ecx     ; set EAX in pushad frame to file size
-        popad
-        iretd
-.fread_fail:
-        popad
-        xor eax, eax
+        push esi
+        push edi
+        push edx
+
+        ; Check which mount the path belongs to
+        push ebx
+        push ecx
+        call vfs_route          ; EAX = mount entry (EBX=path)
+        pop  ecx                ; restore dest buf
+        pop  ebx                ; restore filename
+
+        test eax, eax
+        jz   .vfr_hbfs          ; no mount → fall back
+        cmp  byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        je   .vfr_hbfs          ; HBFS → use fast hbfs_read_file
+
+        ; Non-HBFS: open via VFS, read all, close
+        mov  [.vfr_buf], ecx    ; save dest buf
+        ; vfs_open(EBX=path, ECX=flags)
+        mov  ecx, FD_FLAG_READ
+        call vfs_open           ; EAX = vfd or -1
+        cmp  eax, -1
+        je   .vfr_fail
+        mov  ebx, eax           ; EBX = vfd
+        mov  ecx, [.vfr_buf]   ; ECX = dest buf
+        mov  edx, 65536         ; EDX = max bytes (64 KB)
+        call vfs_read           ; EAX = bytes read or -1
+        push eax                ; save byte count
+        ; EBX still = vfd (vfs_read preserves EBX)
+        call vfs_close
+        pop  eax
+        cmp  eax, -1
+        je   .vfr_fail
+        pop  edx
+        pop  edi
+        pop  esi
         iretd
 
+.vfr_hbfs:
+        ; Fast path: use hbfs_read_file directly
+        ; hbfs_read_file: ESI=filename, EDI=dest; returns ECX=size, CF on error
+        mov  esi, ebx
+        mov  edi, ecx
+        call hbfs_read_file
+        jc   .vfr_fail
+        mov  eax, ecx           ; EAX = bytes read
+        pop  edx
+        pop  edi
+        pop  esi
+        iretd
+
+.vfr_fail:
+        pop  edx
+        pop  edi
+        pop  esi
+        xor  eax, eax
+        iretd
+.vfr_buf: dd 0
+
 ;--- Write entire file (create/overwrite) ---
-; EBX = filename, ECX = buffer pointer, EDX = size
-; Returns EAX = 0 on success
+; EBX = filename/path, ECX = buffer pointer, EDX = size
+; Returns EAX = 0 on success, -1 on error
 sys_fwrite:
         pushad
-        ; Save parameters before hbfs_find_file clobbers them
+        ; Save parameters
         mov [.fw_name], ebx
         mov [.fw_buf], ecx
         mov [.fw_size], edx
@@ -2300,8 +2412,40 @@ sys_fwrite:
 .fw_default_type:
         mov dword [.fw_type], FTYPE_TEXT
 .fw_type_set:
+        ; Check mount: route /tmp/* through VFS
+        call vfs_route          ; EBX=path -> EAX=mount entry
+        test eax, eax
+        jz   .fwrite_hbfs
+        cmp  byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        je   .fwrite_hbfs
+
+        ; Non-HBFS (tmpfs etc.): truncate-then-write
+        ; Unlink first to ensure overwrite semantics (ignore error)
+        mov  ebx, [.fw_name]
+        call vfs_unlink
+        ; Now open for write (creates fresh entry)
+        mov  ebx, [.fw_name]
+        mov  ecx, FD_FLAG_WRITE
+        call vfs_open           ; EAX = vfd or -1
+        cmp  eax, -1
+        je   .fwrite_err
+        mov  ebx, eax           ; vfd
+        mov  ecx, [.fw_buf]
+        mov  edx, [.fw_size]
+        call vfs_write          ; EAX = bytes written or -1
+        push eax
+        call vfs_close          ; close regardless
+        pop  eax
+        cmp  eax, -1
+        je   .fwrite_err
+        mov  dword [esp + 28], 0  ; EAX = 0 in pushad frame
+        popad
+        iretd
+
+.fwrite_hbfs:
+        ; === legacy HBFS path ===
         ; Delete old file if it exists
-        mov esi, ebx
+        mov esi, [.fw_name]
         call hbfs_load_root_dir
         call hbfs_find_file
         jc .fwrite_new
@@ -2328,58 +2472,57 @@ sys_fwrite:
 .fw_type: dd 0
 
 sys_open_fd:
+        ; SYS_OPEN  (5): EBX=path, ECX=flags → EAX=vfd or -1
         push esi
         push edi
-        mov esi, ebx
-        call fd_open
+        call vfs_open
         pop edi
         pop esi
         iretd
 
 sys_read_fd:
+        ; SYS_READ  (6): EBX=vfd, ECX=buf, EDX=len → EAX=bytes or -1
         push esi
         push edi
-        call fd_read
+        call vfs_read
         pop edi
         pop esi
         iretd
 
 sys_write_fd:
+        ; SYS_WRITE (7): EBX=vfd, ECX=buf, EDX=len → EAX=bytes or -1
         push esi
         push edi
-        call fd_write
+        call vfs_write
         pop edi
         pop esi
         iretd
 
 sys_close_fd:
+        ; SYS_CLOSE (8): EBX=vfd → EAX=0 or -1
         push ebx
-        call fd_close
+        call vfs_close
         pop ebx
-        xor eax, eax
         iretd
 
 sys_seek_fd:
+        ; SYS_SEEK  (10): EBX=vfd, ECX=offset, EDX=whence → EAX=new_pos or -1
         push esi
-        call fd_seek
+        call vfs_seek
         pop esi
         iretd
 
 ;---------------------------------------
-; SYS_MKDIR (12): Create a subdirectory
-; EBX = pointer to directory name
+; SYS_MKDIR (12): Create a subdirectory by virtual path
+; EBX = pointer to directory path
 ; Returns: EAX = 0 on success, -1 on error
 ;---------------------------------------
 sys_mkdir:
         push esi
-        mov esi, ebx
-        call hbfs_mkdir
+        push edi
+        call vfs_mkdir          ; EBX=path -> EAX=0 or -1
+        pop edi
         pop esi
-        jc .smk_err
-        xor eax, eax
-        iretd
-.smk_err:
-        mov eax, -1
         iretd
 
 ;---------------------------------------
@@ -2393,6 +2536,39 @@ sys_readdir:
         push edx
         push ebp
 
+        ; -- VFS routing: build CWD path, check if it maps to a non-HBFS mount --
+        push ebx                ; save name_buf
+        push ecx                ; save entry_index
+        mov  edi, path_search_buf
+        call build_cwd_path     ; builds path string into [path_search_buf]
+        mov  ebx, path_search_buf
+        call vfs_route          ; EAX = mount entry ptr (EBX=cwd_path)
+        pop  ecx                ; restore entry_index
+        pop  ebx                ; restore name_buf
+
+        test eax, eax
+        jz   .srd_hbfs_path     ; no mount found? fall back to HBFS
+        cmp  byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        je   .srd_hbfs_path     ; HBFS mount: use legacy path
+
+        ; Non-HBFS backend (proc/dev/tmp): call backend readdir
+        ; Convention: EBX=path, ECX=name_buf, EDX=entry_index
+        push eax                ; save mount entry
+        mov  edx, ecx           ; EDX = entry_index
+        mov  ecx, ebx           ; ECX = name_buf
+        mov  ebx, path_search_buf  ; EBX = path
+        pop  eax
+        call [eax + VFS_MT_READDIR]  ; EAX = type or -1
+        ; ECX = 0 (size unknown for virtual entries)
+        xor  ecx, ecx
+        pop  ebp
+        pop  edx
+        pop  edi
+        pop  esi
+        iretd
+
+.srd_hbfs_path:
+        ; === legacy HBFS path (ECX=entry_index, EBX=name_buf still intact) ===
         call hbfs_load_root_dir
         call hbfs_get_max_entries
         cmp ecx, eax

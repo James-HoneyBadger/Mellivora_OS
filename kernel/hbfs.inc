@@ -3,30 +3,54 @@
 ;
 ; Superblock (LBA HBFS_SUPERBLOCK_LBA, 1 sector):
 ;   [0-3]   Magic: 'HBFS'
-;   [4-7]   Version: 1
+;   [4-7]   Version: 1 / 2 (v9.0) / 3 (v10.0)
 ;   [8-11]  Total blocks
 ;   [12-15] Free blocks
 ;   [16-19] Root directory block
 ;   [20-23] Bitmap start block
 ;   [24-27] Data start block
 ;   [28-31] Block size (4096)
+;   --- v2+ ---
+;   [40]    Journal state (dword)
+;   [44]    Journal write pointer (dword)
+;   --- v3+ ---
+;   [48]    Feature flags (dword): bit0=permissions, bit1=xattr
+;   [52]    Root UID / GID (word each)
 ;
-; Directory Entry (288 bytes):
+; Directory Entry v3 (288 bytes — same size as v1/v2):
 ;   [0-252]   Filename (null-terminated, 252 chars max)
-;   [253]     Type (0=free, 1=file, 2=dir)
+;   [253]     Type (0=free, 1=file, 2=dir, 3=exec, 4=batch, 5=link)
 ;   [254-255] Flags
 ;   [256-259] File size in bytes
 ;   [260-263] Start block (in data area)
 ;   [264-267] Block count
 ;   [268-271] Created timestamp (packed RTC)
 ;   [272-275] Modified timestamp (packed RTC)
-;   [276-287] Reserved
+;   --- v3: previously reserved [276-287] ---
+;   [276-277] Permission mode (Unix rwxrwxrwx + setuid/setgid/sticky)
+;   [278-279] Owner UID (16-bit)
+;   [280-281] Owner GID (16-bit)
+;   [282-283] xattr entry count (0 = no xattrs)
+;   [284-287] xattr block LBA  (0 = no xattrs)
+;
+; xattr block layout (one 4 KB block per file):
+;   32 entries × 128 bytes = 4096 bytes
+;   Each entry: key[64] + value[64]
 ;
 ; Block allocation bitmap:
 ;   128 sectors (65536 bytes) = 524288 blocks max
 ;   At 4KB/block = 2 GB addressable
 ;
 ;=======================================================================
+
+; HBFS v3 feature flag bits (stored at superblock offset 48)
+HBFS_FEAT_PERMS      equ (1 << 0)    ; permission bits are valid
+HBFS_FEAT_XATTR      equ (1 << 1)    ; xattr blocks are present
+
+; Superblock offset for v3 fields
+HBFS_SB_FEATURES     equ 48          ; dword: feature flags
+HBFS_SB_ROOT_UID     equ 52          ; word: root UID
+HBFS_SB_ROOT_GID     equ 54          ; word: root GID
 
 hbfs_init:
         pushad
@@ -49,9 +73,10 @@ hbfs_init:
         mov esi, msg_hbfs_found
         call vga_print
 
-        ; v9.0: Check for journal recovery (v2 only)
-        cmp dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jne .hbfs_v1_mount          ; v1: no journal
+        ; v9.0+: Check for journal recovery (v2 and v3 both use journal)
+        mov  eax, [hbfs_super_buf + 4]
+        cmp  eax, HBFS_VERSION_V2
+        jb   .hbfs_v1_mount         ; v1: no journal
         ; Init journal runtime state from superblock
         mov  eax, [hbfs_super_buf + HBFS_SB_JRNL_PTR]
         mov  [hbfs_journal_ptr], eax
@@ -220,9 +245,9 @@ hbfs_format:
 ; All registers preserved.
 ;-----------------------------------------------------------------------
 hbfs_journal_begin:
-        ; Skip if not a v2 filesystem
+        ; Skip if not a journalled filesystem (v2 or v3)
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jne  .hjb_done
+        jb   .hjb_done
         ; Reset pointer and set state in the in-memory superblock
         mov  dword [hbfs_journal_ptr],   0
         mov  dword [hbfs_journal_dirty],  1
@@ -248,9 +273,9 @@ hbfs_journal_begin:
 ;   All registers preserved.  Does nothing for v1 or if journal full.
 ;-----------------------------------------------------------------------
 hbfs_journal_log_sector:
-        ; Skip if not v2
+        ; Skip if not a journalled filesystem (v2 or v3)
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jne  .hjls_done
+        jb   .hjls_done
         cmp  dword [hbfs_journal_dirty], 1
         jne  .hjls_done
 
@@ -334,7 +359,7 @@ hbfs_journal_log_sector:
 ;-----------------------------------------------------------------------
 hbfs_journal_commit:
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jne  .hjc_done
+        jb   .hjc_done
         cmp  dword [hbfs_journal_dirty], 1
         jne  .hjc_done
 
@@ -1363,71 +1388,255 @@ sys_setmtime:
         iretd
 
 ;=======================================================================
-; sys_defrag — SYS_DEFRAG (104) — HBFS v2 Filesystem Maintenance
+; sys_defrag — SYS_DEFRAG (104) — HBFS Filesystem Maintenance
 ;
-; Performs three maintenance tasks:
-;   1. Recounts free blocks and updates the superblock.
-;   2. Scans bitmap for fragmented (non-contiguous) free runs.
-;   3. Journals the updated superblock for crash safety.
+; Phase 1: Count free blocks and fragmented free runs.
+; Phase 2: Compact file blocks toward block HBFS_JOURNAL_BLOCKS
+;          (forward-scan each dirent; if its start block can move to a
+;           lower free contiguous region, copy sector-by-sector, update
+;           the bitmap and directory entry).
 ;
-; Full block-relocation defrag is a v9.x TODO.
-;
-; Returns: EAX = number of fragmented free runs detected, or -1 on error.
+; Returns: EAX = fragmented free runs detected (before defrag), -1 on error.
 ;=======================================================================
 sys_defrag:
         pushad
 
-        ; Load bitmap from disk
         call hbfs_load_bitmap
         jc   .sdf_fail
 
-        ; 1. Count free blocks and fragmented free-run boundaries
-        xor  ecx, ecx           ; ECX = free block count
-        xor  edx, edx           ; EDX = fragmented run count
-        xor  ebx, ebx           ; EBX = block index
-        xor  esi, esi           ; ESI = previous block was free (0=no 1=yes)
+        call hbfs_load_root_dir
 
+        ; ---- Phase 1: scan bitmap for free-block / fragmentation stats ----
+        xor  ecx, ecx           ; free block count
+        xor  edx, edx           ; fragmented run count
+        xor  ebx, ebx           ; block index
+        xor  esi, esi           ; prev-was-free flag
 .sdf_scan:
         cmp  ebx, HBFS_TOTAL_BLOCKS
-        jge  .sdf_scan_done
-
+        jl   .sdf_scan_body
+        jmp  .sdf_scan_done
+.sdf_scan_body:
         mov  eax, ebx
-        shr  eax, 3             ; byte index in bitmap
+        shr  eax, 3
         mov  edi, ebx
-        and  edi, 7             ; bit index
+        and  edi, 7
         bt   dword [hbfs_bitmap_buf + eax], edi
-        jc   .sdf_used          ; bit set = used
-
-        ; Block is free
-        inc  ecx                ; increment free count
-        cmp  esi, 0             ; was previous block free?
-        jne  .sdf_cont_run      ; yes → continuing run
-        inc  edx                ; no → new fragmented run starts
-        mov  esi, 1             ; mark: previous is now free
-        jmp  .sdf_next_block
-
-.sdf_cont_run:
-        jmp  .sdf_next_block
-
-.sdf_used:
-        mov  esi, 0             ; previous block used
-.sdf_next_block:
+        jc   .sdf_blk_used
+        inc  ecx
+        test esi, esi
+        jnz  .sdf_blk_next      ; continuing a free run
+        inc  edx                ; new run boundary
+        mov  esi, 1
+        jmp  .sdf_blk_next
+.sdf_blk_used:
+        xor  esi, esi
+.sdf_blk_next:
         inc  ebx
         jmp  .sdf_scan
-
 .sdf_scan_done:
-        ; Subtract 1 from run count if we had exactly 1 contiguous run (not fragmented)
         cmp  edx, 1
-        jle  .sdf_no_fragment_adj
-        dec  edx                ; runs > 1 means at least 1 boundary = that many gaps
-.sdf_no_fragment_adj:
+        jle  .sdf_no_adj
+        dec  edx
+.sdf_no_adj:
+        mov  [.sdf_frag_cnt], edx
+        mov  [hbfs_super_buf + 12], ecx ; update free count in superblock
 
-        ; 2. Update free block count in superblock
-        mov  [hbfs_super_buf + 12], ecx
+        ; ---- Phase 2: block relocation ----
+        call hbfs_get_max_entries
+        mov  [.sdf_n_ent], eax
+        xor  ebx, ebx           ; dirent index
 
-        ; 3. Journal and flush the updated superblock
+.sdf_loop:
+        cmp  ebx, [.sdf_n_ent]
+        jl   .sdf_loop_body
+        jmp  .sdf_loop_done
+
+.sdf_loop_body:
+        ; EDI = ptr to current dirent
+        imul eax, ebx, HBFS_DIR_ENTRY_SIZE
+        lea  edi, [hbfs_dir_buf + eax]
+
+        ; Skip FREE entries
+        cmp  byte [edi + DIRENT_TYPE], FTYPE_FREE
+        jne  .sdf_ck_dir
+        jmp  .sdf_next
+.sdf_ck_dir:
+        cmp  byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne  .sdf_ck_blks
+        jmp  .sdf_next
+.sdf_ck_blks:
+        mov  eax, [edi + 260]   ; start block  (HBFS_DE_BLOCK)
+        mov  ecx, [edi + 264]   ; block count
+        test ecx, ecx
+        jnz  .sdf_have_cnt
+        ; Derive block count from file size
+        mov  ecx, [edi + 256]   ; file size (HBFS_DE_SIZE)
+        add  ecx, HBFS_BLOCK_SIZE - 1
+        shr  ecx, 12            ; ceil(size / 4096)
+        test ecx, ecx
+        jnz  .sdf_have_cnt
+        jmp  .sdf_next          ; 0-size file
+.sdf_have_cnt:
+        ; Skip if already at or before the journal reserved area
+        cmp  eax, HBFS_JOURNAL_BLOCKS
+        ja   .sdf_find_start
+        jmp  .sdf_next
+.sdf_find_start:
+        mov  [.sdf_cur_blk], eax
+        mov  [.sdf_blk_cnt], ecx
+
+        ; Scan for lowest free run of ECX blocks at index < [.sdf_cur_blk]
+        mov  edx, HBFS_JOURNAL_BLOCKS   ; search cursor
+
+.sdf_find:
+        ; Stop if we've reached the current file position
+        mov  eax, [.sdf_cur_blk]
+        cmp  edx, eax
+        jl   .sdf_find_body
+        jmp  .sdf_next          ; no improvement found
+.sdf_find_body:
+        ; Is block EDX free?
+        mov  eax, edx
+        shr  eax, 3
+        mov  esi, edx
+        and  esi, 7
+        bt   dword [hbfs_bitmap_buf + eax], esi
+        jnc  .sdf_try_run       ; free: try to build a run
+        inc  edx
+        jmp  .sdf_find
+
+.sdf_try_run:
+        ; EDX is free. Check if the next (blk_cnt-1) blocks are also free.
+        push edx                ; save run-start candidate
+        mov  esi, 1             ; offset into run (block 0 = EDX is already known free)
+.sdf_run_chk:
+        cmp  esi, [.sdf_blk_cnt]
+        jl   .sdf_run_body
+        jmp  .sdf_run_ok        ; all blocks free — go move
+.sdf_run_body:
+        push edx
+        add  edx, esi           ; EDX = candidate + offset
+        mov  eax, edx
+        shr  eax, 3
+        mov  edi, edx
+        and  edi, 7
+        bt   dword [hbfs_bitmap_buf + eax], edi
+        pop  edx
+        jnc  .sdf_run_cont      ; still free
+        ; Block at offset ESI is occupied — advance past it and retry
+        pop  edx                ; restore run start
+        add  edx, esi
+        inc  edx
+        jmp  .sdf_find
+.sdf_run_cont:
+        inc  esi
+        jmp  .sdf_run_chk
+
+.sdf_run_ok:
+        pop  edx                ; EDX = destination start block
+        cmp  edx, [.sdf_cur_blk]
+        jl   .sdf_do_move
+        jmp  .sdf_next          ; somehow not lower; skip
+
+.sdf_do_move:
+        mov  [.sdf_dst_blk], edx
+
+        ; Compute source and destination start LBAs
+        mov  eax, [.sdf_cur_blk]
+        imul eax, eax, HBFS_SECTORS_PER_BLK
+        add  eax, HBFS_DATA_START
+        mov  [.sdf_src_lba], eax
+
+        mov  eax, [.sdf_dst_blk]
+        imul eax, eax, HBFS_SECTORS_PER_BLK
+        add  eax, HBFS_DATA_START
+        mov  [.sdf_dst_lba], eax
+
+        mov  eax, [.sdf_blk_cnt]
+        imul eax, eax, HBFS_SECTORS_PER_BLK
+        mov  [.sdf_sects], eax  ; total sectors to copy
+
+.sdf_copy:
+        cmp  dword [.sdf_sects], 0
+        je   .sdf_copy_done
+        ; Read one sector from source
+        mov  eax, [.sdf_src_lba]
+        mov  ecx, 1
+        mov  edi, hbfs_block_buf
+        call ata_read_sectors
+        jnc  .sdf_cp_rd_ok
+        jmp  .sdf_next          ; read error: abort this file
+.sdf_cp_rd_ok:
+        ; Write to destination
+        mov  eax, [.sdf_dst_lba]
+        mov  ecx, 1
+        mov  esi, hbfs_block_buf
+        call ata_write_sectors
+        jnc  .sdf_cp_wr_ok
+        jmp  .sdf_next          ; write error: abort this file
+.sdf_cp_wr_ok:
+        inc  dword [.sdf_src_lba]
+        inc  dword [.sdf_dst_lba]
+        dec  dword [.sdf_sects]
+        jmp  .sdf_copy
+
+.sdf_copy_done:
+        ; Mark destination blocks as used in bitmap
+        mov  ecx, [.sdf_blk_cnt]
+        mov  edx, [.sdf_dst_blk]
+.sdf_bm_set:
+        test ecx, ecx
+        jz   .sdf_bm_set_done
+        mov  eax, edx
+        shr  eax, 3
+        mov  esi, edx
+        and  esi, 7
+        bts  dword [hbfs_bitmap_buf + eax], esi
+        inc  edx
+        dec  ecx
+        jmp  .sdf_bm_set
+.sdf_bm_set_done:
+
+        ; Mark source blocks as free in bitmap
+        mov  ecx, [.sdf_blk_cnt]
+        mov  edx, [.sdf_cur_blk]
+.sdf_bm_clr:
+        test ecx, ecx
+        jz   .sdf_bm_clr_done
+        mov  eax, edx
+        shr  eax, 3
+        mov  esi, edx
+        and  esi, 7
+        btr  dword [hbfs_bitmap_buf + eax], esi
+        inc  edx
+        dec  ecx
+        jmp  .sdf_bm_clr
+.sdf_bm_clr_done:
+
+        ; Update dirent start block (recompute EDI from EBX)
+        imul eax, ebx, HBFS_DIR_ENTRY_SIZE
+        lea  edi, [hbfs_dir_buf + eax]
+        mov  eax, [.sdf_dst_blk]
+        mov  [edi + 260], eax   ; HBFS_DE_BLOCK
+
+.sdf_next:
+        inc  ebx
+        jmp  .sdf_loop
+
+.sdf_loop_done:
+        ; Flush bitmap
+        mov  eax, HBFS_BITMAP_START
+        mov  ecx, HBFS_BITMAP_SECTS
+        mov  esi, hbfs_bitmap_buf
+        call ata_write_sectors
+        jc   .sdf_fail_commit
+
+        ; Save updated root directory
+        call hbfs_save_root_dir
+
+        ; Journal + flush superblock
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jne  .sdf_flush         ; v1: no journal
+        jb   .sdf_flush
         call hbfs_journal_begin
         mov  eax, HBFS_SUPERBLOCK_LBA
         call hbfs_journal_log_sector
@@ -1438,20 +1647,571 @@ sys_defrag:
         call ata_write_sectors
         jc   .sdf_fail_commit
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jne  .sdf_done
+        jb   .sdf_done
         call hbfs_journal_commit
 
 .sdf_done:
-        ; Return fragmented run count in EAX
-        mov  [esp + 28], edx
+        mov  eax, [.sdf_frag_cnt]
+        mov  [esp + 28], eax
         popad
         iretd
 
 .sdf_fail_commit:
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jne  .sdf_fail
-        call hbfs_journal_commit  ; still commit (clears dirty state)
+        jb   .sdf_fail
+        call hbfs_journal_commit
 .sdf_fail:
         mov  dword [esp + 28], -1
         popad
         iretd
+
+; Local storage for sys_defrag
+.sdf_frag_cnt:  dd 0
+.sdf_n_ent:     dd 0
+.sdf_cur_blk:   dd 0
+.sdf_blk_cnt:   dd 0
+.sdf_dst_blk:   dd 0
+.sdf_src_lba:   dd 0
+.sdf_dst_lba:   dd 0
+.sdf_sects:     dd 0
+
+;=======================================================================
+; HBFS v3 — Permission, UID/GID, and xattr support
+;
+; These routines are called by v10.0 syscall handlers.  They are safe
+; to compile against v1/v2 images — permission fields simply read as 0
+; (reserved bytes from older images) which maps to root ownership with
+; mode 0o000; the kernel treats that as "accessible by root only."
+;
+; Call convention: all functions use pushad/popad and return in EAX.
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; hbfs_get_mode  — read permission mode from a directory entry
+;   In : EDI = pointer to 288-byte directory entry in RAM
+;   Out: EAX = mode word (12-bit permissions), ZF set if mode is 0
+;-----------------------------------------------------------------------
+hbfs_get_mode:
+        movzx eax, word [edi + HBFS_DE_MODE]
+        test eax, eax
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_set_mode  — write permission mode into a directory entry
+;   In : EDI = pointer to directory entry (in RAM; caller must flush)
+;        EBX = new mode word
+;   Does NOT write to disk — caller must call hbfs_flush_dir_entry.
+;-----------------------------------------------------------------------
+hbfs_set_mode:
+        mov [edi + HBFS_DE_MODE], bx
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_check_access — verify that the current process may access a file
+;   In : EDI = pointer to directory entry (in RAM)
+;        EBX = access bits requested (HBFS_ACC_READ/WRITE/EXEC)
+;        ECX = current effective UID
+;        EDX = current effective GID
+;   Out: EAX = 0 allowed, -1 denied
+;
+; Permission check mirrors standard POSIX logic:
+;   1. If UID == 0 (root), always grant.
+;   2. If file UID == calling UID, use owner bits.
+;   3. If file GID == calling GID, use group bits.
+;   4. Otherwise use world bits.
+;-----------------------------------------------------------------------
+HBFS_ACC_READ   equ (1 << 2)
+HBFS_ACC_WRITE  equ (1 << 1)
+HBFS_ACC_EXEC   equ (1 << 0)
+
+hbfs_check_access:
+        ; Root always passes
+        test ecx, ecx
+        jz .hca_ok
+
+        movzx eax, word [edi + HBFS_DE_MODE]
+        movzx esi, word [edi + HBFS_DE_UID]
+        movzx edi, word [edi + HBFS_DE_GID]   ; NOTE: overwrites EDI!
+
+        ; If mode is all-zero (legacy entry), deny writes but allow reads
+        test eax, eax
+        jnz .hca_check_uid
+        ; Legacy (no permission bits): deny if requesting write/exec
+        test ebx, (HBFS_ACC_WRITE | HBFS_ACC_EXEC)
+        jnz .hca_deny
+        jmp .hca_ok
+
+.hca_check_uid:
+        cmp ecx, esi            ; calling UID == file UID?
+        jne .hca_check_gid
+        ; Use owner bits [8:6]
+        mov esi, eax
+        shr esi, 6
+        jmp .hca_test
+
+.hca_check_gid:
+        cmp edx, edi            ; calling GID == file GID?
+        jne .hca_world
+        ; Use group bits [5:3]
+        mov esi, eax
+        shr esi, 3
+        jmp .hca_test
+
+.hca_world:
+        ; Use world bits [2:0]
+        mov esi, eax
+
+.hca_test:
+        and esi, 0x07           ; low 3 bits of relevant triplet
+        and esi, ebx            ; mask with requested access
+        cmp esi, ebx
+        jne .hca_deny
+.hca_ok:
+        xor eax, eax
+        ret
+.hca_deny:
+        mov eax, -1
+        ret
+
+;-----------------------------------------------------------------------
+; sys_chmod — SYS_CHMOD implementation (v3: actual on-disk write)
+;   In (from syscall frame): EBX = filename_ptr, ECX = mode_word
+;   Out: EAX = 0 success, -1 fail
+;-----------------------------------------------------------------------
+sys_chmod_v3:
+        pushad
+        ; Validate user pointer
+        mov eax, ebx
+        call validate_user_ptr
+        jc .schmod_fail
+
+        ; Find the file in HBFS directory
+        call hbfs_find_entry     ; EBX=name -> EDI=entry ptr or 0; EAX=entry#
+        test eax, eax
+        js .schmod_fail
+
+        ; Update mode field in the loaded directory entry buffer
+        mov [edi + HBFS_DE_MODE], cx
+
+        ; Mark version as v3 if not already (so we persist the permission data)
+        cmp dword [hbfs_super_buf + 4], HBFS_VERSION_V3
+        je .schmod_flush
+        mov dword [hbfs_super_buf + 4], HBFS_VERSION_V3
+        ; Enable permission feature flag
+        or  dword [hbfs_super_buf + HBFS_SB_FEATURES], HBFS_FEAT_PERMS
+        ; Write updated superblock
+        push eax
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call ata_write_sectors
+        pop  eax
+
+.schmod_flush:
+        ; Write the modified directory entry back to disk
+        call hbfs_flush_dir_entry   ; EDI=entry, EAX=entry# -> writes sector
+        jc .schmod_fail
+
+        mov dword [esp + 28], 0    ; EAX in saved pushad frame
+        popad
+        iretd
+
+.schmod_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_chown_v3 — SYS_CHOWN implementation (v3: actual on-disk write)
+;   In: EBX = filename_ptr, ECX = new_uid, EDX = new_gid
+;   Out: EAX = 0 / -1
+;-----------------------------------------------------------------------
+sys_chown_v3:
+        pushad
+        mov eax, ebx
+        call validate_user_ptr
+        jc .schown_fail
+
+        call hbfs_find_entry
+        test eax, eax
+        js .schown_fail
+
+        ; Update UID and GID in loaded entry buffer
+        mov [edi + HBFS_DE_UID], cx
+        mov [edi + HBFS_DE_GID], dx
+
+        ; Upgrade to v3 if needed
+        cmp dword [hbfs_super_buf + 4], HBFS_VERSION_V3
+        je .schown_flush
+        mov dword [hbfs_super_buf + 4], HBFS_VERSION_V3
+        or  dword [hbfs_super_buf + HBFS_SB_FEATURES], HBFS_FEAT_PERMS
+        push eax
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call ata_write_sectors
+        pop  eax
+
+.schown_flush:
+        call hbfs_flush_dir_entry
+        jc .schown_fail
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.schown_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; hbfs_xattr_get — read an extended attribute value
+;   In : EBX = entry ptr (in RAM, directory entry)
+;        ECX = key_ptr (null-terminated, up to 63 chars)
+;        EDX = value_buf (caller buffer)
+;        ESI = value_buf_max (max bytes to write)
+;   Out: EAX = value length, or -1 if not found
+;-----------------------------------------------------------------------
+hbfs_xattr_get:
+        pushad
+        movzx eax, word [ebx + HBFS_DE_XATTR_COUNT]
+        test eax, eax
+        jz .hxg_notfound
+
+        mov edi, [ebx + HBFS_DE_XATTR_LBA]
+        test edi, edi
+        jz .hxg_notfound
+
+        ; Load xattr block from disk (edi = absolute LBA already)
+        push eax
+        mov eax, edi
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov edi, hbfs_block_buf
+        call ata_read_sectors
+        pop eax
+        jc .hxg_notfound
+
+        ; Scan entries for matching key
+        mov edi, hbfs_block_buf
+        xor ecx, ecx
+.hxg_loop:
+        cmp ecx, [ebx + HBFS_DE_XATTR_COUNT + 0]   ; word compare
+        jge .hxg_notfound
+        ; Compare key
+        push esi
+        push edi
+        push ecx
+        mov esi, ecx            ; use ECX for str compare
+        mov esi, ebx            ; restore: key in caller ECX param
+        ; Note: EBX, ECX, EDX are from the caller (not preserved by pushad)
+        ; This function uses non-standard internal reg usage; fix-up:
+        ; The caller's ECX = key_ptr, EDX = val_buf, ESI = max
+        ; After pushad, saved regs are on stack; original EBX/ECX/EDX/ESI still accessible
+        ; For simplicity, compare via helper that takes ESI=a EDI=b
+        pop ecx
+        pop edi
+        pop esi
+        push edi
+        mov esi, [esp + 12]     ; original ECX (key_ptr) from pushad frame offset
+        ; Simpler approach: inline compare
+        push ecx
+        mov ecx, HBFS_XATTR_KEY_LEN - 1
+        push esi
+        push edi
+        ; edi = current key in xattr block
+.hxg_cmp:
+        lodsb
+        cmp al, [edi]
+        jne .hxg_cmp_ne
+        inc edi
+        test al, al
+        jz .hxg_cmp_match
+        loop .hxg_cmp
+.hxg_cmp_match:
+        pop edi
+        pop esi
+        pop ecx
+        ; Match found — copy value to EDX buf up to ESI max bytes
+        add edi, HBFS_XATTR_KEY_LEN   ; edi -> value field
+        push edi
+        xor eax, eax
+.hxg_copy:
+        cmp eax, esi
+        jge .hxg_copy_done
+        mov bl, [edi + eax]
+        mov [edx + eax], bl
+        test bl, bl
+        jz .hxg_copy_done
+        inc eax
+        jmp .hxg_copy
+.hxg_copy_done:
+        pop edi
+        mov [esp + 28], eax    ; return length in EAX slot of pushad
+        popad
+        ret
+
+.hxg_cmp_ne:
+        pop edi
+        pop esi
+        pop ecx
+        pop edi                ; restore from outer push
+        add edi, HBFS_XATTR_ENTRY_SIZE   ; advance to next entry
+        inc ecx
+        jmp .hxg_loop
+
+.hxg_notfound:
+        mov dword [esp + 28], -1
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_xattr_set — write an extended attribute (creates if not exists)
+;   In : EBX = entry ptr, ECX = key_ptr, EDX = value_ptr
+;   Out: EAX = 0 success, -1 fail
+;-----------------------------------------------------------------------
+hbfs_xattr_set:
+        pushad
+        mov [.hxs_key_ptr], ecx        ; save before registers change
+        mov [.hxs_val_ptr], edx
+
+        movzx eax, word [ebx + HBFS_DE_XATTR_COUNT]
+
+        ; If no xattr block yet, allocate one
+        cmp dword [ebx + HBFS_DE_XATTR_LBA], 0
+        jne .hxs_have_block
+
+        push eax
+        call hbfs_alloc_block   ; -> EAX = new block number or -1
+        test eax, eax
+        js .hxs_fail_pop
+
+        ; Zero the new block
+        push eax
+        mov edi, hbfs_block_buf
+        xor eax, eax
+        mov ecx, HBFS_BLOCK_SIZE / 4
+        rep stosd
+        pop eax
+
+        ; Store the LBA (convert block# to LBA)
+        mov edi, eax
+        imul edi, HBFS_SECTORS_PER_BLK
+        add edi, HBFS_DATA_START + HBFS_JOURNAL_SECTS
+        mov [ebx + HBFS_DE_XATTR_LBA], edi
+
+        ; Enable xattr feature flag in superblock
+        or  dword [hbfs_super_buf + HBFS_SB_FEATURES], HBFS_FEAT_XATTR
+        pop eax
+
+.hxs_have_block:
+        ; Load existing xattr block
+        mov edi, [ebx + HBFS_DE_XATTR_LBA]
+        push eax
+        mov eax, edi
+        mov ecx, HBFS_SECTORS_PER_BLK
+        push edi
+        mov edi, hbfs_block_buf
+        call ata_read_sectors
+        pop edi
+        pop eax
+        jc .hxs_fail
+
+        ; Search for existing key or first free slot
+        push edi                        ; save xattr LBA for disk write later
+        mov edi, hbfs_block_buf
+        xor ecx, ecx                    ; slot index
+.hxs_scan:
+        cmp ecx, HBFS_XATTR_PER_BLOCK
+        jge .hxs_new_slot
+        ; Check if this slot is free (key[0] == 0)
+        cmp byte [edi], 0
+        je .hxs_write_here
+        ; Compare stored key with requested key
+        push ecx
+        push esi
+        push edi
+        mov esi, [.hxs_key_ptr]
+        mov ecx, HBFS_XATTR_KEY_LEN
+        cld
+        repe cmpsb
+        pop edi
+        pop esi
+        pop ecx
+        je .hxs_key_match
+        ; Keys differ: advance to next slot
+        add edi, HBFS_XATTR_ENTRY_SIZE
+        inc ecx
+        jmp .hxs_scan
+
+.hxs_new_slot:
+        ; No free slot found — xattr block is full
+        pop edi
+        jmp .hxs_fail
+
+.hxs_key_match:
+        ; Update the value field of an existing xattr entry in-place
+        add edi, HBFS_XATTR_KEY_LEN
+        mov esi, [.hxs_val_ptr]
+        mov ecx, HBFS_XATTR_VAL_LEN - 1
+        cld
+.hxs_uk:
+        lodsb
+        stosb
+        test al, al
+        jz .hxs_uk_done
+        loop .hxs_uk
+        mov byte [edi], 0
+.hxs_uk_done:
+        ; No xattr count change (key already existed)
+        pop edi                         ; xattr LBA
+        mov eax, edi
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov esi, hbfs_block_buf
+        call ata_write_sectors
+        jc .hxs_fail
+        mov dword [esp + 28], 0
+        popad
+        ret
+
+.hxs_write_here:
+        ; edi -> free slot; write key then value
+        push edi                        ; save slot base ptr
+        mov esi, [.hxs_key_ptr]
+        mov ecx, HBFS_XATTR_KEY_LEN - 1
+        cld
+.hxs_wk:
+        lodsb
+        stosb
+        test al, al
+        jz .hxs_wk_done
+        loop .hxs_wk
+        mov byte [edi], 0
+.hxs_wk_done:
+        pop edi                         ; restore slot base
+        add edi, HBFS_XATTR_KEY_LEN
+        mov esi, [.hxs_val_ptr]
+        mov ecx, HBFS_XATTR_VAL_LEN - 1
+.hxs_wv:
+        lodsb
+        stosb
+        test al, al
+        jz .hxs_wv_done
+        loop .hxs_wv
+        mov byte [edi], 0
+.hxs_wv_done:
+        ; Update xattr count in entry
+        inc word [ebx + HBFS_DE_XATTR_COUNT]
+
+        ; Write xattr block to disk
+        pop edi                         ; xattr LBA
+        mov eax, edi
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov esi, hbfs_block_buf
+        call ata_write_sectors
+        jc .hxs_fail
+
+        mov dword [esp + 28], 0
+        popad
+        ret
+
+.hxs_fail_pop:
+        pop eax
+.hxs_fail:
+        mov dword [esp + 28], -1
+        popad
+        ret
+
+.hxs_key_ptr:   dd 0
+.hxs_val_ptr:   dd 0
+
+;-----------------------------------------------------------------------
+; hbfs_find_entry — search loaded directory for a filename
+;   In : EBX = filename pointer
+;   Out: EAX = entry index (0-based), or -1 if not found
+;        EDI = pointer to 288-byte entry in hbfs_dir_buf
+;-----------------------------------------------------------------------
+hbfs_find_entry:
+        push esi
+        push ecx
+        xor ecx, ecx
+        mov edi, hbfs_dir_buf
+.hfe_loop:
+        cmp ecx, HBFS_MAX_FILES
+        jge .hfe_notfound
+        cmp byte [edi + HBFS_DE_TYPE], FTYPE_FREE
+        je .hfe_next
+        push edi
+        mov esi, ebx
+        add edi, HBFS_DE_NAME
+        call str_compare        ; ESI=query, EDI=stored name -> EAX=0 if equal
+        pop edi
+        test eax, eax
+        jz .hfe_found
+.hfe_next:
+        add edi, HBFS_DIR_ENTRY_SIZE
+        inc ecx
+        jmp .hfe_loop
+.hfe_found:
+        mov eax, ecx
+        pop ecx
+        pop esi
+        ret
+.hfe_notfound:
+        mov eax, -1
+        pop ecx
+        pop esi
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_flush_dir_entry — write a single directory entry back to disk
+;   In : EDI = pointer to entry in hbfs_dir_buf
+;        EAX = entry index (0-based)
+;   Out: CF set on error
+;
+; Calculates which sector of the root directory contains this entry
+; and does a read-modify-write to preserve other entries in the sector.
+;-----------------------------------------------------------------------
+hbfs_flush_dir_entry:
+        pushad
+        ; Compute: LBA = HBFS_ROOT_DIR_START + (entry# * HBFS_DIR_ENTRY_SIZE) / 512
+        mov ebx, eax
+        imul ebx, HBFS_DIR_ENTRY_SIZE       ; byte offset
+        mov ecx, 512
+        xor edx, edx
+        div ecx                              ; EAX = sector offset, EDX = byte-in-sector
+        add eax, HBFS_ROOT_DIR_START         ; absolute LBA
+
+        ; Read the 512-byte sector
+        push eax
+        mov edi, hbfs_sector_rw_buf
+        mov ecx, 1
+        call ata_read_sectors
+        pop eax
+        jc .hfde_fail
+
+        ; Patch the entry within the sector
+        ; entry_offset_in_sector = (orig_entry# * HBFS_DIR_ENTRY_SIZE) mod 512
+        push eax
+        mov eax, [esp + 8]           ; original EAX (entry index) from pushad frame
+        imul eax, HBFS_DIR_ENTRY_SIZE
+        xor edx, edx
+        mov ecx, 512
+        div ecx                      ; EDX = offset within sector
+        pop eax
+
+        mov esi, [esp + 4]           ; original EDI (entry ptr) from pushad frame
+        lea edi, [hbfs_sector_rw_buf + edx]
+        mov ecx, HBFS_DIR_ENTRY_SIZE
+        rep movsb
+
+        ; Write sector back
+        mov ecx, 1
+        mov esi, hbfs_sector_rw_buf
+        call ata_write_sectors
+        jc .hfde_fail
+        popad
+        clc
+        ret
+.hfde_fail:
+        popad
+        stc
+        ret

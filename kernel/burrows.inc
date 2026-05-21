@@ -131,6 +131,13 @@ burrows_init:
         mov byte [gui_exit_flag], 0
         mov byte [gui_dragging], 0
         mov byte [gui_active_workspace], 0  ; v9.0: start on desktop 0
+        ; v10: register this task as compositor so ipc_surface_create wakes us
+        call sched_get_current_task
+        test eax, eax
+        jz .bi_nopid
+        mov eax, [eax + TCB_PID]
+        mov [burrows_compositor_pid], eax
+.bi_nopid:
         popad
         ret
 
@@ -1266,6 +1273,7 @@ gui_compose:
         pushad
         call gui_draw_background
         call gui_draw_desktop_icons
+        call gui_compose_surfaces   ; v10: blit IPC surface layer
         call gui_draw_all_windows
         call gui_draw_taskbar
         cmp byte [gui_menu_open], 1
@@ -1283,8 +1291,6 @@ gui_compose:
         ret
 
 ;---------------------------------------
-; gui_draw_background - Fill backbuf with desktop color
-;---------------------------------------
 gui_draw_background:
         pushad
         cld
@@ -1296,12 +1302,147 @@ gui_draw_background:
         ret
 
 ;---------------------------------------
+; gui_compose_surfaces  — blit IPC surface table into back buffer
+; Iterates ipc_surface_table in slot order (slot 0 = bottom z).
+; Each SURF_VISIBLE surface is row-blitted with full screen clipping.
+; Scratch variables are safe here: compositor is single-task.
+;---------------------------------------
+gui_compose_surfaces:
+        push eax
+        push ebx
+        push ecx
+        push edx
+        push esi
+        push edi
+        push ebp
+        xor ebp, ebp            ; EBP = slot index
+
+.gcs_slot:
+        cmp ebp, SURF_MAX
+        jge .gcs_done
+
+        ; Entry address -> EAX
+        mov eax, ebp
+        imul eax, SURF_ENTRY_SIZE
+        add eax, ipc_surface_table
+
+        cmp dword [eax + SURF_STATE], SURF_VISIBLE
+        jne .gcs_next
+
+        mov esi, [eax + SURF_BUF_PTR]
+        test esi, esi
+        jz .gcs_next
+
+        ; Load geometry into scratch vars
+        mov ebx, [eax + SURF_X]
+        mov edx, [eax + SURF_Y]
+        mov ecx, [eax + SURF_WIDTH]
+        mov [.surf_stride], ecx     ; original row stride (pixels)
+        mov ecx, [eax + SURF_HEIGHT]
+        mov [.blit_h], ecx
+
+        ; --- Clip top: dst_y < 0 ---
+        test edx, edx
+        jns .gcs_clip_bot
+        neg edx                     ; rows_skip = -dst_y
+        sub dword [.blit_h], edx
+        jle .gcs_next
+        mov eax, edx
+        imul eax, [.surf_stride]
+        shl eax, 2                  ; bytes = rows_skip * stride * 4
+        add esi, eax
+        xor edx, edx
+
+.gcs_clip_bot:
+        ; blit_h = min(blit_h, GUI_SCREEN_H - dst_y)
+        mov eax, GUI_SCREEN_H
+        sub eax, edx
+        cmp [.blit_h], eax
+        jle .gcs_clip_left
+        mov [.blit_h], eax
+
+.gcs_clip_left:
+        cmp dword [.blit_h], 0
+        jle .gcs_next
+        ; blit_w starts as full stride
+        mov ecx, [.surf_stride]
+        mov [.blit_w], ecx
+
+        ; --- Clip left: dst_x < 0 ---
+        test ebx, ebx
+        jns .gcs_clip_right
+        neg ebx                     ; cols_skip = -dst_x
+        sub dword [.blit_w], ebx
+        jle .gcs_next
+        lea esi, [esi + ebx*4]      ; advance src ptr
+        xor ebx, ebx
+
+.gcs_clip_right:
+        ; blit_w = min(blit_w, GUI_SCREEN_W - dst_x)
+        mov eax, GUI_SCREEN_W
+        sub eax, ebx
+        cmp [.blit_w], eax
+        jle .gcs_do_blit
+        mov [.blit_w], eax
+
+.gcs_do_blit:
+        cmp dword [.blit_w], 0
+        jle .gcs_next
+
+        ; Destination pointer: GUI_BACKBUF + (dst_y * GUI_SCREEN_W + dst_x) * 4
+        mov eax, edx
+        imul eax, GUI_SCREEN_W
+        add eax, ebx
+        shl eax, 2
+        add eax, GUI_BACKBUF
+        mov edi, eax                ; EDI = dst row pointer
+
+        ; Source row stride in bytes
+        mov eax, [.surf_stride]
+        shl eax, 2
+        mov [.src_stride_b], eax
+
+.gcs_row:
+        ; Copy one row
+        push esi
+        push edi
+        mov ecx, [.blit_w]
+        cld
+        rep movsd
+        pop edi
+        pop esi
+        add esi, [.src_stride_b]
+        add edi, GUI_PITCH
+        dec dword [.blit_h]
+        jnz .gcs_row
+
+.gcs_next:
+        inc ebp
+        jmp .gcs_slot
+
+.gcs_done:
+        pop ebp
+        pop edi
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        pop eax
+        ret
+
+; Scratch dwords (single-task compositor only)
+.surf_stride    dd 0
+.blit_h         dd 0
+.blit_w         dd 0
+.src_stride_b   dd 0
+
+;---------------------------------------
 ; Desktop icon layout constants
 ;---------------------------------------
-ICON_SIZE       equ 32          ; icon box width/height
 ICON_TEXT_H     equ 12          ; space below icon for label
 ICON_CELL_W     equ 72          ; grid cell width
 ICON_CELL_H     equ 64          ; grid cell height
+ICON_SIZE       equ 32          ; icon box width/height
 ICON_START_X    equ 20          ; first column x
 ICON_START_Y    equ 16          ; first row y
 ICON_COLS       equ 1           ; single column of icons

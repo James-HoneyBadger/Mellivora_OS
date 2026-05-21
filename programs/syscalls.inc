@@ -50,7 +50,7 @@ SYS_SERIAL_IN   equ 33          ; Read serial port: -> EAX=char or -1
 SYS_STDIN_READ  equ 34          ; Read piped stdin: EBX=buf -> EAX=bytes (-1 if none)
 SYS_YIELD       equ 35          ; Cooperative yield: switch to next ready task
 SYS_MOUSE       equ 36          ; Read mouse: -> EAX=x, EBX=y, ECX=buttons
-SYS_FRAMEBUF    equ 37          ; Framebuffer: EBX=sub (0=info,1=set,2=restore)
+SYS_FRAMEBUF    equ 37          ; Framebuffer: EBX=sub (0=info,1=set,2=restore,3=text,4=present,5=surfbuf)
 SYS_GUI         equ 38          ; Burrows GUI: EBX=sub-function
 SYS_SOCKET      equ 39          ; Create socket: EBX=type(1=TCP,2=UDP) -> EAX=fd
 SYS_CONNECT     equ 40          ; Connect: EBX=fd ECX=ip EDX=port -> EAX=0/-1
@@ -141,6 +141,133 @@ SYS_MSGQ_SEND       equ 113 ; Send: EBX=qid ECX=buf EDX=len -> EAX=0/-1
 SYS_MSGQ_RECV       equ 114 ; Recv: EBX=qid ECX=buf EDX=max -> EAX=bytes/-1
 SYS_MSGQ_CLOSE      equ 115 ; Destroy queue: EBX=qid -> EAX=0/-1
 
+; --- v10.0 POSIX compatibility extensions ---
+SYS_DUP             equ 116 ; Dup fd:    EBX=fd -> EAX=new_fd/-1
+SYS_DUP2            equ 117 ; Dup2 fd:   EBX=src ECX=dst -> EAX=dst/-1
+SYS_FCNTL           equ 118 ; Fcntl:     EBX=fd ECX=cmd EDX=arg -> EAX=result/-1
+SYS_IOCTL           equ 119 ; Ioctl:     EBX=fd ECX=req EDX=arg -> EAX=0/-1
+SYS_MMAP            equ 120 ; Mmap:      EBX=addr ECX=len EDX=prot -> EAX=addr/-1
+SYS_MUNMAP          equ 121 ; Munmap:    EBX=addr ECX=len -> EAX=0/-1
+SYS_MPROTECT        equ 122 ; Mprotect:  EBX=addr ECX=len EDX=prot -> EAX=0/-1
+SYS_SELECT          equ 123 ; Select:    EBX=nfds ECX=rfds EDX=wfds ESI=efds EDI=tv -> EAX=count
+SYS_CLOCK_GETTIME   equ 124 ; ClkGetTime:EBX=clk ECX=timespec* -> EAX=0/-1
+SYS_NANOSLEEP       equ 125 ; Nanosleep: EBX=rqtp ECX=rmtp -> EAX=0/-1
+SYS_GETTIMEOFDAY    equ 126 ; Gtimeofday:EBX=timeval* ECX=tz* -> EAX=0
+SYS_GETUID          equ 127 ; Getuid: -> EAX=uid
+SYS_SETUID          equ 128 ; Setuid:    EBX=uid -> EAX=0/-1
+SYS_GETGID          equ 129 ; Getgid: -> EAX=gid
+SYS_SETGID          equ 130 ; Setgid:    EBX=gid -> EAX=0/-1
+SYS_GETEUID         equ 131 ; Geteuid: -> EAX=euid
+SYS_GETEGID         equ 132 ; Getegid: -> EAX=egid
+SYS_ACCESS          equ 133 ; Access:    EBX=path ECX=mode -> EAX=0/-1
+SYS_PIPE2           equ 134 ; Pipe2:     EBX=pipefd[2] ECX=flags -> EAX=0/-1
+
+; --- v10.0 Burrows Desktop 2.0 compositor surfaces ---
+SYS_SURFACE_CREATE  equ 135 ; Create surface: EBX=w ECX=h EDX=x ESI=y -> EAX=surf_id/-1
+SYS_SURFACE_COMMIT  equ 136 ; Commit dirty:   EBX=id ECX=dx EDX=dy ESI=dw EDI=dh -> EAX=0/-1
+SYS_SURFACE_DESTROY equ 137 ; Destroy:        EBX=surf_id -> EAX=0/-1
+SYS_SURFACE_MOVE    equ 138 ; Move:           EBX=id ECX=x EDX=y -> EAX=0/-1
+SYS_SURFACE_RESIZE  equ 139 ; Resize:         EBX=id ECX=w EDX=h -> EAX=0/-1
+SYS_ALARM           equ 140 ; alarm():        EBX=seconds (0=cancel) -> EAX=prev_secs
+; --- v10.0 HBFS v3 extended attributes ---
+SYS_GETXATTR        equ 141 ; Getxattr: EBX=file ECX=key EDX=val_buf ESI=max -> EAX=len/-1
+SYS_SETXATTR        equ 142 ; Setxattr: EBX=file ECX=key EDX=val_ptr        -> EAX=0/-1
+; --- v11.0 user-space signal delivery ---
+SYS_SIGACTION       equ 143 ; sigaction(): EBX=signum ECX=handler EDX=old_ptr -> EAX=0/-1
+SYS_SIGRETURN       equ 144 ; sigreturn(): (no args) — return from signal handler
+
+; --- v12.0 POSIX compliance (145-180) ---
+SYS_FSTAT           equ 145 ; fstat(fd, stat_buf) -> 0/-1
+SYS_FTRUNCATE       equ 146 ; ftruncate(fd, size) -> 0/-1
+SYS_FCHMOD          equ 147 ; fchmod(fd, mode) -> 0/-1
+SYS_FCHOWN          equ 148 ; fchown(fd, uid, gid) -> 0/-1
+SYS_FSYNC           equ 149 ; fsync(fd) -> 0/-1
+SYS_LINK            equ 150 ; link(old, new) -> 0/-1
+SYS_ISATTY          equ 151 ; isatty(fd) -> 1/0
+SYS_SETSID          equ 152 ; setsid() -> sid/-1
+SYS_GETSID          equ 153 ; getsid(pid) -> sid/-1
+SYS_WAIT            equ 154 ; wait(status*) -> pid/-1
+SYS_PAUSE           equ 155 ; pause() -> -1
+SYS_UMASK           equ 156 ; umask(mask) -> old_mask
+SYS_SIGPENDING      equ 157 ; sigpending(set*) -> 0
+SYS_SIGSUSPEND      equ 158 ; sigsuspend(mask*) -> -1
+SYS_SETITIMER       equ 159 ; setitimer(which, new*, old*) -> 0/-1
+SYS_GETITIMER       equ 160 ; getitimer(which, cur*) -> 0/-1
+SYS_SETENV          equ 161 ; setenv(name, val, over) -> 0/-1
+SYS_UNSETENV        equ 162 ; unsetenv(name) -> 0
+SYS_UNAME           equ 163 ; uname(utsname*) -> 0/-1
+SYS_UTIME           equ 164 ; utime(path, utimbuf*) -> 0/-1
+SYS_SYSCONF         equ 165 ; sysconf(name) -> value/-1
+SYS_SETEUID         equ 166 ; seteuid(euid) -> 0/-1
+SYS_SETEGID         equ 167 ; setegid(egid) -> 0/-1
+SYS_SETREUID        equ 168 ; setreuid(ruid, euid) -> 0/-1
+SYS_SETREGID        equ 169 ; setregid(rgid, egid) -> 0/-1
+SYS_SENDTO          equ 170 ; sendto(fd,buf,len,fl,addr) -> bytes/-1
+SYS_RECVFROM        equ 171 ; recvfrom(fd,buf,len,fl,from) -> bytes/-1
+SYS_SETSOCKOPT      equ 172 ; setsockopt(fd,lvl,opt,val,len) -> 0/-1
+SYS_GETSOCKOPT      equ 173 ; getsockopt(fd,lvl,opt,val*,len*) -> 0/-1
+SYS_GETSOCKNAME     equ 174 ; getsockname(fd,addr,len*) -> 0/-1
+SYS_GETPEERNAME     equ 175 ; getpeername(fd,addr,len*) -> 0/-1
+SYS_SHUTDOWN        equ 176 ; shutdown(fd,how) -> 0/-1
+SYS_TCGETATTR       equ 177 ; tcgetattr(fd,termios*) -> 0/-1
+SYS_TCSETATTR       equ 178 ; tcsetattr(fd,act,termios*) -> 0/-1
+SYS_TCDRAIN         equ 179 ; tcdrain(fd) -> 0/-1
+SYS_TCFLUSH         equ 180 ; tcflush(fd,queue) -> 0/-1
+
+; sysconf name constants
+_SC_ARG_MAX         equ 0
+_SC_CHILD_MAX       equ 1
+_SC_CLK_TCK         equ 2
+_SC_NGROUPS_MAX     equ 3
+_SC_OPEN_MAX        equ 4
+_SC_PAGESIZE        equ 28
+_SC_PAGE_SIZE       equ 28
+
+; setitimer which values
+ITIMER_REAL         equ 0
+
+; shutdown() how values
+SHUT_RD             equ 0
+SHUT_WR             equ 1
+SHUT_RDWR           equ 2
+
+; AF_INET
+AF_INET             equ 2
+
+; termios c_lflag bits
+ISIG_FLAG           equ 0x01
+ICANON_FLAG         equ 0x02
+ECHO_FLAG           equ 0x08
+ECHOE_FLAG          equ 0x10
+ECHOK_FLAG          equ 0x20
+
+; SYS_ACCESS mode bits
+ACC_F_OK            equ 0   ; existence check only
+ACC_R_OK            equ 4   ; read permission
+ACC_W_OK            equ 2   ; write permission
+ACC_X_OK            equ 1   ; execute permission
+
+; SYS_FCNTL command codes
+FCNTL_F_DUPFD       equ 0
+FCNTL_F_GETFL       equ 3
+FCNTL_F_SETFL       equ 4
+
+; SYS_MMAP protection flags
+PROT_NONE           equ 0
+PROT_READ           equ 1
+PROT_WRITE          equ 2
+PROT_EXEC           equ 4
+
+; SYS_MMAP mapping type flags
+MAP_SHARED          equ 0x01
+MAP_PRIVATE         equ 0x02
+MAP_ANONYMOUS       equ 0x20
+MAP_ANON            equ MAP_ANONYMOUS
+
+; SYS_CLOCK_GETTIME clock IDs
+CLOCK_REALTIME      equ 0
+CLOCK_MONOTONIC     equ 1
+
 ; v4.0 Priority levels
 PRIO_HIGH       equ 0
 PRIO_NORMAL     equ 1
@@ -157,6 +284,10 @@ SIGTERM         equ 15
 SIGCHLD         equ 17
 SIGTSTP         equ 20
 SIGCONT         equ 25
+
+; v11.0 Signal dispositions (for SYS_SIGACTION ECX)
+SIG_DFL         equ 0           ; Restore default action
+SIG_IGN         equ 1           ; Ignore this signal
 
 ; Audio format flags (for SYS_AUDIO_PLAY EDX)
 SB_FMT_16BIT    equ (1 << 16)

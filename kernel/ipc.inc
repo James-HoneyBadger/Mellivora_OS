@@ -736,3 +736,428 @@ sys_msgq_close:
 
 ; Message queue pool storage
 msgq_pool:      times (MSGQ_MAX_QUEUES * MSGQ_STRUCT_SIZE) db 0
+
+;=======================================================================
+; Burrows Desktop 2.0 — Compositor Surface IPC  (v10.0)
+;
+; Applications request a "surface" — a pixel buffer mapped into the
+; compositor's address space.  The compositor (Burrows Desktop shell)
+; blends all dirty surfaces onto the physical framebuffer each frame.
+;
+; Surface lifecycle:
+;   SYS_SURFACE_CREATE  (135) — allocate pixel buffer, return surface_id
+;   SYS_SURFACE_COMMIT  (136) — mark dirty rect → trigger compositor
+;   SYS_SURFACE_DESTROY (137) — free pixel buffer and slot
+;   SYS_SURFACE_MOVE    (138) — update x/y position
+;   SYS_SURFACE_RESIZE  (139) — realloc pixel buffer to new dimensions
+;
+; Surface table layout (SURF_ENTRY_SIZE bytes per entry):
+;   [0]   surf_id     dword  — 0 = free slot
+;   [4]   owner_pid   dword
+;   [8]   buf_ptr     dword  — pointer to RGBA pixel buffer (w*h*4 bytes)
+;   [12]  width       dword
+;   [16]  height      dword
+;   [20]  x           dword  — position on screen
+;   [24]  y           dword
+;   [28]  z_order     dword  — higher = on top; default = insertion order
+;   [32]  dirty_x     dword  — dirty rectangle for partial updates
+;   [36]  dirty_y     dword
+;   [40]  dirty_w     dword
+;   [44]  dirty_h     dword
+;   [48]  state       dword  — 0=free,1=visible,2=minimised,3=hidden
+;=======================================================================
+
+SURF_MAX        equ 64
+SURF_ENTRY_SIZE equ 52
+
+; Surface state constants
+SURF_FREE       equ 0
+SURF_VISIBLE    equ 1
+SURF_MINIMISED  equ 2
+SURF_HIDDEN     equ 3
+
+; Surface entry field offsets
+SURF_ID         equ 0
+SURF_OWNER_PID  equ 4
+SURF_BUF_PTR    equ 8
+SURF_WIDTH      equ 12
+SURF_HEIGHT     equ 16
+SURF_X          equ 20
+SURF_Y          equ 24
+SURF_Z          equ 28
+SURF_DX         equ 32
+SURF_DY         equ 36
+SURF_DW         equ 40
+SURF_DH         equ 44
+SURF_STATE      equ 48
+
+;-----------------------------------------------------------------------
+; ipc_surface_create  (SYS_SURFACE_CREATE = 135)
+;   In : EBX = width, ECX = height, EDX = initial_x, ESI = initial_y
+;   Out: EAX = surface_id (>0), or -1 on failure
+;-----------------------------------------------------------------------
+ipc_surface_create:
+        pushad
+
+        ; Validate dimensions (1..4096)
+        test ebx, ebx
+        jz .isc_fail
+        test ecx, ecx
+        jz .isc_fail
+        cmp ebx, 4096
+        jg .isc_fail
+        cmp ecx, 4096
+        jg .isc_fail
+
+        ; Save initial position (ESI = Y) to scratch
+        mov [esi_save], esi
+
+        ; Find a free slot in ipc_surface_table
+        xor edi, edi
+        push ebx                ; [esp+0] = width
+        push ecx                ; [esp+4] = height
+        push edx                ; [esp+8] = initial_x
+.isc_scan:
+        cmp edi, SURF_MAX
+        jge .isc_full
+        mov eax, edi
+        imul eax, SURF_ENTRY_SIZE
+        cmp dword [ipc_surface_table + eax + SURF_STATE], SURF_FREE
+        je .isc_found
+        inc edi
+        jmp .isc_scan
+.isc_full:
+        add esp, 12
+        jmp .isc_fail
+
+.isc_found:
+        ; Compute pixel buffer size: width * height * 4 bytes -> pages
+        mov eax, [esp]          ; width
+        imul eax, [esp + 4]     ; * height
+        shl eax, 2              ; * 4 (RGBA)
+        ; pages = ceil(bytes / 4096)
+        add eax, 0xFFF
+        shr eax, 12
+        mov ecx, eax
+        call pmm_alloc_pages    ; ECX = pages -> EAX = phys addr or 0
+        test eax, eax
+        jz .isc_alloc_fail
+
+        push eax                ; [esp+12] = buf_ptr (after the 3 above)
+
+        ; Zero pixel buffer
+        push edi
+        mov edi, eax            ; dest
+        imul ecx, [esp + 8]     ; height  (esp+8 after edi push = was esp+4 = height)
+        ; Recompute ECX = total dwords
+        mov ecx, [esp + 4]      ; width  (stack: edi, buf, x, h, w from top)
+        ; Stack from top: [edi_pushed][buf_ptr][init_x][height][width]
+        ; Too complex — recalc directly
+        pop edi                 ; restore slot index
+        pop eax                 ; buf_ptr
+        push eax                ; re-push
+
+        ; Compute total bytes to zero
+        mov ecx, [esp + 4]      ; width  (stack: buf, x, h, w)
+        imul ecx, [esp + 8]     ; * height
+        shl ecx, 2              ; * 4
+        shr ecx, 2              ; convert to dwords
+        push edi                ; save slot index
+        mov edi, eax            ; edi = buf_ptr
+        xor eax, eax
+        rep stosd
+        pop edi                 ; slot index restored
+        pop eax                 ; buf_ptr
+
+        ; Fill surface entry
+        mov ecx, edi
+        imul ecx, SURF_ENTRY_SIZE
+        add ecx, ipc_surface_table  ; ECX = entry pointer
+
+        mov dword [ecx + SURF_STATE],    SURF_VISIBLE
+        lea edx, [edi + 1]
+        mov [ecx + SURF_ID],             edx   ; ID = slot + 1
+        mov [ecx + SURF_BUF_PTR],        eax   ; pixel buffer
+        mov edx, [esp]          ; initial_x
+        mov [ecx + SURF_X],              edx
+        mov edx, [esi_save]     ; initial_y
+        mov [ecx + SURF_Y],              edx
+        mov dword [ecx + SURF_Z],        0
+        mov edx, [esp + 4]      ; height
+        mov [ecx + SURF_HEIGHT],         edx
+        mov edx, [esp + 8]      ; width
+        mov [ecx + SURF_WIDTH],          edx
+
+        ; Owner PID
+        call sched_get_current_task
+        test eax, eax
+        jz .isc_pid0
+        mov eax, [eax + TCB_PID]
+        jmp .isc_pid_ok2
+.isc_pid0:
+        xor eax, eax
+.isc_pid_ok2:
+        mov [ecx + SURF_OWNER_PID], eax
+
+        ; Return surface ID
+        mov eax, [ecx + SURF_ID]
+        mov [esp + 28 + 12], eax  ; +12 for the 3 pushes before pushad
+
+        add esp, 12
+        call vbe_compositor_refresh
+        popad
+        iretd
+
+.isc_alloc_fail:
+        add esp, 12
+.isc_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+; Scratch variable for ESI save (compositor PID is single-task, safe)
+esi_save        dd 0
+
+;-----------------------------------------------------------------------
+; ipc_surface_commit  (SYS_SURFACE_COMMIT = 136)
+;   In : EBX = surface_id, ECX = dirty_x, EDX = dirty_y,
+;        ESI = dirty_w, EDI = dirty_h
+;   Out: EAX = 0 or -1
+;-----------------------------------------------------------------------
+ipc_surface_commit:
+        pushad
+        call ipc_find_surface   ; EBX=id -> ESI=entry or NULL
+        test esi, esi
+        jz .isc2_fail
+        mov [esi + SURF_DX], ecx
+        mov [esi + SURF_DY], edx
+        mov [esi + SURF_DW], esi
+        mov [esi + SURF_DH], edi
+        ; Trigger compositor to repaint this surface's dirty rectangle
+        call vbe_compositor_refresh
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.isc2_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; ipc_surface_destroy  (SYS_SURFACE_DESTROY = 137)
+;   In : EBX = surface_id
+;   Out: EAX = 0 or -1
+;-----------------------------------------------------------------------
+ipc_surface_destroy:
+        pushad
+        call ipc_find_surface
+        test esi, esi
+        jz .isd_fail
+        ; Free pixel buffer: compute pages from width * height * 4
+        mov eax, [esi + SURF_BUF_PTR]
+        mov ecx, [esi + SURF_WIDTH]
+        imul ecx, [esi + SURF_HEIGHT]
+        shl ecx, 2              ; * 4 bytes
+        add ecx, 0xFFF
+        shr ecx, 12             ; pages
+        test ecx, ecx
+        jz .isd_skip_free
+        call pmm_free_pages     ; EAX=addr, ECX=pages
+.isd_skip_free:
+        ; Zero the entry
+        mov edi, esi
+        xor eax, eax
+        mov ecx, SURF_ENTRY_SIZE / 4
+        rep stosd
+        call vbe_compositor_refresh
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.isd_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; ipc_surface_move  (SYS_SURFACE_MOVE = 138)
+;   In : EBX = surface_id, ECX = new_x, EDX = new_y
+;   Out: EAX = 0 or -1
+;-----------------------------------------------------------------------
+ipc_surface_move:
+        pushad
+        call ipc_find_surface
+        test esi, esi
+        jz .ism_fail
+        mov [esi + SURF_X], ecx
+        mov [esi + SURF_Y], edx
+        call vbe_compositor_refresh
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.ism_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; ipc_surface_resize  (SYS_SURFACE_RESIZE = 139)
+;   In : EBX = surface_id, ECX = new_width, EDX = new_height
+;   Out: EAX = 0 or -1
+;-----------------------------------------------------------------------
+ipc_surface_resize:
+        pushad
+        call ipc_find_surface
+        test esi, esi
+        jz .isr_fail
+
+        ; Free old buffer (compute pages from old width/height)
+        push ecx
+        push edx
+        mov eax, [esi + SURF_BUF_PTR]
+        mov ecx, [esi + SURF_WIDTH]
+        imul ecx, [esi + SURF_HEIGHT]
+        shl ecx, 2
+        add ecx, 0xFFF
+        shr ecx, 12
+        test ecx, ecx
+        jz .isr_skip_free
+        call pmm_free_pages     ; EAX=addr, ECX=pages
+.isr_skip_free:
+        pop edx
+        pop ecx
+
+        ; Allocate new buffer (ECX = pages)
+        mov ecx, ecx            ; new width
+        imul ecx, edx           ; * new height
+        ; Re-read new dimensions from incoming registers (saved in pushad)
+        ; After pushad: [esp+0]=edi [esp+4]=esi [esp+8]=ebp [esp+12]=esp
+        ;               [esp+16]=ebx(id) [esp+20]=ecx(w) [esp+24]=edx(h) [esp+28]=eax
+        ; new_width = [esp+20], new_height = [esp+24]
+        mov ecx, [esp + 20]     ; new_width
+        imul ecx, [esp + 24]    ; * new_height
+        shl ecx, 2              ; * 4
+        add ecx, 0xFFF
+        shr ecx, 12
+        call pmm_alloc_pages    ; ECX=pages -> EAX=addr or 0
+        test eax, eax
+        jz .isr_fail
+
+        mov [esi + SURF_BUF_PTR], eax
+        mov ecx, [esp + 20]
+        mov [esi + SURF_WIDTH],   ecx
+        mov edx, [esp + 24]
+        mov [esi + SURF_HEIGHT],  edx
+        ; Reset dirty rect to full surface
+        mov [esi + SURF_DX], dword 0
+        mov [esi + SURF_DY], dword 0
+        mov [esi + SURF_DW], ecx
+        mov [esi + SURF_DH], edx
+        call vbe_compositor_refresh
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.isr_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; ipc_find_surface  — locate a surface entry by ID
+;   In : EBX = surface_id
+;   Out: ESI = pointer to entry, or 0 if not found
+;-----------------------------------------------------------------------
+ipc_find_surface:
+        push edi
+        push ecx
+        xor edi, edi
+        mov esi, ipc_surface_table
+.ifs_loop:
+        cmp edi, SURF_MAX
+        jge .ifs_fail
+        cmp [esi + SURF_ID], ebx
+        je .ifs_found
+        add esi, SURF_ENTRY_SIZE
+        inc edi
+        jmp .ifs_loop
+.ifs_found:
+        pop ecx
+        pop edi
+        ret
+.ifs_fail:
+        xor esi, esi
+        pop ecx
+        pop edi
+        ret
+
+;-----------------------------------------------------------------------
+; ipc_pipe_create  — allocate a new kernel pipe
+;   Out: EAX = pipe_id (0-based) or -1
+;-----------------------------------------------------------------------
+ipc_pipe_create:
+        push ecx
+        push edi
+        xor ecx, ecx
+        mov edi, ipc_pipes
+.ipc_scan:
+        cmp ecx, IPC_MAX_PIPES
+        jge .ipc_fail
+        cmp dword [edi + PIPE_ACTIVE], 0
+        je .ipc_alloc
+        add edi, PIPE_STRUCT_SIZE
+        inc ecx
+        jmp .ipc_scan
+.ipc_alloc:
+        mov dword [edi + PIPE_ACTIVE], 1
+        mov dword [edi + PIPE_READ_POS], 0
+        mov dword [edi + PIPE_WRITE_POS], 0
+        mov eax, ecx
+        pop edi
+        pop ecx
+        ret
+.ipc_fail:
+        mov eax, -1
+        pop edi
+        pop ecx
+        ret
+
+;-----------------------------------------------------------------------
+; vbe_compositor_refresh  — stub: trigger Burrows compositor repaint
+; In a full implementation this would signal the compositor task via IPC.
+; For now we call the existing vbe_composite_surfaces if it exists,
+; otherwise return silently.
+;-----------------------------------------------------------------------
+vbe_compositor_refresh:
+        ; Check if compositor is running (burrows_compositor_pid != 0)
+        cmp dword [burrows_compositor_pid], 0
+        je .vcr_nocomp
+        ; Scan task_table for matching PID and mark it READY
+        push eax
+        push ecx
+        push edi
+        mov eax, [burrows_compositor_pid]
+        mov ecx, MAX_TASKS
+        mov edi, task_table
+.vcr_scan:
+        cmp dword [edi + TCB_PID], eax
+        je .vcr_found
+        add edi, TCB_SIZE
+        dec ecx
+        jnz .vcr_scan
+        jmp .vcr_wake_done
+.vcr_found:
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .vcr_wake_done
+        mov dword [edi + TCB_STATE], TASK_READY
+.vcr_wake_done:
+        pop edi
+        pop ecx
+        pop eax
+.vcr_nocomp:
+        ret
+
+; Global: PID of the running Burrows compositor task (0 = not started)
+burrows_compositor_pid  dd 0
+
+; Surface table storage
+ipc_surface_table:
+        times (SURF_MAX * SURF_ENTRY_SIZE) db 0

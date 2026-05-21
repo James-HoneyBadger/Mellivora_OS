@@ -454,6 +454,7 @@ net_rtl8139_init:
 
         call net_read_mac
         mov dword [net_state], NET_STATE_UP
+        mov byte [net_nic_type], 1      ; NIC_RTL8139
         mov dword [net_tx_desc], 0
         popad
         ret
@@ -640,6 +641,11 @@ net_send_frame:
         cmp ecx, NET_TX_BUF_SIZE
         ja .send_fail
 
+        ; Dispatch on NIC type
+        cmp byte [net_nic_type], 2      ; NIC_E1000
+        je  .via_e1000
+
+        ; --- RTL8139 TX path ---
         ; Get current TX descriptor
         mov eax, [net_tx_desc]
         and eax, 3
@@ -713,6 +719,14 @@ net_send_frame:
         popad
         clc
         ret
+
+.via_e1000:
+        ; ESI=frame ptr and ECX=length are still live (pushad doesn't modify regs)
+        call e1000_hw_send      ; ESI=frame, ECX=len -> CF=0 ok, CF=1 err
+        ; CF is not affected by popad, so preserve it across register restore
+        popad
+        ret                     ; returns caller's CF from e1000_hw_send
+
 .send_fail:
         popad
         stc
@@ -4460,9 +4474,8 @@ ipv6_handle:
         pop esi
 
         ; Zero out checksum field in reply (offset 2-3 of ICMPv6)
+        ; Checksum computed after IPv6 reply header is built below.
         mov word [net_frame_buf + ETH_HLEN + IPV6_HDR_LEN + 2], 0
-        ; TODO: compute proper ICMPv6 checksum (pseudo-header over IPv6)
-        ; For now, leave 0 (some hosts accept it for echo)
 
         ; Build IPv6 header in reply buffer: swap src↔dst
         mov edi, net_frame_buf + ETH_HLEN
@@ -4500,6 +4513,56 @@ ipv6_handle:
         rep movsb
         pop edi
         pop esi
+
+        ; Compute ICMPv6 checksum (RFC 4443 pseudo-header + payload)
+        ; Reply IPv6 header is now complete in net_frame_buf + ETH_HLEN.
+        ; Pseudo-header layout: src_addr(16) dst_addr(16) length(4) zeros(3) NH(1)
+        xor edx, edx            ; 32-bit accumulator
+        ; Sum reply source IPv6 address (hdr+8, 8 x 16-bit words)
+        mov esi, net_frame_buf + ETH_HLEN + 8
+        mov ebx, 8
+.icmpv6_ck_src:
+        movzx eax, word [esi]
+        add edx, eax
+        add esi, 2
+        dec ebx
+        jnz .icmpv6_ck_src
+        ; Sum reply destination IPv6 address (hdr+24, 8 x 16-bit words)
+        mov esi, net_frame_buf + ETH_HLEN + 24
+        mov ebx, 8
+.icmpv6_ck_dst:
+        movzx eax, word [esi]
+        add edx, eax
+        add esi, 2
+        dec ebx
+        jnz .icmpv6_ck_dst
+        ; ICMPv6 payload length (IPv6 hdr bytes 4-5, big-endian word as stored)
+        movzx eax, word [net_frame_buf + ETH_HLEN + 4]
+        add edx, eax
+        ; Next-header byte = 58 = 0x3A; big-endian [0x00,0x3A] → x86 word 0x3A00
+        add edx, 0x3A00
+        ; Sum ICMPv6 payload words
+        mov esi, net_frame_buf + ETH_HLEN + IPV6_HDR_LEN
+        movzx ebx, word [net_frame_buf + ETH_HLEN + 4]
+        xchg bl, bh             ; big-endian → little-endian byte count
+        shr ebx, 1              ; byte count → word count
+        jz .icmpv6_ck_fold
+.icmpv6_ck_loop:
+        movzx eax, word [esi]
+        add edx, eax
+        add esi, 2
+        dec ebx
+        jnz .icmpv6_ck_loop
+.icmpv6_ck_fold:
+        mov eax, edx
+        shr eax, 16
+        and edx, 0xFFFF
+        add edx, eax
+        mov eax, edx
+        shr eax, 16
+        add edx, eax
+        not dx
+        mov word [net_frame_buf + ETH_HLEN + IPV6_HDR_LEN + 2], dx
 
         ; Send reply: payload = IPv6 hdr + ICMPv6 body
         pop ecx

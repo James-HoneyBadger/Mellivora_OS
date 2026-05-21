@@ -33,6 +33,10 @@ PRIO_IDLE    equ 3           ; Idle tasks — only run when nothing else ready
 SCHED_QUANTUM_BASE equ 5
 SCHED_QUANTUM equ 10          ; Kept for backward compat (NORMAL = 2x base)
 
+; Signal disposition sentinels (v11.0)
+SIG_DFL      equ 0            ; Default action for a signal
+SIG_IGN      equ 1            ; Ignore this signal
+
 ; Signal numbers (v4.0)
 SIGINT       equ 2            ; Interrupt (Ctrl+C)
 SIGKILL      equ 9            ; Kill (non-catchable)
@@ -61,9 +65,86 @@ TCB_PGID     equ 56         ; Process group ID (v4.0)
 TCB_EXIT_CODE equ 60        ; Exit code (v4.0)
 TCB_BRK      equ 64         ; Program break address (for sbrk)
 TCB_PPID     equ 68         ; v9.0: Parent PID (set on fork; 0 = shell)
-TCB_SIZE     equ 72         ; Bytes per TCB (was 68 in v8.x)
+TCB_UID      equ 72         ; v10: Real user ID (0 = root)
+TCB_GID      equ 76         ; v10: Real group ID (0 = root)
+TCB_ALARM    equ 80         ; v10: Alarm deadline (PIT tick; 0 = no alarm)
+TCB_SIG_HAND equ 84         ; v11: Pointer to 32-dword signal handler table (0 = not allocated)
+; --- v12.0 POSIX extensions ---
+TCB_EUID     equ 88         ; v12: Effective user ID
+TCB_EGID     equ 92         ; v12: Effective group ID
+TCB_SID      equ 96         ; v12: Session ID (0 = unset)
+TCB_UMASK    equ 100        ; v12: File creation mask (default 0022)
+TCB_ITIMER_VAL  equ 104     ; v12: ITIMER_REAL countdown (ticks; 0 = disarmed)
+TCB_ITIMER_INT  equ 108     ; v12: ITIMER_REAL reload interval (ticks; 0 = one-shot)
+TCB_SAVED_MASK  equ 112     ; v12: Signal mask saved for sigsuspend restore
+TCB_WAIT_PID    equ 116     ; v12: PID being waited on (0 = not waiting); for sys_waitpid block
+TCB_FD_TABLE_PTR equ 120    ; v12: Physical/virtual address of per-task fd table page (0 = not alloc)
+TCB_ERRNO       equ 124     ; v12: Per-task errno value
+TCB_SIZE        equ 128     ; Bytes per TCB
 
 MAX_TASKS    equ 128         ; v5.0: Doubled from 64
+
+;-----------------------------------------------------------------------
+; sched_swap_fd_tables  — save outgoing task's fd view, load incoming's
+;
+;  Call at every context switch BEFORE updating esp.
+;  EDI = outgoing TCB ptr  (0 = outgoing is the shell)
+;  EBX = incoming TCB ptr  (0 = incoming is the shell)
+;
+;  Preserves ALL registers.
+;-----------------------------------------------------------------------
+sched_swap_fd_tables:
+        pushad
+
+        ; --- Save global fd_table into outgoing task's private copy ---
+        cmp edi, 0
+        je .sft_save_shell          ; outgoing is the shell
+
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .sft_load                ; no private page — skip save
+        ; copy global fd_table (FD_MAX*FD_ENTRY_SIZE = 256 bytes = 64 dwords) → private page
+        push edi
+        mov edi, eax                ; dest = private page
+        mov esi, fd_table           ; src  = global fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        rep movsd
+        pop edi
+        jmp .sft_load
+
+.sft_save_shell:
+        ; outgoing is shell — save to shell_fd_table
+        push edi
+        mov edi, shell_fd_table
+        mov esi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        rep movsd
+        pop edi
+
+.sft_load:
+        ; --- Load incoming task's private copy into global fd_table ---
+        cmp ebx, 0
+        je .sft_load_shell          ; incoming is the shell
+
+        mov eax, [ebx + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .sft_done                ; no private page — leave global as-is
+        ; copy private page → global fd_table
+        mov esi, eax
+        mov edi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        rep movsd
+        jmp .sft_done
+
+.sft_load_shell:
+        mov esi, shell_fd_table
+        mov edi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        rep movsd
+
+.sft_done:
+        popad
+        ret
 
 ;---------------------------------------
 ; sched_init - Initialize the scheduler
@@ -175,6 +256,42 @@ sched_create_task:
         mov [edi + TCB_PGID], edx        ; Default PGID = own PID
         mov [edi + TCB_EXIT_CODE], dword 0
         mov [edi + TCB_BRK], dword PROGRAM_END_ADDR ; Initial break = end of static data
+        mov [edi + TCB_SIG_HAND], dword 0           ; v11: no handler table yet
+        ; v12 POSIX fields
+        mov eax, [edi + TCB_UID]
+        mov [edi + TCB_EUID], eax          ; EUID = real UID at creation
+        mov eax, [edi + TCB_GID]
+        mov [edi + TCB_EGID], eax          ; EGID = real GID at creation
+        mov [edi + TCB_SID], edx           ; SID = own PID (new session leader)
+        mov [edi + TCB_UMASK], dword 0022h ; default umask 022
+        mov [edi + TCB_ITIMER_VAL],  dword 0
+        mov [edi + TCB_ITIMER_INT],  dword 0
+        mov [edi + TCB_SAVED_MASK],  dword 0
+        mov [edi + TCB_WAIT_PID],    dword 0
+        mov [edi + TCB_ERRNO],       dword 0
+
+        ; Allocate a private fd table page (4KB, zero-filled)
+        push edx
+        push edi
+        call pmm_alloc_page         ; EAX = page address or 0
+        pop edi
+        pop edx
+        test eax, eax
+        jz .no_fd_page
+        ; Zero the page (4096 bytes = 1024 dwords)
+        push eax
+        push edi
+        mov edi, eax
+        xor eax, eax
+        mov ecx, 1024
+        rep stosd
+        pop edi
+        pop eax
+        mov [edi + TCB_FD_TABLE_PTR], eax
+        jmp .fd_page_done
+.no_fd_page:
+        mov [edi + TCB_FD_TABLE_PTR], dword 0
+.fd_page_done:
 
         ; Copy task name from task_create_name (set by caller, or default)
         push edi
@@ -242,6 +359,17 @@ sched_exit_task:
         sub eax, 4096
         call pmm_free_page
 
+        ; Free the private fd table page if allocated
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .exit_no_fd_page
+        call pmm_free_page
+        mov [edi + TCB_FD_TABLE_PTR], dword 0
+.exit_no_fd_page:
+
+        ; Get PID of the dying task for parent wake-up
+        mov esi, [edi + TCB_PID]
+
         ; Clear execution fields but leave PID and exit code for waitpid
         ; v5.0: TASK_ZOMBIE lets waitpid collect the exit code before reaping
         mov dword [edi + TCB_STATE], TASK_ZOMBIE
@@ -253,6 +381,38 @@ sched_exit_task:
 
         dec dword [task_count]
 
+        ; Wake any task blocked in sys_waitpid waiting for this PID
+        push edi
+        push esi
+        mov edi, task_table
+        xor edx, edx
+.exit_wake_scan:
+        cmp edx, MAX_TASKS
+        jge .exit_wake_done
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .exit_wake_next
+        mov eax, [edi + TCB_WAIT_PID]
+        ; waiting for specific PID?
+        cmp eax, esi
+        je .exit_wake_found
+        ; waiting for any child (-1)?
+        cmp eax, -1
+        jne .exit_wake_next
+.exit_wake_found:
+        mov dword [edi + TCB_WAIT_PID], 0
+        mov dword [edi + TCB_STATE], TASK_READY
+        ; Write exit code (0) into the waiter's return register slot
+        ; [TCB_ESP+28] = EAX slot in pushad frame
+        mov ebx, [edi + TCB_ESP]
+        mov dword [ebx + 28], 0
+.exit_wake_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .exit_wake_scan
+.exit_wake_done:
+        pop esi
+        pop edi
+
 .exit_done:
         popad
         ret
@@ -263,15 +423,31 @@ sched_exit_task:
 ; Returns: EAX = exit code (0 if unknown/no-exit-code)
 ;          On error (bad PID / no tasks): EAX = -1
 ;---------------------------------------
-WAITPID_RETRIES equ 2000        ; max yields before giving up
+WAITPID_RETRIES equ 2000        ; kept for compatibility (no longer used)
 
+;---------------------------------------
+; sys_waitpid - Wait for a task to exit
+; EBX = PID to wait for (-1 = any child)
+; Returns: EAX = exit code (0 if unknown)
+;          On error (bad PID): EAX = -1
+;
+; If called from a ring-3 task, the caller
+; is blocked until the child exits.
+; If called from the shell (ring-0), we do
+; a single non-blocking scan only.
+;---------------------------------------
 sys_waitpid:
         pushad
         cmp ebx, 0
-        jl .swp_fail            ; negative PID not supported (except -1)
+        jl .swp_any             ; -1 = wait for any
+        jmp .swp_check_pid
+.swp_any:
+        cmp ebx, -1
+        jne .swp_fail           ; only -1 or >= 0 supported
 
-.swp_retry:
-        ; Scan task table for the requested PID
+.swp_check_pid:
+        ; First, check if requested task is already a zombie
+.swp_scan_zombie:
         mov edi, task_table
         xor ecx, ecx
 .swp_scan:
@@ -279,48 +455,83 @@ sys_waitpid:
         jge .swp_not_found
         cmp dword [edi + TCB_STATE], TASK_FREE
         je .swp_next
+        cmp ebx, -1
+        je .swp_check_this      ; any PID
         cmp [edi + TCB_PID], ebx
-        je .swp_found_task
+        jne .swp_next
+.swp_check_this:
+        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
+        je .swp_reap
 .swp_next:
         add edi, TCB_SIZE
         inc ecx
         jmp .swp_scan
 
-.swp_found_task:
-        ; Task exists — check if it's a zombie (exited, code available)
-        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
-        je .swp_reap
-
-        ; Task still alive — yield and retry
-        mov eax, [esp + 16]     ; EBX (retry count) saved in pushad frame
-        inc eax
-        cmp eax, WAITPID_RETRIES
-        jge .swp_fail
-        mov [esp + 16], eax     ; store updated retry count back via EBX slot
-        push ebx
-        push ecx
-        push edi
-        mov eax, SYS_YIELD
-        int 0x80
-        pop edi
-        pop ecx
-        pop ebx
-        jmp .swp_retry
-
 .swp_reap:
-        ; Found zombie — collect exit code, then free the TCB slot
+        ; Collect exit code and free TCB slot
         mov eax, [edi + TCB_EXIT_CODE]
         mov dword [edi + TCB_STATE], TASK_FREE
-        ; Return exit code through pushad EAX slot
         mov [esp + 28], eax
         popad
         iretd
 
 .swp_not_found:
-        ; PID not in table — task was never created or already reaped
-        mov dword [esp + 28], -1
+        ; No zombie found yet — check if we're a ring-3 task
+        ; Inspect CS from the iretd frame: [esp+32..36] after pushad
+        ; [esp+36] = CS
+        mov eax, [esp + 36]
+        and eax, 3
+        cmp eax, 3
+        jne .swp_fail           ; ring-0 (shell) — give up immediately
+
+        ; We're ring-3: block until child exits
+        ; Find our own TCB (TASK_RUNNING)
+        push ebx
+        call sched_get_current_task
+        pop ebx
+        test eax, eax
+        jz .swp_fail            ; no TCB? shouldn't happen
+
+        mov edi, eax            ; EDI = our TCB
+
+        ; Set TCB_WAIT_PID so sched_exit_task will wake us
+        mov [edi + TCB_WAIT_PID], ebx
+
+        ; Save ESP and block
+        mov [edi + TCB_ESP], esp
+        mov dword [edi + TCB_STATE], TASK_BLOCKED
+
+        ; Find next READY task to run
+        mov ebx, task_table
+        xor edx, edx
+.swp_find_next:
+        cmp edx, MAX_TASKS
+        jge .swp_no_next
+        cmp dword [ebx + TCB_STATE], TASK_READY
+        je .swp_switch_to
+        add ebx, TCB_SIZE
+        inc edx
+        jmp .swp_find_next
+
+.swp_switch_to:
+        ; Swap fd tables: outgoing=EDI, incoming=EBX
+        call sched_swap_fd_tables
+        mov dword [ebx + TCB_STATE], TASK_RUNNING
+        mov [task_current], edx
+        mov eax, [ebx + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+        mov esp, [ebx + TCB_ESP]
         popad
         iretd
+
+.swp_no_next:
+        ; No other task to run — go to shell
+        ; (our task remains BLOCKED; timer will wake it when child exits)
+        ; EDI=our TCB (outgoing), EBX=0 (incoming=shell)
+        xor ebx, ebx
+        call sched_swap_fd_tables
+        mov esp, KERNEL_STACK
+        jmp shell_main
 
 .swp_fail:
         mov dword [esp + 28], -1
@@ -352,11 +563,38 @@ sched_force_switch:
         mov [task_current], edx
         mov eax, [edi + TCB_KSTACK]
         mov [tss_struct + 4], eax
+        ; Load incoming task's fd table (EDI=incoming TCB, EBX=0 unused)
+        ; Use a direct load: copy private page into global fd_table
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .sfs_switch
+        push esi
+        push edi
+        push ecx
+        mov esi, eax
+        mov edi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        rep movsd
+        pop ecx
+        pop edi
+        pop esi
+.sfs_switch:
         mov esp, [edi + TCB_ESP]  ; Switch to new task's kernel stack
         popad                      ; Restore its GP registers
         iretd                      ; Resume the ring-3 task
 .sfs_no_task:
         ; No other ring-3 task running — return to shell prompt
+        ; Load shell's fd table back into global fd_table
+        push esi
+        push edi
+        push ecx
+        mov esi, shell_fd_table
+        mov edi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        rep movsd
+        pop ecx
+        pop edi
+        pop esi
         mov esp, KERNEL_STACK
         jmp shell_main
 
@@ -448,6 +686,9 @@ sys_yield:
 
 .yld_switch:
         ; EBX = pointer to new task's TCB, ESI = new task index
+        ; EDI = outgoing task TCB
+        ; Swap fd tables before switching
+        call sched_swap_fd_tables
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
 
@@ -517,9 +758,17 @@ sys_kill:
         ; Free the kernel stack page
         mov eax, [edi + TCB_KSTACK]
         test eax, eax
-        jz .sk_clear
+        jz .sk_free_fd
         sub eax, 4096
         call pmm_free_page
+
+.sk_free_fd:
+        ; Free private fd table page
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .sk_clear
+        call pmm_free_page
+        mov dword [edi + TCB_FD_TABLE_PTR], 0
 
 .sk_clear:
         ; Clear the TCB
@@ -676,6 +925,8 @@ sys_sleep:
         jmp .sleep_abort
 
 .sleep_switch:
+        ; EDI = outgoing task TCB, EBX = incoming task TCB
+        call sched_swap_fd_tables
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
         mov eax, [ebx + TCB_KSTACK]
@@ -719,6 +970,9 @@ sched_wake_sleepers:
         cmp dword [edi + TCB_STATE], TASK_BLOCKED
         jne .wake_next
         ; Check if wakeup tick has been reached
+        ; TCB_WAKEUP == 0 means indefinite block (pause/sigsuspend) — skip
+        cmp dword [edi + TCB_WAKEUP], 0
+        je  .wake_next
         mov eax, [tick_count]
         cmp eax, [edi + TCB_WAKEUP]
         jb .wake_next
@@ -731,9 +985,200 @@ sched_wake_sleepers:
 .wake_done:
         ret
 
+;---------------------------------------
+; sched_check_alarms — Deliver SIGALRM to tasks whose alarm deadline
+;   has been reached.  Called from irq_timer on every PIT tick.
+; Clobbers: EAX, ECX, EDI  (caller saves)
+;---------------------------------------
+sched_check_alarms:
+        mov edi, task_table
+        xor ecx, ecx
+.sca_loop:
+        cmp ecx, MAX_TASKS
+        jge .sca_done
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je  .sca_next
+        cmp dword [edi + TCB_ALARM], 0
+        je  .sca_next
+        mov eax, [tick_count]
+        cmp eax, [edi + TCB_ALARM]
+        jb  .sca_next
+        ; Deadline reached: set SIGALRM pending, disarm alarm
+        or  dword [edi + TCB_SIG_PEND], (1 << SIGALRM)
+        mov dword [edi + TCB_ALARM], 0
+.sca_next:
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .sca_loop
+.sca_done:
+        ret
+
+;---------------------------------------
+; sched_check_itimers — Tick down ITIMER_REAL for all tasks and
+;   deliver SIGALRM when the counter reaches zero.
+;   Called from irq_timer every PIT tick.
+; Clobbers: EAX, ECX, EDI  (caller saves)
+;---------------------------------------
+sched_check_itimers:
+        mov edi, task_table
+        xor ecx, ecx
+.sci_loop:
+        cmp ecx, MAX_TASKS
+        jge .sci_done
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je  .sci_next
+        cmp dword [edi + TCB_ITIMER_VAL], 0
+        je  .sci_next
+        dec dword [edi + TCB_ITIMER_VAL]
+        jnz .sci_next
+        ; Counter hit zero — deliver SIGALRM
+        or  dword [edi + TCB_SIG_PEND], (1 << SIGALRM)
+        ; Wake BLOCKED task so it gets scheduled and the signal delivered
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .sci_reload
+        mov dword [edi + TCB_STATE], TASK_READY
+.sci_reload:
+        ; Reload interval (0 = one-shot → stays disarmed)
+        mov eax, [edi + TCB_ITIMER_INT]
+        mov [edi + TCB_ITIMER_VAL], eax
+.sci_next:
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .sci_loop
+.sci_done:
+        ret
+
+; — Dispatch pending user-space signal
+;   handlers before iretd to ring-3.
+;
+;   In : EBX = TCB pointer of the task about to be resumed
+;        EDI = base address of the pushad+iretd frame for that task:
+;              [edi+0 .. edi+31] = pushad (EDI,ESI,EBP,origESP,EBX,EDX,ECX,EAX)
+;              [edi+32] = saved EIP3
+;              [edi+36] = saved CS3
+;              [edi+40] = saved EFLAGS
+;              [edi+44] = saved ESP3
+;              [edi+48] = saved SS3
+;   Out: EAX = 0  — task is alive, frame may have been redirected to handler
+;        EAX = -1 — task was terminated by a default signal action (TCB_STATE
+;                   is now TASK_FREE; caller must NOT do popad+iretd)
+;   Clobbers: EAX, ECX, EDX, ESI  (preserves EBX, EDI)
 ;=======================================================================
-; v4.0 NEW SYSCALLS - Priority, Signals, Process Groups
-;=======================================================================
+sched_deliver_signals:
+.sdel_next:
+        ; Compute pending & unmasked signals
+        mov eax, [ebx + TCB_SIG_PEND]
+        mov ecx, [ebx + TCB_SIG_MASK]
+        not ecx
+        and eax, ecx                    ; pending & ~masked
+        test eax, eax
+        jz  .sdel_ok
+
+        bsf ecx, eax                    ; ecx = lowest pending signal number
+
+        ; Clear the pending bit
+        mov eax, 1
+        shl eax, cl
+        not eax
+        and [ebx + TCB_SIG_PEND], eax
+
+        ; Get handler table; if none → default action
+        mov esi, [ebx + TCB_SIG_HAND]
+        test esi, esi
+        jz  .sdel_default
+
+        ; Read disposition for this signal
+        mov eax, [esi + ecx*4]          ; eax = handler fn, SIG_DFL, or SIG_IGN
+        cmp eax, SIG_IGN
+        je  .sdel_next                  ; Ignored — consume and check again
+
+        cmp eax, SIG_DFL
+        je  .sdel_default               ; Default action
+
+        ; ---- User-space handler ----
+        ; eax = handler fn address, ecx = signum, edi = frame base
+        ; Build signal frame on user stack:
+        ;   new_esp = old_ESP3 - 32
+        ;   [new_esp + 0]  = return_address → stub at new_esp+24
+        ;   [new_esp + 4]  = signum
+        ;   [new_esp + 8]  = saved_eip
+        ;   [new_esp + 12] = saved_eflags
+        ;   [new_esp + 16] = saved_old_esp3
+        ;   [new_esp + 20] = saved_sig_mask (restored by sys_sigreturn)
+        ;   [new_esp + 24..31] = sigreturn stub: mov eax,144; int 0x80; nop
+        push eax                        ; save handler fn
+        push ecx                        ; save signum
+
+        mov edx, [edi + 44]             ; old ESP3
+        mov esi, [edi + 32]             ; old EIP3 (to save)
+        sub edx, 32                     ; edx = new_esp
+
+        ; Return address = read-only sigreturn trampoline page (no stub on stack)
+        mov eax, SIGRETURN_TRAMPOLINE_VADDR
+        mov [edx + 0], eax              ; return_address → trampoline
+
+        mov eax, [esp]                  ; signum (from stack)
+        mov [edx + 4], eax
+
+        mov [edx + 8],  esi             ; saved_eip
+        mov eax, [edi + 40]
+        mov [edx + 12], eax             ; saved_eflags
+        lea eax, [edx + 32]             ; saved_old_esp3 = new_esp + 32 = old ESP3
+        mov [edx + 16], eax
+
+        mov eax, [ebx + TCB_SIG_MASK]
+        mov [edx + 20], eax             ; saved_sig_mask
+
+        ; Zero the previously-used stub bytes (no W^X violation)
+        mov dword [edx + 24], 0
+        mov dword [edx + 28], 0
+
+        pop ecx                         ; discard signum
+        pop eax                         ; restore handler fn
+
+        ; Redirect iretd frame to handler
+        mov [edi + 32], eax             ; new EIP3 = handler
+        and dword [edi + 40], 0xFFFFFEFF ; clear TF in EFLAGS
+        mov [edi + 44], edx             ; new ESP3 = signal frame
+
+        jmp .sdel_next                  ; check for more signals
+
+        ; ---- Default signal action ----
+.sdel_default:
+        cmp ecx, SIGCONT
+        je  .sdel_next              ; SIGCONT on running task = no-op
+        cmp ecx, SIGTSTP
+        je  .sdel_stop
+
+        ; All others (SIGKILL, SIGTERM, SIGINT, SIGALRM, etc.): terminate
+        ; Free kernel stack page if allocated
+        mov eax, [ebx + TCB_KSTACK]
+        test eax, eax
+        jz  .sdel_no_kstack
+        sub eax, 4096
+        call pmm_free_page
+.sdel_no_kstack:
+        ; Free private fd table page if allocated (always check, independent of kstack)
+        mov eax, [ebx + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .sdel_term_clear
+        call pmm_free_page
+        mov dword [ebx + TCB_FD_TABLE_PTR], 0
+.sdel_term_clear:
+        mov dword [ebx + TCB_STATE],  TASK_FREE
+        mov dword [ebx + TCB_ESP],    0
+        mov dword [ebx + TCB_KSTACK], 0
+        dec dword [task_count]
+        mov eax, -1
+        ret                             ; EAX = -1 : task killed
+
+.sdel_stop:
+        mov dword [ebx + TCB_STATE], TASK_STOPPED
+        ; Fall through to sdel_ok (task stopped, not killed)
+.sdel_ok:
+        xor eax, eax
+        ret                             ; EAX = 0 : task alive
+
 
 ;---------------------------------------
 ; sys_setpriority - Set task priority
@@ -875,8 +1320,13 @@ sys_signal:
         je .sig_terminate
         cmp ecx, SIGTERM
         je .sig_terminate
-        ; Other signals: just set pending bit (checked at task switch)
+        ; Other signals: set pending bit; wake BLOCKED task so pause/sigsuspend return
         mov dword [esp + 28], 0
+        ; If target is BLOCKED (sleeping/paused), mark READY so it gets scheduled
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .sig_ok_done
+        mov dword [edi + TCB_STATE], TASK_READY
+.sig_ok_done:
         popad
         iretd
 .sig_terminate:
@@ -1303,7 +1753,38 @@ sys_fork:
         mov  [edi + TCB_USTACK], eax
         mov  eax, [fork_child_kesp]
         mov  [edi + TCB_ESP],    eax
-        mov  dword [edi + TCB_SIG_PEND], 0  ; clear pending signals for child
+        mov  dword [edi + TCB_SIG_PEND],  0  ; clear pending signals for child
+        mov  dword [edi + TCB_ALARM],     0  ; no alarm inherited by child
+        mov  dword [edi + TCB_SIG_HAND],  0  ; v11: child starts with no signal handlers
+        ; v12: reset child's itimers and sigsuspend saved mask
+        mov  dword [edi + TCB_ITIMER_VAL],  0
+        mov  dword [edi + TCB_ITIMER_INT],  0
+        mov  dword [edi + TCB_SAVED_MASK],  0
+        ; Reset child's wait/errno/fd table fields (must NOT inherit parent's)
+        mov  dword [edi + TCB_WAIT_PID],    0
+        mov  dword [edi + TCB_ERRNO],       0
+
+        ;--- 8b. Allocate child's private fd table page (copy parent's) ---
+        push edi                        ; save child TCB
+        call pmm_alloc_page             ; EAX = new page or 0
+        pop  edi
+        test eax, eax
+        jnz  .fork_have_fd_page
+        ; OOM: could not allocate fd page — child gets no open fds
+        mov  dword [edi + TCB_FD_TABLE_PTR], 0
+        jmp  .fork_fd_done
+.fork_have_fd_page:
+        ; Zero-copy parent fd table view (global fd_table) into child's private page
+        push eax                        ; save child fd page addr
+        push edi
+        mov  edi, eax
+        mov  esi, fd_table
+        mov  ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        rep  movsd
+        pop  edi
+        pop  eax
+        mov  [edi + TCB_FD_TABLE_PTR], eax
+.fork_fd_done:
 
         inc  dword [task_count]
 

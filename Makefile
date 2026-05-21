@@ -21,6 +21,31 @@ UNAME_S := $(shell uname -s)
 # sysctl, then POSIX getconf, then a safe default of 4 cores.
 NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 
+# -----------------------------------------------------------------------
+# v10.0: C toolchain (for tools/hbpkg.c and boot/uefi_loader.c)
+# -----------------------------------------------------------------------
+CC      ?= gcc
+CFLAGS  ?= -O2 -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200809L
+
+# UEFI cross-toolchain (requires gnu-efi and x86_64 cross-compiler)
+# Override these on your distro, e.g.:
+#   make uefi CC_EFI=x86_64-w64-mingw32-gcc EFI_INCLUDE=/usr/include/efi
+CC_EFI     ?= x86_64-linux-gnu-gcc
+LD_EFI     ?= x86_64-linux-gnu-ld
+OBJCOPY    ?= x86_64-linux-gnu-objcopy
+EFI_INCLUDE ?= /usr/include/efi
+EFI_LIB    ?= /usr/lib/x86_64-linux-gnu/gnuefi
+OVMF_CODE  ?= /usr/share/OVMF/OVMF_CODE.fd
+OVMF_VARS  ?= /usr/share/OVMF/OVMF_VARS.fd
+
+# Build artefacts
+UEFI_EFI   = boot/uefi_loader.efi
+UEFI_SO    = boot/uefi_loader.so
+HBPKG_BIN  = tools/hbpkg
+
+# UEFI disk image (FAT ESP + HBFS kernel payload)
+UEFI_IMAGE = mellivora-uefi.img
+
 # Output
 IMAGE = mellivora.img
 IMAGE_SIZE_MB = 2048
@@ -83,7 +108,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count
+.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg
 
 all: $(IMAGE)
 
@@ -286,19 +311,133 @@ sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 dev: full
 	$(QEMU) $(QEMU_FLAGS)
 
+# -----------------------------------------------------------------------
+# v10.0: UEFI bootloader build
+# Requires: gnu-efi, x86_64-linux-gnu-gcc, x86_64-linux-gnu-ld, objcopy
+# Install:  apt-get install gnu-efi gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+# -----------------------------------------------------------------------
+CFLAGS_EFI = -O2 -fpic -ffreestanding -fno-stack-protector -fno-stack-check \
+             -fshort-wchar -mno-red-zone -DGNU_EFI_USE_MS_ABI \
+             -I$(EFI_INCLUDE) -I$(EFI_INCLUDE)/x86_64 -I$(EFI_INCLUDE)/protocol \
+             -Wall -Wextra -std=c11
+
+LDFLAGS_EFI = -shared -Bsymbolic -L$(EFI_LIB) \
+              -T $(EFI_LIB)/elf_x86_64_efi.lds \
+              $(EFI_LIB)/crt0-efi-x86_64.o
+
+$(UEFI_SO): boot/uefi_loader.c
+	@mkdir -p boot
+	$(CC_EFI) $(CFLAGS_EFI) -c -o boot/uefi_loader.o $<
+	$(LD_EFI) $(LDFLAGS_EFI) boot/uefi_loader.o -o $@ -lgnuefi -lefi
+
+$(UEFI_EFI): $(UEFI_SO)
+	$(OBJCOPY) -j .text -j .sdata -j .data -j .rodata -j .dynamic \
+	           -j .dynsym -j .rel -j .rela -j .rel.* -j .rela.* \
+	           -j .reloc --target=efi-app-x86_64 --subsystem=10 \
+	           $< $@
+	@echo "=== UEFI loader: $(UEFI_EFI) ==="
+	@ls -lh $@
+
+uefi: $(UEFI_EFI)
+
+# Build a UEFI-bootable disk image:
+#   ESP partition (FAT, 64 MB) with EFI/BOOT/BOOTX64.EFI
+#   followed by the HBFS kernel payload (mellivora.img data)
+$(UEFI_IMAGE): $(UEFI_EFI) $(KERNEL_BIN) programs
+	@echo "=== Building UEFI disk image: $(UEFI_IMAGE) ==="
+	@# Create 512 MB raw image
+	$(DD) if=/dev/zero of=$(UEFI_IMAGE) bs=1M count=512 status=none
+	@# Create GPT with ESP partition using sgdisk (or fdisk as fallback)
+	@if command -v sgdisk >/dev/null 2>&1; then \
+		sgdisk -n 1:2048:133119 -t 1:ef00 -c 1:"EFI System" \
+		       -n 2:133120: -t 2:8300 -c 2:"HBFS Data" $(UEFI_IMAGE); \
+	else \
+		echo "  WARNING: sgdisk not found — image will lack GPT"; \
+	fi
+	@# Format ESP partition as FAT32 and install EFI application
+	@LOOP=$$(sudo losetup -f --show -P $(UEFI_IMAGE)); \
+	 sudo mkfs.vfat -F 32 $${LOOP}p1; \
+	 MNT=$$(mktemp -d); \
+	 sudo mount $${LOOP}p1 $$MNT; \
+	 sudo mkdir -p $$MNT/EFI/BOOT; \
+	 sudo cp $(UEFI_EFI) $$MNT/EFI/BOOT/BOOTX64.EFI; \
+	 sudo cp $(KERNEL_BIN) $$MNT/mellivora.bin; \
+	 sudo umount $$MNT; \
+	 rmdir $$MNT; \
+	 sudo losetup -d $$LOOP
+	@echo "=== $(UEFI_IMAGE) ready ==="
+	@ls -lh $(UEFI_IMAGE)
+
+# Run the UEFI disk image under QEMU with OVMF firmware
+run-uefi: $(UEFI_IMAGE)
+	@echo "=== Launching Mellivora in UEFI mode (OVMF, qemu64, 512 MB) ==="
+	@[ -f $(OVMF_CODE) ] || { echo "  ERROR: $(OVMF_CODE) not found. Install ovmf."; exit 1; }
+	cp $(OVMF_VARS) /tmp/OVMF_VARS_rw.fd
+	$(QEMU) \
+		-cpu qemu64 -m 512 \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
+		-drive if=pflash,format=raw,file=/tmp/OVMF_VARS_rw.fd \
+		-drive file=$(UEFI_IMAGE),format=raw,if=ide \
+		-boot menu=on \
+		-no-shutdown -no-reboot \
+		$(QEMU_AUDIO_FLAGS) \
+		-netdev user,id=net0 -device rtl8139,netdev=net0
+
+# -----------------------------------------------------------------------
+# v10.0: 64-bit kernel build (experimental — requires 64-bit kernel.asm)
+# Assembles stage2 with KERNEL_64BIT defined so it enters long mode.
+# -----------------------------------------------------------------------
+KERNEL_64BIN  = kernel64.bin
+STAGE2_64BIN  = stage2-64.bin
+IMAGE_64      = mellivora64.img
+
+$(KERNEL_64BIN): $(KERNEL_SRC) $(KERNEL_INCS)
+	$(NASM) -f bin -O0 -w-zeroing -DKERNEL_64BIT=1 -o $@ -l $(@:.bin=.lst) $<
+
+$(STAGE2_64BIN): $(STAGE2_SRC) kernel_sectors.inc
+	$(NASM) -f bin -DKERNEL_64BIT=1 -o $@ -l $(@:.bin=.lst) $<
+
+$(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN)
+	@echo "=== Building 64-bit Mellivora image ==="
+	$(DD) if=/dev/zero of=$(IMAGE_64) bs=1M count=$(IMAGE_SIZE_MB) status=none
+	$(DD) if=$(BOOT_BIN)    of=$(IMAGE_64) bs=512 count=1  conv=notrunc status=none
+	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64) bs=512 seek=1  conv=notrunc status=none
+	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64) bs=512 seek=33 conv=notrunc status=none
+	@echo "=== $(IMAGE_64) ready ==="
+
+64bit: $(IMAGE_64)
+	@echo "=== Run with: make run IMAGE=$(IMAGE_64) ==="
+
+# -----------------------------------------------------------------------
+# v10.0: Package manager (tools/hbpkg)
+# -----------------------------------------------------------------------
+$(HBPKG_BIN): tools/hbpkg.c
+	@mkdir -p tools
+	$(CC) $(CFLAGS) -o $@ $<
+	@echo "=== Package manager: $(HBPKG_BIN) ==="
+
+hbpkg: $(HBPKG_BIN)
+
 # Print available build targets
 help:
 	@echo "Mellivora OS — Build Targets"
 	@echo ""
-	@echo "  Build"
+	@echo "  Build (32-bit BIOS, default)"
 	@echo "    make all          Build disk image (boot + stage2 + kernel)"
-	@echo "    make full         Full build: boot + kernel + 131 programs + filesystem"
-	@echo "    make programs     Build all user-space programs (parallel, uses \$$(nproc) jobs)"
-	@echo "    make kernel-only  Rebuild kernel only and patch into image (fast iteration)"
+	@echo "    make full         Full build: boot + kernel + programs + filesystem"
+	@echo "    make programs     Build all user-space programs (parallel)"
+	@echo "    make kernel-only  Rebuild kernel only and patch into image (fast)"
 	@echo "    make populate     Populate filesystem (requires programs)"
+	@echo ""
+	@echo "  Build (v10.0 new targets)"
+	@echo "    make uefi         Build UEFI PE32+ EFI application (boot/uefi_loader.efi)"
+	@echo "    make uefi-image   Build UEFI-bootable GPT disk image (mellivora-uefi.img)"
+	@echo "    make 64bit        Build 64-bit kernel + stage2 image (mellivora64.img)"
+	@echo "    make hbpkg        Build package manager (tools/hbpkg)"
 	@echo ""
 	@echo "  Run"
 	@echo "    make run          Launch in QEMU (i486, 128 MB RAM)"
+	@echo "    make run-uefi     Launch UEFI image in QEMU with OVMF firmware"
 	@echo "    make dev          Full build + launch in one step"
 	@echo "    make debug        Launch with QEMU monitor on stdio"
 	@echo "    make run-serial   Launch with serial on TCP port 4555"
@@ -310,7 +449,7 @@ help:
 	@echo "    make iso-verify   Validate El Torito boot record in ISO"
 	@echo ""
 	@echo "  Test & Info"
-	@echo "    make check        Run regression suite (1,160 tests)"
+	@echo "    make check        Run regression suite"
 	@echo "    make sizes        Show component and ISO binary sizes"
 	@echo "    make count        Lines of code statistics by component"
 	@echo ""
@@ -334,14 +473,19 @@ count:
 		"$$(ls $(PROG_DIR)/*.asm | wc -l)"
 	@printf "  %-24s %6d lines\n" "Syscalls lib" "$$(wc -l < $(PROG_DIR)/syscalls.inc)"
 	@echo ""
+	@printf "  %-24s %6d lines\n" "UEFI loader (C)" "$$(wc -l < boot/uefi_loader.c 2>/dev/null || echo 0)"
+	@printf "  %-24s %6d lines\n" "Package mgr hbpkg (C)" "$$(wc -l < tools/hbpkg.c 2>/dev/null || echo 0)"
+	@echo ""
 	@printf "  %-24s %6d lines\n" "Build system" "$$(cat Makefile populate.py | wc -l)"
 	@printf "  %-24s %6d lines\n" "Documentation" "$$(cat docs/*.md | wc -l)"
 	@echo "  ─────────────────────────────────"
 	@printf "  %-24s %6d lines\n" "GRAND TOTAL" \
-		"$$(cat boot.asm stage2.asm kernel.asm kernel/*.inc $(PROG_DIR)/*.asm $(PROG_DIR)/syscalls.inc Makefile populate.py | wc -l)"
+		"$$(cat boot.asm stage2.asm kernel.asm kernel/*.inc $(PROG_DIR)/*.asm $(PROG_DIR)/syscalls.inc Makefile populate.py boot/uefi_loader.c tools/hbpkg.c 2>/dev/null | wc -l)"
 
 clean:
 	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE) $(ISO_FILE) $(ISO_LITE_FILE) kernel_sectors.inc
 	rm -f *.lst
 	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
 	rm -rf .build
+	# v10.0 additions
+	rm -f $(UEFI_EFI) $(UEFI_SO) $(HBPKG_BIN) $(UEFI_IMAGE)

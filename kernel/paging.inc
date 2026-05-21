@@ -155,6 +155,8 @@ paging_init:
         ; A JMP flushes the prefetch queue (good practice)
         jmp .paging_on
 .paging_on:
+        ; Install read-only sigreturn trampoline page
+        call sigreturn_trampoline_init
 
         popad
         ret
@@ -406,3 +408,45 @@ paging_map_page:
 pf_addr:    dd 0
 pf_eip:     dd 0
 pf_errcode: dd 0
+
+;-----------------------------------------------------------------------
+; sigreturn_trampoline_init  — map a read-only sigreturn trampoline page
+;
+; Allocates one physical page, writes the 8-byte sigreturn stub at its
+; start, then maps it read-only (PG_PRESENT|PG_USER, no PG_WRITABLE) at
+; SIGRETURN_TRAMPOLINE_VADDR.  Saves the physical address in
+; sigreturn_trampoline_phys for future reference.
+;
+; Must be called after paging is enabled and PMM is available.
+; Preserves all registers.
+;-----------------------------------------------------------------------
+sigreturn_trampoline_init:
+        pushad
+        call pmm_alloc_page          ; EAX = physical page (identity-mapped)
+        test eax, eax
+        jz .sti_fail
+
+        ; Save physical address
+        mov [sigreturn_trampoline_phys], eax
+
+        ; Write sigreturn stub bytes at the start of the page
+        ; (page is identity-mapped, so phys == virt here)
+        ;   mov eax, 144      ; 0xB8 0x90 0x00 0x00 0x00
+        ;   int 0x80           ; 0xCD 0x80
+        ;   nop                ; 0x90
+        mov byte  [eax + 0], 0xB8
+        mov dword [eax + 1], 144
+        mov byte  [eax + 5], 0xCD
+        mov byte  [eax + 6], 0x80
+        mov byte  [eax + 7], 0x90
+
+        ; Map the page read-only (PG_PRESENT|PG_USER, no PG_WRITABLE)
+        ; paging_map_page(EAX=virt, EBX=phys, ECX=flags)
+        mov ebx, [sigreturn_trampoline_phys]
+        mov eax, SIGRETURN_TRAMPOLINE_VADDR
+        mov ecx, PG_PRESENT | PG_USER
+        call paging_map_page
+
+.sti_fail:
+        popad
+        ret

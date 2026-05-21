@@ -241,6 +241,10 @@ irq_timer:
 
         ; v3.0: Wake any sleeping/blocked tasks whose timer expired
         call sched_wake_sleepers
+        ; v10: Deliver SIGALRM to tasks whose alarm() deadline has passed
+        call sched_check_alarms
+        ; v12: Tick down ITIMER_REAL interval timers
+        call sched_check_itimers
 
         ; --- Preemptive scheduling ---
         ; Only preempt if we have active tasks
@@ -299,17 +303,22 @@ irq_timer:
 
         ; No other ready task — re-mark self as RUNNING
         mov dword [edi + TCB_STATE], TASK_RUNNING
+        ; v11: deliver pending signals to the current task before re-entering ring-3
+        mov ebx, edi            ; EBX = current task TCB
+        mov edi, esp            ; EDI = frame base (timer pushad+iretd frame)
+        call sched_deliver_signals
+        test eax, eax
+        js  .timer_done         ; killed by default action — reschedule next tick
         jmp .timer_done
 
 .timer_switch:
         ; v3.0: Disable interrupts during critical context switch.
-        ; EOI was already sent above, so the PIC could deliver another
-        ; IRQ between now and IRETD if interrupts were enabled.
-        ; Interrupt gates clear IF on entry, but CLI is defensive in
-        ; case the gate type ever changes or an NMI arrives.
         cli
 
-        ; EBX = new task's TCB
+        ; EBX = new task's TCB, EDI = outgoing task's TCB
+        ; Swap per-task fd tables (save outgoing's view, load incoming's)
+        call sched_swap_fd_tables
+
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
 
@@ -317,13 +326,37 @@ irq_timer:
         mov eax, [ebx + TCB_KSTACK]
         mov [tss_struct + 4], eax
 
-        ; Load the new task's saved kernel ESP
-        mov esp, [ebx + TCB_ESP]
+        ; v11: deliver pending signals to the new task before restoring its context
+        mov edi, [ebx + TCB_ESP]        ; EDI = frame base (new task's kernel frame)
+        call sched_deliver_signals      ; EAX = 0 alive, -1 killed
+        test eax, eax
+        js  .timer_killed               ; default action terminated the new task
 
-        ; Restore GP regs and IRETD to new task's ring-3 context
-        ; (IRETD restores EFLAGS which re-enables IF for user mode)
+        ; Load the new task's (possibly modified) saved kernel ESP
+        mov esp, [ebx + TCB_ESP]
         popad
         iretd
+
+.timer_killed:
+        ; The task we just switched to was terminated by a default signal action.
+        ; Fall back to re-scanning for the next READY task (one pass only).
+        ; If none found, fall through to .timer_done (idle until next tick).
+        mov ecx, MAX_TASKS
+        ; esi still = the slot of the killed task; scan forward from there
+.timer_rescan:
+        inc esi
+        cmp esi, MAX_TASKS
+        jb  .timer_rcheck
+        xor esi, esi
+.timer_rcheck:
+        mov eax, esi
+        imul eax, TCB_SIZE
+        lea ebx, [task_table + eax]
+        cmp dword [ebx + TCB_STATE], TASK_READY
+        je  .timer_switch               ; found — switch (delivers signals there)
+        dec ecx
+        jnz .timer_rescan
+        ; No ready task remains — fall through to .timer_done
 
 .timer_done:
         popad
