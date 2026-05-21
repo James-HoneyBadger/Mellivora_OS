@@ -72,7 +72,7 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 ```nasm
 ; hello.asm — Hello World for Mellivora OS
 BITS 32
-ORG 0x200000
+ORG 0x300000
 
     ; Print a string
     mov eax, 3          ; SYS_PRINT
@@ -104,7 +104,7 @@ Lair:/>
 ### Key Points
 
 - **`BITS 32`**: Programs run in 32-bit protected mode
-- **`ORG 0x200000`**: Program is loaded at this address
+- **`ORG 0x300000`**: Program is loaded at this address
 - **`INT 0x80`**: All OS services go through this interrupt
 - **`SYS_EXIT` (EAX=0)**: Always exit cleanly, or the trampoline does it for you
 - **`-O0`**: Disable NASM optimizations (critical — prevents short jump issues)
@@ -248,7 +248,7 @@ SYS_MSGQ_RECV       equ 114 ; Receive message: EBX=qid ECX=buf EDX=max -> EAX=by
 SYS_MSGQ_CLOSE      equ 115 ; Destroy queue: EBX=qid -> EAX=0/-1
 ```
 
-> The numbers above match `programs/syscalls.inc`. All syscalls 0–115 are
+> The numbers above match `programs/syscalls.inc`. All syscalls 0–181 are
 > implemented. Include `syscalls.inc` at the top of every program for the
 > authoritative list.
 
@@ -1072,7 +1072,7 @@ Here's the standard pattern used by games like Snake, Tetris, and 2048:
 
 ```nasm
 BITS 32
-ORG 0x200000
+ORG 0x300000
 
 main:
     ; Initialize game state
@@ -1291,7 +1291,7 @@ Place your program in the `programs/` directory alongside `syscalls.inc`:
 %include "syscalls.inc"
 
 BITS 32
-ORG 0x200000
+ORG 0x300000
 
     mov eax, SYS_PRINT
     mov ebx, msg
@@ -1313,7 +1313,7 @@ msg: db "It works!", 10, 0
 ### The -O0 Flag
 
 **Always use `-O0`** (disable optimizations). Without it, NASM may generate short jumps
-that break when the binary is loaded at `0x200000` instead of `0x0`. This is the single
+that break when the binary is loaded at `0x300000` instead of `0x0`. This is the single
 most common source of program crashes.
 
 ---
@@ -1505,7 +1505,7 @@ newline_str: db 10, 0
 
 ### Common Pitfalls
 
-1. **Missing `-O0` flag:** NASM optimizations break programs loaded at 0x200000
+1. **Missing `-O0` flag:** NASM optimizations break programs loaded at 0x300000
 2. **Forgetting `SYS_EXIT`:** Program will slide into garbage memory (though the
    trampoline catches `RET`)
 3. **Buffer overflows:** No memory protection — overwriting past your buffer corrupts
@@ -1521,7 +1521,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 95 syscalls. See `programs/syscalls.inc` for the authoritative list.
+Quick reference for all 182 syscalls. See `programs/syscalls.inc` for the authoritative list.
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |
@@ -1607,6 +1607,12 @@ Quick reference for all 95 syscalls. See `programs/syscalls.inc` for the authori
 | 79 | REALLOC | ptr | new_size | old_size | new_ptr or 0 |
 | 80 | GETENV_SLOT | index | buf (128 B) | — | 0/-1 |
 | 81 | DMESG_WRITE | msg_ptr | — | — | 0 |
+| 82 | DMESG_READ | index | dest_buf (128 B) | — | 0/-1 |
+| 83 | RENAME | old_name | new_name | — | 0/-1 |
+| 84 | RMDIR | name | — | — | 0/-1 |
+| 85 | TRUNCATE | name | new_size | — | 0/-1 |
+| 86 | CONNECT_NB | fd | ip | port | 0/-2/-1 |
+| 87 | POLL | fd | events (1=in,2=out) | timeout_ms | ready_mask |
 | 88 | SEM_CREATE | initial_value | — | — | sem_id/-1 |
 | 89 | SEM_WAIT | sem_id | — | — | 0/-1 |
 | 90 | SEM_POST | sem_id | — | — | 0 |
@@ -1614,3 +1620,90 @@ Quick reference for all 95 syscalls. See `programs/syscalls.inc` for the authori
 | 92 | WAITPID | pid | — | — | exit_code/-1 |
 | 93 | GETMTIME | filename | — | — | EAX=mtime, ECX=ctime |
 | 94 | SETMTIME | filename | timestamp (0=now) | — | 0/-1 |
+| 95 | DRAW_LINE | x0\|y0 packed† | x1 | y1\|color packed† | — |
+| 96 | DRAW_TRIANGLE | x0\|(y0<<16) | x1\|(y1<<16) | x2\|(y2<<16) | — |
+| 97 | BLIT | src | dst_x | dst_y | — |
+| 98 | DIRTY_PRESENT | — | — | — | — |
+| 99 | PSF_LOAD | filename | — | — | 0/-1 |
+| 100 | PSF_CHAR | x | y | codepoint | — |
+| 101 | PCI_FIND | vendor_id | device_id | — | bdf/-1 |
+| 102 | GETPPID | — | — | — | parent PID |
+| 103 | FORK | — | — | — | child_pid/0/-1 |
+| 104 | EXEC | path | argv | — | −1 on error |
+| 105 | GETPID | — | — | — | pid |
+| 106 | SOCKET | domain | type | protocol | fd/-1 |
+| 107 | BIND | fd | addr | — | 0/-1 |
+| 108 | LISTEN | fd | backlog | — | 0/-1 |
+| 109 | ACCEPT | fd | addr | — | new_fd/-1 |
+| 110 | CONNECT | fd | ip | port | 0/-1 |
+| 111 | AUDIO_CLOSE_CHAN | channel | — | — | 0 |
+| 112 | MSGQ_CREATE | key | max_msgs | — | qid/-1 |
+| 113 | MSGQ_SEND | qid | buf | len | 0/-1 |
+| 114 | MSGQ_RECV | qid | buf | max | bytes/-1 |
+| 115 | MSGQ_CLOSE | qid | — | — | 0/-1 |
+| 116 | DUP | fd | — | — | new_fd/-1 |
+| 117 | DUP2 | src | dst | — | dst/-1 |
+| 118 | FCNTL | fd | cmd | arg | result/-1 |
+| 119 | IOCTL | fd | req | arg | 0/-1 |
+| 120 | MMAP | addr | len | prot | addr/-1 |
+| 121 | MUNMAP | addr | len | — | 0/-1 |
+| 122 | MPROTECT | addr | len | prot | 0/-1 |
+| 123 | SELECT | nfds | rfds | wfds | count/-1 |
+| 124 | CLOCK_GETTIME | clk_id | timespec* | — | 0/-1 |
+| 125 | NANOSLEEP | rqtp | rmtp | — | 0/-1 |
+| 126 | GETTIMEOFDAY | timeval* | tz* | — | 0 |
+| 127 | GETUID | — | — | — | uid |
+| 128 | SETUID | uid | — | — | 0/-1 |
+| 129 | GETGID | — | — | — | gid |
+| 130 | SETGID | gid | — | — | 0/-1 |
+| 131 | GETEUID | — | — | — | euid |
+| 132 | GETEGID | — | — | — | egid |
+| 133 | ACCESS | path | mode | — | 0/-1 |
+| 134 | PIPE2 | pipefd[2] | flags | — | 0/-1 |
+| 135 | SURFACE_CREATE | w | h | x | surf_id/-1 |
+| 136 | SURFACE_COMMIT | id | dx/dy packed | dw/dh packed | 0/-1 |
+| 137 | SURFACE_DESTROY | surf_id | — | — | 0/-1 |
+| 138 | SURFACE_MOVE | id | x | y | 0/-1 |
+| 139 | SURFACE_RESIZE | id | w | h | 0/-1 |
+| 140 | ALARM | seconds (0=cancel) | — | — | prev_secs |
+| 141 | GETXATTR | file | key | val_buf | len/-1 |
+| 142 | SETXATTR | file | key | val_ptr | 0/-1 |
+| 143 | SIGACTION | signum | handler | old_ptr | 0/-1 |
+| 144 | SIGRETURN | — | — | — | (returns from handler) |
+| 145 | FSTAT | fd | stat_buf | — | 0/-1 |
+| 146 | FTRUNCATE | fd | new_size | — | 0/-1 |
+| 147 | FCHMOD | fd | perms | — | 0/-1 |
+| 148 | FCHOWN | fd | uid | — | 0/-1 |
+| 149 | FSYNC | fd | — | — | 0/-1 |
+| 150 | LINK | target | linkname | — | 0/-1 |
+| 151 | ISATTY | fd | — | — | 1/0 |
+| 152 | SETSID | — | — | — | sid/-1 |
+| 153 | GETSID | pid (0=self) | — | — | sid/-1 |
+| 154 | WAIT | status_ptr | — | — | child_pid/-1 |
+| 155 | PAUSE | — | — | — | -1 (EINTR) |
+| 156 | UMASK | mask | — | — | old_mask |
+| 157 | SIGPENDING | sigset_ptr | — | — | 0/-1 |
+| 158 | SIGSUSPEND | mask_ptr | — | — | -1 (EINTR) |
+| 159 | SETITIMER | which | new_val_ptr | old_val_ptr | 0/-1 |
+| 160 | GETITIMER | which | val_ptr | — | 0/-1 |
+| 161 | SETENV | name | value | overwrite | 0/-1 |
+| 162 | UNSETENV | name | — | — | 0/-1 |
+| 163 | UNAME | utsname_ptr | — | — | 0 |
+| 164 | UTIME | filename | utimbuf | — | 0/-1 |
+| 165 | SYSCONF | _SC_constant | — | — | value/-1 |
+| 166 | SETEUID | euid | — | — | 0/-1 |
+| 167 | SETEGID | egid | — | — | 0/-1 |
+| 168 | SETREUID | ruid | euid (-1=keep) | — | 0/-1 |
+| 169 | SETREGID | rgid | egid (-1=keep) | — | 0/-1 |
+| 170 | SENDTO | fd | buf | len | bytes/-1 |
+| 171 | RECVFROM | fd | buf | maxlen | bytes/-1 |
+| 172 | SETSOCKOPT | fd | level | optname | 0/-1 |
+| 173 | GETSOCKOPT | fd | level | optname | 0/-1 |
+| 174 | GETSOCKNAME | fd | addr_ptr | — | 0/-1 |
+| 175 | GETPEERNAME | fd | addr_ptr | — | 0/-1 |
+| 176 | SHUTDOWN | fd | how | — | 0/-1 |
+| 177 | TCGETATTR | fd | termios_ptr | — | 0/-1 |
+| 178 | TCSETATTR | fd | action | termios_ptr | 0/-1 |
+| 179 | TCDRAIN | fd | — | — | 0 |
+| 180 | TCFLUSH | fd | queue | — | 0 |
+| 181 | GETERRNO | — | — | — | per-task errno |

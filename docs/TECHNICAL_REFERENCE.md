@@ -13,28 +13,33 @@ anyone who wants to understand how the system works under the hood.
 3. [Interrupt Descriptor Table (IDT)](#interrupt-descriptor-table-idt)
 4. [Memory Map](#memory-map)
 5. [Physical Memory Manager (PMM)](#physical-memory-manager-pmm)
-6. [HBFS Filesystem](#hbfs-filesystem)
-7. [Directory Navigation & Stacking](#directory-navigation--stacking)
-8. [PATH Search Mechanism](#path-search-mechanism)
-9. [Path-Aware File I/O](#path-aware-file-io)
-10. [ATA/IDE Disk Driver](#ataide-disk-driver)
-11. [ATA Bus Master DMA](#ata-bus-master-dma)
-12. [PCI Bus Driver](#pci-bus-driver)
-13. [AC'97 Audio Driver](#ac97-audio-driver)
-14. [VirtIO Devices](#virtio-devices)
-15. [VGA Text Mode](#vga-text-mode)
-16. [VBE/BGA Graphics Driver](#vbebga-graphics-driver-kernelvbeinc)
-17. [Keyboard Driver](#keyboard-driver)
-18. [PIT Timer](#pit-timer)
-19. [Serial Port](#serial-port)
-20. [PC Speaker](#pc-speaker)
-21. [Process Execution](#process-execution)
-22. [Syscall Interface](#syscall-interface)
-23. [Shell Architecture](#shell-architecture)
-24. [Environment Variables](#environment-variables)
-25. [Alias System](#alias-system)
-26. [Command History](#command-history)
-27. [Tab Completion](#tab-completion)
+6. [Virtual Filesystem (VFS)](#virtual-filesystem-vfs)
+7. [HBFS Filesystem](#hbfs-filesystem)
+8. [Directory Navigation & Stacking](#directory-navigation--stacking)
+9. [PATH Search Mechanism](#path-search-mechanism)
+10. [Path-Aware File I/O](#path-aware-file-io)
+11. [ATA/IDE Disk Driver](#ataide-disk-driver)
+12. [ATA Bus Master DMA](#ata-bus-master-dma)
+13. [AHCI SATA Driver](#ahci-sata-driver)
+14. [PCI Bus Driver](#pci-bus-driver)
+15. [Intel e1000 NIC Driver](#intel-e1000-nic-driver)
+16. [AC'97 Audio Driver](#ac97-audio-driver)
+17. [VirtIO Devices](#virtio-devices)
+18. [VGA Text Mode](#vga-text-mode)
+19. [VBE/BGA Graphics Driver](#vbebga-graphics-driver-kernelvbeinc)
+20. [Keyboard Driver](#keyboard-driver)
+21. [PIT Timer](#pit-timer)
+22. [Serial Port](#serial-port)
+23. [PC Speaker](#pc-speaker)
+24. [GDB Remote Stub](#gdb-remote-stub)
+25. [Scheduler & Task Control](#scheduler--task-control)
+26. [Process Execution](#process-execution)
+27. [Syscall Interface](#syscall-interface)
+28. [Shell Architecture](#shell-architecture)
+29. [Environment Variables](#environment-variables)
+30. [Alias System](#alias-system)
+31. [Command History](#command-history)
+32. [Tab Completion](#tab-completion)
 
 ---
 
@@ -64,7 +69,7 @@ Stage 2 runs at `0x7E00` in real mode and transitions to 32-bit protected mode.
 3. Detects available memory via `BIOS INT 0x15 E820` (up to 32 entries × 24 bytes)
 4. Loads the kernel from disk starting at **LBA 33**, reading the generated
    `KERNEL_SECTORS` value from `kernel_sectors.inc` into low memory at `0x20000`
-   (segment `0x2000`), in chunks of up to 64 sectors
+   (segment `0x2000`), in chunks of up to 128 sectors
 5. Enters protected mode:
    - Loads the GDT (`lgdt [gdt_descriptor]`)
    - Sets the CR0 PE bit
@@ -93,11 +98,21 @@ The kernel starts executing at 1 MB in 32-bit protected mode.
    - TSS (Ring 3 support)
    - Scheduler (`sched_init`)
    - IPC — pipes, shared memory, semaphores
-   - Network stack
-   - Paging / LFB identity mapping
+   - Network stack (`net_init`)
+   - Intel e1000 NIC (`e1000_init`, after `net_init`)
+   - Paging / LFB identity mapping + sigreturn trampoline
    - PS/2 mouse
    - SB16 audio
    - VBE/BGA graphics
+   - PCI bus enumeration
+   - AC'97 audio
+   - ATA Bus Master DMA
+   - VirtIO devices
+   - Burrows desktop compositor
+   - AHCI SATA controller (`ahci_init`)
+   - HBFS filesystem (with VFS mount)
+   - GDB remote stub (`gdbstub_init`)
+   - Default environment variables
    - PCI bus enumeration
    - AC'97 audio
    - ATA Bus Master DMA
@@ -205,12 +220,16 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 0x000B8000 │ VGA text framebuffer    │  4000 bytes (80×25×2)
 0x00100000 ├─────────────────────────┤  ← 1 MB
            │ Kernel code + data      │  Variable (generated sector count)
-0x00200000 ├─────────────────────────┤  ← 2 MB
-           │ User program space      │  1 MB max
-0x002FFFF0 │ SYS_EXIT trampoline     │  Safety net for programs that RET
 0x00300000 ├─────────────────────────┤  ← 3 MB
-           │ PMM bitmap              │  128 KB (tracks up to 4 GB)
+           │ User program space      │  1 MB max
+0x003FFFF0 │ SYS_EXIT trampoline     │  Safety net for programs that RET
 0x00400000 ├─────────────────────────┤  ← 4 MB
+           │ (gap / reserved)        │
+0x00500000 ├─────────────────────────┤  ← 5 MB
+           │ PMM bitmap              │  128 KB (tracks up to 4 GB)
+0x00520000 ├─────────────────────────┤
+           │ PMM buddy tags          │  4 KB
+0x00700000 ├─────────────────────────┤  ← 7 MB
            │ Heap / PMM allocations  │  Usable memory starts here
            │ ...                     │
            └─────────────────────────┘
@@ -223,11 +242,12 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 | `KERNEL_BASE` | `0x00100000` (1 MB) | Kernel load address |
 | `KERNEL_SECTORS` | Generated at build time | Kernel disk size in sectors |
 | `KERNEL_STACK` | `0x0009FC00` | Stack top (conventional memory end) |
-| `PROGRAM_BASE` | `0x00200000` (2 MB) | User program load address |
+| `PROGRAM_BASE` | `0x00300000` (3 MB) | User program load address |
 | `PROGRAM_MAX_SIZE` | `0x00100000` (1 MB) | Max program size |
-| `PROGRAM_EXIT_ADDR` | `0x002FFFF0` | SYS_EXIT trampoline |
-| `PMM_BITMAP` | `0x00300000` (3 MB) | Physical memory bitmap |
-| `HEAP_BASE` | `0x00400000` (4 MB) | PMM allocation boundary |
+| `PROGRAM_EXIT_ADDR` | `0x003FFFF0` | SYS_EXIT trampoline |
+| `PMM_BITMAP` | `0x00500000` (5 MB) | Physical memory bitmap |
+| `PMM_BUDDY_TAGS` | `0x00520000` | Buddy allocator tag array |
+| `HEAP_BASE` | `0x00700000` (7 MB) | PMM allocation boundary |
 | `VGA_BASE` | `0x000B8000` | VGA text mode framebuffer |
 | `VGA_WIDTH` | 80 | Screen columns |
 | `VGA_HEIGHT` | 25 | Screen rows |
@@ -238,11 +258,60 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 
 ---
 
+## Virtual Filesystem (VFS)
+
+### Overview (`kernel/vfs.inc`)
+
+The VFS provides a unified front-end for all file I/O. User programs and kernel subsystems
+call the VFS routines (`vfs_open`, `vfs_read`, `vfs_write`, etc.); the VFS dispatches to
+the appropriate backend based on the mount table.
+
+### Mount Table
+
+| Mount point | Backend | Description |
+| --- | --- | --- |
+| `/` | HBFS | Honey Badger File System v3 root |
+| `/proc` | procfs | Per-process and system info (read-only) |
+| `/dev` | devfs | Device nodes (`/dev/tty0`, `/dev/null`, `/dev/zero`, …) |
+| `/tmp` | tmpfs | Volatile RAM-backed temporary storage |
+
+### VFS API
+
+| Function | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `vfs_open` | EBX=path, ECX=flags | EAX=vfd / -1 | Open a file; allocates a VFS file descriptor (0–63) |
+| `vfs_read` | EBX=vfd, ECX=buf, EDX=len | EAX=bytes / -1 | Read up to `len` bytes |
+| `vfs_write` | EBX=vfd, ECX=buf, EDX=len | EAX=bytes / -1 | Write `len` bytes |
+| `vfs_close` | EBX=vfd | EAX=0 / -1 | Close descriptor and release resources |
+| `vfs_seek` | EBX=vfd, ECX=offset, EDX=whence | EAX=new_pos / -1 | Reposition file offset |
+| `vfs_readdir` | EBX=path, ECX=buf | EAX=0 / -1 | Enumerate directory entries into `buf` |
+| `vfs_stat` | EBX=path, ECX=stat_buf | EAX=0 / -1 | Fill `stat_buf` with file metadata |
+| `vfs_mkdir` | EBX=path, ECX=mode | EAX=0 / -1 | Create a directory |
+| `vfs_unlink` | EBX=path | EAX=0 / -1 | Remove a file or empty directory |
+
+### VFS File Descriptor
+
+Each open file is tracked by a 32-byte VFS descriptor in the per-task fd table page
+(see [Scheduler & Task Control](#scheduler--task-control)). Fields:
+
+| Offset | Size | Field | Description |
+| --- | --- | --- | --- |
+| 0 | 1 | flags | `VFD_VALID` / `VFD_READABLE` / `VFD_WRITABLE` |
+| 1 | 1 | backend | 0=HBFS, 1=procfs, 2=devfs, 3=tmpfs |
+| 2 | 2 | reserved | — |
+| 4 | 4 | offset | Current file position |
+| 8 | 4 | size | File size at open time |
+| 12 | 4 | lba | First LBA (HBFS) or node ptr (other backends) |
+| 16 | 4 | mode | Permission bits |
+| 20 | 12 | reserved | Padding to 32 bytes |
+
+---
+
 ## Physical Memory Manager (PMM)
 
 ### Overview
 
-The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x300000). Each bit represents one
+The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x500000). Each bit represents one
 4 KB page. Bit = 1 means used, bit = 0 means free.
 
 ### Specifications
@@ -259,7 +328,7 @@ The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x300000). Each bit represe
 
 1. All bits set to 1 (mark everything as used)
 2. E820 memory map entries are iterated
-3. Usable regions **above 4 MB** are freed via `pmm_free_region`
+3. Usable regions **above 7 MB** are freed via `pmm_free_region`
 4. This ensures kernel, program space, and PMM bitmap are never allocated
 
 ### Key Routines
@@ -573,6 +642,31 @@ bulk sector reads.
 
 ---
 
+## AHCI SATA Driver
+
+### Overview (`kernel/ahci.inc`)
+
+AHCI (Advanced Host Controller Interface) driver for SATA disks. Detected and
+initialised after PCI enumeration.
+
+- Probes PCI for class `0x01` / subclass `0x06` (SATA AHCI) via `pci_dev_table` scan.
+- Reads **BAR5** (ABAR) for the MMIO base address.
+- Finds the first port where `DET=3` (device detected) and `SIG=0x00000101` (ATA disk).
+- Operates in **polling mode** (no interrupts), using command slot 0 only.
+- `ahci_present` flag (byte) is set to 1 on successful init; all APIs check this flag
+  and return `CF=1` silently if AHCI is unavailable (fallback to legacy ATA).
+
+### Key Routines (AHCI)
+
+| Routine | Parameters | Description |
+| --- | --- | --- |
+| `ahci_init` | — | Detect and initialise AHCI controller |
+| `ahci_read_sectors` | EAX=LBA_lo, EDX=LBA_hi, ECX=count, EDI=dest | Read sectors from first AHCI drive |
+| `ahci_write_sectors` | EAX=LBA_lo, EDX=LBA_hi, ECX=count, ESI=src | Write sectors to first AHCI drive |
+| `ahci_flush` | — | Issue FLUSH CACHE to AHCI drive |
+
+---
+
 ## PCI Bus Driver
 
 ### Overview (`kernel/pci.inc`)
@@ -614,6 +708,30 @@ of up to 64 entries.
 ### `SYS_PCI_FIND` (syscall 101)
 
 User programs can query the PCI table: `EBX=vendor_id ECX=device_id → EAX=bdf or -1`.
+
+---
+
+## Intel e1000 NIC Driver
+
+### Overview (`kernel/e1000.inc`)
+
+Driver for the Intel 82540EM (PCI `8086:100E`) and compatible e1000 family Ethernet
+adapters. Initialised by `e1000_init` immediately after `net_init` during kernel startup.
+
+- Probes PCI device table for vendor `0x8086`, device `0x100E`.
+- Maps MMIO BAR0 as the register base (EEPROM read → 6-byte MAC).
+- Configures a single 16-entry **TX descriptor ring** and 32-entry **RX descriptor ring**,
+  both backed by 4 KB PMM pages.
+- TX: polling completion on `TCTL.EN`; RX: scheduler calls `e1000_poll_rx` each tick.
+- The MAC address is written into `net_mac` for the network stack.
+
+### Key Routines (e1000)
+
+| Routine | Parameters | Description |
+| --- | --- | --- |
+| `e1000_init` | — | Detect, map, and initialise the adapter |
+| `e1000_send_packet` | ESI=buf, ECX=len | Copy frame into next TX descriptor and kick TCTL |
+| `e1000_poll_rx` | — | Drain RX ring; dispatch each frame to `net_receive_packet` |
 
 ---
 
@@ -892,13 +1010,132 @@ divisor = 1,193,182 / desired_frequency_hz
 
 ---
 
+## GDB Remote Stub
+
+### Overview (`kernel/gdbstub.inc`)
+
+A GDB RSP (Remote Serial Protocol) stub that allows remote debugging of the running
+kernel over the serial port. Initialised by `gdbstub_init` near the end of the kernel
+boot sequence.
+
+- Listens on **COM1** (115200 8N1).
+- Handles the standard RSP packet set: `?`, `g`/`G` (register read/write), `m`/`M`
+  (memory read/write), `c` (continue), `s` (single-step via TF bit), `k` (kill), `z`/`Z`
+  (software breakpoints via `INT 3`).
+- The **Ctrl+Alt+G** hotkey (detected by the keyboard ISR) triggers an immediate software
+  breakpoint, dropping control to a connected GDB client.
+- All register state is saved/restored via the existing IDT fault frame — no additional
+  stack frame is needed.
+
+### Connecting
+
+```text
+(gdb) target remote /dev/ttyUSB0   # or COM port on host
+(gdb) set architecture i386
+(gdb) symbol-file kernel.elf       # if you have a debug ELF build
+```
+
+---
+
+## Scheduler & Task Control
+
+### Overview (`kernel/sched.inc`)
+
+Mellivora OS uses a **preemptive priority-based round-robin scheduler**. The PIT fires at
+100 Hz; on each ring-3 timer interrupt the scheduler picks the next runnable task.
+**Ring-0 code (kernel / shell) is never preempted** — context switches only happen on
+return from an interrupt that was taken in ring 3.
+
+### Parameters
+
+| Parameter | Value |
+| --- | --- |
+| Tick rate | 100 Hz (10 ms) |
+| Maximum tasks | 128 (ring-3) + shell (ring-0) |
+| Priority levels | 4 — HIGH (0), NORMAL (1), LOW (2), IDLE (3) |
+| Scheduling policy | Priority-based round-robin within each level |
+| Blocking operations | `waitpid` blocks in `TASK_WAIT` until specific child exits |
+
+### Task Control Block (TCB)
+
+Each task occupies 128 bytes in the static `task_table` array
+(`MAX_TASKS × TCB_SIZE`). Layout:
+
+| Offset | Size | Name | Description |
+| --- | --- | --- | --- |
+| 0 | 4 | `TCB_PID` | Task PID |
+| 4 | 4 | `TCB_STATE` | State: 0=free, 1=runnable, 2=blocked, 3=zombie, 4=waiting |
+| 8 | 4 | `TCB_ESP` | Saved ring-3 ESP |
+| 12 | 4 | `TCB_KSTACK` | Top of this task's kernel stack page |
+| 16 | 4 | `TCB_USTACK` | Top of this task's user stack page |
+| 20 | 4 | `TCB_ENTRY` | Ring-3 entry point |
+| 24 | 4 | `TCB_PRIORITY` | Priority level (0–3) |
+| 28 | 4 | `TCB_SIGNALS` | Pending signal bitmask |
+| 32 | 4 | `TCB_PGID` | Process group ID |
+| 36 | 4 | `TCB_PARENT` | Parent PID |
+| 40 | 4 | `TCB_SIGMASK` | Blocked signal mask |
+| 44 | 4 | `TCB_EXIT_CODE` | Exit status (set on `sys_exit`) |
+| 48 | 4 | `TCB_HEAP_BASE` | Per-task heap base |
+| 52 | 4 | `TCB_HEAP_END` | Per-task heap end (current brk) |
+| 56 | 4 | `TCB_UID` | Real user ID |
+| 60 | 4 | `TCB_GID` | Real group ID |
+| 64 | 16 | `TCB_NAME` | Task name (NUL-terminated, 15 chars max) |
+| 80 | 4 | `TCB_EIP` | Saved ring-3 EIP |
+| 84 | 4 | `TCB_SIG_HAND` | Signal handler table pointer (v11) |
+| 88 | 4 | `TCB_EUID` | Effective user ID (v12.0) |
+| 92 | 4 | `TCB_EGID` | Effective group ID (v12.0) |
+| 96 | 4 | `TCB_SID` | Session ID (v12.0) |
+| 100 | 4 | `TCB_UMASK` | File creation umask (v12.0) |
+| 104 | 4 | `TCB_ITIMER_VAL` | Interval timer current value in ticks (v12.0) |
+| 108 | 4 | `TCB_ITIMER_INT` | Interval timer reload interval in ticks (v12.0) |
+| 112 | 4 | `TCB_SAVED_MASK` | Signal mask saved across `sigsuspend` (v12.0) |
+| 116 | 4 | `TCB_WAIT_PID` | PID being waited on (v12.1; 0=none) |
+| 120 | 4 | `TCB_FD_TABLE_PTR` | Physical address of per-task 4 KB fd table page (v12.1) |
+| 124 | 4 | `TCB_ERRNO` | Per-task errno value (v12.1) |
+| **128** | — | `TCB_SIZE` | Total TCB size |
+
+### Per-task File Descriptor Isolation (v12.1)
+
+Each task is allocated a private 4 KB page for its VFS fd table at fork/exec time.
+`sched_swap_fd_tables` is called at every context-switch point (scheduler tick, syscall
+return, signal delivery) to install the current task's fd table pointer. This ensures:
+
+- No cross-task fd aliasing — two tasks with the same fd number refer to independent
+  descriptors.
+- Cleanup on exit — the fd table page is freed by `sched_deliver_signals` (zombie reap),
+  independently of the kernel stack page.
+
+### Signal Delivery & W^X Trampoline (v11/v12.1)
+
+When delivering a user-space signal, the kernel builds a signal frame on the task's
+ring-3 stack:
+
+| Slot | Content |
+| --- | --- |
+| `[esp+0]` | Return address → `SIGRETURN_TRAMPOLINE_VADDR` (0x1FFFF000) |
+| `[esp+4]` | Signal number (EBX arg for handler) |
+| `[esp+8..n]` | Saved caller registers (EFLAGS, EIP, …) |
+
+`SIGRETURN_TRAMPOLINE_VADDR` (0x1FFFF000) is a **read-only, no-write, executable** page
+mapped at boot (part of paging init). It contains an 8-byte stub:
+
+```nasm
+mov eax, SYS_SIGRETURN   ; 144
+int 0x80
+```
+
+This design is **W^X compliant** — the trampoline page is never writable. `sys_sigreturn`
+pops the saved register state from the signal frame and resumes user code.
+
+---
+
 ## Process Execution
 
 ### Loading a Program
 
 1. Shell parses command into program name (`prog_name_buf`, 256 bytes) and arguments
    (`program_args_buf`, 512 bytes)
-2. Attempts to load file via `hbfs_read_file` to `PROGRAM_BASE` (0x200000)
+2. Attempts to load file via `hbfs_read_file` to `PROGRAM_BASE` (0x300000)
 3. If not found in current directory, searches PATH directories
 
 ### ELF vs Flat Binary Detection
@@ -912,7 +1149,7 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 ### Ring 3 Execution
 
 1. Set `program_running = 1`, clear `ctrl_c_flag` and `program_exit_code`
-2. Write **SYS_EXIT trampoline** at `PROGRAM_EXIT_ADDR` (0x2FFFF0):
+2. Write **SYS_EXIT trampoline** at `PROGRAM_EXIT_ADDR` (0x3FFFF0):
 
    ```nasm
    mov eax, 0    ; SYS_EXIT
@@ -1175,8 +1412,74 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 113 | `SYS_MSGQ_SEND` | EBX=qid, ECX=buf, EDX=len | EAX=0/-1 |
 | 114 | `SYS_MSGQ_RECV` | EBX=qid, ECX=buf, EDX=max | EAX=bytes/-1 |
 | 115 | `SYS_MSGQ_CLOSE` | EBX=qid | EAX=0/-1 |
+| 116 | `SYS_DUP` | EBX=fd | EAX=new_fd/-1 |
+| 117 | `SYS_DUP2` | EBX=src, ECX=dst | EAX=dst/-1 |
+| 118 | `SYS_FCNTL` | EBX=fd, ECX=cmd, EDX=arg | EAX=result/-1 |
+| 119 | `SYS_IOCTL` | EBX=fd, ECX=req, EDX=arg | EAX=0/-1 |
+| 120 | `SYS_MMAP` | EBX=addr, ECX=len, EDX=prot | EAX=addr/-1 |
+| 121 | `SYS_MUNMAP` | EBX=addr, ECX=len | EAX=0/-1 |
+| 122 | `SYS_MPROTECT` | EBX=addr, ECX=len, EDX=prot | EAX=0/-1 |
+| 123 | `SYS_SELECT` | EBX=nfds, ECX=rfds, EDX=wfds, ESI=efds, EDI=tv | EAX=count/-1 |
+| 124 | `SYS_CLOCK_GETTIME` | EBX=clk_id, ECX=timespec* | EAX=0/-1 |
+| 125 | `SYS_NANOSLEEP` | EBX=rqtp, ECX=rmtp | EAX=0/-1 |
+| 126 | `SYS_GETTIMEOFDAY` | EBX=timeval*, ECX=tz* | EAX=0 |
+| 127 | `SYS_GETUID` | — | EAX=uid |
+| 128 | `SYS_SETUID` | EBX=uid | EAX=0/-1 |
+| 129 | `SYS_GETGID` | — | EAX=gid |
+| 130 | `SYS_SETGID` | EBX=gid | EAX=0/-1 |
+| 131 | `SYS_GETEUID` | — | EAX=euid |
+| 132 | `SYS_GETEGID` | — | EAX=egid |
+| 133 | `SYS_ACCESS` | EBX=path, ECX=mode | EAX=0/-1 |
+| 134 | `SYS_PIPE2` | EBX=pipefd[2], ECX=flags | EAX=0/-1 |
+| 135 | `SYS_SURFACE_CREATE` | EBX=w, ECX=h, EDX=x, ESI=y | EAX=surf_id/-1 |
+| 136 | `SYS_SURFACE_COMMIT` | EBX=id, ECX=dx, EDX=dy, ESI=dw, EDI=dh | EAX=0/-1 |
+| 137 | `SYS_SURFACE_DESTROY` | EBX=surf_id | EAX=0/-1 |
+| 138 | `SYS_SURFACE_MOVE` | EBX=id, ECX=x, EDX=y | EAX=0/-1 |
+| 139 | `SYS_SURFACE_RESIZE` | EBX=id, ECX=w, EDX=h | EAX=0/-1 |
+| 140 | `SYS_ALARM` | EBX=seconds (0=cancel) | EAX=prev_secs |
+| 141 | `SYS_GETXATTR` | EBX=file, ECX=key, EDX=val_buf, ESI=max | EAX=len/-1 |
+| 142 | `SYS_SETXATTR` | EBX=file, ECX=key, EDX=val_ptr | EAX=0/-1 |
+| 143 | `SYS_SIGACTION` | EBX=signum, ECX=handler, EDX=old_ptr | EAX=0/-1 |
+| 144 | `SYS_SIGRETURN` | — | — (returns from signal handler) |
+| 145 | `SYS_FSTAT` | EBX=fd, ECX=stat_buf | EAX=0/-1 |
+| 146 | `SYS_FTRUNCATE` | EBX=fd, ECX=new_size | EAX=0/-1 |
+| 147 | `SYS_FCHMOD` | EBX=fd, ECX=perms | EAX=0/-1 |
+| 148 | `SYS_FCHOWN` | EBX=fd, ECX=uid | EAX=0/-1 |
+| 149 | `SYS_FSYNC` | EBX=fd | EAX=0/-1 |
+| 150 | `SYS_LINK` | EBX=target, ECX=linkname | EAX=0/-1 |
+| 151 | `SYS_ISATTY` | EBX=fd | EAX=1/0 |
+| 152 | `SYS_SETSID` | — | EAX=sid/-1 |
+| 153 | `SYS_GETSID` | EBX=pid (0=self) | EAX=sid/-1 |
+| 154 | `SYS_WAIT` | EBX=status_ptr | EAX=child_pid/-1 |
+| 155 | `SYS_PAUSE` | — | EAX=-1 (EINTR on signal) |
+| 156 | `SYS_UMASK` | EBX=mask (0xFFFFFFFF=query) | EAX=old_mask |
+| 157 | `SYS_SIGPENDING` | EBX=sigset_ptr | EAX=0/-1 |
+| 158 | `SYS_SIGSUSPEND` | EBX=mask_ptr | EAX=-1 (EINTR) |
+| 159 | `SYS_SETITIMER` | EBX=which, ECX=new_val_ptr, EDX=old_val_ptr | EAX=0/-1 |
+| 160 | `SYS_GETITIMER` | EBX=which, ECX=val_ptr | EAX=0/-1 |
+| 161 | `SYS_SETENV` | EBX=name, ECX=value, EDX=overwrite | EAX=0/-1 |
+| 162 | `SYS_UNSETENV` | EBX=name | EAX=0/-1 |
+| 163 | `SYS_UNAME` | EBX=utsname_ptr | EAX=0 |
+| 164 | `SYS_UTIME` | EBX=filename, ECX=utimbuf | EAX=0/-1 |
+| 165 | `SYS_SYSCONF` | EBX=_SC_constant | EAX=value/-1 |
+| 166 | `SYS_SETEUID` | EBX=euid | EAX=0/-1 |
+| 167 | `SYS_SETEGID` | EBX=egid | EAX=0/-1 |
+| 168 | `SYS_SETREUID` | EBX=ruid, ECX=euid (-1=keep) | EAX=0/-1 |
+| 169 | `SYS_SETREGID` | EBX=rgid, ECX=egid (-1=keep) | EAX=0/-1 |
+| 170 | `SYS_SENDTO` | EBX=fd, ECX=buf, EDX=len, ESI=flags, EDI=dest_addr | EAX=bytes/-1 |
+| 171 | `SYS_RECVFROM` | EBX=fd, ECX=buf, EDX=maxlen, ESI=flags, EDI=from* | EAX=bytes/-1 |
+| 172 | `SYS_SETSOCKOPT` | EBX=fd, ECX=level, EDX=optname, ESI=optval | EAX=0/-1 |
+| 173 | `SYS_GETSOCKOPT` | EBX=fd, ECX=level, EDX=optname, ESI=optval | EAX=0/-1 |
+| 174 | `SYS_GETSOCKNAME` | EBX=fd, ECX=addr_ptr | EAX=0/-1 |
+| 175 | `SYS_GETPEERNAME` | EBX=fd, ECX=addr_ptr | EAX=0/-1 |
+| 176 | `SYS_SHUTDOWN` | EBX=fd, ECX=how | EAX=0/-1 |
+| 177 | `SYS_TCGETATTR` | EBX=fd, ECX=termios_ptr | EAX=0/-1 |
+| 178 | `SYS_TCSETATTR` | EBX=fd, ECX=action, EDX=termios_ptr | EAX=0/-1 |
+| 179 | `SYS_TCDRAIN` | EBX=fd | EAX=0 |
+| 180 | `SYS_TCFLUSH` | EBX=fd, ECX=queue | EAX=0 |
+| 181 | `SYS_GETERRNO` | — | EAX=per-task errno |
 
-**Total: 116 syscalls defined (0–115, no gaps).**
+**Total: 182 syscalls defined (0–181, no gaps).**
 
 ---
 

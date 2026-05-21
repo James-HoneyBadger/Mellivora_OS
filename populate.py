@@ -794,10 +794,10 @@ BURROWS_PROGRAMS = {
 
 # Classify programs into categories for subdirectories
 GAME_PROGRAMS = {
-    'adventure', 'blackjack', 'connect4', 'doomfire',
+    'adventure', 'blackjack', 'breakout', 'connect4', 'doomfire',
     'galaga', 'guess', 'hangman', 'kingdom', 'life',
     'lunar', 'mastermind', 'matrix', 'maze', 'mine',
-    'neurovault', 'outbreak', 'pacman', 'iago', 'rain', 'rogue',
+    'neurovault', 'outbreak', 'pacman', 'iago', 'rain', 'raycaster', 'rogue',
     'simon', 'snake', 'solitaire', 'starfield', 'tetris', 'tictactoe',
     'robotown',
 }
@@ -950,6 +950,13 @@ def main():
                             directory="samples")
         for fname in sorted(os.listdir(samples_dir)):
             if fname.endswith('.bas'):
+                fpath = os.path.join(samples_dir, fname)
+                with open(fpath, 'r', encoding='ascii') as f:
+                    data = f.read()
+                fs.add_file(fname, data.encode('ascii'),
+                            directory="samples")
+        for fname in sorted(os.listdir(samples_dir)):
+            if fname.endswith('.pl'):
                 fpath = os.path.join(samples_dir, fname)
                 with open(fpath, 'r', encoding='ascii') as f:
                     data = f.read()

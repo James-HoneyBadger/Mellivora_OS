@@ -4,14 +4,15 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 140 syscalls, priority-based preemptive scheduling, signal support, a VFS abstraction layer, compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 218 assembly programs, and 19 bundled samples (C, Perl, and BASIC).
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 182 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
+compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 231 assembly programs, and 31 bundled samples (C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** BIOS 3-stage boot or UEFI (gnu-efi PE32+) into 32-bit protected mode; optional x86-64 long-mode path
-- **Userland:** 90+ shell commands, 218 assembly programs, and 19 bundled samples (C, Perl, and BASIC)
+- **Userland:** 90+ shell commands, 231 assembly programs, and 31 bundled samples (C, Perl, and BASIC)
 - **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
 
@@ -24,20 +25,22 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 - **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`)
 - **UEFI boot** — `boot/uefi_loader.efi` (gnu-efi PE32+) for UEFI firmware; `make uefi` / `make run-uefi`
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **140 syscalls** via `INT 0x80` — full POSIX-compat range 116–139 added in v10 (dup, pipe2, mmap, mprotect, getpid, chmod, chown, nanosleep, clock_gettime, compositor surfaces)
+- **182 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`)
 - **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
-- **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 64 concurrent tasks
-- **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD
-- **Process groups** — PGID support for job control
+- **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 128 concurrent ring-3 tasks; blocking `waitpid`
+- **Per-task fd isolation** (v12.1) — each task has a private 4 KB fd table page; no cross-task aliasing
+- **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD; W^X sigreturn trampoline at 0x1FFFF000
+- **Per-task errno** (v12.1) — `TCB_ERRNO` in the TCB; read via `SYS_GETERRNO`
+- **Process groups** — PGID and SID support for job control
 - **ELF32 loader** — supports flat binaries and ELF executables
-- **Physical memory manager** with buddy allocator (order 0–9; malloc/free/realloc for user programs)
+- **Physical memory manager** with buddy allocator (order 0–11; malloc/free/realloc for user programs)
 - **VBE/BGA graphics driver** — high-resolution framebuffer modes (640×480, 800×600, 1024×768 at 32 bpp) with double buffering
 - **Compositor surface IPC** — kernel-managed pixel buffers with z-order and dirty-rect compositing (SYS_SURFACE_CREATE/COMMIT/DESTROY/MOVE/RESIZE)
 - **Three-stage BIOS boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
 ### Ratel Init System
 
-- **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS, scheduler, IPC, networking, paging, mouse, SB16, VBE, PCI, AC'97, ATA DMA, VirtIO
+- **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS, scheduler, IPC, networking, e1000 NIC, paging, mouse, SB16, VBE, PCI, AC'97, ATA DMA, VirtIO, AHCI SATA, GDB stub
 - **Filesystem mount** — HBFS detection, validation, and auto-format
 - **Shell handoff** — drops into HB Lair interactive prompt after init completes
 
@@ -75,16 +78,19 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 - **PS/2 mouse** — 3-byte packet, IRQ12, cursor tracking
 - **ATA PIO** disk with LBA48 addressing
 - **ATA Bus Master DMA** — Intel PIIX3/4 IDE controller, PRD-based DMA reads
+- **AHCI SATA** (v11) — polling-mode SATA driver; auto-detected via PCI; falls back to ATA PIO
 - **PIT timer** at 100 Hz
 - **PC speaker** for sound/music
 - **Sound Blaster 16** ISA DMA PCM playback
 - **AC'97 audio** — Intel ICH2/3/4 PCI DMA playback
-- **Serial port** (COM1 at 115200 baud) for debug output
+- **Serial port** (COM1 at 115200 baud) for debug output and GDB remote stub
+- **Intel e1000 NIC** (v11) — 82540EM, 16-entry TX ring / 32-entry RX ring; Ctrl+Alt+G for GDB breakpoint
 - **RTC** real-time clock for date/time
 - **PCI bus** — enumeration (buses 0–7), 64-entry device table
 - **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
+- **GDB remote stub** (v11) — RSP protocol over COM1; supports registers, memory, continue, step, breakpoints
 
-### Programs (218 assembly + 19 bundled samples)
+### Programs (231 assembly + 31 bundled samples)
 
 - **Games (31)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
@@ -94,7 +100,7 @@ Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QE
 - **Network tools**: ping, wget, nc, ftp, telnet, irc, gopher, dig, traceroute, whois, daytime
 - **Daily-driver suite (new)**: `tutorial`, `pkginfo`, `meminfo`, `journal`, `bcal`, `theme`, `tag`, `histgrep`, `bnotify`, `mkprog`, `dnslook`, `play`, `nim`, `plasma`, `tldr`, `todo`, `pomodoro`, `morse`, `wiki`, `color`, `stopwatch`, `countdown`, `passgen`, `dice`, `coin`, `tip`, `roll`, `pick`, `reverse`, `upper`, `lower`, `countc`
 - **API Libraries**: 17 reusable `.inc` libraries in `programs/lib/` (string, I/O, math, VGA, memory, data, net, GUI, VBE, font, audio, highscore, and more)
-- **Samples**: 11 C programs + 6 Perl scripts + 2 BASIC scripts in `/samples`
+- **Samples**: 17 C programs + 9 Perl scripts + 5 BASIC scripts in `/samples`
 
 ---
 
@@ -152,9 +158,9 @@ Lair:/> perl /samples/hello.pl # Run a Perl script
 
 ```text
 /
-├── bin/          126 utility programs (edit, grep, sort, tcc, wget, nc, ...)
-├── games/         27 games (snake, tetris, galaga, pacman, rogue, robotown, ...)
-├── samples/       19 source files (hello.c, fib.c, hello.pl, fizzbuzz.pl, hello.bas, ...)
+├── bin/          190 utility programs (edit, grep, sort, tcc, wget, nc, ...)
+├── games/         29 games (snake, tetris, galaga, pacman, rogue, robotown, ...)
+├── samples/       31 source files (hello.c, fib.c, hello.pl, fizzbuzz.pl, hello.bas, ...)
 ├── docs/           text files (readme.txt, license.txt, notes.txt, ...)
 └── script.bat      Example batch script
 ```
@@ -170,7 +176,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry + modular includes (22 files in `kernel/`)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v9.0.0)
+├── CHANGELOG.md            Version history (v1.0 → v12.4.0)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers
@@ -183,13 +189,13 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (218 programs total)
+│   └── ...                 (231 programs total)
 ├── samples/                C, Perl, and BASIC source files
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c, hanoi.c
 │   ├── bf.c, wumpus.c, boxes.c, stars.c, echo.c
 │   ├── hello.pl, factorial.pl, fizzbuzz.pl, guess.pl, strings.pl, arrays.pl
-│   ├── hello.bas, fib.bas
-│   └── ...                 (19 samples total)
+│   ├── hello.bas, fib.bas, blackjack.bas, mandelbrot.bas, snake.bas
+│   └── ...                 (31 samples total — 17 C + 9 Perl + 5 BASIC)
 ├── tests/                  Regression test suite
 │   ├── test_build.sh       Build-time checks
 │   └── test_hbfs.py        HBFS filesystem integrity checks
@@ -230,7 +236,6 @@ Mellivora_OS/
 | `galaga` | Space shooter with enemy waves |
 | `blackjack` | Blackjack (21) card game |
 | `rogue` | ASCII dungeon crawler |
-| `freecell` | FreeCell solitaire card game |
 | `adventure` | Text adventure (interactive fiction) |
 | `connect4` | Connect Four |
 | `mastermind` | Mastermind code-breaking game |
@@ -249,14 +254,13 @@ Mellivora_OS/
 | `starfield` | Starfield fly-through |
 | `lunar` | Lunar lander game |
 | `solitaire` | Klondike solitaire card game |
-| `worm` | Multi-worm arena game |
 | `pacman` | Pac-Man-style 21×21 maze chase — eat dots and power pellets, hunt or flee 4 ghosts |
 | `iago` | Othello / Reversi — VBE board with greedy-AI opponent and persistent wins |
 | `raycaster` | Wolfenstein 3D-style raycaster — fixed-point 16.16 math, WASD movement |
 | `robotown` | Robot Town — logic-puzzle adventure inspired by Robot Odyssey |
 | `breakout` | Breakout/Arkanoid clone — 5×10 bricks, three lives, LEFT/RIGHT paddle |
 
-> **31 games total** in `/games` — run any from anywhere thanks to PATH.
+> **29 games total** in `/games` — run any from anywhere thanks to PATH.
 
 ### Utilities
 
@@ -338,14 +342,14 @@ Mellivora_OS/
 | Metric | Value |
 | -------- | ------- |
 | Kernel source | Entry file + 26 modular include files |
-| Syscalls | 116 (via `INT 0x80`) |
+| Syscalls | 182 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 218 assembly apps |
-| Bundled samples | 19 (11 C + 6 Perl + 2 BAS) in `/samples` |
+| User programs | 231 assembly apps |
+| Bundled samples | 31 (17 C + 9 Perl + 5 BAS) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |
 | HBFS root capacity | 455 files; 224 files per subdirectory |
-| Concurrent tasks | 64 (preemptive scheduler, 4 priority levels) |
+| Concurrent tasks | 128 (preemptive scheduler, 4 priority levels) |
 
 ---
 

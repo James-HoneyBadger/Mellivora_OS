@@ -90,7 +90,7 @@ This single command:
 4. Creates a 2 GB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (210 programs + 17 samples + docs)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (231 programs + 31 samples + docs)
 
 ### Build Targets
 
@@ -234,13 +234,14 @@ LBA 4481+       ~2 GB       Data blocks (4 KB each)
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 4 subdirectories and places the curated runtime file set (176 programs + 17 samples + docs):
+The `populate.py` script creates 5 subdirectories and places the curated runtime file set (231 programs + 31 samples + docs):
 
 ```text
 /
 ├── bin/           Utility programs (hello, edit, grep, sort, tcc, ...)
-├── games/         Games (snake, tetris, 2048, galaga, mine, ...)
-├── samples/       11 C source files (hello.c, fib.c, wumpus.c, ...)
+├── games/         Games (snake, tetris, galaga, pacman, mine, ...)
+├── Burrows/       Burrows desktop applications
+├── samples/       C, Perl, and BASIC source files (hello.c, fib.c, hello.pl, hello.bas, ...)
 ├── docs/           5 text files (readme, license, notes, todo, poem)
 └── script.bat     Example batch script
 ```
@@ -301,17 +302,18 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry and include graph (main file + 26 include modules)
 ├── Makefile                Build system
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (current: v9.0.0)
+├── CHANGELOG.md            Version history (current: v12.4.0)
 ├── README.md               Project overview
 │
-├── programs/               User-space assembly programs (~218 total)
+├── programs/               User-space assembly programs (~231 total)
 │   ├── syscalls.inc        Shared constants and helpers
 │   ├── hello.asm           ... through ...
 │   └── wc.asm
 │
-├── samples/                11 C source files for TCC
+├── samples/                C, Perl, and BASIC source files
 │   ├── hello.c             ... through ...
-│   └── wumpus.c
+│   ├── hello.pl            ...
+│   └── hello.bas
 │
 └── docs/                   Full documentation suite
     ├── INSTALL.md           This file

@@ -1,0 +1,128 @@
+10  REM Blackjack - Mellivora OS BASIC
+20  REM Standard rules: dealer hits on soft 16, stands on 17+
+30  REM Aces = 11 (auto-reduce to 1 if bust)
+40  DIM D(52)
+50  DIM H(10)
+60  DIM P(10)
+70  LET SEED = 54321
+80  PRINT "*** BLACKJACK ***"
+90  PRINT
+100 GOSUB 1000
+110 REM --- New hand ---
+120 LET SCORE = 0
+130 LET WIN = 0
+140 LET BUST = 0
+150 LET PC = 0
+160 LET DC = 0
+170 LET DI = 1
+180 GOSUB 2000
+190 LET PC = PC + 1
+200 LET P(PC) = GC
+210 GOSUB 2000
+220 LET DC = DC + 1
+230 LET D(DC) = GC
+240 GOSUB 2000
+250 LET PC = PC + 1
+260 LET P(PC) = GC
+270 GOSUB 2000
+280 LET DC = DC + 1
+290 LET D(DC) = GC
+300 GOSUB 3000
+310 PRINT "Dealer shows: ";
+320 LET CI = 1
+330 GOSUB 4000
+340 PRINT
+350 PRINT "Your total: "; PT
+360 PRINT
+370 REM --- Player loop ---
+380 IF PT >= 21 THEN GOTO 500
+390 PRINT "Hit (H) or Stand (S)? ";
+400 INPUT A$
+410 IF A$ = "H" OR A$ = "h" THEN GOTO 440
+420 IF A$ = "S" OR A$ = "s" THEN GOTO 500
+430 GOTO 390
+440 GOSUB 2000
+450 LET PC = PC + 1
+460 LET P(PC) = GC
+470 GOSUB 3000
+480 PRINT "You drew "; GC; "  Total: "; PT
+490 IF PT > 21 THEN GOTO 560
+500 IF PT >= 21 THEN GOTO 600
+510 GOTO 380
+560 PRINT "BUST! You lose."
+570 GOTO 700
+600 REM --- Dealer loop ---
+610 PRINT
+620 PRINT "Dealer's hand: ";
+630 LET CI = 1
+640 WHILE CI <= DC
+650   GOSUB 4000
+660   PRINT " ";
+670   LET CI = CI + 1
+680 WEND
+690 GOSUB 5000
+700 PRINT "Dealer total: "; DT
+710 IF DT > 21 THEN PRINT "Dealer busts! You WIN!": GOTO 800
+720 IF PT > DT THEN PRINT "You WIN!": GOTO 800
+730 IF PT = DT THEN PRINT "PUSH (tie).": GOTO 800
+740 PRINT "Dealer wins."
+800 PRINT
+810 PRINT "Play again (Y/N)? ";
+820 INPUT A$
+830 IF A$ = "Y" OR A$ = "y" THEN GOTO 100
+840 PRINT "Thanks for playing!"
+850 END
+900 REM --- Subroutines ---
+1000 REM Shuffle deck using Fisher-Yates
+1010 LET I = 1
+1020 WHILE I <= 52
+1030   LET D(I) = I
+1040   LET I = I + 1
+1050 WEND
+1060 LET I = 52
+1070 WHILE I > 1
+1080   LET SEED = ABS((SEED * 1103515245 + 12345)) - (ABS((SEED * 1103515245 + 12345)) / 32768) * 32768
+1090   LET J = (SEED - (SEED / I) * I) + 1
+1100   LET T = D(I)
+1110   LET D(I) = D(J)
+1120   LET D(J) = T
+1130   LET I = I - 1
+1140 WEND
+1150 RETURN
+2000 REM Deal next card; result in GC (face value 1-10, ace=11)
+2010 LET GC = D(DI) - (D(DI) / 13) * 13
+2020 IF GC = 0 THEN LET GC = 13
+2030 IF GC > 10 THEN LET GC = 10
+2040 IF GC = 1 THEN LET GC = 11
+2050 LET DI = DI + 1
+2060 RETURN
+3000 REM Sum player's hand into PT; reduce aces if bust
+3010 LET PT = 0
+3020 LET I = 1
+3030 WHILE I <= PC
+3040   LET PT = PT + P(I)
+3050   LET I = I + 1
+3060 WEND
+3070 LET I = 1
+3080 WHILE PT > 21 AND I <= PC
+3090   IF P(I) = 11 THEN LET P(I) = 1: LET PT = PT - 10
+3100   LET I = I + 1
+3110 WEND
+3120 RETURN
+4000 REM Print card at D(CI)
+4010 IF D(CI) = 11 THEN PRINT "A"; ELSE PRINT D(CI);
+4020 RETURN
+5000 REM Sum dealer's hand into DT; reduce aces if bust; dealer hits <=16
+5010 LET DT = 0
+5020 LET I = 1
+5030 WHILE I <= DC
+5040   LET DT = DT + D(I)
+5050   LET I = I + 1
+5060 WEND
+5070 LET I = 1
+5080 WHILE DT > 21 AND I <= DC
+5090   IF D(I) = 11 THEN LET D(I) = 1: LET DT = DT - 10
+5100   LET I = I + 1
+5110 WEND
+5120 IF DT <= 16 THEN GOSUB 2000: LET DC = DC + 1: LET D(DC) = GC: GOTO 5000
+5130 RETURN

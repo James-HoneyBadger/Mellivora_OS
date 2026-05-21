@@ -36,11 +36,11 @@
 ; Memory layout
 KERNEL_BASE         equ 0x00100000
 KERNEL_STACK        equ 0x009FC00       ; Top of conventional memory for kernel stack
-PROGRAM_BASE        equ 0x00200000      ; Programs load at 2MB
-PROGRAM_END_ADDR    equ 0x00300000      ; End of static program area (for sbrk)
+PROGRAM_BASE        equ 0x00300000      ; Programs load at 3MB
+PROGRAM_END_ADDR    equ 0x00400000      ; End of static program area (for sbrk)
 PROGRAM_MAX_SIZE    equ 0x00100000      ; Max 1MB per program
-HEAP_BASE           equ 0x00400000      ; Kernel heap starts at 4MB
-PMM_BITMAP          equ 0x00300000      ; Physical memory bitmap at 3MB
+HEAP_BASE           equ 0x00700000      ; Kernel heap starts at 7MB
+PMM_BITMAP          equ 0x00500000      ; Physical memory bitmap at 5MB
 BG_PROG_PAGES       equ 256             ; Pages per background program slot (1MB)
 BG_STACK_PAGES      equ 16             ; Pages per background task user stack (64KB)
 

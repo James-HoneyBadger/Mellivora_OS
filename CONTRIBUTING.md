@@ -70,7 +70,7 @@ Mellivora_OS/
 ├── stage2.asm         Stage 2 loader (A20, E820, protected-mode switch)
 ├── kernel.asm         Kernel entry point + %include graph
 ├── kernel/            26 kernel include modules (sched, vga, hbfs, net, ...)
-├── programs/          User-space assembly programs (~218 total)
+├── programs/          User-space assembly programs (~231 total)
 │   ├── syscalls.inc   Shared syscall constants — include this first
 │   └── lib/           17 reusable library includes (string, io, math, vbe, ...)
 ├── samples/           C, Perl, and BASIC source files for TCC / interpreters

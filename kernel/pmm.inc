@@ -5,8 +5,8 @@
 ; Orders 0–11 map to block sizes 4KB–8MB (2^order pages × 4KB).
 ;
 ; Memory layout:
-;   PMM_BITMAP     (0x300000, 128KB) — 1 bit per 4KB page; 0=free, 1=used.
-;   PMM_BUDDY_TAGS (0x320000,   4KB) — reserved for v9.x coalescing tags.
+;   PMM_BITMAP     (0x500000, 128KB) — 1 bit per 4KB page; 0=free, 1=used.
+;   PMM_BUDDY_TAGS (0x520000,   4KB) — reserved for v9.x coalescing tags.
 ;
 ; Free lists (buddy_free_list[12] in data.inc):
 ;   Per-order singly-linked lists.  Each free block stores the next-block

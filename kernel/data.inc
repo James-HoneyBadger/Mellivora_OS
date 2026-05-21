@@ -105,11 +105,11 @@ banner_str:
         db 0xC9                                             ; ╔
         times 78 db 0xCD                                   ; ══...══
         db 0xBB, 0x0A                                      ; ╗\n
-        db 0xBA, "      Mellivora OS  v10.0.0          Honey Badger Operating System           ", 0xBA, 0x0A
+        db 0xBA, "      Mellivora OS  v12.4.0          Honey Badger Operating System           ", 0xBA, 0x0A
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9, 0x0A                                      ; ╣\n
-        db 0xBA, "  HBFS v3  ", 0xF9, "  142 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA, 0x0A
+        db 0xBA, "  HBFS v3  ", 0xF9, "  182 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA, 0x0A
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0x0A, 0                                   ; ╝\n\0
@@ -121,13 +121,13 @@ msg_boot_time:  db "  Boot complete in ", 0
 msg_boot_suf:   db "s", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v10.0.0 - HBFS v3, 142 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
+        db "Mellivora OS v12.4.0 - HBFS v3, 182 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair v10.0 (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
-        db "  Disk:          ATA PIO + Bus Master DMA, LBA48 (up to 128 PB)", 0x0A
+        db "  Disk:          ATA PIO + Bus Master DMA + AHCI SATA, LBA48 (up to 128 PB)", 0x0A
         db "  Filesystem:    HBFS v3 (Honey Badger File System, version 3)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
         db "    Max files:   455 root / 224 per subdirectory", 0x0A
@@ -140,12 +140,12 @@ version_text:
         db "  Timer:         PIT at 100 Hz", 0x0A
         db "  Keyboard:      PS/2 with shift/ctrl support", 0x0A
         db "  Display:       VGA 80x25 text, 16 colors + VBE 640x480 framebuffer", 0x0A
-        db "  Serial:        COM1 at 115200 baud", 0x0A
+        db "  Serial:        COM1 at 115200 baud (+ GDB remote stub)", 0x0A
         db "  Speaker:       PC speaker (beep)", 0x0A
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (142 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (182 syscalls)", 0x0A
         db "  UEFI Boot:     Tianocore EDK2 UEFI loader (boot/uefi_loader.c)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
@@ -157,7 +157,7 @@ version_text:
         db "  Env vars:      set/unset with $VAR expansion (32 vars)", 0x0A
         db "  File I/O:      open/read/write/close/seek (fd)", 0x0A
         db "  IPC:           Pipes (8) + shared memory (4)", 0x0A
-        db "  Networking:    TCP/IP (RTL8139, ARP, DHCP, DNS, IPv6)", 0x0A
+        db "  Networking:    TCP/IP (RTL8139, e1000, ARP, DHCP, DNS, IPv6)", 0x0A
         db "  Scripts:       Batch file execution", 0x0A
         db "  Security:      Raw disk access denied to ring 3", 0x0A, 0
 
@@ -746,6 +746,7 @@ ctrl_c_flag:    resb 1
 ; Program execution
 program_entry:  resd 1
 program_exit_code: resd 1
+bg_exit_code:      resd 1          ; v12.2: BG task exit code saved before sched_exit_task
 shell_last_status: resd 1
 nice_priority:    resd 1           ; v4.0: Priority for next spawned task
 

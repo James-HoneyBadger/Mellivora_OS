@@ -1,5 +1,145 @@
 # Mellivora OS - Changelog
 
+## v12.4.0 - Conway's Life 3D, DFT analyser, JSON pretty-printer, C/ASM samples
+
+### Overview
+
+Three new VBE and text-mode programs plus two new C samples completing the
+Phase 6 demo application batch.
+
+### New Programs (`programs/`)
+
+- **`life3d.asm`** — Conway's Game of Life on a 40×20 isometric diamond
+  tilemap (640×480 VBE). Live cells rendered as raised shadow-glow tiles;
+  dead cells as flat dark diamonds. Depth-sorted painter's-algorithm draw
+  order. Wrapping toroidal boundary. Press ESC to quit.
+
+- **`fft.asm`** — 16-point DFT spectrum analyser (640×480 VBE bar chart).
+  Implements direct-DFT O(N²) with integer fixed-point twiddle tables
+  (scale=256). Three test signals selectable at runtime: cosine (energy at
+  bins 2 and 14), square wave (odd harmonics), triangle wave (steeper
+  roll-off). Bar height scaled to max magnitude; top-pixel highlight per bar.
+  Keys 1/2/3 switch signal; ESC quits.
+
+- **`json.asm`** — Single-pass JSON pretty-printer (text mode). State machine
+  parses compact JSON and re-emits it with 2-space indentation. Handles
+  strings (including backslash escapes), numbers, booleans, null, nested
+  objects and arrays. Accepts optional filename argument; falls back to a
+  hardcoded demo object.
+
+### New Samples (`samples/`)
+
+- **`json_parse.c`** — Minimal JSON tokenizer in C. Tokenizes a hardcoded
+  JSON string and prints each token's type name and value. Handles all
+  structural tokens, strings with escape sequences, integers, floats,
+  `true`/`false`/`null`. All-global-variable TCC convention; output via
+  `putchar()`.
+  Compile: `tcc json_parse.c json_parse`
+
+- **`echo_server.c`** — TCP echo server. Binds to port 8080, accepts one
+  client at a time, echoes every received byte back, and closes the session
+  on an empty line. Uses `__asm__ volatile` inline syscall wrappers for
+  `SYS_SOCKET`/`SYS_BIND`/`SYS_LISTEN`/`SYS_ACCEPT`/`SYS_RECV`/`SYS_SEND`.
+  Compile: `tcc echo_server.c echo_server` · Test: `chat 127.0.0.1 8080`
+
+---
+
+## v12.3.0 - CHIP-8 emulator, SHA-256, matrix multiply, Mandelbrot C, HTTP Perl
+
+### Overview
+
+New programs and samples: a complete CHIP-8 emulator (`programs/chip8.asm`),
+SHA-256 C implementation, 4×4 matrix multiplication, fixed-point Mandelbrot,
+and an HTTP/1.1 request-builder Perl demo. Boot banner updated to v12.2.0.
+
+### New Programs (`programs/`)
+
+- **`chip8.asm`** — Full CHIP-8 emulator (1977 Cosmac VIP ISA, all 35 opcodes).
+  Loads `.ch8` ROM files; falls back to built-in digits demo. Displays 64×32
+  at 8× scale (512×256) centred on a 640×480 VBE framebuffer. Full keypad
+  mapping (1-4/Q-R/A-F/Z-V → keys 1-C/4-D/7-E/A-F). ESC to quit.
+
+### New Samples (`samples/`)
+
+- **`sha256.c`** — SHA-256 of the hardcoded string `"Hello, Mellivora!"`.
+  Pure C, no stdlib. Implements full message schedule expansion and all 64
+  compression rounds using global variables (TCC Mellivora convention).
+  Compile: `tcc sha256.c sha256`
+
+- **`matrix_mul.c`** — 4×4 integer matrix multiplication (O(n³) standard
+  algorithm). Prints matrices A, B, and C=A×B in a formatted grid.
+  Compile: `tcc matrix_mul.c matrix_mul`
+
+- **`mandelbrot_fp.c`** — ASCII Mandelbrot set (70×22) using integer
+  fixed-point arithmetic (scale=256, no floating point). Character palette
+  maps iteration depth to density: `" .:-=+*#@"` (space is the first character).
+  Compile: `tcc mandelbrot_fp.c mandelbrot_fp`
+
+- **`http_get.pl`** — HTTP/1.1 request builder and response parser demo in
+  Perl. URL parsing (`http://host:port/path`), request header formatting,
+  status-line / header parsing, and chunked transfer-encoding decoding.
+  Run: `perl http_get.pl`
+
+### Other Changes
+
+- `kernel/data.inc`: boot banner and `version_text` updated from v12.1.0 to v12.2.0.
+
+---
+
+## v12.2.0 - Phase 1 kernel fixes, pipe expansion, new samples
+
+### Overview
+
+Kernel correctness patch: background-task exit codes are now propagated correctly, SIGCHLD
+is delivered to parent tasks on child exit, and the IPC pipe limit is raised from 8 to 32.
+Six new sample files are added across C, BASIC, and Perl.
+
+### SIGCHLD delivery on child exit (`kernel/sched.inc`, `kernel/syscall.inc`, `kernel/data.inc`)
+
+Previously `sched_exit_task` marked the dying task as TASK_ZOMBIE and woke any `sys_waitpid`
+waiter, but never signalled the parent. Two bugs are fixed together:
+
+- **Exit code was always 0**: `sched_exit_task` stored `mov dword [edi+TCB_EXIT_CODE], 0`
+  unconditionally. The real code from `EBX` at `sys_exit` time was already clobbered by the
+  page-freeing loop. Fix: `sys_exit` now saves `EBX` to `bg_exit_code` (new BSS dword in
+  `kernel/data.inc`) before the first push, and `sched_exit_task` reads it back.
+  `sys_waitpid` wake path also fills the waiter's EAX frame slot with the real exit code.
+
+- **SIGCHLD never delivered**: after the waitpid wake scan, `sched_exit_task` now reads
+  `TCB_PPID`, scans the task table for the parent, and sets bit 17 (`SIGCHLD`) in
+  `TCB_SIG_PEND` — unless the parent explicitly set `SIG_IGN` for SIGCHLD. If the parent is
+  TASK_BLOCKED (in `pause`/`sigsuspend`, not `waitpid`), it is also woken.
+
+### Pipe count raised to 32 (`kernel/ipc.inc`)
+
+`IPC_MAX_PIPES` raised from 8 to 32. All bounds checks already use the constant, so no other
+code changed. BSS grows by ~384 KB (32 × 16 400-byte pipe structs ≈ 512 KB total). Unblocks
+complex shell pipelines with many concurrent stages.
+
+### New samples
+
+#### C (`samples/`)
+
+- **`sort.c`** — selection sort and bubble sort on a 16-element array; demonstrates sorting
+  algorithms with the Mellivora TCC C environment.
+
+#### BASIC (`samples/`)
+
+- **`mandelbrot.bas`** — ASCII Mandelbrot set using integer fixed-point arithmetic
+  (scale factor 100); 60×22 character grid.
+- **`snake.bas`** — interactive snake game using `LOCATE`, `INKEY$`, `DIM`, `SLEEP`, and
+  `COLOR`; adjustable-size board; score display.
+- **`blackjack.bas`** — blackjack card game with Fisher-Yates shuffle, ace reduction,
+  and dealer hit-on-16 rules.
+
+#### Perl (`samples/`)
+
+- **`csv.pl`** — CSV parser: parse, column-extract, filter by score, and sort by column.
+- **`regex_demo.pl`** — 14 regex examples: basic match, anchors, capture groups, named
+  captures, substitution, trimming, grep/filter, split on regex.
+
+---
+
 ## v12.1.0 - Architectural correctness sprint: per-task fd isolation, blocking waitpid, W^X trampoline, errno, bug fixes
 
 ### Overview
@@ -29,10 +169,10 @@ corrupt each other's open file state. Each task now has a private 4 KB fd-table 
 Three new fields appended to the TCB:
 
 | Field | Offset | Description |
-|-------|--------|-------------|
-| `TCB_WAIT_PID`     | 116 | PID being waited on in `sys_waitpid` (0 = not waiting) |
+| --- | --- | --- |
+| `TCB_WAIT_PID` | 116 | PID being waited on in `sys_waitpid` (0 = not waiting) |
 | `TCB_FD_TABLE_PTR` | 120 | Physical address of private fd-table page |
-| `TCB_ERRNO`        | 124 | Per-task `errno` value |
+| `TCB_ERRNO` | 124 | Per-task `errno` value |
 
 ### Blocking `sys_waitpid` (kernel/sched.inc)
 
@@ -92,7 +232,8 @@ user stack on every signal delivery, making the user stack both writable and exe
 ### `sys_ftruncate` block deallocation (kernel/syscall.inc)
 
 When the new size is smaller than the current size, excess HBFS blocks are now freed:
-```
+
+```text
 if new_block_count < old_block_count:
     hbfs_free_blocks(start_block + new_count, old_count - new_count)
     fd_entry[block_count] = new_block_count
@@ -121,10 +262,10 @@ identity management, networking extensions, and terminal (termios) control.
 `TCB_SIZE` grows from 88 to 116 bytes. Seven new fields:
 
 | Field | Offset | Description |
-|-------|--------|-------------|
+| --- | --- | --- |
 | `TCB_EUID` | 88 | Effective UID |
 | `TCB_EGID` | 92 | Effective GID |
-| `TCB_SID`  | 96 | Session ID |
+| `TCB_SID` | 96 | Session ID |
 | `TCB_UMASK` | 100 | File creation mask |
 | `TCB_ITIMER_VAL` | 104 | Interval timer current value (ticks) |
 | `TCB_ITIMER_INT` | 108 | Interval timer interval (ticks) |
@@ -149,7 +290,7 @@ identity management, networking extensions, and terminal (termios) control.
 #### FD operations (145–151)
 
 | # | Name | Description |
-|---|------|-------------|
+| - | ---- | ----------- |
 | 145 | `SYS_FSTAT` | stat an open fd → fills 12-byte stat_buf |
 | 146 | `SYS_FTRUNCATE` | truncate file by fd to new size (in-memory) |
 | 147 | `SYS_FCHMOD` | change mode by fd (stub, accepted) |
@@ -161,7 +302,7 @@ identity management, networking extensions, and terminal (termios) control.
 #### Session management (152–156)
 
 | # | Name | Description |
-|---|------|-------------|
+| - | ---- | ----------- |
 | 152 | `SYS_SETSID` | create new session (fails if already group leader) |
 | 153 | `SYS_GETSID` | get session ID by PID (0 = self) |
 | 154 | `SYS_WAIT` | reap any zombie child (`WNOHANG` semantics) |
@@ -171,7 +312,7 @@ identity management, networking extensions, and terminal (termios) control.
 #### Signal extensions (157–160)
 
 | # | Name | Description |
-|---|------|-------------|
+| - | ---- | ----------- |
 | 157 | `SYS_SIGPENDING` | write pending unblocked signals to caller's sigset |
 | 158 | `SYS_SIGSUSPEND` | atomically set mask, block until signal; restores old mask |
 | 159 | `SYS_SETITIMER` | set/query `ITIMER_REAL` interval timer (usec precision, 100 Hz) |
@@ -180,7 +321,7 @@ identity management, networking extensions, and terminal (termios) control.
 #### Environment / system info (161–165)
 
 | # | Name | Description |
-|---|------|-------------|
+| - | ---- | ----------- |
 | 161 | `SYS_SETENV` | set/add environment variable with optional overwrite |
 | 162 | `SYS_UNSETENV` | remove environment variable |
 | 163 | `SYS_UNAME` | fill utsname: `Mellivora` / `12.0.0` / `i386` |
@@ -190,7 +331,7 @@ identity management, networking extensions, and terminal (termios) control.
 #### Identity (166–169)
 
 | # | Name | Description |
-|---|------|-------------|
+| - | ---- | ----------- |
 | 166 | `SYS_SETEUID` | set effective UID (root or matching real UID allowed) |
 | 167 | `SYS_SETEGID` | set effective GID |
 | 168 | `SYS_SETREUID` | set real+effective UID (−1 = keep current) |
@@ -199,7 +340,7 @@ identity management, networking extensions, and terminal (termios) control.
 #### Networking extensions (170–176)
 
 | # | Name | Description |
-|---|------|-------------|
+| - | ---- | ----------- |
 | 170 | `SYS_SENDTO` | send with optional UDP destination; delegates to `sys_send` |
 | 171 | `SYS_RECVFROM` | receive; delegates to `sys_recv` |
 | 172 | `SYS_SETSOCKOPT` | set socket option (`SO_REUSEADDR` stored, rest accepted) |
@@ -211,7 +352,7 @@ identity management, networking extensions, and terminal (termios) control.
 #### Terminal control (177–180)
 
 | # | Name | Description |
-|---|------|-------------|
+| - | ---- | ----------- |
 | 177 | `SYS_TCGETATTR` | return cooked-mode termios for fd 0–2 |
 | 178 | `SYS_TCSETATTR` | store termios in `tty_termios` shadow (fd 0–2) |
 | 179 | `SYS_TCDRAIN` | no-op (write-through I/O) |
@@ -242,7 +383,8 @@ identity management, networking extensions, and terminal (termios) control.
 - **`sched_deliver_signals`** (`kernel/sched.inc`) — called by `irq_timer` every context
   switch with `EBX = TCB pointer` and `EDI = iretd frame base address`.  For each pending,
   unmasked signal it builds a 28-byte *signal frame* on the user stack:
-  ```
+
+  ```text
   [new_esp +  0]  return address  → points to inline sigreturn stub
   [new_esp +  4]  signum          (cdecl argument)
   [new_esp +  8]  saved EIP       (interrupted ring-3 EIP)
@@ -250,6 +392,7 @@ identity management, networking extensions, and terminal (termios) control.
   [new_esp + 16]  saved ESP       (original user stack pointer)
   [new_esp + 20]  stub: MOV EAX,144 / INT 0x80 / NOP (8 bytes)
   ```
+
   The iretd frame `EIP3` is redirected to the user handler and `ESP3` is set to `new_esp`.
   When the handler returns it lands on the stub which transparently invokes `sys_sigreturn`.
   Default actions: SIGKILL/SIGTERM/SIGINT → terminate task; SIGTSTP → pause; SIGCONT → no-op;

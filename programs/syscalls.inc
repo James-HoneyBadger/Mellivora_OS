@@ -7,7 +7,7 @@
 
 ; Program header
 [BITS 32]
-[ORG 0x00200000]
+[ORG 0x00300000]
 
 ; Jump past shared code to program entry point
 jmp start
@@ -213,6 +213,7 @@ SYS_TCGETATTR       equ 177 ; tcgetattr(fd,termios*) -> 0/-1
 SYS_TCSETATTR       equ 178 ; tcsetattr(fd,act,termios*) -> 0/-1
 SYS_TCDRAIN         equ 179 ; tcdrain(fd) -> 0/-1
 SYS_TCFLUSH         equ 180 ; tcflush(fd,queue) -> 0/-1
+SYS_GETERRNO        equ 181 ; geterrno() -> EAX=per-task errno
 
 ; sysconf name constants
 _SC_ARG_MAX         equ 0

@@ -375,9 +375,9 @@ sched_exit_task:
         mov dword [edi + TCB_STATE], TASK_ZOMBIE
         mov dword [edi + TCB_ESP], 0
         mov dword [edi + TCB_KSTACK], 0
-        ; Clear the bg-flag from TCB_EXIT_CODE (bit 31 = page marker, not real exit code)
-        ; Store 0 as exit code (real code was in EBX at sys_exit time)
-        mov dword [edi + TCB_EXIT_CODE], 0
+        ; v12.2: Store real exit code (saved in bg_exit_code by sys_exit before EBX was clobbered)
+        mov eax, [bg_exit_code]
+        mov [edi + TCB_EXIT_CODE], eax
 
         dec dword [task_count]
 
@@ -401,10 +401,11 @@ sched_exit_task:
 .exit_wake_found:
         mov dword [edi + TCB_WAIT_PID], 0
         mov dword [edi + TCB_STATE], TASK_READY
-        ; Write exit code (0) into the waiter's return register slot
-        ; [TCB_ESP+28] = EAX slot in pushad frame
+        ; v12.2: Write real exit code into the waiter's EAX slot in its pushad frame
+        ; [TCB_ESP+28] = EAX slot
         mov ebx, [edi + TCB_ESP]
-        mov dword [ebx + 28], 0
+        mov eax, [bg_exit_code]
+        mov [ebx + 28], eax
 .exit_wake_next:
         add edi, TCB_SIZE
         inc edx
@@ -412,6 +413,48 @@ sched_exit_task:
 .exit_wake_done:
         pop esi
         pop edi
+
+        ; --- v12.2: Deliver SIGCHLD to parent ---
+        ; edi = dying task TCB, esi = dying task PID
+        mov eax, [edi + TCB_PPID]       ; parent PID (0 = no real parent / shell)
+        test eax, eax
+        jz .exit_done                   ; PPID=0 → shell-launched, skip SIGCHLD
+
+        push edi                        ; save dying TCB
+        push eax                        ; save parent PID on stack
+        mov edi, task_table
+        xor edx, edx
+.exit_sigchld_scan:
+        cmp edx, MAX_TASKS
+        jge .exit_sigchld_done
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .exit_sigchld_next
+        mov ebx, [esp]                  ; parent PID
+        cmp [edi + TCB_PID], ebx
+        je .exit_sigchld_found
+.exit_sigchld_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .exit_sigchld_scan
+.exit_sigchld_found:
+        ; Check whether parent has explicitly set SIGCHLD to SIG_IGN
+        mov ebx, [edi + TCB_SIG_HAND]
+        test ebx, ebx
+        jz .exit_sigchld_deliver        ; no handler table → SIG_DFL → deliver
+        cmp dword [ebx + SIGCHLD * 4], SIG_IGN
+        je .exit_sigchld_done           ; explicitly ignored → skip
+.exit_sigchld_deliver:
+        or dword [edi + TCB_SIG_PEND], (1 << SIGCHLD)
+        ; Wake parent if blocked in pause/sigsuspend (NOT in waitpid — that's handled above)
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .exit_sigchld_done
+        cmp dword [edi + TCB_WAIT_PID], 0
+        jne .exit_sigchld_done          ; blocked in waitpid — waitpid scan handles it
+        mov dword [edi + TCB_STATE], TASK_READY
+.exit_sigchld_done:
+        pop eax                         ; discard saved parent PID
+        pop edi                         ; restore dying TCB pointer
+        ; --- end SIGCHLD ---
 
 .exit_done:
         popad

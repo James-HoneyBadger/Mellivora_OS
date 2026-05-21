@@ -13,7 +13,7 @@ SYSCALL_MAX     equ 256         ; Table capacity (0..255) — v10.0 extended
 
 ; --- Phase 1.2 v9.0: user pointer validation --------------------------------
 ; A valid user pointer must lie in [PROGRAM_BASE, USER_PTR_MAX).
-;   PROGRAM_BASE  = 0x00200000  rejects NULL, real-mode IVT/BDA, kernel image
+;   PROGRAM_BASE  = 0x00300000  rejects NULL, real-mode IVT/BDA, kernel image
 ;   USER_PTR_MAX  = 0x20000000  512 MB — covers the 128 MB identity-mapped zone
 ;                               PLUS the 384 MB v9.0 demand-paged extension.
 USER_PTR_MAX    equ 0x20000000
@@ -1461,8 +1461,8 @@ sys_uname:
         iretd
 .uname_sysname:  db 'Mellivora', 0
 .uname_nodename: db 'mellivora', 0
-.uname_release:  db '12.0.0', 0
-.uname_version:  db 'Mellivora OS v12.0.0 (POSIX)', 0
+.uname_release:  db '12.1.0', 0
+.uname_version:  db 'Mellivora OS v12.1.0 (POSIX)', 0
 .uname_machine:  db 'i386', 0
 
 ;-----------------------------------------------------------------------
@@ -2886,6 +2886,9 @@ sys_exit:
 .exit_check_bg:
         test dword [edi + TCB_EXIT_CODE], 0x80000000
         jz .exit_is_fg
+
+        ; v12.2: Save real exit code (EBX) before EBX is clobbered by page-free ops
+        mov [bg_exit_code], ebx
 
         ; Background task exit: free its program memory + stack, then switch away
         mov eax, [edi + TCB_EXIT_CODE]

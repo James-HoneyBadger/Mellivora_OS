@@ -3,7 +3,7 @@
 ; Pipes (circular buffers) and Shared Memory
 ;=======================================================================
 
-IPC_MAX_PIPES   equ 8
+IPC_MAX_PIPES   equ 32          ; v12.2: raised from 8; 32 × 16 KB = 512 KB BSS
 IPC_PIPE_SIZE   equ 16384       ; 16 KB per pipe
 IPC_MAX_SHM     equ 4
 IPC_SHM_SIZE    equ 4096        ; 4 KB per shared memory region

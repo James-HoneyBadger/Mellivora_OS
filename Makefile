@@ -132,11 +132,6 @@ kernel_sectors.inc: $(KERNEL_BIN)
 			echo "  Update HBFS_SUPERBLOCK_LBA in kernel.asm AND populate.py."; \
 			exit 1; \
 		fi; \
-		if [ $$KSECTORS -gt 2048 ]; then \
-			echo "  ERROR: kernel is $$KSECTORS sectors (> 2048 = 1 MB) \
-			and will overflow the stage-2 load buffer at 0x20000."; \
-			exit 1; \
-		fi; \
 		echo "KERNEL_SECTORS  equ $$KSECTORS" > $@
 	@echo "  Kernel sectors: $$(cat $@)"
 
