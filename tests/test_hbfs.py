@@ -24,12 +24,13 @@ SECTOR_SIZE = 512
 BLOCK_SIZE = 4096
 SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE  # 8
 HBFS_MAGIC = 0x48424653  # 'HBFS'
-HBFS_SUPERBLOCK_LBA = 417
-HBFS_BITMAP_START = 418
-HBFS_ROOT_DIR_START = 546
+HBFS_SUPERBLOCK_LBA = 4096
+HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
 HBFS_ROOT_DIR_BLOCKS = 32
 HBFS_ROOT_DIR_SIZE = HBFS_ROOT_DIR_BLOCKS * BLOCK_SIZE
-HBFS_DATA_START = 802
+HBFS_BITMAP_BLOCKS = 16
+HBFS_ROOT_DIR_START = HBFS_BITMAP_START + HBFS_BITMAP_BLOCKS * SECTORS_PER_BLOCK
+HBFS_DATA_START = HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_BLOCKS * SECTORS_PER_BLOCK
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
 HBFS_SUBDIR_BLOCKS = 16
@@ -198,6 +199,11 @@ def validate_program_binary(f, fi, prefix=""):
     elf_magic = struct.unpack_from("<I", header, 0)[0]
     if elf_magic == 0x464C457F:
         ok(f"  '{display}' valid ELF header")
+        return
+
+    # Script executables (e.g., Perl samples) begin with a shebang.
+    if header.startswith(b"#!"):
+        ok(f"  '{display}' valid script shebang")
         return
 
     # For flat binaries: first bytes should be from syscalls.inc which has

@@ -1,0 +1,22 @@
+{
+  "id": "os.mellivora.filepick",
+  "name": "File Picker Demo",
+  "version": "1.0.0",
+  "entry": "filepick",
+  "category": "demo",
+  "description": "Intermediate sample showing SYS_FILE_OPEN_DLG and SYS_FILE_SAVE_DLG",
+  "author": "Mellivora OS",
+  "keywords": ["demo", "file", "dialog", "intermediate", "sample"],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write"
+  ],
+  "settings_key": "filepick",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 720,
+    "height": 480,
+    "resizable": true,
+    "centered": true
+  }
+}

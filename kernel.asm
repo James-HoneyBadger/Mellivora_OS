@@ -335,7 +335,8 @@ SYS_TASKNAME        equ 78      ; Set task name: EBX=name_ptr -> EAX=0
 SYS_REALLOC         equ 79      ; Realloc: EBX=ptr ECX=new_size -> EAX=new_ptr/0
 
 ; v8.0 graphics/IO syscalls (slots 80-101)
-SYS_DMESG_WRITE     equ 80
+SYS_GETENV_SLOT     equ 80
+SYS_DMESG_WRITE     equ 81
 SYS_DMESG_READ      equ 82
 SYS_RENAME          equ 83
 SYS_RMDIR           equ 84

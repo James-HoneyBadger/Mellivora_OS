@@ -1,0 +1,22 @@
+{
+  "id": "os.mellivora.netgraph",
+  "name": "Network Latency Graph",
+  "version": "1.0.0",
+  "entry": "netgraph",
+  "category": "network",
+  "description": "Live scrolling ping RTT bar chart — advanced demo of SYS_PING and VGA rendering",
+  "author": "Mellivora OS",
+  "keywords": ["network", "ping", "graph", "advanced", "monitor"],
+  "permissions": [
+    "network.raw",
+    "network.tcp"
+  ],
+  "settings_key": "netgraph",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 800,
+    "height": 400,
+    "resizable": false,
+    "centered": false
+  }
+}

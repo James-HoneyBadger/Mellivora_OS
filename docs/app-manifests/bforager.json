@@ -1,0 +1,28 @@
+{
+  "id": "os.mellivora.bforager",
+  "name": "Burrows File Manager",
+  "version": "12.0.0",
+  "entry": "bforager",
+  "category": "file",
+  "description": "Graphical file manager with cut/copy/paste, rename, and dual-pane layout",
+  "author": "Mellivora OS",
+  "keywords": ["file", "manager", "browser", "forager"],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.clipboard",
+    "gui.notify",
+    "gui.mouse"
+  ],
+  "settings_key": "bforager",
+  "min_os_version": "10.0",
+  "window": {
+    "width": 1024,
+    "height": 768,
+    "resizable": true,
+    "centered": false
+  }
+}

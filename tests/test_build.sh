@@ -68,7 +68,8 @@ check "stage2.bin <= 16384 bytes (32 sectors)" "[[ ${STAGE2_SIZE:-0} -le 16384 ]
 
 KERNEL_SIZE=$(file_sz kernel.bin)
 check "kernel.bin exists"       "[[ ${KERNEL_SIZE:-0} -gt 0 ]]"
-check "kernel.bin <= 1 MB"      "[[ ${KERNEL_SIZE:-0} -le 1048576 ]]"
+# Must stay below the current stage2/hbfs guardrail (4062 sectors ≈ 2 MB).
+check "kernel.bin <= 2 MB"      "[[ ${KERNEL_SIZE:-0} -le 2097152 ]]"
 check "kernel.bin > 100 KB"     "[[ ${KERNEL_SIZE:-0} -ge 102400 ]]"
 
 IMG_SIZE=$(file_sz "$IMG")

@@ -1,0 +1,8 @@
+kernel-only rebuild                      12 ms
+single program (hello.asm)               5 ms
+programs up-to-date check                51 ms
+filesystem population                    113 ms
+validate-constants                       41 ms
+validate-syscalls                        18 ms
+check-syscalls-json                      26 ms
+check-syscalls-md                        26 ms

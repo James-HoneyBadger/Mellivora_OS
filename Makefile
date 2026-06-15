@@ -108,7 +108,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg
+.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest
 
 all: $(IMAGE)
 
@@ -270,6 +270,59 @@ iso-verify: $(ISO_FILE)
 check: full
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
+
+validate-constants:
+	@python3 tools/validate_constants.py
+
+validate-syscalls:
+	@python3 tools/validate_syscalls.py
+
+syscalls-json:
+	@python3 tools/generate_syscalls_json.py
+
+syscalls-md:
+	@python3 tools/generate_syscalls_json.py
+
+check-syscalls-json:
+	@python3 tools/generate_syscalls_json.py --check-json
+
+check-syscalls-md:
+	@python3 tools/generate_syscalls_json.py --check-md
+
+lint: validate-constants validate-syscalls check-syscalls-json check-syscalls-md validate-manifest
+	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
+	@echo "=== Lint checks complete ==="
+
+qa-sprint1: lint check
+	@echo "=== Sprint 1 quality gate complete ==="
+
+# Benchmark targets
+bench:
+	@bash tests/bench.sh
+
+bench-check:
+	@BENCH_CHECK=1 bash tests/bench.sh
+
+bench-trend:
+	@python3 tools/bench_trend.py --dir benchmark --limit 20
+
+bench-trend-check:
+	@python3 tools/bench_trend.py --dir benchmark --limit 20 --check
+
+bench-baseline:
+	@bash tests/bench.sh
+	@latest=$$(ls -1t benchmark/results-*.txt 2>/dev/null | head -1); \
+	if [ -n "$$latest" ]; then \
+		cp "$$latest" benchmark/baseline.txt; \
+		echo "=== Benchmark baseline updated from $$latest ==="; \
+	else \
+		echo "=== No benchmark result file found; baseline unchanged ==="; \
+	fi
+	@echo "=== Benchmark baseline updated ==="
+
+# App manifest schema validation (requires jsonschema: pip install jsonschema)
+validate-manifest:
+	@python3 tools/validate_manifest.py
 
 # Phase 4: nightly-style sanitize build. Defines KERNEL_DEBUG_BOUNDS so any
 # compile-time bounds-check macros are enabled, then runs the regression
@@ -445,6 +498,17 @@ help:
 	@echo ""
 	@echo "  Test & Info"
 	@echo "    make check        Run regression suite"
+	@echo "    make lint         Run contract and NASM source lint checks"
+	@echo "    make syscalls-json Generate docs/syscalls.json + docs/syscalls.md"
+	@echo "    make check-syscalls-json Verify docs/syscalls.json is up to date"
+	@echo "    make check-syscalls-md Verify docs/syscalls.md is up to date"
+	@echo "    make bench        Run build-time benchmark suite"
+	@echo "    make bench-check  Run benchmarks and fail on regression"
+	@echo "    make bench-baseline Update benchmark/baseline.txt"
+	@echo "    make bench-trend  Generate benchmark trend summary/json"
+	@echo "    make bench-trend-check Fail on sustained trend regressions when enough history exists"
+	@echo "    make validate-manifest Validate app manifest examples against schema"
+	@echo "    make qa-sprint1   Run Sprint 1 gate (lint + check)"
 	@echo "    make sizes        Show component and ISO binary sizes"
 	@echo "    make count        Lines of code statistics by component"
 	@echo ""

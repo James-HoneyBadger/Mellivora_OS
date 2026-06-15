@@ -24,3 +24,11 @@ __pycache__/
 *.swp
 .vscode/
 .populate_cache
+benchmark/results-*.txt
+benchmark/results-*.json
+benchmark/summary-*.txt
+benchmark/latest-results.txt
+benchmark/latest-results.json
+benchmark/latest-summary.txt
+benchmark/trend-latest.txt
+benchmark/trend-latest.json

@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Mellivora App Manifest",
+  "description": "App manifest schema for Mellivora vNext desktop environment. Every GUI and system app ships app.json next to its binary.",
+  "type": "object",
+  "required": ["id", "name", "version", "entry", "category"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable reverse-domain identifier, e.g. os.mellivora.bedit",
+      "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name shown in launcher and title bars",
+      "minLength": 1,
+      "maxLength": 48
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "entry": {
+      "type": "string",
+      "description": "Path to the executable binary, relative to the app root",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "description": "Top-level launcher category",
+      "enum": [
+        "editor",
+        "file",
+        "system",
+        "network",
+        "media",
+        "game",
+        "dev",
+        "terminal",
+        "demo",
+        "utility"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "description": "One-line description shown in launcher search",
+      "maxLength": 120
+    },
+    "author": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "maxItems": 16,
+      "description": "Search tags for launcher discovery"
+    },
+    "permissions": {
+      "type": "array",
+      "description": "Explicit syscall/device permissions required at launch",
+      "items": {
+        "type": "string",
+        "enum": [
+          "filesystem.read",
+          "filesystem.write",
+          "filesystem.exec",
+          "network.tcp",
+          "network.udp",
+          "network.raw",
+          "audio.play",
+          "audio.record",
+          "gui.framebuf",
+          "gui.compositor",
+          "gui.mouse",
+          "gui.clipboard",
+          "gui.notify",
+          "system.processes",
+          "system.reboot",
+          "hardware.pci",
+          "hardware.serial"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "settings_key": {
+      "type": "string",
+      "description": "Root key under /config/ where app persists its settings",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "min_os_version": {
+      "type": "string",
+      "description": "Minimum Mellivora OS version required",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "window": {
+      "type": "object",
+      "description": "Default window geometry hints for the Burrows compositor",
+      "additionalProperties": false,
+      "properties": {
+        "width":     { "type": "integer", "minimum": 80,  "maximum": 1920 },
+        "height":    { "type": "integer", "minimum": 40,  "maximum": 1200 },
+        "resizable": { "type": "boolean" },
+        "centered":  { "type": "boolean" }
+      }
+    }
+  }
+}

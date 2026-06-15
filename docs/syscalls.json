@@ -1,0 +1,917 @@
+{
+  "generated_from": "programs/syscalls.inc",
+  "syscall_count": 182,
+  "highest_syscall_number": 181,
+  "syscalls": [
+    {
+      "name": "SYS_EXIT",
+      "number": 0,
+      "summary": ""
+    },
+    {
+      "name": "SYS_PUTCHAR",
+      "number": 1,
+      "summary": ""
+    },
+    {
+      "name": "SYS_GETCHAR",
+      "number": 2,
+      "summary": ""
+    },
+    {
+      "name": "SYS_PRINT",
+      "number": 3,
+      "summary": ""
+    },
+    {
+      "name": "SYS_READ_KEY",
+      "number": 4,
+      "summary": ""
+    },
+    {
+      "name": "SYS_OPEN",
+      "number": 5,
+      "summary": ""
+    },
+    {
+      "name": "SYS_READ",
+      "number": 6,
+      "summary": ""
+    },
+    {
+      "name": "SYS_WRITE",
+      "number": 7,
+      "summary": ""
+    },
+    {
+      "name": "SYS_CLOSE",
+      "number": 8,
+      "summary": ""
+    },
+    {
+      "name": "SYS_DELETE",
+      "number": 9,
+      "summary": ""
+    },
+    {
+      "name": "SYS_SEEK",
+      "number": 10,
+      "summary": ""
+    },
+    {
+      "name": "SYS_STAT",
+      "number": 11,
+      "summary": ""
+    },
+    {
+      "name": "SYS_MKDIR",
+      "number": 12,
+      "summary": "Create directory: EBX=name -> EAX=0 success"
+    },
+    {
+      "name": "SYS_READDIR",
+      "number": 13,
+      "summary": "Read directory entry: EBX=buf ECX=index -> EAX=type(-1=end) ECX=size"
+    },
+    {
+      "name": "SYS_SETCURSOR",
+      "number": 14,
+      "summary": ""
+    },
+    {
+      "name": "SYS_GETTIME",
+      "number": 15,
+      "summary": ""
+    },
+    {
+      "name": "SYS_SLEEP",
+      "number": 16,
+      "summary": ""
+    },
+    {
+      "name": "SYS_CLEAR",
+      "number": 17,
+      "summary": ""
+    },
+    {
+      "name": "SYS_SETCOLOR",
+      "number": 18,
+      "summary": ""
+    },
+    {
+      "name": "SYS_MALLOC",
+      "number": 19,
+      "summary": ""
+    },
+    {
+      "name": "SYS_FREE",
+      "number": 20,
+      "summary": ""
+    },
+    {
+      "name": "SYS_EXEC",
+      "number": 21,
+      "summary": ""
+    },
+    {
+      "name": "SYS_DISK_READ",
+      "number": 22,
+      "summary": "Raw disk read (kernel-only; returns -1 from user programs)"
+    },
+    {
+      "name": "SYS_SBRK",
+      "number": 23,
+      "summary": "Adjust program break: EBX=increment -> EAX=old_brk/-1"
+    },
+    {
+      "name": "SYS_BEEP",
+      "number": 24,
+      "summary": "PC speaker beep: EBX=frequency_hz ECX=duration_ticks (1 tick=10ms at 100Hz)"
+    },
+    {
+      "name": "SYS_DATE",
+      "number": 25,
+      "summary": ""
+    },
+    {
+      "name": "SYS_CHDIR",
+      "number": 26,
+      "summary": ""
+    },
+    {
+      "name": "SYS_GETCWD",
+      "number": 27,
+      "summary": ""
+    },
+    {
+      "name": "SYS_SERIAL",
+      "number": 28,
+      "summary": ""
+    },
+    {
+      "name": "SYS_GETENV",
+      "number": 29,
+      "summary": ""
+    },
+    {
+      "name": "SYS_FREAD",
+      "number": 30,
+      "summary": "Read entire file: EBX=name ECX=buf -> EAX=bytes"
+    },
+    {
+      "name": "SYS_FWRITE",
+      "number": 31,
+      "summary": "Write file: EBX=name ECX=buf EDX=size ESI=type(0=text)"
+    },
+    {
+      "name": "SYS_GETARGS",
+      "number": 32,
+      "summary": "Get command-line args: EBX=buf -> EAX=length"
+    },
+    {
+      "name": "SYS_SERIAL_IN",
+      "number": 33,
+      "summary": "Read serial port: -> EAX=char or -1"
+    },
+    {
+      "name": "SYS_STDIN_READ",
+      "number": 34,
+      "summary": "Read piped stdin: EBX=buf -> EAX=bytes (-1 if none)"
+    },
+    {
+      "name": "SYS_YIELD",
+      "number": 35,
+      "summary": "Cooperative yield: switch to next ready task"
+    },
+    {
+      "name": "SYS_MOUSE",
+      "number": 36,
+      "summary": "Read mouse: -> EAX=x, EBX=y, ECX=buttons"
+    },
+    {
+      "name": "SYS_FRAMEBUF",
+      "number": 37,
+      "summary": "Framebuffer: EBX=sub (0=info,1=set,2=restore,3=text,4=present,5=surfbuf)"
+    },
+    {
+      "name": "SYS_GUI",
+      "number": 38,
+      "summary": "Burrows GUI: EBX=sub-function"
+    },
+    {
+      "name": "SYS_SOCKET",
+      "number": 39,
+      "summary": "Create socket: EBX=type(1=TCP,2=UDP) -> EAX=fd"
+    },
+    {
+      "name": "SYS_CONNECT",
+      "number": 40,
+      "summary": "Connect: EBX=fd ECX=ip EDX=port -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SEND",
+      "number": 41,
+      "summary": "Send: EBX=fd ECX=buf EDX=len -> EAX=bytes"
+    },
+    {
+      "name": "SYS_RECV",
+      "number": 42,
+      "summary": "Recv: EBX=fd ECX=buf EDX=maxlen -> EAX=bytes"
+    },
+    {
+      "name": "SYS_BIND",
+      "number": 43,
+      "summary": "Bind: EBX=fd ECX=port -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_LISTEN",
+      "number": 44,
+      "summary": "Listen: EBX=fd -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_ACCEPT",
+      "number": 45,
+      "summary": "Accept: EBX=fd -> EAX=new_fd"
+    },
+    {
+      "name": "SYS_DNS",
+      "number": 46,
+      "summary": "DNS: EBX=hostname -> EAX=ip (0=fail)"
+    },
+    {
+      "name": "SYS_SOCKCLOSE",
+      "number": 47,
+      "summary": "Close socket: EBX=fd -> EAX=0"
+    },
+    {
+      "name": "SYS_PING",
+      "number": 48,
+      "summary": "Ping: EBX=ip -> EAX=rtt/-1"
+    },
+    {
+      "name": "SYS_SETDATE",
+      "number": 49,
+      "summary": "Set RTC: EBX=buf[sec,min,hr,day,mon,yr] ECX=century"
+    },
+    {
+      "name": "SYS_AUDIO_PLAY",
+      "number": 50,
+      "summary": "Play PCM: EBX=buf ECX=len EDX=fmt -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_AUDIO_STOP",
+      "number": 51,
+      "summary": "Stop playback -> EAX=0"
+    },
+    {
+      "name": "SYS_AUDIO_STATUS",
+      "number": 52,
+      "summary": "Query: -> EAX=state(0/1/2) EBX=present"
+    },
+    {
+      "name": "SYS_KILL",
+      "number": 53,
+      "summary": "Kill task: EBX=pid -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_GETPID",
+      "number": 54,
+      "summary": "Get PID: -> EAX=pid"
+    },
+    {
+      "name": "SYS_CLIPBOARD_COPY",
+      "number": 55,
+      "summary": "Copy: EBX=buf ECX=len -> EAX=0"
+    },
+    {
+      "name": "SYS_CLIPBOARD_PASTE",
+      "number": 56,
+      "summary": "Paste: EBX=buf ECX=maxlen -> EAX=len"
+    },
+    {
+      "name": "SYS_NOTIFY",
+      "number": 57,
+      "summary": "Notify: EBX=text EDX=color -> EAX=0"
+    },
+    {
+      "name": "SYS_FILE_OPEN_DLG",
+      "number": 58,
+      "summary": "Open dialog: EBX=title EDX=filter -> EAX=1/0 ECX=name"
+    },
+    {
+      "name": "SYS_FILE_SAVE_DLG",
+      "number": 59,
+      "summary": "Save dialog: EBX=title EDX=filter -> EAX=1/0 ECX=name"
+    },
+    {
+      "name": "SYS_PIPE_CREATE",
+      "number": 60,
+      "summary": "Create pipe: -> EAX=pipe_id"
+    },
+    {
+      "name": "SYS_PIPE_WRITE",
+      "number": 61,
+      "summary": "Write pipe: EBX=id ECX=buf EDX=len -> EAX=written"
+    },
+    {
+      "name": "SYS_PIPE_READ",
+      "number": 62,
+      "summary": "Read pipe: EBX=id ECX=buf EDX=max -> EAX=read"
+    },
+    {
+      "name": "SYS_PIPE_CLOSE",
+      "number": 63,
+      "summary": "Close pipe: EBX=id -> EAX=0"
+    },
+    {
+      "name": "SYS_SHMGET",
+      "number": 64,
+      "summary": "Get shared mem: EBX=key ECX=size -> EAX=shm_id"
+    },
+    {
+      "name": "SYS_SHMADDR",
+      "number": 65,
+      "summary": "Get shm address: EBX=shm_id -> EAX=ptr"
+    },
+    {
+      "name": "SYS_PROCLIST",
+      "number": 66,
+      "summary": "Get task info: EBX=slot ECX=buf(16B) -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_MEMINFO",
+      "number": 67,
+      "summary": "Get mem info: -> EAX=free_pages EBX=boot_free_pages"
+    },
+    {
+      "name": "SYS_CHMOD",
+      "number": 68,
+      "summary": "Change perms: EBX=filename ECX=perms -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_CHOWN",
+      "number": 69,
+      "summary": "Change owner: EBX=filename ECX=uid -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SYMLINK",
+      "number": 70,
+      "summary": "Create link: EBX=linkname ECX=target -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_READLINK",
+      "number": 71,
+      "summary": "Read link: EBX=linkname ECX=buf -> EAX=len/-1"
+    },
+    {
+      "name": "SYS_SETPRIORITY",
+      "number": 72,
+      "summary": "Set priority: EBX=pid(0=self) ECX=prio -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_GETPRIORITY",
+      "number": 73,
+      "summary": "Get priority: EBX=pid(0=self) -> EAX=prio/-1"
+    },
+    {
+      "name": "SYS_SIGNAL",
+      "number": 74,
+      "summary": "Send signal: EBX=pid ECX=signum -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SETPGID",
+      "number": 75,
+      "summary": "Set PGID: EBX=pid(0=self) ECX=pgid -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_GETPGID",
+      "number": 76,
+      "summary": "Get PGID: EBX=pid(0=self) -> EAX=pgid/-1"
+    },
+    {
+      "name": "SYS_SIGMASK",
+      "number": 77,
+      "summary": "Signal mask: EBX=op ECX=mask -> EAX=old/-1"
+    },
+    {
+      "name": "SYS_TASKNAME",
+      "number": 78,
+      "summary": "Set task name: EBX=name_ptr -> EAX=0"
+    },
+    {
+      "name": "SYS_REALLOC",
+      "number": 79,
+      "summary": "Realloc: EBX=ptr ECX=new_size EDX=old_size -> EAX=ptr/0"
+    },
+    {
+      "name": "SYS_GETENV_SLOT",
+      "number": 80,
+      "summary": "Get env slot: EBX=index ECX=dest_buf(128) -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_DMESG_WRITE",
+      "number": 81,
+      "summary": "Write dmesg: EBX=msg_ptr -> EAX=0"
+    },
+    {
+      "name": "SYS_DMESG_READ",
+      "number": 82,
+      "summary": "Read dmesg: EBX=index ECX=dest_buf(128) -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_RENAME",
+      "number": 83,
+      "summary": "Rename file/dir: EBX=old_name ECX=new_name -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_RMDIR",
+      "number": 84,
+      "summary": "Remove empty dir: EBX=name -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_TRUNCATE",
+      "number": 85,
+      "summary": "Truncate file: EBX=name ECX=new_size -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_CONNECT_NB",
+      "number": 86,
+      "summary": "Non-blocking connect: EBX=fd ECX=ip EDX=port -> EAX=0/-2/-1"
+    },
+    {
+      "name": "SYS_POLL",
+      "number": 87,
+      "summary": "Poll socket: EBX=fd ECX=events(1=in,2=out) EDX=timeout_ms -> EAX=ready_mask"
+    },
+    {
+      "name": "SYS_SEM_CREATE",
+      "number": 88,
+      "summary": "Create semaphore: EBX=initial_val -> EAX=sem_id/-1"
+    },
+    {
+      "name": "SYS_SEM_WAIT",
+      "number": 89,
+      "summary": "Wait (P): EBX=sem_id -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SEM_POST",
+      "number": 90,
+      "summary": "Post (V): EBX=sem_id -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SEM_CLOSE",
+      "number": 91,
+      "summary": "Close semaphore: EBX=sem_id -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_WAITPID",
+      "number": 92,
+      "summary": "Wait for task: EBX=pid -> EAX=exit_code/-1"
+    },
+    {
+      "name": "SYS_GETMTIME",
+      "number": 93,
+      "summary": "Get mtime: EBX=filename -> EAX=mtime ECX=ctime"
+    },
+    {
+      "name": "SYS_SETMTIME",
+      "number": 94,
+      "summary": "Set mtime: EBX=filename ECX=timestamp(0=now) -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_DRAW_LINE",
+      "number": 95,
+      "summary": "EBX=x0 ECX=y0 EDX=x1 ESI=y1 EDI=color"
+    },
+    {
+      "name": "SYS_DRAW_TRIANGLE",
+      "number": 96,
+      "summary": "EBX=x0|(y0<<16) ECX=x1|(y1<<16) EDX=x2|(y2<<16) ESI=color"
+    },
+    {
+      "name": "SYS_BLIT",
+      "number": 97,
+      "summary": "EBX=src ECX=dst_x EDX=dst_y ESI=w|(h<<16) EDI=colorkey"
+    },
+    {
+      "name": "SYS_DIRTY_PRESENT",
+      "number": 98,
+      "summary": "no args \u2014 flush dirty shadow rect to LFB"
+    },
+    {
+      "name": "SYS_PSF_LOAD",
+      "number": 99,
+      "summary": "EBX=filename_ptr -> EAX=0 success / -1 fail"
+    },
+    {
+      "name": "SYS_PSF_CHAR",
+      "number": 100,
+      "summary": "EBX=x ECX=y EDX=codepoint ESI=fg_color"
+    },
+    {
+      "name": "SYS_PCI_FIND",
+      "number": 101,
+      "summary": "EBX=vendor_id ECX=device_id -> EAX=bdf or -1"
+    },
+    {
+      "name": "SYS_GETPPID",
+      "number": 102,
+      "summary": "-> EAX=parent PID"
+    },
+    {
+      "name": "SYS_FORK",
+      "number": 103,
+      "summary": "-> EAX=child_pid (parent) / 0 (child) / -1 (error)"
+    },
+    {
+      "name": "SYS_DEFRAG",
+      "number": 104,
+      "summary": "Defrag HBFS: -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_TLS_CONNECT",
+      "number": 105,
+      "summary": "TLS 1.2 stub: EBX=fd -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_AUDIO_REC_START",
+      "number": 106,
+      "summary": "Start AC97 recording: EBX=buf ECX=max -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_AUDIO_REC_READ",
+      "number": 107,
+      "summary": "Read recorded PCM: EBX=buf ECX=max -> EAX=bytes/-1"
+    },
+    {
+      "name": "SYS_AUDIO_REC_STOP",
+      "number": 108,
+      "summary": "Stop recording -> EAX=0"
+    },
+    {
+      "name": "SYS_AUDIO_OPEN",
+      "number": 109,
+      "summary": "Open mixer channel: EBX=fmt ECX=rate -> EAX=ch/-1"
+    },
+    {
+      "name": "SYS_AUDIO_WRITE",
+      "number": 110,
+      "summary": "Write to mixer: EBX=ch ECX=buf EDX=len -> EAX=bytes"
+    },
+    {
+      "name": "SYS_AUDIO_CLOSE_CHAN",
+      "number": 111,
+      "summary": "Close mixer channel: EBX=ch -> EAX=0"
+    },
+    {
+      "name": "SYS_MSGQ_CREATE",
+      "number": 112,
+      "summary": "Create msg queue: EBX=key ECX=max_msgs -> EAX=qid/-1"
+    },
+    {
+      "name": "SYS_MSGQ_SEND",
+      "number": 113,
+      "summary": "Send: EBX=qid ECX=buf EDX=len -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_MSGQ_RECV",
+      "number": 114,
+      "summary": "Recv: EBX=qid ECX=buf EDX=max -> EAX=bytes/-1"
+    },
+    {
+      "name": "SYS_MSGQ_CLOSE",
+      "number": 115,
+      "summary": "Destroy queue: EBX=qid -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_DUP",
+      "number": 116,
+      "summary": "Dup fd:    EBX=fd -> EAX=new_fd/-1"
+    },
+    {
+      "name": "SYS_DUP2",
+      "number": 117,
+      "summary": "Dup2 fd:   EBX=src ECX=dst -> EAX=dst/-1"
+    },
+    {
+      "name": "SYS_FCNTL",
+      "number": 118,
+      "summary": "Fcntl:     EBX=fd ECX=cmd EDX=arg -> EAX=result/-1"
+    },
+    {
+      "name": "SYS_IOCTL",
+      "number": 119,
+      "summary": "Ioctl:     EBX=fd ECX=req EDX=arg -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_MMAP",
+      "number": 120,
+      "summary": "Mmap:      EBX=addr ECX=len EDX=prot -> EAX=addr/-1"
+    },
+    {
+      "name": "SYS_MUNMAP",
+      "number": 121,
+      "summary": "Munmap:    EBX=addr ECX=len -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_MPROTECT",
+      "number": 122,
+      "summary": "Mprotect:  EBX=addr ECX=len EDX=prot -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SELECT",
+      "number": 123,
+      "summary": "Select:    EBX=nfds ECX=rfds EDX=wfds ESI=efds EDI=tv -> EAX=count"
+    },
+    {
+      "name": "SYS_CLOCK_GETTIME",
+      "number": 124,
+      "summary": "ClkGetTime:EBX=clk ECX=timespec* -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_NANOSLEEP",
+      "number": 125,
+      "summary": "Nanosleep: EBX=rqtp ECX=rmtp -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_GETTIMEOFDAY",
+      "number": 126,
+      "summary": "Gtimeofday:EBX=timeval* ECX=tz* -> EAX=0"
+    },
+    {
+      "name": "SYS_GETUID",
+      "number": 127,
+      "summary": "Getuid: -> EAX=uid"
+    },
+    {
+      "name": "SYS_SETUID",
+      "number": 128,
+      "summary": "Setuid:    EBX=uid -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_GETGID",
+      "number": 129,
+      "summary": "Getgid: -> EAX=gid"
+    },
+    {
+      "name": "SYS_SETGID",
+      "number": 130,
+      "summary": "Setgid:    EBX=gid -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_GETEUID",
+      "number": 131,
+      "summary": "Geteuid: -> EAX=euid"
+    },
+    {
+      "name": "SYS_GETEGID",
+      "number": 132,
+      "summary": "Getegid: -> EAX=egid"
+    },
+    {
+      "name": "SYS_ACCESS",
+      "number": 133,
+      "summary": "Access:    EBX=path ECX=mode -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_PIPE2",
+      "number": 134,
+      "summary": "Pipe2:     EBX=pipefd[2] ECX=flags -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SURFACE_CREATE",
+      "number": 135,
+      "summary": "Create surface: EBX=w ECX=h EDX=x ESI=y -> EAX=surf_id/-1"
+    },
+    {
+      "name": "SYS_SURFACE_COMMIT",
+      "number": 136,
+      "summary": "Commit dirty:   EBX=id ECX=dx EDX=dy ESI=dw EDI=dh -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SURFACE_DESTROY",
+      "number": 137,
+      "summary": "Destroy:        EBX=surf_id -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SURFACE_MOVE",
+      "number": 138,
+      "summary": "Move:           EBX=id ECX=x EDX=y -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SURFACE_RESIZE",
+      "number": 139,
+      "summary": "Resize:         EBX=id ECX=w EDX=h -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_ALARM",
+      "number": 140,
+      "summary": "alarm():        EBX=seconds (0=cancel) -> EAX=prev_secs"
+    },
+    {
+      "name": "SYS_GETXATTR",
+      "number": 141,
+      "summary": "Getxattr: EBX=file ECX=key EDX=val_buf ESI=max -> EAX=len/-1"
+    },
+    {
+      "name": "SYS_SETXATTR",
+      "number": 142,
+      "summary": "Setxattr: EBX=file ECX=key EDX=val_ptr        -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SIGACTION",
+      "number": 143,
+      "summary": "sigaction(): EBX=signum ECX=handler EDX=old_ptr -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SIGRETURN",
+      "number": 144,
+      "summary": "sigreturn(): (no args) \u2014 return from signal handler"
+    },
+    {
+      "name": "SYS_FSTAT",
+      "number": 145,
+      "summary": "fstat(fd, stat_buf) -> 0/-1"
+    },
+    {
+      "name": "SYS_FTRUNCATE",
+      "number": 146,
+      "summary": "ftruncate(fd, size) -> 0/-1"
+    },
+    {
+      "name": "SYS_FCHMOD",
+      "number": 147,
+      "summary": "fchmod(fd, mode) -> 0/-1"
+    },
+    {
+      "name": "SYS_FCHOWN",
+      "number": 148,
+      "summary": "fchown(fd, uid, gid) -> 0/-1"
+    },
+    {
+      "name": "SYS_FSYNC",
+      "number": 149,
+      "summary": "fsync(fd) -> 0/-1"
+    },
+    {
+      "name": "SYS_LINK",
+      "number": 150,
+      "summary": "link(old, new) -> 0/-1"
+    },
+    {
+      "name": "SYS_ISATTY",
+      "number": 151,
+      "summary": "isatty(fd) -> 1/0"
+    },
+    {
+      "name": "SYS_SETSID",
+      "number": 152,
+      "summary": "setsid() -> sid/-1"
+    },
+    {
+      "name": "SYS_GETSID",
+      "number": 153,
+      "summary": "getsid(pid) -> sid/-1"
+    },
+    {
+      "name": "SYS_WAIT",
+      "number": 154,
+      "summary": "wait(status*) -> pid/-1"
+    },
+    {
+      "name": "SYS_PAUSE",
+      "number": 155,
+      "summary": "pause() -> -1"
+    },
+    {
+      "name": "SYS_UMASK",
+      "number": 156,
+      "summary": "umask(mask) -> old_mask"
+    },
+    {
+      "name": "SYS_SIGPENDING",
+      "number": 157,
+      "summary": "sigpending(set*) -> 0"
+    },
+    {
+      "name": "SYS_SIGSUSPEND",
+      "number": 158,
+      "summary": "sigsuspend(mask*) -> -1"
+    },
+    {
+      "name": "SYS_SETITIMER",
+      "number": 159,
+      "summary": "setitimer(which, new*, old*) -> 0/-1"
+    },
+    {
+      "name": "SYS_GETITIMER",
+      "number": 160,
+      "summary": "getitimer(which, cur*) -> 0/-1"
+    },
+    {
+      "name": "SYS_SETENV",
+      "number": 161,
+      "summary": "setenv(name, val, over) -> 0/-1"
+    },
+    {
+      "name": "SYS_UNSETENV",
+      "number": 162,
+      "summary": "unsetenv(name) -> 0"
+    },
+    {
+      "name": "SYS_UNAME",
+      "number": 163,
+      "summary": "uname(utsname*) -> 0/-1"
+    },
+    {
+      "name": "SYS_UTIME",
+      "number": 164,
+      "summary": "utime(path, utimbuf*) -> 0/-1"
+    },
+    {
+      "name": "SYS_SYSCONF",
+      "number": 165,
+      "summary": "sysconf(name) -> value/-1"
+    },
+    {
+      "name": "SYS_SETEUID",
+      "number": 166,
+      "summary": "seteuid(euid) -> 0/-1"
+    },
+    {
+      "name": "SYS_SETEGID",
+      "number": 167,
+      "summary": "setegid(egid) -> 0/-1"
+    },
+    {
+      "name": "SYS_SETREUID",
+      "number": 168,
+      "summary": "setreuid(ruid, euid) -> 0/-1"
+    },
+    {
+      "name": "SYS_SETREGID",
+      "number": 169,
+      "summary": "setregid(rgid, egid) -> 0/-1"
+    },
+    {
+      "name": "SYS_SENDTO",
+      "number": 170,
+      "summary": "sendto(fd,buf,len,fl,addr) -> bytes/-1"
+    },
+    {
+      "name": "SYS_RECVFROM",
+      "number": 171,
+      "summary": "recvfrom(fd,buf,len,fl,from) -> bytes/-1"
+    },
+    {
+      "name": "SYS_SETSOCKOPT",
+      "number": 172,
+      "summary": "setsockopt(fd,lvl,opt,val,len) -> 0/-1"
+    },
+    {
+      "name": "SYS_GETSOCKOPT",
+      "number": 173,
+      "summary": "getsockopt(fd,lvl,opt,val*,len*) -> 0/-1"
+    },
+    {
+      "name": "SYS_GETSOCKNAME",
+      "number": 174,
+      "summary": "getsockname(fd,addr,len*) -> 0/-1"
+    },
+    {
+      "name": "SYS_GETPEERNAME",
+      "number": 175,
+      "summary": "getpeername(fd,addr,len*) -> 0/-1"
+    },
+    {
+      "name": "SYS_SHUTDOWN",
+      "number": 176,
+      "summary": "shutdown(fd,how) -> 0/-1"
+    },
+    {
+      "name": "SYS_TCGETATTR",
+      "number": 177,
+      "summary": "tcgetattr(fd,termios*) -> 0/-1"
+    },
+    {
+      "name": "SYS_TCSETATTR",
+      "number": 178,
+      "summary": "tcsetattr(fd,act,termios*) -> 0/-1"
+    },
+    {
+      "name": "SYS_TCDRAIN",
+      "number": 179,
+      "summary": "tcdrain(fd) -> 0/-1"
+    },
+    {
+      "name": "SYS_TCFLUSH",
+      "number": 180,
+      "summary": "tcflush(fd,queue) -> 0/-1"
+    },
+    {
+      "name": "SYS_GETERRNO",
+      "number": 181,
+      "summary": "geterrno() -> EAX=per-task errno"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "id": "os.mellivora.notify-demo",
+  "name": "Notify & Clipboard Demo",
+  "version": "1.0.0",
+  "entry": "notify_demo",
+  "category": "demo",
+  "description": "Beginner sample demonstrating SYS_NOTIFY and SYS_CLIPBOARD_COPY/PASTE",
+  "author": "Mellivora OS",
+  "keywords": ["demo", "clipboard", "notify", "beginner", "sample"],
+  "permissions": [
+    "gui.clipboard",
+    "gui.notify"
+  ],
+  "settings_key": "notify_demo",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 640,
+    "height": 400,
+    "resizable": false,
+    "centered": true
+  }
+}
