@@ -1,0 +1,189 @@
+{
+  "generated_from": "docs/app-manifests",
+  "app_count": 5,
+  "categories": {
+    "demo": 2,
+    "editor": 1,
+    "file": 1,
+    "network": 1
+  },
+  "permissions": {
+    "filesystem.read": 3,
+    "filesystem.write": 3,
+    "gui.clipboard": 3,
+    "gui.notify": 3,
+    "filesystem.exec": 2,
+    "gui.framebuf": 2,
+    "gui.compositor": 2,
+    "gui.mouse": 2,
+    "network.raw": 1,
+    "network.tcp": 1
+  },
+  "apps": [
+    {
+      "id": "os.mellivora.filepick",
+      "name": "File Picker Demo",
+      "version": "1.0.0",
+      "entry": "filepick",
+      "category": "demo",
+      "description": "Intermediate sample showing SYS_FILE_OPEN_DLG and SYS_FILE_SAVE_DLG",
+      "author": "Mellivora OS",
+      "keywords": [
+        "demo",
+        "file",
+        "dialog",
+        "intermediate",
+        "sample"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write"
+      ],
+      "settings_key": "filepick",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 720,
+        "height": 480,
+        "resizable": true,
+        "centered": true
+      },
+      "icon": "res/demo.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/filepick.json"
+    },
+    {
+      "id": "os.mellivora.notify-demo",
+      "name": "Notify & Clipboard Demo",
+      "version": "1.0.0",
+      "entry": "notify_demo",
+      "category": "demo",
+      "description": "Beginner sample demonstrating SYS_NOTIFY and SYS_CLIPBOARD_COPY/PASTE",
+      "author": "Mellivora OS",
+      "keywords": [
+        "demo",
+        "clipboard",
+        "notify",
+        "beginner",
+        "sample"
+      ],
+      "permissions": [
+        "gui.clipboard",
+        "gui.notify"
+      ],
+      "settings_key": "notify_demo",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 640,
+        "height": 400,
+        "resizable": false,
+        "centered": true
+      },
+      "icon": "res/demo.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/notify_demo.json"
+    },
+    {
+      "id": "os.mellivora.bedit",
+      "name": "Burrows Editor",
+      "version": "13.0.0",
+      "entry": "bedit",
+      "category": "editor",
+      "description": "Full-featured text editor with syntax hints, line numbers, and compile-run integration",
+      "author": "Mellivora OS",
+      "keywords": [
+        "editor",
+        "text",
+        "code",
+        "syntax"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.clipboard",
+        "gui.notify",
+        "gui.mouse"
+      ],
+      "settings_key": "bedit",
+      "min_os_version": "6.0",
+      "window": {
+        "width": 1024,
+        "height": 768,
+        "resizable": true,
+        "centered": false
+      },
+      "icon": "res/editor.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/bedit.json"
+    },
+    {
+      "id": "os.mellivora.bforager",
+      "name": "Burrows File Manager",
+      "version": "13.0.0",
+      "entry": "bforager",
+      "category": "file",
+      "description": "Graphical file manager with cut/copy/paste, rename, and dual-pane layout",
+      "author": "Mellivora OS",
+      "keywords": [
+        "file",
+        "manager",
+        "browser",
+        "forager"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.clipboard",
+        "gui.notify",
+        "gui.mouse"
+      ],
+      "settings_key": "bforager",
+      "min_os_version": "10.0",
+      "window": {
+        "width": 1024,
+        "height": 768,
+        "resizable": true,
+        "centered": false
+      },
+      "icon": "res/folder.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/bforager.json"
+    },
+    {
+      "id": "os.mellivora.netgraph",
+      "name": "Network Latency Graph",
+      "version": "1.0.0",
+      "entry": "netgraph",
+      "category": "network",
+      "description": "Live scrolling ping RTT bar chart \u2014 advanced demo of SYS_PING and VGA rendering",
+      "author": "Mellivora OS",
+      "keywords": [
+        "network",
+        "ping",
+        "graph",
+        "advanced",
+        "monitor"
+      ],
+      "permissions": [
+        "network.raw",
+        "network.tcp"
+      ],
+      "settings_key": "netgraph",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 800,
+        "height": 400,
+        "resizable": false,
+        "centered": false
+      },
+      "icon": "res/demo.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/netgraph.json"
+    }
+  ]
+}

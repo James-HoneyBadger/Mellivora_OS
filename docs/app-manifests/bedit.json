@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bedit",
   "name": "Burrows Editor",
-  "version": "12.0.0",
+  "version": "13.0.0",
   "entry": "bedit",
   "category": "editor",
   "description": "Full-featured text editor with syntax hints, line numbers, and compile-run integration",
@@ -24,5 +24,7 @@
     "height": 768,
     "resizable": true,
     "centered": false
-  }
+  },
+  "icon": "res/editor.icon",
+  "launch_mode": "normal"
 }

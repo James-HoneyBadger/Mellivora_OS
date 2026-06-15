@@ -1,5 +1,50 @@
 # Mellivora OS - Changelog
 
+## v13.0.0 - Quality gates, benchmark observability, app manifests, new demos
+
+### Overview
+
+This release promotes the project to v13 with a repository-wide consistency
+pass plus stronger release engineering. The main additions are version- and
+API-consistency validators, benchmark regression/trend tooling, a first pass
+at vNext desktop app-manifest infrastructure, and three new demo programs.
+
+### New Programs (`programs/`)
+
+- **`notify_demo.asm`** — Beginner service-API demo for `SYS_NOTIFY` and
+  `SYS_CLIPBOARD_COPY` / `SYS_CLIPBOARD_PASTE`. Shows notification posting,
+  clipboard round-trip, and simple interactive flow in text mode.
+
+- **`filepick.asm`** — Intermediate dialog-service demo for
+  `SYS_FILE_OPEN_DLG` and `SYS_FILE_SAVE_DLG`. Opens a file chooser, reads the
+  selected file, previews its first bytes in hex, and writes a saved copy.
+
+- **`netgraph.asm`** — Advanced live network latency visualizer. Repeatedly
+  pings a target IP, records RTT samples, and renders a scrolling VGA text-mode
+  bar graph of latency and timeouts.
+
+### Infrastructure
+
+- Added version-consistency validation so runtime strings, docs, OCI metadata,
+  and bundled first-party manifest versions can be checked mechanically during
+  `make lint`.
+
+- Added benchmark tooling in `tests/bench.sh` plus benchmark regression and
+  trend analysis helpers. CI now publishes benchmark summaries and raw trend
+  artifacts for review.
+
+- Added generated syscall contract artifacts (`docs/syscalls.json` and
+  `docs/syscalls.md`) and lint checks that fail when generated API references
+  drift from `programs/syscalls.inc`.
+
+- Added app manifest schema and example bundled-app manifests to establish the
+  vNext launcher/permission metadata contract.
+
+### Other Changes
+
+- Boot/runtime version strings, documentation current-version references, and
+  OCI package metadata have all been aligned to v13.0.0.
+
 ## v12.4.0 - Conway's Life 3D, DFT analyser, JSON pretty-printer, C/ASM samples
 
 ### Overview

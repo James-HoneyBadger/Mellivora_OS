@@ -176,7 +176,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry + modular includes (22 files in `kernel/`)
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v12.4.0)
+├── CHANGELOG.md            Version history (v1.0 → v13.0.0)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers

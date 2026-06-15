@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "docs" / "app-manifest.schema.json"
 EXAMPLE_DIR = ROOT / "docs" / "app-manifests"
+PROGRAM_DIR = ROOT / "programs"
 
 REQUIRED_FIELDS = {"id", "name", "version", "entry", "category"}
 VALID_CATEGORIES = {
@@ -63,6 +64,8 @@ def main() -> int:
 
     total = 0
     failures = 0
+    seen_ids: dict[str, str] = {}
+    seen_entries: dict[str, str] = {}
     for path in examples:
         total += 1
         try:
@@ -73,6 +76,24 @@ def main() -> int:
             continue
 
         errors = jsonschema_validate(manifest, schema, path)
+
+        manifest_id = manifest.get("id")
+        if manifest_id:
+            if manifest_id in seen_ids:
+                errors.append(f"duplicate id {manifest_id!r}; also used by {seen_ids[manifest_id]}")
+            else:
+                seen_ids[manifest_id] = path.name
+
+        entry = manifest.get("entry")
+        if entry:
+            if entry in seen_entries:
+                errors.append(f"duplicate entry {entry!r}; also used by {seen_entries[entry]}")
+            else:
+                seen_entries[entry] = path.name
+            program_path = PROGRAM_DIR / f"{entry}.asm"
+            if not program_path.exists():
+                errors.append(f"entry {entry!r} does not map to existing program source {program_path.relative_to(ROOT)}")
+
         if errors:
             for e in errors:
                 print(f"[validate-manifest] FAIL {path.name}: {e}")

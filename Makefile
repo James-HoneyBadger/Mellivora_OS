@@ -108,7 +108,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest
+.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest
 
 all: $(IMAGE)
 
@@ -277,6 +277,12 @@ validate-constants:
 validate-syscalls:
 	@python3 tools/validate_syscalls.py
 
+validate-version:
+	@python3 tools/validate_version_strings.py
+
+validate-permissions:
+	@python3 tools/validate_permissions.py
+
 syscalls-json:
 	@python3 tools/generate_syscalls_json.py
 
@@ -289,7 +295,13 @@ check-syscalls-json:
 check-syscalls-md:
 	@python3 tools/generate_syscalls_json.py --check-md
 
-lint: validate-constants validate-syscalls check-syscalls-json check-syscalls-md validate-manifest
+app-catalog:
+	@python3 tools/generate_app_catalog.py
+
+check-app-catalog:
+	@python3 tools/generate_app_catalog.py --check
+
+lint: validate-constants validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog validate-manifest
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
 	@echo "=== Lint checks complete ==="
 
@@ -499,9 +511,13 @@ help:
 	@echo "  Test & Info"
 	@echo "    make check        Run regression suite"
 	@echo "    make lint         Run contract and NASM source lint checks"
+	@echo "    make validate-version Validate repo version strings for the current release"
 	@echo "    make syscalls-json Generate docs/syscalls.json + docs/syscalls.md"
 	@echo "    make check-syscalls-json Verify docs/syscalls.json is up to date"
 	@echo "    make check-syscalls-md Verify docs/syscalls.md is up to date"
+	@echo "    make app-catalog  Generate docs/app-catalog.json from bundled manifests"
+	@echo "    make check-app-catalog Verify docs/app-catalog.json is up to date"
+	@echo "    make validate-permissions Validate app permissions against platform policy"
 	@echo "    make bench        Run build-time benchmark suite"
 	@echo "    make bench-check  Run benchmarks and fail on regression"
 	@echo "    make bench-baseline Update benchmark/baseline.txt"

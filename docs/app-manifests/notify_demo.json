@@ -18,5 +18,7 @@
     "height": 400,
     "resizable": false,
     "centered": true
-  }
+  },
+  "icon": "res/demo.icon",
+  "launch_mode": "normal"
 }

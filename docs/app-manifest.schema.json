@@ -106,6 +106,27 @@
         "resizable": { "type": "boolean" },
         "centered":  { "type": "boolean" }
       }
+    },
+    "icon": {
+      "type": "string",
+      "description": "Launcher icon asset ID or path relative to app root",
+      "maxLength": 64
+    },
+    "launch_mode": {
+      "type": "string",
+      "description": "How the app behaves at startup",
+      "enum": ["normal", "singleton", "daemon"]
+    },
+    "startup_order": {
+      "type": "integer",
+      "description": "Boot-time startup priority (lower = earlier); 0-100 or omitted",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "startup_args": {
+      "type": "array",
+      "description": "Default command-line arguments passed at startup if specified",
+      "items": { "type": "string" }
     }
   }
 }
