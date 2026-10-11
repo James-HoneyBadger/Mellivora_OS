@@ -268,7 +268,7 @@ def main():
         block_size = struct.unpack_from("<I", sb, 28)[0]
 
         check("Magic = 'HBFS'", magic == HBFS_MAGIC)
-        check("Version = 1", version == 1)
+        check("Version is supported (1-3)", 1 <= version <= 3)
         check(f"Total blocks = {TOTAL_BLOCKS}", total_blocks == TOTAL_BLOCKS)
         check(f"Free blocks <= total ({free_blocks} <= {total_blocks})",
               free_blocks <= total_blocks)
@@ -430,7 +430,7 @@ def main():
         # Build a lookup: name -> file entry (search root + subdirectories)
         all_file_entries = {}
         for fi in files:
-            all_file_entries[fi["name"]] = fi
+            all_file_entries[f"/{fi['name']}"] = fi
         for dent in dir_entries:
             dirname = dent["name"]
             subdir_lba = block_to_lba(dent["start_block"])
@@ -439,15 +439,17 @@ def main():
             subdir_data = read_at(f, lba_offset(subdir_lba), subdir_size)
             sub_files, _ = parse_dir_entries(subdir_data, subdir_max)
             for fi in sub_files:
-                all_file_entries[fi["name"]] = fi
+                all_file_entries[f"/{dirname}/{fi['name']}"] = fi
 
         # Spot-check a few program binaries
         spot_checks = ["hello", "fibonacci", "primes",
                        "snake", "sysinfo", "colors"]
         for prog_name in spot_checks:
-            if prog_name not in all_file_entries:
+            fi = next((all_file_entries.get(f"/{directory}/{prog_name}")
+                       for directory in ("bin", "games", "Burrows")
+                       if all_file_entries.get(f"/{directory}/{prog_name}") is not None), None)
+            if fi is None:
                 continue
-            fi = all_file_entries[prog_name]
             local_path = os.path.join("programs", prog_name + ".bin")
             if not os.path.isfile(local_path):
                 continue

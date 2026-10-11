@@ -7,7 +7,9 @@ so CI doesn't hard-require the extra package.
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -15,28 +17,35 @@ ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "docs" / "app-manifest.schema.json"
 EXAMPLE_DIR = ROOT / "docs" / "app-manifests"
 PROGRAM_DIR = ROOT / "programs"
+EXCLUSIONS_PATH = ROOT / "docs" / "app-manifest-exclusions.json"
 
 REQUIRED_FIELDS = {"id", "name", "version", "entry", "category"}
 VALID_CATEGORIES = {
     "editor", "file", "system", "network", "media",
     "game", "dev", "terminal", "demo", "utility",
 }
-ID_PATTERN = __import__("re").compile(r"^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$")
-VERSION_PATTERN = __import__("re").compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$")
+VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 def lite_validate(manifest: dict, path: Path) -> list[str]:
     errors: list[str] = []
+    if not isinstance(manifest, dict):
+        return ["manifest root must be an object"]
     for field in REQUIRED_FIELDS:
         if field not in manifest:
             errors.append(f"missing required field: {field!r}")
-    if "id" in manifest and not ID_PATTERN.match(manifest["id"]):
+    if "id" in manifest and (not isinstance(manifest["id"], str) or not ID_PATTERN.match(manifest["id"])):
         errors.append(f"id {manifest['id']!r} does not match pattern")
-    if "version" in manifest and not VERSION_PATTERN.match(manifest["version"]):
+    if "version" in manifest and (not isinstance(manifest["version"], str) or not VERSION_PATTERN.match(manifest["version"])):
         errors.append(f"version {manifest['version']!r} must be X.Y.Z")
     if "category" in manifest and manifest["category"] not in VALID_CATEGORIES:
         errors.append(f"unknown category {manifest['category']!r}")
-    if "name" in manifest and (len(manifest["name"]) < 1 or len(manifest["name"]) > 48):
+    if "name" in manifest and (
+        not isinstance(manifest["name"], str)
+        or len(manifest["name"]) < 1
+        or len(manifest["name"]) > 48
+    ):
         errors.append("name must be 1-48 chars")
     return errors
 
@@ -50,12 +59,34 @@ def jsonschema_validate(manifest: dict, schema: dict, path: Path) -> list[str]:
         return lite_validate(manifest, path)
 
 
+def load_coverage_exclusions() -> set[str]:
+    if not EXCLUSIONS_PATH.exists():
+        return set()
+    data = json.loads(EXCLUSIONS_PATH.read_text(encoding="utf-8"))
+    entries = data.get("entries", [])
+    if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
+        raise ValueError("entries must be an array of strings")
+    return set(entries)
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate Mellivora app manifests")
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="Report program sources without a manifest and fail on missing entries",
+    )
+    args = parser.parse_args()
+
     if not SCHEMA_PATH.exists():
         print(f"[validate-manifest] FAIL schema not found: {SCHEMA_PATH.relative_to(ROOT)}")
         return 1
 
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    try:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"[validate-manifest] FAIL schema JSON parse error: {exc}")
+        return 1
     examples = sorted(EXAMPLE_DIR.glob("*.json")) if EXAMPLE_DIR.is_dir() else []
 
     if not examples:
@@ -63,7 +94,7 @@ def main() -> int:
         return 0
 
     total = 0
-    failures = 0
+    manifest_failures = 0
     seen_ids: dict[str, str] = {}
     seen_entries: dict[str, str] = {}
     for path in examples:
@@ -72,7 +103,7 @@ def main() -> int:
             manifest = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             print(f"[validate-manifest] FAIL {path.name}: JSON parse error: {exc}")
-            failures += 1
+            manifest_failures += 1
             continue
 
         errors = jsonschema_validate(manifest, schema, path)
@@ -97,12 +128,45 @@ def main() -> int:
         if errors:
             for e in errors:
                 print(f"[validate-manifest] FAIL {path.name}: {e}")
-            failures += 1
+            manifest_failures += 1
         else:
             print(f"[validate-manifest] PASS {path.name}")
 
-    print(f"[validate-manifest] {total - failures}/{total} manifests valid")
-    return 0 if failures == 0 else 1
+    coverage_failures = 0
+    if args.coverage:
+        try:
+            excluded_entries = load_coverage_exclusions()
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(f"[validate-manifest] FAIL {EXCLUSIONS_PATH.relative_to(ROOT)}: {exc}")
+            coverage_failures += 1
+            excluded_entries = set()
+
+        manifest_entries = set(seen_entries)
+        program_entries = {path.stem for path in PROGRAM_DIR.glob("*.asm")}
+        missing_entries = sorted(program_entries - manifest_entries - excluded_entries)
+        if missing_entries:
+            print(
+                f"[validate-manifest] FAIL coverage: {len(missing_entries)} program sources have no manifest"
+            )
+            for entry in missing_entries:
+                print(f"[validate-manifest] MISSING {entry}")
+            coverage_failures += 1
+        else:
+            print(
+                f"[validate-manifest] PASS coverage: {len(program_entries)} program sources covered"
+            )
+
+        stale_exclusions = sorted(excluded_entries - program_entries)
+        if stale_exclusions:
+            print(
+                f"[validate-manifest] FAIL coverage: {len(stale_exclusions)} exclusions do not match program sources"
+            )
+            for entry in stale_exclusions:
+                print(f"[validate-manifest] STALE EXCLUSION {entry}")
+            coverage_failures += 1
+
+    print(f"[validate-manifest] {total - manifest_failures}/{total} manifests valid")
+    return 0 if manifest_failures == 0 and coverage_failures == 0 else 1
 
 
 if __name__ == "__main__":

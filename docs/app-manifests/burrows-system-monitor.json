@@ -1,0 +1,35 @@
+{
+  "id": "os.mellivora.bsysmon",
+  "name": "Burrows System Monitor",
+  "version": "13.0.0",
+  "entry": "bsysmon",
+  "category": "system",
+  "description": "Live view of processes, memory, and system activity",
+  "author": "Mellivora OS",
+  "keywords": [
+    "system",
+    "monitor",
+    "processes",
+    "memory"
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.mouse",
+    "gui.notify",
+    "system.processes"
+  ],
+  "settings_key": "burrows_system_monitor",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "centered": true
+  },
+  "icon": "res/system-monitor.icon",
+  "launch_mode": "normal"
+}

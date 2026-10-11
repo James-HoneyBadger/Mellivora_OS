@@ -1,0 +1,29 @@
+{
+  "id": "os.mellivora.bcalc",
+  "name": "Burrows Calculator",
+  "version": "13.0.0",
+  "entry": "bcalc",
+  "category": "utility",
+  "description": "Desktop calculator for arithmetic and numeric expressions",
+  "author": "Mellivora OS",
+  "keywords": [
+    "calculator",
+    "math",
+    "arithmetic"
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "gui.notify"
+  ],
+  "settings_key": "burrows_calculator",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 720,
+    "height": 480,
+    "resizable": true,
+    "centered": true
+  },
+  "icon": "res/calculator.icon",
+  "launch_mode": "normal"
+}

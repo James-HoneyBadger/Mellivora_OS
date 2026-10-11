@@ -1,0 +1,35 @@
+{
+  "id": "os.mellivora.bsettings",
+  "name": "Burrows Settings",
+  "version": "13.0.0",
+  "entry": "bsettings",
+  "category": "system",
+  "description": "Desktop settings for themes, preferences, and system behavior",
+  "author": "Mellivora OS",
+  "keywords": [
+    "settings",
+    "themes",
+    "preferences",
+    "system"
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.mouse",
+    "gui.notify",
+    "system.processes"
+  ],
+  "settings_key": "burrows_settings",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "centered": true
+  },
+  "icon": "res/settings.icon",
+  "launch_mode": "normal"
+}

@@ -171,7 +171,7 @@ This single command:
 4. Creates a 2 GB raw disk image (`mellivora.img`)
 5. Writes boot sector, Stage 2, and kernel to the image
 6. Assembles all user-space assembly programs in `programs/` into flat binaries
-7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (231 programs + 31 samples + docs)
+7. Runs `populate.py` to create subdirectories and write the current file set into HBFS (235 programs + 37 samples + docs)
 
 ### Build Targets
 
@@ -315,7 +315,7 @@ LBA 4481+       ~2 GB       Data blocks (4 KB each)
 
 ### On-Disk Directory Structure
 
-The `populate.py` script creates 5 subdirectories and places the curated runtime file set (231 programs + 31 samples + docs):
+The `populate.py` script creates 5 subdirectories and places the curated runtime file set (235 programs + 37 samples + docs):
 
 ```text
 /
@@ -386,7 +386,7 @@ Mellivora_OS/
 ├── CHANGELOG.md            Version history (current: v13.0.0)
 ├── README.md               Project overview
 │
-├── programs/               User-space assembly programs (~231 total)
+├── programs/               User-space assembly programs (~235 sources total)
 │   ├── syscalls.inc        Shared constants and helpers
 │   ├── hello.asm           ... through ...
 │   └── wc.asm

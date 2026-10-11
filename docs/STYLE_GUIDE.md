@@ -1,11 +1,11 @@
 # Mellivora OS Style Guide
 
-**Version:** 1.0 (Phase 0 of v6.x overhaul) **Status:** Authoritative
+**Version:** 1.1 (v13.0.0) **Status:** Authoritative
 
 This document is the single source of truth for cross-program conventions in
 Mellivora OS user-space programs. Anything new added to `programs/` MUST
 follow this guide. Existing programs should be migrated to this guide
-incrementally during the v6.x overhaul.
+incrementally as the v13.x codebase evolves.
 
 For kernel conventions, see [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md).
 For library API details, see [API_REFERENCE.md](API_REFERENCE.md).
@@ -415,5 +415,5 @@ Before committing changes to a program, verify:
 
 ---
 
-*This style guide will evolve as the v6.x overhaul progresses. Changes are
+*This style guide will evolve as the v13.x codebase progresses. Changes are
 recorded in `CHANGELOG.md`.*

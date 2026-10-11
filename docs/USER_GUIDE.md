@@ -71,10 +71,10 @@ Mellivora organizes files into subdirectories:
 
 ```text
 /
-├── bin/          171 utility programs (edit, grep, sort, tcc, sed, awk, top, tar, ...)
-├── games/         27 games (snake, tetris, galaga, pacman, rogue, robotown, ...)
-├── Burrows/       12 GUI apps (bedit, bforager, bhive, bterm, bsheet, ...)
-├── samples/       19 source files (hello.c, fib.c, hello.pl, fizzbuzz.pl, hello.bas, ...)
+├── bin/          Generated utility programs (edit, grep, sort, tcc, sed, awk, top, tar, ...)
+├── games/         29 games (snake, tetris, galaga, pacman, rogue, robotown, ...)
+├── Burrows/       Generated GUI applications (bedit, bforager, bhive, bterm, bsheet, ...)
+├── samples/       37 source files (2 NASM, 18 C, 11 Perl, 6 BASIC)
 ├── docs/           text files (readme.txt, license.txt, notes.txt, ...)
 └── script.bat      Example batch script
 ```
@@ -449,9 +449,9 @@ Batch scripts can use:
 
 ## Programs
 
-Mellivora ships with a broad set of user-space programs organized in `/bin`, `/games`,
-and `/Burrows` (210 assembly programs: 171 utilities in `/bin`, 27 games in `/games`,
-12 Burrows GUI apps in `/Burrows`).
+Mellivora ships with 235 assembly sources and generated user-space programs organized
+in `/bin`, `/games`, and `/Burrows`. The exact generated file list can change as apps
+are added; use `dir` in each directory for the current image contents.
 
 ### Games (in /games)
 

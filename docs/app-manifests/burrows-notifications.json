@@ -1,0 +1,34 @@
+{
+  "id": "os.mellivora.bnotify",
+  "name": "Burrows Notifications",
+  "version": "13.0.0",
+  "entry": "bnotify",
+  "category": "system",
+  "description": "Test and inspect desktop notification behavior",
+  "author": "Mellivora OS",
+  "keywords": [
+    "notifications",
+    "alerts",
+    "desktop"
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.mouse",
+    "gui.notify",
+    "system.processes"
+  ],
+  "settings_key": "burrows_notifications",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "centered": true
+  },
+  "icon": "res/notification.icon",
+  "launch_mode": "normal"
+}

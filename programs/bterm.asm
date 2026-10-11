@@ -12,6 +12,8 @@ INPUT_MAX       equ 78          ; max input length
 FILE_BUF_SIZE   equ 32768       ; 32 KB file read buffer
 SCROLL_LINES    equ 200         ; scrollback buffer depth (v9.0)
 SCROLL_LSIZE    equ 84          ; bytes per scroll line (80 chars+null+3 pad)
+HIST_MAX        equ 16
+HIST_SIZE       equ 84
 ; ANSI color indices: 0=green 1=white 2=red 3=yellow 4=blue 5=magenta 6=cyan 7=gray
 TERM_COLOR_DEFAULT equ 0
 
@@ -29,7 +31,10 @@ start:
 
         ; Initialize terminal state (v9.0)
         mov dword [input_len], 0
+        mov dword [cursor_pos], 0
         mov byte [input_buf], 0
+        mov dword [history_count], 0
+        mov dword [history_index], 0
         mov dword [scroll_count], 0
         mov dword [view_offset], 0
         mov byte [cur_color], TERM_COLOR_DEFAULT
@@ -58,6 +63,24 @@ start:
         je .handle_enter
         cmp bl, 8               ; Backspace
         je .handle_bs
+        cmp bl, KEY_LEFT        ; Move cursor left
+        je .handle_left
+        cmp bl, KEY_RIGHT       ; Move cursor right
+        je .handle_right
+        cmp bl, 1               ; Ctrl+A
+        je .handle_home
+        cmp bl, 5               ; Ctrl+E
+        je .handle_end
+        cmp bl, 4               ; Ctrl+D
+        je .handle_delete
+        cmp bl, 3               ; Ctrl+C
+        je .handle_ctrl_c
+        cmp bl, 12              ; Ctrl+L
+        je .handle_ctrl_l
+        cmp bl, KEY_UP          ; Previous command
+        je .handle_hist_up
+        cmp bl, KEY_DOWN        ; Next command
+        je .handle_hist_down
         ; v9.0: PgUp / PgDn for scrollback
         cmp bl, KEY_PGUP
         je .handle_pgup
@@ -68,21 +91,124 @@ start:
         cmp bl, 126
         jg .main_loop
 
-        ; Add char to input
+        ; Insert char at cursor
         mov ecx, [input_len]
         cmp ecx, INPUT_MAX
         jge .main_loop
-        mov [input_buf + ecx], bl
+        mov edx, [cursor_pos]
+        lea esi, [input_buf + ecx]
+.insert_shift:
+        cmp ecx, edx
+        je .insert_ready
+        mov al, [esi - 1]
+        mov [esi], al
+        dec esi
+        dec ecx
+        jmp .insert_shift
+.insert_ready:
+        mov [input_buf + edx], bl
         inc dword [input_len]
-        mov byte [input_buf + ecx + 1], 0
+        inc dword [cursor_pos]
         jmp .main_loop
 
 .handle_bs:
-        cmp dword [input_len], 0
+        cmp dword [cursor_pos], 0
         je .main_loop
-        dec dword [input_len]
+        mov edx, [cursor_pos]
+        dec edx
+        mov esi, input_buf
+        add esi, edx
         mov ecx, [input_len]
-        mov byte [input_buf + ecx], 0
+        sub ecx, edx
+.backspace_shift:
+        mov al, [esi + 1]
+        mov [esi], al
+        inc esi
+        dec ecx
+        jnz .backspace_shift
+        dec dword [input_len]
+        dec dword [cursor_pos]
+        jmp .main_loop
+
+.handle_left:
+        cmp dword [cursor_pos], 0
+        je .main_loop
+        dec dword [cursor_pos]
+        jmp .main_loop
+
+.handle_right:
+        mov eax, [cursor_pos]
+        cmp eax, [input_len]
+        jge .main_loop
+        inc dword [cursor_pos]
+        jmp .main_loop
+
+.handle_home:
+        mov dword [cursor_pos], 0
+        jmp .main_loop
+
+.handle_end:
+        mov eax, [input_len]
+        mov [cursor_pos], eax
+        jmp .main_loop
+
+.handle_delete:
+        mov edx, [cursor_pos]
+        cmp edx, [input_len]
+        jge .main_loop
+        mov esi, input_buf
+        add esi, edx
+        mov ecx, [input_len]
+        sub ecx, edx
+.delete_shift:
+        mov al, [esi + 1]
+        mov [esi], al
+        inc esi
+        dec ecx
+        jnz .delete_shift
+        dec dword [input_len]
+        jmp .main_loop
+
+.handle_ctrl_c:
+        call term_add_prompt_line
+        mov esi, msg_ctrl_c
+        call term_add_line
+        mov dword [input_len], 0
+        mov dword [cursor_pos], 0
+        mov byte [input_buf], 0
+        mov eax, [history_count]
+        mov [history_index], eax
+        jmp .main_loop
+
+.handle_ctrl_l:
+        mov dword [num_lines], 0
+        mov dword [scroll_count], 0
+        mov dword [view_offset], 0
+        jmp .main_loop
+
+.handle_hist_up:
+        cmp dword [history_count], 0
+        je .main_loop
+        cmp dword [history_index], 0
+        je .main_loop
+        dec dword [history_index]
+        call term_recall_history
+        jmp .main_loop
+
+.handle_hist_down:
+        mov eax, [history_index]
+        cmp eax, [history_count]
+        jge .main_loop
+        inc dword [history_index]
+        mov eax, [history_index]
+        cmp eax, [history_count]
+        je .clear_history_input
+        call term_recall_history
+        jmp .main_loop
+.clear_history_input:
+        mov dword [input_len], 0
+        mov dword [cursor_pos], 0
+        mov byte [input_buf], 0
         jmp .main_loop
 
 .handle_pgup:
@@ -116,11 +242,15 @@ start:
 .handle_enter:
         ; Show prompt line in output
         call term_add_prompt_line
+        call term_save_history
         ; Execute
         call term_exec_cmd
         ; Reset input, scroll to bottom
         mov dword [input_len], 0
+        mov dword [cursor_pos], 0
         mov byte [input_buf], 0
+        mov eax, [history_count]
+        mov [history_index], eax
         mov dword [view_offset], 0
         jmp .main_loop
 
@@ -207,7 +337,7 @@ term_draw_content:
         call gui_draw_text
 
         ; Draw cursor
-        mov eax, [input_len]
+        mov eax, [cursor_pos]
         shl eax, 3
         add eax, 20
         mov ebx, eax
@@ -220,6 +350,57 @@ term_draw_content:
         popad
         ret
 .draw_start: dd 0
+
+term_save_history:
+        cmp dword [input_len], 0
+        je .done
+        cmp dword [history_count], HIST_MAX
+        jb .append
+        mov ecx, 1
+.shift:
+        cmp ecx, HIST_MAX
+        jge .append_full
+        mov eax, ecx
+        imul eax, HIST_SIZE
+        lea esi, [history_buf + eax]
+        mov edx, ecx
+        dec edx
+        imul edx, HIST_SIZE
+        lea edi, [history_buf + edx]
+        call str_copy
+        inc ecx
+        jmp .shift
+.append_full:
+        mov eax, HIST_MAX - 1
+        jmp .append_at
+.append:
+        mov eax, [history_count]
+.append_at:
+        imul eax, HIST_SIZE
+        lea edi, [history_buf + eax]
+        mov esi, input_buf
+        call str_copy
+        cmp dword [history_count], HIST_MAX
+        jge .set_index
+        inc dword [history_count]
+.set_index:
+        mov eax, [history_count]
+        mov [history_index], eax
+.done:
+        ret
+
+term_recall_history:
+        mov eax, [history_index]
+        imul eax, HIST_SIZE
+        lea esi, [history_buf + eax]
+        mov edi, input_buf
+        call str_copy
+        mov edi, input_buf
+        call str_len
+        mov [input_len], eax
+        mov [cursor_pos], eax
+        ret
+
 term_exec_cmd:
         pushad
         cmp dword [input_len], 0
@@ -799,6 +980,8 @@ term_exec_cmd:
 
 .do_clear:
         mov dword [num_lines], 0
+        mov dword [scroll_count], 0
+        mov dword [view_offset], 0
         jmp .done
 
 .do_date:
@@ -828,6 +1011,8 @@ term_exec_cmd:
         mov esi, msg_help3
         call term_add_line
         mov esi, msg_help4
+        call term_add_line
+        mov esi, msg_help5
         call term_add_line
         jmp .done
 
@@ -1187,6 +1372,7 @@ msg_welcome:    db "Mellivora Terminal v9.0 (80x24)", 0
 msg_version:    db "Mellivora OS v9.0", 0
 msg_whoami:     db "root", 0
 msg_unknown:    db "Unknown command. Type 'help'.", 0
+msg_ctrl_c:     db "^C", 0
 msg_ok:         db "OK", 0
 msg_file_err:   db "Error: file not found", 0
 msg_empty_file: db "(empty file)", 0
@@ -1204,10 +1390,14 @@ msg_help1:      db "Commands: ls cat cd pwd mkdir", 0
 msg_help2:      db " rm touch write echo clear", 0
 msg_help3:      db " date ver size hex whoami", 0
 msg_help4:      db " help exit", 0
+msg_help5:      db " Edit: arrows/Ctrl+A/E, Ctrl+D; history: Up/Down; Ctrl+C/L", 0
 
 ; Variables
 win_id:         dd 0
 input_len:      dd 0
+cursor_pos:     dd 0
+history_count:  dd 0
+history_index:  dd 0
 num_lines:      dd 0            ; kept for compat (= scroll_count)
 scroll_count:   dd 0            ; v9.0: total lines in scroll buffer
 view_offset:    dd 0            ; v9.0: lines scrolled back from bottom
@@ -1227,6 +1417,7 @@ term_colors:
 
 ; Buffers
 input_buf:      times 84 db 0
+history_buf:    times HIST_MAX * HIST_SIZE db 0
 tmp_buf:        times 128 db 0
 fmt_buf:        times 128 db 0
 ; v9.0 scrollback buffer

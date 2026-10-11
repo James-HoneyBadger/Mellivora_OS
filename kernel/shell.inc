@@ -167,6 +167,10 @@ shell_main:
         je .hist_up
         cmp al, KEY_DOWN        ; Down arrow - history next
         je .hist_down
+        cmp al, KEY_LEFT        ; Left arrow - move cursor left
+        je .cursor_left
+        cmp al, KEY_RIGHT       ; Right arrow - move cursor right
+        je .cursor_right
         cmp al, TAB_KEY         ; Tab - auto-complete
         je .tab_complete
         cmp al, CTRL_C_CODE     ; Ctrl+C - cancel
@@ -185,19 +189,78 @@ shell_main:
         je .ctrl_w
         cmp al, 0x0C            ; Ctrl+L - clear screen, redraw prompt
         je .ctrl_l
+        cmp al, 0x04            ; Ctrl+D - delete character at cursor
+        je .delete_forward
 
         ; Store character if buffer not full
         cmp ecx, LINE_BUFFER_SIZE - 1
         jge .read_loop
-        stosb
+        push eax
+        mov edx, [line_len]
+        lea esi, [line_buffer + edx]
+.insert_shift:
+        cmp edx, ecx
+        je .insert_ready
+        mov bl, [esi - 1]
+        mov [esi], bl
+        dec esi
+        dec edx
+        jmp .insert_shift
+.insert_ready:
+        pop eax
+        mov [edi], al
         inc ecx
         inc dword [line_len]    ; Keep total-length tracker in sync
-        ; Echo character
         call vga_putchar
+        inc edi
+        call .redraw_tail
         jmp .read_loop
+
+.redraw_tail:
+        mov edx, [line_len]
+        sub edx, ecx
+        mov esi, edi
+        push edx
+.redraw_tail_chars:
+        cmp edx, 0
+        je .redraw_tail_back
+        mov al, [esi]
+        inc esi
+        call vga_putchar
+        dec edx
+        jmp .redraw_tail_chars
+.redraw_tail_back:
+        pop edx
+.redraw_tail_back_loop:
+        cmp edx, 0
+        je .redraw_tail_done
+        mov al, 0x08
+        call vga_putchar
+        dec edx
+        jmp .redraw_tail_back_loop
+.redraw_tail_done:
+        ret
+
+.redraw_tail_clear:
+        call .redraw_tail
+        mov al, ' '
+        call vga_putchar
+        mov edx, [line_len]
+        sub edx, ecx
+        inc edx
+.redraw_tail_clear_loop:
+        cmp edx, 0
+        je .redraw_tail_clear_done
+        mov al, 0x08
+        call vga_putchar
+        dec edx
+        jmp .redraw_tail_clear_loop
+.redraw_tail_clear_done:
+        ret
 
 ; v4.0: Ctrl+A - cursor to beginning of line (visually backspace to prompt)
 .ctrl_a:
+.cursor_home:
         or ecx, ecx
         jz .read_loop
 .ctrl_a_loop:
@@ -213,7 +276,51 @@ shell_main:
 
 ; v4.0: Ctrl+E - cursor to end (no-op in simple append mode, but redraws line)
 .ctrl_e:
-        ; In append-only mode, cursor is always at end; just continue
+.cursor_end:
+        mov edx, [line_len]
+        sub edx, ecx
+        jz .read_loop
+.cursor_end_loop:
+        mov al, [edi]
+        inc edi
+        inc ecx
+        call vga_putchar
+        dec edx
+        jnz .cursor_end_loop
+        jmp .read_loop
+
+.cursor_left:
+        or ecx, ecx
+        jz .read_loop
+        dec edi
+        dec ecx
+        mov al, 0x08
+        call vga_putchar
+        jmp .read_loop
+
+.cursor_right:
+        cmp ecx, [line_len]
+        jge .read_loop
+        mov al, [edi]
+        inc edi
+        inc ecx
+        call vga_putchar
+        jmp .read_loop
+
+.delete_forward:
+        cmp ecx, [line_len]
+        jge .read_loop
+        mov eax, [line_len]
+        sub eax, ecx
+        mov esi, edi
+.delete_shift:
+        mov bl, [esi + 1]
+        mov [esi], bl
+        inc esi
+        dec eax
+        jnz .delete_shift
+        dec dword [line_len]
+        call .redraw_tail_clear
         jmp .read_loop
 
 ; v4.0: Ctrl+K - kill from cursor to end of line

@@ -1,23 +1,27 @@
 {
   "generated_from": "docs/app-manifests",
-  "app_count": 5,
+  "app_count": 13,
   "categories": {
     "demo": 2,
-    "editor": 1,
-    "file": 1,
-    "network": 1
+    "editor": 2,
+    "file": 2,
+    "network": 1,
+    "system": 4,
+    "terminal": 1,
+    "utility": 1
   },
   "permissions": {
-    "filesystem.read": 3,
-    "filesystem.write": 3,
-    "gui.clipboard": 3,
-    "gui.notify": 3,
-    "filesystem.exec": 2,
-    "gui.framebuf": 2,
-    "gui.compositor": 2,
-    "gui.mouse": 2,
+    "filesystem.read": 11,
+    "filesystem.write": 11,
+    "gui.clipboard": 5,
+    "gui.notify": 11,
+    "filesystem.exec": 9,
+    "gui.framebuf": 9,
+    "gui.compositor": 9,
+    "gui.mouse": 8,
     "network.raw": 1,
-    "network.tcp": 1
+    "network.tcp": 1,
+    "system.processes": 4
   },
   "apps": [
     {
@@ -119,6 +123,78 @@
       "manifest_file": "docs/app-manifests/bedit.json"
     },
     {
+      "id": "os.mellivora.bpaint",
+      "name": "Burrows Paint",
+      "version": "13.0.0",
+      "entry": "bpaint",
+      "category": "editor",
+      "description": "Pixel drawing workspace for simple images and sketches",
+      "author": "Mellivora OS",
+      "keywords": [
+        "paint",
+        "drawing",
+        "pixel",
+        "image"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.clipboard",
+        "gui.notify",
+        "gui.mouse"
+      ],
+      "settings_key": "burrows_paint",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 1024,
+        "height": 768,
+        "resizable": true,
+        "centered": false
+      },
+      "icon": "res/paint.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/burrows-paint.json"
+    },
+    {
+      "id": "os.mellivora.bhive",
+      "name": "Burrows File Browser",
+      "version": "13.0.0",
+      "entry": "bhive",
+      "category": "file",
+      "description": "File browser for navigating and managing HBFS volumes",
+      "author": "Mellivora OS",
+      "keywords": [
+        "file",
+        "browser",
+        "hbfs",
+        "filesystem"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.clipboard",
+        "gui.notify",
+        "gui.mouse"
+      ],
+      "settings_key": "burrows_file_browser",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 960,
+        "height": 720,
+        "resizable": true,
+        "centered": false
+      },
+      "icon": "res/folder.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/burrows-file-browser.json"
+    },
+    {
       "id": "os.mellivora.bforager",
       "name": "Burrows File Manager",
       "version": "13.0.0",
@@ -184,6 +260,214 @@
       "icon": "res/demo.icon",
       "launch_mode": "normal",
       "manifest_file": "docs/app-manifests/netgraph.json"
+    },
+    {
+      "id": "os.mellivora.blauncher",
+      "name": "Burrows Launcher",
+      "version": "13.0.0",
+      "entry": "blauncher",
+      "category": "system",
+      "description": "Desktop launcher, app switcher, and Burrows taskbar controller",
+      "author": "Mellivora OS",
+      "keywords": [
+        "launcher",
+        "desktop",
+        "taskbar",
+        "switcher",
+        "system"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.mouse",
+        "gui.notify",
+        "system.processes"
+      ],
+      "settings_key": "blauncher",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "centered": true
+      },
+      "icon": "res/launcher.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/blauncher.json"
+    },
+    {
+      "id": "os.mellivora.bnotify",
+      "name": "Burrows Notifications",
+      "version": "13.0.0",
+      "entry": "bnotify",
+      "category": "system",
+      "description": "Test and inspect desktop notification behavior",
+      "author": "Mellivora OS",
+      "keywords": [
+        "notifications",
+        "alerts",
+        "desktop"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.mouse",
+        "gui.notify",
+        "system.processes"
+      ],
+      "settings_key": "burrows_notifications",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "centered": true
+      },
+      "icon": "res/notification.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/burrows-notifications.json"
+    },
+    {
+      "id": "os.mellivora.bsettings",
+      "name": "Burrows Settings",
+      "version": "13.0.0",
+      "entry": "bsettings",
+      "category": "system",
+      "description": "Desktop settings for themes, preferences, and system behavior",
+      "author": "Mellivora OS",
+      "keywords": [
+        "settings",
+        "themes",
+        "preferences",
+        "system"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.mouse",
+        "gui.notify",
+        "system.processes"
+      ],
+      "settings_key": "burrows_settings",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "centered": true
+      },
+      "icon": "res/settings.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/burrows-settings.json"
+    },
+    {
+      "id": "os.mellivora.bsysmon",
+      "name": "Burrows System Monitor",
+      "version": "13.0.0",
+      "entry": "bsysmon",
+      "category": "system",
+      "description": "Live view of processes, memory, and system activity",
+      "author": "Mellivora OS",
+      "keywords": [
+        "system",
+        "monitor",
+        "processes",
+        "memory"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.mouse",
+        "gui.notify",
+        "system.processes"
+      ],
+      "settings_key": "burrows_system_monitor",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "centered": true
+      },
+      "icon": "res/system-monitor.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/burrows-system-monitor.json"
+    },
+    {
+      "id": "os.mellivora.bterm",
+      "name": "Burrows Terminal",
+      "version": "13.0.0",
+      "entry": "bterm",
+      "category": "terminal",
+      "description": "Graphical terminal for shell commands and interactive programs",
+      "author": "Mellivora OS",
+      "keywords": [
+        "terminal",
+        "shell",
+        "console",
+        "command"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.exec",
+        "gui.framebuf",
+        "gui.compositor",
+        "gui.notify"
+      ],
+      "settings_key": "burrows_terminal",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 900,
+        "height": 600,
+        "resizable": true,
+        "centered": false
+      },
+      "icon": "res/terminal.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/burrows-terminal.json"
+    },
+    {
+      "id": "os.mellivora.bcalc",
+      "name": "Burrows Calculator",
+      "version": "13.0.0",
+      "entry": "bcalc",
+      "category": "utility",
+      "description": "Desktop calculator for arithmetic and numeric expressions",
+      "author": "Mellivora OS",
+      "keywords": [
+        "calculator",
+        "math",
+        "arithmetic"
+      ],
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "gui.notify"
+      ],
+      "settings_key": "burrows_calculator",
+      "min_os_version": "13.0",
+      "window": {
+        "width": 720,
+        "height": 480,
+        "resizable": true,
+        "centered": true
+      },
+      "icon": "res/calculator.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/burrows-calculator.json"
     }
   ]
 }

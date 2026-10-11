@@ -57,8 +57,15 @@ stage2_entry:
 .splash_done:
         pop es
 
+        mov ah, 0x02
+        xor bh, bh
+        mov dh, 1
+        mov dl, 4
+        int 0x10
+
         mov si, msg_stage2
         call print16
+        call newline16
 
         ;---------------------------------------
         ; Detect memory map via BIOS int 0x15, EAX=0xE820
@@ -100,6 +107,7 @@ detect_memory:
         call putchar16
         mov si, msg_entries
         call print16
+        call newline16
 
         ;---------------------------------------
         ; Kernel loaded in 64KB chunks: BIOS int 0x13 to 0x10000, then
@@ -177,6 +185,7 @@ load_kernel:
 .lk_done:
         mov si, msg_ok
         call print16
+        call newline16
         jmp enter_pmode
 
 .lk_fail:
@@ -190,6 +199,7 @@ load_kernel:
 enter_pmode:
         mov si, msg_pmode
         call print16
+        call newline16
 
         cli                             ; No interrupts during switch
 
@@ -523,11 +533,47 @@ print16:
         lodsb
         or al, al
         jz .done
+        cmp al, 0x0D
+        je .carriage_return
+        cmp al, 0x0A
+        je .line_feed
         mov ah, 0x0E
         mov bx, 0x0007
         int 0x10
         jmp print16
+.carriage_return:
+        mov ah, 0x03
+        xor bh, bh
+        int 0x10
+        xor dl, dl
+        mov ah, 0x02
+        int 0x10
+        jmp print16
+.line_feed:
+        mov ah, 0x03
+        xor bh, bh
+        int 0x10
+        inc dh
+        mov ah, 0x02
+        int 0x10
+        jmp print16
 .done:
+        ret
+
+newline16:
+        push ax
+        push bx
+        push dx
+        mov ah, 0x03
+        xor bh, bh
+        int 0x10
+        inc dh
+        xor dl, dl
+        mov ah, 0x02
+        int 0x10
+        pop dx
+        pop bx
+        pop ax
         ret
 
 ;---------------------------------------
@@ -625,13 +671,13 @@ xmem_gdt:
 
 kern_dap:       times 16 db 0
 
-msg_stage2:     db "Stage 2 loader", 0x0D, 0x0A, 0
+msg_stage2:     db "Stage 2 loader", 0
 msg_mem:        db "Memory: ", 0
-msg_entries:    db " regions", 0x0D, 0x0A, 0
+msg_entries:    db " regions", 0
 msg_load_kern:  db "Loading kernel", 0
-msg_ok:         db " OK", 0x0D, 0x0A, 0
+msg_ok:         db " OK", 0
 msg_load_fail:  db "Kernel load fail!", 0
-msg_pmode:      db "Entering protected mode...", 0x0D, 0x0A, 0
+msg_pmode:      db "Entering protected mode...", 0
 splash_title:   db "Mellivora OS - Booting...", 0
 
 ;---------------------------------------

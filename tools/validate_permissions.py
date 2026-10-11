@@ -25,8 +25,8 @@ CATEGORY_POLICY: dict[str, set[str]] = {
     "media": {"audio.play", "audio.record", "gui.framebuf", "gui.mouse"},
     "game": {"gui.framebuf", "gui.mouse", "audio.play"},
     "dev": {"filesystem.read", "filesystem.write", "filesystem.exec", "system.processes"},
-    "terminal": {"filesystem.read", "filesystem.write", "filesystem.exec", "gui.framebuf", "gui.mouse"},
-    "system": {"system.processes", "system.reboot", "hardware.pci", "hardware.serial"},
+    "terminal": {"filesystem.read", "filesystem.write", "filesystem.exec", "gui.framebuf", "gui.compositor", "gui.notify", "gui.mouse"},
+    "system": {"filesystem.read", "filesystem.write", "filesystem.exec", "gui.framebuf", "gui.compositor", "gui.notify", "gui.mouse", "system.processes", "system.reboot", "hardware.pci", "hardware.serial"},
     "utility": {"filesystem.read", "filesystem.write", "gui.notify"},
 }
 

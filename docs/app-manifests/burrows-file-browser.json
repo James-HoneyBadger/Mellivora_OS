@@ -1,0 +1,35 @@
+{
+  "id": "os.mellivora.bhive",
+  "name": "Burrows File Browser",
+  "version": "13.0.0",
+  "entry": "bhive",
+  "category": "file",
+  "description": "File browser for navigating and managing HBFS volumes",
+  "author": "Mellivora OS",
+  "keywords": [
+    "file",
+    "browser",
+    "hbfs",
+    "filesystem"
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.clipboard",
+    "gui.notify",
+    "gui.mouse"
+  ],
+  "settings_key": "burrows_file_browser",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 960,
+    "height": 720,
+    "resizable": true,
+    "centered": false
+  },
+  "icon": "res/folder.icon",
+  "launch_mode": "normal"
+}

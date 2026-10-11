@@ -68,7 +68,7 @@ EVT_CLOSE       equ 4
 GUI_MENU_X      equ 4
 GUI_MENU_W      equ 160
 GUI_MENU_ITEM_H equ 24
-GUI_MENU_ITEMS  equ 12
+GUI_MENU_ITEMS  equ 13
 
 ; Theme struct offsets (12 colors x 4 bytes = 48 bytes)
 THEME_DESKTOP_BG        equ 0
@@ -1446,7 +1446,7 @@ ICON_SIZE       equ 32          ; icon box width/height
 ICON_START_X    equ 20          ; first column x
 ICON_START_Y    equ 16          ; first row y
 ICON_COLS       equ 1           ; single column of icons
-ICON_COUNT      equ 8           ; number of desktop icons
+ICON_COUNT      equ 9           ; number of desktop icons
 
 ;---------------------------------------
 ; gui_draw_desktop_icons - Draw icons on desktop surface
@@ -3235,8 +3235,10 @@ gui_menu_select:
         cmp eax, 9
         je .ms_sysmon
         cmp eax, 10
-        je .ms_about
+        je .ms_launcher
         cmp eax, 11
+        je .ms_about
+        cmp eax, 12
         je .ms_exit
         popad
         ret
@@ -3285,6 +3287,11 @@ gui_menu_select:
         ret
 .ms_sysmon:
         mov esi, gui_prog_bsysmon
+        call gui_launch_app
+        popad
+        ret
+.ms_launcher:
+        mov esi, gui_prog_blauncher
         call gui_launch_app
         popad
         ret
@@ -6294,6 +6301,7 @@ gui_str_m_timewarp: db "Time Warp", 0
 gui_str_m_clock:    db "Clock", 0
 gui_str_m_settings: db "Settings", 0
 gui_str_m_sysmon:   db "BSysMon", 0
+gui_str_m_launcher: db "Launcher", 0
 gui_str_m_about:    db "About", 0
 gui_str_m_exit:     db "Exit Desktop", 0
 
@@ -6308,6 +6316,7 @@ gui_menu_strings:
         dd gui_str_m_clock
         dd gui_str_m_settings
         dd gui_str_m_sysmon
+        dd gui_str_m_launcher
         dd gui_str_m_about
         dd gui_str_m_exit
 
@@ -6319,10 +6328,11 @@ gui_prog_bedit:     db "bedit", 0
 gui_prog_bcalc:     db "bcalc", 0
 gui_prog_bpaint:    db "bpaint", 0
 gui_prog_bsysmon:   db "bsysmon", 0
+gui_prog_blauncher: db "blauncher", 0
 gui_prog_timewarp:  db "timewarp", 0
 
 ; Desktop icon data
-gui_icon_symbols:   db 'T', 'H', 'W', 'E', 'C', 'P', 'Z', 'M', 0
+gui_icon_symbols:   db 'T', 'H', 'W', 'E', 'C', 'P', 'Z', 'M', 'L', 0
 
 gui_icon_labels:
         dd gui_str_ic_term
@@ -6333,6 +6343,7 @@ gui_icon_labels:
         dd gui_str_ic_paint
         dd gui_str_ic_timewarp
         dd gui_str_ic_sysmon
+        dd gui_str_ic_launcher
 
 gui_icon_progs:
         dd gui_prog_bterm
@@ -6343,8 +6354,9 @@ gui_icon_progs:
         dd gui_prog_bpaint
         dd gui_prog_timewarp
         dd gui_prog_bsysmon
+        dd gui_prog_blauncher
 
-gui_str_ic_term:    db "BTerm", 0
+gui_str_ic_term:     db "BTerm", 0
 gui_str_ic_files:   db "BHive", 0
 gui_str_ic_forager: db "BForager", 0
 gui_str_ic_edit:    db "BEdit", 0
@@ -6352,6 +6364,7 @@ gui_str_ic_calc:    db "BCalc", 0
 gui_str_ic_paint:   db "BPaint", 0
 gui_str_ic_timewarp: db "Time Warp", 0
 gui_str_ic_sysmon:  db "BSysMon", 0
+gui_str_ic_launcher: db "Launcher", 0
 
 ; Right-click context menu strings
 gui_str_ctx_term:   db "Open BTerm", 0

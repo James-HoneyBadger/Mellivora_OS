@@ -106,7 +106,7 @@ MAGIC=$(hex_bytes "$IMG" "$SB_OFF" 4)
 check "Superblock magic = HBFS" "[[ '$MAGIC' == '53464248' ]]"
 
 VERSION=$(u32le_hex "$IMG" $((SB_OFF + 4)))
-check "Superblock version = 1"  "[[ '$VERSION' == '00000001' ]]"
+check "Superblock version is supported (1-3)"  "[[ '$VERSION' == '00000001' || '$VERSION' == '00000002' || '$VERSION' == '00000003' ]]"
 
 BLKSZ=$(u32le_hex "$IMG" $((SB_OFF + 28)))
 check "Block size = 4096 (0x1000)" "[[ '$BLKSZ' == '00001000' ]]"

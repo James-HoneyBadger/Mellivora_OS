@@ -1,0 +1,33 @@
+{
+  "id": "os.mellivora.bterm",
+  "name": "Burrows Terminal",
+  "version": "13.0.0",
+  "entry": "bterm",
+  "category": "terminal",
+  "description": "Graphical terminal for shell commands and interactive programs",
+  "author": "Mellivora OS",
+  "keywords": [
+    "terminal",
+    "shell",
+    "console",
+    "command"
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.notify"
+  ],
+  "settings_key": "burrows_terminal",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 900,
+    "height": 600,
+    "resizable": true,
+    "centered": false
+  },
+  "icon": "res/terminal.icon",
+  "launch_mode": "normal"
+}

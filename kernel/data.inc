@@ -104,15 +104,15 @@ banner_str:
         db COLOR_HEADER                                     ; color prefix byte
         db 0xC9                                             ; ╔
         times 78 db 0xCD                                   ; ══...══
-        db 0xBB, 0x0A                                      ; ╗\n
-        db 0xBA, "      Mellivora OS  v13.0.0          Honey Badger Operating System           ", 0xBA, 0x0A
+        db 0xBB                                             ; ╗
+        db 0xBA, "      Mellivora OS  v13.0.0          Honey Badger Operating System           ", " ", 0xBA
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
-        db 0xB9, 0x0A                                      ; ╣\n
-        db 0xBA, "  HBFS v3  ", 0xF9, "  182 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA, 0x0A
+        db 0xB9                                             ; ╣
+        db 0xBA, "  HBFS v3  ", 0xF9, "  182 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
-        db 0xBC, 0x0A, 0                                   ; ╝\n\0
+        db 0xBC, 0                                        ; ╝\0
 
 motd_str:
         db "  Type 'help' for commands  |  'ver' for system info  |  'burrows' for the GUI", 0x0A, 0
@@ -436,6 +436,7 @@ help_text:
         db "  nice P CMD - Run command at priority (0-3)", 0x0A
         db " Shortcuts:", 0x0A
         db "  Tab        - Auto-complete filename", 0x0A
+        db "  Arrows     - Move cursor; Ctrl+D deletes forward", 0x0A
         db "  Ctrl+C     - Cancel current input", 0x0A
         db "  Ctrl+A/E   - Move cursor to start/end", 0x0A
         db "  Ctrl+U     - Kill line (clear input)", 0x0A

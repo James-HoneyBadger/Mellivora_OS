@@ -120,7 +120,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest check-qemu
+.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu
 
 all: $(IMAGE)
 
@@ -219,6 +219,11 @@ programs:
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
 
+programs/blauncher.bin: programs/generated_app_catalog.inc
+
+programs/generated_app_catalog.inc: docs/app-catalog.json tools/generate_launcher_catalog.py
+	@python3 tools/generate_launcher_catalog.py
+
 # Populate disk image with files and programs
 populate: $(IMAGE) programs populate.py
 	@echo "=== Populating filesystem ==="
@@ -290,7 +295,7 @@ iso-verify: $(ISO_FILE)
 	 fi
 
 # Run regression tests (requires full build)
-check: full
+check: full check-samples
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -324,7 +329,13 @@ app-catalog:
 check-app-catalog:
 	@python3 tools/generate_app_catalog.py --check
 
-lint: validate-constants validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog validate-manifest
+launcher-catalog: docs/app-catalog.json tools/generate_launcher_catalog.py
+	@python3 tools/generate_launcher_catalog.py
+
+check-launcher-catalog:
+	@python3 tools/generate_launcher_catalog.py --check
+
+lint: validate-constants validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
 	@echo "=== Lint checks complete ==="
 
@@ -358,6 +369,12 @@ bench-baseline:
 # App manifest schema validation (requires jsonschema: pip install jsonschema)
 validate-manifest:
 	@python3 tools/validate_manifest.py
+
+validate-manifest-coverage:
+	@python3 tools/validate_manifest.py --coverage
+
+check-samples:
+	@python3 tools/check_samples.py
 
 # Phase 4: nightly-style sanitize build. Defines KERNEL_DEBUG_BOUNDS so any
 # compile-time bounds-check macros are enabled, then runs the regression
@@ -542,6 +559,8 @@ help:
 	@echo "    make check-syscalls-md Verify docs/syscalls.md is up to date"
 	@echo "    make app-catalog  Generate docs/app-catalog.json from bundled manifests"
 	@echo "    make check-app-catalog Verify docs/app-catalog.json is up to date"
+	@echo "    make launcher-catalog Generate the launcher app table from app-catalog.json"
+	@echo "    make check-launcher-catalog Verify the launcher app table is up to date"
 	@echo "    make validate-permissions Validate app permissions against platform policy"
 	@echo "    make bench        Run build-time benchmark suite"
 	@echo "    make bench-check  Run benchmarks and fail on regression"
@@ -549,6 +568,8 @@ help:
 	@echo "    make bench-trend  Generate benchmark trend summary/json"
 	@echo "    make bench-trend-check Fail on sustained trend regressions when enough history exists"
 	@echo "    make validate-manifest Validate app manifest examples against schema"
+	@echo "    make validate-manifest-coverage Check program sources for missing manifests"
+	@echo "    make check-samples  Syntax-check sample programs across supported languages"
 	@echo "    make qa-sprint1   Run Sprint 1 gate (lint + check)"
 	@echo "    make sizes        Show component and ISO binary sizes"
 	@echo "    make count        Lines of code statistics by component"

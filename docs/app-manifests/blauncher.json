@@ -1,0 +1,30 @@
+{
+  "id": "os.mellivora.blauncher",
+  "name": "Burrows Launcher",
+  "version": "13.0.0",
+  "entry": "blauncher",
+  "category": "system",
+  "description": "Desktop launcher, app switcher, and Burrows taskbar controller",
+  "author": "Mellivora OS",
+  "keywords": ["launcher", "desktop", "taskbar", "switcher", "system"],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.mouse",
+    "gui.notify",
+    "system.processes"
+  ],
+  "settings_key": "blauncher",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "centered": true
+  },
+  "icon": "res/launcher.icon",
+  "launch_mode": "normal"
+}

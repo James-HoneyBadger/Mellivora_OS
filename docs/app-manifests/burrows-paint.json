@@ -1,0 +1,35 @@
+{
+  "id": "os.mellivora.bpaint",
+  "name": "Burrows Paint",
+  "version": "13.0.0",
+  "entry": "bpaint",
+  "category": "editor",
+  "description": "Pixel drawing workspace for simple images and sketches",
+  "author": "Mellivora OS",
+  "keywords": [
+    "paint",
+    "drawing",
+    "pixel",
+    "image"
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.exec",
+    "gui.framebuf",
+    "gui.compositor",
+    "gui.clipboard",
+    "gui.notify",
+    "gui.mouse"
+  ],
+  "settings_key": "burrows_paint",
+  "min_os_version": "13.0",
+  "window": {
+    "width": 1024,
+    "height": 768,
+    "resizable": true,
+    "centered": false
+  },
+  "icon": "res/paint.icon",
+  "launch_mode": "normal"
+}

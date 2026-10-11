@@ -5,14 +5,14 @@
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
 Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 182 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
-compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 231 assembly programs, and 31 bundled samples (C, Perl, and BASIC).
+compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** BIOS 3-stage boot or UEFI (gnu-efi PE32+) into 32-bit protected mode; optional x86-64 long-mode path
-- **Userland:** 90+ shell commands, 231 assembly programs, and 31 bundled samples (C, Perl, and BASIC)
+- **Userland:** 90+ shell commands, 235 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC)
 - **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
 
@@ -90,7 +90,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 231 assembl
 - **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
 - **GDB remote stub** (v11) — RSP protocol over COM1; supports registers, memory, continue, step, breakpoints
 
-### Programs (231 assembly + 31 bundled samples)
+### Programs (235 assembly sources + 37 bundled samples)
 
 - **Games (31)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
@@ -100,7 +100,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 231 assembl
 - **Network tools**: ping, wget, nc, ftp, telnet, irc, gopher, dig, traceroute, whois, daytime
 - **Daily-driver suite (new)**: `tutorial`, `pkginfo`, `meminfo`, `journal`, `bcal`, `theme`, `tag`, `histgrep`, `bnotify`, `mkprog`, `dnslook`, `play`, `nim`, `plasma`, `tldr`, `todo`, `pomodoro`, `morse`, `wiki`, `color`, `stopwatch`, `countdown`, `passgen`, `dice`, `coin`, `tip`, `roll`, `pick`, `reverse`, `upper`, `lower`, `countc`
 - **API Libraries**: 17 reusable `.inc` libraries in `programs/lib/` (string, I/O, math, VGA, memory, data, net, GUI, VBE, font, audio, highscore, and more)
-- **Samples**: 17 C programs + 9 Perl scripts + 5 BASIC scripts in `/samples`
+- **Samples**: 2 NASM programs + 18 C programs + 11 Perl scripts + 6 BASIC scripts in `/samples`; see [the sample catalog](docs/SAMPLES.md)
 
 ---
 
@@ -158,9 +158,10 @@ Lair:/> perl /samples/hello.pl # Run a Perl script
 
 ```text
 /
-├── bin/          190 utility programs (edit, grep, sort, tcc, wget, nc, ...)
+├── bin/          Generated utility programs (edit, grep, sort, tcc, wget, nc, ...)
 ├── games/         29 games (snake, tetris, galaga, pacman, rogue, robotown, ...)
-├── samples/       31 source files (hello.c, fib.c, hello.pl, fizzbuzz.pl, hello.bas, ...)
+├── Burrows/       Generated GUI applications (bedit, bforager, bterm, bsheet, ...)
+├── samples/       37 source files (hello_burrows.asm, word_stats.c, prime_report.pl, temperature.bas, ...)
 ├── docs/           text files (readme.txt, license.txt, notes.txt, ...)
 └── script.bat      Example batch script
 ```
@@ -173,7 +174,7 @@ Programs in `/bin` and `/games` are in the default PATH, so they run from any di
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (512 bytes, 16-bit)
 ├── stage2.asm              Stage 2 loader (A20, E820, long mode switch)
-├── kernel.asm              Kernel entry + modular includes (22 files in `kernel/`)
+├── kernel.asm              Kernel entry + 30 modular includes in `kernel/`
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
 ├── CHANGELOG.md            Version history (v1.0 → v13.0.0)
@@ -189,13 +190,13 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (231 programs total)
-├── samples/                C, Perl, and BASIC source files
+│   └── ...                 (235 assembly sources total)
+├── samples/                NASM, C, Perl, and BASIC source files
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c, hanoi.c
 │   ├── bf.c, wumpus.c, boxes.c, stars.c, echo.c
 │   ├── hello.pl, factorial.pl, fizzbuzz.pl, guess.pl, strings.pl, arrays.pl
 │   ├── hello.bas, fib.bas, blackjack.bas, mandelbrot.bas, snake.bas
-│   └── ...                 (31 samples total — 17 C + 9 Perl + 5 BASIC)
+│   └── ...                 (37 samples total — 2 NASM + 18 C + 11 Perl + 6 BASIC)
 ├── tests/                  Regression test suite
 │   ├── test_build.sh       Build-time checks
 │   └── test_hbfs.py        HBFS filesystem integrity checks
@@ -220,6 +221,7 @@ Mellivora_OS/
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, memory map, HBFS, drivers |
 | [Tutorial](docs/TUTORIAL.md) | Step-by-step beginner walkthrough |
 | [API Reference](docs/API_REFERENCE.md) | Library functions and calling conventions |
+| [Sample Catalog](docs/SAMPLES.md) | Guided examples across NASM, C, Perl, and BASIC |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
 
 ---
@@ -317,6 +319,23 @@ Mellivora_OS/
 | `make check` | Run the regression suite and HBFS integrity checks |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Show component sizes |
+| `make programs` | Assemble all user programs |
+| `make populate` | Populate the existing image filesystem |
+| `make kernel-only` | Rebuild and patch the kernel and stage 2 |
+| `make lint` | Run repository consistency and NASM checks |
+| `make check-samples` | Validate NASM, C, Perl, and BASIC sample sources |
+| `make check-qemu` | Verify that QEMU is available |
+| `make run-serial` | Boot with a diagnostic serial TCP endpoint on port 4555 |
+| `make run-iso` | Boot the ISO with the disk image attached |
+| `make iso-lite` | Build the smaller documentation/live ISO |
+| `make iso-verify` | Inspect generated ISO boot metadata |
+| `make sanitize` | Clean-build with bounds instrumentation and run regressions |
+| `make bench` | Measure build and validation stages |
+| `make bench-check` | Compare measurements with the benchmark baseline |
+| `make uefi` | Build the optional UEFI loader |
+| `make run-uefi` | Boot the optional UEFI image |
+| `make 64bit` | Build the experimental long-mode path |
+| `make hbpkg` | Build the host package-manager utility |
 
 ---
 
@@ -344,11 +363,11 @@ ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on A
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | Entry file + 26 modular include files |
+| Kernel source | Entry file + 30 modular include files |
 | Syscalls | 182 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 231 assembly apps |
-| Bundled samples | 31 (17 C + 9 Perl + 5 BAS) in `/samples` |
+| User programs | 235 assembly sources built by the Makefile |
+| Bundled samples | 37 (2 NASM + 18 C + 11 Perl + 6 BASIC) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |
 | HBFS root capacity | 455 files; 224 files per subdirectory |
