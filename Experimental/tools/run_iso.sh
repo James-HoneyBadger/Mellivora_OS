@@ -11,7 +11,7 @@
 # Usage:
 #   ./run_iso.sh [mellivora.iso]
 #
-# Requirements: qemu-system-i386, one of: xorriso, bsdtar, 7z
+# Requirements: qemu-system-x86_64 or qemu-system-i386, one of: xorriso, bsdtar, 7z
 #
 set -euo pipefail
 
@@ -46,7 +46,7 @@ show_help() {
   echo "  -h, --help    Show this help message"
   echo ""
   echo "Environment variables:"
-  echo "  QEMU                  QEMU binary (default: qemu-system-i386)"
+  echo "  QEMU                  QEMU binary (auto-detected; x86_64 preferred)"
   echo "  QEMU_AUDIO_BACKEND    Audio backend: none, pa, alsa (default: none)"
   echo "  QEMU_EXTRA_ARGS       Extra arguments passed to QEMU"
   echo ""
@@ -71,9 +71,18 @@ if [[ ! -f "$ISO" ]]; then
   die "ISO file not found: $ISO"
 fi
 
-QEMU="${QEMU:-qemu-system-i386}"
-if ! command -v "$QEMU" >/dev/null 2>&1; then
-  die "$QEMU not found — install QEMU or set QEMU= to the correct binary"
+if [[ -n "${QEMU:-}" ]]; then
+  QEMU_CMD=("$QEMU")
+elif command -v qemu-system-x86_64 >/dev/null 2>&1; then
+  QEMU_CMD=("$(command -v qemu-system-x86_64)")
+elif command -v qemu-system-i386 >/dev/null 2>&1; then
+  QEMU_CMD=("$(command -v qemu-system-i386)")
+elif [[ -x "$HOME/.local/bin/qemu-system-x86_64" ]]; then
+  QEMU_CMD=("$HOME/.local/bin/qemu-system-x86_64")
+elif [[ -x /usr/bin/flatpak-spawn ]]; then
+  QEMU_CMD=(/usr/bin/flatpak-spawn --host qemu-system-x86_64)
+else
+  die "QEMU x86 system emulator not found — install qemu-system-x86 or build it for this host"
 fi
 
 # ── Extract disk image from ISO ──────────────────────────────────────
@@ -108,7 +117,7 @@ AUDIO="${QEMU_AUDIO_BACKEND:-none}"
 EXTRA="${QEMU_EXTRA_ARGS:-}"
 
 echo ""
-info "QEMU:    ${BLD}$QEMU${RST}"
+info "QEMU:    ${BLD}${QEMU_CMD[*]}${RST}"
 info "CPU:     ${BLD}i486${RST}  RAM: ${BLD}128 MB${RST}"
 info "Boot:    ${BLD}CD-ROM${RST} (El Torito) + ${BLD}IDE disk${RST} (HBFS)"
 info "Audio:   ${BLD}$AUDIO${RST}"
@@ -119,7 +128,7 @@ ok "Launching Mellivora OS ..."
 echo ""
 
 # shellcheck disable=SC2086
-exec "$QEMU" \
+exec "${QEMU_CMD[@]}" \
   -cpu 486 \
   -m 128 \
   -cdrom "$ISO" \

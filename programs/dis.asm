@@ -966,13 +966,13 @@ decode_insn:
         cmp bl, 0xBB
         je .0f_btc
         jmp .0f_unk
-.0f_bt:  mov [tmp_r], dword bt_mnem
+.0f_bt:  mov dword [tmp_r], bt_mnem
         jmp .0f_bt_common
-.0f_bts: mov [tmp_r], dword bts_mnem
+.0f_bts: mov dword [tmp_r], bts_mnem
         jmp .0f_bt_common
-.0f_btr: mov [tmp_r], dword btr_mnem
+.0f_btr: mov dword [tmp_r], btr_mnem
         jmp .0f_bt_common
-.0f_btc: mov [tmp_r], dword btc_mnem
+.0f_btc: mov dword [tmp_r], btc_mnem
 .0f_bt_common:
         inc esi
         call parse_modrm
@@ -2269,7 +2269,7 @@ arg_buf:     times 256 db 0
 start_offset: dd 0
 file_len:    dd 0
 cur_op:      db 0
-tmp_r:       db 0
+tmp_r:       dd 0
 tmp_imm:     dd 0
 
 modrm_mod:   db 0

@@ -41,6 +41,87 @@ sudo dnf install nasm qemu-system-x86 make python3
 sudo pacman -S nasm qemu-full make python
 ```
 
+### Linux Host Architectures
+
+Mellivora is a 32-bit x86 guest. On an x86_64 Linux host, run it with QEMU or boot it on compatible x86 hardware. On an ARM64/aarch64 Linux host, run it under QEMU's x86 system emulator; QEMU translates the guest instructions in software, so performance is typically slower. ARM hardware cannot boot Mellivora natively.
+
+#### Install a packaged emulator
+
+Use the distribution's x86 system-emulation package, not an ARM-only QEMU target:
+
+```bash
+# Debian/Ubuntu, including ARM64
+sudo apt update
+sudo apt install qemu-system-x86
+
+# Arch Linux x86_64
+sudo pacman -Syu qemu-full
+```
+
+On Arch Linux ARM, pacman may report that `qemu-system-x86` requires `seabios` or `edk2-ovmf` packages that are unavailable in the enabled repositories. A full sync does not fix dependencies absent from those repositories. Do not skip the package, force-install it with `--nodeps`, or install x86_64 host packages on ARM. The normal `make run` path is BIOS boot; it does not need OVMF. Build QEMU on the ARM host instead.
+
+The Makefile searches for `qemu-system-x86_64`, then `qemu-system-i386`, then `~/.local/bin/qemu-system-x86_64`; it also supports the VS Code Flatpak host launcher. On ARM, host audio defaults to `none`; on other hosts the existing PulseAudio default is retained. Set `QEMU` or `QEMU_AUDIO_BACKEND` explicitly to override these choices.
+
+#### Build QEMU from source
+
+Install the native build dependencies for your host distribution:
+
+```bash
+# Debian/Ubuntu
+sudo apt install build-essential git python3 pkg-config ninja-build \
+  libglib2.0-dev libpixman-1-dev libslirp-dev
+
+# Fedora
+sudo dnf install gcc gcc-c++ git make python3 pkgconf-pkg-config ninja-build \
+  glib2-devel pixman-devel libslirp-devel
+
+# Arch Linux / Arch Linux ARM
+sudo pacman -S --needed base-devel git python pkgconf glib2 pixman libslirp ninja
+```
+
+Then build only the x86 system emulator. These commands build QEMU for the current host (including ARM) while enabling x86 guests:
+
+```bash
+mkdir -p ~/src
+cd ~/src
+git clone https://gitlab.com/qemu-project/qemu.git
+cd qemu
+mkdir build
+cd build
+../configure --prefix="$HOME/.local" --target-list=x86_64-softmmu
+make -j"$(nproc)"
+make install
+```
+
+QEMU's source tree provides the default x86 BIOS firmware used by `make run`. After installation, the Makefile discovers the local binary automatically:
+
+```bash
+cd /path/to/Mellivora_OS
+make run
+```
+
+If auto-detection does not find it, or you want to choose a particular backend, use:
+
+```bash
+make run QEMU="$HOME/.local/bin/qemu-system-x86_64" QEMU_AUDIO_BACKEND=none
+```
+
+`x86_64-softmmu` supports this 32-bit x86 guest. The host QEMU binary is still ARM-native; only the guest is x86-emulated.
+
+#### Optional UEFI boot
+
+`make run-uefi` is separate from the BIOS `make run` path. It needs an x86_64 UEFI loader toolchain and **x86_64 OVMF firmware**. On ARM, do not use AArch64 OVMF files: QEMU is emulating an x86 machine, so its firmware must also be x86. Firmware package names and paths vary by distro. Locate both code and vars files, then pass their paths:
+
+On an ARM build host, `make uefi` also needs an x86_64 cross-compiler, x86_64 binutils, and GNU-EFI headers/libraries. Set `CC_EFI`, `LD_EFI`, `OBJCOPY`, `EFI_INCLUDE`, and `EFI_LIB` to the corresponding cross-toolchain paths if their names or locations differ. This is only for the optional UEFI loader; the regular BIOS build does not need a C cross-compiler.
+
+```bash
+find /usr/share -type f \( -iname 'OVMF_CODE*.fd' -o -iname 'OVMF_VARS*.fd' \)
+make run-uefi OVMF_CODE=/path/to/x86_64/OVMF_CODE.fd \
+  OVMF_VARS=/path/to/x86_64/OVMF_VARS.fd
+```
+
+If the ARM distro does not package x86_64 OVMF, use BIOS mode (`make run`) or obtain compatible x86_64 OVMF firmware separately. `make run-uefi` reports which firmware file is missing.
+
 ### Installing on macOS (Homebrew)
 
 ```bash

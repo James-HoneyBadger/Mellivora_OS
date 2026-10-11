@@ -324,8 +324,9 @@ Mellivora_OS/
 
 ### Emulation (Recommended)
 
-- QEMU 6.0+ with `qemu-system-i386` (or `qemu-system-x86_64` in compatibility mode)
-- Any modern host OS (Linux, macOS, Windows with WSL)
+- QEMU 6.0+ with the x86 system-emulation target (`qemu-system-x86_64` or `qemu-system-i386`)
+- Linux hosts may be x86_64 or ARM64/aarch64. On ARM, QEMU uses software emulation to run the x86 guest and will be slower than on x86 hardware.
+- macOS or Windows with WSL can also run QEMU; see [Installation & Build Guide](docs/INSTALL.md) for host-specific setup.
 
 ### Real Hardware
 
@@ -334,6 +335,8 @@ Mellivora_OS/
 - IDE/SATA disk or USB drive (BIOS legacy boot)
 - VGA-compatible display
 - PS/2 keyboard
+
+ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on ARM Linux. The ARM-host setup, including a source-build fallback when distro packages are unavailable, is covered in the [Installation & Build Guide](docs/INSTALL.md#linux-host-architectures).
 
 ---
 

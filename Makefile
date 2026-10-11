@@ -13,10 +13,22 @@
 # not already set.  Override with:  make programs NPROC=1
 #
 
-NASM = $(if $(wildcard /usr/bin/flatpak-spawn),nasm,$(if $(shell command -v nasm 2>/dev/null),nasm,flatpak run --command=nasm com.visualstudio.code))
-QEMU = $(if $(wildcard /usr/bin/flatpak-spawn),/usr/bin/flatpak-spawn --host qemu-system-x86_64,qemu-system-x86_64)
+NASM = $(if $(wildcard /usr/bin/flatpak-spawn),nasm,$(if $(shell command -v nasm 2>/dev/null),nasm,$(if $(shell command -v flatpak 2>/dev/null),flatpak run --command=nasm com.visualstudio.code,$(error NASM is required to build Mellivora; install NASM or Flatpak with the VS Code app))))
+QEMU ?= $(shell \
+	if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+		command -v qemu-system-x86_64; \
+	elif command -v qemu-system-i386 >/dev/null 2>&1; then \
+		command -v qemu-system-i386; \
+	elif [ -x "$$HOME/.local/bin/qemu-system-x86_64" ]; then \
+		printf '%s' "$$HOME/.local/bin/qemu-system-x86_64"; \
+	elif [ -x /usr/bin/flatpak-spawn ]; then \
+		printf '%s' '/usr/bin/flatpak-spawn --host qemu-system-x86_64'; \
+	else \
+		printf '%s' 'qemu-system-x86_64'; \
+	fi)
 DD = dd
 UNAME_S := $(shell uname -s)
+HOST_ARCH := $(shell uname -m)
 # Phase 3.1: portable parallelism detection — try Linux nproc, then BSD/macOS
 # sysctl, then POSIX getconf, then a safe default of 4 cores.
 NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -65,7 +77,7 @@ KERNEL_SRC = kernel.asm
 # Override manually when needed, e.g.:
 #   make run QEMU_AUDIO_BACKEND=alsa
 #   make run QEMU_AUDIO_BACKEND=pa
-QEMU_AUDIO_BACKEND ?= pa
+QEMU_AUDIO_BACKEND ?= $(if $(filter aarch64 arm64 arm%,$(HOST_ARCH)),none,pa)
 ifeq ($(UNAME_S),Darwin)
 QEMU_AUDIO_BACKEND = coreaudio
 endif
@@ -108,7 +120,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest
+.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest check-qemu
 
 all: $(IMAGE)
 
@@ -165,26 +177,37 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@ls -la $(IMAGE)
 
 # Run in QEMU with i486 CPU
-run: $(IMAGE)
+check-qemu:
+	@QEMU_BIN='$(firstword $(QEMU))'; \
+		if ! command -v "$$QEMU_BIN" >/dev/null 2>&1; then \
+			echo "ERROR: QEMU x86 system emulator not found: $$QEMU_BIN"; \
+			case "$(HOST_ARCH)" in \
+				aarch64|arm64|arm*) echo "  ARM Linux: install qemu-system-x86, or build QEMU with --target-list=x86_64-softmmu; see docs/INSTALL.md." ;; \
+				*) echo "  Install qemu-system-x86_64 (or qemu-system-i386), or set QEMU=/path/to/qemu-system-x86_64." ;; \
+			esac; \
+			exit 1; \
+		fi
+
+run: check-qemu $(IMAGE)
 	@echo "=== Launching Mellivora in QEMU (i486 CPU, 128MB RAM) ==="
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS)
 
 # Run with serial console on TCP port (connect with: nc localhost 4555)
-run-serial: $(IMAGE)
+run-serial: check-qemu $(IMAGE)
 	@echo "=== Launching Mellivora with serial on TCP port 4555 ==="
 	@echo "    Connect with:  nc localhost 4555"
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS) -serial tcp:127.0.0.1:4555,server=on,wait=off
 
 # Boot the ISO in QEMU: CD-ROM provides El Torito boot, IDE disk provides HBFS.
-run-iso: iso
+run-iso: check-qemu iso
 	@echo "=== Launching Mellivora from ISO (El Torito CD boot + IDE disk) ==="
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_FILE) -boot d
 
 # Run with debug output
-debug: $(IMAGE)
+debug: check-qemu $(IMAGE)
 	@echo "=== Launching Mellivora in QEMU (DEBUG MODE) ==="
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_DEBUG_FLAGS)
@@ -369,6 +392,7 @@ sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 
 # Quick dev loop: full build + run
 dev: full
+	$(MAKE) check-qemu
 	$(QEMU) $(QEMU_FLAGS)
 
 # -----------------------------------------------------------------------
@@ -429,9 +453,10 @@ $(UEFI_IMAGE): $(UEFI_EFI) $(KERNEL_BIN) programs
 	@ls -lh $(UEFI_IMAGE)
 
 # Run the UEFI disk image under QEMU with OVMF firmware
-run-uefi: $(UEFI_IMAGE)
+run-uefi: check-qemu $(UEFI_IMAGE)
 	@echo "=== Launching Mellivora in UEFI mode (OVMF, qemu64, 512 MB) ==="
-	@[ -f $(OVMF_CODE) ] || { echo "  ERROR: $(OVMF_CODE) not found. Install ovmf."; exit 1; }
+	@[ -f "$(OVMF_CODE)" ] || { echo "  ERROR: x86 OVMF code image not found: $(OVMF_CODE)"; echo "  Install x86_64 OVMF firmware and set OVMF_CODE=/path/to/OVMF_CODE.fd."; exit 1; }
+	@[ -f "$(OVMF_VARS)" ] || { echo "  ERROR: x86 OVMF variables image not found: $(OVMF_VARS)"; echo "  Set OVMF_VARS=/path/to/OVMF_VARS.fd."; exit 1; }
 	cp $(OVMF_VARS) /tmp/OVMF_VARS_rw.fd
 	$(QEMU) \
 		-cpu qemu64 -m 512 \
