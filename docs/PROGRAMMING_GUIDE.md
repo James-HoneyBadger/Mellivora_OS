@@ -1314,7 +1314,7 @@ launcher or a document window can open a second app and keep running:
 | --- | --- |
 | `F1` | Open (or focus) the launcher |
 | `F2` | Open a terminal |
-| `Alt+Tab` | Cycle focus between windows |
+| `Alt+Tab` | Cycle focus between windows (a switcher overlay lists them) |
 | `Ctrl+Alt+1`..`4` | Switch virtual workspace |
 | `Ctrl+C` | Abort the focused app and return to the desktop |
 

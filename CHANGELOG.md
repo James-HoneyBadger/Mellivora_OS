@@ -28,6 +28,8 @@ routed by focus and the desktop never blocking on a child program.
   shortcuts (`F1` launcher, `F2` terminal, `Alt+Tab`, `Ctrl+Alt+1..4`) are handled by
   the kernel even when nothing has focus, so a workspace switch can never strand the
   user.
+- **Alt+Tab switcher overlay** — cycling focus briefly shows a centred panel listing the
+  windows on the current workspace with the newly focused one highlighted.
 - **Virtual workspaces** — four workspaces with a taskbar indicator; switching focuses
   the topmost window on the destination workspace.
 - **Leaving the desktop is safe** — `SYS_GUI/GUI_EXIT_DESKTOP` (31) returns to the shell

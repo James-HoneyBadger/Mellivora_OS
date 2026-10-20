@@ -112,8 +112,8 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
   title-bar, taskbar and start-menu clicks are handled by the window manager
 - **Virtual workspaces** — four workspaces with a taskbar indicator (`Ctrl+Alt+1..4`)
 - **Launcher and shortcuts** — `F1` launcher with search and Exit Desktop, `F2`
-  terminal, `Alt+Tab` window cycling, `Ctrl+C` abort to desktop; desktop shortcuts work
-  even with no window focused
+  terminal, `Alt+Tab` window cycling with a switcher overlay, `Ctrl+C` abort to desktop;
+  desktop shortcuts work even with no window focused
 - **Clean teardown** — `SYS_GUI/GUI_EXIT_DESKTOP` returns to the text shell and reclaims
   every task, so a GUI app can never outlive the desktop
 

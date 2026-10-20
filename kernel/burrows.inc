@@ -78,6 +78,9 @@ EVT_KEY_PRESS   equ 3
 EVT_CLOSE       equ 4
 
 ; Menu constants
+GUI_SW_W        equ 260         ; Alt+Tab switcher width
+GUI_SW_ROW_H    equ 22          ; switcher row height
+GUI_SW_MAX      equ 8           ; switcher shows at most this many windows
 GUI_MENU_X      equ 4
 GUI_MENU_W      equ 160
 GUI_MENU_ITEM_H equ 24
@@ -1312,8 +1315,151 @@ gui_compose:
         call gui_draw_ctx_menu
 .no_ctx:
         call gui_draw_notifications
+        call gui_draw_switcher
         call gui_draw_cursor
         call gui_flip
+        popad
+        ret
+
+;---------------------------------------
+; gui_draw_switcher - Alt+Tab overlay listing windows on the active workspace
+;---------------------------------------
+gui_draw_switcher:
+        pushad
+        mov eax, [gui_switcher_until]
+        test eax, eax
+        jz .dsw_done
+        cmp [tick_count], eax
+        jb .dsw_draw
+        mov dword [gui_switcher_until], 0
+        jmp .dsw_done
+
+.dsw_draw:
+        call gui_target_screen
+
+        ; Collect the windows shown on this workspace.
+        mov dword [gui_sw_count], 0
+        xor ecx, ecx
+        mov esi, gui_win_table
+.dsw_collect:
+        cmp ecx, MAX_WINDOWS
+        jge .dsw_collected
+        mov eax, [esi + WIN_FLAGS]
+        and eax, 0x03
+        cmp eax, 0x03
+        jne .dsw_next
+        movzx eax, byte [esi + WIN_WORKSPACE]
+        cmp al, 0xFF
+        je .dsw_next
+        cmp al, [gui_active_workspace]
+        jne .dsw_next
+        mov eax, [gui_sw_count]
+        cmp eax, GUI_SW_MAX
+        jge .dsw_collected
+        mov [gui_sw_list + eax*4], ecx
+        inc dword [gui_sw_count]
+.dsw_next:
+        add esi, WIN_STRUCT_SIZE
+        inc ecx
+        jmp .dsw_collect
+.dsw_collected:
+        cmp dword [gui_sw_count], 0
+        je .dsw_done
+
+        ; Panel geometry: one 22px row per window plus a title row.
+        mov eax, [gui_sw_count]
+        imul eax, GUI_SW_ROW_H
+        add eax, GUI_SW_ROW_H
+        mov [gui_sw_h], eax
+        mov dword [gui_sw_w], GUI_SW_W
+        mov eax, GUI_SCREEN_W - GUI_SW_W
+        shr eax, 1
+        mov [gui_sw_x], eax
+        mov eax, GUI_SCREEN_H
+        sub eax, [gui_sw_h]
+        shr eax, 1
+        mov [gui_sw_y], eax
+
+        ; Shadow
+        mov eax, [gui_sw_x]
+        add eax, 4
+        mov ebx, [gui_sw_y]
+        add ebx, 4
+        mov ecx, [gui_sw_w]
+        mov edx, [gui_sw_h]
+        mov esi, 0x00101828
+        call gui_bb_fill_rect
+
+        ; Panel body and a highlight strip along the top edge
+        mov eax, [gui_sw_x]
+        mov ebx, [gui_sw_y]
+        mov ecx, [gui_sw_w]
+        mov edx, [gui_sw_h]
+        mov esi, [gui_theme + THEME_WINDOW_BG]
+        call gui_bb_fill_rect
+        mov eax, [gui_sw_x]
+        mov ebx, [gui_sw_y]
+        mov ecx, [gui_sw_w]
+        mov edx, GUI_SW_ROW_H
+        mov esi, [gui_theme + THEME_MENU_HIGHLIGHT]
+        call gui_bb_fill_rect
+
+        ; Panel title
+        mov eax, [gui_sw_x]
+        add eax, 8
+        mov ebx, [gui_sw_y]
+        add ebx, 5
+        mov esi, gui_str_switcher
+        mov edx, [gui_theme + THEME_TITLE_TEXT]
+        call gui_bb_draw_string
+
+        ; One row per window
+        xor ebp, ebp
+.dsw_rows:
+        cmp ebp, [gui_sw_count]
+        jge .dsw_done
+
+        mov eax, ebp
+        imul eax, GUI_SW_ROW_H
+        add eax, [gui_sw_y]
+        add eax, GUI_SW_ROW_H
+        mov [gui_sw_row_y], eax
+
+        ; The focused window gets the highlight colour and light text.
+        mov esi, [gui_theme + THEME_WINDOW_BG]
+        mov dword [gui_sw_text], 0x00202020
+        mov eax, [gui_sw_list + ebp*4]
+        cmp eax, [gui_focused_win]
+        jne .dsw_row_bg
+        mov esi, [gui_theme + THEME_ACCENT]
+        mov dword [gui_sw_text], 0x00FFFFFF
+.dsw_row_bg:
+        mov eax, [gui_sw_x]
+        add eax, 4
+        mov ebx, [gui_sw_row_y]
+        mov ecx, GUI_SW_W - 8
+        mov edx, GUI_SW_ROW_H - 2
+        call gui_bb_fill_rect
+
+        ; Row label, truncated to the panel width
+        mov esi, [gui_sw_list + ebp*4]
+        imul esi, WIN_STRUCT_SIZE
+        add esi, gui_win_table
+        add esi, WIN_TITLE
+        mov edi, gui_title_buf
+        mov ecx, 15
+        call gui_copy_trunc
+        mov eax, [gui_sw_x]
+        add eax, 12
+        mov ebx, [gui_sw_row_y]
+        add ebx, 5
+        mov esi, gui_title_buf
+        mov edx, [gui_sw_text]
+        call gui_bb_draw_string
+
+        inc ebp
+        jmp .dsw_rows
+.dsw_done:
         popad
         ret
 
@@ -2821,6 +2967,10 @@ gui_cycle_window:
         jne .cw_next
         ; Found a valid window — focus it
         call gui_focus_window
+        ; Show the switcher overlay briefly so the user can see where focus went.
+        mov eax, [tick_count]
+        add eax, 150                    ; ~1.5 s at 100 Hz
+        mov [gui_switcher_until], eax
         jmp .cw_done
 .cw_next:
         inc eax
@@ -7278,6 +7428,7 @@ gui_str_m_settings: db "Settings", 0
 gui_str_m_sysmon:   db "BSysMon", 0
 gui_str_m_launcher: db "Launcher", 0
 gui_str_m_about:    db "About", 0
+gui_str_switcher:   db "Switch window", 0
 gui_str_m_exit:     db "Exit Desktop", 0
 
 gui_menu_strings:
@@ -7542,6 +7693,15 @@ gui_resize_my0:     dd 0           ; initial mouse y
 gui_resize_w0:      dd 0           ; original window width
 gui_resize_h0:      dd 0           ; original window height
 gui_focused_win:    dd -1
+gui_switcher_until: dd 0          ; tick deadline for the Alt+Tab overlay
+gui_sw_count:       dd 0
+gui_sw_x:           dd 0
+gui_sw_y:           dd 0
+gui_sw_w:           dd 0
+gui_sw_h:           dd 0
+gui_sw_row_y:       dd 0
+gui_sw_text:        dd 0
+gui_sw_list:        times 8 dd 0
 gui_win_count:      dd 0
 gui_next_z:         dd 0
 gui_menu_sel:       dd -1
