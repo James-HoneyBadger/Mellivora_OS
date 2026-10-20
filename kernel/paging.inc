@@ -301,6 +301,17 @@ isr_page_fault:
         cmp  eax, USER_DEMAND_MAX
         jae  .pf_kernel_fault
 
+        ; Fail closed: the address must belong to a mapping this task owns.
+        ; Blindly allocating on any demand-zone touch would resurrect memory
+        ; that munmap just released (and turn every stray pointer into a
+        ; silent allocation).
+        push eax
+        mov  ebx, eax
+        call vm_find_area
+        pop  ebx
+        test eax, eax
+        jz   .pf_kernel_fault
+
         ; Allocate a physical page
         call pmm_alloc_page      ; EAX = phys addr or 0
         test eax, eax

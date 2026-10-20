@@ -89,6 +89,15 @@ routed by focus and the desktop never blocking on a child program.
   Kernel memory is now supervisor-only; user access is granted per page to exactly the
   things a process needs: its program window, the legacy VGA text aperture, the VBE
   shadow framebuffer, IPC surface pixels and shared memory (`paging_map_phys_user`).
+- **Real `mmap`/`munmap`/`mprotect`** — `kernel/vm.inc` adds a per-task `vm_area` table,
+  anonymous mappings in the demand zone with randomized placement, page-level
+  protection changes, frame release on `munmap`, and W^X enforcement (writable and
+  executable never co-exist unless `MAP_JIT` is requested). Demand faults now **fail
+  closed**: an address is only serviced if it belongs to one of the task's mappings, so
+  a stray pointer or a just-freed range faults instead of silently allocating.
+- **`SYS_MALLOC` published to ring 3** — legacy page allocations are mapped
+  user-accessible, so `tcc`, `audiodemo` and `soundviz` keep working under the new
+  supervisor-only kernel mapping.
 - **Contained console faults** — a ring 3 fault now kills only the offending task instead
   of resetting the session: the shell, the file system state and every other process
   survive. Contained faults print a one-line report (`[fault] task killed, eip=… addr=…`);
@@ -108,6 +117,9 @@ routed by focus and the desktop never blocking on a child program.
 
 ### Testing
 
+- **`vmtest`** — asserts `mmap` alignment/zero-fill/writability, W^X rejection,
+  `mprotect` enforcement (child faults on a read-only page), `munmap` enforcement (child
+  faults on a released range) and non-overlapping placements.
 - **`memprot_test`** — forks a child that writes to kernel memory and asserts the child
   dies while the parent (and the shell) survive; also checks that the program window and
   the heap are readable and writable. Wired into `tests/test_runtime.sh`.

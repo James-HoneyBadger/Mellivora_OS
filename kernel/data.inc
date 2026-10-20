@@ -1085,6 +1085,11 @@ sb16_buf_addr:    resd 1          ; DMA buffer physical address
 sb16_buf_len:     resd 1          ; DMA buffer length
 sb16_format:      resd 1          ; Format flags
 
+; Virtual memory: per-task mmap areas (see kernel/vm.inc).
+vm_areas:         resb MAX_TASKS * 32 * 20   ; 32 areas x 20 bytes per task
+vm_next:          resd MAX_TASKS             ; per-task allocation bump pointer
+vm_rng:           resd 1
+
 ; Burrows desktop settings: persisted theme (see burrows_config_load/save)
 burrows_cfg_buf:  resb 4096       ; one HBFS block, the read path fills it whole
 

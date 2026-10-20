@@ -74,6 +74,26 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 Stack growth: a fault within 64 KB below `vm_area.start` of the stack area extends the
 stack instead of failing.
 
+## 4a. Status of the 32-bit implementation (P1)
+
+Implemented in `kernel/vm.inc`:
+
+- Per-task `vm_area` table (32 areas per task) recording start, pages, protection
+  and the backing physical run.
+- `mmap`: anonymous mappings in the demand zone, page-aligned, zero-filled, with a
+  randomized first base (16 MB of ASLR spread) and overlap-checked placement.
+- `munmap`: frees the frames, clears the PTEs and drops the record. Only whole
+  mappings are supported for now; a partial range returns `-1`.
+- `mprotect`: rewrites PTE flags for the range and updates the record.
+- W^X: `PROT_WRITE|PROT_EXEC` is refused by both `mmap` and `mprotect` unless
+  `MAP_JIT` (0x40) is requested.
+- Demand faults **fail closed**: a fault in the demand zone is only serviced when
+  the address belongs to one of the task's areas. Anything else — including an
+  address that `munmap` just released — kills the task.
+
+Not yet implemented: file-backed mappings, `MAP_SHARED` semantics, guard pages,
+stack-growth faults, and partial unmapping.
+
 ## 5. Isolation invariants (tested)
 
 1. A ring 3 write to `0x00100000` (kernel image) faults and cannot be observed to
@@ -84,8 +104,8 @@ stack instead of failing.
 5. No stale bytes: a fresh anonymous page reads as zero.
 6. Kernel code may still write VGA text (`0xB8000`) and its own memory without faults.
 
-Each invariant has a regression test; `tests/test_isolation.py` drives them over QEMU and
-`make check` fails if any regresses.
+Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test` and
+`vmtest` over QEMU and `make check` fails if any regresses.
 
 ## 6. Compatibility exceptions
 

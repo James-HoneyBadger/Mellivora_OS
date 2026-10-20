@@ -631,6 +631,7 @@ kernel_entry:
         call net_init
         call e1000_init
         call paging_init
+        call vm_init
         call mouse_init
         call sb16_init
         call vbe_init
@@ -686,6 +687,7 @@ kernel_entry:
 %include "kernel/ipc.inc"
 %include "kernel/net.inc"
 %include "kernel/paging.inc"
+%include "kernel/vm.inc"
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"
 %include "kernel/vbe.inc"

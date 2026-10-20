@@ -2551,166 +2551,8 @@ sys_ioctl:
 ;   In : EBX = addr (hint, 0=any), ECX = len, EDX = prot, ESI = flags
 ;   Out: EAX = mapped address, or -1
 ;-----------------------------------------------------------------------
-sys_mmap:
-        pushad
-        ; A length at or above USER_PTR_MAX is nonsense and, worse, its page
-        ; rounding can wrap 32 bits: len >= 0xFFFFF001 rounds to 0 pages and
-        ; the caller still treats the result as a len-byte buffer.
-        cmp ecx, USER_PTR_MAX
-        ja  .mmap_fail
-        ; Align length to page boundary
-        mov eax, ecx
-        add eax, 0xFFF
-        jc  .mmap_fail                  ; rounding wrapped
-        and eax, ~0xFFF
-        ; Convert byte count to page count for pmm_alloc_pages
-        shr eax, 12
-        ; Allocate physical pages (ECX = page count)
-        mov ecx, eax
-        call pmm_alloc_pages    ; ECX = page count -> EAX = phys address or 0
-        test eax, eax
-        jz .mmap_fail
-        ; Physical pages are identity-mapped 0–128MB, so phys == virt
-        ; (For pages in that range, they're already accessible.)
-        ; Return the allocated address directly.
-        mov [esp + 28], eax
-        popad
-        iretd
-.mmap_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
-
-;-----------------------------------------------------------------------
-; sys_munmap (121) — unmap memory
-;   In : EBX = addr, ECX = len
-;   Out: EAX = 0
-; Simple: tell PMM to free; no strict tracking (v10 limitation)
-;-----------------------------------------------------------------------
-sys_munmap:
-        pushad
-        ; pmm_free_pages(EAX=addr, ECX=count)
-        mov eax, ebx            ; addr
-        ; Refuse to free anything below the PMM-managed region. Sys_malloc and
-        ; sys_mmap never hand out memory down there, so a request for it is
-        ; either a bug or an attempt to free the kernel's own metadata (the
-        ; PMM bitmap lives at 0x500000).
-        cmp eax, KERNEL_RESERVED_END
-        jb  .munmap_fail
-        ; Reject an absurd or wrapping length: without this, len=0xFFFFF000
-        ; frees about a million pages starting at the caller's address.
-        cmp ecx, USER_PTR_MAX
-        ja  .munmap_fail
-        mov edx, eax
-        add edx, ecx
-        jc  .munmap_fail
-        cmp edx, USER_PTR_MAX
-        ja  .munmap_fail
-        ; Convert byte length to page count
-        add ecx, 0xFFF
-        shr ecx, 12
-        call pmm_free_pages
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.munmap_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
-
-;-----------------------------------------------------------------------
-; sys_mprotect (122) — change memory protection
-;   EBX = addr (page-aligned virtual address)
-;   ECX = len  (byte length; rounds up to page boundary)
-;   EDX = prot (PROT_NONE=0, PROT_READ=1, PROT_WRITE=2, PROT_EXEC=4)
-;   Out: EAX = 0 on success, -1 if range includes unmapped pages
-;
-; x86 32-bit base paging: PG_WRITABLE controls W access.
-; No NX bit in plain 32-bit paging, so PROT_EXEC is silently accepted.
-; PROT_NONE clears PG_PRESENT so any access faults.
-;-----------------------------------------------------------------------
-PROT_NONE   equ 0
-PROT_READ   equ 1
-PROT_WRITE  equ 2
-PROT_EXEC   equ 4
-PAGE_SHIFT  equ 12
-PAGE_SIZE   equ 4096
-PAGE_MASK   equ 0xFFFFF000
-
-sys_mprotect:
-        pushad
-        ; Validate addr alignment
-        test ebx, 0xFFF
-        jnz .mp_fail
-        ; Only user addresses may be changed. Without this a ring-3 program
-        ; can rewrite the PTEs of the kernel image, page tables or IDT.
-        cmp ebx, PROGRAM_BASE
-        jb .mp_fail
-        cmp ebx, USER_PTR_MAX
-        jae .mp_fail
-        mov eax, ebx
-        add eax, ecx
-        jc .mp_fail
-        cmp eax, USER_PTR_MAX
-        ja .mp_fail
-        ; Round len up to page boundary
-        add ecx, PAGE_SIZE - 1
-        and ecx, PAGE_MASK
-        jz .mp_ok               ; zero length: trivially success
-        ; EBX = start virt, ECX = byte count (page-multiple)
-        mov esi, ebx            ; ESI = current page virt addr
-        mov edi, ecx            ; EDI = remaining bytes
-.mp_loop:
-        test edi, edi
-        jz .mp_ok
-        ; Walk PD: PDI = virt >> 22
-        mov eax, esi
-        shr eax, 22
-        ; Load PDE from page directory
-        mov ecx, PAGE_DIR_ADDR
-        mov eax, [ecx + eax*4]
-        test eax, PG_PRESENT
-        jz .mp_fail             ; unmapped PDE → error
-        ; PT base = PDE & PAGE_MASK
-        and eax, PAGE_MASK
-        ; PTI = (virt >> 12) & 0x3FF
-        mov ecx, esi
-        shr ecx, PAGE_SHIFT
-        and ecx, 0x3FF
-        ; EAX = PTE address
-        lea eax, [eax + ecx*4]
-        mov ecx, [eax]          ; current PTE
-        test ecx, PG_PRESENT
-        jz .mp_fail             ; page not backed → error
-        ; Build new PTE flags: keep phys addr, rebuild flags
-        and ecx, PAGE_MASK      ; isolate physical frame address
-        test edx, PROT_NONE     ; treat prot=0 specially
-        jnz .mp_not_none
-        cmp edx, 0
-        jne .mp_not_none
-        ; PROT_NONE: clear present so any access generates a fault
-        ; (phys addr preserved for later mprotect restore)
-        jmp .mp_write_pte       ; ECX = phys | 0 (not present)
-.mp_not_none:
-        or  ecx, PG_PRESENT | PG_USER
-        test edx, PROT_WRITE
-        jz .mp_write_pte
-        or  ecx, PG_WRITABLE
-.mp_write_pte:
-        mov [eax], ecx
-        invlpg [esi]
-        ; Advance to next page
-        add esi, PAGE_SIZE
-        sub edi, PAGE_SIZE
-        jmp .mp_loop
-.mp_ok:
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.mp_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
+; SYS_MMAP / SYS_MUNMAP / SYS_MPROTECT are implemented in kernel/vm.inc,
+; which owns the per-process vm_area table and the demand-zone mappings.
 
 ;-----------------------------------------------------------------------
 ; sys_select (123) — synchronous I/O multiplexing
@@ -3532,8 +3374,17 @@ sys_malloc:
         xor eax, eax
         cmp ecx, 0
         je .malloc_done
-        ; Allocate pages from PMM
+        ; Allocate pages from PMM, then publish them to ring 3: the caller is
+        ; a user program and the returned address is its memory.
         call pmm_alloc_pages
+        test eax, eax
+        jz .malloc_done
+        push eax
+        push ecx
+        mov ecx, [esp + 4]      ; pages
+        call paging_map_phys_user
+        pop ecx
+        pop eax
 .malloc_done:
         pop ecx
         iretd
