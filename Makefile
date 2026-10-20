@@ -122,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime crash-test
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime crash-test
 
 all: $(IMAGE)
 
@@ -548,8 +548,10 @@ KERNEL_64BIN  = kernel64.bin
 STAGE2_64BIN  = stage2-64.bin
 IMAGE_64      = mellivora64.img
 
-$(KERNEL_64BIN): $(KERNEL_SRC) $(KERNEL_INCS)
-	$(NASM) -f bin -O0 -w-zeroing -DKERNEL_64BIT=1 -o $@ -l $(@:.bin=.lst) $<
+# The 64-bit nucleus (roadmap P2). stage2 has already negotiated long mode
+# and jumped to 0x00100000, so this is assembled as plain 64-bit code.
+$(KERNEL_64BIN): boot/lm_nucleus.asm
+	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
 
 $(STAGE2_64BIN): $(STAGE2_SRC) kernel_sectors.inc
 	$(NASM) -f bin -DKERNEL_64BIT=1 -o $@ -l $(@:.bin=.lst) $<
@@ -564,6 +566,10 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN)
 
 64bit: $(IMAGE_64)
 	@echo "=== Run with: make run IMAGE=$(IMAGE_64) ==="
+
+# Boot the 64-bit nucleus and assert it reached long mode and reported in.
+check-longmode: $(IMAGE_64)
+	@python3 tests/test_longmode.py $(IMAGE_64)
 
 # -----------------------------------------------------------------------
 # v10.0: Package manager (tools/hbpkg)

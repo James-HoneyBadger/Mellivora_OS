@@ -19,6 +19,45 @@
         dd 'BOS2'
 
 ;---------------------------------------
+; LM_DIAG: opt-in progress markers written straight to VGA row 24.
+; Each marker is a single character at a fixed column, so a screendump
+; shows exactly how far the loader got when serial output is unavailable.
+; Build with -DLM_DIAG=1 (see the *-diag.img rule) to enable.
+;---------------------------------------
+%ifdef LM_DIAG
+%macro mark16 2
+        pusha
+        push es
+        mov bx, 0xB800
+        mov es, bx
+        mov ax, 0x4F00 | %2
+        mov bx, (24 * 80 + %1) * 2
+        mov [es:bx], ax
+        pop es
+        popa
+%endmacro
+%macro mark32 2
+        pushad
+        mov ax, 0x4F00 | %2
+        mov [(24 * 80 + %1) * 2], ax   ; DS is the flat data selector here
+        popad
+%endmacro
+%macro mark64 2
+        push rax
+        mov ax, 0x4F00 | %2
+        mov [(24 * 80 + %1) * 2], ax   ; flat DS, low 4 GB
+        pop rax
+%endmacro
+%else
+%macro mark16 2
+%endmacro
+%macro mark32 2
+%endmacro
+%macro mark64 2
+%endmacro
+%endif
+
+;---------------------------------------
 ; Stage 2 entry point (stage 1 jumps here, past magic)
 ; DL = boot drive from BIOS
 ;---------------------------------------
@@ -55,6 +94,7 @@ stage2_entry:
         stosw
         jmp .splash
 .splash_done:
+        mark16 0, 'A'          ; splash drawn
         pop es
 
         mov ah, 0x02
@@ -100,6 +140,7 @@ detect_memory:
 
 .e820_done:
         mov [memory_map_count], bp
+        mark16 1, 'B'          ; E820 done
 
         ; Print entry count
         mov ax, bp
@@ -145,6 +186,7 @@ load_kernel:
         mov word [load_seg], 0x1000     ; CHS fallback segment
         call read_kernel_chunk
         jc  .lk_fail
+        mark16 2, 'C'          ; one chunk read
 
         ; Advance LBA counter
         movzx eax, word [chunk_size]
@@ -183,6 +225,7 @@ load_kernel:
         jmp .lk_chunk
 
 .lk_done:
+        mark16 3, 'D'          ; kernel fully staged
         mov si, msg_ok
         call print16
         call newline16
@@ -255,6 +298,7 @@ LM_PDT           equ LM_PT_BASE + 0x2000 ; PDT   (4 KB)
 KERNEL_LOAD_ADDR equ 0x00100000
 
 enter_longmode:
+        mark32 5, 'F'          ; entered long-mode setup
         ; --- Step 1: Confirm long-mode support via CPUID ---
         mov eax, 0x80000000
         cpuid
@@ -292,6 +336,7 @@ enter_longmode:
         inc ebx
         cmp ebx, 8
         jl  .lm_fill_pdt
+        mark32 6, 'G'          ; page tables built
 
         ; --- Step 3: Load 64-bit GDT ---
         lgdt [gdt64_descriptor]
@@ -324,6 +369,7 @@ enter_longmode:
         ; --- Step 5: 64-bit entry point ---
 [BITS 64]
 .lm_64bit:
+        mark64 7, 'H'          ; running as 64-bit code
         ; Set all data segments to the 64-bit data selector (0x10)
         mov ax, 0x10
         mov ds, ax
@@ -399,6 +445,11 @@ gdt64_descriptor:
         dd gdt64_start            ; Base
 
 %endif  ; KERNEL_64BIT
+
+; The long-mode block above switches BITS twice; restore the real-mode
+; context that the rest of the loader (print16, read_kernel_chunk, ...)
+; depends on.
+[BITS 16]
 
 ;---------------------------------------
 ; Read one kernel chunk, preferring INT 13h extensions but falling back
@@ -602,6 +653,7 @@ pmode_entry:
         mov gs, ax
         mov ss, ax
         mov esp, 0x9FC00        ; Stack at top of conventional memory
+        mark32 4, 'E'          ; 32-bit protected mode
 
         ; Store boot drive and memory map info at known location
         ; The kernel expects these at 0x500 (BIOS-safe area)

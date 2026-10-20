@@ -22,7 +22,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 
 ### Kernel & Architecture
 
-- **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`)
+- **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`) that currently boots a 64-bit nucleus reporting `MELLIVORA64_OK` on COM1 (`make check-longmode`)
 - **UEFI boot** — `boot/uefi_loader.efi` (gnu-efi PE32+) for UEFI firmware; `make uefi` / `make run-uefi`
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
 - **185 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
@@ -362,7 +362,8 @@ Mellivora_OS/
 | `make bench-check` | Compare measurements with the benchmark baseline |
 | `make uefi` | Build the optional UEFI loader |
 | `make run-uefi` | Boot the optional UEFI image |
-| `make 64bit` | Build the experimental long-mode path |
+| `make 64bit` | Build the x86-64 image (stage2 long-mode bootstrap + 64-bit nucleus) |
+| `make check-longmode` | Boot the x86-64 image and assert the 64-bit nucleus reports over COM1 |
 | `make hbpkg` | Build the host package-manager utility |
 
 ---

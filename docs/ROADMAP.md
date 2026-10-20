@@ -35,6 +35,13 @@ A phase does not close until these are measured:
 | Footprint | < 8 MB RAM idle; < 2 s boot to desktop under QEMU |
 | Security | Unprivileged code cannot open a device, peer memory or a forbidden file; fuzz-clean |
 
+## Progress
+
+| Phase | State | Landed so far |
+|---|---|---|
+| P1 | in progress | `vm_area` table, `mmap`/`munmap`/`mprotect`, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, console-mode fault containment, `vmtest`/`memprot_test`/`sbrk_test` conformance fixtures |
+| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`) |
+
 ## Phases
 
 ### P0 · Guardrails and measurement (2 sprints)
@@ -52,24 +59,25 @@ A phase does not close until these are measured:
 
 ### P1 · Memory and isolation (4 sprints)
 
-- `vm_area` model; `mmap/munmap/mprotect`; guard pages; stack growth; demand-zero and
-  file-backed faults.
-- **Remove user access to kernel RAM**; map only what a process needs (program window,
-  stack, framebuffer, IPC surfaces, sigreturn trampoline). See `docs/spec/VMM.md`.
-- Kernel slab allocator; page cache and unified block cache; user heap on top of VMM.
-- ASLR for stack/heap/mmap; W^X enforcement; NX (with P2).
-- Console-mode fault containment: a crashing task dies, the shell survives.
+- [x] `vm_area` model; `mmap/munmap/mprotect` with randomised placement and W^X.
+- [ ] Guard pages, stack growth faults, demand-zero and file-backed faults.
+- [x] **Remove user access to kernel RAM**; map only what a process needs (program
+  window, stack, framebuffer, IPC surfaces). See `docs/spec/VMM.md`.
+- [ ] Kernel slab allocator; page cache and unified block cache; user heap on top of VMM.
+- [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
+- [x] Console-mode fault containment: a crashing task dies, the shell survives.
 
 **Exit:** the isolation conformance test passes, 100 MB heap workload passes, no
 stale-data leaks between processes.
 
 ### P2 · 64-bit foundation (6 sprints)
 
-- Cross toolchain (`x86_64-elf-gcc`), dual-target build.
-- Long-mode boot, higher-half kernel, per-CPU blocks, `SYSCALL` entry.
-- Port PMM/VMM/slab/scheduler/timers/syscalls and the driver set.
-- LP64 ABI plus a 32-bit compat shim so existing binaries keep running.
-- NX, SMEP/SMAP where the CPU provides them.
+- [x] Long-mode boot: CPUID gate, identity map, far jump, 64-bit nucleus on COM1.
+- [ ] Cross toolchain (`x86_64-elf-gcc`), dual-target build.
+- [ ] Higher-half kernel, per-CPU blocks, `SYSCALL` entry.
+- [ ] Port PMM/VMM/slab/scheduler/timers/syscalls and the driver set.
+- [ ] LP64 ABI plus a 32-bit compat shim so existing binaries keep running.
+- [ ] NX, SMEP/SMAP where the CPU provides them.
 
 **Exit:** the whole existing suite green on 64-bit; 8 GB RAM usable; 32-bit apps run
 unchanged; kernel image < 1 MB.

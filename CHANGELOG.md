@@ -1,5 +1,40 @@
 # Mellivora OS - Changelog
 
+## Unreleased - x86-64 boot foundation
+
+### 64-bit path
+
+- **Real long-mode entry** — `stage2` now contains an optional x86-64 bootstrap
+  (`-DKERNEL_64BIT=1`): it verifies long-mode support via CPUID, builds a PML4/PDPT/PDT
+  identity map for the first 16 MB with 2 MB pages at `0x70000`, loads a 64-bit GDT,
+  sets `CR4.PAE`/`CR3`/`EFER.LME`/`CR0.PG`, far-jumps into a 64-bit code selector and
+  starts the nucleus at `0x00100000`.
+- **64-bit nucleus** (`boot/lm_nucleus.asm`) — assembled as a flat 64-bit binary, it
+  initialises COM1, reports `cr3` and prints `MELLIVORA64_OK`, proving the whole
+  path (BIOS → real mode → protected mode → long mode → 64-bit C-ABI-shaped code) works
+  end to end. `make 64bit` builds `mellivora64.img`; `make check-longmode` boots it and
+  asserts the marker.
+
+### Fixed
+
+- **stage2 assembled real-mode helpers as 32-bit code in the 64-bit build** — the
+  long-mode block switched `BITS` twice and never restored `BITS 16`, so everything
+  after it (`read_kernel_chunk`, `print16`, `putchar16`, `newline16`) was emitted as
+  32-bit code while still executing in real mode. Kernel loading stalled after two
+  chunks and the loader's own progress messages never reached the screen. The
+  assembler context is now restored explicitly after the block, with a comment
+  explaining why.
+
+### Tooling
+
+- **`LM_DIAG` loader markers** — build stage2 with `-DLM_DIAG=1` to have `A`–`H`
+  written straight into VGA row 24 at each loader milestone (splash, E820, first chunk,
+  kernel staged, protected mode, long-mode setup, page tables, 64-bit code). Headless
+  `screendump`/`xp` then shows exactly how far the loader got when serial output is
+  unavailable.
+- **CI job `longmode`** — builds the 64-bit image and runs `make check-longmode` on
+  every push, so the long-mode path cannot silently rot.
+
 ## Unreleased - Burrows 3.0 multi-app desktop
 
 ### Overview
