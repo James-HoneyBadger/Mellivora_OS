@@ -8,6 +8,10 @@
 
 # Logs
 *.log
+build_output.txt
+
+# Build artifacts
+kernel.elf
 
 # ISO / packaging artifacts
 *.iso

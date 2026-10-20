@@ -14,7 +14,7 @@ For library API details, see [API_REFERENCE.md](API_REFERENCE.md).
 
 ## 1. Program Skeleton
 
-Every user-space program is a **flat binary** loaded at `0x00200000` and
+Every user-space program is a **flat binary** loaded at `0x00300000` and
 starts execution at offset 0 with a jump to a labeled entry point.
 
 ### 1.1 Header
@@ -31,9 +31,11 @@ start:
         ...
 ```
 
-**Do NOT** include `[BITS 32]` or `[ORG ...]` directives in user programs;
-the build pipeline handles them. Programs use the standard load address
-`0x00200000` implicitly.
+**Do NOT** include `[BITS 32]` or `[ORG ...]` directives in user programs.
+`programs/syscalls.inc` - which every program includes - already sets both, and
+a second `[ORG]` is an assembly error. The load address is `0x00300000`, which is
+`PROGRAM_BASE` in `kernel.asm`; if that constant ever moves, every program must
+be re-linked, so never hard-code the number in a program.
 
 ### 1.2 The flat-binary BSS rule
 

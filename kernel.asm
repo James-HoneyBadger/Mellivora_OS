@@ -27,22 +27,40 @@
 ;
 
 [BITS 32]
+
+; The shipping image is a flat binary with a fixed load address. The same
+; source also assembles as ELF32 (make symbols) so GDB has a symbol table:
+; without ORG the symbols are section-relative, and the debugger adds the
+; 1 MB load base with `add-symbol-file kernel.elf 0x00100000`.
+%ifdef KERNEL_ELF
+        ; no ORG: ELF symbols are offsets from the load base
+%else
 [ORG 0x00100000]
+%endif
 
 ;=======================================================================
 ; CONSTANTS
 ;=======================================================================
 
-; Memory layout
+; Memory layout — everything from KERNEL_BASE up to KERNEL_RESERVED_END is
+; claimed by the kernel: image, program window, page tables, PMM bitmap/tags
+; and the heap window.  pmm_init frees only memory at or above
+; KERNEL_RESERVED_END; anything lower must never reach the buddy allocator or
+; it will hand out the kernel's own metadata.
+; Keep in sync with docs/TECHNICAL_REFERENCE.md and populate.py.
 KERNEL_BASE         equ 0x00100000
 KERNEL_STACK        equ 0x009FC00       ; Top of conventional memory for kernel stack
 PROGRAM_BASE        equ 0x00300000      ; Programs load at 3MB
 PROGRAM_END_ADDR    equ 0x00400000      ; End of static program area (for sbrk)
-PROGRAM_MAX_SIZE    equ 0x00100000      ; Max 1MB per program
-HEAP_BASE           equ 0x00700000      ; Kernel heap starts at 7MB
-PMM_BITMAP          equ 0x00500000      ; Physical memory bitmap at 5MB
+PROGRAM_MAX_SIZE    equ 0x00100000      ; Max 1MB per program = END - BASE
+PMM_BITMAP          equ 0x00500000      ; Physical memory bitmap at 5MB (128KB)
+HEAP_BASE           equ 0x00700000      ; Kernel heap window (currently unused)
+KERNEL_RESERVED_END equ 0x00800000      ; 8MB — lower bound of PMM-managed memory
 BG_PROG_PAGES       equ 256             ; Pages per background program slot (1MB)
 BG_STACK_PAGES      equ 16             ; Pages per background task user stack (64KB)
+; Copy-on-write bookkeeping covers the identity-mapped region only: 128 MB of
+; RAM / 4 KB = 32768 pages, one refcount byte each (see cow_ref in data.inc).
+COW_MAX_PAGES       equ 32768
 
 ; Boot info passed by stage 2 at 0x500
 BOOTINFO_DRIVE      equ 0x500
@@ -129,16 +147,20 @@ HBFS_ROOT_DIR_SIZE   equ HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE      ; 131072 by
 HBFS_MAX_FILES       equ HBFS_ROOT_DIR_SIZE / HBFS_DIR_ENTRY_SIZE    ; 455 entries
 HBFS_SUBDIR_BLOCKS   equ 16           ; Subdirectories get 16 blocks (224 entries each)
 ; HBFS on-disk layout — all LBAs derived from HBFS_SUPERBLOCK_LBA.
-; HBFS_SUPERBLOCK_LBA must be > (33 + KERNEL_SECTORS). Kernel is currently
-; ~1569 sectors (ends at LBA 1601). 4096 provides ample headroom for growth.
-; If kernel ever exceeds 4062 sectors (~2 MB), update this value AND the
-; matching constant in populate.py.
+; HBFS_SUPERBLOCK_LBA must be > (33 + KERNEL_SECTORS).
+; KERNEL_SECTORS is generated into kernel_sectors.inc by the Makefile from the
+; assembled binary, and that rule hard-fails the build above 4062 sectors (the
+; headroom below this LBA). Do NOT hard-code a sector count here — a number in
+; a comment silently drifts out of date. If the kernel ever really does exceed
+; 4062 sectors, raise this value AND the matching constant in populate.py.
 HBFS_SUPERBLOCK_LBA  equ 4096          ; First LBA of HBFS (well past kernel end)
 HBFS_BITMAP_START    equ HBFS_SUPERBLOCK_LBA + 1
 HBFS_BITMAP_BLOCKS   equ 16            ; 16 blocks for bitmap (covers 524288 blocks)
 HBFS_BITMAP_SECTS    equ HBFS_BITMAP_BLOCKS * HBFS_SECTORS_PER_BLK ; 128 sectors
 HBFS_BITMAP_SIZE     equ HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE       ; 65536 bytes
-HBFS_TOTAL_BLOCKS    equ 524288        ; Total filesystem blocks (2 GB)
+HBFS_TOTAL_BLOCKS    equ 523727        ; Data blocks in a 2048 MiB image
+                                       ; (523728 blocks would run 512 bytes past
+                                       ; the end); must match populate.py
 HBFS_ROOT_DIR_START  equ HBFS_BITMAP_START + HBFS_BITMAP_SECTS      ; = HBFS_SUPERBLOCK_LBA + 129
 HBFS_DATA_START      equ HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS  ; = HBFS_SUPERBLOCK_LBA + 385
 
@@ -156,6 +178,11 @@ HBFS_JRNL_T_COMMIT   equ 2            ; Journal entry type: commit
 ; Offsets within the 512-byte superblock for journal fields
 HBFS_SB_JRNL_STATE   equ 40          ; dword: 0=clean 1=transaction-in-progress
 HBFS_SB_JRNL_PTR     equ 44          ; dword: next journal sector index (0 = first)
+; Every transaction increments this counter; each journal record is stamped with
+; it. Recovery only replays records carrying the current epoch, so stale records
+; from an older transaction (still sitting in the circular log) can never be
+; applied again.
+HBFS_SB_JRNL_EPOCH   equ 56          ; dword: journal transaction epoch
 
 ; v10.0 HBFS v3 — Permissions, UID/GID, xattr, extended filename
 ; Directory entry layout is unchanged in byte count (288 bytes) but the
@@ -359,23 +386,157 @@ SYS_PSF_CHAR        equ 100     ; Draw PSF2 char: EBX=x ECX=y EDX=codepoint ESI=
 SYS_PCI_FIND        equ 101     ; Find PCI device: EBX=vendor ECX=device_id -> EAX=bdf/-1
 SYS_GETPPID         equ 102     ; Get parent PID -> EAX=ppid
 
-; v12.0 POSIX syscalls (103-180 in syscall.inc)
+; ---------------------------------------------------------------------
+; v9.0 syscalls (103-115)
+; Declared here as well as in programs/syscalls.inc so that
+; tools/validate_syscalls.py can check the two headers against each other AND
+; against the positional dispatch table in kernel/syscall.inc. These numbers
+; used to exist only in the user header, which meant the whole v9.0/v10.0/v11.0
+; range (103-180) was never cross-checked.
+; ---------------------------------------------------------------------
+SYS_FORK            equ 103     ; -> EAX=child_pid (parent) / 0 (child) / -1
+SYS_DEFRAG          equ 104     ; Defragment HBFS: -> EAX=0/-1
+SYS_TLS_CONNECT     equ 105     ; TLS 1.2 stub: EBX=fd -> EAX=0/-1
+SYS_AUDIO_REC_START equ 106     ; Start AC97 recording: EBX=buf ECX=max -> EAX=0/-1
+SYS_AUDIO_REC_READ  equ 107     ; Read recorded PCM: EBX=buf ECX=max -> EAX=bytes/-1
+SYS_AUDIO_REC_STOP  equ 108     ; Stop recording -> EAX=0
+SYS_AUDIO_OPEN      equ 109     ; Open mixer channel: EBX=fmt ECX=rate -> EAX=ch/-1
+SYS_AUDIO_WRITE     equ 110     ; Write to mixer: EBX=ch ECX=buf EDX=len -> EAX=bytes
+SYS_AUDIO_CLOSE_CHAN equ 111    ; Close mixer channel: EBX=ch -> EAX=0
+SYS_MSGQ_CREATE     equ 112     ; Create message queue: EBX=key ECX=max_msgs -> EAX=qid/-1
+SYS_MSGQ_SEND       equ 113     ; Send: EBX=qid ECX=buf EDX=len -> EAX=0/-1
+SYS_MSGQ_RECV       equ 114     ; Recv: EBX=qid ECX=buf EDX=max -> EAX=bytes/-1
+SYS_MSGQ_CLOSE      equ 115     ; Destroy queue: EBX=qid -> EAX=0/-1
+
+; ---------------------------------------------------------------------
+; v10.0 POSIX compatibility extensions + compositor surfaces (116-142)
+; ---------------------------------------------------------------------
+SYS_DUP             equ 116     ; dup(fd) -> EAX=new_fd/-1
+SYS_DUP2            equ 117     ; dup2(src,dst) -> EAX=dst/-1
+SYS_FCNTL           equ 118     ; fcntl(fd,cmd,arg) -> EAX=result/-1
+SYS_IOCTL           equ 119     ; ioctl(fd,req,arg) -> EAX=0/-1
+SYS_MMAP            equ 120     ; mmap(addr,len,prot) -> EAX=addr/-1
+SYS_MUNMAP          equ 121     ; munmap(addr,len) -> EAX=0/-1
+SYS_MPROTECT        equ 122     ; mprotect(addr,len,prot) -> EAX=0/-1
+SYS_SELECT          equ 123     ; select(nfds,rfds,wfds,efds,tv) -> EAX=count
+SYS_CLOCK_GETTIME   equ 124     ; clock_gettime(clk,timespec*) -> EAX=0/-1
+SYS_NANOSLEEP       equ 125     ; nanosleep(rqtp,rmtp) -> EAX=0/-1
+SYS_GETTIMEOFDAY    equ 126     ; gettimeofday(timeval*,tz*) -> EAX=0
+SYS_GETUID          equ 127     ; -> EAX=uid
+SYS_SETUID          equ 128     ; setuid(uid) -> EAX=0/-1
+SYS_GETGID          equ 129     ; -> EAX=gid
+SYS_SETGID          equ 130     ; setgid(gid) -> EAX=0/-1
+SYS_GETEUID         equ 131     ; -> EAX=euid
+SYS_GETEGID         equ 132     ; -> EAX=egid
+SYS_ACCESS          equ 133     ; access(path,mode) -> EAX=0/-1
+SYS_PIPE2           equ 134     ; pipe2(pipefd[2],flags) -> EAX=0/-1
+SYS_SURFACE_CREATE  equ 135     ; Create surface: EBX=w ECX=h EDX=x ESI=y -> EAX=id/-1
+SYS_SURFACE_COMMIT  equ 136     ; Commit dirty rect: EBX=id ECX=dx EDX=dy ESI=dw EDI=dh
+SYS_SURFACE_DESTROY equ 137     ; Destroy surface: EBX=id -> EAX=0/-1
+SYS_SURFACE_MOVE    equ 138     ; Move surface: EBX=id ECX=x EDX=y -> EAX=0/-1
+SYS_SURFACE_RESIZE  equ 139     ; Resize surface: EBX=id ECX=w EDX=h -> EAX=0/-1
+SYS_ALARM           equ 140     ; alarm(seconds; 0=cancel) -> EAX=prev_secs
+SYS_GETXATTR        equ 141     ; getxattr(file,key,val,max) -> EAX=len/-1
+SYS_SETXATTR        equ 142     ; setxattr(file,key,val) -> EAX=0/-1
+
+; ---------------------------------------------------------------------
+; v11.0 user-space signal delivery (143-144)
+; ---------------------------------------------------------------------
+SYS_SIGACTION       equ 143     ; sigaction(signum,handler,old) -> EAX=0/-1
+SYS_SIGRETURN       equ 144     ; sigreturn() — return from a signal handler
+
+; ---------------------------------------------------------------------
+; v12.0 POSIX compliance (145-181)
+; ---------------------------------------------------------------------
+SYS_FSTAT           equ 145     ; fstat(fd,stat_buf) -> EAX=0/-1
+SYS_FTRUNCATE       equ 146     ; ftruncate(fd,size) -> EAX=0/-1
+SYS_FCHMOD          equ 147     ; fchmod(fd,mode) -> EAX=0/-1
+SYS_FCHOWN          equ 148     ; fchown(fd,uid,gid) -> EAX=0/-1
+SYS_FSYNC           equ 149     ; fsync(fd) -> EAX=0/-1
+SYS_LINK            equ 150     ; link(old,new) -> EAX=0/-1
+SYS_ISATTY          equ 151     ; isatty(fd) -> EAX=1/0
+SYS_SETSID          equ 152     ; setsid() -> EAX=sid/-1
+SYS_GETSID          equ 153     ; getsid(pid) -> EAX=sid/-1
+SYS_WAIT            equ 154     ; wait(status*) -> EAX=pid/-1
+SYS_PAUSE           equ 155     ; pause() -> EAX=-1
+SYS_UMASK           equ 156     ; umask(mask) -> EAX=old_mask
+SYS_SIGPENDING      equ 157     ; sigpending(set*) -> EAX=0
+SYS_SIGSUSPEND      equ 158     ; sigsuspend(mask*) -> EAX=-1
+SYS_SETITIMER       equ 159     ; setitimer(which,new*,old*) -> EAX=0/-1
+SYS_GETITIMER       equ 160     ; getitimer(which,cur*) -> EAX=0/-1
+SYS_SETENV          equ 161     ; setenv(name,val,over) -> EAX=0/-1
+SYS_UNSETENV        equ 162     ; unsetenv(name) -> EAX=0
+SYS_UNAME           equ 163     ; uname(utsname*) -> EAX=0/-1
+SYS_UTIME           equ 164     ; utime(path,utimbuf*) -> EAX=0/-1
+SYS_SYSCONF         equ 165     ; sysconf(name) -> EAX=value/-1
+SYS_SETEUID         equ 166     ; seteuid(euid) -> EAX=0/-1
+SYS_SETEGID         equ 167     ; setegid(egid) -> EAX=0/-1
+SYS_SETREUID        equ 168     ; setreuid(ruid,euid) -> EAX=0/-1
+SYS_SETREGID        equ 169     ; setregid(rgid,egid) -> EAX=0/-1
+SYS_SENDTO          equ 170     ; sendto(fd,buf,len,fl,addr) -> EAX=bytes/-1
+SYS_RECVFROM        equ 171     ; recvfrom(fd,buf,len,fl,from) -> EAX=bytes/-1
+SYS_SETSOCKOPT      equ 172     ; setsockopt(fd,lvl,opt,val,len) -> EAX=0/-1
+SYS_GETSOCKOPT      equ 173     ; getsockopt(fd,lvl,opt,val*,len*) -> EAX=0/-1
+SYS_GETSOCKNAME     equ 174     ; getsockname(fd,addr,len*) -> EAX=0/-1
+SYS_GETPEERNAME     equ 175     ; getpeername(fd,addr,len*) -> EAX=0/-1
+SYS_SHUTDOWN        equ 176     ; shutdown(fd,how) -> EAX=0/-1
+SYS_TCGETATTR       equ 177     ; tcgetattr(fd,termios*) -> EAX=0/-1
+SYS_TCSETATTR       equ 178     ; tcsetattr(fd,action,termios*) -> EAX=0/-1
+SYS_TCDRAIN         equ 179     ; tcdrain(fd) -> EAX=0/-1
+SYS_TCFLUSH         equ 180     ; tcflush(fd,queue) -> EAX=0/-1
 ; SYS_GETERRNO — retrieve per-task errno
 SYS_GETERRNO        equ 181     ; Get errno: -> EAX=errno
+SYS_EXECVE          equ 182     ; execve(path, argv, envp) -> no return / -1
+SYS_TCSETPGRP       equ 183     ; Set terminal foreground pgid: EBX=pgid -> 0/-1
+SYS_TCGETPGRP       equ 184     ; Get terminal foreground pgid: -> EAX=pgid
 
 ; Signal trampoline — read-only page mapped at top of demand zone
 SIGRETURN_TRAMPOLINE_VADDR equ 0x1FFFF000   ; Last page of demand zone (128–512MB)
 
-; errno constants (POSIX E-values)
+; errno constants (POSIX E-values, Linux/ia32 numbering so programs can compare
+; against the real values). Recorded per task via errno_set() and read back with
+; SYS_GETERRNO.
+;
+; NOTE: storage is per-TCB, so it only covers code running as a scheduler task
+; (background jobs). A foreground program entered via cmd_exec_program has no
+; TCB yet, so its errno reads back as 0 until the Phase 2 process model gives
+; every user program a real task. Do not export a global errno as a shortcut:
+; background tasks would race on it.
+EPERM               equ 1       ; Operation not permitted
 ENOENT              equ 2       ; No such file or directory
+ESRCH               equ 3       ; No such process
+EINTR               equ 4       ; Interrupted system call
+EIO                 equ 5       ; I/O error
+ENXIO               equ 6       ; No such device or address
+ENOEXEC             equ 8       ; Exec format error
 EBADF               equ 9       ; Bad file descriptor
+ECHILD              equ 10      ; No child processes
+EAGAIN              equ 11      ; Try again / would block
+EWOULDBLOCK         equ EAGAIN  ; POSIX alias for EAGAIN
 ENOMEM              equ 12      ; Out of memory
 EACCES              equ 13      ; Permission denied
 EFAULT              equ 14      ; Bad address
+EBUSY               equ 16      ; Device or resource busy
+EEXIST              equ 17      ; File exists
+EXDEV               equ 18      ; Cross-device link
+ENODEV              equ 19      ; No such device
+ENOTDIR             equ 20      ; Not a directory
+EISDIR              equ 21      ; Is a directory
 EINVAL              equ 22      ; Invalid argument
+ENFILE              equ 23      ; File table overflow
 EMFILE              equ 24      ; Too many open files
-ENOTTY              equ 25      ; Not a typewriter (ioctl on wrong fd type)
+ENOTTY              equ 25      ; Inappropriate ioctl for device
+EFBIG               equ 27      ; File too large
+ENOSPC              equ 28      ; No space left on device
+ESPIPE              equ 29      ; Illegal seek
+EROFS               equ 30      ; Read-only file system
+EMLINK              equ 31      ; Too many links
+EPIPE               equ 32      ; Broken pipe
+ERANGE              equ 34      ; Numerical result out of range
+ENAMETOOLONG        equ 36      ; File name too long
 ENOSYS              equ 38      ; Function not implemented
+ENOTEMPTY           equ 39      ; Directory not empty
+ELOOP               equ 40      ; Too many levels of symbolic links
 
 ; File descriptor constants
 FD_MAX              equ 8
@@ -383,6 +544,14 @@ FD_ENTRY_SIZE       equ 32
 FD_FLAG_CLOSED      equ 0
 FD_FLAG_READ        equ 1
 FD_FLAG_WRITE       equ 2
+
+; A task's private fd page (4 KB) holds BOTH fd views:
+;   offset 0    legacy HBFS fd_table  (FD_MAX * FD_ENTRY_SIZE = 256 bytes)
+;   offset 256  VFS virtual-fd table  (VFS_MAX_FDS * VFD_SIZE = 2048 bytes)
+; Both are copied in/out of the live globals on every context switch, so one
+; task closing a descriptor cannot affect another task's view of it.
+FD_PAGE_VFD_OFS     equ (FD_MAX * FD_ENTRY_SIZE)
+FD_PAGE_VFD_BYTES   equ 2048
 
 ; ELF constants
 ELF_MAGIC           equ 0x464C457F
@@ -399,8 +568,9 @@ DMESG_ENTRIES       equ 64
 DMESG_LINE_SIZE     equ 128
 DMSG_TOTAL_SIZE     equ (DMESG_ENTRIES * DMESG_LINE_SIZE)
 
-; Ctrl+C / Tab
+; Ctrl+C / Ctrl+Z / Tab
 CTRL_C_CODE         equ 3
+CTRL_Z_CODE         equ 0x1A
 TAB_KEY             equ 0x09
 
 ; Ring 3 selectors

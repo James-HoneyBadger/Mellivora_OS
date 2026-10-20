@@ -35,13 +35,13 @@ compiler.
 
 ### Memory Layout
 
-Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
+Programs are loaded at `0x00300000` (3 MB) and run in Ring 3 (user mode).
 
 | Address | Purpose |
 | --- | --- |
-| `0x00200000` | Program load address (code + data) |
-| `0x002FFFF0` | SYS_EXIT trampoline (safety net) |
-| `0x002FFFEC` | Initial stack pointer (grows downward) |
+| `0x00300000` | Program load address (code + data); `PROGRAM_BASE` in `kernel.asm` |
+| `0x003FFFF0` | SYS_EXIT trampoline (safety net) |
+| `0x003FFFEC` | Initial stack pointer (grows downward) |
 
 ### Execution Model
 
@@ -71,16 +71,17 @@ Programs are loaded at `0x00200000` (2 MB) and run in Ring 3 (user mode).
 
 ```nasm
 ; hello.asm — Hello World for Mellivora OS
-BITS 32
-ORG 0x300000
+; BITS 32 and the load address are supplied by syscalls.inc - never repeat them.
+%include "syscalls.inc"
 
+start:                      ; required: syscalls.inc jumps here
     ; Print a string
-    mov eax, 3          ; SYS_PRINT
+    mov eax, SYS_PRINT
     mov ebx, message    ; pointer to null-terminated string
     int 0x80
 
     ; Exit cleanly
-    mov eax, 0          ; SYS_EXIT
+    mov eax, SYS_EXIT
     xor ebx, ebx        ; exit code 0
     int 0x80
 
@@ -90,7 +91,7 @@ message: db "Hello, World!", 10, 0
 ### Building and Running
 
 ```bash
-nasm -f bin -O0 -o hello hello.asm
+nasm -f bin -Iprograms/ -o programs/hello.bin programs/hello.asm
 ```
 
 Then copy `hello` to the disk image and run it from the shell:
@@ -1521,7 +1522,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 182 syscalls. See `programs/syscalls.inc` for the authoritative list.
+Quick reference for all 185 syscalls. See `programs/syscalls.inc` for the authoritative list.
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |

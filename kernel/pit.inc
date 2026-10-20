@@ -42,12 +42,57 @@ kb_getchar:
         mov al, bl
         ret
 .wait:
+        ; Serial console input. Tests and remote terminals drive the shell
+        ; through COM1; the PS/2 ring buffer is only reachable from the local
+        ; keyboard. Polled here (the UART interrupt is disabled) so a serial
+        ; byte is picked up on the next loop pass, at worst one PIT tick later.
+        call serial_getchar
+        cmp al, 0xFF
+        jne .have_serial
+
         mov eax, [kb_read_idx]
         cmp eax, [kb_write_idx]
         jne .have_key
         sti                     ; Ensure interrupts are enabled
         hlt                     ; Sleep until next interrupt
         jmp .wait
+
+.have_serial:
+        ; Echo back to the serial console so a remote terminal sees what it
+        ; typed. The shell echoes to VGA on its own, so this only touches COM1.
+        cmp al, 0x0D
+        je .serial_cr
+        cmp al, 0x08
+        je .serial_bs
+        cmp al, 0x20
+        jb .serial_done
+        cmp al, 0x7E
+        ja .serial_done
+        push eax
+        call serial_putchar
+        pop eax
+        jmp .serial_done
+.serial_cr:
+        push eax
+        mov al, 0x0D
+        call serial_putchar
+        mov al, 0x0A
+        call serial_putchar
+        pop eax
+        jmp .serial_done
+.serial_bs:
+        push eax
+        mov al, 0x08
+        call serial_putchar
+        mov al, ' '
+        call serial_putchar
+        mov al, 0x08
+        call serial_putchar
+        pop eax
+.serial_done:
+        movzx eax, al
+        ret
+
 .have_key:
 
         mov ebx, eax
@@ -62,8 +107,17 @@ kb_getchar:
 kb_pollchar:
         mov eax, [kb_read_idx]
         cmp eax, [kb_write_idx]
-        je .none
+        jne .have
 
+        ; No PS/2 key; try the serial console.
+        call serial_getchar
+        cmp al, 0xFF
+        je .none
+        movzx eax, al
+        or al, al               ; Clear ZF
+        ret
+
+.have:
         mov ebx, eax
         mov al, [kb_buffer + ebx]
         inc ebx

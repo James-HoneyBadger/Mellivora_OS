@@ -473,18 +473,18 @@ draw_frame:
         mov [drect_col], dword 0xFFFFFF
         call fill_rect
 
-        ; Draw score text (top-left via SYS_FRAMEBUF sub=3)
+        ; Draw score text (top-left via SYS_FRAMEBUF sub=3; X/Y are PIXELS)
         mov eax, SYS_FRAMEBUF
         mov ebx, 3
-        mov ecx, 2              ; col
-        mov edx, 0              ; row
+        mov ecx, 16             ; x = col 2
+        mov edx, 0              ; y
         mov esi, score_str
         int 0x80
 
         ; Draw lives
         mov eax, SYS_FRAMEBUF
         mov ebx, 3
-        mov ecx, 70             ; col (near right edge)
+        mov ecx, 560            ; x = col 70 (near right edge)
         mov edx, 0
         mov esi, lives_str
         int 0x80
@@ -532,8 +532,8 @@ draw_gameover:
         ; Show text in the middle
         mov eax, SYS_FRAMEBUF
         mov ebx, 3
-        mov ecx, 30             ; col
-        mov edx, 12             ; row (middle-ish)
+        mov ecx, 240            ; x = col 30
+        mov edx, 192            ; y = row 12 (middle-ish)
         cmp byte [game_over], 2
         je .show_win
         mov esi, gameover_str

@@ -41,6 +41,7 @@ VFS_FS_HBFS  equ 1      ; HBFS (Honey Badger File System)
 VFS_FS_PROC  equ 2      ; procfs (/proc)
 VFS_FS_DEV   equ 3      ; devfs (/dev)
 VFS_FS_TMP   equ 4      ; tmpfs (/tmp)
+VFS_FS_SOCK  equ 5      ; socket (VFD_REAL_FD = index into net_sock_table)
 
 ; Max mount points
 VFS_MAX_MOUNTS  equ 8
@@ -61,6 +62,12 @@ VFS_MT_SIZE     equ 48
 VFS_MAX_FDS     equ 64   ; total virtual FDs
 VFD_FREE        equ 0
 VFD_OPEN        equ 1
+
+; The per-task fd page reserves this much room for the VFD table (see
+; FD_PAGE_VFD_BYTES in kernel.asm). Keep the two in sync.
+%if VFS_MAX_FDS * 32 != FD_PAGE_VFD_BYTES
+%error "FD_PAGE_VFD_BYTES must equal VFS_MAX_FDS * VFD_SIZE"
+%endif
 
 ; VFD entry layout (32 bytes)
 VFD_STATE       equ 0    ; byte: VFD_FREE / VFD_OPEN
@@ -324,6 +331,107 @@ vfs_fd_ptr:
         ret
 
 ;=======================================================================
+; Socket-backed virtual file descriptors
+;
+; Sockets used to live in their own 0..MAX_SOCKETS namespace, so a program
+; had two unrelated fd spaces: fd 3 could be a file or a socket depending on
+; which syscall you called. Sockets now occupy VFDs like every other open
+; object, which makes close()/dup() work on them and removes the collision.
+; SYS_SOCKET / SYS_ACCEPT hand out VFDs; the socket syscalls translate back
+; with vfd_to_sock.
+;=======================================================================
+
+; vfd_alloc_sock — allocate a VFD bound to a socket index
+;   In : EAX = socket index
+;   Out: EAX = vfd, or -1 when the table is full
+vfd_alloc_sock:
+        pushad
+        mov [.vas_sock], eax
+        call vfs_alloc_fd           ; EAX = free slot or -1
+        cmp eax, -1
+        je .vas_done
+        mov edi, eax
+        imul edi, VFD_SIZE
+        add edi, vfs_fd_table
+        mov dword [edi + VFD_STATE], VFD_OPEN
+        mov dword [edi + VFD_FS_TYPE], VFS_FS_SOCK
+        mov edx, [.vas_sock]
+        mov [edi + VFD_REAL_FD], edx
+        mov dword [edi + VFD_POS], 0
+        mov dword [edi + VFD_FLAGS], FD_FLAG_READ | FD_FLAG_WRITE
+.vas_done:
+        mov [esp + 28], eax
+        popad
+        ret
+.vas_sock: dd 0
+
+; vfd_to_sock — resolve a VFD to its socket index
+;   In : EBX = vfd
+;   Out: EAX = socket index, CF=0; CF=1 when EBX is not an open socket
+vfd_to_sock:
+        cmp ebx, VFS_MAX_FDS
+        jae .vts_bad
+        push edi
+        push edx
+        mov edi, ebx
+        imul edi, VFD_SIZE
+        add edi, vfs_fd_table
+        cmp dword [edi + VFD_STATE], VFD_OPEN
+        jne .vts_bad_pop
+        cmp dword [edi + VFD_FS_TYPE], VFS_FS_SOCK
+        jne .vts_bad_pop
+        mov eax, [edi + VFD_REAL_FD]
+        cmp eax, MAX_SOCKETS
+        jae .vts_bad_pop
+        pop edx
+        pop edi
+        clc
+        ret
+.vts_bad_pop:
+        pop edx
+        pop edi
+.vts_bad:
+        stc
+        ret
+
+; vfd_release_sock — free the VFD bound to a socket index
+;   In : EAX = socket index
+;   Out: EAX = vfd released, or -1 if none matched
+vfd_release_sock:
+        push edi
+        push ecx
+        push edx
+        mov edx, eax
+        mov edi, vfs_fd_table
+        xor ecx, ecx
+.vrs_scan:
+        cmp ecx, VFS_MAX_FDS
+        jge .vrs_none
+        cmp dword [edi + VFD_STATE], VFD_OPEN
+        jne .vrs_next
+        cmp dword [edi + VFD_FS_TYPE], VFS_FS_SOCK
+        jne .vrs_next
+        cmp [edi + VFD_REAL_FD], edx
+        je .vrs_found
+.vrs_next:
+        add edi, VFD_SIZE
+        inc ecx
+        jmp .vrs_scan
+.vrs_found:
+        mov dword [edi + VFD_STATE], VFD_FREE
+        mov eax, ecx
+        pop edx
+        pop ecx
+        pop edi
+        ret
+.vrs_none:
+        mov eax, -1
+        pop edx
+        pop ecx
+        pop edi
+        ret
+
+;=======================================================================
 ; HBFS VFS stubs — delegate to existing hbfs_* functions
 ;=======================================================================
 
@@ -501,24 +609,114 @@ vfs_hbfs_readdir:
 
 vfs_hbfs_stat:
         ; EBX=path, ECX=stat_buf -> EAX=0/-1
-        ; Use hbfs_find_file_global: ESI=name -> CF on fail, EDI=dirent_ptr
-        push esi
+        ; hbfs_find_file_global only searches the current directory, so resolve
+        ; an absolute/relative path here: cd to its directory, find the
+        ; basename, fill the stat block, then restore the shell's cwd.
+        pushad
+        mov [.vhbs_path], ebx
+        mov [.vhbs_stat], ecx
+
         mov esi, ebx
+        xor edx, edx
+.vhbs_scan:
+        mov al, [esi]
+        test al, al
+        jz .vhbs_local
+        cmp al, '/'
+        je .vhbs_with_path
+        inc esi
+        jmp .vhbs_scan
+
+.vhbs_local:
+        mov esi, [.vhbs_path]
         call hbfs_find_file_global
-        pop esi
-        jc .vhbfs_stat_fail
-        ; Fill stat buf: [0]=size, [4]=type, [8]=mtime
+        jc .vhbs_fail
+        jmp .vhbs_fill
+
+.vhbs_with_path:
+        call gff_save_cwd
+        mov esi, [.vhbs_path]
+        xor edx, edx
+.vhbs_last_slash:
+        mov al, [esi]
+        test al, al
+        jz .vhbs_split
+        cmp al, '/'
+        jne .vhbs_next_char
+        mov edx, esi
+.vhbs_next_char:
+        inc esi
+        jmp .vhbs_last_slash
+
+.vhbs_split:
+        mov esi, [.vhbs_path]
+        mov edi, path_dir_buf
+.vhbs_cp_dir:
+        cmp esi, edx
+        je .vhbs_cp_dir_done
+        movsb
+        jmp .vhbs_cp_dir
+.vhbs_cp_dir_done:
+        cmp edi, path_dir_buf
+        jne .vhbs_dir_ok
+        mov byte [edi], '/'
+        inc edi
+.vhbs_dir_ok:
+        mov byte [edi], 0
+
+        lea esi, [edx + 1]
+        mov edi, path_base_buf
+.vhbs_cp_base:
+        lodsb
+        stosb
+        test al, al
+        jnz .vhbs_cp_base
+        cmp byte [path_base_buf], 0
+        je .vhbs_restore_fail
+
+        mov esi, path_dir_buf
+        call cmd_cd_internal
+        test eax, eax
+        jnz .vhbs_restore_fail
+        call hbfs_load_root_dir
+        mov esi, path_base_buf
+        call hbfs_find_file
+        jc .vhbs_restore_fail
+
+        ; EDI points at the target entry; fill before restoring the cwd.
+        mov ecx, [.vhbs_stat]
         mov eax, [edi + DIRENT_SIZE]
         mov [ecx], eax
         movzx eax, byte [edi + DIRENT_TYPE]
         mov [ecx + 4], eax
         mov eax, [edi + HBFS_DE_MTIME]
         mov [ecx + 8], eax
-        xor eax, eax
+        call gff_restore_cwd
+        mov dword [esp + 28], 0
+        popad
         ret
-.vhbfs_stat_fail:
-        mov eax, -1
+
+.vhbs_restore_fail:
+        call gff_restore_cwd
+.vhbs_fail:
+        mov dword [esp + 28], -1
+        popad
         ret
+
+.vhbs_fill:
+        mov ecx, [.vhbs_stat]
+        mov eax, [edi + DIRENT_SIZE]
+        mov [ecx], eax
+        movzx eax, byte [edi + DIRENT_TYPE]
+        mov [ecx + 4], eax
+        mov eax, [edi + HBFS_DE_MTIME]
+        mov [ecx + 8], eax
+        mov dword [esp + 28], 0
+        popad
+        ret
+
+.vhbs_path: dd 0
+.vhbs_stat: dd 0
 
 vfs_hbfs_mkdir:
         ; EBX=path -> EAX=0/-1
@@ -593,7 +791,7 @@ vfs_proc_open:
 
         ; Mark as open, record fs type
         mov dword [edi + VFD_STATE],   VFD_OPEN
-        mov dword [edi + VFS_MT_TYPE], VFS_FS_PROC
+        mov dword [edi + VFD_FS_TYPE], VFS_FS_PROC
         mov dword [edi + VFD_POS],     0
 
         ; Decode sub-type from path
@@ -644,105 +842,54 @@ vfs_proc_open:
         pop ecx
         ret
 
-; str_suffix_match_ebx: EBX=path, ESI=suffix -> ZF=1 if match
+; str_suffix_match_ebx - does the path in EBX end with the name in ESI?
+;   In : EBX = NUL-terminated path, ESI = NUL-terminated name
+;   Out: ZF=1 on match, ZF=0 otherwise
+;   Preserves EBX, ESI, EDI, ECX (AL is scratch)
+;
+; Compares the LAST path component, so "/proc/version" matches "version" and
+; "/proc/versionx" does not. procfs uses this to decode the special file name.
+;
+; The previous version leaked one stack slot per '/' in the path (it pushed
+; EDI inside the slash loop and never popped it), so a two-level path returned
+; to whatever happened to be on the stack instead of to its caller.
 str_suffix_match_ebx:
         push edi
-        push ecx
-        ; Find end of EBX string
-        mov edi, ebx
-        xor ecx, ecx
-        not ecx
-        xor al, al
-        repne scasb
-        not ecx
-        dec ecx                     ; ecx = strlen(ebx)
-        ; Find length of suffix
-        push edi
-        mov edi, esi
-        xor ecx, ecx
-        not ecx
-        repne scasb
-        not ecx
-        dec ecx                     ; ecx = strlen(suffix)
-        pop edi
-        ; Compare last len(suffix) bytes of EBX with ESI
-        mov edi, ebx
-        ; advance edi to end-of-suffix position
-        push eax
-        mov eax, ebx
-        push ecx
-        push edi
-        mov edi, eax
-        xor ecx, ecx
-        not ecx
-        xor al, al
-        repne scasb
-        not ecx
-        dec ecx                     ; ecx = strlen(ebx) again
-        pop edi
-        pop ecx                     ; ecx = strlen(suffix) again
-        ; edi = ebx; advance by (strlen(ebx) - strlen(suffix))
-        push eax
-        mov eax, edi
-        xor ecx, ecx
-        not ecx
-        push edi
-        xor al, al
-        repne scasb
-        not ecx
-        dec ecx
-        pop edi
-        pop eax
-        ; simple: compare from end
-        ; Actually use straightforward suffix comparison
-        ; Restore and just do strstr/endswith
-        ; Simplified: scan EBX for last '/' then compare remainder with ESI
-        pop eax
-        pop ecx
-        pop edi
-        ; Use simple ends-with: find last / in EBX, compare what follows with ESI
-        push edi
         push esi
-        push ebx
-        ; Find last slash
+        push ecx
+        ; ECX = start of the last path component
         mov edi, ebx
-.ssm_findslash:
-        cmp byte [edi], '/'
-        je .ssm_slash
-        cmp byte [edi], 0
-        je .ssm_noslash
+        mov ecx, ebx
+.ssm_scan:
+        mov al, [edi]
+        test al, al
+        jz .ssm_scan_done
         inc edi
-        jmp .ssm_findslash
-.ssm_slash:
-        inc edi
-        mov ebx, edi        ; candidate suffix start
-        ; check if another slash
-        push edi
-        mov edi, ebx
-        jmp .ssm_findslash  ; re-scan from here
-.ssm_noslash:
-        ; ebx now points to the last path component
-        ; compare with esi
-        push esi
-        mov edi, ebx
-        pop esi
+        cmp al, '/'
+        jne .ssm_scan
+        mov ecx, edi            ; candidate starts after the slash
+        jmp .ssm_scan
+.ssm_scan_done:
+        mov edi, ecx
 .ssm_cmp:
         lodsb
         test al, al
-        jz .ssm_match
+        jz .ssm_name_end
         cmp al, [edi]
         jne .ssm_nomatch
         inc edi
         jmp .ssm_cmp
-.ssm_match:
-        xor al, al          ; ZF=1
-        pop ebx
+.ssm_name_end:
+        cmp byte [edi], 0       ; component must end here as well
+        jne .ssm_nomatch
+        xor al, al              ; ZF=1
+        pop ecx
         pop esi
         pop edi
         ret
 .ssm_nomatch:
-        or al, 1            ; ZF=0
-        pop ebx
+        or al, 1                ; ZF=0
+        pop ecx
         pop esi
         pop edi
         ret
@@ -816,19 +963,27 @@ vfs_proc_read:
         mov edi, proc_scratch_buf
         push edi
         mov esi, proc_str_memtotal
-        call str_copy
-        call pmm_free_pages     ; EAX = free pages
-        push eax
-        mov eax, [total_free_pages]  ; v10: use init-time page count
-        imul eax, 4             ; KB
-        call itoa_dec_edi
+        call str_copy                   ; copies the NUL and advances EDI past it
+        dec edi                         ; drop that NUL: the number goes here
+        mov eax, [total_free_pages]
+        imul eax, 4                     ; pages -> KB
+        call itoa_dec_edi               ; digits only, no terminator
+        mov byte [edi], 0
+        inc edi
         mov esi, proc_str_kb_nl
         call str_copy_append
-        pop eax
+
+        mov esi, proc_str_memfree
+        call str_copy_append
+        dec edi                         ; drop the NUL before the second number
+        mov eax, [total_free_pages]
         imul eax, 4
         call itoa_dec_edi
+        mov byte [edi], 0
+        inc edi
         mov esi, proc_str_kb_nl
         call str_copy_append
+
         mov byte [edi], 0
         pop esi
         jmp .procr_copybuf
@@ -1788,6 +1943,8 @@ vfs_read:
         push edi
         push ebx
 
+        cmp  ebx, VFS_MAX_FDS
+        jae  .vrd_badf
         call vfs_fd_ptr                 ; EDI → VFD  (EAX clobbered)
         cmp  dword [edi + VFD_STATE], VFD_OPEN
         jne  .vrd_fail
@@ -1823,6 +1980,10 @@ vfs_read:
         mov  eax, -1
         ret
 
+.vrd_badf:
+        pop  ebx
+        jmp  .vrd_fail2
+
 ;=======================================================================
 ; vfs_write — dispatch write to the correct backend
 ;   In : EBX = vfd, ECX = user buffer, EDX = byte count
@@ -1832,6 +1993,8 @@ vfs_write:
         push edi
         push ebx
 
+        cmp  ebx, VFS_MAX_FDS
+        jae  .vwr_badf
         call vfs_fd_ptr
         cmp  dword [edi + VFD_STATE], VFD_OPEN
         jne  .vwr_fail
@@ -1864,6 +2027,10 @@ vfs_write:
         mov  eax, -1
         ret
 
+.vwr_badf:
+        pop  ebx
+        jmp  .vwr_fail2
+
 ;=======================================================================
 ; vfs_close — close a virtual fd
 ;   In : EBX = vfd
@@ -1873,6 +2040,8 @@ vfs_close:
         push edi
         push ebx
 
+        cmp  ebx, VFS_MAX_FDS
+        jae  .vcl_badf
         call vfs_fd_ptr
         cmp  dword [edi + VFD_STATE], VFD_OPEN
         jne  .vcl_bad
@@ -1882,8 +2051,20 @@ vfs_close:
 
         cmp  eax, VFS_FS_HBFS
         je  .vcl_hbfs
+        cmp  eax, VFS_FS_SOCK
+        je  .vcl_sock
         ; proc / dev / tmp: just free the VFD
         call vfs_proc_close             ; same body for all three
+        pop  edi
+        ret
+
+.vcl_sock:
+        ; EDI still points at the VFD. Release the slot first, then shut the
+        ; socket down (graceful FIN for TCP).
+        mov  eax, [edi + VFD_REAL_FD]
+        mov  dword [edi + VFD_STATE], VFD_FREE
+        call sock_close
+        xor  eax, eax
         pop  edi
         ret
 
@@ -1898,6 +2079,10 @@ vfs_close:
         mov  eax, -1
         ret
 
+.vcl_badf:
+        pop  ebx
+        jmp  .vcl_bad
+
 ;=======================================================================
 ; vfs_seek — seek within a virtual fd
 ;   In : EBX = vfd, ECX = offset, EDX = whence (0=SET, 1=CUR, 2=END)
@@ -1907,6 +2092,8 @@ vfs_seek:
         push edi
         push ebx
 
+        cmp  ebx, VFS_MAX_FDS
+        jae  .vsk_badf
         call vfs_fd_ptr
         cmp  dword [edi + VFD_STATE], VFD_OPEN
         jne  .vsk_fail
@@ -1914,11 +2101,12 @@ vfs_seek:
         mov  eax, [edi + VFD_FS_TYPE]
         pop  ebx
 
+        cmp  eax, VFS_FS_SOCK
+        je   .vsk_fail          ; sockets are not seekable (ESPIPE)
         cmp  eax, VFS_FS_HBFS
         jne  .vsk_vfd           ; proc/dev/tmp: update VFD_POS directly
 
-        ; HBFS: delegate to legacy fd_seek (EBX=real_fd, ECX=offset, EDX=whence)
-        push ebx
+        ; HBFS: delegate to legacy fd_seek (EBX=real_fd, ECX=offset, EDX=whence)        push ebx
         call vfs_fd_ptr         ; EDI → VFD
         mov  ebx, [edi + VFD_REAL_FD]
         pop  eax                ; discard saved vfd (ebx is now real_fd)
@@ -1957,6 +2145,10 @@ vfs_seek:
         pop  edi
         mov  eax, -1
         ret
+
+.vsk_badf:
+        pop  ebx
+        jmp  .vsk_fail
 
 ;=======================================================================
 ; vfs_readdir — enumerate a directory by virtual path

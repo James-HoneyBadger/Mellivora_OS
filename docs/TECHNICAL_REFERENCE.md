@@ -225,13 +225,23 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 0x003FFFF0 │ SYS_EXIT trampoline     │  Safety net for programs that RET
 0x00400000 ├─────────────────────────┤  ← 4 MB
            │ (gap / reserved)        │
+0x00410000 ├─────────────────────────┤
+           │ Page directory          │  4 KB — must NOT overlap 3-4 MB
+0x00411000 ├─────────────────────────┤  (a 512 KB+ program would
+           │ 32 identity page tables │  128 KB   overwrite its page dir)
+0x00431000 ├─────────────────────────┤
+           │ 96 demand page tables   │  384 KB (128-512 MB zone)
+0x00491000 ├─────────────────────────┤
+           │ (gap / reserved)        │
 0x00500000 ├─────────────────────────┤  ← 5 MB
            │ PMM bitmap              │  128 KB (tracks up to 4 GB)
 0x00520000 ├─────────────────────────┤
-           │ PMM buddy tags          │  4 KB
+           │ PMM buddy tags          │  4 KB (currently unused)
 0x00700000 ├─────────────────────────┤  ← 7 MB
-           │ Heap / PMM allocations  │  Usable memory starts here
-           │ ...                     │
+           │ Heap window (unused)    │
+0x00800000 ├─────────────────────────┤  ← 8 MB  KERNEL_RESERVED_END
+           │ PMM-managed memory      │  Usable memory starts here —
+           │ ...                     │  pmm_init frees nothing below
            └─────────────────────────┘
 ```
 
@@ -247,7 +257,10 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 | `PROGRAM_EXIT_ADDR` | `0x003FFFF0` | SYS_EXIT trampoline |
 | `PMM_BITMAP` | `0x00500000` (5 MB) | Physical memory bitmap |
 | `PMM_BUDDY_TAGS` | `0x00520000` | Buddy allocator tag array |
-| `HEAP_BASE` | `0x00700000` (7 MB) | PMM allocation boundary |
+| `PAGE_DIR_ADDR` | `0x00410000` | Page directory (above the program window) |
+| `PAGE_TABLE_BASE` | `0x00411000` | First of 32 identity page tables |
+| `HEAP_BASE` | `0x00700000` (7 MB) | Heap window (reserved, currently unused) |
+| `KERNEL_RESERVED_END` | `0x00800000` (8 MB) | Lower bound of PMM-managed memory |
 | `VGA_BASE` | `0x000B8000` | VGA text mode framebuffer |
 | `VGA_WIDTH` | 80 | Screen columns |
 | `VGA_HEIGHT` | 25 | Screen rows |
@@ -291,19 +304,36 @@ the appropriate backend based on the mount table.
 
 ### VFS File Descriptor
 
-Each open file is tracked by a 32-byte VFS descriptor in the per-task fd table page
-(see [Scheduler & Task Control](#scheduler--task-control)). Fields:
+Each open object is tracked by a 32-byte VFD in `vfs_fd_table` (64 slots, fds 0–63).
+Fields (see `kernel/vfs.inc`):
 
 | Offset | Size | Field | Description |
 | --- | --- | --- | --- |
-| 0 | 1 | flags | `VFD_VALID` / `VFD_READABLE` / `VFD_WRITABLE` |
-| 1 | 1 | backend | 0=HBFS, 1=procfs, 2=devfs, 3=tmpfs |
-| 2 | 2 | reserved | — |
-| 4 | 4 | offset | Current file position |
-| 8 | 4 | size | File size at open time |
-| 12 | 4 | lba | First LBA (HBFS) or node ptr (other backends) |
-| 16 | 4 | mode | Permission bits |
+| 0 | 4 | `VFD_STATE` | `VFD_FREE` (0) / `VFD_OPEN` (1) |
+| 4 | 4 | `VFD_FS_TYPE` | `VFS_FS_HBFS` / `PROC` / `DEV` / `TMP` / `SOCK` |
+| 8 | 4 | `VFD_REAL_FD` | Backend handle: legacy fd index, proc/dev subtype, or socket index |
+| 12 | 4 | `VFD_POS` | Current position (HBFS/proc/dev/tmp) |
+| 16 | 4 | `VFD_FLAGS` | Open flags (`FD_FLAG_READ` / `FD_FLAG_WRITE`) |
 | 20 | 12 | reserved | Padding to 32 bytes |
+
+### Sockets in the fd namespace (v14)
+
+Sockets used to have their own 0–31 namespace, so an fd meant one thing to `read()` and
+something else to `recv()`. They now occupy VFDs like every other open object:
+
+- `SYS_SOCKET` and `SYS_ACCEPT` return a **VFD** (`VFS_FS_SOCK`, `VFD_REAL_FD` = socket
+  index). If no VFD slot is free, the socket is released again — no leak.
+- Every socket syscall (`connect`, `send`, `recv`, `sendto`, `recvfrom`, `bind`,
+  `listen`, `accept`, `poll`, `setsockopt`, `getsockopt`, `getsockname`,
+  `getpeername`, `shutdown`) starts with `vfd_to_sock`, which rejects anything that is
+  not an open socket VFD.
+- `close()` releases the VFD and the socket, sending a TCP FIN (`sock_close`).
+  `SYS_SOCKCLOSE` is now just an alias for the same path.
+- `read()`/`write()` on a socket return −1: use `send`/`recv` (they carry flags and
+  addresses). `seek()` returns −1 as well (ESPIPE).
+
+The VFD table is still global; only the legacy 8-entry HBFS fd table is swapped per task.
+Making `vfs_fd_table` per-task is the remaining isolation step.
 
 ---
 
@@ -428,16 +458,87 @@ a block allocation bitmap, and support for nested subdirectories.
 
 | Routine | Description |
 | --- | --- |
-| `hbfs_init` | Reads superblock, validates magic, loads bitmap and root directory |
+| `hbfs_init` | Reads superblock, validates magic, replays the journal if dirty, loads the bitmap and root directory |
 | `hbfs_find_file` | Scans loaded directory for filename match |
-| `hbfs_create_file` | Allocates blocks, writes data, creates directory entry |
-| `hbfs_delete_file` | Frees blocks, clears directory entry |
+| `hbfs_create_file` | Allocates blocks, writes data, creates directory entry — one transaction |
+| `hbfs_delete_file` | Frees blocks, clears directory entry — one transaction |
 | `hbfs_read_file` | Path-aware: resolves `/` paths, reads file to buffer |
-| `hbfs_load_root_dir` | Loads current directory's blocks into `dir_buffer` |
-| `hbfs_alloc_blocks` | Scans bitmap for N contiguous free blocks |
+| `hbfs_load_root_dir` | Loads the current directory into `hbfs_dir_buf` and mirrors it into `hbfs_dir_shadow` |
+| `hbfs_save_root_dir` | Writes back **only the sectors that differ from the shadow**, each journaled |
+| `hbfs_alloc_blocks` | Scans the resident bitmap for N contiguous free blocks |
 | `hbfs_free_blocks` | Clears bitmap bits for a range of blocks |
-| `hbfs_flush_bitmap` | Writes in-memory bitmap back to disk |
-| `hbfs_flush_dir` | Writes in-memory directory back to disk |
+| `hbfs_meta_write` | Journal-then-write primitive used by every metadata write |
+| `hbfs_journal_begin` / `_log_sector` / `_commit` / `_abort` / `_recover` | Write-ahead undo log (see below) |
+
+### Write-Ahead Journal (crash consistency)
+
+The first `HBFS_JOURNAL_BLOCKS` (4) data blocks — 16 KB, 32 sectors — are reserved for an
+**undo log**. Every metadata mutation runs inside a transaction:
+
+1. `hbfs_journal_begin` writes `JRNL_STATE=1` to the superblock and resets the pointer.
+   Nested begins only increment `hbfs_journal_depth`, so a helper that allocates blocks
+   *and* writes a directory entry still produces a single atomic unit.
+2. Each metadata sector is logged as a **pre-image**: a header sector
+   (`[magic][type=PRE][target LBA][epoch]`) followed by a copy of the sector as it
+   is *now*, written **before** the new content.
+3. `hbfs_journal_commit` writes a commit marker at the write pointer, clears
+   `JRNL_STATE`, and flushes the superblock.
+
+Every transaction increments a **journal epoch** (`HBFS_SB_JRNL_EPOCH`, superblock
+offset 56) and stamps it into each record. Recovery stops at the first record whose epoch
+does not match the current one. Without that, a crash mid-transaction would replay not
+only that transaction's records but also *stale* records left in the circular log by an
+already-committed transaction — silently rolling the filesystem back to an older state
+(observed as "file entry present, its block marked free").
+
+A sector is **logged at most once per transaction** (`hbfs_journal_logged`). A create that
+replaces an existing file writes the bitmap sector and the directory sector twice (free
+then allocate, clear then re-add the entry); logging the second write would record an
+*intermediate* state, and undoing to it would leave the directory entry and the bitmap
+disagreeing. The first pre-image is the pre-transaction content, which is what undo
+needs.
+
+On mount with `JRNL_STATE == 1`, `hbfs_journal_recover` walks the log in order and writes
+every pre-image back to its target LBA, stopping at the first commit marker. That is the
+whole recovery rule:
+
+| Crash point | Result after replay |
+| --- | --- |
+| Before the data sector is written | Undo restores the untouched sector — no change |
+| After the data sector, before the commit marker | The mutation is rolled back — old state |
+| After the commit marker | Replay stops; the new state stands (only `JRNL_STATE` needs clearing) |
+
+If the log cannot take another record the transaction **fails** rather than proceeding
+unjournaled: `hbfs_journal_log_sector` returns CF=1, `hbfs_meta_write` calls
+`hbfs_journal_abort`, and the caller reports an error. `hbfs_journal_abort` seals the log
+with a commit marker at the write pointer (so stale records from an older transaction are
+never replayed), runs the same undo pass, and clears the state.
+
+File **data** is deliberately not journaled — only metadata is. A crash can therefore
+leave a file whose contents are old, but never an allocation or directory state that
+contradicts itself.
+
+Two rules matter when touching this code:
+
+- **`ata_read_sectors` takes its destination in EDI and `ata_write_sectors` its source in
+  ESI.** Both the pre-image write and the replay originally left the target LBA in EDI (and
+  put the read buffer in ESI), so the read landed at a low memory address and an unfilled
+  buffer was written over the real sector. Replaying a bitmap record therefore replaced
+  sector 0 of the bitmap with a journal header — the filesystem then reported every block
+  as free.
+- **Only dirty sectors may be written.** A full directory rewrite is 128 KB and can never
+  fit in a 16 KB log, which is why `hbfs_save_root_dir` diffs against `hbfs_dir_shadow`.
+
+### Performance: what a metadata operation costs
+
+| Operation | Before | Now |
+| --- | --- | --- |
+| Change one directory entry | 128 KB directory rewrite | one 512-byte sector |
+| Allocate/free blocks | 64 KB bitmap rewritten | 1–2 bitmap sectors covering the range |
+| Read the bitmap | 64 KB every allocation | resident (`hbfs_bitmap_valid`) |
+
+The bitmap and the loaded directory are cached in kernel memory; the shadow copy lets the
+writer compute the exact dirty set without any write tracking in the callers.
 
 ---
 
@@ -722,7 +823,9 @@ adapters. Initialised by `e1000_init` immediately after `net_init` during kernel
 - Maps MMIO BAR0 as the register base (EEPROM read → 6-byte MAC).
 - Configures a single 16-entry **TX descriptor ring** and 32-entry **RX descriptor ring**,
   both backed by 4 KB PMM pages.
-- TX: polling completion on `TCTL.EN`; RX: scheduler calls `e1000_poll_rx` each tick.
+- TX and RX are polling-based. `e1000_init` currently runs before `pci_init` and BAR0 is
+  above the identity-mapped range, so the RTL8139 driver remains the active NIC in the
+  shipped QEMU configuration.
 - The MAC address is written into `net_mac` for the network stack.
 
 ### Key Routines (e1000)
@@ -731,7 +834,7 @@ adapters. Initialised by `e1000_init` immediately after `net_init` during kernel
 | --- | --- | --- |
 | `e1000_init` | — | Detect, map, and initialise the adapter |
 | `e1000_send_packet` | ESI=buf, ECX=len | Copy frame into next TX descriptor and kick TCTL |
-| `e1000_poll_rx` | — | Drain RX ring; dispatch each frame to `net_receive_packet` |
+| `e1000_poll_rx` | — | Drain the RX ring (polling helper; not wired into the active stack) |
 
 ---
 
@@ -1054,56 +1157,71 @@ return from an interrupt that was taken in ring 3.
 | Maximum tasks | 128 (ring-3) + shell (ring-0) |
 | Priority levels | 4 — HIGH (0), NORMAL (1), LOW (2), IDLE (3) |
 | Scheduling policy | Priority-based round-robin within each level |
-| Blocking operations | `waitpid` blocks in `TASK_WAIT` until specific child exits |
+| Blocking operations | `waitpid` blocks the task in `TASK_BLOCKED` until the child exits |
 
 ### Task Control Block (TCB)
 
-Each task occupies 128 bytes in the static `task_table` array
+Each task occupies **136 bytes** in the static `task_table` array
 (`MAX_TASKS × TCB_SIZE`). Layout:
 
 | Offset | Size | Name | Description |
 | --- | --- | --- | --- |
-| 0 | 4 | `TCB_PID` | Task PID |
-| 4 | 4 | `TCB_STATE` | State: 0=free, 1=runnable, 2=blocked, 3=zombie, 4=waiting |
-| 8 | 4 | `TCB_ESP` | Saved ring-3 ESP |
-| 12 | 4 | `TCB_KSTACK` | Top of this task's kernel stack page |
-| 16 | 4 | `TCB_USTACK` | Top of this task's user stack page |
-| 20 | 4 | `TCB_ENTRY` | Ring-3 entry point |
+| 0 | 4 | `TCB_ESP` | Saved kernel-mode ESP (pushad + iretd frame) |
+| 4 | 4 | `TCB_STATE` | 0=free, 1=ready, 2=running, 3=blocked, 4=stopped, 5=zombie |
+| 8 | 4 | `TCB_KSTACK` | Top of this task's kernel stack page (TSS ESP0) |
+| 12 | 4 | `TCB_USTACK` | User-mode stack top |
+| 16 | 4 | `TCB_ENTRY` | Ring-3 entry point |
+| 20 | 4 | `TCB_PID` | Task ID |
 | 24 | 4 | `TCB_PRIORITY` | Priority level (0–3) |
-| 28 | 4 | `TCB_SIGNALS` | Pending signal bitmask |
-| 32 | 4 | `TCB_PGID` | Process group ID |
-| 36 | 4 | `TCB_PARENT` | Parent PID |
-| 40 | 4 | `TCB_SIGMASK` | Blocked signal mask |
-| 44 | 4 | `TCB_EXIT_CODE` | Exit status (set on `sys_exit`) |
-| 48 | 4 | `TCB_HEAP_BASE` | Per-task heap base |
-| 52 | 4 | `TCB_HEAP_END` | Per-task heap end (current brk) |
-| 56 | 4 | `TCB_UID` | Real user ID |
-| 60 | 4 | `TCB_GID` | Real group ID |
-| 64 | 16 | `TCB_NAME` | Task name (NUL-terminated, 15 chars max) |
-| 80 | 4 | `TCB_EIP` | Saved ring-3 EIP |
-| 84 | 4 | `TCB_SIG_HAND` | Signal handler table pointer (v11) |
-| 88 | 4 | `TCB_EUID` | Effective user ID (v12.0) |
-| 92 | 4 | `TCB_EGID` | Effective group ID (v12.0) |
-| 96 | 4 | `TCB_SID` | Session ID (v12.0) |
-| 100 | 4 | `TCB_UMASK` | File creation umask (v12.0) |
-| 104 | 4 | `TCB_ITIMER_VAL` | Interval timer current value in ticks (v12.0) |
-| 108 | 4 | `TCB_ITIMER_INT` | Interval timer reload interval in ticks (v12.0) |
-| 112 | 4 | `TCB_SAVED_MASK` | Signal mask saved across `sigsuspend` (v12.0) |
-| 116 | 4 | `TCB_WAIT_PID` | PID being waited on (v12.1; 0=none) |
-| 120 | 4 | `TCB_FD_TABLE_PTR` | Physical address of per-task 4 KB fd table page (v12.1) |
-| 124 | 4 | `TCB_ERRNO` | Per-task errno value (v12.1) |
-| **128** | — | `TCB_SIZE` | Total TCB size |
+| 28 | 4 | `TCB_WAKEUP` | Wakeup tick for `sys_sleep` |
+| 32 | 16 | `TCB_NAME` | Task name (NUL-terminated, 15 chars max) |
+| 48 | 4 | `TCB_SIG_PEND` | Pending signal bitmask |
+| 52 | 4 | `TCB_SIG_MASK` | Blocked signal bitmask |
+| 56 | 4 | `TCB_PGID` | Process group ID |
+| 60 | 4 | `TCB_EXIT_CODE` | Exit status (set on `sys_exit`) |
+| 64 | 4 | `TCB_BRK` | Program break for `sbrk` |
+| 68 | 4 | `TCB_PPID` | Parent PID (`-1` = shell-launched, no parent) |
+| 72 | 4 | `TCB_UID` | Real user ID |
+| 76 | 4 | `TCB_GID` | Real group ID |
+| 80 | 4 | `TCB_ALARM` | `alarm()` deadline in PIT ticks |
+| 84 | 4 | `TCB_SIG_HAND` | Signal handler table pointer |
+| 88 | 4 | `TCB_EUID` | Effective user ID |
+| 92 | 4 | `TCB_EGID` | Effective group ID |
+| 96 | 4 | `TCB_SID` | Session ID |
+| 100 | 4 | `TCB_UMASK` | File creation umask |
+| 104 | 4 | `TCB_ITIMER_VAL` | ITIMER_REAL countdown in ticks |
+| 108 | 4 | `TCB_ITIMER_INT` | ITIMER_REAL reload interval in ticks |
+| 112 | 4 | `TCB_SAVED_MASK` | Signal mask saved across `sigsuspend` |
+| 116 | 4 | `TCB_WAIT_PID` | PID being waited on (0 = none) |
+| 120 | 4 | `TCB_FD_TABLE_PTR` | Physical address of the per-task fd table page |
+| 124 | 4 | `TCB_ERRNO` | Per-task errno value |
+| 128 | 4 | `TCB_CR3` | Physical address of this task's page directory (0 = master) |
+| **136** | — | `TCB_SIZE` | Total TCB size |
 
-### Per-task File Descriptor Isolation (v12.1)
+### Per-task File Descriptor Isolation (v12.1, extended v14)
 
-Each task is allocated a private 4 KB page for its VFS fd table at fork/exec time.
-`sched_swap_fd_tables` is called at every context-switch point (scheduler tick, syscall
-return, signal delivery) to install the current task's fd table pointer. This ensures:
+Each task owns a private 4 KB page holding **both** fd views:
+
+| Offset | Size | Contents |
+| --- | --- | --- |
+| 0 | 256 | Legacy HBFS `fd_table` (`FD_MAX × FD_ENTRY_SIZE`) |
+| 256 | 2048 | VFS `vfs_fd_table` (`VFS_MAX_FDS × VFD_SIZE`) |
+
+`sched_swap_fd_tables` is called at every context-switch point (scheduler tick,
+`sys_yield`, shell→task start, signal delivery). It saves the live tables into the
+outgoing task's page and loads the incoming task's copy into the globals, so one process
+closing a descriptor cannot affect another's view. The shell has the same pair of
+snapshots (`shell_fd_table`, `shell_vfd_table`).
 
 - No cross-task fd aliasing — two tasks with the same fd number refer to independent
-  descriptors.
-- Cleanup on exit — the fd table page is freed by `sched_deliver_signals` (zombie reap),
+  descriptors (verified by `programs/fd_isolate_test.asm`).
+- Inheritance — a new task's page starts as a copy of the launcher's view, so
+  redirections active at launch are visible while later changes stay isolated.
+- Cleanup on exit — the page is freed by `sched_exit_task` / `sched_deliver_signals`,
   independently of the kernel stack page.
+
+`FD_PAGE_VFD_BYTES` in `kernel.asm` must equal `VFS_MAX_FDS * VFD_SIZE`; `kernel/vfs.inc`
+asserts this at assembly time with `%if`/`%error`.
 
 ### Signal Delivery & W^X Trampoline (v11/v12.1)
 
@@ -1126,6 +1244,110 @@ int 0x80
 
 This design is **W^X compliant** — the trampoline page is never writable. `sys_sigreturn`
 pops the saved register state from the signal frame and resumes user code.
+
+### Job Control: `kill`, Process Groups, and Ctrl+C
+
+`SYS_KILL` (53) is `kill(pid, sig)`:
+
+| Register | Meaning |
+| --- | --- |
+| EBX | PID to signal, or a **negative** process-group id (`-pgid`) to signal a group |
+| ECX | Signal number 1..31; anything else is treated as `SIGTERM` |
+| EAX | 0 if at least one task was signalled, −1 otherwise |
+
+`SYS_SETPGID` (75) sets a task's `TCB_PGID` (ECX = 0 means "use that task's own PID"), and
+`SYS_GETPGID` reads it back — enough for a shell to put a pipeline in one group and signal
+the whole job.
+
+### The Terminal's Foreground Process Group
+
+Keyboard signals belong to the console, not to "whichever task happens to be running":
+
+| Syscall | Meaning |
+| --- | --- |
+| `SYS_TCSETPGRP` (183) | `tcsetpgrp(pgid)` — hand the console to a group; `-1` clears it. Fails if no live task belongs to that group |
+| `SYS_TCGETPGRP` (184) | `tcgetpgrp()` — read it back (`-1` when no job owns the console) |
+
+The value lives in `tty_fg_pgid` and starts at **-1**, not 0: PGIDs are task PIDs, so the
+task in slot 0 genuinely has PGID 0 and cannot double as the "no owner" sentinel.
+
+`sched_kbd_signal(EAX = signum)` decides where Ctrl+C/Ctrl+Z go: the whole foreground
+group, or the running task when no group is set. It returns whether the interrupted context
+survives — the keyboard handler returns to the program when it does, and otherwise hands
+the console back to the shell (`SYS_EXIT`'s foreground path does the same, and clears
+`tty_fg_pgid`).
+
+Ctrl+Z is `SIGTSTP`: the job becomes `TASK_STOPPED` and keeps its TCB, fd view and address
+space, so `fg <pid>` (`SIGCONT` + `tcsetpgrp`) or `bg <pid>` (`SIGCONT`) can resume it.
+
+`sched_signal_task(EDI = TCB, EAX = signum)` is the single decision point:
+
+| Target state | Result |
+| --- | --- |
+| Handler installed (not `SIG_DFL`/`SIG_IGN`) | `TCB_SIG_PEND` bit set; `TASK_BLOCKED` → `TASK_READY` so the next switch delivers it |
+| `SIG_IGN` | Signal discarded |
+| `SIG_DFL`, or no handler table at all | Task destroyed immediately (kstack, fd page, handler page, PD deferred-free) |
+| `TASK_RUNNING` | Always queued — that is the caller, and its kernel stack must not be freed |
+
+Delivery happens in `sched_deliver_signals(EBX = TCB, EDI = frame base)` and therefore needs
+**the receiving task's address space installed first**: the signal frame is written to that
+task's ring-3 stack. Every switch path (`sys_yield`, `sys_waitpid`, the timer) applies the
+incoming task's CR3 and delivers **before committing anything** — before the fd-table swap,
+the state change and `TCB_ESP` load. If a default action kills the candidate at that point,
+nothing has been committed, so the candidate is simply skipped (waitpid keeps scanning) or
+the caller resumes (yield). `sys_yield` also delivers for the running task when it stays
+put, because a program that yields in a tight loop spends most of its time in ring 0, where
+the timer never advances the scheduling quantum.
+
+Four signals are handled before the handler lookup, because their semantics are not
+"terminate by default". A RUNNING target (the caller itself) is always queued first —
+tearing it down would free the kernel stack the syscall is standing on:
+
+| Signal | Behaviour |
+| --- | --- |
+| `SIGKILL` (9) | Destroyed, ignoring any handler (it cannot be caught); queued first if it targets the caller |
+| `SIGCONT` (25) | `TASK_STOPPED` → `TASK_READY`, otherwise no-op |
+| `SIGTSTP` (20) | Stops the task unless it installed a handler, which then decides at delivery |
+| `SIGCHLD` (17) | Ignored unless a handler is installed — `sched_exit_task` queues SIGCHLD on every parent, so "terminate" here would kill it the next time it ran |
+
+`SYS_SIGNAL` (74) is an alias (`jmp sys_kill`): the shell's `kill`/`bg`/`fg` builtins use it,
+and one implementation keeps handler dispatch, process groups and teardown identical.
+
+Ctrl+C is `SIGINT` (2) and Ctrl+Z is `SIGTSTP` (20). Both go through `sched_kbd_signal`,
+which signals the terminal's foreground process group (falling back to the running task):
+
+| Outcome | Effect |
+| --- | --- |
+| A member has a handler | The signal is queued, EOI, `iret` — the job keeps running and the handler runs at the next delivery point |
+| `SIG_IGN` | EOI, `iret` — nothing happens |
+| `SIG_DFL` / no handler | Task torn down (Ctrl+C) or stopped (Ctrl+Z); the shell's fd view and master directory are restored and `tty_fg_pgid` cleared |
+
+The handler table itself is a lazily allocated 4 KB page (`TCB_SIG_HAND`, indexed
+`[table + signum*4]`) created by `SYS_SIGACTION` and freed on every teardown path.
+
+**Pending signals are a bitmask, not a queue.** Sending the same signal twice before the
+target next runs sets the same bit twice and is delivered **once** — the classic
+non-realtime (`sigaction`-without-`SA_SIGINFO`) behaviour. Any protocol that counts events
+must therefore use a *different* signal per event (`SIGUSR1` and `SIGUSR2`, one per child)
+or a shared counter that the receiver reads after a single wakeup.
+
+**Signal delivery clobbers `EAX`, `ECX`, `EDX` and `ESI`** (`sched_deliver_signals` uses
+them as scratch while building the frame). Any kernel switch path that calls it and still
+needs those registers must save them across the call — `.yld_switch` in `sys_yield` keeps
+`ESI` (the destination slot index) for exactly this reason.
+
+### Syscall Register Contract
+
+`int 0x80` returns a value **only in `EAX`**; every other register is preserved. Bodies
+implement this with `pushad`/`popad` and by writing the result to `[esp + 28]`, or with
+explicit `push`/`pop` of the registers they use as scan variables. User code is entitled
+to keep a value in `ECX`/`EDI` across a syscall.
+
+`SYS_GETPID` and `SYS_GETPPID` used to break this: they walked `task_table` with `ECX` and
+`EDI` and returned them to the caller. A program that had loaded a signal number into
+`ECX` before `SYS_GETPPID` therefore called `SYS_KILL` with signal *1* (`SIGHUP`) instead —
+and since the caller was RUNNING, the signal was queued and then terminated it at the next
+switch point. Both syscalls now save and restore those registers.
 
 ---
 
@@ -1157,9 +1379,13 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
    ```
 
    This catches programs that use `RET` instead of `SYS_EXIT`
-3. Update TSS ESP0 to `KERNEL_STACK` (for Ring 0 transitions)
+3. Create the task (`sched_create_task`) and switch to it with `sched_start_task`. The
+   task's own kernel stack becomes TSS ESP0, so kernel work during its syscalls never
+   touches the shell's stack. If task creation fails, the legacy direct-IRET path is
+   used: TSS ESP0 stays `KERNEL_STACK` and the IRET frame is built by hand.
 4. Set up Ring 3 stack at `PROGRAM_EXIT_ADDR - 4`, push trampoline as return address
-5. Perform `IRETD` to Ring 3:
+5. Perform `IRETD` to Ring 3 (either from the task's saved frame or, on the legacy
+   path, from a hand-built frame):
    - Push `USER_DS` (0x23) — SS3
    - Push ESP3
    - Push EFLAGS (with IF set)
@@ -1174,6 +1400,94 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 | Ctrl+C | Hard abort — IRQ handler resets ESP, jumps to shell |
 | CPU Exception | Fault handler prints info, recovers to shell |
 | `RET` instruction | Hits trampoline → SYS_EXIT automatically |
+
+### Foreground Programs Run as Tasks
+
+A program started from the prompt is a real scheduler task, not a one-off IRET:
+
+1. `cmd_exec_program` loads the image, writes the exit trampoline, then calls
+   `sched_create_task` (`EBX` = entry, `ECX` = user stack top).
+2. `sched_start_task` installs the task's CR3, kernel stack and fd view and IRETs into
+   ring 3 through the saved frame. It never returns.
+3. On `SYS_EXIT` the task is torn down (`sched_exit_task`), the shell's fd view and the
+   master directory are restored, and control returns to `shell_main`.
+4. Ctrl+C performs the same teardown before jumping back to the shell. Without it, every
+   interrupted program would leak a TCB, a kernel stack page, an fd page and a PD.
+
+If `sched_create_task` fails (OOM) the launcher falls back to the legacy direct-IRET
+path, which runs the program without a TCB. That path also keeps `parent_active` for
+re-launching a parent whose `SYS_EXEC` needed it.
+
+`TCB_PPID` uses **-1** as the "no parent" sentinel rather than 0, because PID 0 is a
+valid task slot: a child forked by the task in slot 0 must still be treated as having a
+parent (`waitpid`, zombie retention, `SIGCHLD`).
+
+### Per-task Program Window (exec isolation)
+
+All directories start as copies of the master, so `PROGRAM_BASE` normally maps the same
+physical frames everywhere. Before a task execs, `sys_exec_call` calls
+`paging_isolate_program_window`, which:
+
+1. calls `paging_privatize_pde` for PDE 0 — copies the shared page table so remapping
+   one directory cannot change another's mapping, then
+2. `paging_copy_window_private` copies the 1 MB window at `PROGRAM_BASE` into fresh
+   frames and repoints the PTEs.
+
+The loader then writes the new image into frames only that task owns, so a forked child's
+`exec` cannot overwrite the code its parent is still running. `sched_exit_task` releases
+those frames again (only PTEs that differ from the master are freed, so shared identity
+frames are never touched).
+
+`sys_fork` clones the **parent's** page directory (`paging_clone_pd`), not the master, so
+a child of an already-exec'd parent inherits that parent's private window.
+
+### Copy-on-Write Fork
+
+fork() no longer copies 64 KB of stack and cannot copy the program image, so the two
+address spaces **share frames** until one of them writes:
+
+1. `cow_fork_share` privatises the page tables that cover the shared regions in *both*
+   directories (`paging_privatize_pde` per 4 MB PDE — without this a PTE write would leak
+   into every task, since directories start as copies of the master).
+2. It clears `PG_WRITABLE` on every present PTE in the parent's copy and in the child's,
+   and records one extra owner per frame (`cow_share`).
+3. The first write in either process takes `#PF` (present + write + user), which
+   `cow_break_page` handles: with two or more owners it copies the frame into a private
+   page and drops the old reference; with exactly one owner (the other side already
+   copied) it simply re-enables writing; with no recorded owners it is a genuine
+   protection fault and still crashes.
+
+Shared regions are the program window (`PROGRAM_BASE`, which also holds a foreground
+program's stack at its top), a background task's separately allocated image, and a
+background task's separate stack — the last two only when they are outside the window,
+because sharing a range twice would count its frames twice and leak them.
+
+Bookkeeping is `cow_ref` in `data.inc`: one byte per 4 KB frame of identity-mapped RAM
+(`COW_MAX_PAGES` = 128 MB worth). **0 means "not shared"**, so a page that was never
+forked is freed by its owner directly; `cow_put` returns whether the caller should free.
+Every teardown path is refcount-aware (`paging_free_window_private`, `cow_release_range`
+in `sched_exit_task`, the background-exit path), and exec isolation forces `PG_WRITABLE`
+on the private copies it makes while releasing the references it replaces.
+
+
+### Arguments and `execve`
+
+`program_args_buf` only holds the launch currently being set up, so each task gets a
+snapshot of it in `task_argv_table[PID]` (`sched_set_task_args`, 512 bytes per task).
+`SYS_GETARGS` reads the calling task's own slot and falls back to the global buffer only
+on the legacy no-TCB path. Without the snapshot a long-running background job would read
+the arguments of whatever program the shell started most recently.
+
+`SYS_EXECVE` (182) takes `EBX = path`, `ECX = argv`, `EDX = envp`:
+
+1. the path is validated and copied into `program_args_buf`,
+2. `argv[0]` is skipped (the loader already knows the program name) and `argv[1..]` are
+   appended, space-separated, capped at 32 entries / 63 bytes each / 511 bytes total,
+3. the flattened command line goes through `exec_kernel_line`, the same path `SYS_EXEC`
+   uses, so isolation and parent bookkeeping happen exactly once.
+
+Every task created by the shell is named from `prog_name_buf`
+(`sched_set_create_name`), so `ps` shows the program instead of `-`.
 
 ---
 
@@ -1210,8 +1524,13 @@ QEMU exposes a compatible BGA adapter on the virtual VGA device.
    config address `0x80001010`. Mask off the lowest 4 bits.
 3. Fallback: use `0xFD000000` (standard QEMU/Bochs mapping).
 
-The LFB is identity-mapped by the paging subsystem (`paging_map_lfb`) so that
-kernel and user-mode pixel writes go directly to video RAM.
+The LFB is identity-mapped by the paging subsystem so that kernel and user-mode pixel
+writes go directly to video RAM. The mapping must exist in **both** the master
+directory and the calling task's directory: `paging_map_page` only edits
+`PAGE_DIR_ADDR`, so a task running on its own directory would otherwise fault on the
+first framebuffer write. `paging_map_page_all` maps the page in the master (which every
+future task copies) and in the active directory; demand paging instead uses
+`paging_map_page_here` so a task's own pages never leak into other address spaces.
 
 ### Double Buffering — Shadow Buffer
 
@@ -1249,7 +1568,7 @@ followed by a large-mode program (e.g. 1024×768).
 | 0 | **get info** | — | EAX=shadow_buf addr, EBX=width, ECX=height, EDX=bpp |
 | 1 | **set mode** | ECX=width, EDX=height, ESI=bpp | EAX=0/-1 |
 | 2 | **restore text** | — | EAX=0 |
-| 3 | **draw text** | ECX=x, EDX=y, ESI=str_ptr, EDI=fg_color | EAX=0 |
+| 3 | **draw text** | ECX=x, EDX=y (PIXELS), ESI=str_ptr, EDI=fg_color | EAX=0 |
 | 4 | **present frame** | — | EAX=0 (blits shadow→LFB) |
 
 Sub-function 0 returns the shadow buffer address (not the raw LFB) so that programs
@@ -1479,7 +1798,7 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 180 | `SYS_TCFLUSH` | EBX=fd, ECX=queue | EAX=0 |
 | 181 | `SYS_GETERRNO` | — | EAX=per-task errno |
 
-**Total: 182 syscalls defined (0–181, no gaps).**
+**Total: 185 syscalls defined (0–184, no gaps).**
 
 ---
 

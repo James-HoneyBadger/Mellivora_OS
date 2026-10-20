@@ -91,15 +91,15 @@ exposes functionality through syscalls and shell commands.
 
 | Resource | Limit |
 | --- | --- |
-| Simultaneous sockets | 8 |
+| Simultaneous sockets | 32 |
 | Socket structure size | 128 bytes per socket |
-| Socket recv buffer | 4,096 bytes per socket |
-| Socket send buffer | 4,096 bytes per TCP socket |
+| Socket recv buffer | 8,192 bytes (2 pages) per socket |
+| Socket send buffer | 8,192 bytes (2 pages) per TCP socket |
 | ARP cache entries | 16 |
-| DNS cache entries | 8 |
+| DNS cache entries | 32 |
 | DHCP buffer | 600 bytes |
 | TX buffer | 1,536 bytes |
-| RX buffer | 8,192 + 16 bytes |
+| RX buffer | 1,536 bytes |
 
 ---
 

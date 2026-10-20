@@ -134,6 +134,7 @@ SOCK_PARENT     equ 68          ; dword: parent listening socket index (-1 = non
 
 ; Socket buffer size
 SOCK_BUF_SIZE   equ 8192
+SOCK_BUF_PAGES  equ SOCK_BUF_SIZE / 4096   ; 2 pages, not one
 
 ; ARP cache
 ARP_CACHE_SIZE  equ 16
@@ -1159,6 +1160,7 @@ arp_lookup:
 ;---------------------------------------
 ip_handle:
         pushad
+        mov ebp, ecx                   ; EBP = received IP packet length
         cmp ecx, IP_HLEN
         jb .ip_h_done
 
@@ -1171,6 +1173,15 @@ ip_handle:
         and ebx, 0x0F
         cmp ebx, 5
         jb .ip_h_done
+
+        ; Verify the header checksum before trusting any header field. A
+        ; corrupted or forged header could otherwise steer the payload length
+        ; and the protocol dispatch.
+        mov ecx, ebx
+        shl ecx, 2
+        call inet_checksum
+        test ax, ax
+        jnz .ip_h_done
 
         ; Check destination is us or broadcast
         mov eax, [esi + 16]    ; destination IP
@@ -1202,12 +1213,21 @@ ip_handle:
         shl edx, 8
         mov dl, [esi + 3]      ; total length (big-endian)
 
+        ; The total length must describe a header plus payload that actually
+        ; fits in the received packet. Without these checks a short or forged
+        ; total_length underflows the payload length (`sub edx, ecx`), which
+        ; then copies kernel memory into the socket buffer.
+        cmp edx, IP_HLEN
+        jb  .ip_h_done
+        cmp edx, ebp           ; received IP length
+        ja  .ip_h_done
+        cmp ecx, edx           ; header length <= total length
+        ja  .ip_h_done
+
         ; Payload = ESI + header_len, length = total - header_len
-        push edx
         sub edx, ecx
         add esi, ecx
         mov ecx, edx
-        pop edx
 
         cmp eax, IP_PROTO_ICMP
         je .ip_icmp
@@ -1407,6 +1427,11 @@ icmp_handle:
         cmp ecx, 8
         jb .icmp_done
 
+        ; Reject corrupt ICMP before acting on its type or ID.
+        call inet_checksum
+        test ax, ax
+        jnz .icmp_done
+
         movzx eax, byte [esi]  ; ICMP type
         cmp eax, ICMP_ECHO_REQ
         je .icmp_echo_reply
@@ -1514,6 +1539,16 @@ udp_handle:
         pushad
         cmp ecx, 8
         jb .udp_h_done
+
+        ; IPv4 allows a zero UDP checksum ("not computed"); otherwise the
+        ; checksum must validate against the pseudo-header.
+        cmp word [esi + 6], 0
+        je .udp_cksum_valid
+        mov eax, IP_PROTO_UDP
+        mov edx, [net_recv_src_ip]
+        call net_rx_checksum_ok
+        jnz .udp_h_done
+.udp_cksum_valid:
 
         ; UDP header: src_port(2) dst_port(2) length(2) checksum(2)
         movzx eax, byte [esi]
@@ -1715,6 +1750,41 @@ udp_compute_checksum:
         popad
         ret
 
+;---------------------------------------
+; net_rx_checksum_ok - validate a received UDP/TCP checksum
+;   In : ESI = transport header, ECX = transport length,
+;        EAX = IP protocol, EDX = source IP (network byte order)
+;   Out: ZF=1 valid, ZF=0 invalid. All registers preserved.
+;
+; Builds the RFC 793/768 pseudo-header followed by the segment in
+; net_rx_cksum_buf, then reuses inet_checksum. A valid checksum folds to 0.
+;---------------------------------------
+net_rx_checksum_ok:
+        pushad
+        mov ebp, ecx                 ; EBP = transport length
+        mov edi, net_rx_cksum_buf
+
+        mov [edi + 0], edx           ; source IP
+        mov ebx, [net_ip]
+        mov [edi + 4], ebx           ; destination IP
+        mov byte [edi + 8], 0
+        mov byte [edi + 9], al       ; protocol
+        mov ebx, ebp
+        xchg bl, bh
+        mov [edi + 10], bx           ; segment length, big-endian
+
+        add edi, 12
+        mov ecx, ebp
+        cld
+        rep movsb                    ; copy header + payload
+
+        mov esi, net_rx_cksum_buf
+        lea ecx, [ebp + 12]
+        call inet_checksum
+        test ax, ax                  ; ZF=1 when the checksum is valid
+        popad
+        ret
+
 
 ;=======================================================================
 ; SECTION 7: TCP
@@ -1729,6 +1799,12 @@ tcp_handle:
         pushad
         cmp ecx, 20
         jb .tcp_h_done
+
+        ; The TCP checksum is mandatory: validate it before parsing any field.
+        mov eax, IP_PROTO_TCP
+        mov edx, [net_recv_src_ip]
+        call net_rx_checksum_ok
+        jnz .tcp_h_done
 
         ; Parse TCP header
         movzx eax, byte [esi]
@@ -2749,6 +2825,7 @@ dns_resolve:
         ; Transaction ID
         mov ax, [net_dns_id]
         inc word [net_dns_id]
+        mov [net_dns_pending_id], ax    ; remember the outstanding query ID
         xchg al, ah
         mov [edi], ax
         ; Flags: standard query, recursion desired
@@ -2820,6 +2897,7 @@ dns_resolve:
         ; --- ATTEMPT 2: retry with a fresh transaction ID ---
         mov ax, [net_dns_id]
         inc word [net_dns_id]
+        mov [net_dns_pending_id], ax    ; only this ID may answer now
         xchg al, ah
         mov word [net_dns_buf], ax    ; patch TxID in already-built query
 
@@ -2879,6 +2957,13 @@ dns_handle_response:
         pushad
         cmp ecx, 12
         jb .dns_hr_done
+
+        ; Only the outstanding transaction may answer this query. Without
+        ; this check any UDP packet from port 53 could spoof a DNS result.
+        mov ax, [esi]
+        xchg al, ah
+        cmp ax, [net_dns_pending_id]
+        jne .dns_hr_done
 
         ; Check it's a response (QR bit set in flags)
         test byte [esi+2], 0x80
@@ -3116,9 +3201,10 @@ sock_alloc:
         ; Set type
         mov [edi + SOCK_TYPE], ebx
 
-        ; Allocate recv buffer
+        ; Allocate recv buffer (SOCK_BUF_SIZE bytes, not one 4 KB page)
         push ecx
-        call pmm_alloc_page
+        mov ecx, SOCK_BUF_PAGES
+        call pmm_alloc_pages
         pop ecx
         test eax, eax
         jz .sa_fail
@@ -3128,7 +3214,8 @@ sock_alloc:
         cmp ebx, SOCK_TCP
         jne .sa_no_send_buf
         push ecx
-        call pmm_alloc_page
+        mov ecx, SOCK_BUF_PAGES
+        call pmm_alloc_pages
         pop ecx
         test eax, eax
         jz .sa_fail
@@ -3163,13 +3250,15 @@ sock_free:
         mov eax, [edi + SOCK_RECV_BUF]
         test eax, eax
         jz .sf_no_recv
-        call pmm_free_page
+        mov ecx, SOCK_BUF_PAGES
+        call pmm_free_pages
 .sf_no_recv:
         ; Free send buffer
         mov eax, [edi + SOCK_SEND_BUF]
         test eax, eax
         jz .sf_no_send
-        call pmm_free_page
+        mov ecx, SOCK_BUF_PAGES
+        call pmm_free_pages
 .sf_no_send:
 
         ; Zero the structure
@@ -3181,6 +3270,74 @@ sock_free:
 .sf_done:
         popad
         ret
+
+;---------------------------------------
+; sock_close - shut a socket down and release it
+;   In : EAX = socket index
+;   Out: nothing (registers preserved)
+;
+; Used by VFS close (vfs_close) and SYS_SOCKCLOSE, so a socket closed through
+; the unified fd table gets the same graceful TCP FIN as one closed through
+; the legacy call.
+;---------------------------------------
+sock_close:
+        pushad
+        mov [.scl_idx], eax
+        cmp eax, MAX_SOCKETS
+        jae .scl_done
+        mov ebx, eax
+        imul eax, SOCK_SIZE
+        lea ebp, [net_sock_table + eax]
+
+        cmp dword [ebp + SOCK_TYPE], SOCK_TCP
+        jne .scl_free
+
+        ; TCP graceful close
+        cmp dword [ebp + SOCK_STATE], TCP_ESTABLISHED
+        je .scl_fin
+        cmp dword [ebp + SOCK_STATE], TCP_CLOSE_WAIT
+        je .scl_last_ack
+        jmp .scl_free
+
+.scl_fin:
+        mov dword [ebp + SOCK_STATE], TCP_FIN_WAIT_1
+        mov al, TCP_FIN | TCP_ACK
+        call tcp_send_flags
+        mov ecx, 300
+.scl_wait:
+        hlt
+        call tcp_flush_pending
+        mov eax, [ebp + SOCK_STATE]
+        cmp eax, TCP_CLOSED
+        je .scl_free
+        cmp eax, TCP_TIME_WAIT
+        je .scl_free
+        dec ecx
+        jnz .scl_wait
+        jmp .scl_free
+
+.scl_last_ack:
+        call tcp_flush_pending
+        mov dword [ebp + SOCK_STATE], TCP_LAST_ACK
+        mov al, TCP_FIN | TCP_ACK
+        call tcp_send_flags
+        mov ecx, 300
+.scl_la_wait:
+        hlt
+        call tcp_flush_pending
+        cmp dword [ebp + SOCK_STATE], TCP_CLOSED
+        je .scl_free
+        dec ecx
+        jnz .scl_la_wait
+
+.scl_free:
+        mov eax, [.scl_idx]
+        call sock_free
+
+.scl_done:
+        popad
+        ret
+.scl_idx: dd 0
 
 ;---------------------------------------
 ; sock_find_by_port - Find socket by local port and type
@@ -3245,9 +3402,26 @@ net_alloc_port:
 ;  EBX = type (1=TCP, 2=UDP) -> EAX = fd (-1 error)
 ;---------------------------------------
 sys_socket:
+        ; EBX = SOCK_TCP / SOCK_UDP
+        ; Returns EAX = vfd (a slot in the unified fd table) or -1
+        pushad
         mov eax, ebx
         call sock_alloc
+        cmp eax, -1
+        je .ssock_done
+        mov [.ssock_idx], eax
+        call vfd_alloc_sock         ; EAX = vfd or -1
+        cmp eax, -1
+        jne .ssock_done
+        ; No VFD slot: give the socket back so it cannot leak
+        mov eax, [.ssock_idx]
+        call sock_free
+        mov eax, -1
+.ssock_done:
+        mov [esp + 28], eax
+        popad
         iretd
+.ssock_idx: dd 0
 
 ;---------------------------------------
 ; sys_connect - Connect to remote host
@@ -3256,9 +3430,9 @@ sys_socket:
 ;---------------------------------------
 sys_connect:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .sconn_fail
-        mov eax, ebx
+        call vfd_to_sock
+        jc .sconn_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea ebp, [net_sock_table + eax]
 
@@ -3329,9 +3503,9 @@ sys_connect:
 ;---------------------------------------
 sys_connect_nb:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .scnb_fail
-        mov eax, ebx
+        call vfd_to_sock
+        jc .scnb_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea ebp, [net_sock_table + eax]
 
@@ -3384,9 +3558,16 @@ sys_connect_nb:
 ;---------------------------------------
 sys_send:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .ssend_fail
-        mov eax, ebx
+        ; Validate the source buffer [ECX, ECX+EDX) before reading it.
+        mov eax, [esp + 24]     ; original ECX (buffer)
+        mov ecx, [esp + 20]     ; original EDX (length)
+        call user_range_ok
+        jc .ssend_fail
+        mov ecx, [esp + 24]
+        mov edx, [esp + 20]
+        call vfd_to_sock
+        jc .ssend_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea ebp, [net_sock_table + eax]
 
@@ -3457,9 +3638,16 @@ sys_send:
 ;---------------------------------------
 sys_recv:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .srecv_fail
-        mov eax, ebx
+        ; Validate the destination buffer [ECX, ECX+EDX) before writing it.
+        mov eax, [esp + 24]     ; original ECX (buffer)
+        mov ecx, [esp + 20]     ; original EDX (max length)
+        call user_range_ok
+        jc .srecv_fail
+        mov ecx, [esp + 24]
+        mov edx, [esp + 20]
+        call vfd_to_sock
+        jc .srecv_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea ebp, [net_sock_table + eax]
 
@@ -3539,9 +3727,9 @@ sys_recv:
 ;---------------------------------------
 sys_bind:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .sbind_fail
-        mov eax, ebx
+        call vfd_to_sock
+        jc .sbind_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea edi, [net_sock_table + eax]
         mov [edi + SOCK_LOCAL_PORT], cx
@@ -3559,9 +3747,9 @@ sys_bind:
 ;---------------------------------------
 sys_listen:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .slisten_fail
-        mov eax, ebx
+        call vfd_to_sock
+        jc .slisten_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea edi, [net_sock_table + eax]
         cmp dword [edi + SOCK_TYPE], SOCK_TCP
@@ -3587,9 +3775,9 @@ sys_listen:
 ;---------------------------------------
 sys_accept:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .saccept_fail
-        mov eax, ebx
+        call vfd_to_sock
+        jc .saccept_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea ebp, [net_sock_table + eax]
         cmp dword [ebp + SOCK_STATE], TCP_LISTEN
@@ -3632,7 +3820,17 @@ sys_accept:
         ; Clear parent reference (connection is now independent)
         mov dword [edi + SOCK_PARENT], -1
         pop ecx                 ; balance push ecx
-        mov [esp + 28], edx     ; return child socket fd in EAX
+        mov eax, edx
+        call vfd_alloc_sock     ; EAX = vfd or -1
+        cmp eax, -1
+        jne .saccept_return
+        push edx
+        mov eax, edx
+        call sock_free          ; no fd slot: release the connection
+        pop edx
+        mov eax, -1
+.saccept_return:
+        mov [esp + 28], eax     ; return the new vfd in EAX
         popad
         iretd
 
@@ -3656,61 +3854,13 @@ sys_dns:
 ;  EBX = fd
 ;---------------------------------------
 sys_sockclose:
+        ; EBX = fd (a VFD; sockets live in the unified fd table now)
+        ; Delegates to vfs_close so close() and SYS_SOCKCLOSE behave alike.
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .sclose_done
         mov eax, ebx
-        imul eax, SOCK_SIZE
-        lea ebp, [net_sock_table + eax]
-
-        cmp dword [ebp + SOCK_TYPE], SOCK_TCP
-        jne .sclose_free
-
-        ; TCP graceful close
-        cmp dword [ebp + SOCK_STATE], TCP_ESTABLISHED
-        je .sclose_fin
-        cmp dword [ebp + SOCK_STATE], TCP_CLOSE_WAIT
-        je .sclose_last_ack
-        jmp .sclose_free
-
-.sclose_fin:
-        mov dword [ebp + SOCK_STATE], TCP_FIN_WAIT_1
-        mov al, TCP_FIN | TCP_ACK
-        call tcp_send_flags
-        ; Wait for close to complete (up to 3 seconds)
-        mov ecx, 300
-.sclose_wait:
-        hlt
-        call tcp_flush_pending    ; Send deferred ACK from non-ISR context
-        mov eax, [ebp + SOCK_STATE]
-        cmp eax, TCP_CLOSED
-        je .sclose_free
-        cmp eax, TCP_TIME_WAIT
-        je .sclose_free
-        dec ecx
-        jnz .sclose_wait
-        jmp .sclose_free
-
-.sclose_last_ack:
-        call tcp_flush_pending    ; Flush pending ACK for received FIN
-        mov dword [ebp + SOCK_STATE], TCP_LAST_ACK
-        mov al, TCP_FIN | TCP_ACK
-        call tcp_send_flags
-        mov ecx, 300
-.sclose_la_wait:
-        hlt
-        call tcp_flush_pending    ; Send deferred ACK from non-ISR context
-        cmp dword [ebp + SOCK_STATE], TCP_CLOSED
-        je .sclose_free
-        dec ecx
-        jnz .sclose_la_wait
-
-.sclose_free:
-        mov eax, ebx
-        call sock_free
-.sclose_done:
+        call vfs_close
+        mov [esp + 28], eax
         popad
-        xor eax, eax
         iretd
 
 ;---------------------------------------
@@ -3759,10 +3909,10 @@ POLL_OUT        equ 2
 
 sys_poll:
         pushad
-        ; Validate fd
-        cmp ebx, MAX_SOCKETS
-        jge .spoll_fail
-        mov eax, ebx
+        ; Validate fd (a VFD bound to a socket)
+        call vfd_to_sock
+        jc .spoll_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea ebp, [net_sock_table + eax]
         cmp dword [ebp + SOCK_TYPE], 0

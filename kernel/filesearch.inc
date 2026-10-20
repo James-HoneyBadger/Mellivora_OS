@@ -60,6 +60,12 @@ gff_restore_cwd:
 ; Load file data into buffer
 ; ESI = filename, EDI = destination buffer
 ; Returns: ECX = file size, CF set if not found
+;
+; Reads are capped at HBFS_READ_MAX_BLOCKS. Callers pass a destination inside
+; the program window (PROGRAM_BASE..PROGRAM_END_ADDR, 1 MB); a larger file is
+; refused rather than read past that window into the paging structures and the
+; PMM bitmap that sit above it.
+HBFS_READ_MAX_BLOCKS equ PROGRAM_MAX_SIZE / HBFS_BLOCK_SIZE   ; 256 blocks = 1 MB
 hbfs_read_file:
         pushad
         mov [.save_dest], edi
@@ -147,6 +153,8 @@ hbfs_read_file:
         mov [.save_fsize], ebx
         mov eax, [edi + 260]    ; start block
         mov ecx, [edi + 264]    ; block count
+        cmp ecx, HBFS_READ_MAX_BLOCKS
+        ja  .path_read_fail     ; file is larger than the caller's buffer
         shl eax, 3
         add eax, HBFS_DATA_START
         shl ecx, 3
@@ -188,6 +196,8 @@ hbfs_read_file:
         ; Get block number and block count, then read all data
         mov eax, [edi + 260]    ; Start block
         mov ecx, [edi + 264]    ; Block count
+        cmp ecx, HBFS_READ_MAX_BLOCKS
+        ja  .read_error         ; file is larger than the caller's buffer
         shl eax, 3              ; * 8 = sector offset within data area
         add eax, HBFS_DATA_START
         shl ecx, 3              ; block_count * 8 = total sectors to read

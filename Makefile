@@ -4,7 +4,7 @@
 # Produces a bootable disk image with:
 #   Sector 0:      Stage 1 boot sector (512 bytes)
 #   Sectors 1-32:  Stage 2 loader (16 KB)
-#   Sectors 33+:   Kernel (192 KB)
+#   Sectors 33+:   Kernel (size = kernel_sectors.inc, computed from the binary)
 #   Remaining:     Filesystem area
 #
 # Target: i486+ emulation via QEMU
@@ -66,6 +66,8 @@ IMAGE_SIZE_MB = 2048
 BOOT_BIN = boot.bin
 STAGE2_BIN = stage2.bin
 KERNEL_BIN = kernel.bin
+# ELF32 form of the same source, used only as a GDB symbol table.
+KERNEL_ELF = kernel.elf
 
 # Source
 BOOT_SRC = boot.asm
@@ -120,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug programs populate full check sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime crash-test
 
 all: $(IMAGE)
 
@@ -134,6 +136,15 @@ KERNEL_INCS = $(wildcard kernel/*.inc)
 # Assemble 32-bit kernel
 $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS)
 	$(NASM) -f bin -O0 -w-zeroing -o $@ -l $(@:.bin=.lst) $<
+
+# Symbol-bearing ELF32 build. This is not booted; it exists so GDB can resolve
+# addresses. Symbols are relative to 0 because the ELF has no ORG; gdb is told
+# the load base via `add-symbol-file kernel.elf 0x00100000` (see tools/gdb_kernel.sh).
+$(KERNEL_ELF): $(KERNEL_SRC) $(KERNEL_INCS)
+	$(NASM) -f elf32 -dKERNEL_ELF -O0 -w-zeroing -o $@ $<
+
+symbols: $(KERNEL_ELF)
+	@echo "  Symbols: $(KERNEL_ELF) (load base 0x00100000)"
 
 # Generate kernel_sectors.inc from kernel binary size
 # This computes ceil(size / 512) so stage2 loads exactly the right amount.
@@ -155,7 +166,7 @@ $(STAGE2_BIN): $(STAGE2_SRC) kernel_sectors.inc
 # Layout:
 #   Offset 0x00000 (LBA 0):  boot.bin   (512 bytes)
 #   Offset 0x00200 (LBA 1):  stage2.bin (16384 bytes = 32 sectors)
-#   Offset 0x04200 (LBA 33): kernel.bin (padded to 192KB = 384 sectors)
+#   Offset 0x04200 (LBA 33): kernel.bin (KERNEL_SECTORS, not padded)
 $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "=== Building Mellivora disk image ==="
 	@echo "  Boot sector:  $(BOOT_BIN)"
@@ -212,6 +223,11 @@ debug: check-qemu $(IMAGE)
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_DEBUG_FLAGS)
 
+# Boot under QEMU's gdbstub with the kernel symbol table loaded
+gdb: check-qemu $(IMAGE) $(KERNEL_ELF)
+	@echo "=== Launching Mellivora under GDB ==="
+	@bash tools/gdb_kernel.sh $(IMAGE)
+
 # Build all sample programs (parallel by default)
 programs:
 	$(MAKE) -j$(NPROC) $(PROG_BINS)
@@ -229,8 +245,8 @@ populate: $(IMAGE) programs populate.py
 	@echo "=== Populating filesystem ==="
 	$(POPULATE) $(IMAGE) $(PROG_DIR)
 
-# Full build: OS + programs + populated filesystem
-full: $(IMAGE) programs
+# Full build: OS + programs + populated filesystem + debug symbols
+full: $(IMAGE) programs symbols
 	# Always write the latest kernel before repopulating the filesystem.
 	# populate.py updates mellivora.img's mtime, so the $(IMAGE) rule is
 	# skipped on subsequent builds — this dd ensures kernel is always current.
@@ -294,8 +310,32 @@ iso-verify: $(ISO_FILE)
 		echo "  WARN  boot-load-size: expected $$EXPECTED, found $$ACTUAL"; \
 	 fi
 
+# Headless QEMU boot smoke test: asserts the kernel reaches the shell prompt and
+# reported no CPU exceptions on COM1. BOOT_ALLOW_SKIP=1 keeps 'make check'
+# usable on hosts without QEMU; CI runs tests/test_boot.sh directly (strict).
+check-boot: $(IMAGE)
+	@BOOT_ALLOW_SKIP=1 bash tests/test_boot.sh $(IMAGE)
+
+# Runtime regression matrix: foreground/background programs, fork+exec,
+# syscall validation and networking, all driven over COM1 in QEMU.
+check-runtime: $(IMAGE)
+	@RUNTIME_ALLOW_SKIP=1 bash tests/test_runtime.sh $(IMAGE)
+
+# Host-side HBFS validator: superblock, bitmap, directory tree, xattrs, journal.
+fsck: $(IMAGE) tools/fsck_hbfs.py
+	@python3 tools/fsck_hbfs.py $(IMAGE)
+
+# Crash consistency: kill QEMU at random points during metadata work and prove
+# with fsck that the journal recovers. Slower than the rest of the gate, so it
+# is a separate target rather than part of `make check`.
+CRASH_ITERS ?= 5
+crash-test: $(IMAGE) tools/crash_inject.py tools/fsck_hbfs.py
+	@CRASH_IMAGE=$(IMAGE); \
+	python3 tools/crash_inject.py "$$CRASH_IMAGE" "fs_mkdir_test" \
+		--iterations $(CRASH_ITERS)
+
 # Run regression tests (requires full build)
-check: full check-samples
+check: full check-samples check-boot check-runtime fsck
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -552,6 +592,7 @@ help:
 	@echo ""
 	@echo "  Test & Info"
 	@echo "    make check        Run regression suite"
+	@echo "    make crash-test   Kill QEMU at random points and require fsck to pass (HBFS journal)"
 	@echo "    make lint         Run contract and NASM source lint checks"
 	@echo "    make validate-version Validate repo version strings for the current release"
 	@echo "    make syscalls-json Generate docs/syscalls.json + docs/syscalls.md"
@@ -604,7 +645,7 @@ count:
 		"$$(cat boot.asm stage2.asm kernel.asm kernel/*.inc $(PROG_DIR)/*.asm $(PROG_DIR)/syscalls.inc Makefile populate.py boot/uefi_loader.c tools/hbpkg.c 2>/dev/null | wc -l)"
 
 clean:
-	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(IMAGE) $(ISO_FILE) $(ISO_LITE_FILE) kernel_sectors.inc
+	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(KERNEL_ELF) $(IMAGE) $(ISO_FILE) $(ISO_LITE_FILE) kernel_sectors.inc
 	rm -f *.lst
 	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
 	rm -rf .build

@@ -4,7 +4,8 @@ populate.py - Populate a Mellivora OS disk image with sample files.
 
 Writes files directly into the HBFS filesystem on the disk image.
 This understands the on-disk HBFS layout:
-  - Superblock at LBA 4096 (well past kernel end at LBA ~1601)
+  - Superblock at LBA 4096 (well past the kernel end, which is LBA 33 +
+    KERNEL_SECTORS as generated into kernel_sectors.inc)
   - Block allocation bitmap at LBA 4097 (128 sectors = 16 blocks)
   - Root directory at LBA 4225 (256 sectors = 32 blocks)
   - Data area starts at LBA 4481
@@ -40,7 +41,13 @@ HBFS_DATA_START = HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE      # 455
 HBFS_MAX_FILENAME = 252
-TOTAL_BLOCKS = 524288
+# The journal occupies the first HBFS_JOURNAL_BLOCKS data blocks and must never
+# be handed to a file.
+HBFS_JOURNAL_BLOCKS = 4
+# A 2048 MiB image has 523727 complete 4 KB data blocks after the metadata
+# (data starts at LBA 4481). Declaring 524288 made the last 561 blocks point
+# past the end of the image.
+TOTAL_BLOCKS = 523727
 
 # File types
 FTYPE_FREE = 0
@@ -164,7 +171,15 @@ def create_dir_entry(filename, ftype, size, start_block,
     # Modified timestamp: bytes 272-275
     struct.pack_into('<I', entry, 272, timestamp)
 
-    # Reserved: bytes 276-287 (already zeroed)
+    # Permission metadata (v3): mode/uid/gid. Explicit defaults matter because a
+    # zero mode makes every entry a legacy entry that permission checks reject.
+    if ftype in (FTYPE_DIR, FTYPE_EXEC):
+        mode = 0o755
+    else:
+        mode = 0o644
+    struct.pack_into('<H', entry, 276, mode)
+    struct.pack_into('<H', entry, 278, 0)      # uid = root
+    struct.pack_into('<H', entry, 280, 0)      # gid = root
 
     return entry
 
@@ -204,12 +219,15 @@ class FSImage:
 
                 self.img.seek(lba_to_offset(HBFS_ROOT_DIR_START))
                 self.root_dir = bytearray(self.img.read(HBFS_ROOT_DIR_SIZE))
+                # Bring pre-v3 entries (mode 0) up to explicit defaults.
+                self._migrate_modes(self.root_dir, HBFS_MAX_FILES)
 
                 self.next_block = self._find_next_block()
                 return
 
         # No filesystem yet: initialize a fresh one.
         self.sb = create_superblock()
+        self.next_block = HBFS_JOURNAL_BLOCKS
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
         self.img.write(self.sb)
 
@@ -227,6 +245,24 @@ class FSImage:
             directory_buf[off + 253] != FTYPE_FREE
             and directory_buf[off] != 0
         )
+
+    @staticmethod
+    def _migrate_modes(directory_buf, max_entries):
+        """Give legacy mode-0 entries explicit default permissions.
+
+        Images created before v3 have mode/uid/gid zeroed. Those entries are
+        rejected by permission checks and look like "legacy" entries to fsck.
+        Nothing else about the entry changes.
+        """
+        for i in range(max_entries):
+            off = i * HBFS_DIR_ENTRY_SIZE
+            if directory_buf[off + 253] == FTYPE_FREE:
+                continue
+            mode = struct.unpack_from('<H', directory_buf, off + 276)[0]
+            if mode == 0:
+                ftype = directory_buf[off + 253]
+                mode = 0o755 if ftype in (FTYPE_DIR, FTYPE_EXEC) else 0o644
+                struct.pack_into('<H', directory_buf, off + 276, mode)
 
     def _find_next_block(self):
         """Return the next free block after the highest used one."""
@@ -281,6 +317,9 @@ class FSImage:
     def _rebuild_bitmap(self):
         """Rebuild the allocation bitmap from live directory entries."""
         fresh = bytearray(HBFS_BITMAP_SIZE)
+
+        # The journal is reserved even when no transaction is active.
+        self._mark_block_range(fresh, 0, HBFS_JOURNAL_BLOCKS)
 
         def mark_directory(directory_buf, max_entries):
             entries = []
@@ -341,6 +380,7 @@ class FSImage:
                 raw = self.img.read(block_count * BLOCK_SIZE)
                 data = bytearray(raw[:HBFS_SUBDIR_SIZE].ljust(
                     HBFS_SUBDIR_SIZE, b'\x00'))
+                self._migrate_modes(data, HBFS_SUBDIR_MAX_FILES)
                 self.subdirs[dirname] = {
                     'start_block': block_num,
                     'data': data,
@@ -508,6 +548,9 @@ class FSImage:
 
         used = self._rebuild_bitmap()
         free = TOTAL_BLOCKS - used
+        # Keep the on-disk geometry in sync with the constants. This also
+        # migrates an image created when TOTAL_BLOCKS overran the image size.
+        struct.pack_into('<I', self.sb, 8, TOTAL_BLOCKS)
         struct.pack_into('<I', self.sb, 12, free)
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
         self.img.write(self.sb)
@@ -634,19 +677,22 @@ Memory Map:
   0x000A0000 - 0x000BFFFF  VGA memory
   0x000B8000 - 0x000B8F9F  VGA text buffer (80x25x2)
   0x000C0000 - 0x000FFFFF  ROM area
-  0x00100000 - 0x001FFFFF  Kernel (loaded at 1MB)
-  0x00200000 - 0x002FFFFF  Program load area (1MB)
-  0x00300000 - 0x0031FFFF  Physical memory bitmap (128KB)
-  0x00400000 - onwards     Free memory (managed by PMM)
+  0x00100000 - 0x002FFFFF  Kernel (loaded at 1MB, ~1.3MB)
+  0x00300000 - 0x003FFFFF  Program load area (1MB)
+  0x00410000 - 0x00490FFF  Page directory + page tables
+  0x00500000 - 0x0051FFFF  Physical memory bitmap (128KB)
+  0x00520000 - 0x00520FFF  PMM buddy tags (unused)
+  0x00700000 - 0x007FFFFF  Heap window (unused)
+  0x00800000 - onwards     Free memory (managed by PMM), KERNEL_RESERVED_END
 
 Disk Layout:
-  LBA 0:       Boot sector (512 bytes)
-  LBA 1-32:    Stage 2 loader (16KB)
-  LBA 33-416:  Kernel (384 sectors, 192KB)
-  LBA 417:     HBFS Superblock
-  LBA 418-425: Block allocation bitmap (4KB)
-  LBA 426-553: Root directory (64KB, 16 blocks, 227 entries)
-  LBA 554+:    Data blocks (4KB each)
+  LBA 0:         Boot sector (512 bytes)
+  LBA 1-32:      Stage 2 loader (16KB)
+  LBA 33+:       Kernel (KERNEL_SECTORS from kernel_sectors.inc)
+  LBA 4096:      HBFS Superblock
+  LBA 4097-4224: Block allocation bitmap (128 sectors = 16 blocks)
+  LBA 4225-4480: Root directory (256 sectors = 32 blocks, 455 entries)
+  LBA 4481+:     Data blocks (4KB each)
 
 Syscall Interface (INT 0x80):
   EAX = syscall number

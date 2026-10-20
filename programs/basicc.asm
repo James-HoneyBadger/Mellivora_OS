@@ -20,7 +20,7 @@
 ;   - Colon multi-statement lines
 ;
 ; Usage:  basicc source.bas output.bin
-;   Compiles source.bas to a flat x86 binary at 0x200000.
+;   Compiles source.bas to a flat x86 binary at PROGRAM_BASE.
 ;
 ; Output binary layout:
 ;   [0x000] JMP to code_start          (5 bytes)
@@ -57,7 +57,9 @@ FOR_STACK_MAX   equ 16          ; max nested FOR loops (compile-time)
 ; -----------------------------------------------------------------------
 ; Output binary fixed layout constants
 ; -----------------------------------------------------------------------
-BASE_ADDR       equ 0x200000
+BASE_ADDR       equ 0x300000    ; = kernel.asm PROGRAM_BASE, where the shell loads
+                                ; flat binaries. Emitted absolute addresses (vars A-Z,
+                                ; runtime subroutines, string literals) are based here.
 
 ; Data section offsets (from BASE_ADDR)
 VARS_OFF        equ 0x100       ; vars A..Z (104 bytes)

@@ -1,5 +1,279 @@
 # Mellivora OS - Changelog
 
+## Unreleased - Foreground process model
+
+### Overview
+
+Foreground programs are now real scheduler tasks instead of a one-off IRET from the
+shell, and an exec inside a task gets a private copy of the program window so it cannot
+overwrite the image another process is running.
+
+### Kernel
+
+- **Per-task framebuffer mapping** — `paging_map_page` only ever edited the master
+  directory, so once programs ran as tasks with private page directories every VBE game
+  page-faulted on its first framebuffer write (address `0xFD000000`, supervisor write).
+  Added `paging_map_page_at` (choose a directory), `paging_map_page_here` (active
+  directory, used by demand paging) and `paging_map_page_all` (master + active). The VBE
+  mode setter and the sigreturn trampoline use the latter.
+- **`vbe_fill_triangle` divide-by-zero** — the two short-edge scanline divisions loaded
+  the divisor into EDX and then executed `cdq`, which overwrites EDX with the sign of the
+  dividend; every triangle with a positive intermediate hit `#DE` (asteroids crashed as
+  soon as it drew its ship). The divisor now lives in ECX.
+- **Exception visibility in graphics modes** — the generic exception handlers restored
+  text mode only for the Burrows desktop, so a fault inside a full-screen VBE program
+  printed its report to an invisible text buffer. They now also check `vbe_active`.
+
+- **Per-task VFD table** — the VFS virtual-fd table is now swapped per task, just like
+  the legacy HBFS table. Both live in the task's 4 KB fd page (legacy at offset 0, VFDs
+  at 256) and are copied in/out on every context switch. A forked child closing a
+  descriptor no longer closes it for its parent; `programs/fd_isolate_test.asm` covers it.
+- **Unified fd namespace** — sockets now occupy VFDs (`VFS_FS_SOCK`) instead of their own
+  0–31 space. `SYS_SOCKET`/`SYS_ACCEPT` return VFDs, every socket syscall translates with
+  `vfd_to_sock`, and `close()` shuts the socket down (TCP FIN) and frees the slot;
+  `SYS_SOCKCLOSE` is now an alias for that path. `read`/`write` on a socket return −1
+  (use `send`/`recv`).
+- **fd bounds checks** — `vfs_read`, `vfs_write`, `vfs_close` and `vfs_seek` reject
+  fds ≥ `VFS_MAX_FDS`; previously an out-of-range fd indexed past `vfs_fd_table`.
+- **procfs fixes** — `str_suffix_match_ebx` pushed a stack slot per `/` in a path and
+  never popped it, so `/proc/version` returned to whatever was on the stack (this made
+  every procfs open fault); it is now a correct last-component matcher. `vfs_proc_open`
+  wrote the fs type to `VFS_MT_TYPE` (offset 16) instead of `VFD_FS_TYPE` (offset 4), so
+  proc reads never dispatched. `meminfo` called `pmm_free_pages` by mistake, never wrote
+  its numbers, and left a NUL between the label and the value — it now reports
+  `MemTotal`/`MemFree` in kB and no longer frees random pages.
+- **Foreground tasks** — the prompt launches programs through `sched_create_task` +
+  `sched_start_task`, so each run owns a TCB, kernel stack, page directory, fd table page,
+  `errno` and program break. `SYS_EXIT`, Ctrl+C and fork-child exits all tear the task down
+  (`sched_exit_task`) and restore the shell's fd view and master directory, so interrupted
+  programs no longer leak TCBs, stacks, fd pages or directories.
+- **fd inheritance** — a new task's fd page starts as a copy of the launcher's view, so
+  redirections active at launch are visible while later changes stay isolated.
+- **exec isolation** — `paging_isolate_program_window` privatises the PDE covering
+  `PROGRAM_BASE` and copies the 1 MB window into task-owned frames before a task execs
+  (`paging_privatize_pde`, `paging_copy_window_private`,
+  `paging_free_window_private`).
+- **fork** — `sys_fork` clones the parent's page directory (`paging_clone_pd`) instead of
+  the master, so a child of an exec'd parent inherits the right image.
+- **PPID sentinel** — "no parent" is now `-1`, freeing PID 0 to be a real parent; `getppid`
+  still reports 0 for shell-launched tasks.
+
+### Job control (signals)
+
+- **`kill` takes a signal** — `SYS_KILL` (53) is now `kill(pid, sig)` in EBX/ECX and
+  accepts a negative PID to signal a whole process group (`kill(-pgid, sig)`. The previous
+  ABI only read EBX and destroyed the target outright; callers that leave ECX unset still
+  get SIGTERM and the same visible result.
+- **`sched_signal_task`** — one place decides what a signal means for a task. A task with
+  an installed handler is queued (`TCB_SIG_PEND`), and made runnable if it was blocked;
+  a task with `SIG_DFL` (or no handler table at all) is still torn down immediately, so
+  `kill` stays decisive for programs that never handle signals. A RUNNING target is always
+  queued — it is the caller, and freeing the kernel stack we are standing on would be
+  fatal.
+- **Ctrl+C is SIGINT** — the keyboard handler no longer hard-aborts unconditionally. If
+  the foreground program installed a SIGINT handler, the signal is queued and the program
+  keeps running; `SIG_IGN` is honoured; `SIG_DFL` (or no handler) still aborts to the shell.
+- **`sys_sigaction` lost the first handler** — the zero-fill of a freshly allocated handler
+  table used `rep stosd`, which consumes ECX, and ECX held the handler argument. The first
+  `sigaction` call of every task therefore installed `SIG_DFL`, so a task could never catch
+  its first signal. ECX is now preserved across the fill.
+- **Delivery needs the target's address space** — the signal frame is written onto the
+  receiving task's user stack, so `sys_yield`, `sys_waitpid` and the timer switch now
+  install the incoming task's page directory and deliver *before* committing anything
+  (fd-swap, state change, `TCB_ESP` load). Previously the frame was built through the
+  outgoing task's mapping, which corrupted the wrong stack; a candidate killed by a
+  default action is now skipped instead of being resumed.
+- **`SIGKILL`/`SIGCONT`/`SIGTSTP`** — `sched_signal_task` handles these before the handler
+  lookup: SIGKILL bypasses handlers, SIGCONT wakes a stopped task, SIGTSTP stops one (a
+  RUNNING target is always queued, never torn down, since it is the caller).
+- **`SYS_SIGNAL` is `kill`** — the shell's `kill`/`bg`/`fg` builtins went through a second,
+  duplicated implementation that ignored handlers and leaked the fd page, the page
+  directory count and the handler table. `sys_signal` is now `jmp sys_kill`.
+- **Delivery in `sys_yield`** — a program that yields in a tight loop spends most of its
+  time inside the syscall (ring 0), where the timer never advances its quantum, so a
+  pending signal was never delivered. Cooperative yields now dispatch pending signals
+  themselves for both the running task and the task they switch to.
+- **handler table page** — the 4 KB handler table allocated by `sigaction` was never
+  freed; `sched_exit_task`, `sched_signal_task` and the default-action path now release it.
+- **`sigterm_test`** — new regression program: forks, the child installs a SIGTERM
+  handler and spins, the parent puts it in its own process group and sends
+  `kill(-pgid, SIGTERM)`; the handler runs and exits 42, and the parent's `waitpid` sees it.
+- **`timeout`** — passes SIGTERM explicitly now that the syscall takes a signal.
+
+### Terminal foreground process group
+
+- **`SYS_TCSETPGRP` (183) / `SYS_TCGETPGRP` (184)** — the console now names the process
+  group that owns it (`tty_fg_pgid`, `-1` when none). `tcsetpgrp` rejects a group no live
+  task belongs to, so a typo cannot leave the terminal permanently unable to deliver
+  Ctrl+C. The sentinel is `-1`, not 0: PGIDs are task PIDs and the task in slot 0 really
+  has PGID 0.
+- **Ctrl+C/Ctrl+Z signal the job, not "whatever is running"** — `sched_kbd_signal` sends
+  the signal to the terminal's foreground group (falling back to the running task when no
+  group is set) and reports whether the interrupted context survives; the keyboard handler
+  returns to it, or restores the shell's fds, address space and TSS when the job died or
+  was stopped.
+- **Ctrl+Z is `SIGTSTP`** — a stopped job keeps its TCB, fd page and address space, so
+  `fg <pid>` (`SIGCONT` + `tcsetpgrp`) and `bg <pid>` (`SIGCONT`) can resume it.
+- **shell** — a foreground launch makes the console follow the new task's group; program
+  exit clears it, and `fg` re-claims it for the resumed job.
+- **`SIGCHLD` default action is "ignore"** — `sched_exit_task` queues SIGCHLD on every
+  parent, and `sched_deliver_signals` treated every non-CONT/TSTP default as "terminate".
+  Any parent that yielded after a child exited was therefore destroyed (it showed up as a
+  process-group signal test hanging, not as a crash). Both the delivery path and
+  `sched_signal_task` now ignore SIGCHLD unless a handler is installed.
+- **yield with a single task** — `sys_yield`'s "nothing to switch to" fast path returned
+  without dispatching pending signals, so the last task in the system could never receive
+  one: the timer only advances the quantum when it interrupted ring 3. The fast path now
+  delivers before returning.
+- **`SYS_GETPID`/`SYS_GETPPID` clobbered `ECX`/`EDI`** — both walked `task_table` with
+  those registers and returned them to user space, breaking the rule that `int 0x80`
+  reports only in `EAX`. A program that loaded a signal number into `ECX` before
+  `SYS_GETPPID` (the obvious way to write `kill(getppid(), SIGUSR1)`) actually called
+  `kill(ppid, 1)`; `SIGHUP` is queued for a RUNNING caller and then terminates it at the
+  next switch point, so the process simply vanished. Both syscalls now save and restore
+  them.
+- **`sys_yield` stored a clobbered `ESI` into `task_current`** — `sched_deliver_signals`
+  uses `ESI` as scratch while it builds the signal frame, and `.yld_switch` wrote `ESI`
+  (the *incoming slot index*) into `task_current` after the call. The signal handler then
+  ran with `task_current` pointing at a saved `EIP3` value, and `sys_sigreturn` dereferenced
+  it (`#PF` at a wild address that moves with the program). `ESI` now survives the call.
+- **`sigret_test`** — new regression program: a handler that *returns* (sigreturn
+  trampoline) rather than exiting, which is the shape job control needs.
+- **`pgrp_test`** — new regression program: parent + two children in one group,
+  `tcsetpgrp`/`tcgetpgrp` round-trip, `kill(-pgid, SIGINT)` reaching every member including
+  the caller, and both children exiting through their handler. Each child announces
+  readiness with a *different* signal (`SIGUSR1`/`SIGUSR2`): pending signals are a bitmask,
+  so two children sending the same one before the parent ran collapsed into a single
+  delivery and the parent waited for a second that never came.
+
+### Copy-on-write fork
+
+- **fork() shares frames instead of copying** — `cow_fork_share` privatises the page
+  tables covering the shared regions in both directories, clears `PG_WRITABLE` on every
+  present PTE and records an extra owner per frame (`cow_ref`, one byte per 4 KB of
+  identity-mapped RAM, 0 = not shared). The 64 KB eager stack copy is gone; the child runs
+  on the parent's stack until either one writes.
+- **`#PF` breaks the share** — `cow_break_page` handles a present + write + user fault:
+  two or more owners → copy the frame, drop the old reference, remap writable; exactly one
+  owner → the other side already copied, so just re-enable writing; no recorded owners →
+  a genuine protection violation (the read-only sigreturn trampoline still faults).
+- **Refcount-aware teardown** — `paging_free_window_private` now compares *frames* rather
+  than whole PTEs (a COW share has the same frame as the master but different flags) and
+  releases through `cow_put`; `sched_exit_task` releases the user stack for every task
+  exit, not just background ones (foreground and forked exits used to leak it);
+  `paging_copy_window_private` (exec isolation) forces `PG_WRITABLE` on the copies it
+  makes and releases the references it replaces.
+- **`cow_test`** — new regression program: the child sees the parent's data and stack
+  values, its writes to both stay private, and the parent's values are intact afterwards.
+
+### Storage (HBFS) — crash-consistent metadata
+
+Every metadata mutation now runs inside a write-ahead transaction, and the two paths that
+wrote metadata to the wrong place are fixed.
+
+- **The journal never worked** — `hbfs_journal_log_sector` read the sector it was supposed
+  to preserve with the destination in `ESI`, but `ata_read_sectors` takes its destination
+  in **EDI**; EDI still held the *journal LBA*. The pre-image was therefore read from
+  absolute address ~0x1180 (low memory) and journalled as garbage. Replay had the mirror
+  bug (`mov edi, target` then `lea esi, buf` before a read): it wrote an unfilled buffer
+  to the target LBA. Net effect: replaying a bitmap record replaced the bitmap with a
+  journal header, i.e. *every block became free*. Both paths now keep the target LBA in a
+  local variable and use EDI/ESI correctly.
+- **Metadata is journaled, and only dirty sectors are written** — new
+  `hbfs_meta_write(EAX = LBA, ESI = buf, ECX = sectors)` logs each sector's pre-image and
+  then writes it. `hbfs_create_file`, `hbfs_delete_file_entry`, `hbfs_mkdir`,
+  `hbfs_alloc_blocks`, `hbfs_free_blocks`, `hbfs_save_root_dir`, chmod and chown all go
+  through it. Transactions nest (`hbfs_journal_depth`), so "allocate blocks + write the
+  directory entry" is one atomic unit: a crash can no longer leave allocated-but-orphaned
+  blocks or an entry pointing at unallocated space.
+- **A full journal aborts the operation** — `hbfs_journal_log_sector` used to skip the
+  record when the log was full, which silently left an un-undoable mutation on disk. It now
+  returns CF=1; `hbfs_meta_write` calls the new `hbfs_journal_abort`, which seals the log
+  with a commit marker, replays the pre-images it just wrote (undo) and clears the state.
+- **Journal epochs** — the log is circular, so after a crash mid-transaction the records of
+  the *previous*, already-committed transaction were still sitting behind the new ones with
+  valid magic. Recovery replayed them too, rolling the filesystem back to an older state
+  (a file entry survived while its block was marked free). Every transaction now increments
+  `HBFS_SB_JRNL_EPOCH` (superblock offset 56) and stamps it into every record; recovery stops
+  at the first record from a different epoch.
+- **A sector is logged once per transaction** — replacing a file writes the bitmap sector
+  and the directory sector twice (free then allocate). The log used to keep both
+  pre-images, so an undo could restore the *intermediate* state and leave the entry and
+  the bitmap disagreeing. `hbfs_journal_logged` remembers the sectors already logged by the
+  open transaction and skips repeats.
+- **`hbfs_flush_dir_entry` wrote into the root directory regardless of the current
+  directory** — it added `HBFS_ROOT_DIR_START` instead of `current_dir_lba`, so changing
+  the mode of a file inside a subdirectory overwrote whichever *root* entry happened to
+  live at the same sector offset. It now delegates to the diffing writer, which uses the
+  real directory LBA.
+- **A one-entry metadata change no longer rewrites 128 KB** — `hbfs_save_root_dir` diffs
+  `hbfs_dir_buf` against a shadow copy of what is on disk and writes only the 512-byte
+  sectors that changed. (`ls`/`chmod`/`create` used to rewrite the whole directory on every
+  operation, which was also why it could not be journaled at all.)
+- **The allocation bitmap is resident and written by range** — allocations read the whole
+  64 KB bitmap from disk every time and wrote all of it back. It is now cached
+  (`hbfs_bitmap_valid`) and only the one or two bitmap sectors covering the changed block
+  range are written.
+- **`fs_meta_test`** — new regression program: writes a file in the root and one in a
+  subdirectory, chmods both, and verifies the *other* file is intact after each step
+  (this is exactly what the `HBFS_ROOT_DIR_START` bug corrupted), then deletes and
+  recreates one of them. Prints the failing stage number.
+- **`fs_mkdir_test`** — metadata churn workload (create/chmod/delete × 40) used as the
+  crash-injection target.
+- **`tools/crash_inject.py` + `make crash-test`** — boots a *copy* of the image, types the
+  churn command, `SIGKILL`s QEMU at a random point, then requires `fsck` to pass both
+  immediately and again after the kernel has replayed the journal. This is what found the
+  replay bug above.
+- **`tools/fsck_hbfs.py`** now validates the log: record magic, type, target LBA inside the
+  filesystem, and the dirty-state/commit-marker combinations.
+
+### Storage (HBFS) — tooling
+
+- **`tools/qemu_drive.py --wait N`** — the driver used to sample the screen once, ~3 s
+  after typing a command, so any program doing real work was reported as a failure. It now
+  polls for `--expect` text for up to `--wait` seconds (default 6).
+
+### Programs
+
+- **`breakout`** — the HUD passed column/row to `SYS_FRAMEBUF/3`, which takes pixel
+  coordinates, so the score and lives strings overlapped; they now use pixels.
+- **`fonttest`** — new diagnostic: renders the kernel's captured VGA font as a
+  character sheet in VBE mode (press any key to quit).
+- **`curl`** — now works against the current socket ABI: it creates a TCP socket,
+  passes `connect(fd, ip, port)` in the documented registers, uses `send`/`recv` with
+  buffer/length in ECX/EDX, and treats DNS failure as a 0 return. Previously it never
+  created a socket at all, so every request failed with "connection failed".
+- **`timeout`** — reaps the child with `SYS_WAIT` (WNOHANG semantics) instead of
+  `waitpid`, whose return value cannot distinguish "still running" from "exited with 0".
+- **`argv_test`** — new regression program: prints its own arguments, forks, execve's
+  itself with different arguments, and waits. Proves per-task argv and `SYS_EXECVE`.
+
+### Syscalls
+
+- **`SYS_EXECVE` (182)** — `execve(path, argv, envp)`. `argv[1..]` is flattened into the
+  loader's command line; `SYS_EXEC` and `SYS_EXECVE` share `exec_kernel_line`, so the
+  isolation and parent bookkeeping live in one place. `envp` is accepted for POSIX shape
+  (the environment stays global for now).
+- **per-task argv** — launches snapshot the argument buffer into
+  `task_argv_table[PID]`; `SYS_GETARGS` reads the caller's own copy, so a long-running
+  task no longer sees another program's arguments.
+- **task naming** — the shell names each task after the program it launches, so `ps`
+  shows `hello` instead of `-`.
+
+### Testing
+
+- **`qemu_drive.py --screendump FILE`** — captures the framebuffer through the QEMU
+  monitor and converts the PPM to PNG in-process, so graphics programs can be verified
+  visually even though they never write to the VGA text buffer.
+- Added `tests/test_runtime.sh` and `make check-runtime`: a QEMU matrix covering a flat
+  binary, the time syscalls, the syscall validation suite, fork + exec + waitpid,
+  execve argument passing, VFS files + procfs (`vfstest`), the unified fd table
+  (`sockfd_test`), per-task fd views (`fd_isolate_test`), signal delivery through
+  `kill` and process groups (`sigterm_test`), a signal handler that returns
+  (`sigret_test`), the terminal foreground process group (`pgrp_test`), copy-on-write
+  fork (`cow_test`), background-job reaping, and DHCP + DNS. Every case rejects CPU
+  exceptions on COM1. `make check` now runs it (skipping cleanly on hosts without QEMU).
+
 ## v13.0.0 - Quality gates, benchmark observability, app manifests, new demos
 
 ### Overview

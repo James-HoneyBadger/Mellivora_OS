@@ -16,9 +16,13 @@ isr_exception_noerr:
         pop eax
 
         pushad
-        ; Restore text mode if in GUI so errors are visible
+        ; Make the report visible: leave VBE for text mode, whether the fault
+        ; came from the desktop or from a full-screen graphics program.
         cmp byte [gui_desktop_active], 0
+        jne .exc_noerr_restore
+        cmp byte [vbe_active], 0
         je .exc_noerr_text_ok
+.exc_noerr_restore:
         mov byte [gui_desktop_active], 0
         call vbe_restore_text
 .exc_noerr_text_ok:
@@ -52,9 +56,13 @@ isr_exception_err:
         pop eax
 
         pushad
-        ; Restore text mode if in GUI so errors are visible
+        ; Make the report visible: leave VBE for text mode, whether the fault
+        ; came from the desktop or from a full-screen graphics program.
         cmp byte [gui_desktop_active], 0
+        jne .exc_err_restore
+        cmp byte [vbe_active], 0
         je .exc_err_text_ok
+.exc_err_restore:
         mov byte [gui_desktop_active], 0
         call vbe_restore_text
 .exc_err_text_ok:
@@ -315,6 +323,23 @@ irq_timer:
         ; v3.0: Disable interrupts during critical context switch.
         cli
 
+        ; Install the incoming address space first: the signal frame below is
+        ; written onto that task's user stack, which only exists in its own
+        ; page directory. Nothing is committed yet, so a task that a default
+        ; signal action kills here can still be skipped safely.
+        mov eax, ebx
+        call sched_apply_cr3
+
+        ; v11: deliver pending signals to the new task before restoring its context
+        push esi                        ; sched_deliver_signals clobbers ESI
+        push edi                        ; EDI = outgoing TCB, needed by the fd swap
+        mov edi, [ebx + TCB_ESP]        ; EDI = frame base (new task's kernel frame)
+        call sched_deliver_signals      ; EAX = 0 alive, -1 killed
+        pop edi
+        pop esi
+        test eax, eax
+        js  .timer_killed               ; default action terminated the new task
+
         ; EBX = new task's TCB, EDI = outgoing task's TCB
         ; Swap per-task fd tables (save outgoing's view, load incoming's)
         call sched_swap_fd_tables
@@ -326,12 +351,6 @@ irq_timer:
         mov eax, [ebx + TCB_KSTACK]
         mov [tss_struct + 4], eax
 
-        ; v11: deliver pending signals to the new task before restoring its context
-        mov edi, [ebx + TCB_ESP]        ; EDI = frame base (new task's kernel frame)
-        call sched_deliver_signals      ; EAX = 0 alive, -1 killed
-        test eax, eax
-        js  .timer_killed               ; default action terminated the new task
-
         ; Load the new task's (possibly modified) saved kernel ESP
         mov esp, [ebx + TCB_ESP]
         popad
@@ -339,8 +358,12 @@ irq_timer:
 
 .timer_killed:
         ; The task we just switched to was terminated by a default signal action.
-        ; Fall back to re-scanning for the next READY task (one pass only).
-        ; If none found, fall through to .timer_done (idle until next tick).
+        ; Nothing was committed, so put the outgoing address space back and
+        ; re-scan for the next READY task (one pass only).
+        mov eax, edi
+        call sched_apply_cr3
+        mov eax, [edi + TCB_KSTACK]
+        mov [tss_struct + 4], eax
         mov ecx, MAX_TASKS
         ; esi still = the slot of the killed task; scan forward from there
 .timer_rescan:
@@ -434,18 +457,70 @@ irq_keyboard:
         and al, 0x1F            ; Ctrl+A=1, Ctrl+C=3, etc.
         ; Check for Ctrl+C program abort
         cmp al, CTRL_C_CODE
+        jne .ctrl_z_check
+        cmp byte [program_running], 1
+        jne .no_ctrl
+        ; SIGINT goes to the terminal's foreground process group (falling back
+        ; to the running task). A job that installed a handler keeps running;
+        ; only jobs with SIG_DFL/SIG_IGN fall through to the abort below, so a
+        ; runaway program can still be stopped.
+        mov eax, SIGINT
+        call sched_kbd_signal
+        test eax, eax
+        jnz .eoi                ; EOI + iret: the job survives
+        jmp .ctrlc_abort
+
+.ctrl_z_check:
+        ; Ctrl+Z suspends the foreground job: SIGTSTP to its process group.
+        ; The stopped task keeps its TCB, fd view and address space, so the
+        ; shell's fg/bg builtins can resume it later.
+        cmp al, CTRL_Z_CODE
         jne .no_ctrl
         cmp byte [program_running], 1
         jne .no_ctrl
-        ; Abort the running program
+        mov eax, SIGTSTP
+        call sched_kbd_signal
+        test eax, eax
+        jnz .eoi
+        jmp .ctrlc_abort
+
+.ctrlc_abort:
+        ; Nobody handled the signal. Leave the (already torn down or stopped)
+        ; job and hand the console back to the shell.
         mov byte [program_running], 0
         mov dword [program_exit_code], 0xFFFFFFFF
         mov byte [ctrl_c_flag], 1
         ; Send EOI to PIC
         mov al, 0x20
         out PIC1_CMD, al
-        ; Hard-abort to shell — clean up redirection state
+        ; Release the foreground task from the shared kernel stack before its
+        ; own kernel stack is freed. This mirrors the sys_exit cleanup path.
         mov esp, KERNEL_STACK
+        mov dword [bg_exit_code], 0xFFFFFFFF
+        ; A stopped job keeps its fd view for when it is resumed; a killed one
+        ; has already lost its fd page (sched_swap_fd_tables skips a task with
+        ; no private page).
+        mov ebx, 0
+        mov edi, [sched_kbd_tcb]
+        call sched_swap_fd_tables
+        ; Release the foreground task only if it is still running. A stopped job
+        ; keeps its TCB so fg/bg can resume it, and a killed one is already
+        ; gone — tearing down whatever task happens to be RUNNING instead would
+        ; hit the wrong process.
+        mov edi, [sched_kbd_tcb]
+        test edi, edi
+        jz .ctrlc_no_exit
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        jne .ctrlc_no_exit
+        call sched_exit_task
+.ctrlc_no_exit:
+        call sched_restore_shell_fds
+        xor eax, eax
+        call sched_apply_cr3
+        mov dword [tss_struct + 4], KERNEL_STACK
+        ; The console has no foreground job again (see sys_tcsetpgrp)
+        mov dword [tty_fg_pgid], -1
+        ; Hard-abort to shell — clean up redirection state
         call shell_redir_reset
         call vga_reset_color
         sti

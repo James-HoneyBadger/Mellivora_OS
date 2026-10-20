@@ -20,7 +20,7 @@ start:
         mov [view_addr], eax
         jmp .main
 .use_default:
-        mov dword [view_addr], 0x00200000  ; default: kernel start
+        mov dword [view_addr], 0x00100000  ; default: kernel start (KERNEL_BASE)
 
 .main:
         ; Print banner

@@ -787,6 +787,115 @@ rtc_get_timestamp:
         ret
 
 ;---------------------------------------
+; rtc_get_epoch - Current UTC time as Unix seconds
+;   Out: EAX = seconds since 1970-01-01 00:00:00
+;   Preserves all other registers.
+;---------------------------------------
+rtc_get_epoch:
+        pushad
+        call rtc_read_time
+
+        ; EBP = full year (century*100 + year)
+        movzx eax, byte [rtc_century]
+        imul eax, 100
+        movzx ebx, byte [rtc_year]
+        add eax, ebx
+        mov ebp, eax
+
+        ; EDI = (year - 1970) * 365 + leap days since 1970
+        mov eax, ebp
+        sub eax, 1970
+        imul eax, 365
+        mov edi, eax
+
+        ; leaps(year) = (y-1)/4 - (y-1)/100 + (y-1)/400
+        mov eax, ebp
+        dec eax
+        xor edx, edx
+        mov ecx, 4
+        div ecx
+        mov esi, eax
+        mov eax, ebp
+        dec eax
+        xor edx, edx
+        mov ecx, 100
+        div ecx
+        sub esi, eax
+        mov eax, ebp
+        dec eax
+        xor edx, edx
+        mov ecx, 400
+        div ecx
+        add esi, eax
+        sub esi, 477                    ; leaps(1969) = 492 - 19 + 4
+        add edi, esi                    ; days to January 1 of this year
+
+        ; Add days before this month (non-leap table), then the leap day.
+        movzx ecx, byte [rtc_month]
+        cmp ecx, 1
+        jae .rge_month_ok
+        mov ecx, 1
+.rge_month_ok:
+        cmp ecx, 12
+        jbe .rge_month_clamped
+        mov ecx, 12
+.rge_month_clamped:
+        dec ecx
+        movzx esi, word [rge_month_days + ecx*2]
+        add edi, esi
+
+        cmp ecx, 2                      ; March or later?
+        jl .rge_add_day
+        mov eax, ebp
+        xor edx, edx
+        mov esi, 4
+        div esi
+        test edx, edx
+        jnz .rge_add_day
+        mov eax, ebp
+        xor edx, edx
+        mov esi, 100
+        div esi
+        test edx, edx
+        jnz .rge_leap
+        mov eax, ebp
+        xor edx, edx
+        mov esi, 400
+        div esi
+        test edx, edx
+        jnz .rge_add_day
+.rge_leap:
+        inc edi
+
+.rge_add_day:
+        movzx esi, byte [rtc_day]
+        test esi, esi
+        jz .rge_seconds
+        dec esi
+        add edi, esi
+
+.rge_seconds:
+        ; seconds = days*86400 + hh*3600 + mm*60 + ss
+        mov eax, edi
+        mov ecx, 86400
+        mul ecx
+        mov edi, eax
+        movzx eax, byte [rtc_hour]
+        imul eax, 3600
+        add edi, eax
+        movzx eax, byte [rtc_min]
+        imul eax, 60
+        add edi, eax
+        movzx eax, byte [rtc_sec]
+        add edi, eax
+        mov [esp + 28], edi              ; EAX slot in the pushad frame
+        popad
+        ret
+
+rge_month_days:
+        dw 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+
+;---------------------------------------
 ; rtc_write_reg - Write value to RTC register
 ; AL = register, AH = value
 ;---------------------------------------
@@ -2104,11 +2213,40 @@ sys_chdir:
         iretd
 
 sys_getcwd:
+        push esi
         push edi
-        mov edi, ebx            ; destination buffer
+        push ecx
+        ; Build into the kernel scratch buffer, then copy the exact range to
+        ; the caller. Building directly into EBX wrote a path of unknown
+        ; length into an unvalidated ring-3 pointer.
+        mov edi, path_search_buf
         call build_cwd_path
-        pop edi
+        mov esi, path_search_buf
+        xor ecx, ecx
+.sgc_len:
+        cmp byte [esi + ecx], 0
+        je .sgc_len_done
+        inc ecx
+        cmp ecx, 255
+        jb .sgc_len
+.sgc_len_done:
+        inc ecx                 ; include NUL
+        mov eax, ebx
+        call user_range_ok
+        jc .sgc_bad
+        mov edi, ebx
+        cld
+        rep movsb
         xor eax, eax
+        pop ecx
+        pop edi
+        pop esi
+        iretd
+.sgc_bad:
+        pop ecx
+        pop edi
+        pop esi
+        mov eax, -1
         iretd
 
 sys_serial:
@@ -2164,8 +2302,12 @@ sys_getenv_slot:
         ; Check if slot is occupied (first byte != 0)
         cmp byte [esi], 0
         je .sges_fail
-        ; Copy ENV_ENTRY_SIZE bytes to user buffer
+        ; Validate the 128-byte destination before copying.
         mov edi, ecx
+        mov eax, ecx
+        mov ecx, ENV_ENTRY_SIZE
+        call user_range_ok
+        jc .sges_fail
         mov ecx, ENV_ENTRY_SIZE
         cld
         rep movsb
@@ -2256,6 +2398,10 @@ sys_dmesg_read:
         lea esi, [dmesg_buf + edx]
         ; Destination buffer is in ECX (saved at [esp+24] by pushad)
         mov edi, [esp + 24]
+        mov eax, edi
+        mov ecx, DMESG_LINE_SIZE
+        call user_range_ok
+        jc .sdr_fail
         mov ecx, DMESG_LINE_SIZE
         cld
         rep movsb
@@ -2271,26 +2417,55 @@ sys_dmesg_read:
 ; SYS_GETARGS (32): Get command-line arguments
 ; EBX = pointer to destination buffer (max 512 bytes)
 ; Returns: EAX = length of argument string (0 if none)
+;
+; A task reads the snapshot taken when it was launched or exec'd. Only the
+; legacy no-TCB path (OOM fallback) falls back to the shell's global buffer.
 ;---------------------------------------
 sys_getargs:
         push esi
         push edi
-        push ecx
-        mov esi, program_args_buf
-        mov edi, ebx
+        mov dword [.ga_src], program_args_buf
+        call sched_get_current_task
+        test eax, eax
+        jz .ga_have_src
+        mov eax, [eax + TCB_PID]
+        cmp eax, MAX_TASKS
+        jae .ga_have_src
+        shl eax, 9                      ; * 512 bytes per slot
+        add eax, task_argv_table
+        mov [.ga_src], eax
+.ga_have_src:
+        ; Measure the argument string, then validate exactly that range.
+        mov esi, [.ga_src]
         xor ecx, ecx
-.ga_copy:
-        lodsb
-        stosb
+.ga_scan:
+        cmp byte [esi + ecx], 0
+        je .ga_scanned
         inc ecx
-        test al, al
-        jnz .ga_copy
-        dec ecx                 ; Don't count null terminator
-        mov eax, ecx
-        pop ecx
+        cmp ecx, 511
+        jb .ga_scan
+.ga_scanned:
+        inc ecx                 ; include NUL
+        mov eax, ebx
+        call user_range_ok
+        jc .ga_bad
+        push ecx                ; save length for the return value
+        mov esi, [.ga_src]
+        mov edi, ebx
+        cld
+        rep movsb
+        pop eax
+        dec eax                 ; length without NUL
         pop edi
         pop esi
         iretd
+.ga_bad:
+        pop edi
+        pop esi
+        mov eax, -1
+        iretd
+
+.ga_src: dd 0
 
 ;---------------------------------------
 ; SYS_STDIN_READ (34): Copy piped/redirected stdin into user buffer
@@ -2310,6 +2485,10 @@ sys_stdin_read:
         jbe .ssr_size_ok
         mov ecx, BATCH_BUFFER_SIZE - 1
 .ssr_size_ok:
+        ; Validate the destination range before copying.
+        mov eax, ebx
+        call user_range_ok      ; ECX = length
+        jc .ssr_bad_pop
         mov esi, redir_in_buf
         mov edi, ebx
         mov eax, ecx            ; save count before rep movsb clobbers ECX
@@ -2327,6 +2506,12 @@ sys_stdin_read:
         xor eax, eax
         iretd
 .ssr_no_stdin:
+        mov eax, -1
+        iretd
+.ssr_bad_pop:
+        pop ecx
+        pop edi
+        pop esi
         mov eax, -1
         iretd
 
@@ -2398,6 +2583,15 @@ sys_fread:
 ; Returns EAX = 0 on success, -1 on error
 sys_fwrite:
         pushad
+        ; Validate the source buffer [ECX, ECX+EDX) before any backend reads it.
+        push ecx
+        push edx
+        mov eax, ecx
+        mov ecx, edx
+        call user_range_ok
+        pop edx
+        pop ecx
+        jc .fwrite_bad
         ; Save parameters
         mov [.fw_name], ebx
         mov [.fw_buf], ecx
@@ -2466,6 +2660,11 @@ sys_fwrite:
         popad
         mov eax, -1
         iretd
+.fwrite_bad:
+        ; Invalid user source buffer: do not read it.
+        popad
+        mov eax, -1
+        iretd
 .fw_name: dd 0
 .fw_buf:  dd 0
 .fw_size: dd 0
@@ -2482,20 +2681,41 @@ sys_open_fd:
 
 sys_read_fd:
         ; SYS_READ  (6): EBX=vfd, ECX=buf, EDX=len → EAX=bytes or -1
+        ; The destination comes straight from ring 3 and fd_read ends in
+        ; rep movsb, so validate the whole [buf, buf+len) range. Without this
+        ; an unprivileged program can write anywhere in the identity map.
+        mov eax, ecx
+        mov ecx, edx
+        call user_range_ok
+        jc  .read_bad
+        mov ecx, eax            ; ECX = buf again
         push esi
         push edi
         call vfs_read
         pop edi
         pop esi
         iretd
+.read_bad:
+        mov eax, -1
+        iretd
 
 sys_write_fd:
         ; SYS_WRITE (7): EBX=vfd, ECX=buf, EDX=len → EAX=bytes or -1
+        ; Validate the source range: without it a program can read arbitrary
+        ; kernel memory and exfiltrate it to a file or the network.
+        mov eax, ecx
+        mov ecx, edx
+        call user_range_ok
+        jc  .write_bad
+        mov ecx, eax            ; ECX = buf again
         push esi
         push edi
         call vfs_write
         pop edi
         pop esi
+        iretd
+.write_bad:
+        mov eax, -1
         iretd
 
 sys_close_fd:
@@ -2535,6 +2755,12 @@ sys_readdir:
         push edi
         push edx
         push ebp
+
+        ; Validate the filename destination (253 chars + NUL).
+        mov eax, ebx
+        mov ecx, HBFS_MAX_FILENAME + 1
+        call user_range_ok
+        jc .srd_bad
 
         ; -- VFS routing: build CWD path, check if it maps to a non-HBFS mount --
         push ebx                ; save name_buf
@@ -2621,6 +2847,16 @@ sys_readdir:
 .srd_end:
         ; Past end of directory
         mov byte [ebx], 0
+        mov eax, -1
+        xor ecx, ecx
+        pop ebp
+        pop edx
+        pop edi
+        pop esi
+        iretd
+
+.srd_bad:
+        ; Invalid user name buffer: do not touch it.
         mov eax, -1
         xor ecx, ecx
         pop ebp

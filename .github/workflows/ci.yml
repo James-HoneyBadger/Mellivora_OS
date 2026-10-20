@@ -74,6 +74,29 @@ jobs:
       - name: Build full OS image
         run: make full
 
+      - name: Boot smoke test (headless QEMU)
+        run: |
+          # Strict: this step must not silently skip on the CI runner.
+          command -v qemu-system-x86_64 >/dev/null 2>&1 \
+            || { echo "qemu-system-x86_64 not installed on the runner"; exit 1; }
+          bash tests/test_boot.sh mellivora.img
+
+      - name: HBFS fsck (fresh image, strict)
+        run: |
+          mkdir -p .build
+          truncate -s 2G .build/fresh.img
+          python3 populate.py .build/fresh.img programs
+          python3 tools/fsck_hbfs.py .build/fresh.img --strict
+
+      - name: Runtime assertions over serial console
+        run: |
+          python3 tools/qemu_drive.py mellivora.img "time_test" \
+            --expect TIME_OK --reject TIME_FAIL
+          python3 tools/qemu_drive.py mellivora.img "syscall_test arg" \
+            --expect SYSCALL_OK --reject SYSCALL_FAIL
+          python3 tools/qemu_drive.py mellivora.img "hello &" --then "ps" \
+            --expect "No background jobs"
+
       - name: Run test suite
         run: make check
 

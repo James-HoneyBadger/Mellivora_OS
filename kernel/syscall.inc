@@ -9,7 +9,18 @@
 ;       Table holds 128 entries (room for future syscalls).
 ;=======================================================================
 
-SYSCALL_MAX     equ 256         ; Table capacity (0..255) — v10.0 extended
+; Table capacity. Must be > the highest syscall number and is used to size the
+; dispatch table below. Raised 256 -> 512 because the POSIX conformance work
+; needs well over the 73 slots that were left free at 183 used. Cost is one
+; dword per slot (512 * 4 = 2 KB).
+SYSCALL_MAX     equ 512
+
+; --- EFLAGS bits a user-mode thread may set via SYS_SIGRETURN --------------
+; CF|PF|AF|ZF|SF|TF|IF|DF|OF|AC|ID plus reserved bit 1.  Deliberately excludes
+; IOPL (12-13), NT (14), RF (16), VM (17) and VIF/VIP (19-20): the value comes
+; from a user-writable signal frame, so restoring it unmasked let a signal
+; handler return to ring 3 with IOPL=3 (unrestricted in/out) or in v86 mode.
+EFLAGS_USER_MASK equ 0x00240FD7
 
 ; --- Phase 1.2 v9.0: user pointer validation --------------------------------
 ; A valid user pointer must lie in [PROGRAM_BASE, USER_PTR_MAX).
@@ -32,12 +43,116 @@ validate_user_ptr:
         stc
         ret
 
+; user_range_ok - validate a whole user buffer, not just its base.
+;   In : EAX = pointer, ECX = length in bytes
+;   Out: CF=0 valid, CF=1 invalid; all GPRs preserved.
+;
+; validate_user_ptr only checks the base, so 'buf + len' can still run off the
+; end of the user area or wrap around 2^32 — which is how a length-checked copy
+; ends up touching kernel memory. A zero-length range is valid.
+user_range_ok:
+        push edx
+        test ecx, ecx
+        jz   .uro_ok                    ; nothing to copy
+        cmp  eax, PROGRAM_BASE
+        jb   .uro_bad
+        cmp  eax, USER_PTR_MAX
+        jae  .uro_bad
+        mov  edx, eax
+        add  edx, ecx
+        jc   .uro_bad                   ; end wrapped past 2^32
+        cmp  edx, USER_PTR_MAX
+        jbe  .uro_ok                    ; end may equal the limit
+.uro_bad:
+        pop  edx
+        stc
+        ret
+.uro_ok:
+        pop  edx
+        clc
+        ret
+
+; copy_to_user - copy kernel memory to a validated ring-3 buffer
+;   In : EDI = user destination, ESI = kernel source, ECX = length
+;   Out: CF=0 copied; CF=1 invalid range (nothing copied).
+;        ESI/EDI/ECX advance on success, like rep movsb.
+copy_to_user:
+        push eax
+        mov eax, edi
+        call user_range_ok
+        jc .ctu_bad
+        pop eax
+        cld
+        rep movsb
+        clc
+        ret
+.ctu_bad:
+        pop eax
+        stc
+        ret
+
+; copy_from_user - copy a validated ring-3 buffer to kernel memory
+;   In : ESI = user source, EDI = kernel destination, ECX = length
+;   Out: CF=0 copied; CF=1 invalid range (nothing copied).
+copy_from_user:
+        push eax
+        mov eax, esi
+        call user_range_ok
+        jc .cfu_bad
+        pop eax
+        cld
+        rep movsb
+        clc
+        ret
+.cfu_bad:
+        pop eax
+        stc
+        ret
+
+; errno_set - record a POSIX error for the calling context and return -1.
+;   In : EAX = errno value (an E* constant from kernel.asm)
+;   Out: EAX = -1
+;
+; Failure paths should use this instead of a bare `mov eax, -1`, so that a
+; program can find out WHY the call failed via SYS_GETERRNO.  All registers are
+; preserved except EAX/EFLAGS.
+;
+; Storage is per-TCB.  The write is guarded on the task actually being in the
+; RUNNING state, because `task_current` still holds the index of the last task
+; switched away from while the shell or a foreground program is executing —
+; writing to that stale slot would corrupt an unrelated task's errno.
+; A foreground program has no TCB at all (see cmd_exec_program), so errno_set is
+; a no-op for it; SYS_GETERRNO returns 0 until the Phase 2 process model gives
+; every user program a real task.
+errno_set:
+        push ecx
+        push edi
+        mov ecx, eax                    ; ECX = errno value
+        mov edi, [task_current]
+        cmp edi, MAX_TASKS
+        jae .es_done                    ; no valid current task
+        imul edi, TCB_SIZE
+        add edi, task_table
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        jne .es_done                    ; shell/foreground: no TCB to record into
+        mov [edi + TCB_ERRNO], ecx
+.es_done:
+        pop edi
+        pop ecx
+        mov eax, -1
+        ret
+
 ; Handler for INT 0x80
 ; Dispatches to the correct syscall handler based on EAX.
 ;---------------------------------------
 syscall_handler:
+        ; Reject out-of-range syscall numbers. The compare must be UNSIGNED: a
+        ; negative EAX (0x80000000..0xFFFFFFFF) would otherwise index
+        ; syscall_table far below its base. It must also reject exactly
+        ; SYSCALL_MAX — the table has SYSCALL_MAX entries (0..SYSCALL_MAX-1),
+        ; so 'ja' let EAX==SYSCALL_MAX through and read one dword past the end.
         cmp eax, SYSCALL_MAX
-        ja .syscall_bad
+        jae .syscall_bad
 
         ; Jump to the correct handler
         jmp [syscall_table + eax * 4]
@@ -163,9 +278,9 @@ syscall_table:
         dd sys_fork             ; 103 SYS_FORK
         dd sys_defrag           ; 104 SYS_DEFRAG           (HBFS v2)
         dd sys_tls_connect      ; 105 SYS_TLS_CONNECT      (stub)
-        dd sys_audio_rec_start  ; 106 SYS_AUDIO_RECORD_START
-        dd sys_audio_rec_read   ; 107 SYS_AUDIO_RECORD_READ
-        dd sys_audio_rec_stop   ; 108 SYS_AUDIO_RECORD_STOP
+        dd sys_audio_rec_start  ; 106 SYS_AUDIO_REC_START
+        dd sys_audio_rec_read   ; 107 SYS_AUDIO_REC_READ
+        dd sys_audio_rec_stop   ; 108 SYS_AUDIO_REC_STOP
         dd sys_audio_open       ; 109 SYS_AUDIO_OPEN
         dd sys_audio_write_chan ; 110 SYS_AUDIO_WRITE
         dd sys_audio_close_chan ; 111 SYS_AUDIO_CLOSE_CHAN
@@ -252,8 +367,13 @@ syscall_table:
         dd sys_tcflush          ; 180 SYS_TCFLUSH
         ; v12.0: errno
         dd sys_geterrno         ; 181 SYS_GETERRNO
-        ; Reserved / unimplemented (182..255)
-        times (SYSCALL_MAX - 182) dd syscall_handler.syscall_bad
+        ; v14.0: process model
+        dd sys_execve           ; 182 SYS_EXECVE
+        ; v14.0: job control
+        dd sys_tcsetpgrp        ; 183 SYS_TCSETPGRP
+        dd sys_tcgetpgrp        ; 184 SYS_TCGETPGRP
+        ; Reserved / unimplemented (185..255)
+        times (SYSCALL_MAX - 185) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)
@@ -345,6 +465,11 @@ sys_getxattr:
         jc .sgxa_fail
         mov eax, [.sgxa_valbuf]
         call validate_user_ptr
+        jc .sgxa_fail
+        ; Validate the whole output range too, not just its base.
+        mov eax, [.sgxa_valbuf]
+        mov ecx, [.sgxa_valsz]
+        call user_range_ok
         jc .sgxa_fail
 
         ; Filesystem must expose the xattr feature
@@ -464,9 +589,12 @@ sys_setxattr:
 ;-----------------------------------------------------------------------
 sys_sigaction:
         pushad
-        ; Validate signal number
+        ; Validate signal number. The compare must be UNSIGNED: a negative EBX
+        ; (e.g. 0xFFFFFFFF) passed the old signed 'jge', and since the handler
+        ; table is indexed as [table + ebx*4] that gave a 32-bit kernel write
+        ; at an attacker-chosen offset *below* the table.
         cmp ebx, NUM_SIGNALS
-        jge .sa_fail
+        jae .sa_fail
         ; SIGKILL (9) cannot be caught or ignored
         cmp ebx, SIGKILL
         je  .sa_fail
@@ -490,12 +618,18 @@ sys_sigaction:
         mov [edi + TCB_SIG_HAND], esi
 
         ; Zero-initialise (all SIG_DFL)
+        ; ECX holds the handler argument and rep stosd uses it as the count, so
+        ; it must be saved: without this the first sigaction call on a task
+        ; wrote SIG_DFL instead of the handler (the table is only allocated
+        ; once, so only the very first handler of each task was lost).
+        push ecx
         push edi
         mov edi, esi
         xor eax, eax
         mov ecx, 4096 / 4
         rep stosd
         pop edi
+        pop ecx
 
 .sa_have_table:
         ; Optionally return old handler
@@ -566,6 +700,14 @@ sys_sigreturn:
         ; Read saved context from signal frame on user stack
         mov eax, [edx + 4]              ; saved_eip
         mov ecx, [edx + 8]              ; saved_eflags
+        ; Sanitise EFLAGS before it goes back into the iretd frame. The value
+        ; comes from a user-writable signal frame, so restoring it verbatim
+        ; let a handler return with IOPL=3 (direct in/out to every port) or
+        ; VM=1 (virtual-8086). Keep only the user-legal arithmetic/status
+        ; flags, and force IF set — ring 3 cannot execute cli, so a handler
+        ; must not be able to leave interrupts disabled either.
+        and ecx, EFLAGS_USER_MASK
+        or  ecx, 0x200                  ; IF = 1
 
         ; Restore EIP3, EFLAGS, ESP3 in the iretd frame
         ; iretd frame (3 pushes above our entry → offset 12):
@@ -579,9 +721,12 @@ sys_sigreturn:
         push ebx
         mov eax, [edx + 16]             ; saved_sig_mask
         mov ebx, [task_current]
+        cmp ebx, MAX_TASKS
+        jae .sr_mask_skip               ; no valid RUNNING index — skip
         imul ebx, TCB_SIZE
         add ebx, task_table
         mov [ebx + TCB_SIG_MASK], eax
+.sr_mask_skip:
         pop ebx
 
         pop edx
@@ -715,58 +860,14 @@ sys_fsync:
 ; sys_link (150) — create a hard link
 ;   In : EBX = existing path, ECX = new path
 ;   Out: EAX = 0 / -1
-; Creates a new directory entry with the same start block and size.
+;
+; HBFS v3 has no link-count field. The previous implementation copied a
+; directory entry without one, so deleting either name freed blocks still used
+; by the other. Refuse the call until HBFS v4 adds link counts (Phase 3).
 ;-----------------------------------------------------------------------
 sys_link:
-        pushad
-        mov eax, ebx
-        call validate_user_ptr
-        jc  .link_fail
-        ; Find source file
-        mov esi, ebx
-        call hbfs_find_file_global
-        jc  .link_fail
-        ; Save source block & size
-        mov eax, [edi + DIRENT_START_BLOCK]
-        mov [.link_blk], eax
-        mov eax, [edi + DIRENT_SIZE]
-        mov [.link_sz], eax
-        movzx eax, byte [edi + DIRENT_BLOCK_COUNT]
-        mov [.link_bc], eax
-        cmp dword [hbfs_find_file_global.gff_moved], 1
-        jne .link_no_restore
-        call gff_restore_cwd
-.link_no_restore:
-        ; Create a new file entry pointing to the same blocks using hbfs_create_file
-        ; hbfs_create_file: ESI=name, EAX=block_count -> CF on fail, EDI=new_dirent
-        mov esi, ecx            ; new path (link name)
-        mov eax, [.link_bc]
-        call hbfs_create_file
-        jc  .link_fail
-        ; Patch the new entry to share the same start block & size
-        mov eax, [.link_blk]
-        mov [edi + DIRENT_START_BLOCK], eax
-        mov eax, [.link_sz]
-        mov [edi + DIRENT_SIZE], eax
-        ; Flush the directory entry (compute index from ptr)
-        push edi
-        mov eax, edi
-        sub eax, hbfs_dir_buf
-        mov ecx, HBFS_DIR_ENTRY_SIZE
-        xor edx, edx
-        div ecx                 ; EAX = entry index
-        pop edi
-        call hbfs_flush_dir_entry
-        mov dword [esp + 28], 0
-        popad
+        mov eax, -1
         iretd
-.link_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
-.link_blk: dd 0
-.link_sz:  dd 0
-.link_bc:  dd 0
 
 ;-----------------------------------------------------------------------
 ; sys_isatty (151) — test if fd refers to a terminal
@@ -890,10 +991,11 @@ sys_wait:
         mov eax, [edi + TCB_EXIT_CODE]
         mov [ebx], eax
 .wait_no_store:
-        ; Reap the zombie
+        ; Reap the zombie. task_count was already decremented when the task
+        ; became a zombie (sched_exit_task); decrementing again here would make
+        ; the count drift below the number of live tasks and stall preemption.
         mov eax, [edi + TCB_PID]
         mov dword [edi + TCB_STATE], TASK_FREE
-        dec dword [task_count]
         mov [esp + 28], eax
         popad
         iretd
@@ -956,6 +1058,8 @@ sys_pause:
         call sched_swap_fd_tables
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
+        mov eax, ebx
+        call sched_apply_cr3
         mov eax, [ebx + TCB_KSTACK]
         mov [tss_struct + 4], eax
         mov esp, [ebx + TCB_ESP]
@@ -1094,6 +1198,8 @@ sys_sigsuspend:
         call sched_swap_fd_tables
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
+        mov eax, ebx
+        call sched_apply_cr3
         mov eax, [ebx + TCB_KSTACK]
         mov [tss_struct + 4], eax
         mov esp, [ebx + TCB_ESP]
@@ -1240,6 +1346,23 @@ sys_setenv:
         mov eax, ebx
         call validate_user_ptr
         jc  .setenv_fail
+        ; Validate the value string too: it is copied from ring 3 below. Scan
+        ; its length (capped at the entry size) and check the whole range.
+        mov ebp, ecx
+        xor edi, edi
+.setenv_vscan:
+        cmp byte [ebp + edi], 0
+        je  .setenv_vscanned
+        inc edi
+        cmp edi, ENV_ENTRY_SIZE - 1
+        jb  .setenv_vscan
+.setenv_vscanned:
+        inc edi
+        mov eax, ebp
+        mov ecx, edi
+        call user_range_ok
+        jc  .setenv_fail
+        mov ecx, ebp
         ; Scan env_table for existing NAME= match
         xor ecx, ecx
         mov edi, env_table
@@ -1304,8 +1427,8 @@ sys_setenv:
         ; Write "NAME=VALUE\0" into edi
         ; ECX = value ptr (pushed as part of pushad), EDX = overwrite flag
         ; Retrieve value ptr from pushad frame: ECX slot = [esp+24]
-        ; (8 regs pushed: EDI,ESI,EBP,origESP,EBX,EDX,ECX,EAX → ECX at offset 8)
-        mov esi, [esp + 8]      ; ECX from pushad = value ptr
+        ; (8 regs pushed: EDI,ESI,EBP,origESP,EBX,EDX,ECX,EAX → ECX at offset 24)
+        mov esi, [esp + 24]     ; ECX from pushad = value ptr
         push esi                ; save value ptr
         mov esi, ebx            ; name
         mov ecx, ENV_ENTRY_SIZE - 2
@@ -1712,11 +1835,27 @@ sys_setregid:
 ;-----------------------------------------------------------------------
 sys_sendto:
         pushad
-        ; Validate socket fd
-        cmp ebx, MAX_SOCKETS
-        jge .sendto_fail
+        ; Validate the optional sockaddr_in and the payload buffer.
+        test edi, edi
+        jz  .sendto_buf_ok
+        push ecx
+        mov  eax, edi
+        mov  ecx, 8
+        call user_range_ok
+        pop  ecx
+        jc   .sendto_fail
+.sendto_buf_ok:
+        mov eax, [esp + 24]     ; original ECX (buffer)
+        mov ecx, [esp + 20]     ; original EDX (length)
+        call user_range_ok
+        jc   .sendto_fail
+        mov ecx, [esp + 24]
+        mov edx, [esp + 20]
+        ; Validate socket fd (VFD in the unified table)
+        call vfd_to_sock
+        jc .sendto_fail
+        mov ebx, eax
         mov esi, net_sock_table
-        mov eax, ebx
         imul eax, SOCK_SIZE
         add esi, eax
         cmp dword [esi + SOCK_TYPE], 0
@@ -1752,9 +1891,26 @@ sys_recvfrom:
         ; Save from-addr pointer (original EDI, at [esp+0] after pushad)
         ; [esp+0]=EDI(from*), [esp+4]=ESI, [esp+8]=EBP, [esp+12]=ESP_orig,
         ; [esp+16]=EBX(fd), [esp+20]=EDX(maxlen), [esp+24]=ECX(buf), [esp+28]=EAX(ret)
-        cmp ebx, MAX_SOCKETS
-        jge .srf_fail
-        mov eax, ebx
+        ; Validate the destination buffer and the optional from-address.
+        mov eax, [esp + 24]     ; original ECX (buffer)
+        mov ecx, [esp + 20]     ; original EDX (max length)
+        call user_range_ok
+        jc .srf_fail
+        mov ecx, [esp + 24]
+        mov edx, [esp + 20]
+        mov edi, [esp + 0]
+        test edi, edi
+        jz  .srf_from_ok
+        mov eax, edi
+        mov ecx, 8
+        call user_range_ok
+        jc .srf_fail
+        mov ecx, [esp + 24]
+        mov edx, [esp + 20]
+.srf_from_ok:
+        call vfd_to_sock
+        jc .srf_fail
+        mov ebx, eax
         imul eax, SOCK_SIZE
         lea ebp, [net_sock_table + eax]
 
@@ -1853,10 +2009,10 @@ SOL_SOCKET      equ 1
 
 sys_setsockopt:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .ssopt_fail
+        call vfd_to_sock
+        jc .ssopt_fail
+        mov ebx, eax
         mov edi, net_sock_table
-        mov eax, ebx
         imul eax, SOCK_SIZE
         add edi, eax
         cmp dword [edi + SOCK_TYPE], 0
@@ -1885,10 +2041,10 @@ SO_TYPE         equ 3
 
 sys_getsockopt:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .gsopt_fail
+        call vfd_to_sock
+        jc .gsopt_fail
+        mov ebx, eax
         mov edi, net_sock_table
-        mov eax, ebx
         imul eax, SOCK_SIZE
         add edi, eax
         cmp dword [edi + SOCK_TYPE], 0
@@ -1921,10 +2077,10 @@ sys_getsockopt:
 ;-----------------------------------------------------------------------
 sys_getsockname:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .gsname_fail
+        call vfd_to_sock
+        jc .gsname_fail
+        mov ebx, eax
         mov esi, net_sock_table
-        mov eax, ebx
         imul eax, SOCK_SIZE
         add esi, eax
         cmp dword [esi + SOCK_TYPE], 0
@@ -1959,10 +2115,10 @@ sys_getsockname:
 ;-----------------------------------------------------------------------
 sys_getpeername:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .gpname_fail
+        call vfd_to_sock
+        jc .gpname_fail
+        mov ebx, eax
         mov esi, net_sock_table
-        mov eax, ebx
         imul eax, SOCK_SIZE
         add esi, eax
         cmp dword [esi + SOCK_TYPE], 0
@@ -2001,10 +2157,10 @@ SHUT_RDWR   equ 2
 
 sys_shutdown:
         pushad
-        cmp ebx, MAX_SOCKETS
-        jge .shutdown_fail
+        call vfd_to_sock
+        jc .shutdown_fail
+        mov ebx, eax
         mov esi, net_sock_table
-        mov eax, ebx
         imul eax, SOCK_SIZE
         add esi, eax
         cmp dword [esi + SOCK_TYPE], 0
@@ -2397,9 +2553,15 @@ sys_ioctl:
 ;-----------------------------------------------------------------------
 sys_mmap:
         pushad
+        ; A length at or above USER_PTR_MAX is nonsense and, worse, its page
+        ; rounding can wrap 32 bits: len >= 0xFFFFF001 rounds to 0 pages and
+        ; the caller still treats the result as a len-byte buffer.
+        cmp ecx, USER_PTR_MAX
+        ja  .mmap_fail
         ; Align length to page boundary
         mov eax, ecx
         add eax, 0xFFF
+        jc  .mmap_fail                  ; rounding wrapped
         and eax, ~0xFFF
         ; Convert byte count to page count for pmm_alloc_pages
         shr eax, 12
@@ -2429,11 +2591,30 @@ sys_munmap:
         pushad
         ; pmm_free_pages(EAX=addr, ECX=count)
         mov eax, ebx            ; addr
+        ; Refuse to free anything below the PMM-managed region. Sys_malloc and
+        ; sys_mmap never hand out memory down there, so a request for it is
+        ; either a bug or an attempt to free the kernel's own metadata (the
+        ; PMM bitmap lives at 0x500000).
+        cmp eax, KERNEL_RESERVED_END
+        jb  .munmap_fail
+        ; Reject an absurd or wrapping length: without this, len=0xFFFFF000
+        ; frees about a million pages starting at the caller's address.
+        cmp ecx, USER_PTR_MAX
+        ja  .munmap_fail
+        mov edx, eax
+        add edx, ecx
+        jc  .munmap_fail
+        cmp edx, USER_PTR_MAX
+        ja  .munmap_fail
         ; Convert byte length to page count
         add ecx, 0xFFF
         shr ecx, 12
         call pmm_free_pages
         mov dword [esp + 28], 0
+        popad
+        iretd
+.munmap_fail:
+        mov dword [esp + 28], -1
         popad
         iretd
 
@@ -2461,6 +2642,17 @@ sys_mprotect:
         ; Validate addr alignment
         test ebx, 0xFFF
         jnz .mp_fail
+        ; Only user addresses may be changed. Without this a ring-3 program
+        ; can rewrite the PTEs of the kernel image, page tables or IDT.
+        cmp ebx, PROGRAM_BASE
+        jb .mp_fail
+        cmp ebx, USER_PTR_MAX
+        jae .mp_fail
+        mov eax, ebx
+        add eax, ecx
+        jc .mp_fail
+        cmp eax, USER_PTR_MAX
+        ja .mp_fail
         ; Round len up to page boundary
         add ecx, PAGE_SIZE - 1
         and ecx, PAGE_MASK
@@ -2578,19 +2770,41 @@ CLOCK_MONOTONIC  equ 1
 
 sys_clock_gettime:
         pushad
+        ; Validate the user timespec (8 bytes) before writing to it.
+        mov edx, ecx
+        mov eax, ecx
+        mov ecx, 8
+        call user_range_ok
+        jc .cgt_fail
+        mov ecx, edx
+
         cmp ebx, CLOCK_MONOTONIC
         je .cgt_mono
-        ; CLOCK_REALTIME — read from RTC (simplified: use tick counter)
+
+        ; CLOCK_REALTIME: real wall-clock time from the RTC.
+        call rtc_get_epoch
+        mov [ecx + 0], eax              ; tv_sec
+        mov dword [ecx + 4], 0          ; tv_nsec (RTC has 1s resolution)
+        jmp .cgt_done
+
 .cgt_mono:
-        ; sched_tick is 100 Hz
-        mov eax, [sched_tick]
+        ; CLOCK_MONOTONIC: ticks since boot, never reset. (sched_tick is the
+        ; scheduler quantum counter and resets every quantum, so it must not
+        ; be used as a clock.)
+        mov eax, [tick_count]
         xor edx, edx
         mov esi, 100
-        div esi                 ; EAX = seconds, EDX = remainder ticks
-        mov [ecx + 0], eax      ; tv_sec
-        imul edx, 10000000      ; ticks * (1e9 / 100) = ticks * 10M ns
-        mov [ecx + 4], edx      ; tv_nsec
+        div esi                         ; EAX = seconds, EDX = remainder ticks
+        mov [ecx + 0], eax              ; tv_sec
+        imul edx, 10000000              ; ticks * (1e9 / 100)
+        mov [ecx + 4], edx              ; tv_nsec
+
+.cgt_done:
         mov dword [esp + 28], 0
+        popad
+        iretd
+.cgt_fail:
+        mov dword [esp + 28], -1
         popad
         iretd
 
@@ -2628,14 +2842,22 @@ sys_nanosleep:
 ;-----------------------------------------------------------------------
 sys_gettimeofday:
         pushad
-        mov eax, [sched_tick]
-        xor edx, edx
-        mov ecx, 100
-        div ecx                 ; EAX = seconds
-        mov [ebx + 0], eax
-        imul edx, 10000         ; remainder ticks → microseconds (approx)
-        mov [ebx + 4], edx
+        ; Validate the user timeval (8 bytes) before writing to it.
+        mov edx, ebx
+        mov eax, ebx
+        mov ecx, 8
+        call user_range_ok
+        jc .gtod_fail
+        mov ebx, edx
+
+        call rtc_get_epoch
+        mov [ebx + 0], eax              ; tv_sec
+        mov dword [ebx + 4], 0          ; tv_usec
         mov dword [esp + 28], 0
+        popad
+        iretd
+.gtod_fail:
+        mov dword [esp + 28], -1
         popad
         iretd
 
@@ -2885,8 +3107,15 @@ sys_exit:
         jmp .exit_find_task
 .exit_check_bg:
         test dword [edi + TCB_EXIT_CODE], 0x80000000
-        jz .exit_is_fg
+        jnz .exit_is_bg
+        ; A forked child must stay a zombie for waitpid and switch to its
+        ; parent, not return to the shell. Only shell-launched tasks have
+        ; the -1 "no parent" sentinel.
+        cmp dword [edi + TCB_PPID], -1
+        jne .exit_is_child
+        jmp .exit_is_fg
 
+.exit_is_bg:
         ; v12.2: Save real exit code (EBX) before EBX is clobbered by page-free ops
         mov [bg_exit_code], ebx
 
@@ -2895,38 +3124,29 @@ sys_exit:
         and eax, 0x7FFFFFFF             ; Clear bg flag → page number
         shl eax, 12                     ; Convert page# to physical address
         push eax                        ; Save prog base for free
-        ; Free user stack (BG_STACK_PAGES usable + 1 guard page below)
-        ; TCB_USTACK = guard_base + (BG_STACK_PAGES+1)*4096 - 4
-        ; guard_base = TCB_USTACK - (BG_STACK_PAGES+1)*4096 + 4
-        mov eax, [edi + TCB_USTACK]
-        sub eax, ((BG_STACK_PAGES + 1) * 4096)
-        ; Restore guard page PTE to identity-mapped before freeing physical pages
-        push eax
-        push ebx
-        push ecx
-        mov ebx, eax                    ; phys = virt (identity map)
-        add ebx, 4                      ; Correct the -4 alignment: phys = page_base
-        and ebx, 0xFFFFF000
-        mov eax, ebx                    ; virt = phys
-        mov ecx, PG_PRESENT | PG_WRITABLE | PG_USER
-        call paging_map_page
-        pop ecx
-        pop ebx
-        pop eax
-        ; EAX ≈ guard_base (off by ≤4 bytes; pmm_free_pages rounds down via shr 12)
-        mov ecx, BG_STACK_PAGES + 1
-        call pmm_free_pages
-        ; Free program memory
+        ; Free the background program image. Copy-on-write aware: a child that
+        ; forked from this task may still be running the same frames. The user
+        ; stack is released by sched_exit_task, which every task goes through.
         pop eax
         mov ecx, BG_PROG_PAGES
-        call pmm_free_pages
+        call cow_release_range
+        ; Leave the dying task's kernel stack before sched_exit_task releases it.
+        mov esp, KERNEL_STACK
         ; Remove from scheduler
         call sched_exit_task
-        popad
         ; Switch to another ready task (or fall back to shell_main)
         ; This call does NOT return
         call sched_force_switch
         ; If sched_force_switch returns somehow, fall through to shell_main
+
+.exit_is_child:
+        ; Forked child: become a zombie, wake the parent, and switch to it.
+        ; Use the shared kernel stack before sched_exit_task frees this one.
+        mov esp, KERNEL_STACK
+        mov [bg_exit_code], ebx
+        call sched_exit_task
+        call sched_force_switch
+        ; If no task is ready, sched_force_switch returns to shell_main.
 
 .exit_is_fg:
         popad
@@ -2940,8 +3160,20 @@ sys_exit:
         call vga_reset_color
         ; Ensure interrupts are enabled for the shell
         sti
-        ; Return to shell (or desktop if GUI active)
+
+        ; Release the foreground task, if this exit came from one. The legacy
+        ; direct-IRET launch path has no TCB; sched_exit_task is a no-op then.
+        ; Switch to the shared kernel stack first so freeing the task's kernel
+        ; stack cannot pull the floor out from under this code.
         mov esp, KERNEL_STACK
+        mov [bg_exit_code], ebx
+        call sched_exit_task
+        call sched_restore_shell_fds
+        xor eax, eax
+        call sched_apply_cr3
+        mov dword [tss_struct + 4], KERNEL_STACK
+        ; The console has no foreground job again (see sys_tcsetpgrp)
+        mov dword [tty_fg_pgid], -1
         cmp byte [gui_desktop_active], 1
         je gui_desktop_resume
         jmp shell_main
@@ -3014,9 +3246,10 @@ sys_gettime:
 ; sys_sleep removed — v3.0 blocking implementation is in sched.inc
 
 sys_exec_call:
-        ; EBX = pointer to filename
-        ; Note: on success, cmd_exec_program never returns (iretd to ring 3)
-        ; On failure (program not found), it returns with CF set
+        ; EBX = pointer to a command line in user memory
+        ; (first token = program name/path, remainder = arguments)
+        ; Note: on success, this never returns (IRETs into the new program)
+        ; On failure (program not found), EAX = -1
 
         ; Phase 1.2: validate filename pointer before any kernel state changes
         push eax
@@ -3025,25 +3258,10 @@ sys_exec_call:
         jc .exec_bad_ptr
         pop eax
 
-        ; Save current program as parent for return-after-child-exit
-        push esi
-        push edi
-        push ecx
-        mov esi, prog_name_buf
-        mov edi, parent_prog_name
-        mov ecx, 256
-        rep movsb
-        mov byte [parent_active], 1
-        pop ecx
-        pop edi
-        pop esi
-
-        ; Execute the requested program
         push esi
         mov esi, ebx
-        call cmd_exec_program
+        call exec_kernel_line
         pop esi
-        ; Only reached on failure (success does IRET internally)
         jc .exec_fail
         xor eax, eax
         iretd
@@ -3055,6 +3273,160 @@ sys_exec_call:
         pop eax
         mov eax, -1
         iretd
+
+;-----------------------------------------------------------------------
+; exec_kernel_line — replace the current image with a program
+;   In : ESI = NUL-terminated command line in KERNEL memory
+;   Out: CF=0 → never returns (IRETs into the new program)
+;        CF=1 → nothing was loaded; caller reports -1
+;
+; SYS_EXEC and SYS_EXECVE both funnel through here so the parent bookkeeping
+; and the exec-time address-space isolation are applied exactly once.
+;-----------------------------------------------------------------------
+exec_kernel_line:
+        push esi
+        call sched_get_current_task
+        test eax, eax
+        jnz .ekl_have_task
+
+        ; Save the current program as parent for return-after-child-exit.
+        ; Only needed when the exec'ing program has no TCB (the legacy
+        ; direct-IRET launch path): then the shell must relaunch it. A real
+        ; task survives its own exec, so it must NOT be relaunched by the
+        ; shell - that would run the parent a second time with no arguments.
+        push esi
+        push edi
+        push ecx
+        mov esi, prog_name_buf
+        mov edi, parent_prog_name
+        mov ecx, 256
+        cld
+        rep movsb
+        mov byte [parent_active], 1
+        pop ecx
+        pop edi
+        pop esi
+        jmp .ekl_shared_window
+
+.ekl_have_task:
+        ; Give the exec'ing task a private copy of the program window before the
+        ; loader writes the new image there. Every address space otherwise maps
+        ; PROGRAM_BASE to the same frames, so a child's exec would overwrite the
+        ; code its parent is still running.
+        call paging_isolate_program_window
+        test eax, eax
+        js .ekl_fail                ; no private window → refuse rather than
+                                    ; let the loader clobber another process
+.ekl_shared_window:
+        pop esi                     ; command line
+        call cmd_exec_program       ; CF=1 when the program is not found
+        jc .ekl_fail_return
+        clc
+        ret
+.ekl_fail:
+        pop esi
+.ekl_fail_return:
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; SYS_EXECVE (182) — replace the current image with path + argv
+;   In : EBX = path (user string)
+;        ECX = argv (user array of char*, NULL-terminated) or 0
+;        EDX = envp (accepted for POSIX shape; the environment is global)
+;   Out: does not return on success; EAX = -1 on failure
+;
+; The loader takes a single command line, so argv is flattened into
+; "<path> arg1 arg2 ...". argv[0] is the program name the loader already has,
+; so it is skipped and argv[1..] are appended in order.
+;-----------------------------------------------------------------------
+EXECVE_MAX_PATH  equ 200        ; path bytes accepted (buffer is 512)
+EXECVE_MAX_ARG   equ 63         ; bytes copied from one argument
+EXECVE_MAX_ARGS  equ 32         ; argv entries scanned
+
+sys_execve:
+        pushad
+        mov [.sev_argv], ecx
+
+        ; --- validate and copy the path ---
+        mov eax, ebx
+        call validate_user_ptr
+        jc .sev_fail
+        mov edi, program_args_buf
+        mov esi, ebx
+        mov ecx, EXECVE_MAX_PATH
+.sev_path:
+        lodsb
+        stosb
+        test al, al
+        jz .sev_path_ok
+        loop .sev_path
+        jmp .sev_fail                   ; path too long
+.sev_path_ok:
+        dec edi                         ; drop the NUL; arguments follow
+
+        ; --- append argv[1..] ---
+        mov esi, [.sev_argv]
+        test esi, esi
+        jz .sev_run
+        add esi, 4                      ; argv[0] is the path itself
+        mov dword [.sev_left], EXECVE_MAX_ARGS - 1
+
+.sev_loop:
+        mov eax, esi
+        mov ecx, 4
+        call user_range_ok              ; don't read past the user area
+        jc .sev_fail
+        mov eax, [esi]
+        test eax, eax
+        jz .sev_run                     ; NULL terminator
+        add esi, 4
+        mov [.sev_argv], esi            ; remember the cursor
+        mov [.sev_str], eax
+
+        ; separator
+        cmp edi, program_args_buf + 511
+        jae .sev_run
+        mov byte [edi], ' '
+        inc edi
+
+        ; copy this argument, bounded both by its own length and the buffer
+        mov esi, [.sev_str]
+        mov ecx, EXECVE_MAX_ARG
+.sev_copy:
+        cmp edi, program_args_buf + 511
+        jae .sev_run
+        lodsb
+        test al, al
+        jz .sev_arg_done
+        stosb
+        dec ecx
+        jnz .sev_copy
+        ; argument longer than the cap: keep the prefix, skip the remainder
+.sev_arg_done:
+        mov esi, [.sev_argv]
+        dec dword [.sev_left]
+        jnz .sev_loop
+
+.sev_run:
+        mov byte [edi], 0
+        mov esi, program_args_buf
+        call exec_kernel_line
+        jc .sev_fail
+        ; success never returns; if it somehow did, report success
+        xor eax, eax
+        mov [esp + 28], eax
+        popad
+        iretd
+
+.sev_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+.sev_argv: dd 0
+.sev_left: dd 0
+.sev_str:  dd 0
 
 ;---------------------------------------
 ; SYS_DELETE (9): Delete a file by virtual path
@@ -3078,6 +3450,18 @@ sys_delete:
 sys_stat:
         push esi
         push edi
+
+        ; A non-NULL stat buffer is written by the backend; validate its
+        ; 12-byte layout (size, type, mtime) before calling into it.
+        test ecx, ecx
+        jz  .stat_no_buf
+        mov eax, ecx
+        push ecx
+        mov ecx, 12
+        call user_range_ok
+        pop ecx
+        jc  .stat_not_found
+.stat_no_buf:
 
         ; Try VFS stat first (routes to the right backend)
         ; vfs_route(EBX=path) → EAX = mount entry
@@ -3128,7 +3512,11 @@ sys_stat:
 ;---------------------------------------
 sys_malloc:
         push ecx
-        ; Round up to pages
+        ; Round up to pages. A size at or above USER_PTR_MAX is absurd and its
+        ; rounding can wrap 32 bits, allocating 0 pages while the caller treats
+        ; the result as a full-size block.
+        cmp ebx, USER_PTR_MAX
+        ja  .malloc_bad
         mov eax, ebx
         add eax, 4095
         shr eax, 12             ; / 4096 = pages needed
@@ -3141,6 +3529,10 @@ sys_malloc:
 .malloc_done:
         pop ecx
         iretd
+.malloc_bad:
+        pop ecx
+        xor eax, eax            ; 0 = allocation failure
+        iretd
 
 ;---------------------------------------
 ; SYS_FREE (20): Free allocated memory pages
@@ -3149,6 +3541,13 @@ sys_malloc:
 ; Returns: EAX = 0
 ;---------------------------------------
 sys_free:
+        ; Refuse to free kernel-owned memory, and refuse sizes that wrap the
+        ; page rounding. Without the first check a ring-3 program can free the
+        ; PMM bitmap or the page tables and then allocate them itself.
+        cmp ebx, KERNEL_RESERVED_END
+        jb  .free_bad
+        cmp ecx, USER_PTR_MAX
+        ja  .free_bad
         push ecx
         push eax
         mov eax, ecx
@@ -3168,6 +3567,9 @@ sys_free:
         pop ecx
         xor eax, eax
         iretd
+.free_bad:
+        mov eax, -1
+        iretd
 
 ;---------------------------------------
 ; SYS_REALLOC (79): Reallocate memory block
@@ -3180,49 +3582,50 @@ sys_free:
 ;---------------------------------------
 sys_realloc:
         pushad
+        ; Reject a size whose page rounding would wrap 32 bits.
+        cmp ecx, USER_PTR_MAX
+        ja  .realloc_bad
         ; If ptr is NULL, just allocate
         test ebx, ebx
         jz .realloc_fresh
 
-        ; Allocate new block
-        mov eax, ecx
+        ; EBP = old ptr, EDI = old size, ESI = new size. pushad saved all
+        ; caller registers, so these are scratch.
+        mov ebp, ebx
+        mov edi, edx
+        mov esi, ecx
+
+        ; Allocate the new block.
+        mov eax, esi
         add eax, 4095
         shr eax, 12             ; pages needed
-        push eax                ; save new page count
-        push ecx                ; save new size
-        push edx                ; save old size
-        push ebx                ; save old ptr
         mov ecx, eax
-        call pmm_alloc_pages    ; EAX = new block
+        call pmm_alloc_pages
         test eax, eax
-        jz .realloc_fail_pop
+        jz .realloc_bad
+        mov ebx, eax            ; EBX = new block
 
-        ; Copy min(old_size, new_size) bytes
-        mov edi, eax            ; dest = new block
-        pop esi                 ; old ptr
-        pop ecx                 ; old size (EDX was old size)
-        pop edx                 ; new size
-        push eax                ; save new ptr
-        push edx                ; save new size
-        cmp ecx, edx
-        jbe .realloc_copy       ; old <= new: copy old_size
-        mov ecx, edx            ; new < old: copy new_size
+        ; Copy min(old_size, new_size) bytes.
+        push edi                ; save old size for the free below
+        cmp edi, esi
+        jbe .realloc_copy
+        mov edi, esi
 .realloc_copy:
-        push ecx
-        shr ecx, 2
-        rep movsd               ; copy dwords
-        pop ecx
-        and ecx, 3
-        rep movsb               ; copy remaining bytes
+        mov ecx, edi
+        mov esi, ebp            ; src = old block
+        mov edi, ebx            ; dest = new block
+        cld
+        rep movsb
 
-        ; Free old block
-        mov eax, esi            ; ESI still has old ptr after copy (dest advanced, not src)
-        ; Actually ESI was advanced by rep movsb, recalculate:
-        pop edx                 ; new_size
-        pop eax                 ; new ptr (return value)
-        ; We need old ptr - it was consumed. Simplify: skip free for now.
-        ; Store result
-        mov [esp + 28], eax
+        ; Free the old block. pmm_free_pages rounds ECX up to a power of two,
+        ; so pass the page count derived from the old size, not bytes.
+        pop ecx
+        add ecx, 4095
+        shr ecx, 12
+        mov eax, ebp
+        call pmm_free_pages
+
+        mov [esp + 28], ebx     ; return new pointer
         popad
         iretd
 
@@ -3242,6 +3645,11 @@ sys_realloc:
         mov dword [esp + 28], 0
         popad
         iretd
+.realloc_bad:
+        ; Invalid size: report failure (0 = no new block).
+        mov dword [esp + 28], 0
+        popad
+        iretd
 .realloc_fail_pop:
         add esp, 16             ; clean 4 pushes
         mov dword [esp + 28], 0
@@ -3254,8 +3662,12 @@ sys_realloc:
 ; Returns: EAX = 0 on success, -1 on error
 ;---------------------------------------
 sys_disk_read:
-        ; Deny raw disk access from user programs (ring 3)
-        cmp byte [program_running], 1
+        ; Deny raw disk access to ring 3. The program_running flag is not a
+        ; privilege check: a background task has it clear and could read the
+        ; raw disk. Use the CPL in the interrupt frame instead.
+        mov eax, [esp + 4]      ; CS pushed by INT
+        and eax, 3
+        cmp eax, 3
         je .dread_denied
         push edi
         mov eax, ebx

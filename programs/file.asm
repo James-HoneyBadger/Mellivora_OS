@@ -77,7 +77,7 @@ start:
         cmp word [file_buf], 0x5A4D
         je .mz
 
-        ; Flat binary at 0x200000 (Mellivora program): starts with E9 (jmp)
+        ; Flat binary at PROGRAM_BASE (Mellivora program): starts with E9 (jmp)
         cmp byte [file_buf], 0xE9
         je .mellivora
 

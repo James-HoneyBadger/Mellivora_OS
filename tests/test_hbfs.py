@@ -36,7 +36,11 @@ HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE
 HBFS_SUBDIR_BLOCKS = 16
 HBFS_SUBDIR_SIZE = HBFS_SUBDIR_BLOCKS * BLOCK_SIZE
 HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 224
-TOTAL_BLOCKS = 524288
+TOTAL_BLOCKS = 523727
+# The first HBFS_JOURNAL_BLOCKS data blocks hold the write-ahead journal. They
+# are marked allocated so file data can never land on them, but no directory
+# entry references them.
+HBFS_JOURNAL_BLOCKS = 4
 
 # Program load address (must match kernel.asm PROGRAM_BASE)
 PROGRAM_BASE = 0x00200000
@@ -399,10 +403,15 @@ def main():
             ok("No overlapping block allocations"
                f" ({len(block_map)} blocks checked)")
 
-        # Verify total allocated blocks match bitmap
-        msg = (f"File blocks ({len(block_map)}) match"
-               f" bitmap allocated ({used_blocks})")
-        check(msg, len(block_map) == used_blocks)
+        # Verify total allocated blocks match bitmap. The reserved journal
+        # blocks are allocated in the bitmap but owned by no entry.
+        journal_reserved = sum(
+            1 for b in range(HBFS_JOURNAL_BLOCKS)
+            if bitmap[b // 8] & (1 << (b % 8)))
+        msg = (f"File blocks ({len(block_map)})"
+               f" + journal ({journal_reserved}) match bitmap allocated"
+               f" ({used_blocks})")
+        check(msg, len(block_map) + journal_reserved == used_blocks)
         print()
 
         # ---- Bitmap unused region check ----

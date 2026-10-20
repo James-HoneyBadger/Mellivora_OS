@@ -4,7 +4,7 @@ This file is generated from programs/syscalls.inc.
 Do not edit manually; run: python3 tools/generate_syscalls_json.py
 
 - Source: programs/syscalls.inc
-- Syscall count: 182
+- Syscall count: 185
 
 | Number | Name | Summary |
 | ---: | --- | --- |
@@ -61,7 +61,7 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 50 | SYS_AUDIO_PLAY | Play PCM: EBX=buf ECX=len EDX=fmt -> EAX=0/-1 |
 | 51 | SYS_AUDIO_STOP | Stop playback -> EAX=0 |
 | 52 | SYS_AUDIO_STATUS | Query: -> EAX=state(0/1/2) EBX=present |
-| 53 | SYS_KILL | Kill task: EBX=pid -> EAX=0/-1 |
+| 53 | SYS_KILL | Send signal: EBX=pid\|-pgid ECX=signum -> EAX=0/-1 |
 | 54 | SYS_GETPID | Get PID: -> EAX=pid |
 | 55 | SYS_CLIPBOARD_COPY | Copy: EBX=buf ECX=len -> EAX=0 |
 | 56 | SYS_CLIPBOARD_PASTE | Paste: EBX=buf ECX=maxlen -> EAX=len |
@@ -190,3 +190,6 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 179 | SYS_TCDRAIN | tcdrain(fd) -> 0/-1 |
 | 180 | SYS_TCFLUSH | tcflush(fd,queue) -> 0/-1 |
 | 181 | SYS_GETERRNO | geterrno() -> EAX=per-task errno |
+| 182 | SYS_EXECVE | execve(path,argv,envp) -> no return / -1 |
+| 183 | SYS_TCSETPGRP | tcsetpgrp(pgid) -> 0/-1 (-1 = no foreground job) |
+| 184 | SYS_TCGETPGRP | tcgetpgrp() -> EAX=foreground pgid |

@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 182,
-  "highest_syscall_number": 181,
+  "syscall_count": 185,
+  "highest_syscall_number": 184,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -271,7 +271,7 @@
     {
       "name": "SYS_KILL",
       "number": 53,
-      "summary": "Kill task: EBX=pid -> EAX=0/-1"
+      "summary": "Send signal: EBX=pid|-pgid ECX=signum -> EAX=0/-1"
     },
     {
       "name": "SYS_GETPID",
@@ -912,6 +912,21 @@
       "name": "SYS_GETERRNO",
       "number": 181,
       "summary": "geterrno() -> EAX=per-task errno"
+    },
+    {
+      "name": "SYS_EXECVE",
+      "number": 182,
+      "summary": "execve(path,argv,envp) -> no return / -1"
+    },
+    {
+      "name": "SYS_TCSETPGRP",
+      "number": 183,
+      "summary": "tcsetpgrp(pgid) -> 0/-1 (-1 = no foreground job)"
+    },
+    {
+      "name": "SYS_TCGETPGRP",
+      "number": 184,
+      "summary": "tcgetpgrp() -> EAX=foreground pgid"
     }
   ]
 }

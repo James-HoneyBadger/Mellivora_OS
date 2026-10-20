@@ -66,7 +66,7 @@ SYS_SETDATE     equ 49          ; Set RTC: EBX=buf[sec,min,hr,day,mon,yr] ECX=ce
 SYS_AUDIO_PLAY  equ 50          ; Play PCM: EBX=buf ECX=len EDX=fmt -> EAX=0/-1
 SYS_AUDIO_STOP  equ 51          ; Stop playback -> EAX=0
 SYS_AUDIO_STATUS equ 52         ; Query: -> EAX=state(0/1/2) EBX=present
-SYS_KILL        equ 53          ; Kill task: EBX=pid -> EAX=0/-1
+SYS_KILL        equ 53          ; Send signal: EBX=pid|-pgid ECX=signum -> EAX=0/-1
 SYS_GETPID      equ 54          ; Get PID: -> EAX=pid
 SYS_CLIPBOARD_COPY  equ 55      ; Copy: EBX=buf ECX=len -> EAX=0
 SYS_CLIPBOARD_PASTE equ 56      ; Paste: EBX=buf ECX=maxlen -> EAX=len
@@ -214,7 +214,9 @@ SYS_TCSETATTR       equ 178 ; tcsetattr(fd,act,termios*) -> 0/-1
 SYS_TCDRAIN         equ 179 ; tcdrain(fd) -> 0/-1
 SYS_TCFLUSH         equ 180 ; tcflush(fd,queue) -> 0/-1
 SYS_GETERRNO        equ 181 ; geterrno() -> EAX=per-task errno
-
+SYS_EXECVE          equ 182 ; execve(path,argv,envp) -> no return / -1
+SYS_TCSETPGRP       equ 183 ; tcsetpgrp(pgid) -> 0/-1 (-1 = no foreground job)
+SYS_TCGETPGRP       equ 184 ; tcgetpgrp() -> EAX=foreground pgid
 ; sysconf name constants
 _SC_ARG_MAX         equ 0
 _SC_CHILD_MAX       equ 1
@@ -223,6 +225,45 @@ _SC_NGROUPS_MAX     equ 3
 _SC_OPEN_MAX        equ 4
 _SC_PAGESIZE        equ 28
 _SC_PAGE_SIZE       equ 28
+
+; errno values (POSIX E-values; kept in sync with kernel.asm by
+; tools/validate_syscalls.py). After a syscall returns -1, read the recorded
+; error with SYS_GETERRNO.
+EPERM               equ 1
+ENOENT              equ 2
+ESRCH               equ 3
+EINTR               equ 4
+EIO                 equ 5
+ENXIO               equ 6
+ENOEXEC             equ 8
+EBADF               equ 9
+ECHILD              equ 10
+EAGAIN              equ 11
+EWOULDBLOCK         equ EAGAIN
+ENOMEM              equ 12
+EACCES              equ 13
+EFAULT              equ 14
+EBUSY               equ 16
+EEXIST              equ 17
+EXDEV               equ 18
+ENODEV              equ 19
+ENOTDIR             equ 20
+EISDIR              equ 21
+EINVAL              equ 22
+ENFILE              equ 23
+EMFILE              equ 24
+ENOTTY              equ 25
+EFBIG               equ 27
+ENOSPC              equ 28
+ESPIPE              equ 29
+EROFS               equ 30
+EMLINK              equ 31
+EPIPE               equ 32
+ERANGE              equ 34
+ENAMETOOLONG        equ 36
+ENOSYS              equ 38
+ENOTEMPTY           equ 39
+ELOOP               equ 40
 
 ; setitimer which values
 ITIMER_REAL         equ 0

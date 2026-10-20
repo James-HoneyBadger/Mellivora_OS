@@ -33,7 +33,7 @@
 
 BUDDY_ORDERS        equ 12            ; Orders 0..11 (4KB..8MB)
 PMM_FREE_LIST_NIL   equ 0xFFFFFFFF    ; Empty free-list sentinel
-PMM_BUDDY_TAGS      equ PMM_BITMAP + 0x20000  ; 0x320000 — 4KB reserved
+PMM_BUDDY_TAGS      equ PMM_BITMAP + 0x20000  ; 0x520000 — 4KB, currently unused
 
 ;-----------------------------------------------------------------------
 ; pmm_init
@@ -67,15 +67,18 @@ pmm_init:
         mov eax, [esi]                  ; Base (low 32 bits)
         mov ebx, [esi + 8]             ; Length (low 32 bits)
 
-        ; Trim / skip anything below 4 MB (kernel + driver area)
-        cmp eax, 0x00400000
+        ; Only memory at or above KERNEL_RESERVED_END may be handed out.
+        ; Below it live the kernel image, the program load window, the page
+        ; tables, this allocator's own bitmap/tags and the heap window —
+        ; handing any of that to a caller corrupts the kernel.
+        cmp eax, KERNEL_RESERVED_END
         jge .e820_free
-        mov edx, 0x00400000
+        mov edx, KERNEL_RESERVED_END
         sub edx, eax
         cmp edx, ebx
-        jge .e820_next                  ; Entire region below 4 MB
+        jge .e820_next                  ; Entire region below the reserve
         sub ebx, edx
-        mov eax, 0x00400000
+        mov eax, KERNEL_RESERVED_END
 
 .e820_free:
         call pmm_free_region            ; EAX = base, EBX = byte length

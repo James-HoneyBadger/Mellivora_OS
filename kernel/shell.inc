@@ -109,6 +109,12 @@ shell_main:
         call vga_print
 
         call vga_reset_color
+
+        ; Emit a machine-readable marker on COM1 now that the shell is up.
+        ; tests/test_boot.sh greps for this to detect a successful boot.
+        ; serial_print preserves all registers (pushad/popad).
+        mov esi, msg_boot_ok
+        call serial_print
 .no_motd:
 
 .prompt:
@@ -153,6 +159,18 @@ shell_main:
         mov dword [kb_write_idx], 0
 
 .read_loop:
+        ; Run a background task before blocking for input. Background tasks
+        ; are ring-3, and the timer only preempts ring-3 code, so a task that
+        ; the shell just started with '&' would otherwise stay READY forever:
+        ; this is the only point where the shell (ring 0) can give up the CPU
+        ; without losing a context. Only do it at a clean prompt so a partly
+        ; typed line is never discarded.
+        cmp ecx, 0
+        jne .read_wait
+        cmp dword [line_len], 0
+        jne .read_wait
+        call sched_start_ready
+.read_wait:
         call kb_getchar
 
         cmp al, 0x0D            ; Enter?
@@ -2712,7 +2730,7 @@ shell_dispatch_core:
         ret
 
 .cmd_fg:
-        ; fg <pid> - resume a stopped task (same as bg for now)
+        ; fg <pid> - resume a stopped task and give it the console
         mov esi, line_buffer
         mov edi, cmd_fg_str
         call str_starts_with
@@ -2723,6 +2741,10 @@ shell_dispatch_core:
         mov ebx, eax
         mov ecx, SIGCONT
         mov eax, SYS_SIGNAL
+        int 0x80
+        ; The resumed job owns the terminal again, so Ctrl+C/Ctrl+Z reach it.
+        ; A shell-launched task's PGID is its own PID.
+        mov eax, SYS_TCSETPGRP
         int 0x80
         ret
 
@@ -6145,6 +6167,8 @@ cmd_exec_program:
         mov [.path_fsize], ebx
         mov eax, [edi + 260]    ; start block
         mov ecx, [edi + 264]    ; block count
+        cmp ecx, HBFS_READ_MAX_BLOCKS
+        ja  .path_too_big       ; would overflow the program window
         shl eax, 3
         add eax, HBFS_DATA_START
         shl ecx, 3
@@ -6160,6 +6184,15 @@ cmd_exec_program:
 .path_cd_fail:
         pop esi                 ; restore PATH string position
         jmp .path_next_dir
+
+.path_too_big:
+        ; Program is larger than PROGRAM_MAX_SIZE; refuse it rather than load
+        ; it over the paging structures that follow the program window.
+        call path_restore_cwd
+        pop esi                 ; discard saved PATH string position
+        mov esi, msg_prog_too_big
+        call vga_print
+        jmp .not_found
 
 .path_not_found:
         ; Restore user's cwd
@@ -6204,15 +6237,55 @@ cmd_exec_program:
         mov byte [PROGRAM_EXIT_ADDR + 5], 0xCD
         mov byte [PROGRAM_EXIT_ADDR + 6], 0x80
 
-        ; Update TSS kernel stack for ring transitions
-        mov dword [tss_struct + 4], KERNEL_STACK
-
         ; Set up ring 3 stack
         mov eax, PROGRAM_EXIT_ADDR - 4
         ; Push return address (trampoline) on ring 3 stack
         mov dword [eax], PROGRAM_EXIT_ADDR
 
-        ; Switch to ring 3 via IRET
+        ; If a task is already running, this exec came from SYS_EXEC. execve
+        ; replaces the current image, it does not create a second process: reusing
+        ; the task keeps its TCB/CR3/fd page and avoids leaving two RUNNING TCBs
+        ; (which would make sched_exit_task reap the wrong one).
+        call sched_get_current_task
+        test eax, eax
+        jnz .exec_legacy_ring3
+
+        ; Run the program as a real scheduler task so it gets a TCB, private
+        ; fd page, errno, address space and (later) fork/exec semantics.
+        ; If task creation fails (OOM), fall back to the legacy direct IRET.
+        mov esi, prog_name_buf
+        call sched_set_create_name
+        mov ebx, [program_entry]
+        mov ecx, PROGRAM_EXIT_ADDR - 4
+        call sched_create_task  ; EAX = pid or -1
+        test eax, eax
+        js .exec_legacy_ring3
+        call sched_set_task_args ; snapshot this launch's argv for the task
+        ; The console belongs to this job until it exits or is stopped: Ctrl+C
+        ; and Ctrl+Z signal the terminal's foreground process group. A task's
+        ; PGID starts as its own PID, which is the id sched_create_task returned.
+        mov [tty_fg_pgid], eax
+        call sched_start_task   ; switches CR3/fds and never returns
+
+.exec_legacy_ring3:
+        ; When an existing task execs, its own kernel stack must stay installed as
+        ; TSS ESP0; using KERNEL_STACK here would let the next syscall overwrite
+        ; the shell's stack underneath it.
+        call sched_get_current_task
+        test eax, eax
+        jz .exec_legacy_shell
+        ; exec in place: the task keeps its PID, so refresh its argv slot too
+        mov eax, [eax + TCB_PID]
+        call sched_set_task_args
+        call sched_get_current_task
+        mov eax, [eax + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+        jmp .exec_legacy_iret
+.exec_legacy_shell:
+        mov dword [tss_struct + 4], KERNEL_STACK
+
+.exec_legacy_iret:
+        mov eax, PROGRAM_EXIT_ADDR - 4
         mov ebx, [program_entry]
         push dword USER_DS      ; SS3
         push eax                ; ESP3
@@ -6273,14 +6346,11 @@ cmd_exec_program:
 
         ; 6. Create the task
         mov esi, prog_name_buf
-        mov edi, task_create_name
-        push ecx
-        mov ecx, 16
-        rep movsb
-        pop ecx
+        call sched_set_create_name
         call sched_create_task          ; EBX=entry, ECX=stack → EAX=pid (or -1)
         test eax, eax
         js .bg_sched_fail
+        call sched_set_task_args        ; background task gets its own argv copy
 
         ; 7. Mark the task as background in TCB (bit 31 of TCB_EXIT_CODE)
         ;    Store bg_prog_addr page number so sys_exit can free it.

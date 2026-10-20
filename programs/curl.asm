@@ -140,36 +140,38 @@ start:
         mov byte [path_buf + 1], 0
 .has_path:
 
-        ; Resolve host IP via DNS
+        ; Resolve host IP via DNS (EAX = IP, 0 = failure)
         mov eax, SYS_DNS
         mov ebx, host_buf
-        mov esi, resolve_buf
         int 0x80
-        cmp eax, -1
-        je .dns_fail
-
-        ; Parse IP from resolve_buf (dotted-decimal) into 32-bit BE
-        mov esi, resolve_buf
-        call parse_ip           ; returns EAX = IP dword (host order)
+        test eax, eax
+        jz .dns_fail
         mov [dest_ip], eax
 
-        ; Connect via TCP (using network stack)
-        mov eax, SYS_CONNECT
-        mov ebx, [dest_ip]
-        mov ecx, HTTP_PORT
+        ; Create a TCP socket, then connect it
+        mov eax, SYS_SOCKET
+        mov ebx, 1                  ; SOCK_STREAM
         int 0x80
         cmp eax, -1
         je .conn_fail
         mov [sock_fd], eax
 
+        mov eax, SYS_CONNECT
+        mov ebx, [sock_fd]
+        mov ecx, [dest_ip]
+        mov edx, HTTP_PORT
+        int 0x80
+        cmp eax, -1
+        je .conn_fail
+
         ; Build HTTP request
         call build_http_request
 
-        ; Send request
+        ; Send request (ECX = buffer, EDX = length)
         mov eax, SYS_SEND
         mov ebx, [sock_fd]
-        mov esi, req_buf
-        mov ecx, [req_len]
+        mov ecx, req_buf
+        mov edx, [req_len]
         int 0x80
         cmp eax, -1
         je .send_fail
@@ -178,8 +180,8 @@ start:
 .recv_loop:
         mov eax, SYS_RECV
         mov ebx, [sock_fd]
-        mov esi, resp_buf
-        mov ecx, BUF_SIZE - 1
+        mov ecx, resp_buf
+        mov edx, BUF_SIZE - 1
         int 0x80
         cmp eax, 0
         jle .recv_done
@@ -367,42 +369,6 @@ uint_to_str:
         ret
 
 ;---------------------------------------
-; parse_ip: parse "a.b.c.d" from ESI → EAX (big-endian dword)
-;---------------------------------------
-parse_ip:
-        xor eax, eax
-        mov ecx, 4
-.pi_byte:
-        push ecx
-        push eax
-        xor eax, eax
-.pi_digit:
-        movzx edx, byte [esi]
-        cmp dl, '0'
-        jl .pi_byte_done
-        cmp dl, '9'
-        jg .pi_byte_done
-        imul eax, 10
-        sub dl, '0'
-        add eax, edx
-        inc esi
-        jmp .pi_digit
-.pi_byte_done:
-        ; Skip dot
-        cmp byte [esi], '.'
-        jne .pi_no_dot
-        inc esi
-.pi_no_dot:
-        mov edx, eax            ; this byte
-        pop eax
-        shl eax, 8
-        or al, dl
-        pop ecx
-        dec ecx
-        jnz .pi_byte
-        ret
-
-;---------------------------------------
 ; skip_spaces / skip_token
 ;---------------------------------------
 skip_spaces:
@@ -445,7 +411,6 @@ arg_len:        dd 0
 host_buf:       times URL_MAX db 0
 path_buf:       times URL_MAX db 0
 post_data:      times DATA_MAX db 0
-resolve_buf:    times 32 db 0
 method:         db 'G'
 sock_fd:        dd 0
 dest_ip:        dd 0

@@ -98,11 +98,13 @@ start:
 
         ; --- Poll loop ---
 .poll:
-        ; Check if child has exited
-        mov eax, SYS_WAITPID
-        mov ebx, [child_pid]
+        ; Reap the child with WNOHANG semantics. waitpid() cannot be used here:
+        ; it returns the child's exit code, so a successful exit with code 0 is
+        ; indistinguishable from "child still running".
+        mov eax, SYS_WAIT
+        mov ebx, child_exit
         int 0x80
-        cmp eax, 0
+        cmp eax, -1
         jne .child_done
 
         ; Check elapsed time
@@ -114,6 +116,7 @@ start:
         ; Timed out — kill child and cancel alarm
         mov eax, SYS_KILL
         mov ebx, [child_pid]
+        mov ecx, SIGTERM        ; kill(pid, SIGTERM)
         int 0x80
 
         mov eax, SYS_ALARM
@@ -133,9 +136,7 @@ start:
         jmp .poll
 
 .child_done:
-        ; Child exited normally — cancel alarm and forward exit code
-        mov [child_exit], eax
-
+        ; SYS_WAIT already stored the child's status in child_exit
         mov eax, SYS_ALARM
         xor ebx, ebx
         int 0x80

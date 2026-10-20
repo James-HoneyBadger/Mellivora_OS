@@ -442,9 +442,9 @@ sys_sem_wait:
         popad
         iretd
 .ssw_timeout:
-        ; Timed out — still return 0 (best-effort, non-blocking fallback)
-        dec dword [ebp + SEM_VALUE]
-        mov dword [esp + 28], 0
+        ; Timed out. Do NOT decrement: a failed wait must not consume the
+        ; semaphore, and returning success here hid lost-wakeup bugs.
+        mov dword [esp + 28], -1
         popad
         iretd
 .ssw_fail:

@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, "  HBFS v3  ", 0xF9, "  182 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA
+        db 0xBA, "  HBFS v3  ", 0xF9, "  185 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -120,8 +120,13 @@ motd_str:
 msg_boot_time:  db "  Boot complete in ", 0
 msg_boot_suf:   db "s", 0x0A, 0
 
+; Emitted on COM1 once the shell reaches its first prompt, so a headless QEMU
+; run can be verified without a display. Consumed by tests/test_boot.sh — the
+; string must match BOOT_MARKER in that script.
+msg_boot_ok:    db "MELLIVORA_BOOT_OK", 0x0A, 0
+
 version_text:
-        db "Mellivora OS v13.0.0 - HBFS v3, 182 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
+        db "Mellivora OS v13.0.0 - HBFS v3, 185 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair v13.0 (Honey Badger Lair)", 0x0A
@@ -145,7 +150,7 @@ version_text:
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (182 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (185 syscalls)", 0x0A
         db "  UEFI Boot:     Tianocore EDK2 UEFI loader (boot/uefi_loader.c)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
@@ -551,6 +556,7 @@ msg_bg_launched: db "[bg] PID ", 0
 msg_bg_stopped: db 0x0A, "[bg] Stopped PID ", 0
 msg_bg_noproc:  db "Ctrl+Z: no background task to stop.", 0x0A, 0
 msg_bg_nomem:    db "bg: out of memory for background task", 0x0A, 0
+msg_prog_too_big: db "Program too large to load (1 MB max).", 0x0A, 0
 ; v5.0: Ctrl+R reverse history search messages
 msg_ctrl_r_prompt: db 0x0D, "(reverse-i-search)`", 0
 msg_ctrl_r_sep:    db "': ", 0
@@ -688,13 +694,32 @@ ata_identify_buf: resb 512
 
 hbfs_super_buf:  resb 512       ; Superblock buffer
 hbfs_dir_buf:    resb HBFS_ROOT_DIR_SIZE  ; Directory buffer (64KB)
+; On-disk image of the directory currently in hbfs_dir_buf. hbfs_save_root_dir
+; diffs against it and writes only the sectors that actually changed, so a
+; one-entry metadata edit costs 512 bytes instead of the whole 128 KB.
+hbfs_dir_shadow: resb HBFS_ROOT_DIR_SIZE
 hbfs_block_buf:  resb HBFS_BLOCK_SIZE     ; General block buffer (4KB)
 hbfs_bitmap_buf: resb HBFS_BITMAP_SIZE     ; Bitmap buffer (64KB)
+hbfs_bitmap_valid: resd 1                   ; 1 = hbfs_bitmap_buf matches the disk
 dir_cache_lba:   resd 1                     ; LBA of cached directory (0 = invalid)
 dir_cache_sects: resd 1                     ; Sector count of cached directory
 ; v9.0 HBFS v2 journal runtime state
 hbfs_journal_ptr:   resd 1      ; Next journal sector offset (0 = at HBFS_JOURNAL_LBA)
 hbfs_journal_dirty: resd 1      ; 0=clean 1=transaction active
+hbfs_journal_depth: resd 1      ; >0 while a transaction is open (nesting counter)
+hbfs_journal_failed: resd 1     ; 1 = this transaction overflowed/failed, must abort
+hbfs_journal_epoch: resd 1      ; current transaction epoch (stamped into records)
+; LBAs already logged by the open transaction. A single transaction may write
+; the same sector twice (delete-then-recreate touches the bitmap and the
+; directory sector twice); logging it once keeps undo consistent — the first
+; pre-image is the pre-transaction state, a second one would be an intermediate
+; state and rolling back to it would leave the entry and the bitmap disagreeing.
+hbfs_journal_logged:   resd 16
+hbfs_journal_n_logged: resd 1
+; 1 KB of private journal scratch: 512-byte record header + 512-byte pre-image.
+; It must NOT alias hbfs_block_buf: callers log the very buffer they are about
+; to write, so logging through a shared scratch page would destroy the payload.
+hbfs_jrnl_buf:      resb 1024
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE
@@ -758,6 +783,8 @@ tss_struct:     resb 104
 fd_table:       resb FD_MAX * FD_ENTRY_SIZE
 ; Shell private fd table snapshot (saved/restored on shell↔task context switches)
 shell_fd_table: resb FD_MAX * FD_ENTRY_SIZE
+; Shell snapshot of the VFS virtual-fd table (same lifetime as shell_fd_table)
+shell_vfd_table: resb FD_PAGE_VFD_BYTES
 ; Physical address of the sigreturn trampoline page (set by sigreturn_trampoline_init)
 sigreturn_trampoline_phys: resd 1
 
@@ -809,7 +836,11 @@ last_bg_pid:     resd 1          ; PID of the most recently launched background 
 prog_name_buf:   resb 256        ; Parsed program name from command line
 parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
 parent_active:    resb 1         ; 1 = re-launch parent after child exits
-program_args_buf: resb 512       ; Command-line arguments for programs
+program_args_buf: resb 512       ; Command-line arguments for the current launch
+; Per-task copy of the argument string, indexed by PID. A task that calls
+; SYS_GETARGS long after it started must not see whichever program the shell
+; launched most recently, so launches snapshot the buffer here.
+task_argv_table: resb MAX_TASKS * 512
 head_lines:      resd 1          ; Line count for head/tail commands
 cmd_flags:       resd 1          ; Bitmask of parsed flags (bit 0='a', bit 13='n', etc.)
 cmd_flag_num:    resd 1          ; Numeric argument from -n N
@@ -898,6 +929,19 @@ gff_cwd_stack:    resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 task_current:     resd 1                              ; Index of current running task
 task_count:       resd 1                              ; Number of active tasks
 sched_tick:       resd 1                              ; Tick counter for current time slice
+pd_deferred_free: resd 1                              ; v13: page directory awaiting release
+                                                      ; (queued by a teardown path, freed by
+                                                      ;  sched_apply_cr3 once CR3 has moved)
+tty_fg_pgid:      resd 1                              ; v14: terminal foreground process group
+                                                      ; (-1 = none; PGIDs are task PIDs, so
+                                                      ;  slot 0 is a real group and cannot
+                                                      ;  serve as the "none" sentinel)
+sched_kbd_tcb:    resd 1                              ; v14: TCB a keyboard signal hit
+; v14 copy-on-write fork: one reference count per 4 KB frame of identity-mapped
+; RAM. 0 means "not shared" — the single owner frees it directly. fork() bumps
+; the count and clears PG_WRITABLE in both address spaces; the first write
+; copies the frame and drops the old reference.
+cow_ref:          resb COW_MAX_PAGES
 task_create_name: resb 16                             ; v4.0: Name for next task to create
 ; v9.0 fork scratch — kernel-only temporaries used by sys_fork
 fork_parent_pid:  resd 1
@@ -1013,7 +1057,9 @@ net_dhcp_buf:     resb 600        ; DHCP packet build buffer
 
 ; DNS
 net_dns_id:       resw 1
+net_dns_pending_id: resw 1        ; transaction ID of the outstanding query
 net_dns_resolved: resb 1
+net_rx_cksum_buf: resb 1600       ; pseudo-header + segment for RX checksums
                   resb 1          ; alignment
 net_dns_result_ip: resd 1
 net_dns_query_name: resd 1        ; pointer to query hostname

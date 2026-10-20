@@ -230,7 +230,7 @@ vbe_set_mode:
 .map_fb_loop:
         push ecx
         mov ecx, 0x07                   ; PG_PRESENT | PG_WRITABLE | PG_USER
-        call paging_map_page
+        call paging_map_page_all        ; master + the task calling setmode
         pop ecx
         add eax, 4096
         add ebx, 4096
@@ -1293,9 +1293,9 @@ vbe_fill_triangle:
         cmp ebx, [.v + 12]
         jge .ft_lower
         ; Upper half: v0 -> v1
-        mov edx, [.v + 12]
-        sub edx, [.v + 4]       ; edx = seg_h = y1 - y0
-        test edx, edx
+        mov ecx, [.v + 12]
+        sub ecx, [.v + 4]       ; ecx = seg_h = y1 - y0
+        test ecx, ecx
         jz  .ft_skip_horiz
         mov eax, ebx
         sub eax, [.v + 4]       ; eax = y - y0
@@ -1303,15 +1303,15 @@ vbe_fill_triangle:
         sub esi, [.v + 0]       ; esi = x1 - x0
         imul esi, eax
         mov eax, esi
-        cdq
-        idiv edx
+        cdq                     ; EDX = sign(EAX) — the divisor must NOT be EDX
+        idiv ecx
         add eax, [.v + 0]       ; eax = short_x
         jmp .ft_draw_span
 .ft_lower:
         ; Lower half: v1 -> v2
-        mov edx, [.v + 20]
-        sub edx, [.v + 12]      ; edx = seg_h = y2 - y1
-        test edx, edx
+        mov ecx, [.v + 20]
+        sub ecx, [.v + 12]      ; ecx = seg_h = y2 - y1
+        test ecx, ecx
         jz  .ft_skip_horiz
         mov eax, ebx
         sub eax, [.v + 12]      ; eax = y - y1
@@ -1320,7 +1320,7 @@ vbe_fill_triangle:
         imul esi, eax
         mov eax, esi
         cdq
-        idiv edx
+        idiv ecx
         add eax, [.v + 8]       ; eax = short_x
 .ft_draw_span:
         ; EAX = short_x, [.lx] = long_x, EBX = row

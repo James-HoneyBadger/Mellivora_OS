@@ -64,7 +64,7 @@ TCB_SIG_MASK equ 52         ; Signal mask (blocked signals, 32 bits)
 TCB_PGID     equ 56         ; Process group ID (v4.0)
 TCB_EXIT_CODE equ 60        ; Exit code (v4.0)
 TCB_BRK      equ 64         ; Program break address (for sbrk)
-TCB_PPID     equ 68         ; v9.0: Parent PID (set on fork; 0 = shell)
+TCB_PPID     equ 68         ; v9.0: Parent PID (-1 = no parent / shell)
 TCB_UID      equ 72         ; v10: Real user ID (0 = root)
 TCB_GID      equ 76         ; v10: Real group ID (0 = root)
 TCB_ALARM    equ 80         ; v10: Alarm deadline (PIT tick; 0 = no alarm)
@@ -80,7 +80,10 @@ TCB_SAVED_MASK  equ 112     ; v12: Signal mask saved for sigsuspend restore
 TCB_WAIT_PID    equ 116     ; v12: PID being waited on (0 = not waiting); for sys_waitpid block
 TCB_FD_TABLE_PTR equ 120    ; v12: Physical/virtual address of per-task fd table page (0 = not alloc)
 TCB_ERRNO       equ 124     ; v12: Per-task errno value
-TCB_SIZE        equ 128     ; Bytes per TCB
+TCB_CR3         equ 128     ; v13: Physical address of this task's page directory
+                            ;      (0 = not allocated; the kernel/shell uses the
+                            ;       master directory at PAGE_DIR_ADDR)
+TCB_SIZE        equ 136     ; Bytes per TCB (TCB_CR3 occupies 128..131)
 
 MAX_TASKS    equ 128         ; v5.0: Doubled from 64
 
@@ -96,43 +99,56 @@ MAX_TASKS    equ 128         ; v5.0: Doubled from 64
 sched_swap_fd_tables:
         pushad
 
-        ; --- Save global fd_table into outgoing task's private copy ---
+        ; --- Save the live view into the outgoing task's private page ---
         cmp edi, 0
         je .sft_save_shell          ; outgoing is the shell
 
         mov eax, [edi + TCB_FD_TABLE_PTR]
         test eax, eax
         jz .sft_load                ; no private page — skip save
-        ; copy global fd_table (FD_MAX*FD_ENTRY_SIZE = 256 bytes = 64 dwords) → private page
+        ; The page layout is legacy fd table first, then the VFD table, so two
+        ; consecutive movsd runs fill it without recomputing destinations.
         push edi
         mov edi, eax                ; dest = private page
-        mov esi, fd_table           ; src  = global fd_table
+        mov esi, fd_table
         mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep movsd
+        mov esi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
         rep movsd
         pop edi
         jmp .sft_load
 
 .sft_save_shell:
-        ; outgoing is shell — save to shell_fd_table
+        ; outgoing is shell — save to the shell's copies
         push edi
         mov edi, shell_fd_table
         mov esi, fd_table
         mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep movsd
+        mov edi, shell_vfd_table
+        mov esi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
         rep movsd
         pop edi
 
 .sft_load:
-        ; --- Load incoming task's private copy into global fd_table ---
+        ; --- Load incoming task's private copy into the live tables ---
         cmp ebx, 0
         je .sft_load_shell          ; incoming is the shell
 
         mov eax, [ebx + TCB_FD_TABLE_PTR]
         test eax, eax
         jz .sft_done                ; no private page — leave global as-is
-        ; copy private page → global fd_table
         mov esi, eax
         mov edi, fd_table
         mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep movsd
+        mov edi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
         rep movsd
         jmp .sft_done
 
@@ -140,6 +156,11 @@ sched_swap_fd_tables:
         mov esi, shell_fd_table
         mov edi, fd_table
         mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep movsd
+        mov esi, shell_vfd_table
+        mov edi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
         rep movsd
 
 .sft_done:
@@ -161,6 +182,10 @@ sched_init:
         mov dword [task_count], 0
         mov dword [task_current], 0
         mov dword [sched_tick], 0
+        ; No job owns the console yet. -1 rather than 0: PGIDs are task PIDs
+        ; and the task in slot 0 really does have PGID 0.
+        mov dword [tty_fg_pgid], -1
+        mov dword [sched_kbd_tcb], 0
         popad
         ret
 
@@ -186,6 +211,16 @@ sched_create_task:
         jmp .find_slot
 
 .found_slot:
+        ; Allocate this task's page directory (a copy of the master directory)
+        push edx
+        push edi
+        call paging_new_pd          ; EAX = PD physical address, or 0
+        pop edi
+        pop edx
+        test eax, eax
+        jz .create_fail
+        mov [edi + TCB_CR3], eax
+
         ; Allocate a 4KB page for this task's kernel stack
         push edx
         push edi
@@ -250,6 +285,13 @@ sched_create_task:
         mov [edi + TCB_USTACK], ecx
         mov [edi + TCB_ENTRY], ebx
         mov [edi + TCB_PID], edx
+        ; A task created by the shell has no parent. Set this explicitly:
+        ; TCB slots are reused and sched_exit_task reads TCB_PPID to decide
+        ; whether a zombie can ever be collected, so a stale value from the
+        ; previous occupant would mis-route SIGCHLD / strand the slot.
+        ; -1 (not 0) is the sentinel: slot 0 is a real PID, and a child of the
+        ; task in slot 0 must still be treated as having a parent.
+        mov [edi + TCB_PPID], dword -1
         mov [edi + TCB_PRIORITY], dword PRIO_NORMAL
         mov [edi + TCB_SIG_PEND], dword 0
         mov [edi + TCB_SIG_MASK], dword 0
@@ -270,7 +312,10 @@ sched_create_task:
         mov [edi + TCB_WAIT_PID],    dword 0
         mov [edi + TCB_ERRNO],       dword 0
 
-        ; Allocate a private fd table page (4KB, zero-filled)
+        ; Allocate a private fd table page and inherit the launcher's fd view.
+        ; A new task sees the stdin/stdout redirections that were active when it
+        ; was created, but later changes are isolated because each task owns its
+        ; own page (sched_swap_fd_tables swaps whole pages).
         push edx
         push edi
         call pmm_alloc_page         ; EAX = page address or 0
@@ -278,13 +323,16 @@ sched_create_task:
         pop edx
         test eax, eax
         jz .no_fd_page
-        ; Zero the page (4096 bytes = 1024 dwords)
         push eax
         push edi
         mov edi, eax
-        xor eax, eax
-        mov ecx, 1024
-        rep stosd
+        mov esi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep movsd
+        mov esi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
+        rep movsd
         pop edi
         pop eax
         mov [edi + TCB_FD_TABLE_PTR], eax
@@ -322,6 +370,14 @@ sched_create_task:
         ret
 
 .create_fail_pop:
+        ; Kernel-stack allocation failed: release the page directory first.
+        ; EDI still holds the TCB pointer (it was pushed, not modified).
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz  .create_fail_pop_done
+        mov dword [edi + TCB_CR3], 0
+        call pmm_free_page
+.create_fail_pop_done:
         pop ecx
         pop ebx
         pop edi
@@ -354,10 +410,52 @@ sched_exit_task:
         jmp .exit_find
 
 .exit_found:
-        ; Free the kernel stack page (kstack_top - 4096 = page base)
+        ; Free the kernel stack page (kstack_top - 4096 = page base).
+        ; Callers switch to KERNEL_STACK before invoking us, so the stack this
+        ; runs on is never the page being released here.
         mov eax, [edi + TCB_KSTACK]
         sub eax, 4096
         call pmm_free_page
+
+        ; Release any program-window frames this task copied for itself at exec
+        ; time. Frames still shared with the master are left untouched.
+        push edi
+        mov eax, [edi + TCB_CR3]
+        mov ebx, PROGRAM_BASE
+        mov ecx, PROGRAM_MAX_SIZE / 4096
+        call paging_free_window_private
+        pop edi
+
+        ; Release the user stack when it is a separate allocation (background
+        ; tasks, and children forked from them). Foreground programs stack at
+        ; the top of the program window, covered by the release above. Each page
+        ; is released through its reference count, so a stack still shared with
+        ; a fork parent/child survives until the last owner exits.
+        mov eax, [edi + TCB_USTACK]
+        test eax, eax
+        jz .exit_no_ustack
+        add eax, 4
+        sub eax, BG_STACK_PAGES * 4096
+        cmp eax, PROGRAM_BASE
+        jb  .exit_free_ustack
+        mov ebx, PROGRAM_BASE + PROGRAM_MAX_SIZE
+        cmp eax, ebx
+        jb  .exit_no_ustack            ; inside the program window
+.exit_free_ustack:
+        mov ecx, BG_STACK_PAGES
+        call cow_release_range
+.exit_no_ustack:
+
+        ; Queue this task's page directory for release. It cannot be freed here:
+        ; this runs in the dying task's context, so CR3 may still point at it,
+        ; and reusing a directory the CPU is walking corrupts the kernel. The
+        ; next CR3 switch releases it (see sched_apply_cr3).
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .exit_no_pd
+        mov dword [edi + TCB_CR3], 0
+        mov [pd_deferred_free], eax
+.exit_no_pd:
 
         ; Free the private fd table page if allocated
         mov eax, [edi + TCB_FD_TABLE_PTR]
@@ -366,6 +464,13 @@ sched_exit_task:
         call pmm_free_page
         mov [edi + TCB_FD_TABLE_PTR], dword 0
 .exit_no_fd_page:
+        ; Free the signal handler table page (allocated lazily by sigaction)
+        mov eax, [edi + TCB_SIG_HAND]
+        test eax, eax
+        jz .exit_no_hand
+        mov dword [edi + TCB_SIG_HAND], 0
+        call pmm_free_page
+.exit_no_hand:
 
         ; Get PID of the dying task for parent wake-up
         mov esi, [edi + TCB_PID]
@@ -416,9 +521,9 @@ sched_exit_task:
 
         ; --- v12.2: Deliver SIGCHLD to parent ---
         ; edi = dying task TCB, esi = dying task PID
-        mov eax, [edi + TCB_PPID]       ; parent PID (0 = no real parent / shell)
-        test eax, eax
-        jz .exit_done                   ; PPID=0 → shell-launched, skip SIGCHLD
+        mov eax, [edi + TCB_PPID]       ; parent PID (-1 = no parent / shell)
+        cmp eax, -1
+        je .exit_reap                   ; no parent → nothing will waitpid()
 
         push edi                        ; save dying TCB
         push eax                        ; save parent PID on stack
@@ -455,6 +560,14 @@ sched_exit_task:
         pop eax                         ; discard saved parent PID
         pop edi                         ; restore dying TCB pointer
         ; --- end SIGCHLD ---
+        jmp .exit_done
+
+.exit_reap:
+        ; A shell-launched task (PPID = -1) has no parent that could ever call
+        ; waitpid(), so this zombie would stay in the table forever and every
+        ; launch would leak a TCB slot. Reap it immediately.
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_PID], 0
 
 .exit_done:
         popad
@@ -557,6 +670,20 @@ sys_waitpid:
         jmp .swp_find_next
 
 .swp_switch_to:
+        ; Install the incoming address space and deliver before committing:
+        ; the signal frame lives on that task's user stack, and a task that a
+        ; default signal action kills here must not be resumed.
+        mov eax, ebx
+        call sched_apply_cr3
+        push edx
+        push edi                        ; EDI = our TCB, needed by the fd swap
+        mov edi, [ebx + TCB_ESP]
+        call sched_deliver_signals
+        pop edi
+        pop edx
+        test eax, eax
+        js  .swp_find_next          ; dead — keep scanning from this slot
+
         ; Swap fd tables: outgoing=EDI, incoming=EBX
         call sched_swap_fd_tables
         mov dword [ebx + TCB_STATE], TASK_RUNNING
@@ -573,6 +700,8 @@ sys_waitpid:
         ; EDI=our TCB (outgoing), EBX=0 (incoming=shell)
         xor ebx, ebx
         call sched_swap_fd_tables
+        xor eax, eax
+        call sched_apply_cr3          ; back to the master directory
         mov esp, KERNEL_STACK
         jmp shell_main
 
@@ -580,6 +709,154 @@ sys_waitpid:
         mov dword [esp + 28], -1
         popad
         iretd
+
+;---------------------------------------
+; sched_set_create_name - name the next task created
+;   In : ESI = NUL-terminated program name
+; sched_create_task copies task_create_name into the new TCB; without this a
+; foreground task would inherit whatever name the last background launch left
+; behind (and ps would print the wrong label).
+;---------------------------------------
+sched_set_create_name:
+        pushad
+        mov edi, task_create_name
+        mov ecx, 16
+        cld
+        rep movsb
+        mov byte [task_create_name + 15], 0
+        popad
+        ret
+
+;---------------------------------------
+; sched_set_task_args - snapshot the launch arguments for a task
+;   In : EAX = task id (0..MAX_TASKS-1)
+; Copies program_args_buf into the task's private slot. TCB slots are reused,
+; so a new launch always overwrites whatever the previous occupant left.
+;---------------------------------------
+sched_set_task_args:
+        pushad
+        cmp eax, MAX_TASKS
+        jae .ssta_done
+        mov edi, eax
+        shl edi, 9                  ; * 512 bytes per slot
+        add edi, task_argv_table
+        mov esi, program_args_buf
+        mov ecx, 512 / 4
+        cld
+        rep movsd
+.ssta_done:
+        popad
+        ret
+
+;---------------------------------------
+; sched_restore_shell_fds - install the shell's saved fd view
+;---------------------------------------
+sched_restore_shell_fds:
+        pushad
+        mov esi, shell_fd_table
+        mov edi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep movsd
+        mov esi, shell_vfd_table
+        mov edi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
+        rep movsd
+        popad
+        ret
+
+;---------------------------------------
+; sched_start_ready - Run the first READY task, if there is one
+;
+;   Returns immediately (all registers and EFLAGS preserved) when no task is
+;   READY. Otherwise switches to ring 3 and does NOT return: the task's exit
+;   path (sys_exit -> sched_force_switch) brings control back to shell_main.
+;
+;   Why this exists: the PIT handler only preempts ring-3 code, and the shell
+;   runs at ring 0. A task created by the shell's `&` operator is therefore
+;   never picked up by the timer - nothing is RUNNING to preempt - so without
+;   this hook it sits READY forever. The shell calls it while waiting for a
+;   fresh command line, which is the one point where it has no context worth
+;   preserving.
+;
+;   The outgoing context is the shell, so its fd view is saved to
+;   shell_fd_table before the incoming task's private table is loaded.
+;---------------------------------------
+sched_start_ready:
+        pushad
+        pushfd
+        cli
+        mov edi, task_table
+        xor edx, edx
+.ssr_scan:
+        cmp edx, MAX_TASKS
+        jge .ssr_none
+        cmp dword [edi + TCB_STATE], TASK_READY
+        je .ssr_found
+        add edi, TCB_SIZE
+        inc edx
+        jmp .ssr_scan
+
+.ssr_none:
+        popfd
+        popad
+        ret
+
+.ssr_found:
+        ; EDI = TCB, EDX = slot; the helper switches to it and never returns.
+        jmp sched_switch_to_tcb
+
+;---------------------------------------
+; sched_switch_to_tcb - switch from the shell to a READY task
+;   In : EDI = TCB pointer, EDX = slot index
+;   Out: does not return (iretd into ring 3)
+;
+; The outgoing context is always the shell, so the global fd view is saved to
+; shell_fd_table before the incoming task's private table is loaded.
+;---------------------------------------
+sched_switch_to_tcb:
+        mov dword [edi + TCB_STATE], TASK_RUNNING
+        mov [task_current], edx
+
+        push edi
+        push edx
+        mov ebx, edi            ; incoming TCB
+        xor edi, edi            ; outgoing = shell
+        call sched_swap_fd_tables
+        pop edx
+        pop edi
+
+        mov eax, edi
+        call sched_apply_cr3
+        mov eax, [edi + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+        mov esp, [edi + TCB_ESP]
+        popad
+        iretd
+
+;---------------------------------------
+; sched_start_task - switch to a specific READY task by id
+;   In : EAX = task id (0..MAX_TASKS-1)
+;   Out: does not return; falls back to shell_main if the task is not READY
+;---------------------------------------
+sched_start_task:
+        cmp eax, MAX_TASKS
+        jae .sst_bad
+        mov edx, eax
+        imul eax, TCB_SIZE
+        add eax, task_table
+        mov edi, eax
+        cmp dword [edi + TCB_STATE], TASK_READY
+        jne .sst_bad
+        jmp sched_switch_to_tcb
+
+.sst_bad:
+        xor eax, eax
+        call sched_apply_cr3
+        call sched_restore_shell_fds
+        mov dword [tss_struct + 4], KERNEL_STACK
+        mov esp, KERNEL_STACK
+        jmp shell_main
 
 ;---------------------------------------
 ; sys_yield - SYS_YIELD syscall handler
@@ -604,10 +881,12 @@ sched_force_switch:
 .sfs_found:
         mov dword [edi + TCB_STATE], TASK_RUNNING
         mov [task_current], edx
+        mov eax, edi
+        call sched_apply_cr3
         mov eax, [edi + TCB_KSTACK]
         mov [tss_struct + 4], eax
         ; Load incoming task's fd table (EDI=incoming TCB, EBX=0 unused)
-        ; Use a direct load: copy private page into global fd_table
+        ; Use a direct load: copy the private page into both live tables
         mov eax, [edi + TCB_FD_TABLE_PTR]
         test eax, eax
         jz .sfs_switch
@@ -618,6 +897,9 @@ sched_force_switch:
         mov edi, fd_table
         mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
         rep movsd
+        mov edi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
+        rep movsd
         pop ecx
         pop edi
         pop esi
@@ -627,17 +909,10 @@ sched_force_switch:
         iretd                      ; Resume the ring-3 task
 .sfs_no_task:
         ; No other ring-3 task running — return to shell prompt
-        ; Load shell's fd table back into global fd_table
-        push esi
-        push edi
-        push ecx
-        mov esi, shell_fd_table
-        mov edi, fd_table
-        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
-        rep movsd
-        pop ecx
-        pop edi
-        pop esi
+        call sched_restore_shell_fds
+        xor eax, eax
+        call sched_apply_cr3          ; back to the master directory
+        mov dword [tss_struct + 4], KERNEL_STACK
         mov esp, KERNEL_STACK
         jmp shell_main
 
@@ -650,10 +925,25 @@ sched_force_switch:
 ; Stack has the IRETD frame from the CPU.
 ;---------------------------------------
 sys_yield:
-        ; Fast path: if 0 or 1 tasks, nothing to switch to
+        ; Fast path: if 0 or 1 tasks, there is nothing to switch to — but a
+        ; lone task can still have a signal pending, and nothing else would
+        ; deliver it: the timer only advances the quantum when it interrupted
+        ; ring 3, and this loop lives in ring 0. So dispatch it here.
         cmp dword [task_count], 2
-        jb .yield_nop
+        jae .yld_switch_path
+        call sched_get_current_task
+        test eax, eax
+        jz .yield_nop               ; shell context: nothing to deliver to
+        mov ebx, eax                ; EBX = our own TCB
+        pushad
+        mov edi, esp                ; EDI = frame base (pushad + iretd)
+        call sched_deliver_signals
+        test eax, eax
+        js .yld_self_killed         ; default action freed the stack we are on
+        popad
+        iretd
 
+.yld_switch_path:
         ; Save all GP registers onto the kernel stack
         pushad
 
@@ -721,15 +1011,64 @@ sys_yield:
 .yld_no_switch:
         ; No other ready task found — re-mark self as RUNNING
         mov dword [edi + TCB_STATE], TASK_RUNNING
+        ; Deliver pending signals before re-entering ring 3. A program that
+        ; yields in a tight loop spends most of its time inside this syscall
+        ; (ring 0), where the timer never advances the quantum, so relying on
+        ; the timer to deliver would starve it forever.
+        mov ebx, edi            ; EBX = our TCB
+        mov edi, esp            ; EDI = our kernel frame
+        call sched_deliver_signals
+        test eax, eax
+        js .yld_self_killed
         jmp .yld_abort
+
+.yld_self_killed:
+        ; A default signal action terminated us, and the kernel stack we are
+        ; standing on has been freed. Escaping with iretd would return into a
+        ; released page, so fall back to the shell context instead.
+        mov esp, KERNEL_STACK
+        call sched_restore_shell_fds
+        xor eax, eax
+        call sched_apply_cr3
+        mov dword [tss_struct + 4], KERNEL_STACK
+        mov byte [program_running], 0
+        call shell_redir_reset
+        call vga_reset_color
+        sti
+        jmp shell_main
 
 ; Local temporaries (in .data-ish section within code)
 .best_slot: dd 0
 .best_prio: dd 0
+.yld_res:   dd 0
 
 .yld_switch:
         ; EBX = pointer to new task's TCB, ESI = new task index
-        ; EDI = outgoing task TCB
+        ; EDX = caller's slot
+        ; Install the incoming address space first: the signal frame is written
+        ; onto its user stack, which only exists in its own page directory.
+        ; Nothing is committed yet, so a candidate killed by a default action
+        ; can be dropped without touching our own fd view or state.
+        mov eax, ebx
+        call sched_apply_cr3
+
+        ; sched_deliver_signals clobbers EAX/ECX/EDX/ESI — ESI holds the
+        ; incoming slot that task_current needs below, so both must survive.
+        push edx
+        push esi
+        mov edi, [ebx + TCB_ESP]
+        call sched_deliver_signals
+        mov [.yld_res], eax
+        pop esi
+        pop edx
+        cmp dword [.yld_res], 0
+        js .yld_resume_self
+
+        ; EDI = outgoing (caller) TCB
+        mov eax, edx
+        imul eax, TCB_SIZE
+        lea edi, [task_table + eax]
+
         ; Swap fd tables before switching
         call sched_swap_fd_tables
         mov dword [ebx + TCB_STATE], TASK_RUNNING
@@ -746,6 +1085,19 @@ sys_yield:
         popad
         iretd
 
+.yld_resume_self:
+        ; The candidate died before we committed to it — resume the caller and
+        ; put its address space and TSS back.
+        mov eax, edx
+        imul eax, TCB_SIZE
+        lea edi, [task_table + eax]
+        mov dword [edi + TCB_STATE], TASK_RUNNING
+        mov eax, edi
+        call sched_apply_cr3
+        mov eax, [edi + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+        jmp .yld_abort
+
 .yld_abort:
         ; Couldn't switch — restore current task state and return
         popad
@@ -755,9 +1107,16 @@ sys_yield:
 ;---------------------------------------
 ; sys_getpid - Return current task PID
 ; Returns EAX = task PID (or -1 if shell)
+;
+; EDI/ECX are the scan registers, so save them: only EAX may carry a value
+; back to user space. sys_getpid used to hand back its loop counter in ECX,
+; which silently corrupted any caller that kept something there across the
+; call (a signal number, for instance).
 ;---------------------------------------
 sys_getpid:
         ; Find RUNNING task
+        push ecx
+        push edi
         mov edi, task_table
         xor ecx, ecx
 .gp_find:
@@ -770,56 +1129,302 @@ sys_getpid:
         jmp .gp_find
 .gp_found:
         mov eax, [edi + TCB_PID]
+        pop edi
+        pop ecx
         iretd
 .gp_shell:
         mov eax, -1
+        pop edi
+        pop ecx
         iretd
 
 ;---------------------------------------
-; sys_kill - Terminate task by PID
-;   EBX = PID to kill
-; Returns EAX = 0 on success, -1 on fail
+; sched_signal_task - deliver a signal to a task, or tear it down now
+;   In : EDI = TCB, EAX = signal number (1..NUM_SIGNALS-1)
+;   Out: nothing (all registers preserved)
+;
+; A task that installed a handler gets the signal queued; if it is blocked it
+; is made runnable so the next context switch delivers it. Tasks with SIG_DFL
+; (or no handler table at all) are destroyed immediately, which keeps kill()
+; as decisive as before for programs that never handle signals.
+;
+; A RUNNING task is always queued: it is the caller itself, and freeing the
+; kernel stack we are standing on would corrupt the machine.
 ;---------------------------------------
-sys_kill:
+sched_signal_task:
         pushad
-        ; Find task with matching PID
-        mov edi, task_table
-        xor ecx, ecx
-.sk_find:
-        cmp ecx, MAX_TASKS
-        jge .sk_fail
-        cmp dword [edi + TCB_STATE], TASK_FREE
-        je .sk_next
-        cmp [edi + TCB_PID], ebx
-        je .sk_found
-.sk_next:
-        add edi, TCB_SIZE
-        inc ecx
-        jmp .sk_find
+        mov [.sst_tcb], edi
+        mov [.sst_sig], eax
 
-.sk_found:
+        ; A RUNNING task is the caller itself: always queue, never tear it down
+        ; (we are standing on its kernel stack). This also covers SIGKILL.
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je  .sst_queue
+
+        ; SIGKILL can never be caught, blocked or ignored
+        cmp eax, SIGKILL
+        je  .sst_kill
+
+        ; SIGCONT resumes a stopped task and is otherwise a no-op
+        cmp eax, SIGCONT
+        je  .sst_cont
+
+        ; SIGTSTP stops the task unless a handler wants it
+        cmp eax, SIGTSTP
+        je  .sst_tstp
+
+        ; SIGCHLD's default action is "ignore": never tear a task down for it
+        cmp eax, SIGCHLD
+        je  .sst_chld
+
+        mov ebx, [edi + TCB_SIG_HAND]
+        test ebx, ebx
+        jz  .sst_kill
+        mov ecx, [ebx + eax * 4]
+        cmp ecx, SIG_DFL
+        je  .sst_kill
+        cmp ecx, SIG_IGN
+        je  .sst_done
+        jmp .sst_queue             ; a real handler: queue for delivery
+
+.sst_cont:
+        cmp dword [edi + TCB_STATE], TASK_STOPPED
+        jne .sst_done
+        mov dword [edi + TCB_STATE], TASK_READY
+        jmp .sst_done
+
+.sst_tstp:
+        mov ebx, [edi + TCB_SIG_HAND]
+        test ebx, ebx
+        jz  .sst_stop
+        mov ecx, [ebx + SIGTSTP * 4]
+        cmp ecx, SIG_DFL
+        jne .sst_queue             ; handler (or SIG_IGN) decides at delivery
+.sst_stop:
+        ; Ignore a stop request aimed at the caller: it would never resume
+        cmp dword [edi + TCB_STATE], TASK_RUNNING
+        je  .sst_done
+        mov dword [edi + TCB_STATE], TASK_STOPPED
+        jmp .sst_done
+
+.sst_chld:
+        ; Only a real handler is worth queueing; SIG_DFL/SIG_IGN mean nothing
+        ; happens to the task.
+        mov ebx, [edi + TCB_SIG_HAND]
+        test ebx, ebx
+        jz  .sst_done
+        mov ecx, [ebx + SIGCHLD * 4]
+        cmp ecx, SIG_IGN
+        je  .sst_done
+        cmp ecx, SIG_DFL
+        je  .sst_done
+        jmp .sst_queue
+
+.sst_queue:
+        mov edi, [.sst_tcb]
+        mov eax, [.sst_sig]
+        bts dword [edi + TCB_SIG_PEND], eax
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .sst_done
+        mov dword [edi + TCB_STATE], TASK_READY
+        jmp .sst_done
+
+.sst_kill:
+        mov edi, [.sst_tcb]
+
+        ; Free the signal handler table page (allocated lazily by sigaction)
+        mov eax, [edi + TCB_SIG_HAND]
+        test eax, eax
+        jz .sst_no_hand
+        mov dword [edi + TCB_SIG_HAND], 0
+        call pmm_free_page
+.sst_no_hand:
+
         ; Free the kernel stack page
         mov eax, [edi + TCB_KSTACK]
         test eax, eax
-        jz .sk_free_fd
+        jz .sst_free_fd
         sub eax, 4096
         call pmm_free_page
 
-.sk_free_fd:
+.sst_free_fd:
         ; Free private fd table page
         mov eax, [edi + TCB_FD_TABLE_PTR]
         test eax, eax
-        jz .sk_clear
+        jz .sst_free_pd
         call pmm_free_page
         mov dword [edi + TCB_FD_TABLE_PTR], 0
 
-.sk_clear:
-        ; Clear the TCB
+.sst_free_pd:
+        ; Queue the page directory (see sched_exit_task: it may be the active one)
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .sst_clear
+        mov dword [edi + TCB_CR3], 0
+        mov [pd_deferred_free], eax
+
+.sst_clear:
+        ; Clear the TCB. A zombie was already counted out of task_count by
+        ; sched_exit_task, so decrementing again would undercount live tasks.
+        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
+        je .sst_clear_uncounted
+        dec dword [task_count]
+.sst_clear_uncounted:
         mov dword [edi + TCB_STATE], TASK_FREE
         mov dword [edi + TCB_ESP], 0
         mov dword [edi + TCB_KSTACK], 0
-        dec dword [task_count]
 
+.sst_done:
+        popad
+        ret
+.sst_tcb: dd 0
+.sst_sig: dd 0
+
+;---------------------------------------
+; sched_kbd_signal - deliver a keyboard signal to the foreground job
+;   In : EAX = signal number
+;   Out: EAX = 1  the interrupting context survives (a handler was queued, or
+;                 it was not a target at all) — just return to it
+;        EAX = 0  the foreground context is gone (killed or stopped) and the
+;                 caller must hand the console back to the shell
+;
+; Ctrl+C/Ctrl+Z belong to the terminal, not to "whatever task happens to be
+; running": they go to the terminal's foreground process group (tty_fg_pgid),
+; so a pipeline is signalled as a unit. When no group is set, the running task
+; is the target (a program launched before any group was established).
+;
+; The TCB that was interrupted is left in sched_kbd_tcb so the caller can save
+; its fd view before restoring the shell's.
+;---------------------------------------
+sched_kbd_signal:
+        pushad
+        mov [.ksf_sig], eax
+
+        ; Remember who we interrupted (may be 0 in the shell/legacy context)
+        call sched_get_current_task
+        mov [sched_kbd_tcb], eax
+        mov [.ksf_cur], eax
+
+        mov ecx, [tty_fg_pgid]
+        cmp ecx, -1
+        je .ksf_single
+        test ecx, ecx
+        js  .ksf_single              ; any other negative value: no group
+
+        ; --- Whole foreground process group ---
+        mov dword [.ksf_hits], 0
+        mov edi, task_table
+        xor edx, edx
+.ksf_lock:
+        cmp edx, MAX_TASKS
+        jge .ksf_lock_end
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je  .ksf_lock_next
+        cmp [edi + TCB_PGID], ecx
+        jne .ksf_lock_next
+        inc dword [.ksf_hits]
+        mov eax, [.ksf_sig]
+        call sched_signal_task
+.ksf_lock_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .ksf_lock
+.ksf_lock_end:
+        ; A group that no longer exists (its leader is gone, or the shell never
+        ; claimed one) must not swallow the keystroke.
+        cmp dword [.ksf_hits], 0
+        jne .ksf_verdict
+        jmp .ksf_single
+
+.ksf_single:
+        ; --- No group: target the running task, if any ---
+        mov edi, [.ksf_cur]
+        test edi, edi
+        jz  .ksf_verdict             ; shell context: nothing to signal
+        mov eax, [.ksf_sig]
+        call sched_signal_task
+
+.ksf_verdict:
+        ; Can we return to the interrupted context? Only if it still belongs to
+        ; a task that is runnable. A task destroyed by a default action is FREE;
+        ; a stopped one is TASK_STOPPED. Either way the console goes back to the
+        ; shell.
+        mov eax, [.ksf_cur]
+        test eax, eax
+        jz .ksf_no_task
+        cmp dword [eax + TCB_STATE], TASK_FREE
+        je  .ksf_gone
+        cmp dword [eax + TCB_STATE], TASK_STOPPED
+        je  .ksf_gone
+        mov dword [.ksf_kept], 1
+        jmp .ksf_done
+.ksf_no_task:
+        ; No task (shell or legacy direct-IRET launch): the caller decides. A
+        ; legacy program still needs Ctrl+C to abort, and it has no TCB.
+        mov dword [.ksf_kept], 0
+        jmp .ksf_done
+.ksf_gone:
+        mov dword [.ksf_kept], 0
+.ksf_done:
+        mov eax, [.ksf_kept]
+        mov [esp + 28], eax          ; EAX of the pushad frame = return value
+        popad
+        ret
+.ksf_sig:  dd 0
+.ksf_cur:  dd 0
+.ksf_kept: dd 0
+.ksf_hits: dd 0
+
+;---------------------------------------
+; sys_kill - send a signal to a task or a process group
+;   EBX = pid (> 0) or -pgid (< 0)
+;   ECX = signal number; anything outside 1..NUM_SIGNALS-1 means SIGTERM
+; Returns EAX = 0 if at least one target was signalled, -1 otherwise
+;
+; Group signalling (-pgid) is what a job-control shell needs to stop a whole
+; pipeline. The old ABI only took EBX (pid) and destroyed the task outright;
+; callers that leave ECX unset still get SIGTERM and the same visible result.
+;---------------------------------------
+sys_kill:
+        pushad
+        mov dword [.sk_sig], SIGTERM
+        cmp ecx, 1
+        jb  .sk_sig_ready
+        cmp ecx, NUM_SIGNALS
+        jae .sk_sig_ready
+        mov [.sk_sig], ecx
+.sk_sig_ready:
+        mov dword [.sk_found], 0
+
+        mov edi, task_table
+        xor edx, edx
+.sk_scan:
+        cmp edx, MAX_TASKS
+        jge .sk_scan_done
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je  .sk_next
+        test ebx, ebx
+        js  .sk_match_group
+        cmp [edi + TCB_PID], ebx
+        jne .sk_next
+        jmp .sk_hit
+.sk_match_group:
+        mov eax, ebx
+        neg eax                       ; EBX = -pgid -> EAX = pgid
+        cmp [edi + TCB_PGID], eax
+        jne .sk_next
+.sk_hit:
+        inc dword [.sk_found]
+        mov eax, [.sk_sig]
+        call sched_signal_task
+.sk_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .sk_scan
+
+.sk_scan_done:
+        cmp dword [.sk_found], 0
+        je .sk_fail
         mov dword [esp + 28], 0    ; Return EAX=0
         popad
         iretd
@@ -828,6 +1433,9 @@ sys_kill:
         mov dword [esp + 28], -1   ; Return EAX=-1
         popad
         iretd
+
+.sk_sig:   dd 0
+.sk_found: dd 0
 
 ;---------------------------------------
 ; sys_proclist - Get task info for a scheduler slot
@@ -972,6 +1580,8 @@ sys_sleep:
         call sched_swap_fd_tables
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
+        mov eax, ebx
+        call sched_apply_cr3
         mov eax, [ebx + TCB_KSTACK]
         mov [tss_struct + 4], eax
         mov esp, [ebx + TCB_ESP]
@@ -1192,6 +1802,11 @@ sched_deliver_signals:
         je  .sdel_next              ; SIGCONT on running task = no-op
         cmp ecx, SIGTSTP
         je  .sdel_stop
+        cmp ecx, SIGCHLD
+        je  .sdel_next              ; POSIX: SIGCHLD's default action is ignore.
+                                    ; sched_exit_task queues SIGCHLD on every
+                                    ; parent, so terminating here killed any
+                                    ; parent that yielded after a child died.
 
         ; All others (SIGKILL, SIGTERM, SIGINT, SIGALRM, etc.): terminate
         ; Free kernel stack page if allocated
@@ -1201,12 +1816,26 @@ sched_deliver_signals:
         sub eax, 4096
         call pmm_free_page
 .sdel_no_kstack:
+        ; Queue the task's page directory for release at the next CR3 switch
+        mov eax, [ebx + TCB_CR3]
+        test eax, eax
+        jz .sdel_no_pd
+        mov dword [ebx + TCB_CR3], 0
+        mov [pd_deferred_free], eax
+.sdel_no_pd:
         ; Free private fd table page if allocated (always check, independent of kstack)
         mov eax, [ebx + TCB_FD_TABLE_PTR]
         test eax, eax
-        jz .sdel_term_clear
+        jz .sdel_no_fdpage
         call pmm_free_page
         mov dword [ebx + TCB_FD_TABLE_PTR], 0
+.sdel_no_fdpage:
+        ; Free the signal handler table page
+        mov eax, [ebx + TCB_SIG_HAND]
+        test eax, eax
+        jz .sdel_term_clear
+        mov dword [ebx + TCB_SIG_HAND], 0
+        call pmm_free_page
 .sdel_term_clear:
         mov dword [ebx + TCB_STATE],  TASK_FREE
         mov dword [ebx + TCB_ESP],    0
@@ -1316,121 +1945,16 @@ sys_getpriority:
         popad
         iretd
 
-;---------------------------------------
-; sys_signal - Send signal to a task
-;   EBX = target PID
-;   ECX = signal number (0..31)
+; sys_signal - Send a signal to a task (kill(pid, sig) rules)
+;   EBX = target PID, ECX = signal number
 ; Returns: EAX = 0 on success, -1 on fail
+;
+; Kept as its own syscall number because the shell's kill/bg/fg builtins use
+; it, but the work is done by sys_kill: a single implementation keeps handler
+; dispatch, process groups, SIGCONT/SIGTSTP and teardown identical.
 ;---------------------------------------
 sys_signal:
-        pushad
-        ; Validate signal number
-        cmp ecx, NUM_SIGNALS
-        jge .sig_fail
-        ; Find task by PID
-        mov edi, task_table
-        xor edx, edx
-.sig_find:
-        cmp edx, MAX_TASKS
-        jge .sig_fail
-        cmp dword [edi + TCB_STATE], TASK_FREE
-        je .sig_next
-        cmp [edi + TCB_PID], ebx
-        je .sig_found
-.sig_next:
-        add edi, TCB_SIZE
-        inc edx
-        jmp .sig_find
-.sig_found:
-        ; SIGKILL is always delivered — forcibly terminate
-        cmp ecx, SIGKILL
-        je .sig_kill
-        ; SIGCONT wakes stopped tasks
-        cmp ecx, SIGCONT
-        je .sig_cont
-        ; SIGTSTP stops the task
-        cmp ecx, SIGTSTP
-        je .sig_stop
-        ; Check signal mask
-        mov eax, 1
-        shl eax, cl              ; bit for this signal
-        test [edi + TCB_SIG_MASK], eax
-        jnz .sig_masked          ; Masked — don't deliver
-        ; Set pending bit
-        or [edi + TCB_SIG_PEND], eax
-        ; For SIGINT/SIGTERM on running/ready tasks: terminate
-        cmp ecx, SIGINT
-        je .sig_terminate
-        cmp ecx, SIGTERM
-        je .sig_terminate
-        ; Other signals: set pending bit; wake BLOCKED task so pause/sigsuspend return
-        mov dword [esp + 28], 0
-        ; If target is BLOCKED (sleeping/paused), mark READY so it gets scheduled
-        cmp dword [edi + TCB_STATE], TASK_BLOCKED
-        jne .sig_ok_done
-        mov dword [edi + TCB_STATE], TASK_READY
-.sig_ok_done:
-        popad
-        iretd
-.sig_terminate:
-        ; Terminate the task (same as kill)
-        mov eax, [edi + TCB_KSTACK]
-        test eax, eax
-        jz .sig_clear
-        sub eax, 4096
-        call pmm_free_page
-.sig_clear:
-        mov dword [edi + TCB_STATE], TASK_FREE
-        mov dword [edi + TCB_ESP], 0
-        mov dword [edi + TCB_KSTACK], 0
-        dec dword [task_count]
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.sig_kill:
-        ; Forcible kill — free kernel stack, clear TCB
-        mov eax, [edi + TCB_KSTACK]
-        test eax, eax
-        jz .sigk_clear
-        sub eax, 4096
-        call pmm_free_page
-.sigk_clear:
-        mov dword [edi + TCB_STATE], TASK_FREE
-        mov dword [edi + TCB_ESP], 0
-        mov dword [edi + TCB_KSTACK], 0
-        dec dword [task_count]
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.sig_stop:
-        ; Stop the task (Ctrl+Z)
-        cmp dword [edi + TCB_STATE], TASK_FREE
-        je .sig_fail
-        mov dword [edi + TCB_STATE], TASK_STOPPED
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.sig_cont:
-        ; Continue a stopped task
-        cmp dword [edi + TCB_STATE], TASK_STOPPED
-        jne .sig_ok              ; Not stopped, just succeed
-        mov dword [edi + TCB_STATE], TASK_READY
-.sig_ok:
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.sig_masked:
-        ; Signal is masked — set pending but don't deliver
-        mov eax, 1
-        shl eax, cl
-        or [edi + TCB_SIG_PEND], eax
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.sig_fail:
-        mov dword [esp + 28], -1
-        popad
-        iretd
+        jmp sys_kill
 
 ;---------------------------------------
 ; sys_setpgid - Set process group ID
@@ -1526,6 +2050,59 @@ sys_getpgid:
         iretd
 
 ;---------------------------------------
+; sys_tcsetpgrp - set the terminal's foreground process group
+;   EBX = PGID, or -1 to hand the console back with no owner
+; Returns: EAX = 0 on success, -1 if no live task belongs to that group
+;
+; The terminal (the console) is the object that decides where Ctrl+C and
+; Ctrl+Z go. Job control needs exactly this: the shell puts a job's group in
+; the foreground, and the keyboard then signals the whole job.
+;---------------------------------------
+sys_tcsetpgrp:
+        pushad
+        cmp ebx, -1
+        je  .tsp_clear
+
+        ; Only accept a group that exists: otherwise Ctrl+C would be a no-op
+        ; forever after a typo.
+        mov edi, task_table
+        xor edx, edx
+.tsp_scan:
+        cmp edx, MAX_TASKS
+        jge .tsp_fail
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je  .tsp_next
+        cmp [edi + TCB_PGID], ebx
+        je  .tsp_set
+.tsp_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .tsp_scan
+
+.tsp_set:
+        mov [tty_fg_pgid], ebx
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.tsp_clear:
+        mov dword [tty_fg_pgid], -1
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.tsp_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;---------------------------------------
+; sys_tcgetpgrp - read the terminal's foreground process group
+; Returns: EAX = PGID (-1 when no job owns the console)
+;---------------------------------------
+sys_tcgetpgrp:
+        mov eax, [tty_fg_pgid]
+        iretd
+
+;---------------------------------------
 ; sys_sigmask - Set/get signal mask
 ;   EBX = 0: get mask, 1: set mask, 2: block signals, 3: unblock signals
 ;   ECX = new mask (for set/block/unblock)
@@ -1618,6 +2195,36 @@ sys_taskname:
         iretd
 
 ;---------------------------------------
+; sched_apply_cr3 - install an address space
+;   In : EAX = TCB pointer, or 0 for the kernel/shell (master directory)
+; Clobbers EAX and EFLAGS only.
+;
+; Always installs a valid directory: after a task has exited its directory is no
+; longer safe to run on, so "no task" means the master. This also releases any
+; page directory queued in pd_deferred_free by a teardown path - that can only
+; be done once CR3 no longer points at it, which is exactly here.
+;---------------------------------------
+sched_apply_cr3:
+        test eax, eax
+        jz   .sac_master
+        mov  eax, [eax + TCB_CR3]
+        test eax, eax
+        jz   .sac_master
+        mov  cr3, eax
+        jmp  .sac_release
+.sac_master:
+        mov  eax, PAGE_DIR_ADDR
+        mov  cr3, eax
+.sac_release:
+        mov  eax, [pd_deferred_free]
+        test eax, eax
+        jz   .sac_done
+        mov  dword [pd_deferred_free], 0
+        call pmm_free_page
+.sac_done:
+        ret
+
+;---------------------------------------
 ; sched_get_current_task - Find the TCB of the currently running task
 ; Returns: EAX = pointer to TCB, or 0 if no task is running
 ;---------------------------------------
@@ -1650,7 +2257,10 @@ sched_get_current_task:
 ; Returns: EAX = parent PID (0 = shell/init)
 ;---------------------------------------
 sys_getppid:
-        ; Find RUNNING task and read TCB_PPID
+        ; Find RUNNING task and read TCB_PPID. Same register contract as
+        ; sys_getpid: EDI/ECX are scratch, so preserve them for the caller.
+        push ecx
+        push edi
         mov edi, task_table
         xor ecx, ecx
 .gpp_find:
@@ -1663,9 +2273,17 @@ sys_getppid:
         jmp .gpp_find
 .gpp_found:
         mov eax, [edi + TCB_PPID]
+        cmp eax, -1             ; no parent → report 0 (shell/init)
+        jne .gpp_ret
+        xor eax, eax
+.gpp_ret:
+        pop edi
+        pop ecx
         iretd
 .gpp_shell:
         xor eax, eax
+        pop edi
+        pop ecx
         iretd
 
 ;=======================================================================
@@ -1723,29 +2341,11 @@ sys_fork:
         add  eax, 4096              ; kstack_top
         mov  [fork_child_kstop], eax
 
-        ;--- 4. Allocate child user stack (BG_STACK_PAGES + 1 pages) ---
-        ; +1 for guard page (same layout as sched_create_task)
-        push edx
-        mov  ecx, BG_STACK_PAGES + 1
-        call pmm_alloc_pages
-        pop  edx
-        test eax, eax
-        jz   .fork_fail_kstack      ; OOM — release kernel stack
-
-        mov  [fork_child_ubase], eax
-        mov  ebx, eax
-        add  ebx, (BG_STACK_PAGES + 1) * 4096
-        mov  [fork_child_ustop], ebx
-
-        ;--- 5. Copy parent user stack → child user stack ---
-        ; Parent stack occupies [TCB_USTACK - BG_STACK_PAGES*4096, TCB_USTACK)
-        ; (The guard page is one page BELOW the base, at TCB_USTACK - (BG+1)*4096)
-        mov  edi, [fork_parent_tcb]
-        mov  esi, [edi + TCB_USTACK]
-        sub  esi, (BG_STACK_PAGES + 1) * 4096  ; start of parent allocation
-        mov  edi, [fork_child_ubase]             ; start of child allocation
-        mov  ecx, (BG_STACK_PAGES + 1) * 4096 / 4
-        rep  movsd
+        ;--- 4. Child user stack: shared with the parent, copy-on-write ---
+        ; fork() no longer allocates and copies 64 KB: cow_fork_share marks the
+        ; parent's frames read-only and lets the first write in either process
+        ; take a private copy. The child's ESP3 and TCB_USTACK are the parent's
+        ; (the TCB copy and frame copy below already inherit them).
 
         ;--- 6. Build child kernel-stack frame ---
         ; Current parent kernel stack (ESP after our pushad) layout:
@@ -1762,19 +2362,10 @@ sys_fork:
         ; Patch EAX slot in child pushad frame = 0 (child return value)
         ; pushad frame: [esp+0]=EDI [+4]=ESI [+8]=EBP [+12]=ESP_orig
         ;               [+16]=EBX  [+20]=EDX [+24]=ECX [+28]=EAX
+        ; ESP3 needs no patch any more: the child runs on the parent's stack
+        ; (shared copy-on-write), so the copied frame is already correct.
         mov  edi, [fork_child_kesp]
         mov  dword [edi + 28], 0    ; child EAX = 0
-
-        ; Patch ESP3 in child IRETD frame (at frame+32+12 = frame+44)
-        ; ESP3 = child stack base + same offset as parent within stack
-        mov  eax, [esp + 44]        ; parent's ESP3 from IRETD frame
-        mov  ebx, [fork_parent_tcb]
-        mov  ecx, [ebx + TCB_USTACK]
-        sub  ecx, (BG_STACK_PAGES + 1) * 4096  ; parent stack base
-        sub  eax, ecx               ; offset of parent ESP3 within stack
-        mov  ecx, [fork_child_ubase]
-        add  eax, ecx               ; child ESP3 = child_base + offset
-        mov  [edi + 44], eax        ; patch into child frame
 
         ;--- 7. Populate child TCB ---
         ; Copy parent TCB as base (inherits open files, env, signals, brk, etc.)
@@ -1807,6 +2398,28 @@ sys_fork:
         mov  dword [edi + TCB_WAIT_PID],    0
         mov  dword [edi + TCB_ERRNO],       0
 
+        ;--- 8a. Child gets its own page directory ---
+        ; The TCB copy above inherited the parent's TCB_CR3, but the directory
+        ; itself must be cloned from the PARENT (not the master): if the parent
+        ; already exec'd, its private program tables are the child's image.
+        push edi
+        mov eax, [edi + TCB_CR3]
+        call paging_clone_pd
+        pop edi
+        test eax, eax
+        jz   .fork_fail_pd
+        mov  [edi + TCB_CR3], eax
+
+        ;--- 8a-bis. Share the parent's user frames copy-on-write ---
+        ; Both directories keep pointing at the same frames, marked read-only;
+        ; the first write in either process copies its own private frame.
+        push edi
+        mov  eax, [edi + TCB_CR3]
+        call cow_fork_share             ; EAX = 0 ok, -1 OOM
+        pop  edi
+        test eax, eax
+        js   .fork_fail_cow
+
         ;--- 8b. Allocate child's private fd table page (copy parent's) ---
         push edi                        ; save child TCB
         call pmm_alloc_page             ; EAX = new page or 0
@@ -1817,12 +2430,16 @@ sys_fork:
         mov  dword [edi + TCB_FD_TABLE_PTR], 0
         jmp  .fork_fd_done
 .fork_have_fd_page:
-        ; Zero-copy parent fd table view (global fd_table) into child's private page
+        ; Copy the parent's live fd view (legacy + VFD) into the child's page
         push eax                        ; save child fd page addr
         push edi
         mov  edi, eax
         mov  esi, fd_table
         mov  ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep  movsd
+        mov  esi, vfs_fd_table
+        mov  ecx, FD_PAGE_VFD_BYTES / 4
         rep  movsd
         pop  edi
         pop  eax
@@ -1835,6 +2452,35 @@ sys_fork:
         mov  eax, [fork_child_pid_slot]
         mov  [esp + 28], eax        ; patch EAX in parent pushad frame
 
+        popad
+        iretd
+
+.fork_fail_pd:
+        ; Could not allocate the child's page directory. The TCB currently holds
+        ; the PARENT's PD (inherited by the copy): zero it so nothing frees the
+        ; parent's directory, free the slot, and release the kernel stack.
+        mov  edi, [fork_child_tcb]
+        mov  dword [edi + TCB_CR3], 0
+        mov  dword [edi + TCB_STATE], TASK_FREE
+        mov  eax, [fork_child_kstop]
+        sub  eax, 4096
+        call pmm_free_page
+        mov  dword [esp + 28], -1
+        popad
+        iretd
+
+.fork_fail_cow:
+        ; cow_fork_share could not privatise a page table (OOM). No PTE was
+        ; touched, so the child directory can simply be released.
+        mov  edi, [fork_child_tcb]
+        mov  eax, [edi + TCB_CR3]
+        call paging_free_pd
+        mov  dword [edi + TCB_CR3], 0
+        mov  dword [edi + TCB_STATE], TASK_FREE
+        mov  eax, [fork_child_kstop]
+        sub  eax, 4096
+        call pmm_free_page
+        mov  dword [esp + 28], -1
         popad
         iretd
 

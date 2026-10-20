@@ -80,6 +80,8 @@ hbfs_init:
         ; Init journal runtime state from superblock
         mov  eax, [hbfs_super_buf + HBFS_SB_JRNL_PTR]
         mov  [hbfs_journal_ptr], eax
+        mov  eax, [hbfs_super_buf + HBFS_SB_JRNL_EPOCH]
+        mov  [hbfs_journal_epoch], eax
         cmp  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 1
         jne  .hbfs_journal_clean    ; state=0: clean, skip recovery
         ; Dirty journal: replay UNDO log (restore pre-images)
@@ -195,6 +197,8 @@ hbfs_format:
         ; Init journal runtime state
         mov  dword [hbfs_journal_ptr],   0
         mov  dword [hbfs_journal_dirty],  0
+        ; The bitmap on disk was just rewritten from scratch
+        mov  dword [hbfs_bitmap_valid],   0
         pop  edi
         pop  esi
         pop  ecx
@@ -240,17 +244,87 @@ hbfs_format:
 ;=======================================================================
 
 ;-----------------------------------------------------------------------
-; hbfs_journal_begin — start a metadata transaction
-; Sets superblock journal state = 1 and resets the write pointer.
+;=======================================================================
+; CRC32C (Castagnoli) — used to detect torn journal records.
+;
+; A crash can land between writing a record's pre-image sector and its header,
+; or half-way through either. Without a checksum the header still looks valid
+; (magic + epoch match) and recovery would restore a garbage pre-image over a
+; live sector. The table is generated at assembly time, so the kernel carries
+; no runtime initialisation cost.
+;=======================================================================
+crc32c_table:
+%assign _crc_i 0
+%rep 256
+  %assign _crc_v _crc_i
+  %rep 8
+    %if _crc_v & 1
+      %assign _crc_v ((_crc_v >> 1) ^ 0x82F63B78)
+    %else
+      %assign _crc_v (_crc_v >> 1)
+    %endif
+  %endrep
+  dd _crc_v
+  %assign _crc_i _crc_i + 1
+%endrep
+
+;-----------------------------------------------------------------------
+; crc32c — checksum a buffer
+;   In : EAX = buffer, ECX = length in bytes
+;   Out: EAX = CRC32C
+;   Preserves everything except EAX.
+;-----------------------------------------------------------------------
+crc32c:
+        push ebx
+        push edx
+        push esi
+        push ecx
+        mov  esi, eax
+        mov  eax, 0xFFFFFFFF
+.crc_loop:
+        test ecx, ecx
+        jz   .crc_done
+        movzx ebx, byte [esi]
+        xor  ebx, eax
+        and  ebx, 0xFF                 ; index = (crc ^ byte) & 0xFF
+        shr  eax, 8
+        xor  eax, [crc32c_table + ebx * 4]
+        inc  esi
+        dec  ecx
+        jmp  .crc_loop
+.crc_done:
+        not  eax
+        pop  ecx
+        pop  esi
+        pop  edx
+        pop  ebx
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_journal_begin — start (or nest into) a metadata transaction
+;   Every begin must be paired with exactly one commit or abort.
+;   Nested calls only bump a depth counter: the outermost transaction owns
+;   the journal, so a helper that both allocates blocks (bitmap + superblock)
+;   and writes a directory entry still produces one atomic unit.
 ; All registers preserved.
 ;-----------------------------------------------------------------------
 hbfs_journal_begin:
         ; Skip if not a journalled filesystem (v2 or v3)
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
         jb   .hjb_done
+        inc  dword [hbfs_journal_depth]
+        cmp  dword [hbfs_journal_depth], 1
+        jne  .hjb_done              ; nested — the outer transaction owns it
+
         ; Reset pointer and set state in the in-memory superblock
-        mov  dword [hbfs_journal_ptr],   0
-        mov  dword [hbfs_journal_dirty],  1
+        mov  eax, [hbfs_journal_epoch]
+        inc  eax
+        mov  [hbfs_journal_epoch], eax
+        mov  [hbfs_super_buf + HBFS_SB_JRNL_EPOCH], eax
+        mov  dword [hbfs_journal_ptr],     0
+        mov  dword [hbfs_journal_dirty],   1
+        mov  dword [hbfs_journal_failed],  0
+        mov  dword [hbfs_journal_n_logged], 0
         mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 1
         ; Flush superblock to disk immediately (so crash leaves state=1)
         push eax
@@ -269,88 +343,137 @@ hbfs_journal_begin:
 ;-----------------------------------------------------------------------
 ; hbfs_journal_log_sector — save one sector's original content to journal
 ;   In:  EAX = disk LBA to log
+;   Out: CF = 0  logged (or journalling is not active for this write)
+;        CF = 1  journal full or I/O error; the transaction is marked failed
 ;   Logs 2 journal sectors: header + original data.
-;   All registers preserved.  Does nothing for v1 or if journal full.
+;   All registers preserved.
 ;-----------------------------------------------------------------------
 hbfs_journal_log_sector:
         ; Skip if not a journalled filesystem (v2 or v3)
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
-        jb   .hjls_done
+        jb   .hjls_ok
         cmp  dword [hbfs_journal_dirty], 1
-        jne  .hjls_done
+        jne  .hjls_ok
+        cmp  dword [hbfs_journal_failed], 0
+        jne  .hjls_fail
 
         pushad
 
-        ; Check there's room for 2 more sectors (need ptr+1 < HBFS_JOURNAL_SECTS-1)
+        ; Remember the target, then check whether this transaction already
+        ; logged it.
+        mov  [.hjls_lba], eax
+        mov  ecx, [hbfs_journal_n_logged]
+        xor  edx, edx
+.hjls_dup:
+        cmp  edx, ecx
+        jge  .hjls_dup_done
+        cmp  [hbfs_journal_logged + edx * 4], eax
+        je   .hjls_already
+        inc  edx
+        jmp  .hjls_dup
+.hjls_already:
+        ; Already logged: the existing record holds the pre-transaction content,
+        ; which is exactly what undo needs.
+        popad
+        clc
+        ret
+.hjls_dup_done:
+
+        ; Check there's room for 2 more sectors plus the commit marker
         mov  edx, [hbfs_journal_ptr]
         add  edx, 2
-        cmp  edx, HBFS_JOURNAL_SECTS
-        jge  .hjls_full             ; journal full — skip logging this sector
+        cmp  edx, HBFS_JOURNAL_SECTS - 1
+        jae  .hjls_full             ; journal full — caller must abort
 
-        ; Compute LBA of next journal slot
-        mov  edx, [hbfs_journal_ptr]
-        lea  edi, [HBFS_JOURNAL_LBA + edx]  ; journal write LBA
+        ; --- Read the live sector into the scratch pre-image slot ---
+        ; The pre-image must be captured before the new content is written, and
+        ; its CRC goes into the record header, so it is read first.
+        ; ata_read_sectors wants its destination in EDI. The old code left EDI
+        ; holding the journal LBA, so it read the target sector into absolute
+        ; address ~0x1180 (low memory) and then journalled whatever was there.
+        mov  eax, [.hjls_lba]
+        mov  ecx, 1
+        lea  edi, [hbfs_jrnl_buf + 512]
+        call ata_read_sectors
+        jc   .hjls_iofail
 
-        ; --- Write journal header sector ---
-        ; Use hbfs_block_buf (first 512 bytes) as the header sector
-        ; (caller is not currently doing file I/O, so this is safe)
-        mov  esi, hbfs_block_buf
-        push eax                    ; save target LBA
+        ; --- Store the pre-image in the journal (data sector first) ---
+        ; Writing the payload first means a crash between the two writes leaves
+        ; a record whose header is not yet valid, so recovery ignores it.
+        mov  eax, [hbfs_journal_ptr]
+        add  eax, HBFS_JOURNAL_LBA + 1
+        mov  ecx, 1
+        lea  esi, [hbfs_jrnl_buf + 512]
+        call ata_write_sectors
+        jc   .hjls_iofail
+
+        ; --- Build the record header, including the pre-image checksum ---
+        lea  eax, [hbfs_jrnl_buf + 512]
+        mov  ecx, 512
+        call crc32c
+        mov  esi, hbfs_jrnl_buf
+        mov  [esi + 16], eax            ; CRC32C of the pre-image sector
         mov  dword [esi + 0], HBFS_JRNL_MAGIC
         mov  dword [esi + 4], HBFS_JRNL_T_PRE
-        mov  eax, [esp]             ; target LBA
-        mov  [esi + 8], eax
-        mov  dword [esi + 12], 0    ; reserved
-        pop  eax
+        mov  eax, [.hjls_lba]
+        mov  [esi + 8], eax             ; target LBA
+        mov  eax, [hbfs_journal_epoch]
+        mov  [esi + 12], eax            ; transaction epoch
 
         ; Zero the rest of the header sector
-        push esi
         push edi
-        add  esi, 16
-        xor  ecx, ecx
-        mov  ecx, (512 - 16) / 4
-        push eax
+        lea  edi, [esi + 20]
+        mov  ecx, (512 - 20) / 4
         xor  eax, eax
         rep  stosd
-        pop  eax
         pop  edi
-        pop  esi
 
-        ; Write header to current journal slot
-        push eax
-        push ecx
-        mov  eax, edi
+        ; --- Write the header; the record becomes valid at this point ---
+        mov  eax, [hbfs_journal_ptr]
+        add  eax, HBFS_JOURNAL_LBA
         mov  ecx, 1
+        mov  esi, hbfs_jrnl_buf
         call ata_write_sectors
-        pop  ecx
-        pop  eax
+        jc   .hjls_iofail
 
-        ; --- Read and write the original data sector ---
-        inc  edi                    ; next journal sector
-
-        ; Read original sector into hbfs_block_buf+512
-        push eax
-        push ecx
-        mov  ecx, 1
-        lea  esi, [hbfs_block_buf + 512]
-        call ata_read_sectors       ; EAX = target LBA
-        ; Write original data to journal
-        mov  eax, edi
-        mov  ecx, 1
-        call ata_write_sectors
-        pop  ecx
-        pop  eax
-
-        ; Advance journal pointer by 2
+        ; Advance journal pointer by 2, and remember the target
+        mov  ecx, [hbfs_journal_n_logged]
+        cmp  ecx, 16
+        jge  .hjls_no_list
+        mov  eax, [.hjls_lba]
+        mov  [hbfs_journal_logged + ecx * 4], eax
+        inc  dword [hbfs_journal_n_logged]
+.hjls_no_list:
         add  dword [hbfs_journal_ptr], 2
         ; Update in-memory superblock ptr field (flushed at commit)
         mov  edx, [hbfs_journal_ptr]
         mov  [hbfs_super_buf + HBFS_SB_JRNL_PTR], edx
 
-.hjls_full:
         popad
-.hjls_done:
+        clc
         ret
+
+.hjls_full:
+        ; Journal full: refuse to write the sector. Marking the transaction
+        ; failed makes hbfs_meta_write abort (replay pre-images) instead of
+        ; leaving a half-logged mutation behind.
+        mov  dword [hbfs_journal_failed], 1
+        popad
+        stc
+        ret
+.hjls_iofail:
+        mov  dword [hbfs_journal_failed], 1
+        popad
+        stc
+        ret
+.hjls_ok:
+        clc
+        ret
+.hjls_fail:
+        stc
+        ret
+
+.hjls_lba: dd 0
 
 ;-----------------------------------------------------------------------
 ; hbfs_journal_commit — close a transaction
@@ -363,6 +486,17 @@ hbfs_journal_commit:
         cmp  dword [hbfs_journal_dirty], 1
         jne  .hjc_done
 
+        ; Only the outermost commit closes the transaction
+        dec  dword [hbfs_journal_depth]
+        cmp  dword [hbfs_journal_depth], 0
+        jg   .hjc_ret
+        mov  dword [hbfs_journal_depth], 0
+
+        ; A transaction that overflowed the journal is rolled back, not
+        ; committed: the mutations it could not log are still on disk.
+        cmp  dword [hbfs_journal_failed], 0
+        jne  .hjc_abort
+
         pushad
 
         ; Write commit marker at current journal pointer
@@ -371,11 +505,12 @@ hbfs_journal_commit:
         jge  .hjc_flush             ; no room — skip marker (still mark clean)
 
         lea  edi, [HBFS_JOURNAL_LBA + edx]
-        mov  esi, hbfs_block_buf
+        mov  esi, hbfs_jrnl_buf
         mov  dword [esi + 0], HBFS_JRNL_MAGIC
         mov  dword [esi + 4], HBFS_JRNL_T_COMMIT
         mov  dword [esi + 8], 0
-        mov  dword [esi + 12], 0
+        mov  eax, [hbfs_journal_epoch]
+        mov  [esi + 12], eax            ; epoch of the transaction being closed
         mov  eax, edi
         mov  ecx, 1
         call ata_write_sectors
@@ -384,6 +519,7 @@ hbfs_journal_commit:
         ; Reset journal state and flush superblock
         mov  dword [hbfs_journal_dirty], 0
         mov  dword [hbfs_journal_ptr],   0
+        mov  dword [hbfs_journal_n_logged], 0
         mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 0
         mov  dword [hbfs_super_buf + HBFS_SB_JRNL_PTR],   0
         mov  eax, HBFS_SUPERBLOCK_LBA
@@ -392,7 +528,53 @@ hbfs_journal_commit:
         call ata_write_sectors
 
         popad
+.hjc_ret:
 .hjc_done:
+        ret
+
+.hjc_abort:
+        call hbfs_journal_abort
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_journal_abort — roll the open transaction back
+;   Rewrites every pre-image logged so far, then clears the journal state.
+;   Safe to call when no transaction is open.
+; All registers preserved.
+;-----------------------------------------------------------------------
+hbfs_journal_abort:
+        cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
+        jb   .hja_done
+        pushad
+        mov  dword [hbfs_journal_depth], 0
+
+        ; Seal the log with a commit marker at the write pointer. Replay stops
+        ; at the first commit marker, so stale records left by an older
+        ; transaction (which sit beyond the pointer) can never be replayed.
+        mov  edx, [hbfs_journal_ptr]
+        cmp  edx, HBFS_JOURNAL_SECTS
+        jae  .hja_replay
+        lea  edi, [HBFS_JOURNAL_LBA + edx]
+        mov  esi, hbfs_jrnl_buf
+        mov  dword [esi + 0], HBFS_JRNL_MAGIC
+        mov  dword [esi + 4], HBFS_JRNL_T_COMMIT
+        mov  dword [esi + 8], 0
+        mov  eax, [hbfs_journal_epoch]
+        mov  [esi + 12], eax
+        mov  eax, edi
+        mov  ecx, 1
+        call ata_write_sectors
+
+.hja_replay:
+        call hbfs_journal_recover
+        mov  dword [hbfs_journal_dirty],  0
+        mov  dword [hbfs_journal_failed], 0
+        mov  dword [hbfs_journal_ptr],    0
+        mov  dword [hbfs_journal_n_logged], 0
+        ; The in-memory directory no longer matches the disk: force a reload.
+        mov  dword [dir_cache_lba], -1
+        popad
+.hja_done:
         ret
 
 ;-----------------------------------------------------------------------
@@ -414,35 +596,65 @@ hbfs_journal_recover:
         ; Read journal header sector at this index
         lea  eax, [HBFS_JOURNAL_LBA + ebx]
         mov  ecx, 1
-        lea  edi, [hbfs_block_buf + 1024]  ; temp at +1024 (doesn't stomp first 1024)
+        lea  edi, [hbfs_jrnl_buf]           ; 1 KB private scratch
         call ata_read_sectors
         jc   .hjr_done                     ; read error — stop recovery
 
         ; Check magic
-        cmp  dword [hbfs_block_buf + 1024], HBFS_JRNL_MAGIC
+        cmp  dword [hbfs_jrnl_buf], HBFS_JRNL_MAGIC
         jne  .hjr_done              ; no valid entry — done
 
+        ; Only records from the transaction that was interrupted may be
+        ; replayed. Older transactions leave their records in the circular log
+        ; with valid magic, and replaying those would roll the filesystem back
+        ; to an older state.
+        mov  eax, [hbfs_jrnl_buf + 12]
+        cmp  eax, [hbfs_journal_epoch]
+        jne  .hjr_done
+
         ; Check type
-        mov  edx, [hbfs_block_buf + 1024 + 4]
+        mov  edx, [hbfs_jrnl_buf + 4]
         cmp  edx, HBFS_JRNL_T_COMMIT
         je   .hjr_done              ; found commit — transaction was OK, stop undo
 
         cmp  edx, HBFS_JRNL_T_PRE
         jne  .hjr_next              ; unknown type — skip
 
-        ; Pre-image entry: read the data sector (index+1) and write to target LBA
-        mov  edi, [hbfs_block_buf + 1024 + 8]  ; target LBA
+        ; Pre-image entry: read the data sector (index+1) and write it back to
+        ; the target LBA. The target must be kept in memory: ata_read_sectors
+        ; takes its *destination* in EDI, so holding the target LBA in EDI
+        ; across the read made the write go to a low memory address and pushed
+        ; an unfilled buffer over the real sector (a replayed journal record
+        ; for the bitmap turned the whole bitmap into a journal header).
+        mov  eax, [hbfs_jrnl_buf + 8]  ; target LBA
+        mov  [.hjr_target], eax
         inc  ebx
         lea  eax, [HBFS_JOURNAL_LBA + ebx]
         mov  ecx, 1
-        lea  esi, [hbfs_block_buf + 512]
+        lea  edi, [hbfs_jrnl_buf + 512]      ; read destination
         call ata_read_sectors
         jc   .hjr_next              ; read error on data — skip
 
+        ; A record is only trustworthy if its payload matches the checksum in
+        ; its header. A torn write (header landed, payload did not) would
+        ; otherwise restore garbage over a live sector. A zero checksum means
+        ; the record predates the checksum (v2/v3 images), so it is accepted.
+        mov  eax, [hbfs_jrnl_buf + 16]
+        test eax, eax
+        jz   .hjr_crc_ok
+        push eax
+        lea  eax, [hbfs_jrnl_buf + 512]
+        mov  ecx, 512
+        call crc32c
+        pop  edx
+        cmp  eax, edx
+        jne  .hjr_done              ; torn record — stop here, restore nothing
+.hjr_crc_ok:
+
         ; Restore original content to target LBA
-        mov  eax, edi
+        mov  eax, [.hjr_target]
         mov  ecx, 1
-        mov  esi, hbfs_block_buf + 512
+        mov  esi, hbfs_jrnl_buf + 512
         call ata_write_sectors
 
 .hjr_next:
@@ -453,6 +665,12 @@ hbfs_journal_recover:
         ; Reset journal state
         mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 0
         mov  dword [hbfs_super_buf + HBFS_SB_JRNL_PTR],   0
+        mov  dword [hbfs_journal_dirty],   0
+        mov  dword [hbfs_journal_depth],   0
+        mov  dword [hbfs_journal_failed],  0
+        mov  dword [hbfs_journal_ptr],     0
+        ; Anything replayed came from disk, so the cached directory is stale.
+        mov  dword [dir_cache_lba], -1
         mov  eax, HBFS_SUPERBLOCK_LBA
         mov  ecx, 1
         mov  esi, hbfs_super_buf
@@ -460,6 +678,7 @@ hbfs_journal_recover:
 
         popad
         ret
+.hjr_target: dd 0
 ; Returns: CF set on read error
 hbfs_load_root_dir:
         pushad
@@ -487,6 +706,18 @@ hbfs_load_root_dir:
         mov edi, hbfs_dir_buf
         call ata_read_sectors
         jc .hlrd_err
+        ; The shadow must match what is on disk before anyone mutates the
+        ; buffer: hbfs_save_root_dir diffs the two to decide what to write.
+        push esi
+        push edi
+        push ecx
+        mov esi, hbfs_dir_buf
+        mov edi, hbfs_dir_shadow
+        mov ecx, HBFS_ROOT_DIR_SIZE / 4
+        rep movsd
+        pop ecx
+        pop edi
+        pop esi
         ; Update cache tag
         mov eax, [current_dir_lba]
         mov [dir_cache_lba], eax
@@ -503,15 +734,24 @@ hbfs_load_root_dir:
         ret
 
 ; Load bitmap from disk into hbfs_bitmap_buf
+; The bitmap is kept resident: every allocation used to read the whole 64 KB
+; bitmap from disk first, which dominated the cost of creating a file.
 ; Returns: CF set on read error
 hbfs_load_bitmap:
+        cmp dword [hbfs_bitmap_valid], 1
+        je  .hlb_cached
+
         pushad
         mov eax, HBFS_BITMAP_START
         mov ecx, HBFS_BITMAP_SECTS
         mov edi, hbfs_bitmap_buf
         call ata_read_sectors
         jc .hlb_err
+        mov dword [hbfs_bitmap_valid], 1
         popad
+        clc
+        ret
+.hlb_cached:
         clc
         ret
 .hlb_err:
@@ -521,24 +761,109 @@ hbfs_load_bitmap:
         stc
         ret
 
+;-----------------------------------------------------------------------
+; hbfs_meta_write — write metadata sectors under the journal
+;   In : EAX = LBA of first sector, ESI = buffer, ECX = sector count
+;   Out: CF = 0 written; CF = 1 failed (the transaction is already rolled back)
+;
+; Each sector's old content is logged before it is overwritten, so a crash
+; leaves either the old or the new state, never a mixture.
+; All registers preserved.
+;-----------------------------------------------------------------------
+hbfs_meta_write:
+        pushad
+        mov [.hmw_lba], eax
+        mov [.hmw_buf], esi
+        mov [.hmw_cnt], ecx
+.mhw_loop:
+        cmp dword [.hmw_cnt], 0
+        je  .mhw_ok
+        mov eax, [.hmw_lba]
+        call hbfs_journal_log_sector
+        jc  .mhw_fail
+        mov eax, [.hmw_lba]
+        mov ecx, 1
+        mov esi, [.hmw_buf]
+        call ata_write_sectors
+        jc  .mhw_fail
+        inc dword [.hmw_lba]
+        add dword [.hmw_buf], 512
+        dec dword [.hmw_cnt]
+        jmp .mhw_loop
+.mhw_ok:
+        popad
+        clc
+        ret
+.mhw_fail:
+        call hbfs_journal_abort
+        popad
+        stc
+        ret
+.hmw_lba: dd 0
+.hmw_buf: dd 0
+.hmw_cnt: dd 0
+
 ; Save current directory to disk
+; Only the sectors whose content differs from the on-disk shadow are written,
+; and each one is journaled. Rewriting the whole 128 KB directory for a single
+; entry change was slow (a `ls` of a big directory could take seconds) and
+; impossible to journal with a 16 KB undo log.
 ; Returns: CF set on write error
 hbfs_save_root_dir:
         pushad
+        call hbfs_journal_begin
         mov eax, [current_dir_lba]
-        mov ecx, [current_dir_sects]
+        mov [.hsrd_lba], eax
+        mov eax, [current_dir_sects]
+        mov [.hsrd_cnt], eax
+        mov dword [.hsrd_off], 0
+.hsrd_loop:
+        cmp dword [.hsrd_cnt], 0
+        je  .hsrd_done
+        ; Compare this 512-byte sector against the shadow
         mov esi, hbfs_dir_buf
+        add esi, [.hsrd_off]
+        mov edi, hbfs_dir_shadow
+        add edi, [.hsrd_off]
+        mov ecx, 512 / 4
+        repe cmpsd
+        je  .hsrd_next                  ; identical — nothing to write
+        ; Changed: log the pre-image, write the sector, update the shadow
+        mov eax, [.hsrd_lba]
+        call hbfs_journal_log_sector
+        jc  .hsrd_err
+        mov eax, [.hsrd_lba]
+        mov ecx, 1
+        mov esi, hbfs_dir_buf
+        add esi, [.hsrd_off]
         call ata_write_sectors
-        jc .hsrd_err
+        jc  .hsrd_err
+        mov esi, hbfs_dir_buf
+        add esi, [.hsrd_off]
+        mov edi, hbfs_dir_shadow
+        add edi, [.hsrd_off]
+        mov ecx, 512 / 4
+        rep movsd
+.hsrd_next:
+        inc dword [.hsrd_lba]
+        add dword [.hsrd_off], 512
+        dec dword [.hsrd_cnt]
+        jmp .hsrd_loop
+.hsrd_done:
+        call hbfs_journal_commit
         popad
         clc
         ret
 .hsrd_err:
+        call hbfs_journal_abort
         mov esi, msg_hbfs_dir_write_err
         call vga_print
         popad
         stc
         ret
+.hsrd_lba: dd 0
+.hsrd_cnt: dd 0
+.hsrd_off: dd 0
 
 ; Get max directory entries for current directory
 ; Returns: EAX = number of entries that fit in current directory
@@ -614,11 +939,8 @@ hbfs_alloc_blocks:
         pushad
         mov [.blocks_needed], ecx
 
-        ; Read bitmap
-        mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_BITMAP_SECTS
-        mov edi, hbfs_bitmap_buf
-        call ata_read_sectors
+        ; Read bitmap (served from the resident copy when valid)
+        call hbfs_load_bitmap
 
         ; Scan for N contiguous free bits
         ; v9.0: start from HBFS_JOURNAL_BLOCKS to skip journal reserved area
@@ -669,6 +991,7 @@ hbfs_alloc_blocks:
 
 .found_run:
         pop edx                 ; EDX = first free block
+        mov [.alloc_first], edx
 
         ; Mark all N blocks as used in bitmap
         mov esi, 0
@@ -688,31 +1011,50 @@ hbfs_alloc_blocks:
         jmp .mark_loop
 .mark_done:
 
-        ; Write bitmap back
-        push edx
-        mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_BITMAP_SECTS
-        mov esi, hbfs_bitmap_buf
-        call ata_write_sectors
-        pop edx
+        ; --- Persist the change as one journaled transaction ---
+        call hbfs_journal_begin
 
-        ; Update superblock free_blocks counter
-        push edx
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov edi, hbfs_super_buf
-        call ata_read_sectors
-        mov eax, [.blocks_needed]
+        ; Only the bitmap sectors covering [first, first+n) are dirty. The
+        ; bitmap is 64 KB and rewriting all of it for one allocation was the
+        ; single biggest cost of every metadata operation.
+        mov  eax, [.alloc_first]
+        shr  eax, 12                    ; first dirty bitmap sector index
+        mov  [.bitmap_sect], eax
+        mov  ecx, [.alloc_first]
+        add  ecx, [.blocks_needed]
+        dec  ecx
+        shr  ecx, 12                    ; last dirty sector index
+        sub  ecx, eax
+        inc  ecx                        ; sector count
+        mov  eax, [.bitmap_sect]
+        add  eax, HBFS_BITMAP_START
+        mov  esi, hbfs_bitmap_buf
+        mov  edx, [.bitmap_sect]
+        shl  edx, 9                     ; byte offset into the bitmap buffer
+        add  esi, edx
+        call hbfs_meta_write
+        jc   .alloc_fail
+
+        ; Update superblock free_blocks counter (in-memory copy is authoritative)
+        mov  eax, [.blocks_needed]
         sub [hbfs_super_buf + 12], eax   ; free_blocks -= allocated
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov esi, hbfs_super_buf
-        call ata_write_sectors
-        pop edx
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call hbfs_meta_write
+        jc   .alloc_fail
 
-        mov [esp + 28], edx    ; Return first block number via EAX
+        call hbfs_journal_commit
+
+        mov  eax, [.alloc_first]    ; Return first block number via EAX
+        mov  [esp + 28], eax
         popad
         clc
+        ret
+
+.alloc_fail:
+        popad
+        stc
         ret
 
 .occupied:
@@ -725,6 +1067,8 @@ hbfs_alloc_blocks:
         ret
 
 .blocks_needed: dd 0
+.alloc_first:   dd 0
+.bitmap_sect:   dd 0
 
 ; Allocate a single data block (convenience wrapper)
 ; Returns: EAX = block number, CF set if full
@@ -742,11 +1086,8 @@ hbfs_free_blocks:
         mov [.free_start], eax
         mov [.free_count], ecx
 
-        ; Read bitmap
-        mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_BITMAP_SECTS
-        mov edi, hbfs_bitmap_buf
-        call ata_read_sectors
+        ; Read bitmap (served from the resident copy when valid)
+        call hbfs_load_bitmap
 
         ; Clear bits for all blocks
         mov esi, 0
@@ -769,29 +1110,46 @@ hbfs_free_blocks:
         jmp .free_loop
 .free_done:
 
-        ; Write back
-        mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_BITMAP_SECTS
-        mov esi, hbfs_bitmap_buf
-        call ata_write_sectors
+        ; --- Persist the change as one journaled transaction ---
+        call hbfs_journal_begin
+
+        ; Only the bitmap sectors covering the freed range are dirty
+        mov  eax, [.free_start]
+        shr  eax, 12
+        mov  [.free_sect], eax
+        mov  ecx, [.free_start]
+        add  ecx, [.free_count]
+        dec  ecx
+        shr  ecx, 12
+        sub  ecx, eax
+        inc  ecx
+        mov  eax, [.free_sect]
+        add  eax, HBFS_BITMAP_START
+        mov  esi, hbfs_bitmap_buf
+        mov  edx, [.free_sect]
+        shl  edx, 9
+        add  esi, edx
+        call hbfs_meta_write
+        jc   .free_out
 
         ; Update superblock free_blocks counter
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov edi, hbfs_super_buf
-        call ata_read_sectors
-        mov eax, [.free_count]
+        mov  eax, [.free_count]
         add [hbfs_super_buf + 12], eax   ; free_blocks += freed
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov esi, hbfs_super_buf
-        call ata_write_sectors
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call hbfs_meta_write
+        jc   .free_out
 
+        call hbfs_journal_commit
+
+.free_out:
         popad
         ret
 
 .free_start: dd 0
 .free_count: dd 0
+.free_sect:  dd 0
 
 ; Free a single data block (convenience wrapper)
 ; EAX = block number
@@ -807,6 +1165,10 @@ hbfs_free_block:
 ; Returns: CF set on error
 hbfs_create_file:
         pushad
+        ; One transaction spans the block allocation (bitmap + superblock) and
+        ; the directory entry, so a crash can never leave allocated-but-orphan
+        ; blocks or an entry pointing at unallocated space.
+        call hbfs_journal_begin
         ; Save parameters to local variables
         mov [.save_size], ecx
         mov [.save_data], edi
@@ -903,12 +1265,18 @@ hbfs_create_file:
         call ata_write_sectors
         jc .write_fail
 
+        call hbfs_journal_commit
         popad
         clc
         ret
 
 .alloc_fail:
+        call hbfs_journal_abort
 .write_fail:
+        ; A failed file-data write must not leave the transaction open: an
+        ; uncommitted log would be replayed (undoing the metadata) long after
+        ; the caller has moved on.
+        call hbfs_journal_abort
         popad
         stc
         ret
@@ -923,6 +1291,7 @@ hbfs_create_file:
 ; Delete file entry (EDI already points to entry in hbfs_dir_buf)
 hbfs_delete_file_entry:
         pushad
+        call hbfs_journal_begin
         ; Free ALL data blocks (contiguous)
         mov eax, [edi + 260]    ; Start block
         mov ecx, [edi + 264]    ; Block count
@@ -939,6 +1308,7 @@ hbfs_delete_file_entry:
         pop edi
 
         call hbfs_save_root_dir
+        call hbfs_journal_commit
         popad
         ret
 
@@ -947,6 +1317,7 @@ hbfs_delete_file_entry:
 ; Returns: CF=0 success, CF=1 error
 hbfs_mkdir:
         pushad
+        call hbfs_journal_begin
         mov [.hm_name], esi
 
         call hbfs_load_root_dir
@@ -1015,13 +1386,20 @@ hbfs_mkdir:
         mov eax, [tick_count]
         mov [edi + DIRENT_CREATED], eax
         mov [edi + DIRENT_MODIFIED], eax
+        ; A new directory is rwxr-xr-x, owned by root. Without this the entry
+        ; kept mode 0, and fsck reported it as a legacy entry (and the
+        ; permission checks treat mode 0 as "root only").
+        mov word [edi + DIRENT_PERMS], HBFS_MODE_DIR_DEF
+        mov word [edi + DIRENT_OWNER], 0
         call hbfs_save_root_dir
+        call hbfs_journal_commit
 
         popad
         clc
         ret
 
 .hm_fail:
+        call hbfs_journal_abort
         popad
         stc
         ret
@@ -1233,17 +1611,22 @@ sys_rmdir:
         jne .srd_fail
         ; Save entry info
         mov [.srd_edi], edi
-        push dword [edi + DIRENT_START_BLOCK]
-        push dword [edi + DIRENT_BLOCK_COUNT]
-        ; Check directory is empty: read its block and scan for non-free entries
-        mov eax, [edi + DIRENT_START_BLOCK]
+        mov ebp, [edi + DIRENT_START_BLOCK]
+        mov ebx, [edi + DIRENT_BLOCK_COUNT]
+        test ebx, ebx
+        jle .srd_fail
+
+        ; Check every block of the directory, not just the first 4 KB.
+        ; Subdirectories are 16 blocks / 224 entries.
+.srd_scan_block:
+        mov eax, ebp
         imul eax, HBFS_SECTORS_PER_BLK
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
         call ata_read_sectors
-        jc .srd_fail_pop
-        ; Scan the first block for any used entries
+        jc .srd_fail
+
         mov edi, hbfs_block_buf
         mov ecx, HBFS_BLOCK_SIZE / HBFS_DIR_ENTRY_SIZE
 .srd_scan:
@@ -1251,9 +1634,16 @@ sys_rmdir:
         jne .srd_notempty
         add edi, HBFS_DIR_ENTRY_SIZE
         loop .srd_scan
-        ; Directory is empty — free its blocks
-        pop ecx                 ; block count
-        pop eax                 ; start block
+
+        inc ebp
+        dec ebx
+        jnz .srd_scan_block
+
+        ; Directory is empty — free all of its blocks.
+        mov eax, [.srd_edi]
+        mov eax, [eax + DIRENT_START_BLOCK]
+        mov ecx, [.srd_edi]
+        mov ecx, [ecx + DIRENT_BLOCK_COUNT]
         call hbfs_free_blocks
         ; Reload parent directory and zero the entry
         call hbfs_load_root_dir
@@ -1266,9 +1656,6 @@ sys_rmdir:
         popad
         iretd
 .srd_notempty:
-.srd_fail_pop:
-        pop ecx
-        pop eax
 .srd_fail:
         mov dword [esp + 28], -1
         popad
@@ -1780,6 +2167,7 @@ hbfs_check_access:
 ;-----------------------------------------------------------------------
 sys_chmod_v3:
         pushad
+        call hbfs_journal_begin
         ; Validate user pointer
         mov eax, ebx
         call validate_user_ptr
@@ -1799,24 +2187,25 @@ sys_chmod_v3:
         mov dword [hbfs_super_buf + 4], HBFS_VERSION_V3
         ; Enable permission feature flag
         or  dword [hbfs_super_buf + HBFS_SB_FEATURES], HBFS_FEAT_PERMS
-        ; Write updated superblock
-        push eax
+        ; Write updated superblock (journaled: it carries the feature flag)
         mov  eax, HBFS_SUPERBLOCK_LBA
         mov  ecx, 1
         mov  esi, hbfs_super_buf
-        call ata_write_sectors
-        pop  eax
+        call hbfs_meta_write
+        jc   .schmod_fail
 
 .schmod_flush:
         ; Write the modified directory entry back to disk
         call hbfs_flush_dir_entry   ; EDI=entry, EAX=entry# -> writes sector
         jc .schmod_fail
 
+        call hbfs_journal_commit
         mov dword [esp + 28], 0    ; EAX in saved pushad frame
         popad
         iretd
 
 .schmod_fail:
+        call hbfs_journal_abort
         mov dword [esp + 28], -1
         popad
         iretd
@@ -1828,6 +2217,7 @@ sys_chmod_v3:
 ;-----------------------------------------------------------------------
 sys_chown_v3:
         pushad
+        call hbfs_journal_begin
         mov eax, ebx
         call validate_user_ptr
         jc .schown_fail
@@ -1849,16 +2239,18 @@ sys_chown_v3:
         mov  eax, HBFS_SUPERBLOCK_LBA
         mov  ecx, 1
         mov  esi, hbfs_super_buf
-        call ata_write_sectors
+        call hbfs_meta_write
         pop  eax
 
 .schown_flush:
         call hbfs_flush_dir_entry
         jc .schown_fail
+        call hbfs_journal_commit
         mov dword [esp + 28], 0
         popad
         iretd
 .schown_fail:
+        call hbfs_journal_abort
         mov dword [esp + 28], -1
         popad
         iretd
@@ -1873,95 +2265,76 @@ sys_chown_v3:
 ;-----------------------------------------------------------------------
 hbfs_xattr_get:
         pushad
+        mov [.hxg_entry], ebx
+        mov [.hxg_key], ecx
+        mov [.hxg_val], edx
+        mov [.hxg_max], esi
+
         movzx eax, word [ebx + HBFS_DE_XATTR_COUNT]
         test eax, eax
         jz .hxg_notfound
-
-        mov edi, [ebx + HBFS_DE_XATTR_LBA]
-        test edi, edi
+        mov eax, [ebx + HBFS_DE_XATTR_LBA]
+        test eax, eax
         jz .hxg_notfound
 
-        ; Load xattr block from disk (edi = absolute LBA already)
-        push eax
-        mov eax, edi
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
         call ata_read_sectors
-        pop eax
         jc .hxg_notfound
 
-        ; Scan entries for matching key
         mov edi, hbfs_block_buf
-        xor ecx, ecx
+        mov ecx, [.hxg_entry]
+        movzx ecx, word [ecx + HBFS_DE_XATTR_COUNT]
+        xor edx, edx                    ; slot index
 .hxg_loop:
-        cmp ecx, [ebx + HBFS_DE_XATTR_COUNT + 0]   ; word compare
+        cmp edx, ecx
         jge .hxg_notfound
-        ; Compare key
-        push esi
-        push edi
+        cmp byte [edi], 0
+        je .hxg_notfound                ; free slot: key is absent
         push ecx
-        mov esi, ecx            ; use ECX for str compare
-        mov esi, ebx            ; restore: key in caller ECX param
-        ; Note: EBX, ECX, EDX are from the caller (not preserved by pushad)
-        ; This function uses non-standard internal reg usage; fix-up:
-        ; The caller's ECX = key_ptr, EDX = val_buf, ESI = max
-        ; After pushad, saved regs are on stack; original EBX/ECX/EDX/ESI still accessible
-        ; For simplicity, compare via helper that takes ESI=a EDI=b
-        pop ecx
+        push edx
+        push edi
+        mov esi, [.hxg_key]
+        call str_compare                ; ESI=requested, EDI=stored
         pop edi
-        pop esi
-        push edi
-        mov esi, [esp + 12]     ; original ECX (key_ptr) from pushad frame offset
-        ; Simpler approach: inline compare
-        push ecx
-        mov ecx, HBFS_XATTR_KEY_LEN - 1
-        push esi
-        push edi
-        ; edi = current key in xattr block
-.hxg_cmp:
-        lodsb
-        cmp al, [edi]
-        jne .hxg_cmp_ne
-        inc edi
-        test al, al
-        jz .hxg_cmp_match
-        loop .hxg_cmp
-.hxg_cmp_match:
-        pop edi
-        pop esi
+        pop edx
         pop ecx
-        ; Match found — copy value to EDX buf up to ESI max bytes
-        add edi, HBFS_XATTR_KEY_LEN   ; edi -> value field
-        push edi
+        jz .hxg_found
+        add edi, HBFS_XATTR_ENTRY_SIZE
+        inc edx
+        jmp .hxg_loop
+
+.hxg_found:
+        add edi, HBFS_XATTR_KEY_LEN     ; EDI -> value field
+        mov esi, edi                    ; ESI = value source
+        mov edi, [.hxg_val]             ; EDI = caller buffer
+        mov ecx, [.hxg_max]
         xor eax, eax
+        test ecx, ecx
+        jz .hxg_copy_done
 .hxg_copy:
-        cmp eax, esi
+        cmp eax, ecx
         jge .hxg_copy_done
-        mov bl, [edi + eax]
-        mov [edx + eax], bl
-        test bl, bl
+        mov dl, [esi + eax]
+        mov [edi + eax], dl
+        test dl, dl
         jz .hxg_copy_done
         inc eax
         jmp .hxg_copy
 .hxg_copy_done:
-        pop edi
-        mov [esp + 28], eax    ; return length in EAX slot of pushad
+        mov [esp + 28], eax             ; return length
         popad
         ret
-
-.hxg_cmp_ne:
-        pop edi
-        pop esi
-        pop ecx
-        pop edi                ; restore from outer push
-        add edi, HBFS_XATTR_ENTRY_SIZE   ; advance to next entry
-        inc ecx
-        jmp .hxg_loop
 
 .hxg_notfound:
         mov dword [esp + 28], -1
         popad
         ret
+
+.hxg_entry: dd 0
+.hxg_key:   dd 0
+.hxg_val:   dd 0
+.hxg_max:   dd 0
 
 ;-----------------------------------------------------------------------
 ; hbfs_xattr_set — write an extended attribute (creates if not exists)
@@ -1992,11 +2365,23 @@ hbfs_xattr_set:
         rep stosd
         pop eax
 
-        ; Store the LBA (convert block# to LBA)
+        ; Store the LBA (convert block# to LBA). hbfs_alloc_block returns a
+        ; data-block number; its LBA is DATA_START + block*8. Adding the
+        ; journal offset here pointed four blocks past the allocated block.
         mov edi, eax
         imul edi, HBFS_SECTORS_PER_BLK
-        add edi, HBFS_DATA_START + HBFS_JOURNAL_SECTS
+        add edi, HBFS_DATA_START
         mov [ebx + HBFS_DE_XATTR_LBA], edi
+
+        ; Persist the zeroed block before the read-back below, otherwise the
+        ; free-slot scan sees whatever stale sectors were on disk.
+        push edi
+        mov eax, edi
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov esi, hbfs_block_buf
+        call ata_write_sectors
+        pop edi
+        jc .hxs_fail_pop
 
         ; Enable xattr feature flag in superblock
         or  dword [hbfs_super_buf + HBFS_SB_FEATURES], HBFS_FEAT_XATTR
@@ -2027,14 +2412,10 @@ hbfs_xattr_set:
         je .hxs_write_here
         ; Compare stored key with requested key
         push ecx
-        push esi
         push edi
         mov esi, [.hxs_key_ptr]
-        mov ecx, HBFS_XATTR_KEY_LEN
-        cld
-        repe cmpsb
+        call str_compare
         pop edi
-        pop esi
         pop ecx
         je .hxs_key_match
         ; Keys differ: advance to next slot
@@ -2171,47 +2552,9 @@ hbfs_find_entry:
 ; and does a read-modify-write to preserve other entries in the sector.
 ;-----------------------------------------------------------------------
 hbfs_flush_dir_entry:
-        pushad
-        ; Compute: LBA = HBFS_ROOT_DIR_START + (entry# * HBFS_DIR_ENTRY_SIZE) / 512
-        mov ebx, eax
-        imul ebx, HBFS_DIR_ENTRY_SIZE       ; byte offset
-        mov ecx, 512
-        xor edx, edx
-        div ecx                              ; EAX = sector offset, EDX = byte-in-sector
-        add eax, HBFS_ROOT_DIR_START         ; absolute LBA
-
-        ; Read the 512-byte sector
-        push eax
-        mov edi, hbfs_sector_rw_buf
-        mov ecx, 1
-        call ata_read_sectors
-        pop eax
-        jc .hfde_fail
-
-        ; Patch the entry within the sector
-        ; entry_offset_in_sector = (orig_entry# * HBFS_DIR_ENTRY_SIZE) mod 512
-        push eax
-        mov eax, [esp + 8]           ; original EAX (entry index) from pushad frame
-        imul eax, HBFS_DIR_ENTRY_SIZE
-        xor edx, edx
-        mov ecx, 512
-        div ecx                      ; EDX = offset within sector
-        pop eax
-
-        mov esi, [esp + 4]           ; original EDI (entry ptr) from pushad frame
-        lea edi, [hbfs_sector_rw_buf + edx]
-        mov ecx, HBFS_DIR_ENTRY_SIZE
-        rep movsb
-
-        ; Write sector back
-        mov ecx, 1
-        mov esi, hbfs_sector_rw_buf
-        call ata_write_sectors
-        jc .hfde_fail
-        popad
-        clc
-        ret
-.hfde_fail:
-        popad
-        stc
-        ret
+        ; Callers mutate the entry in hbfs_dir_buf and then ask for it to be
+        ; persisted. hbfs_save_root_dir writes only the sectors that differ from
+        ; the on-disk shadow — for a single entry that is exactly one 512-byte
+        ; sector — and journals it. (This function used to do its own
+        ; read-modify-write, which ignored current_dir_lba entirely.)
+        jmp hbfs_save_root_dir
