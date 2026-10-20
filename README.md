@@ -364,7 +364,7 @@ ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on A
 | Metric | Value |
 | -------- | ------- |
 | Kernel source | Entry file + 30 modular include files |
-| Syscalls | 183 (via `INT 0x80`) |
+| Syscalls | 185 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
 | User programs | 235 assembly sources built by the Makefile |
 | Bundled samples | 37 (2 NASM + 18 C + 11 Perl + 6 BASIC) in `/samples` |
