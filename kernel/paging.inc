@@ -312,6 +312,18 @@ isr_page_fault:
         pop  ecx
         pop  eax
 
+        ; A user-mode fault while Burrows is up is not fatal: kill the
+        ; application and leave the desktop running. Kernel faults, and faults
+        ; when no desktop is up, keep the reporting path below.
+        cmp  byte [gui_desktop_active], 1
+        jne  .pf_show_error
+        mov  eax, [esp + 8]             ; saved CS
+        test eax, 3
+        jz   .pf_show_error
+        mov  eax, [pf_eip]
+        mov  [exc_eip], eax
+        call gui_fault_recover          ; never returns
+
 .pf_show_error:
         pushad
 

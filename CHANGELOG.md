@@ -32,6 +32,14 @@ routed by focus and the desktop never blocking on a child program.
   windows on the current workspace with the newly focused one highlighted.
 - **Virtual workspaces** — four workspaces with a taskbar indicator; switching focuses
   the topmost window on the destination workspace.
+- **Crash resilience** — a ring 3 fault in a GUI application no longer takes the
+  machine down. The kernel checks the faulting CS, tears down only that task, posts a
+  toast naming the program and the faulting EIP, and returns to the desktop with the
+  remaining apps intact. Kernel faults, and faults with no desktop running, still take
+  the reporting path that returns to the shell.
+- **Focus handoff** — destroying the focused window hands input to the topmost window
+  on the workspace instead of leaving the desktop with no keyboard owner, so closing an
+  app (or losing it to a fault) never makes the desktop deaf.
 - **Leaving the desktop is safe** — `SYS_GUI/GUI_EXIT_DESKTOP` (31) returns to the shell
   and `sched_kill_all_tasks` frees every remaining task. Previously surviving GUI tasks
   kept drawing over the restored text console, leaving a green screen.

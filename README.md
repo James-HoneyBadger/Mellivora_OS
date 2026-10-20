@@ -114,6 +114,9 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 - **Launcher and shortcuts** — `F1` launcher with search and Exit Desktop, `F2`
   terminal, `Alt+Tab` window cycling with a switcher overlay, `Ctrl+C` abort to desktop;
   desktop shortcuts work even with no window focused
+- **Crash containment** — a user-mode fault kills only that application: the kernel
+  reaps its windows, reports the fault as a desktop notification, and hands focus to the
+  next window
 - **Clean teardown** — `SYS_GUI/GUI_EXIT_DESKTOP` returns to the text shell and reclaims
   every task, so a GUI app can never outlive the desktop
 

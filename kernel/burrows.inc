@@ -242,6 +242,111 @@ gui_desktop_loop:
         ; Use shell_main unconditionally — it's always safe.
         jmp shell_main
 
+;---------------------------------------
+; gui_fault_recover - a ring 3 GUI app faulted; kill it, keep the desktop
+;
+; Entered from the exception handlers with the faulting task's kernel stack
+; below us and interrupts off. Never returns: control goes back to the
+; desktop loop, which repaints without the dead window.
+;---------------------------------------
+gui_fault_recover:
+        cli
+        mov esp, KERNEL_STACK
+
+        mov dword [bg_exit_code], 0x80000000
+        call gui_fault_message
+
+        ; Save the dying task's fd view and install the shell's.
+        call sched_get_current_task
+        test eax, eax
+        jz .gfr_no_task
+        mov edi, eax
+        xor ebx, ebx
+        call sched_swap_fd_tables
+        ; Tear the task down: this also reaps its windows through
+        ; gui_cleanup_pid, so the desktop repaints without them.
+        call sched_exit_task
+.gfr_no_task:
+        call sched_restore_shell_fds
+        xor eax, eax
+        call sched_apply_cr3
+        mov dword [tss_struct + 4], KERNEL_STACK
+        mov dword [tty_fg_pgid], -1
+        mov byte [program_running], 0
+        call shell_redir_reset
+
+        ; Post the toast after the teardown so the notification is not
+        ; cleared along with the app's windows.
+        mov esi, gui_fault_msg
+        mov edx, 0x00B03030
+        call gui_notify
+
+        sti
+        jmp gui_desktop_resume
+
+;---------------------------------------
+; gui_fault_message - build "<task> fault @ 0x<eip>" for the toast
+;---------------------------------------
+gui_fault_message:
+        pushad
+        mov edi, gui_fault_msg
+
+        ; Task name, if the scheduler can find one
+        call sched_get_current_task
+        test eax, eax
+        jz .gfm_no_name
+        lea esi, [eax + TCB_NAME]
+        mov ecx, 15
+.gfm_name:
+        lodsb
+        test al, al
+        jz .gfm_name_done
+        stosb
+        dec ecx
+        jnz .gfm_name
+        jmp .gfm_name_done
+.gfm_no_name:
+        mov esi, gui_str_fault_anon
+        call gui_str_copy_edi
+.gfm_name_done:
+        mov esi, gui_str_fault_at
+        call gui_str_copy_edi
+
+        ; EIP as 8 hex digits
+        mov eax, [exc_eip]
+        mov ecx, 8
+.gfm_hex:
+        rol eax, 4
+        mov ebx, eax
+        and ebx, 0x0F
+        cmp bl, 10
+        jb .gfm_digit
+        add bl, 'A' - 10 - '0'
+.gfm_digit:
+        add bl, '0'
+        mov [edi], bl
+        inc edi
+        dec ecx
+        jnz .gfm_hex
+        mov byte [edi], 0
+        popad
+        ret
+
+; gui_str_copy_edi - append a null-terminated string at EDI
+gui_str_copy_edi:
+        lodsb
+        test al, al
+        jz .gsc_done
+        stosb
+        jmp gui_str_copy_edi
+.gsc_done:
+        mov byte [edi], 0
+        ret
+
+gui_str_fault_anon: db "Application", 0
+gui_str_fault_at:   db " fault @ 0x", 0
+gui_fault_msg:      times 48 db 0
+
 gui_desktop_resume:
         ; Reached when an external GUI app exits (SYS_EXIT -> here)
         ; Stack was reset to KERNEL_STACK by sys_exit
@@ -2612,7 +2717,8 @@ gui_destroy_window_n:
 .dw_focus:
         cmp edx, [gui_focused_win]
         jne .dw_done
-        mov dword [gui_focused_win], -1
+        ; Hand input to the next window instead of leaving the desktop deaf.
+        call gui_focus_topmost
 .dw_done:
         popad
         ret
@@ -2883,38 +2989,50 @@ gui_set_workspace:
         and eax, 3
         mov [gui_active_workspace], al
         ; Focus the topmost window that lives on the new workspace.
-        mov [gui_focused_win], -1
+        call gui_focus_topmost
+        popad
+        ret
+
+;---------------------------------------
+; gui_focus_topmost - focus the highest-z window on the active workspace
+;
+; Used after a workspace switch and whenever the focused window goes away,
+; so keyboard input always has an owner.
+;---------------------------------------
+gui_focus_topmost:
+        pushad
+        mov dword [gui_focused_win], -1
         xor ecx, ecx
-        mov edx, -1            ; best window index
-        mov ebx, 0             ; best z
-.sw_scan:
+        mov edx, -1             ; best window index
+        xor ebx, ebx            ; best z (window z values start at 1)
+.ft_scan:
         cmp ecx, MAX_WINDOWS
-        jge .sw_scan_done
+        jge .ft_scan_done
         mov esi, ecx
         imul esi, WIN_STRUCT_SIZE
         add esi, gui_win_table
         mov ax, [esi + WIN_FLAGS]
         and ax, 0x03
         cmp ax, 0x03
-        jne .sw_next
+        jne .ft_next
         movzx eax, byte [esi + WIN_WORKSPACE]
         cmp al, 0xFF
-        je .sw_next
+        je .ft_next
         cmp al, [gui_active_workspace]
-        jne .sw_next
+        jne .ft_next
         cmp [esi + WIN_Z], ebx
-        jbe .sw_next
+        jbe .ft_next
         mov ebx, [esi + WIN_Z]
         mov edx, ecx
-.sw_next:
+.ft_next:
         inc ecx
-        jmp .sw_scan
-.sw_scan_done:
+        jmp .ft_scan
+.ft_scan_done:
         cmp edx, -1
-        je .sw_done
+        je .ft_done
         mov eax, edx
         call gui_focus_window
-.sw_done:
+.ft_done:
         popad
         ret
 

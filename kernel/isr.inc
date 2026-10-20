@@ -13,8 +13,19 @@ isr_exception_noerr:
         push eax
         mov eax, [esp + 4]      ; EIP is at esp+4 (after our push eax)
         mov [exc_eip], eax
+        mov eax, [esp + 8]      ; CS tells us whether ring 3 was running
+        mov [exc_cs], eax
         pop eax
 
+        ; A user-mode fault while Burrows is up is not fatal: kill just that
+        ; application and let the desktop carry on.
+        cmp byte [gui_desktop_active], 1
+        jne .exc_noerr_body
+        test dword [exc_cs], 3
+        jz .exc_noerr_body
+        call gui_fault_recover          ; never returns
+
+.exc_noerr_body:
         pushad
         ; Make the report visible: leave VBE for text mode, whether the fault
         ; came from the desktop or from a full-screen graphics program.
@@ -53,8 +64,19 @@ isr_exception_err:
         mov [exc_eip], eax
         mov eax, [esp + 4]      ; Error code at esp+4
         mov [exc_errcode], eax
+        mov eax, [esp + 12]     ; CS tells us whether ring 3 was running
+        mov [exc_cs], eax
         pop eax
 
+        ; A user-mode fault while Burrows is up is not fatal: kill just that
+        ; application and let the desktop carry on.
+        cmp byte [gui_desktop_active], 1
+        jne .exc_err_body
+        test dword [exc_cs], 3
+        jz .exc_err_body
+        call gui_fault_recover          ; never returns
+
+.exc_err_body:
         pushad
         ; Make the report visible: leave VBE for text mode, whether the fault
         ; came from the desktop or from a full-screen graphics program.

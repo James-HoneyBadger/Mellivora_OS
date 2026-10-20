@@ -734,6 +734,7 @@ redir_in_buf:   resb BATCH_BUFFER_SIZE
 
 exc_eip:        resd 1          ; Saved EIP from exception
 exc_errcode:    resd 1          ; Saved error code from exception
+exc_cs:         resd 1          ; Saved CS: ring 3 faults can be recovered
 
 hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (64 * 256 = 16KB)
 hist_count:     resd 1          ; Number of entries in history

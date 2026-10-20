@@ -1320,6 +1320,15 @@ launcher or a document window can open a second app and keep running:
 
 Desktop shortcuts are handled by the kernel even when no window has focus.
 
+### Faults are contained
+
+Burrows treats a user-mode fault in an application as an application failure, not an
+operating system failure. The kernel kills the faulting task, destroys its windows,
+posts a notification naming the program and the faulting instruction pointer, and keeps
+the desktop running. Test this by launching an app that writes to an unmapped address;
+the desktop stays up, the other windows keep working, and the crashed app's taskbar
+entry disappears.
+
 ### Leaving the desktop
 
 Press `Escape` with no menu open, use the start menu, or call `gui_quit_desktop` to return
