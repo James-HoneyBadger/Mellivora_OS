@@ -51,12 +51,24 @@ routed by focus and the desktop never blocking on a child program.
 - **Focus handoff** — destroying the focused window hands input to the topmost window
   on the workspace instead of leaving the desktop with no keyboard owner, so closing an
   app (or losing it to a fault) never makes the desktop deaf.
+- **Notification centre** — every toast is kept in an 8-entry history ring; `F3` opens a
+  panel listing recent notifications newest-first with the colour each was posted with,
+  even after the toast itself has expired.
+- **16 KB clipboard** — `SYS_CLIPBOARD_COPY`/`PASTE` moved from 4 KB to 16 KB, enough to
+  move a source file or a large log between applications.
 - **Leaving the desktop is safe** — `SYS_GUI/GUI_EXIT_DESKTOP` (31) returns to the shell
   and `sched_kill_all_tasks` frees every remaining task. Previously surviving GUI tasks
   kept drawing over the restored text console, leaving a green screen.
 - **Polish** — gradient wallpaper, taskbar title truncation, launcher singleton via
   title match, redesigned launcher (search box with caret, list panel, footer hints,
   visible Exit Desktop) that closes after launching.
+
+### Testing
+
+- **Automated desktop regression test** — `tests/test_desktop.py` (wired into `make check`
+  as `check-desktop`) boots QEMU headless, enters Burrows, launches a terminal and a
+  second app, exercises `Alt+Tab`, `F3`, `Ctrl+Alt+1..4` and Exit Desktop, and asserts on
+  kernel COM1 markers, screendump video modes and the absence of faults.
 
 ## Unreleased - Foreground process model
 

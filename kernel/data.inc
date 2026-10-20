@@ -1087,7 +1087,7 @@ sb16_format:      resd 1          ; Format flags
 burrows_cfg_buf:  resb 4096       ; one HBFS block, the read path fills it whole
 
 ; Clipboard
-clipboard_buf:    resb 4096       ; 4 KB clipboard buffer
+clipboard_buf:    resb 16384      ; 16 KB clipboard buffer (cross-app paste)
 clipboard_len:    resd 1          ; Current clipboard content length
 
 ; dmesg ring buffer (64 entries × 128 bytes = 8192 bytes)

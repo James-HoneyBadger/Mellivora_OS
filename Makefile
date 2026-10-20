@@ -122,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime crash-test
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime crash-test
 
 all: $(IMAGE)
 
@@ -331,6 +331,11 @@ check-boot: $(POPULATE_STAMP)
 check-runtime: $(POPULATE_STAMP)
 	@RUNTIME_ALLOW_SKIP=1 bash tests/test_runtime.sh $(IMAGE)
 
+# Burrows desktop: boots into VBE graphics, launches apps, and checks that the
+# desktop survives Alt+Tab, workspace switches and Exit Desktop.
+check-desktop: $(POPULATE_STAMP)
+	@DESKTOP_ALLOW_SKIP=1 python3 tests/test_desktop.py $(IMAGE)
+
 # Host-side HBFS validator: superblock, bitmap, directory tree, xattrs, journal.
 fsck: $(POPULATE_STAMP) tools/fsck_hbfs.py
 	@python3 tools/fsck_hbfs.py $(IMAGE)
@@ -345,7 +350,7 @@ crash-test: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
 		--iterations $(CRASH_ITERS)
 
 # Run regression tests (requires full build)
-check: full check-samples check-boot check-runtime fsck
+check: full check-samples check-boot check-runtime check-desktop fsck
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -602,6 +607,7 @@ help:
 	@echo ""
 	@echo "  Test & Info"
 	@echo "    make check        Run regression suite"
+	@echo "    make check-desktop Run the Burrows desktop QEMU test"
 	@echo "    make crash-test   Kill QEMU at random points and require fsck to pass (HBFS journal)"
 	@echo "    make lint         Run contract and NASM source lint checks"
 	@echo "    make validate-version Validate repo version strings for the current release"

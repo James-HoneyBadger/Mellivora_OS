@@ -584,6 +584,12 @@ Coordinates are relative to the window's content area: `(0,0)` is the top-left p
 below the title bar. Drawing to a window you do not own returns an error and changes
 nothing.
 
+### Clipboard
+
+`SYS_CLIPBOARD_COPY` (55) stores up to 16 KB for any application to read back with
+`SYS_CLIPBOARD_PASTE` (56), which returns the number of bytes copied and never writes
+past the caller's buffer.
+
 ### Events & Compositing
 
 | Function | Input | Output | Description |

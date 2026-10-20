@@ -2116,15 +2116,15 @@ sys_setdate:
 ;---------------------------------------
 ; sys_clipboard_copy - Copy data to clipboard
 ;   EBX = source buffer
-;   ECX = length (max 4096)
+;   ECX = length (max 16384)
 ; Returns: EAX = 0
 ;---------------------------------------
 sys_clipboard_copy:
         pushad
-        ; Clamp length to 4096
-        cmp ecx, 4096
+        ; Clamp length to the clipboard buffer size
+        cmp ecx, 16384
         jbe .cc_ok
-        mov ecx, 4096
+        mov ecx, 16384
 .cc_ok:
         mov [clipboard_len], ecx
         mov esi, ebx

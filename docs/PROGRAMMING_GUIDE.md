@@ -1318,6 +1318,7 @@ launcher or a document window can open a second app and keep running:
 | `Alt+Left` / `Alt+Right` | Tile the focused window to the left / right half |
 | `Alt+Up` / `Alt+Down` | Maximize / restore the focused window |
 | `Alt+F4` | Ask the focused window to close (the app receives `EVT_CLOSE`) |
+| `F3` | Toggle the notification centre (history of recent notifications) |
 | `Ctrl+Alt+1`..`4` | Switch virtual workspace |
 | `Ctrl+C` | Abort the focused app and return to the desktop |
 

@@ -215,6 +215,10 @@ gui_desktop_main:
         xor edx, edx           ; default color
         call gui_notify
 
+        ; Test/diagnostic markers on COM1 (regression tests key off these).
+        mov esi, burrows_log_up
+        call serial_print
+
 gui_desktop_loop:
         ; Track idle time / trigger screensaver
         call scr_idle_tick
@@ -238,6 +242,8 @@ gui_desktop_loop:
 .desktop_exit:
 
         ; --- Exit desktop ---
+        mov esi, burrows_log_down
+        call serial_print
         call gui_exit_desktop
         ; If we were launched normally, ret works.
         ; If stack was reset by sys_exit after an app, jump to shell.
@@ -1422,6 +1428,7 @@ gui_compose:
         call gui_draw_ctx_menu
 .no_ctx:
         call gui_draw_notifications
+        call gui_draw_notify_center
         call gui_draw_switcher
         call gui_draw_cursor
         call gui_flip
@@ -3050,6 +3057,15 @@ gui_set_workspace:
         pushad
         and eax, 3
         mov [gui_active_workspace], al
+        mov esi, burrows_log_ws
+        call serial_print
+        movzx eax, byte [gui_active_workspace]
+        add al, '1'
+        call serial_putchar
+        mov al, 13
+        call serial_putchar
+        mov al, 10
+        call serial_putchar
         ; Focus the topmost window that lives on the new workspace.
         call gui_focus_topmost
         popad
@@ -4343,6 +4359,17 @@ gui_menu_select:
 ; the caller's user mapping is not present in the master directory.
 ;---------------------------------------
 gui_spawn_program:
+        ; Log the launch so tests and debugging can follow desktop activity.
+        push esi
+        pushad
+        mov esi, burrows_log_launch
+        call serial_print
+        popad
+        mov esi, [esp]
+        call serial_print
+        mov esi, burrows_log_crlf
+        call serial_print
+        pop esi
         pushad
         mov edi, gui_launch_name_buf
         mov ecx, 63
@@ -6490,6 +6517,8 @@ gui_poll_global_key:
         je .pgk_restore
         cmp al, 0x97
         je .pgk_close
+        cmp al, 0x86
+        je .pgk_notify_center
         cmp al, 0x91
         jb .pgk_no
         cmp al, 0x94
@@ -6544,6 +6573,11 @@ gui_poll_global_key:
 .pgk_close:
         call kb_pollchar
         call gui_apply_close
+        mov eax, 1
+        ret
+.pgk_notify_center:
+        call kb_pollchar
+        call gui_notify_center_toggle
         mov eax, 1
         ret
 .pgk_no:
@@ -6843,6 +6877,8 @@ sys_gui:
         je .sg_p_restore
         cmp bl, 0x97           ; Alt+F4 — close focused window
         je .sg_p_close_win
+        cmp bl, 0x86           ; F3 — notification centre
+        je .sg_p_notify_center
         cmp bl, 0x91           ; Ctrl+Alt+1..4 — workspace
         je .sg_p_ws0
         cmp bl, 0x92
@@ -6873,6 +6909,10 @@ sys_gui:
         iretd
 .sg_p_close_win:
         call gui_apply_close
+        xor eax, eax
+        iretd
+.sg_p_notify_center:
+        call gui_notify_center_toggle
         xor eax, eax
         iretd
 .sg_p_launcher:
@@ -7907,6 +7947,17 @@ gui_str_m_settings: db "Settings", 0
 gui_str_m_sysmon:   db "BSysMon", 0
 gui_str_m_launcher: db "Launcher", 0
 gui_str_m_about:    db "About", 0
+; Serial markers used by tests/test_desktop.py and for debugging.
+burrows_log_up:     db "[burrows] desktop up", 13, 10, 0
+burrows_log_down:   db "[burrows] desktop exit", 13, 10, 0
+burrows_log_launch: db "[burrows] launch ", 0
+burrows_log_ws:     db "[burrows] workspace ", 0
+burrows_log_crlf:   db 13, 10, 0
+
+gui_str_nc_title:   db "Notifications", 0
+gui_str_nc_empty:   db "Nothing yet", 0
+gui_str_nc_hint:    db "F3 to close", 0
+
 gui_str_switcher:   db "Switch window", 0
 gui_str_m_exit:     db "Exit Desktop", 0
 
@@ -7998,6 +8049,7 @@ NOTIFY_Y_START  equ 10
 NOTIFY_GAP      equ 44
 NOTIFY_DURATION equ 400         ; ticks (4 seconds at 100Hz)
 NOTIFY_TEXT_LEN equ 60
+NOTIFY_HIST_MAX equ 8           ; notification centre keeps the last 8 entries
 
 ;---------------------------------------
 ; gui_notify - Post a notification toast
@@ -8006,6 +8058,7 @@ NOTIFY_TEXT_LEN equ 60
 ;---------------------------------------
 gui_notify:
         pushad
+        mov [.gn_color], edx
         test edx, edx
         jnz .gn_color_ok
         mov edx, 0x003366CC     ; default blue
@@ -8034,6 +8087,36 @@ gui_notify:
         mov [notify_timer + ecx * 4], eax
         ; Set color
         mov [notify_color + ecx * 4], edx
+        ; Record the entry in the notification centre history.
+        mov [.gn_slot], ecx
+        mov edi, [notify_hist_head]
+        imul edi, NOTIFY_TEXT_LEN
+        add edi, notify_hist_text
+        mov ebx, NOTIFY_TEXT_LEN - 1
+        push esi
+.gn_hist:
+        lodsb
+        test al, al
+        jz .gn_hist_pad
+        stosb
+        dec ebx
+        jnz .gn_hist
+.gn_hist_pad:
+        mov byte [edi], 0
+        pop esi
+        mov ecx, [.gn_slot]
+        mov eax, [notify_hist_head]
+        mov [notify_hist_color + eax*4], edx
+        inc eax
+        and eax, NOTIFY_HIST_MAX - 1
+        mov [notify_hist_head], eax
+        mov eax, [notify_hist_count]
+        cmp eax, NOTIFY_HIST_MAX
+        jae .gn_hist_full
+        inc dword [notify_hist_count]
+.gn_hist_full:
+        mov ecx, [.gn_slot]
+
         ; Copy text
         mov eax, ecx
         imul eax, NOTIFY_TEXT_LEN
@@ -8053,7 +8136,158 @@ gui_notify:
 
         popad
         ret
+.gn_slot:  dd 0
+.gn_color: dd 0
 
+
+;---------------------------------------
+; gui_notify_center_toggle - Show or hide the notification history panel
+;---------------------------------------
+gui_notify_center_toggle:
+        pushad
+        xor byte [gui_center_open], 1
+        popad
+        ret
+
+;---------------------------------------
+; gui_draw_notify_center - Right-hand history panel (F3)
+;---------------------------------------
+NPANEL_W        equ 320
+NPANEL_ROW_H    equ 34
+
+gui_draw_notify_center:
+        pushad
+        cmp byte [gui_center_open], 0
+        je .dnc_done
+        call gui_target_screen
+
+        mov dword [gui_nc_x], GUI_SCREEN_W - NPANEL_W - 8
+        mov dword [gui_nc_y], 40
+        mov dword [gui_nc_w], NPANEL_W
+
+        ; Panel size: title row plus one row per stored notification (min 3)
+        mov eax, [notify_hist_count]
+        cmp eax, 3
+        jae .dnc_rows_ok
+        mov eax, 3
+.dnc_rows_ok:
+        imul eax, NPANEL_ROW_H
+        add eax, NPANEL_ROW_H
+        mov [gui_nc_h], eax
+
+        ; Shadow
+        mov eax, [gui_nc_x]
+        add eax, 4
+        mov ebx, [gui_nc_y]
+        add ebx, 4
+        mov ecx, [gui_nc_w]
+        mov edx, [gui_nc_h]
+        mov esi, 0x00101828
+        call gui_bb_fill_rect
+
+        ; Body and title strip
+        mov eax, [gui_nc_x]
+        mov ebx, [gui_nc_y]
+        mov ecx, [gui_nc_w]
+        mov edx, [gui_nc_h]
+        mov esi, [gui_theme + THEME_WINDOW_BG]
+        call gui_bb_fill_rect
+        mov eax, [gui_nc_x]
+        mov ebx, [gui_nc_y]
+        mov ecx, [gui_nc_w]
+        mov edx, NPANEL_ROW_H
+        mov esi, [gui_theme + THEME_MENU_HIGHLIGHT]
+        call gui_bb_fill_rect
+        mov eax, [gui_nc_x]
+        add eax, 10
+        mov ebx, [gui_nc_y]
+        add ebx, 10
+        mov esi, gui_str_nc_title
+        mov edx, [gui_theme + THEME_TITLE_TEXT]
+        call gui_bb_draw_string
+
+        ; Newest first: walk the ring backwards from head-1.
+        mov dword [gui_nc_i], 0
+.dnc_row:
+        mov eax, [gui_nc_i]
+        cmp eax, [notify_hist_count]
+        jge .dnc_footer
+
+        ; history index = (head - 1 - i) mod HIST_MAX
+        mov ebx, [notify_hist_head]
+        dec ebx
+        sub ebx, eax
+        and ebx, NOTIFY_HIST_MAX - 1
+
+        ; Row background
+        mov eax, [gui_nc_i]
+        imul eax, NPANEL_ROW_H
+        add eax, [gui_nc_y]
+        add eax, NPANEL_ROW_H
+        mov [gui_nc_ry], eax
+        mov eax, [gui_nc_x]
+        mov ebx, [gui_nc_ry]
+        mov ecx, [gui_nc_w]
+        mov edx, 1
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_fill_rect
+
+        ; Colour bar showing where the notification came from
+        mov eax, [gui_nc_i]
+        mov ebx, [notify_hist_head]
+        dec ebx
+        sub ebx, eax
+        and ebx, NOTIFY_HIST_MAX - 1
+        mov esi, [notify_hist_color + ebx*4]
+        mov eax, [gui_nc_x]
+        add eax, 6
+        mov ebx, [gui_nc_ry]
+        add ebx, 6
+        mov ecx, 4
+        mov edx, NPANEL_ROW_H - 12
+        call gui_bb_fill_rect
+
+        ; Text
+        mov eax, [gui_nc_i]
+        mov ebx, [notify_hist_head]
+        dec ebx
+        sub ebx, eax
+        and ebx, NOTIFY_HIST_MAX - 1
+        imul ebx, NOTIFY_TEXT_LEN
+        add ebx, notify_hist_text
+        mov esi, ebx
+        mov eax, [gui_nc_x]
+        add eax, 16
+        mov ebx, [gui_nc_ry]
+        add ebx, 5
+        mov edx, 0x00202020
+        call gui_bb_draw_string
+
+        inc dword [gui_nc_i]
+        jmp .dnc_row
+
+.dnc_footer:
+        cmp dword [notify_hist_count], 0
+        jne .dnc_hint
+        mov eax, [gui_nc_x]
+        add eax, 16
+        mov ebx, [gui_nc_y]
+        add ebx, NPANEL_ROW_H + 8
+        mov esi, gui_str_nc_empty
+        mov edx, 0x00606060
+        call gui_bb_draw_string
+.dnc_hint:
+        mov eax, [gui_nc_x]
+        add eax, 10
+        mov ebx, [gui_nc_y]
+        add ebx, [gui_nc_h]
+        sub ebx, NPANEL_ROW_H - 8
+        mov esi, gui_str_nc_hint
+        mov edx, 0x00606060
+        call gui_bb_draw_string
+.dnc_done:
+        popad
+        ret
 
 ;---------------------------------------
 ; gui_draw_notifications - Draw active notification toasts
@@ -8145,6 +8379,13 @@ notify_timer:   times NOTIFY_MAX dd 0
 notify_color:   times NOTIFY_MAX dd 0
 notify_text:    times (NOTIFY_MAX * NOTIFY_TEXT_LEN) db 0
 
+; Notification centre: history survives the toast expiring.
+notify_hist_head:  dd 0
+notify_hist_count: dd 0
+notify_hist_color: times NOTIFY_HIST_MAX dd 0
+notify_hist_text:  times (NOTIFY_HIST_MAX * NOTIFY_TEXT_LEN) db 0
+gui_center_open:   db 0
+
 ;=======================================================================
 ; STATE VARIABLES (initialized, in binary image)
 ;=======================================================================
@@ -8181,6 +8422,12 @@ gui_sw_w:           dd 0
 gui_sw_h:           dd 0
 gui_sw_row_y:       dd 0
 gui_sw_text:        dd 0
+gui_nc_x:           dd 0
+gui_nc_y:           dd 0
+gui_nc_w:           dd 0
+gui_nc_h:           dd 0
+gui_nc_ry:          dd 0
+gui_nc_i:           dd 0
 gui_sw_list:        times 8 dd 0
 gui_win_count:      dd 0
 gui_next_z:         dd 0

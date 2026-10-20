@@ -113,6 +113,8 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 - **Virtual workspaces** — four workspaces with a taskbar indicator (`Ctrl+Alt+1..4`)
 - **Keyboard window management** — `Alt+Left`/`Alt+Right` tile, `Alt+Up` maximizes,
   `Alt+Down` restores, and `Alt+F4` closes the focused window
+- **Notification centre** — `F3` shows a history of recent notifications; a 16 KB
+  clipboard carries text and data between applications
 - **Launcher and shortcuts** — `F1` launcher with search and Exit Desktop, `F2`
   terminal, `Alt+Tab` window cycling with a switcher overlay, `Ctrl+C` abort to desktop;
   desktop shortcuts work even with no window focused
