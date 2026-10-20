@@ -22,7 +22,8 @@ the bug.
 | `0x00000000`–`0x000A0000` | Real-mode IVT, BIOS data, kernel image, page tables, PMM bitmaps, kernel BSS/heap | **never** |
 | `0x000A0000`–`0x000C0000` | Legacy video aperture (VGA text at `0xB8000`) | read/write (compatibility: direct text-mode output is a documented feature) |
 | `0x000C0000`–`0x00300000` | ROMs, kernel workspace | **never** |
-| `0x00300000`–`0x00400000` | Program window: code, data, BSS, heap (grows up), user stack (grows down from `PROGRAM_EXIT_ADDR - 4`) | read/write/execute |
+| `0x00300000`–`0x003C0000` | Program window: code, data, BSS, heap (grows up, capped at `USER_STACK_BASE`) | read/write/execute |
+| `0x003C0000`–`0x00400000` | Reserved user stack region: guard page at `0x003C0000`, on-demand growth area, then the top 64 KB mapped at exec (stack starts at `PROGRAM_EXIT_ADDR - 4`) | read/write, guard page **never** |
 | `0x00400000`–`0x08000000` | Reserved | **never** |
 | `0x08000000`–`0x20000000` | Demand-paged user zone (`mmap`, large heaps) | read/write, per-`vm_area` permissions |
 | `0x1FFFF000` | Sigreturn trampoline (single page) | read/execute only |
@@ -71,8 +72,31 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 | Permission | Write to a read-only or supervisor page | Deny: kill the task, leave the system running |
 | Kernel fault | Any fault with `CS & 3 == 0` | Fatal: panic with a symbolised stack |
 
-Stack growth: a fault within 64 KB below `vm_area.start` of the stack area extends the
-stack instead of failing.
+Stack growth (implemented): the user stack has its own region at the top of the program
+window — `USER_STACK_BASE` (0x003C0000) to `PROGRAM_END_ADDR` (0x00400000), 256 KB in
+total. Only the top `USER_STACK_INIT_PAGES` (64 KB) are mapped when a task starts; the
+page at `USER_STACK_BASE` is a **permanent guard page** and is never mapped. A
+not-present user fault in the region is serviced by `pf_try_stack_growth`, which:
+
+1. finds the lowest mapped stack page by walking the window's page table down from the
+   top of the region (the page tables *are* the state, so a forked or resumed task needs
+   no bookkeeping);
+2. accepts the fault only if it lies at most `STACK_GROWTH_SLACK` (16 pages, 64 KB)
+   below that frontier, so a stray pointer cannot reserve the region;
+3. maps every page between the fault and the frontier with a freshly zeroed frame
+   (`PG_PRESENT | PG_WRITABLE | PG_USER`) and retries the instruction.
+
+Anything else in the region — the guard page itself, a jump further than the slack — is
+not growth: the task is killed with the one-line report and the shell keeps running.
+`SYS_SBRK` refuses to move the break above `USER_STACK_BASE`, so the heap cannot grow
+into the stack region, and `set_program_brk_init` caps the initial break the same way.
+
+Kernel identity demand: the kernel addresses physical memory directly, but only the first
+`PAGING_MAP_MB` (128 MB) is mapped at boot. A supervisor not-present fault between
+`USER_DEMAND_BASE` (128 MB) and the highest address the firmware reported as usable
+(`pmm_mem_top`) maps that page identity in the master and the active directory, so the
+buddy allocator can use RAM above 128 MB instead of faulting the first time it touches
+it. Addresses beyond the reported RAM still fault, so a kernel bug is not hidden.
 
 ## 4a. Status of the 32-bit implementation (P1)
 
@@ -91,8 +115,16 @@ Implemented in `kernel/vm.inc`:
   the address belongs to one of the task's areas. Anything else — including an
   address that `munmap` just released — kills the task.
 
-Not yet implemented: file-backed mappings, `MAP_SHARED` semantics, guard pages,
-stack-growth faults, and partial unmapping.
+Also implemented:
+
+- Stack guard page and on-demand stack growth (`paging_setup_user_stack`,
+  `pf_try_stack_growth` in `kernel/paging.inc`), set up per task for both the console and
+  the Burrows launch paths; the heap is capped at the stack region in `SYS_SBRK` and
+  `set_program_brk_init`.
+- Kernel identity demand above 128 MB, bounded by the firmware-reported memory top.
+
+Not yet implemented: file-backed mappings, `MAP_SHARED` semantics, demand-zero for
+`mmap` ranges that are painted but never touched, and partial unmapping.
 
 ## 5. Isolation invariants (tested)
 
@@ -104,8 +136,14 @@ stack-growth faults, and partial unmapping.
 5. No stale bytes: a fresh anonymous page reads as zero.
 6. Kernel code may still write VGA text (`0xB8000`) and its own memory without faults.
 
-Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test` and
-`vmtest` over QEMU and `make check` fails if any regresses.
+7. A task that writes past the bottom of its stack region dies alone: the guard page is
+   never mapped and the shell survives (`stack_overflow`).
+8. A task can grow its stack down to the last page above the guard, and every grown page
+   keeps what was written to it (`stack_test`).
+
+Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
+`vmtest`, `stack_test` and `stack_overflow` over QEMU and `make check` fails if any
+regresses.
 
 ## 6. Compatibility exceptions
 

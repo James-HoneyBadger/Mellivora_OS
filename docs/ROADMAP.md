@@ -39,7 +39,7 @@ A phase does not close until these are measured:
 
 | Phase | State | Landed so far |
 |---|---|---|
-| P1 | in progress | `vm_area` table, `mmap`/`munmap`/`mprotect`, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, console-mode fault containment, `vmtest`/`memprot_test`/`sbrk_test` conformance fixtures |
+| P1 | in progress | `vm_area` table, `mmap`/`munmap`/`mprotect`, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, `vmtest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
 | P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`) |
 
 ## Phases
@@ -60,7 +60,8 @@ A phase does not close until these are measured:
 ### P1 · Memory and isolation (4 sprints)
 
 - [x] `vm_area` model; `mmap/munmap/mprotect` with randomised placement and W^X.
-- [ ] Guard pages, stack growth faults, demand-zero and file-backed faults.
+- [x] Guard pages and on-demand stack growth for the user stack.
+- [ ] Demand-zero and file-backed mappings, partial `munmap`.
 - [x] **Remove user access to kernel RAM**; map only what a process needs (program
   window, stack, framebuffer, IPC surfaces). See `docs/spec/VMM.md`.
 - [ ] Kernel slab allocator; page cache and unified block cache; user heap on top of VMM.

@@ -294,6 +294,50 @@ isr_page_fault:
         test eax, 0x01
         jnz  .pf_kernel_fault
 
+        ; Stack growth: a not-present user fault inside the reserved stack
+        ; region grows the stack downwards. The guard page at USER_STACK_BASE
+        ; and anything outside the region fall through and kill only this task.
+        mov  eax, [pf_addr]
+        cmp  eax, USER_STACK_BASE
+        jb   .pf_not_stack
+        cmp  eax, PROGRAM_END_ADDR
+        jae  .pf_not_stack
+        call pf_try_stack_growth
+        test eax, eax
+        jz   .pf_not_stack
+        pop  edx
+        pop  ecx
+        pop  eax
+        add  esp, 4                 ; drop the error code
+        iretd
+.pf_not_stack:
+
+        ; Kernel identity demand: the allocator and other kernel code address
+        ; physical memory directly, but only the first PAGING_MAP_MB is mapped
+        ; at boot. A supervisor, not-present fault in the identity-managed zone
+        ; maps that page identity so RAM above 128 MB is usable instead of
+        ; crashing the kernel the first time the buddy allocator touches it.
+        ; Bounded by the highest address the firmware reported as usable, so a
+        ; kernel bug in that range still faults where it should.
+        mov  eax, [pf_errcode]
+        test eax, 0x05              ; user fault, or a protection violation?
+        jnz  .pf_user_demand
+        mov  eax, [pf_addr]
+        cmp  eax, USER_DEMAND_BASE
+        jb   .pf_kernel_fault
+        cmp  eax, [pmm_mem_top]
+        jae  .pf_kernel_fault
+        and  eax, 0xFFFFF000
+        mov  ebx, eax
+        mov  ecx, PG_PRESENT | PG_WRITABLE      ; supervisor only
+        call paging_map_page_all
+        pop  edx
+        pop  ecx
+        pop  eax
+        add  esp, 4                 ; drop the error code
+        iretd
+
+.pf_user_demand:
         ; Check: faulting address in demand zone [USER_DEMAND_BASE, USER_DEMAND_MAX)
         mov  eax, [pf_addr]
         cmp  eax, USER_DEMAND_BASE
@@ -683,6 +727,55 @@ paging_clone_pd:
         cld
         rep movsd
         pop eax
+        mov [.pcp_child], eax
+
+        ; Copy every page table the source OWNS. Copying only the directory
+        ; would leave parent and child sharing tables, so a copy-on-write break
+        ; in one address space would rewrite the other's PTE as well — the
+        ; child would start seeing the parent's private pages. Tables that still
+        ; point at the master's are the shared template (kernel, demand zone,
+        ; framebuffer) and must stay shared.
+        xor edx, edx
+.pcp_loop:
+        cmp edx, 1024
+        jge .pcp_ok
+        mov eax, [.pcp_child]
+        mov ebx, [eax + edx*4]          ; PDE in the new directory
+        test ebx, PG_PRESENT
+        jz .pcp_next
+
+        mov esi, [PAGE_DIR_ADDR + edx*4]
+        and esi, 0xFFFFF000             ; master's table for this slot
+        mov ecx, ebx
+        and ecx, 0xFFFFF000             ; table the child inherited
+        cmp ecx, esi
+        je .pcp_next                    ; shared with the master: leave it
+
+        push edx
+        call pmm_alloc_page
+        pop edx
+        test eax, eax
+        jz .pcp_fail                    ; leak the pages already copied: OOM
+        push esi
+        mov edi, eax
+        mov esi, ecx
+        push ecx
+        mov ecx, 1024
+        cld
+        rep movsd
+        pop ecx
+        pop esi
+
+        and ebx, 0xFFF                  ; keep the PDE flags
+        or ebx, eax
+        mov eax, [.pcp_child]
+        mov [eax + edx*4], ebx
+.pcp_next:
+        inc edx
+        jmp .pcp_loop
+
+.pcp_ok:
+        mov eax, [.pcp_child]
         mov [esp + 28], eax     ; EAX slot of the pushad frame
         popad
         ret
@@ -690,7 +783,8 @@ paging_clone_pd:
         mov dword [esp + 28], 0
         popad
         ret
-.pcp_src: dd 0
+.pcp_src:   dd 0
+.pcp_child: dd 0
 
 ;-----------------------------------------------------------------------
 ; paging_privatize_pde — give one directory its own page table
@@ -958,6 +1052,194 @@ paging_isolate_program_window:
         mov [esp + 28], eax
         popad
         ret
+
+;-----------------------------------------------------------------------
+; paging_setup_user_stack — reserve the caller's user stack region
+;   Out: EAX = 0 on success, -1 on failure
+;
+; Called once per task, after its image is in the window and its argv/trampoline
+; are in place, with that task's directory active. It privatises the window's
+; page table (so the unmapping below cannot leak into another address space) and
+; unmaps every stack page except the top USER_STACK_INIT_PAGES:
+;
+;   USER_STACK_BASE                guard page — never mapped
+;   USER_STACK_BASE+4K ..          growth area — mapped on demand by
+;                                  pf_try_stack_growth
+;   top USER_STACK_INIT_PAGES      mapped now; holds the trampoline and the
+;                                  first frames the program uses
+;
+; Frames private to this directory are released; frames still shared with the
+; master window are left to it (the master keeps the shell's image).
+;
+; A task that never calls this (exec-in-place, the OOM fallback to the legacy
+; IRET path) keeps the fully mapped window it has today: no guard, but also no
+; change in behaviour.
+;-----------------------------------------------------------------------
+paging_setup_user_stack:
+        pushad
+        call paging_current_pd
+        mov [.psu_pd], eax
+
+        mov edx, PROGRAM_BASE >> 22
+        call paging_privatize_pde
+        test eax, eax
+        jz .psu_fail
+
+        mov dword [.psu_va], USER_STACK_BASE
+        mov dword [.psu_left], USER_STACK_MAX_PAGES - USER_STACK_INIT_PAGES
+
+.psu_loop:
+        cmp dword [.psu_left], 0
+        je .psu_ok
+
+        ; PTE address inside the (now private) window page table
+        mov eax, [.psu_pd]
+        mov eax, [eax + (PROGRAM_BASE >> 22) * 4]
+        test eax, PG_PRESENT
+        jz .psu_fail
+        and eax, 0xFFFFF000
+        mov ebx, [.psu_va]
+        shr ebx, 12
+        and ebx, 0x3FF
+        lea eax, [eax + ebx*4]
+        mov [.psu_pte], eax
+
+        ; Same address in the master directory, for the sharing test
+        mov ecx, [PAGE_DIR_ADDR + (PROGRAM_BASE >> 22) * 4]
+        and ecx, 0xFFFFF000
+        lea ecx, [ecx + ebx*4]
+
+        mov edx, [eax]                  ; our PTE
+        mov esi, edx
+        and esi, 0xFFFFF000             ; our frame
+        mov edi, [ecx]
+        and edi, 0xFFFFF000             ; master frame
+        test esi, esi
+        jz .psu_clear                   ; already absent
+        cmp esi, edi
+        je .psu_clear                   ; shared with the master: keep the frame
+        ; EXPERIMENT: leak instead of releasing
+        nop
+
+.psu_clear:
+        mov eax, [.psu_pte]
+        mov dword [eax], 0              ; not present
+        mov eax, [.psu_va]
+        invlpg [eax]
+        add dword [.psu_va], 4096
+        dec dword [.psu_left]
+        jmp .psu_loop
+
+.psu_ok:
+        mov dword [esp + 28], 0
+        popad
+        ret
+.psu_fail:
+        mov dword [esp + 28], -1
+        popad
+        ret
+.psu_pd:   dd 0
+.psu_va:   dd 0
+.psu_left: dd 0
+.psu_pte:  dd 0
+
+;-----------------------------------------------------------------------
+; pf_try_stack_growth — map pages for a growing user stack
+;   In : pf_addr set by isr_page_fault; user-mode not-present fault
+;   Out: EAX = 1 when pages were mapped, 0 when this is not a growth fault
+;
+; The lowest mapped stack page is found by walking the window's page table down
+; from the top of the stack region, so forked and resumed tasks need no extra
+; bookkeeping: the page tables are the state. Growth is capped to
+; STACK_GROWTH_SLACK pages below that frontier so a stray pointer cannot
+; reserve the region, and the guard page itself is never mapped.
+;
+; A growth fault that cannot be served (out of memory) returns 0, which lets the
+; normal fault path kill just this task.
+;-----------------------------------------------------------------------
+pf_try_stack_growth:
+        pushad
+        mov dword [.pfs_ok], 0
+
+        mov eax, [pf_addr]
+        and eax, 0xFFFFF000
+        mov [.pfs_page], eax
+        cmp eax, USER_STACK_BASE
+        jbe .pfs_out                    ; the guard page is permanent
+
+        mov edx, PROGRAM_BASE >> 22
+        call paging_current_pd
+        mov esi, [eax + edx*4]
+        test esi, PG_PRESENT
+        jz .pfs_out
+        and esi, 0xFFFFF000
+        mov [.pfs_pt], esi
+
+        ; Walk down from the top page until a not-present entry is found.
+        mov esi, PROGRAM_END_ADDR - 0x1000
+.pfs_scan:
+        mov eax, esi
+        shr eax, 12
+        and eax, 0x3FF
+        mov ebx, [.pfs_pt]
+        mov ebx, [ebx + eax*4]
+        test ebx, PG_PRESENT
+        jz .pfs_frontier
+        cmp esi, USER_STACK_BASE + 0x1000
+        jbe .pfs_out                    ; whole region already mapped
+        sub esi, 0x1000
+        jmp .pfs_scan
+
+.pfs_frontier:
+        ; ESI is the first UNMAPPED page below the stack; the lowest mapped
+        ; page is the one above it, and that is the exclusive end of the range
+        ; this fault may map.
+        add esi, 0x1000
+        mov [.pfs_front], esi
+        mov eax, esi
+        cmp eax, [.pfs_page]
+        jbe .pfs_out                    ; fault page at or above the bottom
+        sub eax, [.pfs_page]
+        cmp eax, STACK_GROWTH_SLACK * 4096
+        ja .pfs_out                     ; too far below the mapped stack
+
+.pfs_map:
+        mov eax, [.pfs_page]
+        cmp eax, [.pfs_front]
+        jae .pfs_mapped
+
+        call pmm_alloc_page
+        test eax, eax
+        jz .pfs_out                     ; out of memory
+        mov [.pfs_phys], eax
+
+        ; Never hand stale bytes to ring 3.
+        mov edi, eax
+        xor eax, eax
+        mov ecx, 1024
+        cld
+        rep stosd
+
+        mov eax, [.pfs_page]
+        mov ebx, [.pfs_phys]
+        mov ecx, PG_PRESENT | PG_WRITABLE | PG_USER
+        call paging_map_page_here
+
+        add dword [.pfs_page], 4096
+        jmp .pfs_map
+
+.pfs_mapped:
+        mov dword [.pfs_ok], 1
+.pfs_out:
+        mov eax, [.pfs_ok]
+        mov [esp + 28], eax
+        popad
+        ret
+.pfs_page:  dd 0
+.pfs_phys:  dd 0
+.pfs_pt:    dd 0
+.pfs_front: dd 0
+.pfs_ok:    dd 0
 
 ; BSS data for page fault handler
 pf_addr:    dd 0

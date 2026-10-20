@@ -1,5 +1,45 @@
 # Mellivora OS - Changelog
 
+## Unreleased - guarded, demand-grown user stacks
+
+### Memory and isolation
+
+- **Stack guard page** — the top of the program window is now a reserved 256 KB stack
+  region (`USER_STACK_BASE` 0x003C0000 .. 0x00400000) with a permanent unmapped guard
+  page at its base. Only the top 64 KB are mapped when a task starts, so a runaway stack
+  now faults instead of silently overwriting the heap: the offending task is killed with
+  a one-line report and the shell (or desktop) keeps running.
+- **Demand-grown stacks** — a not-present user fault in the region is serviced by
+  `pf_try_stack_growth`, which finds the lowest mapped stack page by walking the window's
+  page table (the page tables are the state, so forked and resumed tasks need no
+  bookkeeping), accepts the fault only within `STACK_GROWTH_SLACK` (64 KB) of that
+  frontier, and maps the missing pages with freshly zeroed frames.
+- **Heap cannot reach the stack** — `SYS_SBRK` and `set_program_brk_init` cap the break at
+  `USER_STACK_BASE`, so the heap and stack can never meet.
+- **Kernel identity demand above 128 MB** — a supervisor not-present fault in the
+  identity-managed zone maps that page identity (bounded by the firmware-reported memory
+  top), so the buddy allocator can use RAM above the initial 128 MB identity map instead
+  of faulting the first time it touches it. Machines with more than 128 MB now work.
+
+### Fixed
+
+- **`paging_clone_pd` shared page tables with the parent** — a forked child inherited the
+  parent's page tables, so a copy-on-write break in one address space rewrote the other's
+  PTE: the child started observing the parent's private pages. This was latent because
+  the window table was always shared with the master until a task privatised it, and it
+  became visible as soon as the stack guard privatised it per task (the `pgrp_test`
+  process-group suite caught it: both children saw the parent's `is_child2` flag and sent
+  the same signal). A new directory now copies every page table the source owns, keeping
+  only the master-owned template tables shared.
+
+### Tooling
+
+- `programs/stack_test.asm` grows a stack through 44 fault-driven pages, checks every
+  grown page, and proves the heap cannot enter the stack region.
+- `programs/stack_overflow.asm` writes to the guard page and asserts the task dies alone.
+- Both are wired into `tests/test_runtime.sh`, so `make check` fails if stack containment
+  regresses.
+
 ## Unreleased - x86-64 boot foundation
 
 ### 64-bit path

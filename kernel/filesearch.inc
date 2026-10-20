@@ -74,7 +74,7 @@ set_program_brk_init:
         jae .sbi_min_ok
         mov eax, PROGRAM_BASE + 0x1000
 .sbi_min_ok:
-        mov ebx, PROGRAM_EXIT_ADDR - 0x10000
+        mov ebx, USER_STACK_BASE        ; heap stops at the stack guard page
         cmp eax, ebx
         jbe .sbi_max_ok
         mov eax, ebx

@@ -81,6 +81,19 @@ pmm_init:
         mov eax, KERNEL_RESERVED_END
 
 .e820_free:
+        ; Remember the highest usable address: the page-fault handler only
+        ; identity-maps RAM that actually exists (see isr_page_fault).
+        push eax
+        push ebx
+        add  eax, ebx
+        add  eax, 0xFFF
+        and  eax, ~0xFFF
+        cmp  eax, [pmm_mem_top]
+        jbe  .e820_top_ok
+        mov  [pmm_mem_top], eax
+.e820_top_ok:
+        pop  ebx
+        pop  eax
         call pmm_free_region            ; EAX = base, EBX = byte length
 
 .e820_next:

@@ -3590,8 +3590,9 @@ sys_sbrk:
         mov ecx, PROGRAM_BASE + 0x1000
         cmp eax, ecx
         jb .sbrk_fail
-        mov ecx, [edi + TCB_USTACK]
-        sub ecx, 0x100          ; keep a margin below the stack top
+        ; The heap stops at the stack region: everything above it belongs to
+        ; the guarded user stack, which grows on demand.
+        mov ecx, USER_STACK_BASE
         cmp eax, ecx
         ja .sbrk_fail
 

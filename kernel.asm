@@ -58,6 +58,18 @@ HEAP_BASE           equ 0x00700000      ; Kernel heap window (currently unused)
 KERNEL_RESERVED_END equ 0x00800000      ; 8MB — lower bound of PMM-managed memory
 BG_PROG_PAGES       equ 256             ; Pages per background program slot (1MB)
 BG_STACK_PAGES      equ 16             ; Pages per background task user stack (64KB)
+
+; User stack. It lives at the top of the program window, below the exit
+; trampoline. Only the top USER_STACK_INIT_PAGES pages are mapped when a task
+; starts; the pages below them are left unmapped so that
+;   * a stack overflow faults instead of silently overwriting the heap, and
+;   * the fault handler can grow the stack on demand (up to the hard cap).
+; USER_STACK_BASE itself is a permanent guard page: it is never mapped, so the
+; task that runs into it is killed while the rest of the system keeps running.
+USER_STACK_MAX_PAGES  equ 64                                  ; 256 KB hard cap
+USER_STACK_INIT_PAGES equ 16                                  ; 64 KB mapped at exec
+USER_STACK_BASE       equ PROGRAM_END_ADDR - USER_STACK_MAX_PAGES * 4096
+STACK_GROWTH_SLACK    equ 16                                  ; pages one fault may skip
 ; Copy-on-write bookkeeping covers the identity-mapped region only: 128 MB of
 ; RAM / 4 KB = 32768 pages, one refcount byte each (see cow_ref in data.inc).
 COW_MAX_PAGES       equ 32768

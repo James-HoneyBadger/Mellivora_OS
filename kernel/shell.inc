@@ -6280,6 +6280,17 @@ cmd_exec_program:
         ; and Ctrl+Z signal the terminal's foreground process group. A task's
         ; PGID starts as its own PID, which is the id sched_create_task returned.
         mov [tty_fg_pgid], eax
+        ; Give the task a guarded, demand-grown stack before it runs. The
+        ; unmapping has to happen in the task's own directory, so switch to it
+        ; and back; sched_start_task installs it again when the task is entered.
+        push eax
+        imul eax, TCB_SIZE
+        add eax, task_table
+        call sched_apply_cr3
+        call paging_setup_user_stack
+        xor eax, eax
+        call sched_apply_cr3
+        pop eax
         call sched_start_task   ; switches CR3/fds and never returns
 
 .exec_legacy_ring3:
@@ -6348,6 +6359,7 @@ cmd_exec_program:
         call paging_isolate_program_window
         test eax, eax
         js .exec_gui_iso_fail
+        call paging_setup_user_stack    ; guard page + demand-grown stack
         xor eax, eax
         call sched_apply_cr3            ; back to the master directory
         pop eax                         ; task id

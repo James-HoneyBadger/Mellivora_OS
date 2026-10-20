@@ -114,6 +114,11 @@ run_case "VBE framebuffer + font"    "fonttest"              ""                 
 run_case "sbrk heap growth"           "sbrk_test"             "SBRK_BIG_OK"        "" "CPU EXCEPTION|PAGE FAULT|Test FAILED"
 run_case "user/kernel memory isolation" "memprot_test"        "MEMPROT_OK"         "" "CPU EXCEPTION|MEMPROT_FAIL"
 run_case "mmap/mprotect/munmap"         "vmtest"                "VM_OK"              "" "CPU EXCEPTION|VMTEST_FAIL"
+run_case "stack guard + growth"          "stack_test"            "STACK_GROW_OK"      "" "CPU EXCEPTION|PAGE FAULT|STACK_FAIL"
+# The guard page must kill the offending task and nothing else: the shell has to
+# survive and run the next command.
+run_case "stack overflow contained"      "stack_overflow"        "task killed"        "hello" "CPU EXCEPTION|STACK_FAIL"
+
 
 if [ "$failures" -ne 0 ]; then
     fail "$failures runtime case(s) failed"
