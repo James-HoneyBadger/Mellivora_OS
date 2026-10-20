@@ -30,6 +30,12 @@ routed by focus and the desktop never blocking on a child program.
   user.
 - **Alt+Tab switcher overlay** — cycling focus briefly shows a centred panel listing the
   windows on the current workspace with the newly focused one highlighted.
+- **Persisted desktop theme** — `GUI_SET_THEME`, the Settings applet and the built-in
+  theme buttons write `burrows.cfg` (a 52-byte record: magic + theme colours) through
+  HBFS. `burrows_init` reloads it at boot, so a chosen theme survives a reboot; a
+  missing or malformed file falls back to the built-in default.
+- **Theme-driven wallpaper** — the desktop gradient is derived from the theme's desktop
+  colour instead of hard-coded blues, so switching themes repaints the whole workspace.
 - **Virtual workspaces** — four workspaces with a taskbar indicator; switching focuses
   the topmost window on the destination workspace.
 - **Crash resilience** — a ring 3 fault in a GUI application no longer takes the

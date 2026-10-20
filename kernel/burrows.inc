@@ -135,6 +135,8 @@ burrows_init:
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
+        ; A saved theme in burrows.cfg wins over the built-in default.
+        call burrows_config_load
         ; Clear window table
         mov edi, gui_win_table
         xor eax, eax
@@ -1572,35 +1574,78 @@ gui_draw_switcher:
 gui_draw_background:
         pushad
         call gui_target_screen
-        ; Smooth vertical gradient: 0x18/0x28/0x48 at the top to
-        ; 0x30/0x50/0x80 at the bottom. One rep stosd per scanline.
+
+        ; Vertical gradient derived from the theme's desktop colour: the top
+        ; scanline is the theme colour and the bottom is 1.5x brighter, so a
+        ; theme change repaints the wallpaper too.
+        mov eax, [gui_theme + THEME_DESKTOP_BG]
+
+        mov ecx, eax
+        shr ecx, 16
+        and ecx, 0xFF
+        mov [.gb_r0], ecx
+        mov edi, ecx
+        shr edi, 1
+        add edi, ecx
+        cmp edi, 255
+        jbe .gb_r_ok
+        mov edi, 255
+.gb_r_ok:
+        mov [.gb_r1], edi
+
+        mov ecx, eax
+        shr ecx, 8
+        and ecx, 0xFF
+        mov [.gb_g0], ecx
+        mov edi, ecx
+        shr edi, 1
+        add edi, ecx
+        cmp edi, 255
+        jbe .gb_g_ok
+        mov edi, 255
+.gb_g_ok:
+        mov [.gb_g1], edi
+
+        mov ecx, eax
+        and ecx, 0xFF
+        mov [.gb_b0], ecx
+        mov edi, ecx
+        shr edi, 1
+        add edi, ecx
+        cmp edi, 255
+        jbe .gb_b_ok
+        mov edi, 255
+.gb_b_ok:
+        mov [.gb_b1], edi
+
         xor ebx, ebx                    ; y
 .gb_loop:
         ; Red
-        mov eax, ebx
-        imul eax, 0x18
+        mov eax, [.gb_r1]
+        sub eax, [.gb_r0]
+        imul eax, ebx
         xor edx, edx
         mov ecx, GUI_SCREEN_H - 1
         div ecx
-        add eax, 0x18
+        add eax, [.gb_r0]
         shl eax, 16
         mov [.gb_color], eax
         ; Green
-        mov eax, ebx
-        imul eax, 0x28
+        mov eax, [.gb_g1]
+        sub eax, [.gb_g0]
+        imul eax, ebx
         xor edx, edx
-        mov ecx, GUI_SCREEN_H - 1
         div ecx
-        add eax, 0x28
+        add eax, [.gb_g0]
         shl eax, 8
         or [.gb_color], eax
         ; Blue
-        mov eax, ebx
-        imul eax, 0x38
+        mov eax, [.gb_b1]
+        sub eax, [.gb_b0]
+        imul eax, ebx
         xor edx, edx
-        mov ecx, GUI_SCREEN_H - 1
         div ecx
-        add eax, 0x48
+        add eax, [.gb_b0]
         or [.gb_color], eax
 
         mov edi, ebx
@@ -1613,9 +1658,17 @@ gui_draw_background:
         inc ebx
         cmp ebx, GUI_SCREEN_H
         jl .gb_loop
+
+        ; Keep the taskbar area from carrying the gradient behind it
         popad
         ret
 .gb_color: dd 0
+.gb_r0: dd 0
+.gb_r1: dd 0
+.gb_g0: dd 0
+.gb_g1: dd 0
+.gb_b0: dd 0
+.gb_b1: dd 0
 
 ;---------------------------------------
 ; gui_compose_surfaces  — blit IPC surface table into back buffer
@@ -6105,6 +6158,7 @@ gui_applet_settings:
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
+        call burrows_config_save
         jmp .set_loop
 
 .set_dark_click:
@@ -6117,6 +6171,7 @@ gui_applet_settings:
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
+        call burrows_config_save
         jmp .set_loop
 
 .set_light_click:
@@ -6129,6 +6184,7 @@ gui_applet_settings:
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
+        call burrows_config_save
         jmp .set_loop
 
 .set_amber_click:
@@ -6141,6 +6197,7 @@ gui_applet_settings:
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
+        call burrows_config_save
         jmp .set_loop
 
 .set_close:
@@ -6154,6 +6211,58 @@ gui_applet_settings:
         popad
         ret
 .set_win: dd 0
+
+;=======================================================================
+; DESKTOP SETTINGS - theme persisted to burrows.cfg
+;
+; Layout: "BCFG" followed by THEME_SIZE bytes of theme colours. A missing or
+; malformed file simply leaves the built-in default theme in place.
+;=======================================================================
+
+BURROWS_CFG_SIZE equ 4 + THEME_SIZE
+
+;---------------------------------------
+; burrows_config_load - apply a saved theme, if one exists
+;---------------------------------------
+burrows_config_load:
+        pushad
+        mov esi, burrows_cfg_name
+        mov edi, burrows_cfg_buf
+        call hbfs_read_file
+        jc .bcl_done                      ; no settings file yet
+        cmp ecx, BURROWS_CFG_SIZE
+        jb .bcl_done
+        cmp dword [burrows_cfg_buf], 'BCFG'
+        jne .bcl_done
+        cld
+        mov esi, burrows_cfg_buf + 4
+        mov edi, gui_theme
+        mov ecx, THEME_SIZE / 4
+        rep movsd
+.bcl_done:
+        popad
+        ret
+
+;---------------------------------------
+; burrows_config_save - write the current theme back to burrows.cfg
+;---------------------------------------
+burrows_config_save:
+        pushad
+        cld
+        mov dword [burrows_cfg_buf], 'BCFG'
+        mov esi, gui_theme
+        mov edi, burrows_cfg_buf + 4
+        mov ecx, THEME_SIZE / 4
+        rep movsd
+        mov esi, burrows_cfg_name
+        mov ecx, BURROWS_CFG_SIZE
+        mov edi, burrows_cfg_buf
+        mov edx, FTYPE_TEXT
+        call hbfs_create_file
+        popad
+        ret
+
+burrows_cfg_name: db "burrows.cfg", 0
 
 ;=======================================================================
 ; FOCUS-AWARE INPUT HELPERS
@@ -6644,6 +6753,7 @@ sys_gui:
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
+        call burrows_config_save
         popad
         xor eax, eax
         iretd

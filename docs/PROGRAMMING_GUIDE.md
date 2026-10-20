@@ -1320,6 +1320,14 @@ launcher or a document window can open a second app and keep running:
 
 Desktop shortcuts are handled by the kernel even when no window has focus.
 
+### Theme and settings persistence
+
+`gui_set_theme` (and therefore the Settings applet) stores the 48-byte theme block in
+`burrows.cfg` at the filesystem root. `burrows_init` reloads it at boot, so a theme
+chosen in one session is still active after a reboot. Delete `burrows.cfg` to return to
+the built-in blue theme. The desktop wallpaper gradient is derived from the theme's
+desktop colour, so a new theme repaints the whole workspace.
+
 ### Faults are contained
 
 Burrows treats a user-mode fault in an application as an application failure, not an

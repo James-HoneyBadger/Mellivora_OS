@@ -603,7 +603,7 @@ several GUI applications share the CPU.
 | Function | Input | Output | Description |
 | --- | --- | --- | --- |
 | `gui_get_theme` | EAX=dest buffer (48 bytes) | — | Copy current theme data |
-| `gui_set_theme` | EAX=source buffer (48 bytes) | — | Apply theme |
+| `gui_set_theme` | EAX=source buffer (48 bytes) | — | Apply theme and persist it to `burrows.cfg` |
 
 ### Event Types
 

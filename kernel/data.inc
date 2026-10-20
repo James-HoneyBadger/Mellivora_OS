@@ -1083,6 +1083,9 @@ sb16_buf_addr:    resd 1          ; DMA buffer physical address
 sb16_buf_len:     resd 1          ; DMA buffer length
 sb16_format:      resd 1          ; Format flags
 
+; Burrows desktop settings: persisted theme (see burrows_config_load/save)
+burrows_cfg_buf:  resb 4096       ; one HBFS block, the read path fills it whole
+
 ; Clipboard
 clipboard_buf:    resb 4096       ; 4 KB clipboard buffer
 clipboard_len:    resd 1          ; Current clipboard content length
