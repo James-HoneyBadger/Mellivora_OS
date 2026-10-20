@@ -120,7 +120,8 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
   desktop shortcuts work even with no window focused
 - **Crash containment** — a user-mode fault kills only that application: the kernel
   reaps its windows, reports the fault as a desktop notification, and hands focus to the
-  next window
+  next window. The **Crash Resilience Demo** app (launcher → Crash Resilience Demo) shows
+  it live, and `make check` asserts it
 - **Persistent theme** — theme changes are written to `burrows.cfg` and reloaded at boot;
   the wallpaper gradient follows the theme instead of hard-coded colours
 - **Clean teardown** — `SYS_GUI/GUI_EXIT_DESKTOP` returns to the text shell and reclaims

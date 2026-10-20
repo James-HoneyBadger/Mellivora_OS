@@ -140,6 +140,19 @@ def main():
         desk.key("ret")
         check("launcher launches a second app", desk.wait_for("[burrows] launch bcalc"))
 
+        # A crashing application must be contained, not take the desktop down.
+        desk.key("f1")
+        time.sleep(1.5)
+        desk.type_text("crash")
+        desk.key("ret")
+        launched = desk.wait_for("[burrows] launch bfault")
+        check("crash demo launches", launched)
+        check("fault is contained", desk.wait_for("[burrows] fault contained", 20))
+        time.sleep(1.5)
+        width, height = desk.screendump("03-after-fault")
+        check("desktop survives the fault", (width, height) == (1024, 768),
+              "%dx%d" % (width, height))
+
         desk.key("alt-tab")
         time.sleep(1.0)
         width, height = desk.screendump("02-alt-tab")
@@ -147,7 +160,7 @@ def main():
 
         desk.key("f3")
         time.sleep(1.0)
-        width, height = desk.screendump("03-notify-center")
+        width, height = desk.screendump("04-notify-center")
         check("notification centre opens", (width, height) == (1024, 768))
         desk.key("f3")
         time.sleep(0.5)
@@ -163,7 +176,7 @@ def main():
         desk.key("ret")
         check("Exit Desktop leaves Burrows", desk.wait_for("[burrows] desktop exit"))
         time.sleep(2.0)
-        width, height = desk.screendump("03-shell")
+        width, height = desk.screendump("05-shell")
         is_text_mode = height == 400 and width < 800
         check("text mode restored", is_text_mode, "%dx%d" % (width, height))
 

@@ -63,12 +63,21 @@ routed by focus and the desktop never blocking on a child program.
   title match, redesigned launcher (search box with caret, list panel, footer hints,
   visible Exit Desktop) that closes after launching.
 
+### Programs
+
+- **Crash Resilience Demo** (`bfault`, listed as "Crash Resilience Demo") — a diagnostic
+  application that deliberately faults in ring 3. Launching it shows the fault toast and
+  the desktop carrying on, so the containment path can be demonstrated and tested rather
+  than only described.
+
 ### Testing
 
 - **Automated desktop regression test** — `tests/test_desktop.py` (wired into `make check`
   as `check-desktop`) boots QEMU headless, enters Burrows, launches a terminal and a
   second app, exercises `Alt+Tab`, `F3`, `Ctrl+Alt+1..4` and Exit Desktop, and asserts on
-  kernel COM1 markers, screendump video modes and the absence of faults.
+  kernel COM1 markers, screendump video modes and the absence of faults. It also
+  launches the Crash Resilience Demo and asserts the fault is contained and the desktop
+  still renders.
 
 ## Unreleased - Foreground process model
 

@@ -1,12 +1,12 @@
 {
   "generated_from": "docs/app-manifests",
-  "app_count": 13,
+  "app_count": 14,
   "categories": {
     "demo": 2,
     "editor": 2,
     "file": 2,
     "network": 1,
-    "system": 4,
+    "system": 5,
     "terminal": 1,
     "utility": 1
   },
@@ -16,8 +16,8 @@
     "gui.clipboard": 5,
     "gui.notify": 11,
     "filesystem.exec": 9,
-    "gui.framebuf": 9,
-    "gui.compositor": 9,
+    "gui.framebuf": 10,
+    "gui.compositor": 10,
     "gui.mouse": 8,
     "network.raw": 1,
     "network.tcp": 1,
@@ -404,6 +404,37 @@
       "icon": "res/system-monitor.icon",
       "launch_mode": "normal",
       "manifest_file": "docs/app-manifests/burrows-system-monitor.json"
+    },
+    {
+      "id": "os.mellivora.bcrash",
+      "name": "Crash Resilience Demo",
+      "version": "13.0.0",
+      "entry": "bfault",
+      "category": "system",
+      "description": "Deliberately faults to show the desktop contains application crashes",
+      "author": "Mellivora OS",
+      "keywords": [
+        "crash",
+        "fault",
+        "resilience",
+        "diagnostics",
+        "demo"
+      ],
+      "permissions": [
+        "gui.framebuf",
+        "gui.compositor"
+      ],
+      "settings_key": "bcrash",
+      "min_os_version": "6.0",
+      "window": {
+        "width": 320,
+        "height": 200,
+        "resizable": false,
+        "centered": true
+      },
+      "icon": "res/demo.icon",
+      "launch_mode": "normal",
+      "manifest_file": "docs/app-manifests/bcrash.json"
     },
     {
       "id": "os.mellivora.bterm",

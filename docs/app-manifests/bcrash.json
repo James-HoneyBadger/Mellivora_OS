@@ -1,0 +1,16 @@
+{
+  "id": "os.mellivora.bcrash",
+  "name": "Crash Resilience Demo",
+  "version": "13.0.0",
+  "entry": "bfault",
+  "category": "system",
+  "description": "Deliberately faults to show the desktop contains application crashes",
+  "author": "Mellivora OS",
+  "keywords": ["crash", "fault", "resilience", "diagnostics", "demo"],
+  "permissions": ["gui.framebuf", "gui.compositor"],
+  "settings_key": "bcrash",
+  "min_os_version": "6.0",
+  "window": {"width": 320, "height": 200, "resizable": false, "centered": true},
+  "icon": "res/demo.icon",
+  "launch_mode": "normal"
+}

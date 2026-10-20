@@ -283,6 +283,10 @@ gui_fault_recover:
         mov byte [program_running], 0
         call shell_redir_reset
 
+        ; Tell the test harness (and anyone on COM1) that containment worked.
+        mov esi, burrows_log_fault
+        call serial_print
+
         ; Post the toast after the teardown so the notification is not
         ; cleared along with the app's windows.
         mov esi, gui_fault_msg
@@ -7952,6 +7956,7 @@ burrows_log_up:     db "[burrows] desktop up", 13, 10, 0
 burrows_log_down:   db "[burrows] desktop exit", 13, 10, 0
 burrows_log_launch: db "[burrows] launch ", 0
 burrows_log_ws:     db "[burrows] workspace ", 0
+burrows_log_fault:  db "[burrows] fault contained", 13, 10, 0
 burrows_log_crlf:   db 13, 10, 0
 
 gui_str_nc_title:   db "Notifications", 0
