@@ -240,18 +240,28 @@ programs/blauncher.bin: programs/generated_app_catalog.inc
 programs/generated_app_catalog.inc: docs/app-catalog.json tools/generate_launcher_catalog.py
 	@python3 tools/generate_launcher_catalog.py
 
-# Populate disk image with files and programs
-populate: $(IMAGE) programs populate.py
-	@echo "=== Populating filesystem ==="
-	$(POPULATE) $(IMAGE) $(PROG_DIR)
+# Stamp written once populate.py has finished writing the current kernel and
+# programs into the image. The QEMU and fsck targets depend on it, so
+# `make -j check` cannot test an image whose population step is still running
+# (or was never run).
+POPULATE_STAMP = .build/populated.stamp
+POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) populate.py
 
-# Full build: OS + programs + populated filesystem + debug symbols
-full: $(IMAGE) programs symbols
+$(POPULATE_STAMP): $(POPULATE_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "=== Populating filesystem ==="
 	# Always write the latest kernel before repopulating the filesystem.
 	# populate.py updates mellivora.img's mtime, so the $(IMAGE) rule is
 	# skipped on subsequent builds — this dd ensures kernel is always current.
 	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
 	$(POPULATE) $(IMAGE) $(PROG_DIR)
+	@touch $@
+
+# Populate disk image with files and programs
+populate: $(POPULATE_STAMP)
+
+# Full build: OS + programs + populated filesystem + debug symbols
+full: $(POPULATE_STAMP) symbols
 	@echo "=== Full build complete ==="
 
 # Rebuild kernel only and write it into the existing disk image.
@@ -313,23 +323,23 @@ iso-verify: $(ISO_FILE)
 # Headless QEMU boot smoke test: asserts the kernel reaches the shell prompt and
 # reported no CPU exceptions on COM1. BOOT_ALLOW_SKIP=1 keeps 'make check'
 # usable on hosts without QEMU; CI runs tests/test_boot.sh directly (strict).
-check-boot: $(IMAGE)
+check-boot: $(POPULATE_STAMP)
 	@BOOT_ALLOW_SKIP=1 bash tests/test_boot.sh $(IMAGE)
 
 # Runtime regression matrix: foreground/background programs, fork+exec,
 # syscall validation and networking, all driven over COM1 in QEMU.
-check-runtime: $(IMAGE)
+check-runtime: $(POPULATE_STAMP)
 	@RUNTIME_ALLOW_SKIP=1 bash tests/test_runtime.sh $(IMAGE)
 
 # Host-side HBFS validator: superblock, bitmap, directory tree, xattrs, journal.
-fsck: $(IMAGE) tools/fsck_hbfs.py
+fsck: $(POPULATE_STAMP) tools/fsck_hbfs.py
 	@python3 tools/fsck_hbfs.py $(IMAGE)
 
 # Crash consistency: kill QEMU at random points during metadata work and prove
 # with fsck that the journal recovers. Slower than the rest of the gate, so it
 # is a separate target rather than part of `make check`.
 CRASH_ITERS ?= 5
-crash-test: $(IMAGE) tools/crash_inject.py tools/fsck_hbfs.py
+crash-test: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
 	@CRASH_IMAGE=$(IMAGE); \
 	python3 tools/crash_inject.py "$$CRASH_IMAGE" "fs_mkdir_test" \
 		--iterations $(CRASH_ITERS)

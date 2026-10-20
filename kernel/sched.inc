@@ -186,6 +186,7 @@ sched_init:
         ; and the task in slot 0 really does have PGID 0.
         mov dword [tty_fg_pgid], -1
         mov dword [sched_kbd_tcb], 0
+        mov dword [sched_sig_self], 0
         popad
         ret
 
@@ -937,9 +938,10 @@ sys_yield:
         mov ebx, eax                ; EBX = our own TCB
         pushad
         mov edi, esp                ; EDI = frame base (pushad + iretd)
+        mov dword [sched_sig_self], 1
         call sched_deliver_signals
-        test eax, eax
-        js .yld_self_killed         ; default action freed the stack we are on
+        cmp dword [ebx + TCB_STATE], TASK_RUNNING
+        jne sched_self_leave        ; terminated or stopped: leave this stack
         popad
         iretd
 
@@ -1017,25 +1019,11 @@ sys_yield:
         ; the timer to deliver would starve it forever.
         mov ebx, edi            ; EBX = our TCB
         mov edi, esp            ; EDI = our kernel frame
+        mov dword [sched_sig_self], 1
         call sched_deliver_signals
-        test eax, eax
-        js .yld_self_killed
+        cmp dword [ebx + TCB_STATE], TASK_RUNNING
+        jne sched_self_leave
         jmp .yld_abort
-
-.yld_self_killed:
-        ; A default signal action terminated us, and the kernel stack we are
-        ; standing on has been freed. Escaping with iretd would return into a
-        ; released page, so fall back to the shell context instead.
-        mov esp, KERNEL_STACK
-        call sched_restore_shell_fds
-        xor eax, eax
-        call sched_apply_cr3
-        mov dword [tss_struct + 4], KERNEL_STACK
-        mov byte [program_running], 0
-        call shell_redir_reset
-        call vga_reset_color
-        sti
-        jmp shell_main
 
 ; Local temporaries (in .data-ish section within code)
 .best_slot: dd 0
@@ -1103,6 +1091,46 @@ sys_yield:
         popad
 .yield_nop:
         iretd
+
+;---------------------------------------
+; sched_self_leave - leave a task whose signal delivery ran on its own stack
+;   In : EBX = TCB of the task being left (TASK_FREE or TASK_STOPPED)
+;
+;   The stack underneath us belongs to that task, so switch to the shared
+;   kernel stack before touching anything. A terminated task's kernel stack
+;   page was deliberately kept allocated by sched_deliver_signals and is
+;   released here; a stopped task keeps its stack, fd view, address space and
+;   TCB so fg/bg can resume it.
+;
+;   Never returns: control goes back to the shell.
+;---------------------------------------
+sched_self_leave:
+        mov esp, KERNEL_STACK
+        cmp dword [ebx + TCB_STATE], TASK_FREE
+        jne .ssl_keep_kstack
+        mov eax, [ebx + TCB_KSTACK]
+        test eax, eax
+        jz .ssl_keep_kstack
+        sub eax, 4096
+        call pmm_free_page
+        mov dword [ebx + TCB_KSTACK], 0
+.ssl_keep_kstack:
+        ; Save the outgoing task's fd view (needed if it was only stopped) and
+        ; install the shell's.
+        mov edi, ebx
+        xor ebx, ebx
+        call sched_swap_fd_tables
+        call sched_restore_shell_fds
+        xor eax, eax
+        call sched_apply_cr3
+        mov dword [tss_struct + 4], KERNEL_STACK
+        mov dword [tty_fg_pgid], -1
+        mov byte [program_running], 0
+        call shell_redir_reset
+        call vga_reset_color
+        sti
+        jmp shell_main
+
 
 ;---------------------------------------
 ; sys_getpid - Return current task PID
@@ -1281,12 +1309,51 @@ sched_signal_task:
 .sst_sig: dd 0
 
 ;---------------------------------------
+; sched_kbd_default_terminate - would this signal's default action kill?
+;   In : EDI = TCB, EAX = signal number
+;   Out: EAX = 1  SIG_DFL (or no handler table) means "terminate"
+;              = 0  a real handler, SIG_IGN, or a non-terminating default
+;   Preserves: EBX, ECX, EDI
+;---------------------------------------
+sched_kbd_default_terminate:
+        push ebx
+        push ecx
+        cmp eax, SIGKILL
+        je .kdt_yes
+        cmp eax, SIGCONT
+        je .kdt_no
+        cmp eax, SIGTSTP
+        je .kdt_no
+        cmp eax, SIGCHLD
+        je .kdt_no
+        mov ebx, [edi + TCB_SIG_HAND]
+        test ebx, ebx
+        jz .kdt_yes
+        mov ecx, [ebx + eax * 4]
+        cmp ecx, SIG_DFL
+        je .kdt_yes
+.kdt_no:
+        xor eax, eax
+        jmp .kdt_done
+.kdt_yes:
+        mov eax, 1
+.kdt_done:
+        pop ecx
+        pop ebx
+        ret
+
+;---------------------------------------
 ; sched_kbd_signal - deliver a keyboard signal to the foreground job
 ;   In : EAX = signal number
 ;   Out: EAX = 1  the interrupting context survives (a handler was queued, or
 ;                 it was not a target at all) — just return to it
 ;        EAX = 0  the foreground context is gone (killed or stopped) and the
 ;                 caller must hand the console back to the shell
+;
+; A SIG_DFL terminate signal aimed at the interrupted task is not queued: it
+; stays RUNNING and the caller's abort path tears it down from the shared
+; kernel stack. Queueing it would leave the timer to free the very stack the
+; task is executing on.
 ;
 ; Ctrl+C/Ctrl+Z belong to the terminal, not to "whatever task happens to be
 ; running": they go to the terminal's foreground process group (tty_fg_pgid),
@@ -1299,6 +1366,7 @@ sched_signal_task:
 sched_kbd_signal:
         pushad
         mov [.ksf_sig], eax
+        mov dword [.ksf_self_dfl], 0
 
         ; Remember who we interrupted (may be 0 in the shell/legacy context)
         call sched_get_current_task
@@ -1323,6 +1391,15 @@ sched_kbd_signal:
         cmp [edi + TCB_PGID], ecx
         jne .ksf_lock_next
         inc dword [.ksf_hits]
+        cmp edi, [.ksf_cur]
+        jne .ksf_lock_send
+        mov eax, [.ksf_sig]
+        call sched_kbd_default_terminate
+        test eax, eax
+        jz .ksf_lock_send
+        mov dword [.ksf_self_dfl], 1
+        jmp .ksf_lock_next
+.ksf_lock_send:
         mov eax, [.ksf_sig]
         call sched_signal_task
 .ksf_lock_next:
@@ -1342,9 +1419,18 @@ sched_kbd_signal:
         test edi, edi
         jz  .ksf_verdict             ; shell context: nothing to signal
         mov eax, [.ksf_sig]
+        call sched_kbd_default_terminate
+        test eax, eax
+        jz .ksf_single_send
+        mov dword [.ksf_self_dfl], 1
+        jmp .ksf_verdict
+.ksf_single_send:
+        mov eax, [.ksf_sig]
         call sched_signal_task
 
 .ksf_verdict:
+        cmp dword [.ksf_self_dfl], 0
+        jne .ksf_gone                ; default action: caller aborts the task
         ; Can we return to the interrupted context? Only if it still belongs to
         ; a task that is runnable. A task destroyed by a default action is FREE;
         ; a stopped one is TASK_STOPPED. Either way the console goes back to the
@@ -1370,10 +1456,11 @@ sched_kbd_signal:
         mov [esp + 28], eax          ; EAX of the pushad frame = return value
         popad
         ret
-.ksf_sig:  dd 0
-.ksf_cur:  dd 0
-.ksf_kept: dd 0
-.ksf_hits: dd 0
+.ksf_sig:      dd 0
+.ksf_cur:      dd 0
+.ksf_kept:     dd 0
+.ksf_hits:     dd 0
+.ksf_self_dfl: dd 0
 
 ;---------------------------------------
 ; sys_kill - send a signal to a task or a process group
@@ -1716,6 +1803,12 @@ sched_check_itimers:
 ;        EAX = -1 — task was terminated by a default signal action (TCB_STATE
 ;                   is now TASK_FREE; caller must NOT do popad+iretd)
 ;   Clobbers: EAX, ECX, EDX, ESI  (preserves EBX, EDI)
+;
+;   When EBX is the task whose kernel stack this call is running on, set
+;   sched_sig_self = 1 first. A default terminate action then leaves the
+;   stack page allocated (TCB_KSTACK stays set) and the caller must leave via
+;   sched_self_leave, which switches stacks and frees it. The flag is cleared
+;   before this function returns.
 ;=======================================================================
 sched_deliver_signals:
 .sdel_next:
@@ -1809,7 +1902,11 @@ sched_deliver_signals:
                                     ; parent that yielded after a child died.
 
         ; All others (SIGKILL, SIGTERM, SIGINT, SIGALRM, etc.): terminate
-        ; Free kernel stack page if allocated
+        ; Free the kernel stack page if allocated. A self-delivery runs on that
+        ; very page, so it must stay allocated until the caller has switched
+        ; away; sched_self_leave releases it there.
+        cmp dword [sched_sig_self], 0
+        jne .sdel_no_kstack
         mov eax, [ebx + TCB_KSTACK]
         test eax, eax
         jz  .sdel_no_kstack
@@ -1839,8 +1936,14 @@ sched_deliver_signals:
 .sdel_term_clear:
         mov dword [ebx + TCB_STATE],  TASK_FREE
         mov dword [ebx + TCB_ESP],    0
+        ; Keep TCB_KSTACK for a self-delivery: the caller frees the page after
+        ; it has moved off this stack (see sched_self_leave).
+        cmp dword [sched_sig_self], 0
+        jne .sdel_keep_kstack
         mov dword [ebx + TCB_KSTACK], 0
+.sdel_keep_kstack:
         dec dword [task_count]
+        mov dword [sched_sig_self], 0
         mov eax, -1
         ret                             ; EAX = -1 : task killed
 
@@ -1848,6 +1951,7 @@ sched_deliver_signals:
         mov dword [ebx + TCB_STATE], TASK_STOPPED
         ; Fall through to sdel_ok (task stopped, not killed)
 .sdel_ok:
+        mov dword [sched_sig_self], 0
         xor eax, eax
         ret                             ; EAX = 0 : task alive
 
@@ -2383,10 +2487,11 @@ sys_fork:
         mov  dword [edi + TCB_STATE], TASK_READY
         mov  eax, [fork_child_kstop]
         mov  [edi + TCB_KSTACK], eax
-        mov  eax, [fork_child_ustop]
-        mov  [edi + TCB_USTACK], eax
         mov  eax, [fork_child_kesp]
         mov  [edi + TCB_ESP],    eax
+        ; TCB_USTACK is deliberately not touched: the TCB copy above already
+        ; carries the parent's stack top, which the copy-on-write share below
+        ; makes correct for the child.
         mov  dword [edi + TCB_SIG_PEND],  0  ; clear pending signals for child
         mov  dword [edi + TCB_ALARM],     0  ; no alarm inherited by child
         mov  dword [edi + TCB_SIG_HAND],  0  ; v11: child starts with no signal handlers

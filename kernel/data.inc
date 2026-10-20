@@ -937,6 +937,10 @@ tty_fg_pgid:      resd 1                              ; v14: terminal foreground
                                                       ;  slot 0 is a real group and cannot
                                                       ;  serve as the "none" sentinel)
 sched_kbd_tcb:    resd 1                              ; v14: TCB a keyboard signal hit
+sched_sig_self:   resd 1                              ; 1 while sched_deliver_signals runs
+                                                      ; for the task whose kernel stack we
+                                                      ; are on: a default action keeps
+                                                      ; TCB_KSTACK for the caller to free
 ; v14 copy-on-write fork: one reference count per 4 KB frame of identity-mapped
 ; RAM. 0 means "not shared" — the single owner frees it directly. fork() bumps
 ; the count and clears PG_WRITABLE in both address spaces; the first write
@@ -950,7 +954,6 @@ fork_child_tcb:   resd 1
 fork_child_kstop: resd 1
 fork_child_kesp:  resd 1
 fork_child_ubase: resd 1
-fork_child_ustop: resd 1
 fork_child_pid_slot: resd 1  ; slot index that becomes child PID
 task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 128 = 16384 bytes v12.0)
 
@@ -1000,6 +1003,8 @@ net_ip_proto:     resb 1
 net_ip_payload:   resd 1
 net_ip_payload_len: resd 1
 net_recv_src_ip:  resd 1          ; Source IP of received packet
+net_recv_dst_ip:  resd 1          ; Destination IP of received packet (may be
+                                  ; broadcast, so it is not always [net_ip])
 
 ; ICMP / Ping
 net_icmp_buf:     resb 64         ; ICMP build buffer

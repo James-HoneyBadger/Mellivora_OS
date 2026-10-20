@@ -311,12 +311,17 @@ irq_timer:
 
         ; No other ready task — re-mark self as RUNNING
         mov dword [edi + TCB_STATE], TASK_RUNNING
-        ; v11: deliver pending signals to the current task before re-entering ring-3
+        ; v11: deliver pending signals to the current task before re-entering
+        ; ring-3. This runs on that task's own kernel stack, so mark the call
+        ; as a self-delivery: a default action must not free the page we are
+        ; standing on. If it terminates or stops the task, leave through
+        ; sched_self_leave instead of returning to ring 3.
         mov ebx, edi            ; EBX = current task TCB
         mov edi, esp            ; EDI = frame base (timer pushad+iretd frame)
+        mov dword [sched_sig_self], 1
         call sched_deliver_signals
-        test eax, eax
-        js  .timer_done         ; killed by default action — reschedule next tick
+        cmp dword [ebx + TCB_STATE], TASK_RUNNING
+        jne sched_self_leave
         jmp .timer_done
 
 .timer_switch:

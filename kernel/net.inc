@@ -1198,9 +1198,13 @@ ip_handle:
         jne .ip_h_done
 
 .ip_for_us:
-        ; Save source IP for response building
+        ; Save source and destination IPs for response building and for the
+        ; transport checksum pseudo-header. The destination is not always
+        ; [net_ip]: broadcast frames (DHCP) carry 255.255.255.255.
         mov eax, [esi + 12]
         mov [net_recv_src_ip], eax
+        mov eax, [esi + 16]
+        mov [net_recv_dst_ip], eax
 
         ; Get protocol
         movzx eax, byte [esi + 9]
@@ -1533,7 +1537,7 @@ icmp_send_echo:
 ;---------------------------------------
 ; udp_handle - Handle incoming UDP packet
 ;  ESI = UDP header, ECX = length
-;  [net_recv_src_ip] = source IP
+;  [net_recv_src_ip] / [net_recv_dst_ip] = IP addresses of the frame
 ;---------------------------------------
 udp_handle:
         pushad
@@ -1758,6 +1762,9 @@ udp_compute_checksum:
 ;
 ; Builds the RFC 793/768 pseudo-header followed by the segment in
 ; net_rx_cksum_buf, then reuses inet_checksum. A valid checksum folds to 0.
+; The destination comes from [net_recv_dst_ip], the address carried in the
+; received IP header, because ip_handle also accepts broadcast frames whose
+; destination is not our unicast address.
 ;---------------------------------------
 net_rx_checksum_ok:
         pushad
@@ -1765,8 +1772,8 @@ net_rx_checksum_ok:
         mov edi, net_rx_cksum_buf
 
         mov [edi + 0], edx           ; source IP
-        mov ebx, [net_ip]
-        mov [edi + 4], ebx           ; destination IP
+        mov ebx, [net_recv_dst_ip]   ; destination as received, not [net_ip]:
+        mov [edi + 4], ebx           ; broadcast frames carry 255.255.255.255
         mov byte [edi + 8], 0
         mov byte [edi + 9], al       ; protocol
         mov ebx, ebp
@@ -1793,7 +1800,7 @@ net_rx_checksum_ok:
 ;---------------------------------------
 ; tcp_handle - Handle incoming TCP segment
 ;  ESI = TCP header, ECX = payload length (IP payload size)
-;  [net_recv_src_ip] = source IP
+;  [net_recv_src_ip] / [net_recv_dst_ip] = IP addresses of the frame
 ;---------------------------------------
 tcp_handle:
         pushad

@@ -73,6 +73,17 @@ overwrite the image another process is running.
 - **Ctrl+C is SIGINT** — the keyboard handler no longer hard-aborts unconditionally. If
   the foreground program installed a SIGINT handler, the signal is queued and the program
   keeps running; `SIG_IGN` is honoured; `SIG_DFL` (or no handler) still aborts to the shell.
+- **SIG_DFL Ctrl+C aborts immediately** — a default-action signal aimed at the running
+  foreground task is no longer queued. `sched_kbd_signal` checks the disposition and
+  reports the context as gone, so the keyboard handler switches to the shared kernel stack
+  and tears the task down through `sched_exit_task`. Previously the SIGINT stayed pending
+  until the timer delivered it from inside the very stack it then freed.
+- **self-delivery keeps its kernel stack** — `sched_deliver_signals` now knows when it is
+  delivering to the task whose frame it was called with (`sched_sig_self`). A default
+  terminate then leaves `TCB_KSTACK` allocated; the caller leaves through
+  `sched_self_leave`, which switches stacks, frees the page and restores the shell. A
+  stopped task keeps its stack, fd view and address space for `fg`, so Ctrl+Z behaves as
+  documented.
 - **`sys_sigaction` lost the first handler** — the zero-fill of a freshly allocated handler
   table used `rep stosd`, which consumes ECX, and ECX held the handler argument. The first
   `sigaction` call of every task therefore installed `SIG_DFL`, so a task could never catch
@@ -163,8 +174,21 @@ overwrite the image another process is running.
   exit, not just background ones (foreground and forked exits used to leak it);
   `paging_copy_window_private` (exec isolation) forces `PG_WRITABLE` on the copies it
   makes and releases the references it replaces.
+- **fork inherits the parent's user stack top** — `sys_fork` still copied
+  `fork_child_ustop` into `TCB_USTACK`, but that global lost its writer when the eager
+  stack allocation was removed, so every child ended up with a zero stack top. `sbrk` /
+  `malloc` then failed in every forked child, and the child's stack COW references were
+  never released on exit. The child now keeps the parent value the TCB clone inherited.
 - **`cow_test`** — new regression program: the child sees the parent's data and stack
   values, its writes to both stay private, and the parent's values are intact afterwards.
+
+### Networking
+
+- **broadcast UDP checksums** — `net_rx_checksum_ok` built its pseudo-header destination
+  from `[net_ip]`, so a DHCP OFFER/ACK addressed to 255.255.255.255 failed validation
+  before the DHCP handler could run. `ip_handle` now records the destination from the IP
+  header (`net_recv_dst_ip`) and the checksum uses it, so broadcast and not-yet-assigned
+  destinations validate correctly.
 
 ### Storage (HBFS) — crash-consistent metadata
 
@@ -261,6 +285,11 @@ wrote metadata to the wrong place are fixed.
   shows `hello` instead of `-`.
 
 ### Testing
+
+- **`make -j check` cannot test an unpopulated image** — the QEMU and fsck targets now
+  depend on `.build/populated.stamp`, produced by the populate step and dependent on the
+  kernel plus every program binary, instead of only on `$(IMAGE)`. Parallel `check` runs
+  no longer race `populate.py`.
 
 - **`qemu_drive.py --screendump FILE`** — captures the framebuffer through the QEMU
   monitor and converts the PPM to PNG in-process, so graphics programs can be verified
