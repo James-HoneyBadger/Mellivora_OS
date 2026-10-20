@@ -298,7 +298,14 @@ sched_create_task:
         mov [edi + TCB_SIG_MASK], dword 0
         mov [edi + TCB_PGID], edx        ; Default PGID = own PID
         mov [edi + TCB_EXIT_CODE], dword 0
-        mov [edi + TCB_BRK], dword PROGRAM_END_ADDR ; Initial break = end of static data
+        ; Break starts after the loaded image (program_brk_init), not at the
+        ; top of the window: the heap must grow towards the user stack.
+        mov eax, [program_brk_init]
+        test eax, eax
+        jnz .ct_brk_ready
+        mov eax, PROGRAM_BASE + 0x1000
+.ct_brk_ready:
+        mov [edi + TCB_BRK], eax
         mov [edi + TCB_SIG_HAND], dword 0           ; v11: no handler table yet
         ; v12 POSIX fields
         mov eax, [edi + TCB_UID]
@@ -444,6 +451,35 @@ sched_free_ready_task:
         mov dword [edi + TCB_PID], 0
         dec dword [task_count]
 .sfr_done:
+        popad
+        ret
+
+;---------------------------------------
+; fault_kill_current_task - reap the task that just faulted
+;
+; Called from the fault handlers after switching to the shared kernel stack.
+; Leaves the machine fit to return to either the desktop or the shell: the
+; dying task is gone, the shell's fd view is installed and the master page
+; directory is active.
+;---------------------------------------
+fault_kill_current_task:
+        pushad
+        mov dword [bg_exit_code], 0x80000000
+        call sched_get_current_task
+        test eax, eax
+        jz .fkct_done
+        mov edi, eax
+        xor ebx, ebx
+        call sched_swap_fd_tables
+        call sched_exit_task
+.fkct_done:
+        call sched_restore_shell_fds
+        xor eax, eax
+        call sched_apply_cr3
+        mov dword [tss_struct + 4], KERNEL_STACK
+        mov dword [tty_fg_pgid], -1
+        mov byte [program_running], 0
+        call shell_redir_reset
         popad
         ret
 

@@ -274,6 +274,15 @@ sys_shmget:
         push ecx
         push edi
         push edx
+        ; The shared-memory table doubles as the user-visible mapping, so make
+        ; its pages reachable from ring 3 once (idempotent re-map).
+        mov eax, ipc_shm
+        mov ecx, (IPC_MAX_SHM * SHM_STRUCT_SIZE + 0xFFF) >> 12
+        push edx
+        push ebx
+        call paging_map_phys_user
+        pop ebx
+        pop edx
         ; First, check if key already exists
         mov edi, ipc_shm
         xor edx, edx
@@ -888,6 +897,19 @@ ipc_surface_create:
         mov edx, [esp + 8]      ; width
         mov [ecx + SURF_WIDTH],          edx
 
+        ; Surface pixels are written by the owning application, so grant ring 3
+        ; access to exactly these pages.
+        push ecx
+        mov edx, [ecx + SURF_WIDTH]
+        imul edx, [ecx + SURF_HEIGHT]
+        shl edx, 2
+        add edx, 0xFFF
+        shr edx, 12
+        mov ecx, edx
+        ; EAX still holds the freshly allocated pixel buffer
+        call paging_map_phys_user
+        pop ecx
+
         ; Owner PID
         call sched_get_current_task
         test eax, eax
@@ -1047,6 +1069,16 @@ ipc_surface_resize:
         mov [esi + SURF_WIDTH],   ecx
         mov edx, [esp + 24]
         mov [esi + SURF_HEIGHT],  edx
+
+        ; The resized buffer is user-written too.
+        mov eax, [esi + SURF_WIDTH]
+        imul eax, [esi + SURF_HEIGHT]
+        shl eax, 2
+        add eax, 0xFFF
+        shr eax, 12
+        mov ecx, eax
+        mov eax, [esi + SURF_BUF_PTR]
+        call paging_map_phys_user
         ; Reset dirty rect to full surface
         mov [esi + SURF_DX], dword 0
         mov [esi + SURF_DY], dword 0

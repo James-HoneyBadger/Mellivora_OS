@@ -102,6 +102,47 @@ _start:
     cmp eax, [initial_brk]
     jne .fail
 
+    ; --- Test 7: grow the heap by 128 KB and touch both ends ---
+    mov eax, SYS_PRINT
+    mov ebx, msg_test7
+    int 0x80
+
+    mov eax, SYS_SBRK
+    mov ebx, 131072
+    int 0x80
+    cmp eax, -1
+    je .fail
+    mov edi, eax                    ; first byte of the new region
+
+    mov dword [edi], 0x5A5A5A5A
+    mov dword [edi + 131068], 0xA5A5A5A5
+    mov esi, [edi]
+    mov edx, [edi + 131068]
+    cmp esi, 0x5A5A5A5A
+    jne .fail
+    cmp edx, 0xA5A5A5A5
+    jne .fail
+
+    ; Fresh heap must read as zeroes
+    cmp dword [edi + 4096], 0
+    jne .fail
+    cmp dword [edi + 65536], 0
+    jne .fail
+
+    mov eax, SYS_PRINT
+    mov ebx, msg_big_ok
+    int 0x80
+
+    ; --- Test 8: shrink back to where we started ---
+    mov eax, SYS_SBRK
+    mov ebx, -131072
+    int 0x80
+    mov eax, SYS_SBRK
+    mov ebx, 0
+    int 0x80
+    cmp eax, [initial_brk]
+    jne .fail
+
     ; --- Success ---
     mov eax, SYS_PRINT
     mov ebx, msg_success
@@ -151,6 +192,8 @@ msg_test3:  db "3. Writing and reading from new memory: ", 0
 msg_test4:  db "4. Getting current break (after 0-byte alloc): ", 0
 msg_test5:  db "5. Deallocating 4096 bytes. Old break: ", 0
 msg_test6:  db "6. Getting final program break: ", 0
+msg_test7:  db "7. Growing the heap by 128 KB: ", 0
+msg_big_ok: db "SBRK_BIG_OK", 10, 0
 msg_ok:     db "OK", 10, 0
 msg_success:db 10, "All tests passed!", 10, 0
 msg_fail:   db 10, "Test FAILED!", 10, 0

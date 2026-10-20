@@ -6109,6 +6109,11 @@ cmd_exec_program:
         mov edi, PROGRAM_BASE
         call hbfs_read_file
         jc .try_path_search
+        ; ECX = image size: the heap starts after it, not at the window end.
+        mov [program_size], ecx
+        mov eax, ecx
+        add eax, PROGRAM_BASE
+        call set_program_brk_init
 
         jmp .found_program
 
@@ -6179,6 +6184,11 @@ cmd_exec_program:
         ; Restore user's cwd before execution
         call path_restore_cwd
         pop esi                 ; clean up PATH string pointer
+        mov ecx, [.path_fsize]
+        mov [program_size], ecx
+        add ecx, PROGRAM_BASE
+        mov eax, ecx
+        call set_program_brk_init
         jmp .found_program
 
 .path_cd_fail:
@@ -6273,6 +6283,17 @@ cmd_exec_program:
         call sched_start_task   ; switches CR3/fds and never returns
 
 .exec_legacy_ring3:
+        ; exec in place: the new image may be larger, so move the break with it
+        push eax
+        call sched_get_current_task
+        test eax, eax
+        jz .exec_no_brk_reset
+        mov ecx, [program_brk_init]
+        test ecx, ecx
+        jz .exec_no_brk_reset
+        mov [eax + TCB_BRK], ecx
+.exec_no_brk_reset:
+        pop eax
         ; When an existing task execs, its own kernel stack must stay installed as
         ; TSS ESP0; using KERNEL_STACK here would let the next syscall overwrite
         ; the shell's stack underneath it.

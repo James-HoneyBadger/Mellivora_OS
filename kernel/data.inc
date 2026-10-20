@@ -772,6 +772,8 @@ ctrl_c_flag:    resb 1
 
 ; Program execution
 program_entry:  resd 1
+program_brk_init: resd 1        ; first free byte after the loaded image (sbrk base)
+program_size:   resd 1          ; bytes loaded for the current program
 program_exit_code: resd 1
 bg_exit_code:      resd 1          ; v12.2: BG task exit code saved before sched_exit_task
 shell_last_status: resd 1

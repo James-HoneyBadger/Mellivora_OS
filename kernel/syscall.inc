@@ -3726,29 +3726,59 @@ sys_sbrk:
 
         mov edi, eax            ; EDI = TCB
         mov eax, [edi + TCB_BRK]
-        mov [sys_sbrk.old_brk], eax ; Save old break for return
+        test eax, eax
+        jnz .sbrk_have_brk
+        mov eax, PROGRAM_BASE + 0x1000  ; no break recorded yet
+.sbrk_have_brk:
+        mov [sys_sbrk.old_brk], eax
 
-        ; Calculate new break
-        add eax, ebx
-        ; Check for valid range: must be >= end of static data
-        ; and < user stack
-        cmp eax, PROGRAM_END_ADDR
-        jl .sbrk_fail
-        cmp eax, [edi + TCB_USTACK]
-        jge .sbrk_fail
+        ; Calculate the new break, then keep it inside the program window and
+        ; clear of the user stack: the heap grows up towards the stack.
+        mov edx, eax            ; EDX = old break
+        add eax, ebx            ; EAX = new break
+        mov ecx, PROGRAM_BASE + 0x1000
+        cmp eax, ecx
+        jb .sbrk_fail
+        mov ecx, [edi + TCB_USTACK]
+        sub ecx, 0x100          ; keep a margin below the stack top
+        cmp eax, ecx
+        ja .sbrk_fail
 
-        ; All good, update break in TCB
-        mov [edi + TCB_BRK], eax
+        ; Zero the newly exposed range so a grown heap never exposes stale
+        ; bytes from whatever ran in this window before.
+        cmp eax, edx
+        jbe .sbrk_commit
+        mov [sys_sbrk.new_brk], eax
+        mov edi, edx
+        mov ecx, eax
+        sub ecx, edx
+        xor eax, eax
+        cld
+        rep stosb
+        mov eax, [sys_sbrk.new_brk]
+
+.sbrk_commit:
+        ; Re-find the TCB: the zeroing loop clobbered EDI/ECX.
+        mov ebx, eax
+        call sched_get_current_task
+        test eax, eax
+        jz .sbrk_fail
+        mov [eax + TCB_BRK], ebx
+
+        ; Syscall results are returned through the pushad frame, not EAX:
+        ; popad restores the caller's register set.
         mov eax, [sys_sbrk.old_brk]
+        mov [esp + 28], eax
         popad
         iretd
 
 .sbrk_fail:
-        mov eax, -1
+        mov dword [esp + 28], -1
         popad
         iretd
 
 .old_brk: dd 0
+.new_brk: dd 0
 
 ;=======================================================================
 ; v9.0 Stub syscall handlers (104-115)

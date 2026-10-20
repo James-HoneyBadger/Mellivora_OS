@@ -113,14 +113,38 @@ paging_init:
         cmp ebx, PAGING_MAP_TABLES
         jge .fill_dir
 
-        ; Fill 1024 page-table entries for this 4 MB region
+        ; Fill 1024 page-table entries for this 4 MB region.
+        ;
+        ; Kernel RAM is mapped SUPERVISOR-only: ring 3 must not be able to read
+        ; or write page tables, allocator bitmaps, driver state or the kernel
+        ; image. User-mode access is granted per page only where a process
+        ; legitimately needs it:
+        ;   * the program window (PROGRAM_BASE..PROGRAM_END_ADDR): code, data,
+        ;     heap and user stack
+        ;   * the legacy video aperture (0xA0000..0xC0000): direct VGA text
+        ;     output is a documented programming technique
+        ; Everything else is mapped again with PG_USER by the subsystem that
+        ; owns it (framebuffer shadow buffer, IPC surfaces, shared memory).
         mov edi, esi            ; current page table
         mov eax, ebx
         shl eax, 22             ; base phys address = index × 4 MB
-        or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
         mov ecx, 1024
 .fill_pt:
-        stosd                   ; write PTE
+        mov edx, eax
+        or  edx, PG_PRESENT | PG_WRITABLE
+        test ebx, ebx
+        jnz .pt_store           ; above 4 MB: never user here
+        cmp eax, PROGRAM_BASE
+        jae .pt_user
+        cmp eax, 0xA0000
+        jb .pt_store
+        cmp eax, 0xC0000
+        jae .pt_store
+.pt_user:
+        or  edx, PG_USER
+.pt_store:
+        mov [edi], edx          ; write PTE
+        add edi, 4
         add eax, 0x1000         ; next 4 KB page
         loop .fill_pt
 
@@ -312,17 +336,26 @@ isr_page_fault:
         pop  ecx
         pop  eax
 
-        ; A user-mode fault while Burrows is up is not fatal: kill the
-        ; application and leave the desktop running. Kernel faults, and faults
-        ; when no desktop is up, keep the reporting path below.
-        cmp  byte [gui_desktop_active], 1
-        jne  .pf_show_error
-        mov  eax, [esp + 8]             ; saved CS
-        test eax, 3
+        ; A user-mode fault is an application problem, never a system problem.
+        ; Report it in one line and reap only that task; the desktop and the
+        ; shell both keep running. Supervisor faults fall through to the full
+        ; register dump because nothing can be trusted afterwards.
+        test dword [pf_errcode], 0x04
         jz   .pf_show_error
+
+        cmp  byte [gui_desktop_active], 1
+        je   .pf_gui_recover
+
+        call pf_report_task_fault
+        mov  esp, KERNEL_STACK
+        call fault_kill_current_task
+        sti
+        jmp  shell_main
+
+.pf_gui_recover:
         mov  eax, [pf_eip]
         mov  [exc_eip], eax
-        call gui_fault_recover          ; never returns
+        call gui_fault_recover
 
 .pf_show_error:
         pushad
@@ -401,11 +434,72 @@ isr_page_fault:
         call vga_reset_color
         popad
 
-        ; Remove error code from stack and recover to shell
+        ; Remove error code from stack and recover to the shell. Supervisor
+        ; faults leave no trustworthy state, so the session restarts.
         add esp, 4              ; pop error code
         mov esp, KERNEL_STACK
         sti
         jmp shell_main
+
+;---------------------------------------
+; paging_map_phys_user - let ring 3 reach a kernel-owned physical buffer
+;   In : EAX = physical base address, ECX = page count
+;
+; Used for buffers the kernel allocates but hands to user space: the VBE
+; shadow framebuffer, IPC surface pixels and shared memory. The pages are
+; identity mapped writable+user in the MASTER directory, so every task (and
+; every task directory cloned from it) sees the same buffer. Nothing else in
+; the surrounding region becomes user accessible.
+;---------------------------------------
+paging_map_phys_user:
+        pushad
+        test eax, eax
+        jz .mpu_done
+        ; Round down to a page boundary and cover the partial page.
+        and eax, ~0xFFF
+        inc ecx
+        mov [.mpu_addr], eax
+        mov [.mpu_pages], ecx
+.mpu_loop:
+        cmp dword [.mpu_pages], 0
+        jle .mpu_done
+        mov eax, [.mpu_addr]
+        mov ebx, eax
+        mov ecx, PG_PRESENT | PG_WRITABLE | PG_USER
+        call paging_map_page           ; master directory
+        add dword [.mpu_addr], 0x1000
+        dec dword [.mpu_pages]
+        jmp .mpu_loop
+.mpu_done:
+        popad
+        ret
+.mpu_addr:  dd 0
+.mpu_pages: dd 0
+
+;---------------------------------------
+; pf_report_task_fault - one-line report for a contained user-mode fault
+;   Reads pf_addr / pf_eip / pf_errcode.
+;---------------------------------------
+pf_report_task_fault:
+        pushad
+        mov byte [vga_color], COLOR_ERROR
+        mov esi, msg_pf_task
+        call vga_print
+        in  eax, 0x60                   ; last scancode is irrelevant; keep EAX sane
+        mov eax, [pf_eip]
+        call vga_print_hex
+        mov esi, msg_pf_task_addr
+        call vga_print
+        mov eax, [pf_addr]
+        call vga_print_hex
+        mov al, 0x0A
+        call vga_putchar
+        call vga_reset_color
+        popad
+        ret
+
+msg_pf_task:      db "[fault] task killed, eip=0x", 0
+msg_pf_task_addr: db " addr=0x", 0
 
 ;---------------------------------------
 ; paging_map_page - Map a single virtual

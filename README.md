@@ -246,6 +246,9 @@ Mellivora_OS/
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, memory map, HBFS, drivers |
 | [Tutorial](docs/TUTORIAL.md) | Step-by-step beginner walkthrough |
 | [API Reference](docs/API_REFERENCE.md) | Library functions and calling conventions |
+| [Roadmap](docs/ROADMAP.md) | Phased plan to a general-purpose 64-bit OS |
+| [Address-space spec](docs/spec/VMM.md) | Isolation rules and `mmap` semantics |
+| [Security model](docs/spec/SECURITY.md) | Threat model, capabilities, test obligations |
 | [Sample Catalog](docs/SAMPLES.md) | Guided examples across NASM, C, Perl, and BASIC |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
 

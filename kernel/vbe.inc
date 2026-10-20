@@ -278,6 +278,14 @@ vbe_set_mode:
         mov [vbe_shadow_buf], eax
         mov [vbe_shadow_pages], ecx
 .shadow_ready:
+        ; Programs render straight into the shadow buffer, so its pages must be
+        ; user accessible. Kernel RAM around it stays supervisor-only.
+        mov eax, [vbe_shadow_buf]
+        test eax, eax
+        jz .shadow_not_mapped
+        mov ecx, [vbe_shadow_pages]
+        call paging_map_phys_user
+.shadow_not_mapped:
         popad
         ret
 

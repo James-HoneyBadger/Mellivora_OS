@@ -51,8 +51,23 @@ isr_exception_noerr:
         call exc_dump_regs
         call vga_reset_color
         popad
-        ; Recover to shell
+        ; Recover: a ring 3 fault killed only the offending task; a kernel
+        ; fault leaves nothing safe to return to, so the shell restarts.
         mov esp, KERNEL_STACK
+        ; Only a user-mode fault is recoverable by killing the task; a kernel
+        ; fault leaves state we cannot trust, so the shell restarts instead.
+        test dword [exc_cs], 3
+        jz .exc_noerr_fatal
+        cmp byte [gui_desktop_active], 1
+        je .exc_noerr_back_gui
+        call fault_kill_current_task
+        sti
+        jmp shell_main
+.exc_noerr_back_gui:
+        call fault_kill_current_task
+        sti
+        jmp gui_desktop_resume
+.exc_noerr_fatal:
         sti
         jmp shell_main
 
@@ -107,8 +122,23 @@ isr_exception_err:
         call exc_dump_regs
         call vga_reset_color
         popad
-        ; Recover to shell
+        ; Recover: a ring 3 fault kills only the offending task, so the shell
+        ; and the rest of the system stay alive.
         mov esp, KERNEL_STACK
+        ; Only a user-mode fault is recoverable by killing the task; a kernel
+        ; fault leaves state we cannot trust, so the shell restarts instead.
+        test dword [exc_cs], 3
+        jz .exc_fatal_shell1
+        cmp byte [gui_desktop_active], 1
+        je .exc_back_desktop1
+        call fault_kill_current_task
+        sti
+        jmp shell_main
+.exc_back_desktop1:
+        call fault_kill_current_task
+        sti
+        jmp gui_desktop_resume
+.exc_fatal_shell1:
         sti
         jmp shell_main
 

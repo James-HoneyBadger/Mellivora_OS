@@ -262,27 +262,11 @@ gui_fault_recover:
         cli
         mov esp, KERNEL_STACK
 
-        mov dword [bg_exit_code], 0x80000000
         call gui_fault_message
 
-        ; Save the dying task's fd view and install the shell's.
-        call sched_get_current_task
-        test eax, eax
-        jz .gfr_no_task
-        mov edi, eax
-        xor ebx, ebx
-        call sched_swap_fd_tables
-        ; Tear the task down: this also reaps its windows through
-        ; gui_cleanup_pid, so the desktop repaints without them.
-        call sched_exit_task
-.gfr_no_task:
-        call sched_restore_shell_fds
-        xor eax, eax
-        call sched_apply_cr3
-        mov dword [tss_struct + 4], KERNEL_STACK
-        mov dword [tty_fg_pgid], -1
-        mov byte [program_running], 0
-        call shell_redir_reset
+        ; Tear the task down (this also reaps its windows through
+        ; gui_cleanup_pid) and restore the shell's view of the machine.
+        call fault_kill_current_task
 
         ; Tell the test harness (and anyone on COM1) that containment worked.
         mov esi, burrows_log_fault

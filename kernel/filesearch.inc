@@ -57,6 +57,32 @@ gff_restore_cwd:
         popad
         ret
 
+;---------------------------------------
+; set_program_brk_init - record where the heap may start for this image
+;   In : EAX = first free byte after the image (image end address)
+;
+; The value is page-aligned, kept inside the program window and well below the
+; user stack, then stored in program_brk_init so sched_create_task can seed the
+; task's TCB_BRK with it. Without this the break started at the end of the whole
+; window, so every SYS_SBRK failed.
+;---------------------------------------
+set_program_brk_init:
+        pushad
+        add eax, 0xFFF
+        and eax, ~0xFFF
+        cmp eax, PROGRAM_BASE + 0x1000
+        jae .sbi_min_ok
+        mov eax, PROGRAM_BASE + 0x1000
+.sbi_min_ok:
+        mov ebx, PROGRAM_EXIT_ADDR - 0x10000
+        cmp eax, ebx
+        jbe .sbi_max_ok
+        mov eax, ebx
+.sbi_max_ok:
+        mov [program_brk_init], eax
+        popad
+        ret
+
 ; Load file data into buffer
 ; ESI = filename, EDI = destination buffer
 ; Returns: ECX = file size, CF set if not found

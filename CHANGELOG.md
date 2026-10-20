@@ -84,12 +84,40 @@ routed by focus and the desktop never blocking on a child program.
 
 ### Kernel
 
+- **User/kernel isolation** — the identity map marked all RAM 0–128 MB `PG_USER`, so any
+  ring 3 program could read and write the kernel image, page tables and allocator state.
+  Kernel memory is now supervisor-only; user access is granted per page to exactly the
+  things a process needs: its program window, the legacy VGA text aperture, the VBE
+  shadow framebuffer, IPC surface pixels and shared memory (`paging_map_phys_user`).
+- **Contained console faults** — a ring 3 fault now kills only the offending task instead
+  of resetting the session: the shell, the file system state and every other process
+  survive. Contained faults print a one-line report (`[fault] task killed, eip=… addr=…`);
+  supervisor faults still produce the full register dump and restart the shell.
+- **`SYS_SBRK` actually works** — the break was initialised to the *end* of the program
+  window, above the user stack, so every growth request failed and a program that
+  trusted the returned pointer could write into identity-mapped kernel memory. The
+  loader now records where each image ends (`program_brk_init`, page-aligned, clamped
+  below the stack), `sched_create_task` seeds `TCB_BRK` from it, in-place exec refreshes
+  it, and ELF images report the end of their highest segment. `SYS_SBRK` keeps the break
+  inside the window, zeroes newly exposed memory, and returns the old break so callers
+  get usable memory.
 - **`SYS_READDIR` index corruption** — the handler validated the name buffer by loading
   `HBFS_MAX_FILENAME + 1` into ECX, destroying the caller's entry index; every call then
   read the same out-of-range slot, so `ls` inside BTerm listed one entry forever and hung
   the terminal. The index now survives validation.
 
 ### Testing
+
+- **`memprot_test`** — forks a child that writes to kernel memory and asserts the child
+  dies while the parent (and the shell) survive; also checks that the program window and
+  the heap are readable and writable. Wired into `tests/test_runtime.sh`.
+- Full-suite run after the change: **2093/2093** unit tests plus boot, runtime, desktop
+  and fsck.
+
+
+- **New runtime case `sbrk heap growth`** — `sbrk_test` now grows the heap by 128 KB,
+  writes and verifies both ends, checks the fresh pages read as zeroes, and shrinks back
+  to the original break.
 
 - **Automated desktop regression test** — `tests/test_desktop.py` (wired into `make check`
   as `check-desktop`) boots QEMU headless, enters Burrows, launches a terminal and a

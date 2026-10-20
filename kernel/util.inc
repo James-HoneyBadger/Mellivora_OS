@@ -1088,6 +1088,7 @@ elf_load_program:
         mov ebx, [PROGRAM_BASE + 28]
         mov edi, [PROGRAM_BASE + 24]
         mov [.elf_entry], edi
+        mov dword [.elf_max], PROGRAM_BASE
 
         add ebx, PROGRAM_BASE
 .load_seg:
@@ -1113,6 +1114,13 @@ elf_load_program:
         xor al, al
         rep stosb
 .seg_ok:
+        ; Track the end of the last loaded segment so the heap starts there.
+        mov eax, [ebx + 8]
+        add eax, [ebx + 20]
+        cmp eax, [.elf_max]
+        jbe .seg_max_ok
+        mov [.elf_max], eax
+.seg_max_ok:
         pop ecx
 
 .next_ph:
@@ -1121,6 +1129,8 @@ elf_load_program:
         jmp .load_seg
 
 .elf_ok:
+        mov eax, [.elf_max]
+        call set_program_brk_init
         mov eax, [.elf_entry]
         mov [esp + 28], eax
         popad
@@ -1133,6 +1143,7 @@ elf_load_program:
         ret
 
 .elf_entry: dd 0
+.elf_max:   dd 0
 
 ;=======================================================================
 ; FILE DESCRIPTOR TABLE
