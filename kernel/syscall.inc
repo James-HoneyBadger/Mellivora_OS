@@ -3149,6 +3149,14 @@ sys_exit:
         ; If no task is ready, sched_force_switch returns to shell_main.
 
 .exit_is_fg:
+        ; Remember which task is leaving so gui_desktop_resume reaps only its
+        ; windows. Capture before sched_exit_task clears the TCB.
+        call sched_get_current_task
+        test eax, eax
+        jz .exit_no_gui_pid
+        mov eax, [eax + TCB_PID]
+        mov [gui_exit_pid], eax
+.exit_no_gui_pid:
         popad
         call shell_finish_redirection
         ; Save program return code (EBX) for shell inspection

@@ -1276,6 +1276,57 @@ code-quality checklist.
 
 ---
 
+## Burrows Desktop Applications
+
+`lib/gui.inc` wraps the `SYS_GUI` syscall (38) and is the supported way to build a
+windowed app. Burrows is a real multi-app desktop: several applications run at the same
+time, each in its own task, and each draws into its own window buffer.
+
+### What the desktop gives you
+
+- **Window-local drawing** — `gui_fill_rect`, `gui_draw_text` and `gui_draw_pixel` take
+  coordinates relative to your window's content area, so an app never needs to know
+  where its window sits on screen or what is drawn underneath it.
+- **Ownership** — a window belongs to the process that created it. The kernel destroys
+  your windows when you exit, and refused calls from other processes cannot touch them.
+- **Focus-routed keyboard input** — `gui_poll_event` returns `EVT_KEY_PRESS` only to the
+  owner of the focused window. `EVT_MOUSE_CLICK` arrives with window-relative
+  coordinates, and clicks on the frame, taskbar or start menu are consumed by the
+  window manager.
+- **Cooperative multitasking** — `gui_flip` yields the CPU after presenting the frame, so
+  a polling app loop still lets every other app run. Never spin without calling
+  `gui_flip` or `SYS_SLEEP`.
+
+### Launching other applications
+
+`gui_launch` starts another Burrows program as a new task and returns immediately, so a
+launcher or a document window can open a second app and keep running:
+
+```nasm
+        mov esi, app_name           ; e.g. "bterm"
+        call gui_launch             ; EAX = task id, or -1
+        jc   .launch_failed
+```
+
+### Desktop keys
+
+| Shortcut | Action |
+| --- | --- |
+| `F1` | Open (or focus) the launcher |
+| `F2` | Open a terminal |
+| `Alt+Tab` | Cycle focus between windows |
+| `Ctrl+Alt+1`..`4` | Switch virtual workspace |
+| `Ctrl+C` | Abort the focused app and return to the desktop |
+
+Desktop shortcuts are handled by the kernel even when no window has focus.
+
+### Leaving the desktop
+
+Press `Escape` with no menu open, use the start menu, or call `gui_quit_desktop` to return
+to the text shell. All running apps are torn down with the desktop.
+
+---
+
 ## Building Assembly Programs
 
 ### Single Program

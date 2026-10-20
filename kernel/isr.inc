@@ -455,6 +455,16 @@ irq_keyboard:
         ; If Ctrl is held, generate control code for letters
         test byte [kb_ctrl], 1
         jz .no_ctrl
+        ; Ctrl+Alt+1..4 -> desktop workspace shortcuts (0x91..0x94)
+        cmp byte [kb_alt], 1
+        jne .ctrl_letter
+        cmp al, '1'
+        jb .ctrl_letter
+        cmp al, '4'
+        ja .ctrl_letter
+        add al, 0x60
+        jmp .store_key
+.ctrl_letter:
         cmp al, 'A'
         jl .no_ctrl
         cmp al, 'z'
@@ -529,6 +539,8 @@ irq_keyboard:
         call shell_redir_reset
         call vga_reset_color
         sti
+        cmp byte [gui_desktop_active], 1
+        je gui_desktop_resume
         jmp shell_main
 .no_ctrl:
 .store_key:

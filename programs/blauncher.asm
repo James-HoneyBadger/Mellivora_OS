@@ -8,8 +8,8 @@
 %include "generated_app_catalog.inc"
 
 APP_COUNT       equ APP_CATALOG_COUNT + 1
-ROW_Y           equ 54
-ROW_H           equ 24
+ROW_Y           equ 38
+ROW_H           equ 22
 ROW_X           equ 18
 ROW_W           equ 320
 VIEW_ROWS       equ 15
@@ -32,6 +32,7 @@ launcher_title  db "Burrows Launcher", 0
 search_label    db "Search:", 0
 launcher_exit_exec db "exit", 0
 launcher_exit_label db "Exit Desktop", 0
+footer_str      db "Enter: launch   Esc: close   Type: search", 0
 
 section .text
 start:
@@ -81,11 +82,8 @@ start:
         cmp eax, [visible_count]
         jge .main_loop
         mov [selected], eax
-        call launch_selected
-        call selected_is_exit
-        test eax, eax
-        jnz .close
-        jmp .main_loop
+        call activate_selected
+        jmp .close
 
 .handle_key:
         cmp ebx, 27
@@ -144,11 +142,8 @@ start:
         jmp .main_loop
 
 .activate:
-        call launch_selected
-        call selected_is_exit
-        test eax, eax
-        jnz .close
-        jmp .main_loop
+        call activate_selected
+        jmp .close
 
 .close:
         mov eax, [win_id]
@@ -159,6 +154,22 @@ start:
         xor ebx, ebx
         int 0x80
 
+;---------------------------------------
+; activate_selected - launch the highlighted app, or leave the desktop
+;---------------------------------------
+activate_selected:
+        call selected_is_exit
+        test eax, eax
+        jz .as_launch
+        mov eax, [win_id]
+        call gui_destroy_window
+        call gui_quit_desktop
+        jmp .as_done
+.as_launch:
+        call launch_selected
+.as_done:
+        ret
+
 launch_selected:
         mov eax, [selected]
         cmp eax, [visible_count]
@@ -167,10 +178,7 @@ launch_selected:
         cmp eax, APP_COUNT - 1
         je .done
         mov esi, [app_exec_table + eax*4]
-        mov eax, SYS_EXEC
-        mov ebx, esi
-        xor ecx, ecx
-        int 0x80
+        call gui_launch
 .done:
         ret
 
@@ -277,45 +285,63 @@ draw_launcher:
         mov edi, 0x00D0D0D0
         call gui_fill_rect
 
+        ; Search box: a sunken border and a white face.
+        mov eax, [win_id]
+        mov ebx, 6
+        mov ecx, 6
+        mov edx, 348
+        mov esi, 26
+        mov edi, 0x00808080
+        call gui_fill_rect
+        mov eax, [win_id]
+        mov ebx, 8
+        mov ecx, 8
+        mov edx, 344
+        mov esi, 22
+        mov edi, 0x00FFFFFF
+        call gui_fill_rect
+
         ; Search prompt and current query.
         mov eax, [win_id]
-        mov ebx, 16
-        mov ecx, 31
+        mov ebx, 14
+        mov ecx, 11
         mov esi, search_label
         mov edi, 0x00000000
         call gui_draw_text
         mov eax, [win_id]
-        mov ebx, 80
-        mov ecx, 31
+        mov ebx, 78
+        mov ecx, 11
         mov esi, query_buffer
         mov edi, 0x00000000
         call gui_draw_text
 
-        ; Title bar
+        ; Caret after the query.
         mov eax, [win_id]
-        mov ebx, 0
-        mov ecx, 0
-        mov edx, 360
-        mov esi, 24
-        mov edi, 0x005A7FBA
+        mov ebx, [query_len]
+        shl ebx, 3
+        add ebx, 78
+        mov ecx, 11
+        mov edx, 1
+        mov esi, 16
+        xor edi, edi
         call gui_fill_rect
-
-        ; Title text
-        mov eax, [win_id]
-        mov ebx, 10
-        mov ecx, 6
-        mov esi, launcher_title
-        mov edi, 0x00FFFFFF
-        call gui_draw_text
 
         ; List panel
         mov eax, [win_id]
         mov ebx, 8
-        mov ecx, 28
-        mov edx, 332
-        mov esi, 380
+        mov ecx, 34
+        mov edx, 344
+        mov esi, 356
         mov edi, 0x00F4F4F4
         call gui_fill_rect
+
+        ; Footer hint
+        mov eax, [win_id]
+        mov ebx, 12
+        mov ecx, 396
+        mov esi, footer_str
+        mov edi, 0x00606060
+        call gui_draw_text
 
         mov dword [visible_count], 0
         xor eax, eax

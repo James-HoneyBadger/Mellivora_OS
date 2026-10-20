@@ -1,5 +1,42 @@
 # Mellivora OS - Changelog
 
+## Unreleased - Burrows 3.0 multi-app desktop
+
+### Overview
+
+Burrows is no longer a single-app shell. Any number of applications run side by side,
+each in its own task, each drawing into a private window buffer, with keyboard input
+routed by focus and the desktop never blocking on a child program.
+
+### Desktop
+
+- **Per-window backing buffers** — every window owns one, allocated at creation and
+  grown on resize/maximize. `SYS_GUI` drawing calls retarget the drawing primitives at
+  the caller's buffer, so coordinates are window-relative and one app can no longer
+  paint over another or over the desktop chrome. If a buffer cannot be grown, the old
+  one is kept and drawing stays clipped instead of corrupting memory.
+- **Window ownership** — windows record the PID that created them (kernel applets use
+  −1). Non-owners cannot draw into or destroy a window, and `gui_cleanup_pid` tears a
+  process's windows down on exit, Ctrl+C abort and kill.
+- **Concurrent apps** — `SYS_GUI/GUI_LAUNCH` (30) starts a program as a new ready GUI
+  task and returns its id, so the launcher stays responsive. `cmd_exec_program` gained
+  a GUI path that creates the task, isolates its program window and returns.
+- **Cooperative frame yield** — `GUI_FLIP` marks the caller ready and round-robins the
+  ready queue, so GUI apps that busy-poll syscalls still share the CPU. The timer only
+  preempts ring 3, so this is what keeps N apps alive at once.
+- **Focus-routed input** — the focused window's owner receives key events; desktop
+  shortcuts (`F1` launcher, `F2` terminal, `Alt+Tab`, `Ctrl+Alt+1..4`) are handled by
+  the kernel even when nothing has focus, so a workspace switch can never strand the
+  user.
+- **Virtual workspaces** — four workspaces with a taskbar indicator; switching focuses
+  the topmost window on the destination workspace.
+- **Leaving the desktop is safe** — `SYS_GUI/GUI_EXIT_DESKTOP` (31) returns to the shell
+  and `sched_kill_all_tasks` frees every remaining task. Previously surviving GUI tasks
+  kept drawing over the restored text console, leaving a green screen.
+- **Polish** — gradient wallpaper, taskbar title truncation, launcher singleton via
+  title match, redesigned launcher (search box with caret, list panel, footer hints,
+  visible Exit Desktop) that closes after launching.
+
 ## Unreleased - Foreground process model
 
 ### Overview

@@ -102,6 +102,21 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 - **API Libraries**: 17 reusable `.inc` libraries in `programs/lib/` (string, I/O, math, VGA, memory, data, net, GUI, VBE, font, audio, highscore, and more)
 - **Samples**: 2 NASM programs + 18 C programs + 11 Perl scripts + 6 BASIC scripts in `/samples`; see [the sample catalog](docs/SAMPLES.md)
 
+### Burrows Desktop (3.0)
+
+- **Multi-app desktop** — any number of GUI applications run at once, each as its own
+  scheduler task, without blocking the desktop
+- **Per-window backing buffers** — every window draws into its own buffer in
+  window-relative coordinates, so apps cannot paint over each other or the desktop
+- **Focus-routed input** — keyboard events go only to the focused window's owner;
+  title-bar, taskbar and start-menu clicks are handled by the window manager
+- **Virtual workspaces** — four workspaces with a taskbar indicator (`Ctrl+Alt+1..4`)
+- **Launcher and shortcuts** — `F1` launcher with search and Exit Desktop, `F2`
+  terminal, `Alt+Tab` window cycling, `Ctrl+C` abort to desktop; desktop shortcuts work
+  even with no window focused
+- **Clean teardown** — `SYS_GUI/GUI_EXIT_DESKTOP` returns to the text shell and reclaims
+  every task, so a GUI app can never outlive the desktop
+
 ---
 
 ## 🚀 Quick Start

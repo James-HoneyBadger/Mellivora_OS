@@ -47,6 +47,12 @@ Building `programs/blauncher.bin` depends on the generated include, so catalog c
 
 The launcher displays 15 rows at a time. Up/down navigation keeps the selected row in view, and mouse clicks are mapped through the current viewport. Search filters the complete catalog case-insensitively by executable name, display name, category, description, and keywords, including the synthetic Exit Desktop entry.
 
+Apps are started with `gui_launch`, which spawns a separate scheduler task and returns
+immediately, so the launcher never blocks the desktop and several applications can run
+at once. The launcher window closes once an app is chosen (or the desktop is left), and
+`F1` reopens it at any time. Selecting Exit Desktop returns to the text shell; any apps
+still running are torn down with the desktop.
+
 For migration work, preview missing manifests before writing them:
 
 ```text

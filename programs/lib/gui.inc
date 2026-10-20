@@ -163,6 +163,30 @@ gui_get_theme:
         ret
 
 ;---------------------------------------
+; gui_launch - Spawn a Burrows application
+; ESI = program name -> EAX = task id, or -1 on failure
+; The caller keeps running; the new app is scheduled alongside it.
+;---------------------------------------
+gui_launch:
+        push ebx
+        mov eax, SYS_GUI
+        mov ebx, GUI_LAUNCH
+        int 0x80
+        pop ebx
+        ret
+
+;---------------------------------------
+; gui_quit_desktop - Leave Burrows and return to the shell
+;---------------------------------------
+gui_quit_desktop:
+        push ebx
+        mov eax, SYS_GUI
+        mov ebx, GUI_EXIT_DESKTOP
+        int 0x80
+        pop ebx
+        ret
+
+;---------------------------------------
 ; gui_set_theme - Apply theme from buffer
 ; EAX = source buffer (48 bytes)
 ;---------------------------------------

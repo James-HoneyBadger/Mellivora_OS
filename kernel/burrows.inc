@@ -24,7 +24,7 @@ GUI_PITCH       equ GUI_SCREEN_W * 4       ; 4096 bytes per row
 
 ; Window system
 MAX_WINDOWS     equ 16
-WIN_STRUCT_SIZE equ 112
+WIN_STRUCT_SIZE equ 132
 
 ; Window struct field offsets
 WIN_FLAGS       equ 0           ; dword: bit0=active, bit1=visible, bit2=maximized
@@ -34,13 +34,26 @@ WIN_W           equ 12          ; dword: content area width
 WIN_H           equ 16          ; dword: content area height
 WIN_Z           equ 20          ; dword: z-order (higher = on top)
 WIN_TITLE       equ 24          ; 64 bytes: null-terminated title
-WIN_APP_ID      equ 88          ; dword: owning app id (0=desktop)
+WIN_APP_ID      equ 88          ; legacy owner flag (unused; see WIN_OWNER_PID)
 WIN_SAVE_X      equ 92          ; saved x before maximize
 WIN_SAVE_Y      equ 96          ; saved y before maximize
 WIN_SAVE_W      equ 100         ; saved w before maximize
 WIN_SAVE_H      equ 104         ; saved h before maximize
 WIN_WORKSPACE   equ 108         ; v9.0: virtual desktop (0-3; 0xFF = show on all)
 WIN_ALPHA       equ 109         ; v9.0: opacity 0-255 (255 = fully opaque)
+WIN_BUF         equ 112         ; dword: private content buffer (w*h*4)
+WIN_BUF_PAGES   equ 116         ; dword: pages allocated for WIN_BUF
+WIN_OWNER_PID   equ 120         ; dword: owning task PID (-1 = desktop/applet)
+WIN_BUF_W       equ 124         ; dword: allocated buffer width
+WIN_BUF_H       equ 128         ; dword: allocated buffer height
+
+; Target surface for the gui_bb_* primitives. The compositor points this at
+; the screen back buffer; window draw syscalls point it at the window's own
+; content buffer so overlapping windows no longer erase each other.
+gui_target_buf:   dd GUI_BACKBUF
+gui_target_pitch: dd GUI_PITCH
+gui_target_w:     dd GUI_SCREEN_W
+gui_target_h:     dd GUI_SCREEN_H
 
 ; Window decoration sizes
 TITLEBAR_H      equ 22
@@ -105,6 +118,8 @@ GUI_DRAW_TEXTBOX   equ 23
 GUI_DRAW_LISTBOX   equ 24
 GUI_DRAW_LABEL     equ 25
 GUI_DRAW_RECT      equ 26
+GUI_LAUNCH         equ 30      ; ESI = program name; spawns a GUI task
+GUI_EXIT_DESKTOP   equ 31      ; Leave Burrows and return to the shell
 
 ;=======================================================================
 ; INITIALIZATION
@@ -207,7 +222,15 @@ gui_desktop_loop:
 
         ; Check exit flag
         cmp byte [gui_exit_flag], 1
-        jne gui_desktop_loop
+        je .desktop_exit
+
+        ; Run a ready GUI task. This returns immediately when none is ready;
+        ; otherwise it switches to ring 3 and comes back here when the task
+        ; blocks (or through gui_desktop_resume when it exits).
+        call sched_start_ready
+        jmp gui_desktop_loop
+
+.desktop_exit:
 
         ; --- Exit desktop ---
         call gui_exit_desktop
@@ -255,6 +278,10 @@ gui_exit_desktop:
 
         ; Destroy all windows
         call gui_destroy_all_windows
+
+        ; GUI apps cannot outlive the desktop; a surviving task would keep
+        ; composing into the restored text console.
+        call sched_kill_all_tasks
 
         ; Restore text mode
         call vbe_restore_text
@@ -1293,13 +1320,51 @@ gui_compose:
 ;---------------------------------------
 gui_draw_background:
         pushad
+        call gui_target_screen
+        ; Smooth vertical gradient: 0x18/0x28/0x48 at the top to
+        ; 0x30/0x50/0x80 at the bottom. One rep stosd per scanline.
+        xor ebx, ebx                    ; y
+.gb_loop:
+        ; Red
+        mov eax, ebx
+        imul eax, 0x18
+        xor edx, edx
+        mov ecx, GUI_SCREEN_H - 1
+        div ecx
+        add eax, 0x18
+        shl eax, 16
+        mov [.gb_color], eax
+        ; Green
+        mov eax, ebx
+        imul eax, 0x28
+        xor edx, edx
+        mov ecx, GUI_SCREEN_H - 1
+        div ecx
+        add eax, 0x28
+        shl eax, 8
+        or [.gb_color], eax
+        ; Blue
+        mov eax, ebx
+        imul eax, 0x38
+        xor edx, edx
+        mov ecx, GUI_SCREEN_H - 1
+        div ecx
+        add eax, 0x48
+        or [.gb_color], eax
+
+        mov edi, ebx
+        imul edi, GUI_PITCH
+        add edi, GUI_BACKBUF
+        mov eax, [.gb_color]
+        mov ecx, GUI_SCREEN_W
         cld
-        mov edi, GUI_BACKBUF
-        mov eax, [gui_theme + THEME_DESKTOP_BG]
-        mov ecx, GUI_SCREEN_W * GUI_SCREEN_H
         rep stosd
+        inc ebx
+        cmp ebx, GUI_SCREEN_H
+        jl .gb_loop
         popad
         ret
+.gb_color: dd 0
 
 ;---------------------------------------
 ; gui_compose_surfaces  — blit IPC surface table into back buffer
@@ -1607,6 +1672,7 @@ CURSOR_W        equ 16
 
 gui_draw_cursor:
         pushad
+        call gui_target_screen
         ; --- Pass 1: draw shadow (offset +1,+1, dark translucent) ---
         mov ebp, [mouse_x]
         inc ebp                 ; shadow offset x+1
@@ -1746,21 +1812,133 @@ gui_draw_cursor:
 ;=======================================================================
 
 ;---------------------------------------
+; gui_target_screen - direct subsequent gui_bb_* calls at the back buffer
+;---------------------------------------
+gui_target_screen:
+        mov eax, GUI_BACKBUF
+        mov [gui_target_buf], eax
+        mov dword [gui_target_pitch], GUI_PITCH
+        mov dword [gui_target_w], GUI_SCREEN_W
+        mov dword [gui_target_h], GUI_SCREEN_H
+        ret
+
+;---------------------------------------
+; gui_target_window - direct subsequent gui_bb_* calls at a window's buffer
+;   In : EAX = window index
+;   Out: EAX = 0 on success, -1 if the window has no buffer
+;---------------------------------------
+;---------------------------------------
+; gui_caller_owns_window - may the caller draw to / destroy this window?
+;   In : EAX = window index
+;   Out: EAX = 1 (allowed), 0 (refused)
+;
+; Kernel code (desktop applets, the window manager) is always allowed; a
+; user task may only touch windows it created.
+;---------------------------------------
+gui_caller_owns_window:
+        push ebx
+        push edx
+        cmp eax, MAX_WINDOWS
+        jae .gow_no
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        mov ebx, eax
+        call sched_get_current_task
+        test eax, eax
+        jz .gow_yes
+        mov edx, [eax + TCB_PID]
+        cmp edx, [ebx + WIN_OWNER_PID]
+        jne .gow_no
+.gow_yes:
+        mov eax, 1
+        pop edx
+        pop ebx
+        ret
+.gow_no:
+        xor eax, eax
+        pop edx
+        pop ebx
+        ret
+
+;---------------------------------------
+; gui_target_window - point the draw primitives at a window's buffer
+;   In : EAX = window index
+;   Out: EAX = 0 on success, -1 if the window is unusable or not the caller's
+;---------------------------------------
+gui_target_window:
+        push ebx
+        push ecx
+        push edx
+        mov ebx, eax
+        call gui_caller_owns_window
+        test eax, eax
+        jz .tw_fail
+        mov eax, ebx
+        cmp eax, MAX_WINDOWS
+        jae .tw_fail
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        mov ecx, [eax + WIN_BUF]
+        test ecx, ecx
+        jz .tw_fail
+        mov [gui_target_buf], ecx
+        mov ecx, [eax + WIN_BUF_W]
+        mov [gui_target_pitch], ecx
+        shl dword [gui_target_pitch], 2
+        mov [gui_target_w], ecx
+        mov ecx, [eax + WIN_BUF_H]
+        mov [gui_target_h], ecx
+        xor eax, eax
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+.tw_fail:
+        mov eax, -1
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+;---------------------------------------
+; gui_copy_trunc - copy a title, truncating with '.' to ECX characters
+;   In : ESI = source, EDI = destination, ECX = max chars
+;---------------------------------------
+gui_copy_trunc:
+        push eax
+        test ecx, ecx
+        jz .ct_end
+.ct_loop:
+        lodsb
+        test al, al
+        jz .ct_end
+        stosb
+        dec ecx
+        jnz .ct_loop
+        mov byte [edi - 1], '.'
+.ct_end:
+        mov byte [edi], 0
+        pop eax
+        ret
+
+;---------------------------------------
 ; gui_bb_pixel - Draw single pixel
 ; EAX = x, EBX = y, ECX = color
 ;---------------------------------------
 gui_bb_pixel:
         cmp eax, 0
         jl .bp_skip
-        cmp eax, GUI_SCREEN_W
+        cmp eax, [gui_target_w]
         jge .bp_skip
         cmp ebx, 0
         jl .bp_skip
-        cmp ebx, GUI_SCREEN_H
+        cmp ebx, [gui_target_h]
         jge .bp_skip
         push edx
-        imul edx, ebx, GUI_PITCH
-        lea edx, [GUI_BACKBUF + edx + eax*4]
+        mov edx, ebx
+        imul edx, [gui_target_pitch]
+        add edx, [gui_target_buf]
+        lea edx, [edx + eax*4]
         mov [edx], ecx
         pop edx
 .bp_skip:
@@ -1774,7 +1952,7 @@ gui_bb_hline:
         pushad
         cmp ebx, 0
         jl .hl_done
-        cmp ebx, GUI_SCREEN_H
+        cmp ebx, [gui_target_h]
         jge .hl_done
         ; Clip left
         cmp eax, 0
@@ -1785,15 +1963,17 @@ gui_bb_hline:
         ; Clip right
         mov edi, eax
         add edi, ecx
-        cmp edi, GUI_SCREEN_W
+        cmp edi, [gui_target_w]
         jle .hl_rclip
-        mov ecx, GUI_SCREEN_W
+        mov ecx, [gui_target_w]
         sub ecx, eax
 .hl_rclip:
         cmp ecx, 0
         jle .hl_done
-        imul ebx, GUI_PITCH
-        lea edi, [GUI_BACKBUF + ebx + eax*4]
+        mov edi, ebx
+        imul edi, [gui_target_pitch]
+        add edi, [gui_target_buf]
+        lea edi, [edi + eax*4]
         mov eax, edx
         rep stosd
 .hl_done:
@@ -1808,7 +1988,7 @@ gui_bb_vline:
         pushad
         cmp eax, 0
         jl .vl_done
-        cmp eax, GUI_SCREEN_W
+        cmp eax, [gui_target_w]
         jge .vl_done
         ; Clip top
         cmp ebx, 0
@@ -1819,20 +1999,22 @@ gui_bb_vline:
         ; Clip bottom
         mov edi, ebx
         add edi, ecx
-        cmp edi, GUI_SCREEN_H
+        cmp edi, [gui_target_h]
         jle .vl_bclip
-        mov ecx, GUI_SCREEN_H
+        mov ecx, [gui_target_h]
         sub ecx, ebx
 .vl_bclip:
         cmp ecx, 0
         jle .vl_done
-        imul ebx, GUI_PITCH
-        lea edi, [GUI_BACKBUF + ebx + eax*4]
+        mov edi, ebx
+        imul edi, [gui_target_pitch]
+        add edi, [gui_target_buf]
+        lea edi, [edi + eax*4]
 .vl_loop:
         cmp ecx, 0
         jle .vl_done
         mov [edi], edx
-        add edi, GUI_PITCH
+        add edi, [gui_target_pitch]
         dec ecx
         jmp .vl_loop
 .vl_done:
@@ -1846,24 +2028,24 @@ gui_bb_vline:
 gui_bb_fill_rect:
         pushad
         ; Bounds check
-        cmp eax, GUI_SCREEN_W
+        cmp eax, [gui_target_w]
         jge .fr_done
-        cmp ebx, GUI_SCREEN_H
+        cmp ebx, [gui_target_h]
         jge .fr_done
         ; Clip right
         mov edi, eax
         add edi, ecx
-        cmp edi, GUI_SCREEN_W
+        cmp edi, [gui_target_w]
         jle .fr_rclip
-        mov ecx, GUI_SCREEN_W
+        mov ecx, [gui_target_w]
         sub ecx, eax
 .fr_rclip:
         ; Clip bottom
         mov edi, ebx
         add edi, edx
-        cmp edi, GUI_SCREEN_H
+        cmp edi, [gui_target_h]
         jle .fr_bclip
-        mov edx, GUI_SCREEN_H
+        mov edx, [gui_target_h]
         sub edx, ebx
 .fr_bclip:
         ; Clip left
@@ -1885,8 +2067,10 @@ gui_bb_fill_rect:
         ; Calculate starting address
         mov [.fr_w], ecx
         mov [.fr_h], edx
-        imul ebx, GUI_PITCH
-        lea edi, [GUI_BACKBUF + ebx + eax*4]
+        mov edi, ebx
+        imul edi, [gui_target_pitch]
+        add edi, [gui_target_buf]
+        lea edi, [edi + eax*4]
 .fr_row:
         cmp dword [.fr_h], 0
         jle .fr_done
@@ -1895,7 +2079,7 @@ gui_bb_fill_rect:
         mov eax, esi
         rep stosd
         pop edi
-        add edi, GUI_PITCH
+        add edi, [gui_target_pitch]
         dec dword [.fr_h]
         jmp .fr_row
 .fr_done:
@@ -2017,7 +2201,7 @@ gui_bb_draw_char:
 .dc_row:
         cmp ecx, 0
         je .dc_done
-        cmp ebx, GUI_SCREEN_H
+        cmp ebx, [gui_target_h]
         jge .dc_done
         cmp ebx, 0
         jl .dc_skip_row
@@ -2028,7 +2212,7 @@ gui_bb_draw_char:
 .dc_bit:
         cmp edi, 0
         je .dc_next_row
-        cmp eax, GUI_SCREEN_W
+        cmp eax, [gui_target_w]
         jge .dc_next_row
         cmp eax, 0
         jl .dc_skip_bit
@@ -2037,8 +2221,10 @@ gui_bb_draw_char:
         ; Write pixel
         push edx
         push ecx
-        imul ecx, ebx, GUI_PITCH
-        lea ecx, [GUI_BACKBUF + ecx + eax*4]
+        mov ecx, ebx
+        imul ecx, [gui_target_pitch]
+        add ecx, [gui_target_buf]
+        lea ecx, [ecx + eax*4]
         mov edx, [.dc_color]
         mov [ecx], edx
         pop ecx
@@ -2107,17 +2293,77 @@ gui_create_window:
         inc edi
         jmp .cw_find
 .cw_got:
+        mov [.cw_slot], edi
         mov dword [ebp + WIN_FLAGS], 0x03       ; active + visible
         mov eax, [.cw_x]
         mov [ebp + WIN_X], eax
         mov eax, [.cw_y]
         mov [ebp + WIN_Y], eax
+
+        ; Clamp the content size to the screen and to at least one pixel.
         mov eax, [.cw_w]
+        test eax, eax
+        jg .cw_w_min_ok
+        mov eax, 1
+.cw_w_min_ok:
+        cmp eax, GUI_SCREEN_W
+        jle .cw_w_max_ok
+        mov eax, GUI_SCREEN_W
+.cw_w_max_ok:
         mov [ebp + WIN_W], eax
+        mov [.cw_w], eax
         mov eax, [.cw_h]
+        test eax, eax
+        jg .cw_h_min_ok
+        mov eax, 1
+.cw_h_min_ok:
+        cmp eax, GUI_SCREEN_H
+        jle .cw_h_max_ok
+        mov eax, GUI_SCREEN_H
+.cw_h_max_ok:
         mov [ebp + WIN_H], eax
+        mov [.cw_h], eax
+
+        ; Allocate the private content buffer (w*h*4, page rounded).
+        mov eax, [.cw_w]
+        imul eax, [.cw_h]
+        shl eax, 2
+        add eax, 0xFFF
+        shr eax, 12
+        mov [.cw_pages], eax
+        mov ecx, eax
+        call pmm_alloc_pages
+        test eax, eax
+        jz .cw_nomem
+        mov [ebp + WIN_BUF], eax
+        mov ecx, [.cw_pages]
+        mov [ebp + WIN_BUF_PAGES], ecx
+        mov ecx, [.cw_w]
+        mov [ebp + WIN_BUF_W], ecx
+        mov ecx, [.cw_h]
+        mov [ebp + WIN_BUF_H], ecx
+        ; Clear the content to the theme window colour.
+        mov edi, eax
+        mov eax, [gui_theme + THEME_WINDOW_BG]
+        mov ecx, [.cw_w]
+        imul ecx, [.cw_h]
+        cld
+        rep stosd
+        mov dword [ebp + WIN_APP_ID], 0
+
+        ; Record the owning task. 0 means a kernel applet/desktop window.
+        call sched_get_current_task
+        test eax, eax
+        jz .cw_owner_none
+        mov eax, [eax + TCB_PID]
+        jmp .cw_owner_set
+.cw_owner_none:
+        mov eax, -1             ; kernel applet: no task owns this window
+.cw_owner_set:
+        mov [ebp + WIN_OWNER_PID], eax
 
         ; Copy title (up to 63 chars)
+        ; (the launcher check follows the copy)
         push edi
         mov esi, [.cw_title]
         lea edi, [ebp + WIN_TITLE]
@@ -2133,6 +2379,17 @@ gui_create_window:
 .cw_cp_done:
         pop edi
 
+        ; Track the launcher window so F1/Menu focus it instead of spawning
+        ; duplicate launchers.
+        lea esi, [ebp + WIN_TITLE]
+        mov edi, gui_str_launcher_title
+        call str_compare
+        test eax, eax
+        jnz .cw_not_launcher
+        mov eax, [.cw_slot]
+        mov [gui_launcher_win], eax
+.cw_not_launcher:
+
         ; Z-order
         inc dword [gui_next_z]
         mov eax, [gui_next_z]
@@ -2144,14 +2401,21 @@ gui_create_window:
         mov byte [ebp + WIN_ALPHA], 255
 
         ; Set focused
-        mov [gui_focused_win], edi
+        mov eax, [.cw_slot]
+        mov [gui_focused_win], eax
         inc dword [gui_win_count]
 
         ; Return window index
-        mov [esp + 28], edi     ; EAX in pushad frame
+        mov eax, [.cw_slot]
+        mov [esp + 28], eax     ; EAX in pushad frame
         popad
         ret
 
+.cw_nomem:
+        ; Release the half-initialised slot so a later create can use it.
+        mov dword [ebp + WIN_FLAGS], 0
+        mov dword [ebp + WIN_BUF], 0
+        mov dword [ebp + WIN_BUF_PAGES], 0
 .cw_full:
         mov dword [esp + 28], -1
         popad
@@ -2161,6 +2425,8 @@ gui_create_window:
 .cw_y: dd 0
 .cw_w: dd 0
 .cw_h: dd 0
+.cw_pages: dd 0
+.cw_slot: dd 0
 .cw_title: dd 0
 
 ;---------------------------------------
@@ -2171,16 +2437,193 @@ gui_destroy_window_n:
         pushad
         cmp eax, MAX_WINDOWS
         jge .dw_done
+        mov edx, eax            ; EDX = window index
         imul eax, WIN_STRUCT_SIZE
-        add eax, gui_win_table
-        mov dword [eax + WIN_FLAGS], 0
+        add eax, gui_win_table  ; EAX = window entry
+        mov esi, eax
+
+        ; Release the private content buffer.
+        mov eax, [esi + WIN_BUF]
+        test eax, eax
+        jz .dw_nobuf
+        mov ecx, [esi + WIN_BUF_PAGES]
+        test ecx, ecx
+        jz .dw_clear_buf
+        call pmm_free_pages
+.dw_clear_buf:
+        mov dword [esi + WIN_BUF], 0
+        mov dword [esi + WIN_BUF_PAGES], 0
+.dw_nobuf:
+        cmp edx, [gui_launcher_win]
+        jne .dw_not_launcher
+        mov dword [gui_launcher_win], -1
+.dw_not_launcher:
+        mov dword [esi + WIN_FLAGS], 0
         dec dword [gui_win_count]
         cmp dword [gui_win_count], 0
-        jge .dw_done
+        jge .dw_focus
         mov dword [gui_win_count], 0
+.dw_focus:
+        cmp edx, [gui_focused_win]
+        jne .dw_done
+        mov dword [gui_focused_win], -1
 .dw_done:
         popad
         ret
+
+;---------------------------------------
+; gui_cleanup_pid - destroy every window owned by a task
+;   In : EAX = owner PID
+;---------------------------------------
+gui_cleanup_pid:
+        pushad
+        mov [.gcp_pid], eax
+        xor ecx, ecx
+        mov esi, gui_win_table
+.gcp_loop:
+        cmp ecx, MAX_WINDOWS
+        jge .gcp_done
+        test dword [esi + WIN_FLAGS], 0x01
+        jz .gcp_next
+        mov eax, [esi + WIN_OWNER_PID]
+        cmp eax, [.gcp_pid]
+        jne .gcp_next
+        mov eax, ecx
+        call gui_destroy_window_n
+.gcp_next:
+        add esi, WIN_STRUCT_SIZE
+        inc ecx
+        jmp .gcp_loop
+.gcp_done:
+        popad
+        ret
+.gcp_pid: dd 0
+
+;---------------------------------------
+; gui_realloc_window_buf - grow a window buffer to the current WIN_W/H
+;   In : EAX = window index
+;   Out: EAX = 0 on success (or not needed), -1 on allocation failure
+;
+; Called after maximize/restore/edge-resize. Content is preserved for the
+; overlapping region; new pixels start at the theme window colour.
+;---------------------------------------
+gui_realloc_window_buf:
+        pushad
+        cmp eax, MAX_WINDOWS
+        jae .rw_fail
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        mov [.rw_entry], eax
+
+        ; Keep the existing buffer when it already covers both dimensions.
+        mov ecx, [eax + WIN_W]
+        cmp ecx, [eax + WIN_BUF_W]
+        jg .rw_grow
+        mov ecx, [eax + WIN_H]
+        cmp ecx, [eax + WIN_BUF_H]
+        jg .rw_grow
+        jmp .rw_ok
+
+.rw_grow:
+        mov eax, [.rw_entry]
+        mov ecx, [eax + WIN_W]
+        imul ecx, [eax + WIN_H]
+        shl ecx, 2
+        add ecx, 0xFFF
+        shr ecx, 12
+        mov [.rw_pages], ecx
+        call pmm_alloc_pages
+        test eax, eax
+        jz .rw_fail
+        mov [.rw_new], eax
+
+        ; Clear the new buffer.
+        mov edi, eax
+        mov eax, [.rw_entry]
+        mov ecx, [eax + WIN_W]
+        imul ecx, [eax + WIN_H]
+        xor eax, eax
+        cld
+        rep stosd
+
+        ; Copy the overlapping region row by row.
+        mov eax, [.rw_entry]
+        mov esi, [eax + WIN_BUF]
+        test esi, esi
+        jz .rw_free_old
+        mov edi, [.rw_new]
+        mov ebx, [eax + WIN_BUF_H]
+        mov edx, [eax + WIN_H]
+        cmp ebx, edx
+        jle .rw_h_ok
+        mov ebx, edx
+.rw_h_ok:
+        mov ebp, [eax + WIN_BUF_W]
+        mov edx, [eax + WIN_W]
+        cmp ebp, edx
+        jle .rw_w_ok
+        mov ebp, edx
+.rw_w_ok:
+        mov [.rw_rows], ebx
+        mov [.rw_dwords], ebp
+        mov ecx, [eax + WIN_BUF_W]
+        shl ecx, 2
+        mov [.rw_src_pitch], ecx
+        mov ecx, [eax + WIN_W]
+        shl ecx, 2
+        mov [.rw_dst_pitch], ecx
+        mov [.rw_src], esi
+        mov [.rw_dst], edi
+.rw_copy_row:
+        cmp dword [.rw_rows], 0
+        jle .rw_free_old
+        mov esi, [.rw_src]
+        mov edi, [.rw_dst]
+        mov ecx, [.rw_dwords]
+        rep movsd
+        mov ecx, [.rw_src_pitch]
+        add [.rw_src], ecx
+        mov ecx, [.rw_dst_pitch]
+        add [.rw_dst], ecx
+        dec dword [.rw_rows]
+        jmp .rw_copy_row
+
+.rw_free_old:
+        mov eax, [.rw_entry]
+        mov eax, [eax + WIN_BUF]
+        test eax, eax
+        jz .rw_install
+        mov edx, [.rw_entry]
+        mov ecx, [edx + WIN_BUF_PAGES]
+        call pmm_free_pages
+
+.rw_install:
+        mov eax, [.rw_entry]
+        mov ecx, [.rw_new]
+        mov [eax + WIN_BUF], ecx
+        mov ecx, [.rw_pages]
+        mov [eax + WIN_BUF_PAGES], ecx
+        mov ecx, [eax + WIN_W]
+        mov [eax + WIN_BUF_W], ecx
+        mov ecx, [eax + WIN_H]
+        mov [eax + WIN_BUF_H], ecx
+.rw_ok:
+        mov dword [esp + 28], 0
+        popad
+        ret
+.rw_fail:
+        mov dword [esp + 28], -1
+        popad
+        ret
+.rw_entry:      dd 0
+.rw_new:        dd 0
+.rw_pages:      dd 0
+.rw_rows:       dd 0
+.rw_dwords:     dd 0
+.rw_src:        dd 0
+.rw_dst:        dd 0
+.rw_src_pitch:  dd 0
+.rw_dst_pitch:  dd 0
 
 ;---------------------------------------
 ; gui_destroy_all_windows
@@ -2201,29 +2644,15 @@ gui_destroy_all_windows:
 ; gui_cleanup_app_windows - Destroy windows created by programs
 ;---------------------------------------
 gui_cleanup_app_windows:
+        ; Called when a GUI app returns to the desktop. Destroy only that
+        ; task's windows; other GUI apps keep running.
         pushad
-        xor ecx, ecx
-        mov esi, gui_win_table
-.ca_loop:
-        cmp ecx, MAX_WINDOWS
-        jge .ca_done
-        test dword [esi + WIN_FLAGS], 0x01
-        jz .ca_next
-        ; Check if owned by an app (non-zero APP_ID)
-        cmp dword [esi + WIN_APP_ID], 0
-        je .ca_next
-        ; Destroy it
-        mov dword [esi + WIN_FLAGS], 0
-        dec dword [gui_win_count]
-.ca_next:
-        add esi, WIN_STRUCT_SIZE
-        inc ecx
-        jmp .ca_loop
+        mov eax, [gui_exit_pid]
+        test eax, eax
+        js .ca_done
+        call gui_cleanup_pid
+        mov dword [gui_exit_pid], -1
 .ca_done:
-        cmp dword [gui_win_count], 0
-        jge .ca_ok
-        mov dword [gui_win_count], 0
-.ca_ok:
         popad
         ret
 
@@ -2300,6 +2729,50 @@ gui_find_window_at:
 .fw_best_z: dd 0
 
 ;---------------------------------------
+; gui_set_workspace - switch virtual desktop
+;   In : EAX = workspace 0..3
+;---------------------------------------
+gui_set_workspace:
+        pushad
+        and eax, 3
+        mov [gui_active_workspace], al
+        ; Focus the topmost window that lives on the new workspace.
+        mov [gui_focused_win], -1
+        xor ecx, ecx
+        mov edx, -1            ; best window index
+        mov ebx, 0             ; best z
+.sw_scan:
+        cmp ecx, MAX_WINDOWS
+        jge .sw_scan_done
+        mov esi, ecx
+        imul esi, WIN_STRUCT_SIZE
+        add esi, gui_win_table
+        mov ax, [esi + WIN_FLAGS]
+        and ax, 0x03
+        cmp ax, 0x03
+        jne .sw_next
+        movzx eax, byte [esi + WIN_WORKSPACE]
+        cmp al, 0xFF
+        je .sw_next
+        cmp al, [gui_active_workspace]
+        jne .sw_next
+        cmp [esi + WIN_Z], ebx
+        jbe .sw_next
+        mov ebx, [esi + WIN_Z]
+        mov edx, ecx
+.sw_next:
+        inc ecx
+        jmp .sw_scan
+.sw_scan_done:
+        cmp edx, -1
+        je .sw_done
+        mov eax, edx
+        call gui_focus_window
+.sw_done:
+        popad
+        ret
+
+;---------------------------------------
 ; gui_focus_window - Bring window to front
 ; EAX = window index
 ;---------------------------------------
@@ -2366,6 +2839,7 @@ gui_cycle_window:
 ;---------------------------------------
 gui_draw_all_windows:
         pushad
+        call gui_target_screen
         ; Selection sort: repeatedly find min-z undrawn window
         xor edi, edi            ; drawn bitmask
 .aw_pass:
@@ -2416,11 +2890,102 @@ gui_draw_all_windows:
 .aw_min_idx: dd 0
 
 ;---------------------------------------
+; gui_blit_window - copy a window's content buffer to the back buffer
+;   In : EBP = window entry
+;   Clips to the screen. All registers preserved.
+;---------------------------------------
+gui_blit_window:
+        pushad
+        mov esi, [ebp + WIN_BUF]
+        test esi, esi
+        jz .bw_done
+        mov eax, [ebp + WIN_X]
+        mov ebx, [ebp + WIN_Y]
+        test eax, eax
+        jl .bw_done
+        test ebx, ebx
+        jl .bw_done
+        cmp eax, GUI_SCREEN_W
+        jge .bw_done
+        cmp ebx, GUI_SCREEN_H
+        jge .bw_done
+
+        ; w = min(WIN_W, WIN_BUF_W, screen_w - x)
+        mov ecx, [ebp + WIN_W]
+        mov edi, [ebp + WIN_BUF_W]
+        cmp ecx, edi
+        jle .bw_w_buf_ok
+        mov ecx, edi
+.bw_w_buf_ok:
+        mov edx, GUI_SCREEN_W
+        sub edx, eax
+        cmp ecx, edx
+        jle .bw_w_ok
+        mov ecx, edx
+.bw_w_ok:
+        ; h = min(WIN_H, WIN_BUF_H, screen_h - y)
+        mov edx, [ebp + WIN_H]
+        mov edi, [ebp + WIN_BUF_H]
+        cmp edx, edi
+        jle .bw_h_buf_ok
+        mov edx, edi
+.bw_h_buf_ok:
+        mov edi, GUI_SCREEN_H
+        sub edi, ebx
+        cmp edx, edi
+        jle .bw_h_ok
+        mov edx, edi
+.bw_h_ok:
+        cmp ecx, 0
+        jle .bw_done
+        cmp edx, 0
+        jle .bw_done
+        mov [.bw_w], ecx
+        mov [.bw_h], edx
+
+        ; Source pitch = WIN_BUF_W * 4.
+        mov eax, [ebp + WIN_BUF_W]
+        shl eax, 2
+        mov [.bw_src_pitch], eax
+        mov [.bw_src], esi
+
+        ; Destination = back buffer + y*GUI_PITCH + x*4.
+        mov eax, ebx
+        imul eax, GUI_PITCH
+        add eax, GUI_BACKBUF
+        mov ebx, [ebp + WIN_X]
+        lea eax, [eax + ebx*4]
+        mov [.bw_dst], eax
+
+.bw_row:
+        cmp dword [.bw_h], 0
+        jle .bw_done
+        mov esi, [.bw_src]
+        mov edi, [.bw_dst]
+        mov ecx, [.bw_w]
+        cld
+        rep movsd
+        mov eax, [.bw_src_pitch]
+        add [.bw_src], eax
+        add dword [.bw_dst], GUI_PITCH
+        dec dword [.bw_h]
+        jmp .bw_row
+.bw_done:
+        popad
+        ret
+.bw_w:         dd 0
+.bw_h:         dd 0
+.bw_src:       dd 0
+.bw_dst:       dd 0
+.bw_src_pitch: dd 0
+
+;---------------------------------------
 ; gui_draw_window_n - Draw window by index
 ; EBX = window index
 ;---------------------------------------
 gui_draw_window_n:
         pushad
+        call gui_target_screen
         cmp ebx, MAX_WINDOWS
         jge .wn_done
 
@@ -2682,7 +3247,7 @@ gui_draw_window_n:
         pop edx
         pop ecx
 
-        ; --- Draw content area background ---
+        ; --- Fill the content area, then blit the private content buffer ---
         push ecx
         push edx
         mov eax, ecx
@@ -2693,6 +3258,7 @@ gui_draw_window_n:
         call gui_bb_fill_rect
         pop edx
         pop ecx
+        call gui_blit_window
 
         ; v9.0: Apply alpha transparency if WIN_ALPHA < 255
         movzx eax, byte [ebp + WIN_ALPHA]
@@ -2885,6 +3451,7 @@ gui_alpha_blend_rect:
 
 gui_draw_taskbar:
         pushad
+        call gui_target_screen
 
         ; Taskbar background
         mov eax, 0
@@ -2913,6 +3480,28 @@ gui_draw_taskbar:
         mov eax, 12
         mov ebx, TASKBAR_Y + 6
         mov esi, gui_str_menu
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_string
+
+        ; Workspace indicator (click cycles 1..4)
+        movzx eax, byte [gui_active_workspace]
+        add al, '1'
+        mov [gui_ws_buf], al
+        mov byte [gui_ws_buf + 1], 0
+        mov eax, GUI_SCREEN_W - 108
+        mov ebx, TASKBAR_Y + 4
+        mov ecx, 40
+        mov edx, 20
+        mov esi, [gui_theme + THEME_BUTTON_BG]
+        call gui_bb_fill_rect
+        mov eax, GUI_SCREEN_W - 100
+        mov ebx, TASKBAR_Y + 6
+        mov esi, gui_str_ws
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_string
+        mov eax, GUI_SCREEN_W - 84
+        mov ebx, TASKBAR_Y + 6
+        mov esi, gui_ws_buf
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string
 
@@ -2959,12 +3548,16 @@ gui_draw_taskbar:
 .tb_draw_btn:
         call gui_bb_button_3d
 
-        ; Draw truncated title
+        ; Draw a truncated title that fits the 80px taskbar button.
         pop eax                     ; window entry
         push eax
-        mov ebx, TASKBAR_Y + 6
         mov esi, eax
         add esi, WIN_TITLE
+        mov edi, gui_title_buf
+        mov ecx, 9
+        call gui_copy_trunc
+        mov ebx, TASKBAR_Y + 6
+        mov esi, gui_title_buf
         mov eax, [.tb_x]
         add eax, 4
         mov edx, 0x00FFFFFF
@@ -3305,12 +3898,86 @@ gui_menu_select:
         ret
 
 ;---------------------------------------
+; gui_spawn_program - load a program and create a READY GUI task
+;   In : ESI = program name (valid in the caller's address space)
+;   Out: EAX = task id, CF set on failure
+;
+; The loader must run in the master directory: PROGRAM_BASE belongs to the
+; caller when this is invoked from a ring-3 launcher, and overwriting it would
+; destroy the calling app. The name is copied to kernel memory first because
+; the caller's user mapping is not present in the master directory.
+;---------------------------------------
+gui_spawn_program:
+        pushad
+        mov edi, gui_launch_name_buf
+        mov ecx, 63
+.gsp_copy:
+        lodsb
+        stosb
+        test al, al
+        jz .gsp_copied
+        dec ecx
+        jnz .gsp_copy
+        mov byte [edi], 0
+.gsp_copied:
+        call sched_get_current_task
+        mov [.gsp_tcb], eax
+        test eax, eax
+        jz .gsp_master
+        xor eax, eax
+        call sched_apply_cr3
+.gsp_master:
+        mov esi, gui_launch_name_buf
+        mov byte [gui_launch_flag], 1
+        call cmd_exec_program
+        mov byte [gui_launch_flag], 0
+        mov [.gsp_result], eax
+        pushfd
+        pop ecx
+        mov [.gsp_flags], ecx
+        mov ecx, [.gsp_tcb]
+        test ecx, ecx
+        jz .gsp_done
+        mov eax, ecx
+        call sched_apply_cr3
+.gsp_done:
+        mov eax, [.gsp_result]
+        mov [esp + 28], eax
+        mov ecx, [.gsp_flags]
+        test ecx, 1
+        jz .gsp_ok
+        popad
+        stc
+        ret
+.gsp_ok:
+        popad
+        clc
+        ret
+.gsp_tcb:    dd 0
+.gsp_result: dd 0
+.gsp_flags:  dd 0
+gui_launch_name_buf: times 64 db 0
+
+;---------------------------------------
 ; gui_launch_app - Launch external program
 ; ESI = program name
 ;---------------------------------------
 gui_launch_app:
-        call cmd_exec_program
-        ; Only reached if program not found
+        ; Launcher is a singleton: focus the existing window instead of
+        ; stacking duplicate launchers.
+        push esi
+        mov edi, gui_prog_blauncher
+        call str_compare
+        pop esi
+        test eax, eax
+        jnz .la_new
+        mov eax, [gui_launcher_win]
+        cmp eax, -1
+        je .la_new
+        call gui_focus_window
+        ret
+.la_new:
+        call gui_spawn_program
         ret
 
 ;---------------------------------------
@@ -3401,6 +4068,14 @@ gui_handle_input:
         jl .hi_check_icons
         cmp dword [mouse_y], TASKBAR_Y + 24
         jg .hi_check_icons
+        cmp dword [mouse_x], GUI_SCREEN_W - 108
+        jl .hi_taskbtn
+        movzx eax, byte [gui_active_workspace]
+        inc eax
+        and eax, 3
+        call gui_set_workspace
+        jmp .hi_update
+.hi_taskbtn:
         cmp dword [mouse_x], 76
         jl .hi_check_icons
         call gui_taskbar_btn_click
@@ -3497,6 +4172,19 @@ gui_handle_input:
         je .hi_ws3
         cmp al, 0x94           ; Ctrl+Alt+4
         je .hi_ws4
+        cmp al, 0x84           ; F1 — open the launcher
+        je .hi_launcher
+        cmp al, 0x85           ; F2 — open a terminal
+        je .hi_bterm
+        jmp .hi_done
+
+.hi_launcher:
+        mov esi, gui_prog_blauncher
+        call gui_launch_app
+        jmp .hi_done
+.hi_bterm:
+        mov esi, gui_prog_bterm
+        call gui_launch_app
         jmp .hi_done
 
 .hi_alt_tab:
@@ -3505,13 +4193,17 @@ gui_handle_input:
         jmp .hi_done
 
 ; v9.0: Virtual desktop switch helpers
-.hi_ws1: mov byte [gui_active_workspace], 0
+.hi_ws1: xor eax, eax
+         call gui_set_workspace
          jmp .hi_done
-.hi_ws2: mov byte [gui_active_workspace], 1
+.hi_ws2: mov eax, 1
+         call gui_set_workspace
          jmp .hi_done
-.hi_ws3: mov byte [gui_active_workspace], 2
+.hi_ws3: mov eax, 2
+         call gui_set_workspace
          jmp .hi_done
-.hi_ws4: mov byte [gui_active_workspace], 3
+.hi_ws4: mov eax, 3
+         call gui_set_workspace
          jmp .hi_done
 
 .hi_esc:
@@ -3544,6 +4236,7 @@ gui_handle_window_click:
         je .wc_done
 
         ; Focus this window
+        mov [.wc_idx], eax
         push eax
         call gui_focus_window
         pop eax
@@ -3621,6 +4314,8 @@ gui_handle_window_click:
         mov dword [ebx + WIN_W], GUI_SCREEN_W - 2 * BORDER_W
         mov dword [ebx + WIN_H], TASKBAR_Y - TITLEBAR_H - BORDER_W
         or dword [ebx + WIN_FLAGS], 0x04
+        mov eax, [.wc_idx]
+        call gui_realloc_window_buf
         jmp .wc_done
 
 .wc_restore:
@@ -3634,6 +4329,8 @@ gui_handle_window_click:
         mov ecx, [ebx + WIN_SAVE_H]
         mov [ebx + WIN_H], ecx
         and dword [ebx + WIN_FLAGS], ~0x04
+        mov eax, [.wc_idx]
+        call gui_realloc_window_buf
         jmp .wc_done
 
 .wc_not_max:
@@ -3694,6 +4391,7 @@ gui_handle_window_click:
         jz .wc_check_titlebar_drag  ; no edge hit, check title drag
         ; Start resize
         mov byte [gui_resizing], 1
+        mov eax, [.wc_idx]
         mov [gui_resize_win], eax
         mov [gui_resize_edge], cl
         ; Save original mouse position and window dimensions
@@ -3718,6 +4416,7 @@ gui_handle_window_click:
 
         ; Start drag
         mov byte [gui_dragging], 1
+        mov eax, [.wc_idx]
         mov [gui_drag_win], eax
         mov ecx, [mouse_x]
         sub ecx, [ebx + WIN_X]
@@ -3730,6 +4429,7 @@ gui_handle_window_click:
 .wc_done:
         popad
         ret
+.wc_idx: dd 0
 
 ;---------------------------------------
 ; gui_handle_drag - Move window with mouse
@@ -3737,6 +4437,41 @@ gui_handle_window_click:
 gui_handle_drag:
         pushad
         mov eax, [gui_drag_win]
+        cmp eax, MAX_WINDOWS
+        jge .dr_done
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+
+        mov ebx, [mouse_x]
+        sub ebx, [gui_drag_off_x]
+        add ebx, BORDER_W
+        cmp ebx, 0
+        jge .dr_x_ok
+        xor ebx, ebx
+.dr_x_ok:
+        mov ecx, GUI_SCREEN_W - 64
+        cmp ebx, ecx
+        jle .dr_x_max
+        mov ebx, ecx
+.dr_x_max:
+        mov [eax + WIN_X], ebx
+
+        mov ebx, [mouse_y]
+        sub ebx, [gui_drag_off_y]
+        add ebx, TITLEBAR_H
+        cmp ebx, 0
+        jge .dr_y_ok
+        xor ebx, ebx
+.dr_y_ok:
+        mov ecx, TASKBAR_Y - 24
+        cmp ebx, ecx
+        jle .dr_y_max
+        mov ebx, ecx
+.dr_y_max:
+        mov [eax + WIN_Y], ebx
+.dr_done:
+        popad
+        ret
 
 ;---------------------------------------
 ; gui_handle_resize - Resize window with mouse (v9.0)
@@ -3780,23 +4515,8 @@ gui_handle_resize:
         mov [eax + WIN_H], edx
 
 .hrs_done:
-        popad
-        ret
-        cmp eax, MAX_WINDOWS
-        jge .dr_done
-        imul eax, WIN_STRUCT_SIZE
-        add eax, gui_win_table
-
-        mov ebx, [mouse_x]
-        sub ebx, [gui_drag_off_x]
-        add ebx, BORDER_W
-        mov [eax + WIN_X], ebx
-
-        mov ebx, [mouse_y]
-        sub ebx, [gui_drag_off_y]
-        add ebx, TITLEBAR_H
-        mov [eax + WIN_Y], ebx
-.dr_done:
+        mov eax, [gui_resize_win]
+        call gui_realloc_window_buf
         popad
         ret
 
@@ -5168,6 +5888,188 @@ gui_applet_settings:
 .set_win: dd 0
 
 ;=======================================================================
+; FOCUS-AWARE INPUT HELPERS
+;=======================================================================
+
+;---------------------------------------
+; gui_poll_can_read - may the caller consume keyboard/mouse input?
+;   Out: EAX = 1 for the owner of the focused window (or a kernel applet),
+;              = 0 for any other task
+;---------------------------------------
+gui_poll_can_read:
+        mov eax, [gui_focused_win]
+        cmp eax, -1
+        je .pcr_no_focus
+        push eax
+        call sched_get_current_task
+        test eax, eax
+        jz .pcr_kernel
+        mov ebx, [eax + TCB_PID]
+        pop eax
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        cmp ebx, [eax + WIN_OWNER_PID]
+        sete al
+        movzx eax, al
+        ret
+.pcr_kernel:
+        pop eax
+        mov eax, 1
+        ret
+.pcr_no_focus:
+        call sched_get_current_task
+        test eax, eax
+        jz .pcr_yes
+        xor eax, eax
+        ret
+.pcr_yes:
+        mov eax, 1
+        ret
+
+;---------------------------------------
+; gui_poll_global_key - consume and handle a desktop shortcut
+;   Out: EAX = 1 if a shortcut was handled, 0 otherwise
+;
+; Called even when the caller does not own the focused window (for example
+; after a workspace switch dropped focus), so the desktop stays reachable.
+;---------------------------------------
+gui_poll_global_key:
+        call kb_peekchar
+        test al, al
+        jz .pgk_no
+        cmp al, 0x84
+        je .pgk_launcher
+        cmp al, 0x85
+        je .pgk_bterm
+        cmp al, 0x8E
+        je .pgk_alt_tab
+        cmp al, 0x91
+        jb .pgk_no
+        cmp al, 0x94
+        ja .pgk_no
+        push eax
+        call kb_pollchar
+        pop eax
+        sub al, 0x91
+        movzx eax, al
+        call gui_set_workspace
+        mov eax, 1
+        ret
+.pgk_launcher:
+        call kb_pollchar
+        mov esi, gui_prog_blauncher
+        call gui_launch_app
+        mov eax, 1
+        ret
+.pgk_bterm:
+        call kb_pollchar
+        mov esi, gui_prog_bterm
+        call gui_launch_app
+        mov eax, 1
+        ret
+.pgk_alt_tab:
+        call kb_pollchar
+        call gui_cycle_window
+        mov eax, 1
+        ret
+.pgk_no:
+        xor eax, eax
+        ret
+
+;---------------------------------------
+; gui_poll_wm_click - process WM-level clicks during an app poll
+;
+; Handles taskbar/menu clicks, focuses a clicked window, and lets the window
+; manager handle title-bar drag/min/max. A click inside the focused window's
+; content area is left in the latch for the application.
+;---------------------------------------
+gui_poll_wm_click:
+        pushad
+        movzx eax, byte [mouse_btn_latch]
+        test al, 0x01
+        jz .pwc_done
+
+        ; Taskbar?
+        cmp dword [mouse_y], TASKBAR_Y + 4
+        jl .pwc_window
+        cmp dword [mouse_y], TASKBAR_Y + 24
+        jg .pwc_window
+        cmp dword [mouse_x], GUI_SCREEN_W - 108
+        jl .pwc_taskbtn
+        movzx eax, byte [gui_active_workspace]
+        inc eax
+        and eax, 3
+        call gui_set_workspace
+        mov byte [mouse_btn_latch], 0
+        jmp .pwc_done
+.pwc_taskbtn:
+        cmp dword [mouse_x], 76
+        jl .pwc_menu
+        call gui_taskbar_btn_click
+        mov byte [mouse_btn_latch], 0
+        jmp .pwc_done
+
+.pwc_menu:
+        cmp dword [mouse_x], 4
+        jl .pwc_window
+        cmp dword [mouse_x], 68
+        jg .pwc_window
+        mov byte [mouse_btn_latch], 0
+        mov esi, gui_prog_blauncher
+        call gui_launch_app
+        jmp .pwc_done
+
+.pwc_window:
+        mov eax, [mouse_x]
+        mov ebx, [mouse_y]
+        call gui_find_window_at
+        cmp eax, -1
+        je .pwc_done
+
+        ; A click on an unfocused window focuses it and is consumed.
+        cmp eax, [gui_focused_win]
+        je .pwc_focused
+        call gui_focus_window
+        mov byte [mouse_btn_latch], 0
+        jmp .pwc_done
+
+.pwc_focused:
+        ; Content-area clicks belong to the app.
+        mov ebx, eax
+        imul ebx, WIN_STRUCT_SIZE
+        add ebx, gui_win_table
+        mov ecx, [ebx + WIN_Y]
+        cmp dword [mouse_y], ecx
+        jge .pwc_done
+
+        ; Let the app handle the close button (it receives EVT_CLOSE).
+        mov ecx, [ebx + WIN_X]
+        add ecx, [ebx + WIN_W]
+        add ecx, BORDER_W
+        sub ecx, CLOSE_BTN_SIZE + 4
+        cmp dword [mouse_x], ecx
+        jl .pwc_chrome
+        add ecx, CLOSE_BTN_SIZE
+        cmp dword [mouse_x], ecx
+        jg .pwc_chrome
+        mov ecx, [ebx + WIN_Y]
+        sub ecx, TITLEBAR_H
+        add ecx, 3
+        cmp dword [mouse_y], ecx
+        jl .pwc_chrome
+        add ecx, CLOSE_BTN_SIZE
+        cmp dword [mouse_y], ecx
+        jg .pwc_chrome
+        jmp .pwc_done
+
+.pwc_chrome:
+        call gui_handle_window_click
+        mov byte [mouse_btn_latch], 0
+.pwc_done:
+        popad
+        ret
+
+;=======================================================================
 ; SYS_GUI SYSCALL HANDLER
 ;=======================================================================
 
@@ -5206,7 +6108,25 @@ sys_gui:
         je .sg_draw_label
         cmp ebx, GUI_DRAW_RECT
         je .sg_draw_rect
+        cmp ebx, GUI_LAUNCH
+        je .sg_launch
+        cmp ebx, GUI_EXIT_DESKTOP
+        je .sg_exit_desktop
         mov eax, -1
+        iretd
+
+.sg_exit_desktop:
+        mov byte [gui_exit_flag], 1
+        xor eax, eax
+        iretd
+
+.sg_launch:
+        ; ESI = program name. Create a READY GUI task and return its id so a
+        ; launcher can stay alive and open more than one app.
+        pushad
+        call gui_spawn_program
+        mov [esp + 28], eax
+        popad
         iretd
 
 .sg_create:
@@ -5220,45 +6140,39 @@ sys_gui:
         movzx edx, dx          ; h
         call gui_create_window
         pop esi
-        ; Mark window as app-owned
-        cmp eax, -1
-        je .sg_cr_done
-        push eax
-        imul eax, WIN_STRUCT_SIZE
-        mov dword [gui_win_table + eax + WIN_APP_ID], 1
-        pop eax
-.sg_cr_done:
         iretd
 
 .sg_destroy:
         ; ECX = win_id
         mov eax, ecx
+        call gui_caller_owns_window
+        test eax, eax
+        jz .sg_d_fail
+        mov eax, ecx
         call gui_destroy_window_n
         xor eax, eax
+        iretd
+.sg_d_fail:
+        mov eax, -1
         iretd
 
 .sg_fill:
         ; ECX = win_id, EDX = x|y, ESI = w|h, EDI = color
         pushad
         mov eax, ecx
-        cmp eax, MAX_WINDOWS
-        jge .sg_f_done
-        imul eax, WIN_STRUCT_SIZE
-        add eax, gui_win_table
-        test dword [eax + WIN_FLAGS], 0x01
-        jz .sg_f_done
-        ; Convert to screen coords
+        call gui_target_window
+        test eax, eax
+        js .sg_f_done
+        ; Draw into the window's own buffer, in content-relative coordinates.
+        mov eax, edx
+        shr eax, 16            ; x
         mov ebx, edx
-        shr ebx, 16
-        add ebx, [eax + WIN_X]
-        movzx ecx, dx
-        add ecx, [eax + WIN_Y]
-        mov eax, ebx
-        mov ebx, ecx
+        and ebx, 0xFFFF        ; y
         mov ecx, esi
-        shr ecx, 16
-        movzx edx, si
-        mov esi, edi
+        shr ecx, 16            ; w
+        mov edx, esi
+        and edx, 0xFFFF        ; h
+        mov esi, edi           ; color
         call gui_bb_fill_rect
 .sg_f_done:
         popad
@@ -5269,20 +6183,14 @@ sys_gui:
         ; ECX = win_id, EDX = x|y, ESI = text, EDI = color
         pushad
         mov eax, ecx
-        cmp eax, MAX_WINDOWS
-        jge .sg_t_done
-        imul eax, WIN_STRUCT_SIZE
-        add eax, gui_win_table
-        test dword [eax + WIN_FLAGS], 0x01
-        jz .sg_t_done
+        call gui_target_window
+        test eax, eax
+        js .sg_t_done
+        mov eax, edx
+        shr eax, 16            ; x
         mov ebx, edx
-        shr ebx, 16
-        add ebx, [eax + WIN_X]
-        movzx ecx, dx
-        add ecx, [eax + WIN_Y]
-        mov eax, ebx
-        mov ebx, ecx
-        mov edx, edi
+        and ebx, 0xFFFF        ; y
+        mov edx, edi           ; color
         call gui_bb_draw_string
 .sg_t_done:
         popad
@@ -5290,6 +6198,18 @@ sys_gui:
         iretd
 
 .sg_poll:
+        ; WM-level clicks (taskbar, focus changes, title-bar drag) are handled
+        ; for every caller. Then only the owner of the focused window may
+        ; consume the shared keyboard/mouse queues.
+        call gui_poll_wm_click
+        call gui_poll_can_read
+        test eax, eax
+        jnz .sg_p_read
+        ; Unfocused callers still handle global desktop shortcuts.
+        call gui_poll_global_key
+        xor eax, eax
+        iretd
+.sg_p_read:
         ; Poll for events, return in EAX/EBX/ECX
         call kb_pollchar
         cmp al, 0
@@ -5305,11 +6225,61 @@ sys_gui:
         mov eax, [mouse_y]
         cmp eax, [gui_prev_mouse_y]
         jne .sg_p_mouse_mv
+.sg_p_none:
         xor eax, eax
         iretd
 .sg_p_key:
         movzx ebx, al
+        ; Global desktop shortcuts work regardless of the focused app.
+        cmp bl, 0x84           ; F1 — launcher
+        je .sg_p_launcher
+        cmp bl, 0x85           ; F2 — terminal
+        je .sg_p_bterm
+        cmp bl, 0x8E           ; Alt+Tab — cycle windows
+        je .sg_p_alt_tab
+        cmp bl, 0x91           ; Ctrl+Alt+1..4 — workspace
+        je .sg_p_ws0
+        cmp bl, 0x92
+        je .sg_p_ws1
+        cmp bl, 0x93
+        je .sg_p_ws2
+        cmp bl, 0x94
+        je .sg_p_ws3
         mov eax, EVT_KEY_PRESS
+        iretd
+.sg_p_launcher:
+        mov esi, gui_prog_blauncher
+        call gui_launch_app
+        xor eax, eax
+        iretd
+.sg_p_bterm:
+        mov esi, gui_prog_bterm
+        call gui_launch_app
+        xor eax, eax
+        iretd
+.sg_p_alt_tab:
+        call gui_cycle_window
+        xor eax, eax
+        iretd
+.sg_p_ws0:
+        xor eax, eax
+        call gui_set_workspace
+        xor eax, eax
+        iretd
+.sg_p_ws1:
+        mov eax, 1
+        call gui_set_workspace
+        xor eax, eax
+        iretd
+.sg_p_ws2:
+        mov eax, 2
+        call gui_set_workspace
+        xor eax, eax
+        iretd
+.sg_p_ws3:
+        mov eax, 3
+        call gui_set_workspace
+        xor eax, eax
         iretd
 .sg_p_mouse_btn:
         ; Clear latch and update prev state
@@ -5414,20 +6384,14 @@ sys_gui:
         ; ECX = win_id, EDX = x|y, ESI = color
         pushad
         mov eax, ecx
-        cmp eax, MAX_WINDOWS
-        jge .sg_px_done
-        imul eax, WIN_STRUCT_SIZE
-        add eax, gui_win_table
-        test dword [eax + WIN_FLAGS], 0x01
-        jz .sg_px_done
+        call gui_target_window
+        test eax, eax
+        js .sg_px_done
+        mov eax, edx
+        shr eax, 16            ; x
         mov ebx, edx
-        shr ebx, 16
-        add ebx, [eax + WIN_X]
-        movzx ecx, dx
-        add ecx, [eax + WIN_Y]
-        mov eax, ebx
-        mov ebx, ecx
-        mov ecx, esi
+        and ebx, 0xFFFF        ; y
+        mov ecx, esi           ; color
         call gui_bb_pixel
 .sg_px_done:
         popad
@@ -5436,6 +6400,7 @@ sys_gui:
 
 .sg_compose:
         pushad
+        call gui_target_screen
         call gui_draw_background
         call gui_draw_all_windows
         call gui_draw_taskbar
@@ -5444,9 +6409,15 @@ sys_gui:
         iretd
 
 .sg_flip:
+        ; Window content now lives in per-window buffers, so compose the
+        ; desktop before presenting it. gui_compose also draws the cursor and
+        ; flips the back buffer.
         pushad
-        call gui_draw_cursor
-        call gui_flip
+        mov dword [esp + 28], 0     ; syscall returns 0 when resumed
+        call gui_compose
+        ; Give other GUI tasks a slice. Busy GUI loops spend most of their time
+        ; in ring 0 (compose/flip), where the timer never preempts.
+        call sched_try_yield_frame
         popad
         xor eax, eax
         iretd
@@ -5462,13 +6433,15 @@ sys_gui:
 .wgt_resolve_win:
         cmp ecx, MAX_WINDOWS
         jge .wrw_fail
+        push ecx
         mov eax, ecx
-        imul eax, WIN_STRUCT_SIZE
-        add eax, gui_win_table
-        test dword [eax + WIN_FLAGS], 0x01
-        jz .wrw_fail
-        mov ebx, [eax + WIN_Y]
-        mov eax, [eax + WIN_X]
+        call gui_target_window
+        pop ecx
+        test eax, eax
+        js .wrw_fail
+        ; Widgets draw in content-relative coordinates now.
+        xor eax, eax
+        xor ebx, ebx
         clc
         ret
 .wrw_fail:
@@ -6291,6 +7264,8 @@ gui_str_set_cur:    db "Current Theme", 0
 gui_str_set_instr:  db "Click or press 1/2/3/4", 0
 
 ; Menu item strings
+gui_str_launcher_title: db "Burrows Launcher", 0
+gui_str_ws:         db "WS", 0
 gui_str_m_term:     db "BTerm", 0
 gui_str_m_files:    db "BHive", 0
 gui_str_m_forager:  db "BForager", 0
@@ -6546,6 +7521,11 @@ notify_text:    times (NOTIFY_MAX * NOTIFY_TEXT_LEN) db 0
 
 gui_desktop_active: db 0
 gui_exit_flag:      db 0
+gui_launch_flag:    db 0        ; set by GUI_LAUNCH: create READY task, return
+gui_exit_pid:       dd -1       ; PID whose windows must be reaped
+gui_launcher_win:   dd -1       ; launcher window index for singleton launch
+gui_title_buf:      times 16 db 0
+gui_ws_buf:         db "1", 0
 gui_menu_open:      db 0
 gui_ctx_open:       db 0
 gui_dragging:       db 0

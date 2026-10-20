@@ -389,6 +389,147 @@ sched_create_task:
         ret
 
 ;---------------------------------------
+; sched_free_ready_task - release a READY task that never ran
+;   In : EAX = task id
+;
+; Used when a GUI launch cannot isolate the new task's program window. The
+; task's page directory is not active (we are in the master directory), so it
+; can be freed directly.
+;---------------------------------------
+sched_free_ready_task:
+        pushad
+        cmp eax, MAX_TASKS
+        jae .sfr_done
+        imul eax, TCB_SIZE
+        add eax, task_table
+        mov edi, eax
+        cmp dword [edi + TCB_STATE], TASK_READY
+        jne .sfr_done
+
+        ; Release private program-window frames.
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .sfr_kstack
+        mov ebx, PROGRAM_BASE
+        mov ecx, PROGRAM_MAX_SIZE / 4096
+        call paging_free_window_private
+
+.sfr_kstack:
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .sfr_fd
+        sub eax, 4096
+        call pmm_free_page
+        mov dword [edi + TCB_KSTACK], 0
+.sfr_fd:
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .sfr_sig
+        call pmm_free_page
+        mov dword [edi + TCB_FD_TABLE_PTR], 0
+.sfr_sig:
+        mov eax, [edi + TCB_SIG_HAND]
+        test eax, eax
+        jz .sfr_pd
+        mov dword [edi + TCB_SIG_HAND], 0
+        call pmm_free_page
+.sfr_pd:
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .sfr_clear
+        mov dword [edi + TCB_CR3], 0
+        call pmm_free_page
+.sfr_clear:
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_PID], 0
+        dec dword [task_count]
+.sfr_done:
+        popad
+        ret
+
+;---------------------------------------
+; sched_kill_all_tasks - tear down every task at once
+;
+; Used when the desktop shuts down: a GUI app must never outlive Burrows,
+; because it would keep polling windows and drawing over the restored text
+; console. Must run with the master page directory active.
+;---------------------------------------
+sched_kill_all_tasks:
+        pushad
+        xor esi, esi                    ; task index
+.skat_loop:
+        cmp esi, MAX_TASKS
+        jge .skat_done
+        mov edi, esi
+        imul edi, TCB_SIZE
+        add edi, task_table
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .skat_next
+
+        ; Release the private program-window frames.
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .skat_ustack
+        mov ebx, PROGRAM_BASE
+        mov ecx, PROGRAM_MAX_SIZE / 4096
+        call paging_free_window_private
+
+.skat_ustack:
+        mov eax, [edi + TCB_USTACK]
+        test eax, eax
+        jz .skat_kstack
+        add eax, 4
+        sub eax, BG_STACK_PAGES * 4096
+        cmp eax, PROGRAM_BASE
+        jb .skat_free_ustack
+        mov ebx, PROGRAM_BASE + PROGRAM_MAX_SIZE
+        cmp eax, ebx
+        jb .skat_kstack                 ; inside the program window
+.skat_free_ustack:
+        mov ecx, BG_STACK_PAGES
+        call cow_release_range
+
+.skat_kstack:
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .skat_fd
+        sub eax, 4096
+        call pmm_free_page
+        mov dword [edi + TCB_KSTACK], 0
+.skat_fd:
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        test eax, eax
+        jz .skat_sig
+        call pmm_free_page
+        mov dword [edi + TCB_FD_TABLE_PTR], 0
+.skat_sig:
+        mov eax, [edi + TCB_SIG_HAND]
+        test eax, eax
+        jz .skat_pd
+        mov dword [edi + TCB_SIG_HAND], 0
+        call pmm_free_page
+.skat_pd:
+        ; The master directory is active here, so the task's directory is not
+        ; in use and can be released immediately.
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .skat_clear
+        mov dword [edi + TCB_CR3], 0
+        call pmm_free_page
+.skat_clear:
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_PID], 0
+        mov dword [edi + TCB_USTACK], 0
+.skat_next:
+        inc esi
+        jmp .skat_loop
+.skat_done:
+        mov dword [task_count], 0
+        mov dword [task_current], 0
+        popad
+        ret
+
+;---------------------------------------
 ; sched_exit_task - Terminate current task
 ; Called when a task's program exits.
 ; Frees the kernel stack page and TCB.
@@ -411,6 +552,10 @@ sched_exit_task:
         jmp .exit_find
 
 .exit_found:
+        ; Reap any windows this task owned before the TCB is recycled.
+        mov eax, [edi + TCB_PID]
+        call gui_cleanup_pid
+
         ; Free the kernel stack page (kstack_top - 4096 = page base).
         ; Callers switch to KERNEL_STACK before invoking us, so the stack this
         ; runs on is never the page being released here.
@@ -704,6 +849,8 @@ sys_waitpid:
         xor eax, eax
         call sched_apply_cr3          ; back to the master directory
         mov esp, KERNEL_STACK
+        cmp byte [gui_desktop_active], 1
+        je gui_desktop_resume
         jmp shell_main
 
 .swp_fail:
@@ -862,6 +1009,73 @@ sched_start_task:
 ;---------------------------------------
 ; sys_yield - SYS_YIELD syscall handler
 ;---------------------------------------
+; sched_try_yield_frame - cooperative yield from a syscall handler
+;
+; Call with a pushad+iretd frame on the current kernel stack (the normal
+; INT 0x80 handler shape). If another task is READY, save the caller's frame,
+; mark it READY and switch to that task. Returns immediately when no task is
+; ready. Used by GUI_FLIP so a busy GUI app cannot starve its peers.
+;
+; The caller should write its desired EAX return value into the pushad frame
+; before calling; it is restored when the task resumes.
+;---------------------------------------
+sched_try_yield_frame:
+        pushad
+        call sched_get_current_task
+        test eax, eax
+        jz .sty_ret
+        mov edi, eax
+
+        ; Round-robin from the slot after the caller so a busy foreground
+        ; task cannot starve a later-created GUI app.
+        mov edx, [task_current]
+        inc edx
+        cmp edx, MAX_TASKS
+        jb .sty_start_ok
+        xor edx, edx
+.sty_start_ok:
+        mov eax, edx
+        imul eax, TCB_SIZE
+        lea ebx, [task_table + eax]
+        mov ecx, MAX_TASKS
+.sty_scan:
+        cmp dword [ebx + TCB_STATE], TASK_READY
+        je .sty_found
+        add ebx, TCB_SIZE
+        inc edx
+        cmp edx, MAX_TASKS
+        jb .sty_no_wrap
+        xor edx, edx
+        mov ebx, task_table
+.sty_no_wrap:
+        dec ecx
+        jnz .sty_scan
+        jmp .sty_ret
+
+.sty_found:
+        ; Our pushad is 32 bytes and the call return address another 4, so the
+        ; caller's pushad frame starts at esp+36.
+        lea eax, [esp + 36]
+        mov [edi + TCB_ESP], eax
+        mov dword [edi + TCB_STATE], TASK_READY
+
+        ; sched_swap_fd_tables wants EDI=outgoing, EBX=incoming.
+        call sched_swap_fd_tables
+        mov dword [ebx + TCB_STATE], TASK_RUNNING
+        mov [task_current], edx
+        mov eax, [ebx + TCB_KSTACK]
+        mov [tss_struct + 4], eax
+        mov eax, ebx
+        call sched_apply_cr3
+        mov esp, [ebx + TCB_ESP]
+        popad
+        iretd
+
+.sty_ret:
+        popad
+        ret
+
+;---------------------------------------
 ; sched_force_switch - Switch to another ready task
 ; Called after a background task has exited (sched_exit_task already
 ; freed its TCB). Picks the first READY task and IRET to it.
@@ -915,6 +1129,8 @@ sched_force_switch:
         call sched_apply_cr3          ; back to the master directory
         mov dword [tss_struct + 4], KERNEL_STACK
         mov esp, KERNEL_STACK
+        cmp byte [gui_desktop_active], 1
+        je gui_desktop_resume
         jmp shell_main
 
 ;
@@ -1259,6 +1475,10 @@ sched_signal_task:
 
 .sst_kill:
         mov edi, [.sst_tcb]
+
+        ; Destroy the target's windows/surfaces.
+        mov eax, [edi + TCB_PID]
+        call gui_cleanup_pid
 
         ; Free the signal handler table page (allocated lazily by sigaction)
         mov eax, [edi + TCB_SIG_HAND]
@@ -1902,6 +2122,9 @@ sched_deliver_signals:
                                     ; parent that yielded after a child died.
 
         ; All others (SIGKILL, SIGTERM, SIGINT, SIGALRM, etc.): terminate
+        ; Destroy the task's windows/surfaces before recycling the TCB.
+        mov eax, [ebx + TCB_PID]
+        call gui_cleanup_pid
         ; Free the kernel stack page if allocated. A self-delivery runs on that
         ; very page, so it must stay allocated until the caller has switched
         ; away; sched_self_leave releases it there.

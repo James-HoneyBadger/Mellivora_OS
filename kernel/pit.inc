@@ -129,3 +129,18 @@ kb_pollchar:
 .none:
         xor eax, eax            ; AL=0, ZF=1
         ret
+
+;---------------------------------------
+; kb_peekchar - Return the next PS/2 key without consuming it
+;   Out: AL = key (0 if the buffer is empty); ZF set when empty
+;---------------------------------------
+kb_peekchar:
+        mov eax, [kb_read_idx]
+        cmp eax, [kb_write_idx]
+        je .pk_none
+        movzx eax, byte [kb_buffer + eax]
+        or al, al
+        ret
+.pk_none:
+        xor eax, eax
+        ret

@@ -6242,6 +6242,11 @@ cmd_exec_program:
         ; Push return address (trampoline) on ring 3 stack
         mov dword [eax], PROGRAM_EXIT_ADDR
 
+        ; GUI launch (Burrows): create the task READY and return so the
+        ; desktop can start it later and other GUI apps keep running.
+        cmp byte [gui_launch_flag], 1
+        je .exec_gui_task
+
         ; If a task is already running, this exec came from SYS_EXEC. execve
         ; replaces the current image, it does not create a second process: reusing
         ; the task keeps its TCB/CR3/fd page and avoids leaving two RUNNING TCBs
@@ -6295,6 +6300,54 @@ cmd_exec_program:
         push ebx                ; EIP
         iretd
         ; SYS_EXIT will jump to shell_main, we never return here
+
+;-----------------------------------------------------------------------
+; .exec_gui_task - create a READY GUI task without switching to it
+;   Returns CF=0, EAX = task id; CF=1 on failure.
+;
+; The program is already loaded at PROGRAM_BASE in the master directory. Give
+; the new task a private copy of that window before the next launch overwrites
+; it, then switch back to the master directory.
+;-----------------------------------------------------------------------
+.exec_gui_task:
+        mov esi, prog_name_buf
+        call sched_set_create_name
+        mov ebx, [program_entry]
+        mov ecx, PROGRAM_EXIT_ADDR - 4
+        call sched_create_task          ; EAX = task id or -1
+        test eax, eax
+        js .exec_gui_create_fail
+        call sched_set_task_args
+        mov [tty_fg_pgid], eax
+
+        push eax                        ; save task id across CR3 switches
+        imul eax, TCB_SIZE
+        add eax, task_table
+        call sched_apply_cr3            ; run in the new task's directory
+        call paging_isolate_program_window
+        test eax, eax
+        js .exec_gui_iso_fail
+        xor eax, eax
+        call sched_apply_cr3            ; back to the master directory
+        pop eax                         ; task id
+        mov [esp + 28], eax             ; return it through the pushad frame
+        popad
+        clc
+        ret
+
+.exec_gui_iso_fail:
+        pop eax
+        call sched_free_ready_task
+        mov dword [esp + 28], -1
+        popad
+        stc
+        ret
+
+.exec_gui_create_fail:
+        mov dword [esp + 28], -1
+        popad
+        stc
+        ret
 
 .exec_bg:
         ; Launch program as a background scheduler task

@@ -554,6 +554,11 @@ Wrapper functions for the `SYS_GUI` syscall (38) sub-functions. Provides a clean
 calling convention for creating and managing windows in the Burrows desktop environment.
 Requires `syscalls.inc`.
 
+Burrows is a multi-app desktop. Every window owns a backing buffer, so an application
+draws only into its own window no matter what else is on screen, and drawing calls use
+window-relative coordinates. Windows belong to the process that created them and are
+destroyed automatically when that process exits.
+
 **Coordinate packing:** Many SYS_GUI sub-functions use `hi16:lo16` packed registers.
 The `gui.inc` wrappers handle this packing automatically — you pass x, y, w, h as
 separate registers.
@@ -562,8 +567,10 @@ separate registers.
 
 | Function | Input | Output | Description |
 | --- | --- | --- | --- |
-| `gui_create_window` | EAX=x, EBX=y, ECX=w, EDX=h, ESI=title | EAX=win_id (0–15, -1=error) | Create a new window |
-| `gui_destroy_window` | EAX=win_id | — | Destroy a window |
+| `gui_create_window` | EAX=x, EBX=y, ECX=w, EDX=h, ESI=title | EAX=win_id (0–15, -1=error) | Create a new window owned by the caller |
+| `gui_destroy_window` | EAX=win_id | — | Destroy a window (only its owner may destroy it) |
+| `gui_launch` | ESI=program name | EAX=task id, -1=error | Start another Burrows app without blocking the caller |
+| `gui_quit_desktop` | — | — | Leave Burrows and return to the shell |
 
 ### Drawing
 
@@ -573,13 +580,23 @@ separate registers.
 | `gui_draw_text` | EAX=win_id, EBX=x, ECX=y, ESI=text, EDI=color | — | Draw text in window |
 | `gui_draw_pixel` | EAX=win_id, EBX=x, ECX=y, ESI=color | — | Plot single pixel |
 
+Coordinates are relative to the window's content area: `(0,0)` is the top-left pixel
+below the title bar. Drawing to a window you do not own returns an error and changes
+nothing.
+
 ### Events & Compositing
 
 | Function | Input | Output | Description |
 | --- | --- | --- | --- |
 | `gui_poll_event` | — | EAX=event type, EBX=param1, ECX=param2 | Poll for GUI event |
 | `gui_compose` | — | — | Compose desktop to back buffer |
-| `gui_flip` | — | — | Draw cursor and flip to screen |
+| `gui_flip` | — | — | Draw cursor, flip to screen, and yield the CPU |
+
+`gui_poll_event` routes keyboard input by focus: only the process that owns the focused
+window receives `EVT_KEY_PRESS`. Mouse clicks are delivered in window coordinates, and
+clicks on the desktop chrome (title bar, close button, taskbar, start menu) are handled
+by the window manager instead. `gui_flip` performs a cooperative yield, which is how
+several GUI applications share the CPU.
 
 ### Themes
 
