@@ -2840,14 +2840,23 @@ gui_realloc_window_buf:
         call pmm_alloc_pages
         test eax, eax
         jz .rw_fail
-        mov [.rw_new], eax
 
-        ; Clear the new buffer.
-        mov edi, eax
+        ; Fill the new buffer with the window's own background colour (sampled
+        ; from its top-left pixel) so space added by maximize/tile looks like
+        ; the app instead of a black hole until it repaints.
+        mov [.rw_new], eax
+        mov edx, [gui_theme + THEME_WINDOW_BG]
+        mov eax, [.rw_entry]
+        mov ebx, [eax + WIN_BUF]
+        test ebx, ebx
+        jz .rw_fill_ready
+        mov edx, [ebx]
+.rw_fill_ready:
+        mov edi, [.rw_new]
         mov eax, [.rw_entry]
         mov ecx, [eax + WIN_W]
         imul ecx, [eax + WIN_H]
-        xor eax, eax
+        mov eax, edx
         cld
         rep stosd
 
@@ -3088,6 +3097,111 @@ gui_focus_topmost:
 .ft_done:
         popad
         ret
+
+;---------------------------------------
+; gui_win_save_geom - remember geometry so restore can put it back
+;   In : ESI = window entry
+;---------------------------------------
+gui_win_save_geom:
+        mov eax, [esi + WIN_X]
+        mov [esi + WIN_SAVE_X], eax
+        mov eax, [esi + WIN_Y]
+        mov [esi + WIN_SAVE_Y], eax
+        mov eax, [esi + WIN_W]
+        mov [esi + WIN_SAVE_W], eax
+        mov eax, [esi + WIN_H]
+        mov [esi + WIN_SAVE_H], eax
+        ret
+
+;---------------------------------------
+; gui_win_maximize - fill the desktop area, remembering the old geometry
+;   In : EAX = window index
+;---------------------------------------
+gui_win_maximize:
+        pushad
+        cmp eax, MAX_WINDOWS
+        jae .wmax_done
+        mov ebp, eax
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        mov esi, eax
+        test dword [esi + WIN_FLAGS], 0x04
+        jnz .wmax_done                  ; already maximized
+        call gui_win_save_geom
+        mov dword [esi + WIN_X], BORDER_W
+        mov dword [esi + WIN_Y], TITLEBAR_H
+        mov eax, GUI_SCREEN_W - 2 * BORDER_W
+        mov [esi + WIN_W], eax
+        mov eax, TASKBAR_Y - TITLEBAR_H - BORDER_W
+        mov [esi + WIN_H], eax
+        or dword [esi + WIN_FLAGS], 0x04
+        mov eax, ebp
+        call gui_realloc_window_buf
+.wmax_done:
+        popad
+        ret
+
+;---------------------------------------
+; gui_win_restore - undo maximize or tile
+;   In : EAX = window index
+;---------------------------------------
+gui_win_restore:
+        pushad
+        cmp eax, MAX_WINDOWS
+        jae .wres_done
+        mov ebp, eax
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        mov esi, eax
+        mov eax, [esi + WIN_SAVE_X]
+        mov [esi + WIN_X], eax
+        mov eax, [esi + WIN_SAVE_Y]
+        mov [esi + WIN_Y], eax
+        mov eax, [esi + WIN_SAVE_W]
+        mov [esi + WIN_W], eax
+        mov eax, [esi + WIN_SAVE_H]
+        mov [esi + WIN_H], eax
+        and dword [esi + WIN_FLAGS], ~0x04
+        mov eax, ebp
+        call gui_realloc_window_buf
+.wres_done:
+        popad
+        ret
+
+;---------------------------------------
+; gui_win_tile - snap a window to one half of the desktop
+;   In : EAX = window index, EBX = 0 for the left half, 1 for the right
+;---------------------------------------
+gui_win_tile:
+        pushad
+        cmp eax, MAX_WINDOWS
+        jae .wtil_done
+        mov ebp, eax
+        mov [.wtil_side], ebx
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        mov esi, eax
+        call gui_win_save_geom
+        and dword [esi + WIN_FLAGS], ~0x04
+
+        mov eax, GUI_SCREEN_W - 3 * BORDER_W
+        shr eax, 1
+        mov [esi + WIN_W], eax
+        mov dword [esi + WIN_Y], TITLEBAR_H
+        mov ecx, TASKBAR_Y - TITLEBAR_H - BORDER_W
+        mov [esi + WIN_H], ecx
+        mov dword [esi + WIN_X], BORDER_W
+        cmp dword [.wtil_side], 0
+        je .wtil_realloc
+        add eax, BORDER_W
+        mov [esi + WIN_X], eax
+.wtil_realloc:
+        mov eax, ebp
+        call gui_realloc_window_buf
+.wtil_done:
+        popad
+        ret
+.wtil_side:     dd 0
 
 ;---------------------------------------
 ; gui_focus_window - Bring window to front
@@ -6304,6 +6418,52 @@ gui_poll_can_read:
         ret
 
 ;---------------------------------------
+; Window-manager shortcut helpers: act on the focused window
+;
+; Shared by the focused-app key path and the no-focus fallback so the
+; keyboard shortcuts behave the same wherever focus happens to be.
+;---------------------------------------
+gui_apply_tile:
+        pushad
+        mov eax, [gui_focused_win]
+        cmp eax, -1
+        je .wat_done
+        call gui_win_tile
+.wat_done:
+        popad
+        ret
+
+gui_apply_maximize:
+        pushad
+        mov eax, [gui_focused_win]
+        cmp eax, -1
+        je .wam_done
+        call gui_win_maximize
+.wam_done:
+        popad
+        ret
+
+gui_apply_restore:
+        pushad
+        mov eax, [gui_focused_win]
+        cmp eax, -1
+        je .war_done
+        call gui_win_restore
+.war_done:
+        popad
+        ret
+
+gui_apply_close:
+        pushad
+        mov eax, [gui_focused_win]
+        cmp eax, -1
+        je .wac_done
+        mov [gui_close_req], eax
+.wac_done:
+        popad
+        ret
+
+;---------------------------------------
 ; gui_poll_global_key - consume and handle a desktop shortcut
 ;   Out: EAX = 1 if a shortcut was handled, 0 otherwise
 ;
@@ -6320,6 +6480,16 @@ gui_poll_global_key:
         je .pgk_bterm
         cmp al, 0x8E
         je .pgk_alt_tab
+        cmp al, 0x8F
+        je .pgk_tile_left
+        cmp al, 0x90
+        je .pgk_tile_right
+        cmp al, 0x95
+        je .pgk_maximize
+        cmp al, 0x96
+        je .pgk_restore
+        cmp al, 0x97
+        je .pgk_close
         cmp al, 0x91
         jb .pgk_no
         cmp al, 0x94
@@ -6347,6 +6517,33 @@ gui_poll_global_key:
 .pgk_alt_tab:
         call kb_pollchar
         call gui_cycle_window
+        mov eax, 1
+        ret
+.pgk_tile_left:
+        call kb_pollchar
+        xor ebx, ebx
+        call gui_apply_tile
+        mov eax, 1
+        ret
+.pgk_tile_right:
+        call kb_pollchar
+        mov ebx, 1
+        call gui_apply_tile
+        mov eax, 1
+        ret
+.pgk_maximize:
+        call kb_pollchar
+        call gui_apply_maximize
+        mov eax, 1
+        ret
+.pgk_restore:
+        call kb_pollchar
+        call gui_apply_restore
+        mov eax, 1
+        ret
+.pgk_close:
+        call kb_pollchar
+        call gui_apply_close
         mov eax, 1
         ret
 .pgk_no:
@@ -6575,6 +6772,28 @@ sys_gui:
         iretd
 
 .sg_poll:
+        ; A window-manager close request (Alt+F4) is delivered as EVT_CLOSE to
+        ; the owning task, even if another window has focus.
+        mov eax, [gui_close_req]
+        cmp eax, -1
+        je .sg_p_no_close
+        push eax
+        call sched_get_current_task
+        test eax, eax
+        jz .sg_p_no_close_pop
+        mov ebx, [eax + TCB_PID]
+        pop eax
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        cmp ebx, [eax + WIN_OWNER_PID]
+        jne .sg_p_no_close
+        mov dword [gui_close_req], -1
+        mov eax, EVT_CLOSE
+        iretd
+.sg_p_no_close_pop:
+        pop eax
+.sg_p_no_close:
+
         ; WM-level clicks (taskbar, focus changes, title-bar drag) are handled
         ; for every caller. Then only the owner of the focused window may
         ; consume the shared keyboard/mouse queues.
@@ -6614,6 +6833,16 @@ sys_gui:
         je .sg_p_bterm
         cmp bl, 0x8E           ; Alt+Tab — cycle windows
         je .sg_p_alt_tab
+        cmp bl, 0x8F           ; Alt+Left — tile left
+        je .sg_p_tile_left
+        cmp bl, 0x90           ; Alt+Right — tile right
+        je .sg_p_tile_right
+        cmp bl, 0x95           ; Alt+Up — maximize
+        je .sg_p_maximize
+        cmp bl, 0x96           ; Alt+Down — restore
+        je .sg_p_restore
+        cmp bl, 0x97           ; Alt+F4 — close focused window
+        je .sg_p_close_win
         cmp bl, 0x91           ; Ctrl+Alt+1..4 — workspace
         je .sg_p_ws0
         cmp bl, 0x92
@@ -6623,6 +6852,28 @@ sys_gui:
         cmp bl, 0x94
         je .sg_p_ws3
         mov eax, EVT_KEY_PRESS
+        iretd
+.sg_p_tile_left:
+        xor ebx, ebx
+        call gui_apply_tile
+        xor eax, eax
+        iretd
+.sg_p_tile_right:
+        mov ebx, 1
+        call gui_apply_tile
+        xor eax, eax
+        iretd
+.sg_p_maximize:
+        call gui_apply_maximize
+        xor eax, eax
+        iretd
+.sg_p_restore:
+        call gui_apply_restore
+        xor eax, eax
+        iretd
+.sg_p_close_win:
+        call gui_apply_close
+        xor eax, eax
         iretd
 .sg_p_launcher:
         mov esi, gui_prog_blauncher
@@ -7921,6 +8172,7 @@ gui_resize_my0:     dd 0           ; initial mouse y
 gui_resize_w0:      dd 0           ; original window width
 gui_resize_h0:      dd 0           ; original window height
 gui_focused_win:    dd -1
+gui_close_req:      dd -1         ; window whose owner should receive EVT_CLOSE
 gui_switcher_until: dd 0          ; tick deadline for the Alt+Tab overlay
 gui_sw_count:       dd 0
 gui_sw_x:           dd 0

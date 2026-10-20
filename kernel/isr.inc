@@ -459,6 +459,15 @@ irq_keyboard:
         jmp .store_key
 .not_alt_tab:
 
+        ; Alt+F4 closes the focused window (0x97)
+        cmp bl, 0x3E            ; F4 scancode
+        jne .not_alt_f4
+        cmp byte [kb_alt], 1
+        jne .not_alt_f4
+        mov al, 0x97
+        jmp .store_key
+.not_alt_f4:
+
         ; Translate scancode to ASCII
         mov al, [scancode_table + ebx]
         or al, al
@@ -660,15 +669,27 @@ irq_keyboard:
         jmp .store_key
 .ext_up:
         mov al, KEY_UP
+        cmp byte [kb_alt], 1
+        jne .store_key
+        mov al, 0x95            ; Alt+Up — maximize
         jmp .store_key
 .ext_down:
         mov al, KEY_DOWN
+        cmp byte [kb_alt], 1
+        jne .store_key
+        mov al, 0x96            ; Alt+Down — restore
         jmp .store_key
 .ext_left:
         mov al, KEY_LEFT
+        cmp byte [kb_alt], 1
+        jne .store_key
+        mov al, 0x8F            ; Alt+Left — tile left
         jmp .store_key
 .ext_right:
         mov al, KEY_RIGHT
+        cmp byte [kb_alt], 1
+        jne .store_key
+        mov al, 0x90            ; Alt+Right — tile right
         jmp .store_key
 .ext_pgup:
         call vga_do_scroll_back

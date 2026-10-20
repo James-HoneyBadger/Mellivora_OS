@@ -1315,10 +1315,16 @@ launcher or a document window can open a second app and keep running:
 | `F1` | Open (or focus) the launcher |
 | `F2` | Open a terminal |
 | `Alt+Tab` | Cycle focus between windows (a switcher overlay lists them) |
+| `Alt+Left` / `Alt+Right` | Tile the focused window to the left / right half |
+| `Alt+Up` / `Alt+Down` | Maximize / restore the focused window |
+| `Alt+F4` | Ask the focused window to close (the app receives `EVT_CLOSE`) |
 | `Ctrl+Alt+1`..`4` | Switch virtual workspace |
 | `Ctrl+C` | Abort the focused app and return to the desktop |
 
-Desktop shortcuts are handled by the kernel even when no window has focus.
+Desktop shortcuts are handled by the kernel even when no window has focus. Window
+management commands act on the focused window from any application, so a tiling layout
+can be set up entirely from the keyboard. Windows remember their geometry, so restoring
+a maximized or tiled window returns it to where it was.
 
 ### Theme and settings persistence
 

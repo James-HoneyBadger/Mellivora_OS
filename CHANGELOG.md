@@ -36,6 +36,11 @@ routed by focus and the desktop never blocking on a child program.
   missing or malformed file falls back to the built-in default.
 - **Theme-driven wallpaper** — the desktop gradient is derived from the theme's desktop
   colour instead of hard-coded blues, so switching themes repaints the whole workspace.
+- **Keyboard window management** — `Alt+Left`/`Alt+Right` tile the focused window to the
+  left or right half, `Alt+Up` maximizes, `Alt+Down` restores the saved geometry, and
+  `Alt+F4` delivers `EVT_CLOSE` to the focused window's owner. Maximize and tile save
+  the previous geometry, so restore always returns a window where it was, and a grown
+  buffer is filled with the app's own background colour instead of black.
 - **Virtual workspaces** — four workspaces with a taskbar indicator; switching focuses
   the topmost window on the destination workspace.
 - **Crash resilience** — a ring 3 fault in a GUI application no longer takes the
