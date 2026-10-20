@@ -65,6 +65,14 @@ routed by focus and the desktop never blocking on a child program.
 
 ### Programs
 
+- **BTerm window title** — the title bar tracks the shell's working directory
+  (`BTerm: /docs`) using a new `SYS_GUI/GUI_SET_TITLE` (32) sub-function, and the same
+  call is available to any application for its own windows.
+- **BTerm input fix** — the input buffer was never re-terminated after an edit, so the
+  previous command's trailing characters showed up at the end of the next line and
+  commands like `help` were reported as unknown. The buffer is now terminated on every
+  insert.
+
 - **BEdit undo/redo** — `Ctrl+Z` undoes and `Ctrl+Y` redoes up to four edits. Each edit
   snapshots the whole document, so undo is correct for character inserts, backspaces and
   line splits alike; a new edit clears the redo ring and opening a file clears both. The
@@ -73,6 +81,13 @@ routed by focus and the desktop never blocking on a child program.
   application that deliberately faults in ring 3. Launching it shows the fault toast and
   the desktop carrying on, so the containment path can be demonstrated and tested rather
   than only described.
+
+### Kernel
+
+- **`SYS_READDIR` index corruption** — the handler validated the name buffer by loading
+  `HBFS_MAX_FILENAME + 1` into ECX, destroying the caller's entry index; every call then
+  read the same out-of-range slot, so `ls` inside BTerm listed one entry forever and hung
+  the terminal. The index now survives validation.
 
 ### Testing
 

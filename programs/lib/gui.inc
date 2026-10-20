@@ -176,6 +176,21 @@ gui_launch:
         ret
 
 ;---------------------------------------
+; gui_set_title - Change a window's title bar text
+; EAX = win_id, ESI = title -> nothing
+;---------------------------------------
+gui_set_title:
+        push ebx
+        push ecx
+        mov ecx, eax
+        mov eax, SYS_GUI
+        mov ebx, GUI_SET_TITLE
+        int 0x80
+        pop ecx
+        pop ebx
+        ret
+
+;---------------------------------------
 ; gui_quit_desktop - Leave Burrows and return to the shell
 ;---------------------------------------
 gui_quit_desktop:

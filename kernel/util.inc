@@ -2756,10 +2756,14 @@ sys_readdir:
         push edx
         push ebp
 
-        ; Validate the filename destination (253 chars + NUL).
+        ; Validate the filename destination (253 chars + NUL). ECX carries the
+        ; entry index, so it must survive the validation: clobbering it made
+        ; every readdir return the same out-of-range slot and hang callers.
         mov eax, ebx
+        push ecx
         mov ecx, HBFS_MAX_FILENAME + 1
         call user_range_ok
+        pop ecx
         jc .srd_bad
 
         ; -- VFS routing: build CWD path, check if it maps to a non-HBFS mount --

@@ -358,6 +358,7 @@ GUI_DRAW_LABEL     equ 25       ; ECX=win_id ESI=param_block
 GUI_DRAW_RECT      equ 26       ; ECX=win_id ESI=param_block
 GUI_LAUNCH         equ 30       ; ESI=program name -> EAX=pid (spawns GUI task)
 GUI_EXIT_DESKTOP   equ 31       ; Leave Burrows, back to the shell
+GUI_SET_TITLE      equ 32       ; ECX=win_id ESI=title -> retitle your window
 
 ; GUI event types
 EVT_NONE        equ 0

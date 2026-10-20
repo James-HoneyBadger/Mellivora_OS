@@ -569,6 +569,7 @@ separate registers.
 | --- | --- | --- | --- |
 | `gui_create_window` | EAX=x, EBX=y, ECX=w, EDX=h, ESI=title | EAX=win_id (0–15, -1=error) | Create a new window owned by the caller |
 | `gui_destroy_window` | EAX=win_id | — | Destroy a window (only its owner may destroy it) |
+| `gui_set_title` | EAX=win_id, ESI=title | — | Retitle a window you own |
 | `gui_launch` | ESI=program name | EAX=task id, -1=error | Start another Burrows app without blocking the caller |
 | `gui_quit_desktop` | — | — | Leave Burrows and return to the shell |
 

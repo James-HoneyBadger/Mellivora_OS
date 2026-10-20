@@ -42,6 +42,7 @@ start:
         ; Show welcome
         mov esi, msg_welcome
         call term_add_line
+        call term_update_title
 
 .main_loop:
         ; Compose + draw + flip
@@ -109,6 +110,10 @@ start:
         mov [input_buf + edx], bl
         inc dword [input_len]
         inc dword [cursor_pos]
+        ; Keep the buffer terminated: the old command's bytes must never leak
+        ; into the next line (they are displayed past the new input otherwise).
+        mov eax, [input_len]
+        mov byte [input_buf + eax], 0
         jmp .main_loop
 
 .handle_bs:
@@ -245,6 +250,7 @@ start:
         call term_save_history
         ; Execute
         call term_exec_cmd
+        call term_update_title
         ; Reset input, scroll to bottom
         mov dword [input_len], 0
         mov dword [cursor_pos], 0
@@ -261,6 +267,29 @@ start:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
+
+;---------------------------------------
+; term_update_title - Show "BTerm: <cwd>" in the title bar
+;---------------------------------------
+term_update_title:
+        pushad
+        mov esi, title_prefix
+        mov edi, title_buf
+.tut_copy:
+        lodsb
+        test al, al
+        jz .tut_cwd
+        stosb
+        jmp .tut_copy
+.tut_cwd:
+        mov eax, SYS_GETCWD
+        mov ebx, edi
+        int 0x80
+        mov eax, [win_id]
+        mov esi, title_buf
+        call gui_set_title
+        popad
+        ret
 
 ;---------------------------------------
 ; term_draw_content - Draw terminal text (v9.0: scrollback support)
@@ -1342,6 +1371,7 @@ hex_byte_out:
 
 ; ======================= DATA =======================
 title_str:      db "BTerm", 0
+title_prefix:   db "BTerm: ", 0
 prompt_str:     db "> ", 0
 cursor_str:     db "_", 0
 root_path:      db "/", 0
@@ -1418,6 +1448,7 @@ term_colors:
 ; Buffers
 input_buf:      times 84 db 0
 history_buf:    times HIST_MAX * HIST_SIZE db 0
+title_buf:      times 64 db 0
 tmp_buf:        times 128 db 0
 fmt_buf:        times 128 db 0
 ; v9.0 scrollback buffer

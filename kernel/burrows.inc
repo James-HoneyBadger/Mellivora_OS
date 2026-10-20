@@ -123,6 +123,7 @@ GUI_DRAW_LABEL     equ 25
 GUI_DRAW_RECT      equ 26
 GUI_LAUNCH         equ 30      ; ESI = program name; spawns a GUI task
 GUI_EXIT_DESKTOP   equ 31      ; Leave Burrows and return to the shell
+GUI_SET_TITLE      equ 32      ; ECX=win_id ESI=title; retitle a window you own
 
 ;=======================================================================
 ; INITIALIZATION
@@ -6724,11 +6725,31 @@ sys_gui:
         je .sg_launch
         cmp ebx, GUI_EXIT_DESKTOP
         je .sg_exit_desktop
+        cmp ebx, GUI_SET_TITLE
+        je .sg_set_title
         mov eax, -1
         iretd
 
 .sg_exit_desktop:
         mov byte [gui_exit_flag], 1
+        xor eax, eax
+        iretd
+
+.sg_set_title:
+        ; ECX = win_id, ESI = new title. Only the owner may retitle a window.
+        pushad
+        mov eax, ecx
+        call gui_caller_owns_window
+        test eax, eax
+        jz .sg_st_done
+        mov eax, ecx
+        imul eax, WIN_STRUCT_SIZE
+        add eax, gui_win_table
+        lea edi, [eax + WIN_TITLE]
+        mov ecx, 47
+        call gui_copy_trunc
+.sg_st_done:
+        popad
         xor eax, eax
         iretd
 
