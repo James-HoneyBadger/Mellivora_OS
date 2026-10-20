@@ -7,6 +7,8 @@
 MAX_LINES       equ 100
 LINE_LEN        equ 80
 VISIBLE_LINES   equ 18
+UNDO_LEVELS     equ 4           ; Ctrl+Z / Ctrl+Y depth (full-buffer snapshots)
+UNDO_SLOT       equ 12 + MAX_LINES * LINE_LEN   ; num_lines, line, col + text
 
 start:
         ; Create window
@@ -30,6 +32,7 @@ start:
         xor eax, eax
         mov ecx, MAX_LINES * LINE_LEN / 4
         rep stosd
+        call undo_init
 
         ; Check if filename was passed via args
         mov eax, SYS_GETARGS
@@ -71,6 +74,10 @@ start:
         je .key_save
         cmp bl, 15              ; Ctrl+O
         je .key_open
+        cmp bl, 26              ; Ctrl+Z
+        je .key_undo
+        cmp bl, 25              ; Ctrl+Y
+        je .key_redo
         cmp bl, 32
         jl .main_loop
         cmp bl, 126
@@ -148,6 +155,14 @@ start:
         call save_file
         jmp .main_loop
 
+.key_undo:
+        call edit_undo
+        jmp .main_loop
+
+.key_redo:
+        call edit_redo
+        jmp .main_loop
+
 .key_open:
         mov eax, SYS_FILE_OPEN_DLG
         mov ebx, .dlg_open_title
@@ -177,6 +192,7 @@ start:
         mov dword [cur_line], 0
         mov dword [cur_col], 0
         mov dword [scroll_y], 0
+        call undo_reset
         call load_file
         jmp .main_loop
 
@@ -190,6 +206,155 @@ start:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
+
+;---------------------------------------
+; Undo / redo: full-buffer snapshots in two SYS_SBRK rings
+;---------------------------------------
+
+; undo_init - point the ring pointers at their static buffers
+undo_init:
+        pushad
+        mov dword [undo_ptr], undo_buf
+        mov dword [redo_ptr], redo_buf
+        popad
+        ret
+
+; undo_reset - forget all history (after loading a file)
+undo_reset:
+        pushad
+        mov dword [undo_head], 0
+        mov dword [undo_count], 0
+        mov dword [redo_head], 0
+        mov dword [redo_count], 0
+        popad
+        ret
+
+; edit_store_state - copy the current document into a ring slot
+;   EAX = ring base, EBX = slot, ECX = slot count for the "full" clamp
+edit_store_state:
+        pushad
+        imul ebx, UNDO_SLOT
+        add eax, ebx
+        mov edi, eax
+        mov eax, [num_lines]
+        stosd
+        mov eax, [cur_line]
+        stosd
+        mov eax, [cur_col]
+        stosd
+        mov esi, text_buf
+        mov ecx, (MAX_LINES * LINE_LEN) / 4
+        cld
+        rep movsd
+        popad
+        ret
+
+; edit_load_state - restore a ring slot into the document
+;   EAX = ring base, EBX = slot
+edit_load_state:
+        pushad
+        imul ebx, UNDO_SLOT
+        add eax, ebx
+        mov esi, eax
+        lodsd
+        mov [num_lines], eax
+        lodsd
+        mov [cur_line], eax
+        lodsd
+        mov [cur_col], eax
+        mov edi, text_buf
+        mov ecx, (MAX_LINES * LINE_LEN) / 4
+        cld
+        rep movsd
+        call adjust_scroll
+        popad
+        ret
+
+; edit_push_state - snapshot before an edit and invalidate the redo ring
+edit_push_state:
+        pushad
+        cmp dword [undo_ptr], 0
+        je .eps_done
+        mov dword [redo_head], 0
+        mov dword [redo_count], 0
+        mov eax, [undo_ptr]
+        mov ebx, [undo_head]
+        call edit_store_state
+        mov eax, [undo_head]
+        inc eax
+        and eax, UNDO_LEVELS - 1
+        mov [undo_head], eax
+        mov eax, [undo_count]
+        cmp eax, UNDO_LEVELS
+        jae .eps_done
+        inc dword [undo_count]
+.eps_done:
+        popad
+        ret
+
+; edit_undo - restore the previous snapshot
+edit_undo:
+        pushad
+        cmp dword [undo_ptr], 0
+        je .eu_done
+        cmp dword [undo_count], 0
+        je .eu_done
+        ; Keep the current state so Ctrl+Y can come back to it.
+        mov eax, [redo_ptr]
+        mov ebx, [redo_head]
+        call edit_store_state
+        mov eax, [redo_head]
+        inc eax
+        and eax, UNDO_LEVELS - 1
+        mov [redo_head], eax
+        mov eax, [redo_count]
+        cmp eax, UNDO_LEVELS
+        jae .eu_pop
+        inc dword [redo_count]
+.eu_pop:
+        ; Pop the newest undo slot.
+        mov eax, [undo_head]
+        dec eax
+        and eax, UNDO_LEVELS - 1
+        mov [undo_head], eax
+        mov ebx, eax
+        dec dword [undo_count]
+        mov eax, [undo_ptr]
+        call edit_load_state
+.eu_done:
+        popad
+        ret
+
+; edit_redo - reapply the last undone edit
+edit_redo:
+        pushad
+        cmp dword [redo_ptr], 0
+        je .er_done
+        cmp dword [redo_count], 0
+        je .er_done
+        mov eax, [undo_ptr]
+        mov ebx, [undo_head]
+        call edit_store_state
+        mov eax, [undo_head]
+        inc eax
+        and eax, UNDO_LEVELS - 1
+        mov [undo_head], eax
+        mov eax, [undo_count]
+        cmp eax, UNDO_LEVELS
+        jae .er_pop
+        inc dword [undo_count]
+.er_pop:
+        mov eax, [redo_head]
+        dec eax
+        and eax, UNDO_LEVELS - 1
+        mov [redo_head], eax
+        mov ebx, eax
+        dec dword [redo_count]
+        mov eax, [redo_ptr]
+        call edit_load_state
+.er_done:
+        popad
+        ret
 
 ;---------------------------------------
 ; draw_editor
@@ -289,6 +454,7 @@ insert_char:
         mov ecx, eax
         cmp ecx, LINE_LEN - 2
         jge .ic_done
+        call edit_push_state
         lea esi, [edi + ecx]
         lea edx, [edi + ecx + 1]
         std
@@ -315,6 +481,7 @@ delete_char:
         pushad
         cmp dword [cur_col], 0
         je .dc_done
+        call edit_push_state
         dec dword [cur_col]
         mov eax, [cur_line]
         imul eax, LINE_LEN
@@ -342,6 +509,7 @@ insert_newline:
         mov eax, [num_lines]
         cmp eax, MAX_LINES - 1
         jge .nl_done
+        call edit_push_state
 
         ; Shift lines [cur_line+1 .. num_lines-1] down by one LINE_LEN
         ; src = text_buf + (num_lines-1)*LINE_LEN
@@ -596,13 +764,23 @@ strlen_from:
 
 ; Data
 title_str:      db "BEdit", 0
-status_str:     db "^O:Open ^S:Save  ESC:Exit  Arrows:Move", 0
+status_str:     db "^O:Open ^S:Save ^Z:Undo ^Y:Redo ESC:Exit", 0
 
 win_id:         dd 0
 cur_line:       dd 0
 cur_col:        dd 0
 scroll_y:       dd 0
 num_lines:      dd 1
+
+undo_ptr:       dd 0            ; snapshot ring base (static buffers below)
+redo_ptr:       dd 0
+undo_head:      dd 0
+undo_count:     dd 0
+redo_head:      dd 0
+redo_count:     dd 0
+
+undo_buf:       times UNDO_LEVELS * UNDO_SLOT db 0
+redo_buf:       times UNDO_LEVELS * UNDO_SLOT db 0
 
 arg_buf:        times 64 db 0
 file_buf:       times 8192 db 0

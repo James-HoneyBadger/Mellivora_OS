@@ -65,6 +65,10 @@ routed by focus and the desktop never blocking on a child program.
 
 ### Programs
 
+- **BEdit undo/redo** — `Ctrl+Z` undoes and `Ctrl+Y` redoes up to four edits. Each edit
+  snapshots the whole document, so undo is correct for character inserts, backspaces and
+  line splits alike; a new edit clears the redo ring and opening a file clears both. The
+  editor's status bar advertises the new keys.
 - **Crash Resilience Demo** (`bfault`, listed as "Crash Resilience Demo") — a diagnostic
   application that deliberately faults in ring 3. Launching it shows the fault toast and
   the desktop carrying on, so the containment path can be demonstrated and tested rather
