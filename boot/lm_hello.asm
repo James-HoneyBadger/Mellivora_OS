@@ -21,10 +21,13 @@ SYS_BRK    equ 8
 SYS_OPEN   equ 9
 SYS_READ   equ 10
 SYS_CLOSE  equ 11
+SYS_GETARGS equ 33
+SYS_GETENV equ 34
 
 USER_SLOT  equ 0x40001FE8       ; PING result, in this task's stack page
 TASK_SLOT  equ 0x40001FF0       ; the task id, same address in every space
 BUF        equ 0x40001F00       ; where /motd is read
+ARGSBUF    equ 0x40001D00       ; getargs / getenv destination
 
 start:
         int3
@@ -63,6 +66,68 @@ start:
         syscall
         cmp rax, r12
         jne fail
+
+        ; getargs(buf, max) - the command line /init exec'd this with.
+        mov rdi, ARGSBUF
+        mov esi, 64
+        mov eax, SYS_GETARGS
+        syscall
+        test rax, rax
+        js fail
+
+        ; getenv("os", buf, size) - the same call with a name and a destination.
+        lea rdi, [rel osname]
+        mov rsi, ARGSBUF + 32
+        mov edx, 32
+        mov eax, SYS_GETENV
+        syscall
+        test rax, rax
+        js fail
+
+        mov edi, 1
+        lea rsi, [rel argsmsg]
+        mov edx, argsmsg_end - argsmsg
+        mov eax, SYS_WRITE
+        syscall
+
+        mov rdi, ARGSBUF
+        mov esi, 64
+        mov eax, SYS_GETARGS
+        syscall
+        mov rdx, rax
+        mov edi, 1
+        mov rsi, ARGSBUF
+        mov eax, SYS_WRITE
+        syscall
+        mov edi, 1
+        lea rsi, [rel nl]
+        mov edx, 1
+        mov eax, SYS_WRITE
+        syscall
+
+        mov edi, 1
+        lea rsi, [rel envmsg]
+        mov edx, envmsg_end - envmsg
+        mov eax, SYS_WRITE
+        syscall
+        xor eax, eax
+        mov rsi, ARGSBUF + 32
+.count:
+        cmp byte [rsi + rax], 0
+        je .have
+        inc eax
+        jmp .count
+.have:
+        mov rdx, rax
+        mov edi, 1
+        mov rsi, ARGSBUF + 32
+        mov eax, SYS_WRITE
+        syscall
+        mov edi, 1
+        lea rsi, [rel nl]
+        mov edx, 1
+        mov eax, SYS_WRITE
+        syscall
 
         ; PING round trip through this task's own stack page.
         mov eax, SYS_PING
@@ -135,4 +200,10 @@ fail:
 
 msg:     db "hello", 10
 msg_end:
+argsmsg: db "args=" 
+argsmsg_end:
+envmsg:  db "env os=" 
+envmsg_end:
+nl:      db 10
+osname:  db "os", 0
 motd_path: db "/motd", 0

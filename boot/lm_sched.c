@@ -46,6 +46,7 @@ struct lm_task {
     u64 exit_ping;
     u64 cr3;            /* the task's address space */
     u64 brk;            /* program break, in the task's own space */
+    char args[256];     /* the command line EXEC was given, for GETARGS */
     u64 heap;           /* next byte MALLOC hands out, 0 before the first call */
     u64 free_list;      /* blocks returned by FREE, threaded in user memory */
     u64 mode32;         /* non-zero when the task runs in 32-bit mode */
@@ -172,6 +173,7 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space,
     t->user_stack = user_stack;
     t->cr3 = space;
     t->brk = USER_BRK_BASE;
+    t->args[0] = '\0';
     t->heap = 0;
     t->free_list = 0;
     t->mode32 = compat ? 1 : 0;
@@ -265,6 +267,23 @@ void sched_set_brk(u64 value)
     if (current != NULL) {
         current->brk = value;
     }
+}
+
+const char *sched_args(void)
+{
+    return current != NULL ? current->args : "";
+}
+
+void sched_set_args(const char *value)
+{
+    if (current == NULL) {
+        return;
+    }
+    u32 i = 0;
+    for (; value[i] != '\0' && i + 1 < sizeof(current->args); i++) {
+        current->args[i] = value[i];
+    }
+    current->args[i] = '\0';
 }
 
 u64 sched_heap(void)

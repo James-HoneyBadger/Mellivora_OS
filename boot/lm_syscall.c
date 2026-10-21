@@ -205,6 +205,15 @@ static int copy_user_string(u64 addr, char *dst, u64 max)
     return ok;
 }
 
+static int streq(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
 static struct lm_fault_frame *sys_open(struct lm_fault_frame *f)
 {
     char path[64];
@@ -282,6 +291,15 @@ static struct lm_fault_frame *sys_exec(struct lm_fault_frame *f)
         copy_user_string(f->rdi, path, sizeof(path)) != 0) {
         f->rax = (u64)-1;
         return f;
+    }
+
+    /* The command line is kernel-side state, so it survives the address space
+     * being rebuilt for the new program and GETARGS can hand it back. */
+    char args[256];
+    if (f->rsi != 0 && copy_user_string(f->rsi, args, sizeof(args)) == 0) {
+        sched_set_args(args);
+    } else {
+        sched_set_args("");
     }
 
     int handle = vfs_open(path);
@@ -778,6 +796,75 @@ static struct lm_fault_frame *sys_pipe_close(struct lm_fault_frame *f)
     return f;
 }
 
+/* getargs(buf, max): the command line this task was exec'd with. */
+static struct lm_fault_frame *sys_getargs(struct lm_fault_frame *f)
+{
+    const char *args = sched_args();
+    u64 len = 0;
+    while (args[len] != '\0') {
+        len++;
+    }
+    if (f->rsi == 0 || len + 1 > f->rsi) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_to_user(f->rdi, args, len + 1) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = len;
+    return f;
+}
+
+/*
+ * getenv(name, buf, max). The 32-bit tree returns a pointer into its own address
+ * space, which cannot work here: a kernel pointer is not reachable from ring 3.
+ * Both ABIs therefore fill the caller's buffer and return the length.
+ */
+static struct lm_fault_frame *sys_getenv(struct lm_fault_frame *f)
+{
+    char name[32];
+    const char *value = NULL;
+
+    if (copy_user_string(f->rdi, name, sizeof(name)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    if (streq(name, "os")) {
+        value = "mellivora64";
+    } else if (streq(name, "arch")) {
+        value = "x86_64";
+    } else if (streq(name, "host")) {
+        value = "mellivora";
+    } else if (streq(name, "user")) {
+        value = "root";
+    } else if (streq(name, "cwd")) {
+        value = vfs_getcwd();
+    } else if (streq(name, "path")) {
+        value = "/";
+    }
+    if (value == NULL) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    u64 len = 0;
+    while (value[len] != '\0') {
+        len++;
+    }
+    if (f->rsi == 0 || len + 1 > f->rdx) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_to_user(f->rsi, value, len + 1) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = len;
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -843,6 +930,8 @@ static const struct lm_syscall syscalls[] = {
     [30] = {"pipe_write", sys_pipe_write, 1},
     [31] = {"pipe_read", sys_pipe_read, 0},
     [32] = {"pipe_close", sys_pipe_close, 0},
+    [33] = {"getargs", sys_getargs, 0},
+    [34] = {"getenv", sys_getenv, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -1055,6 +1144,15 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
     case 23:                        /* SYS_SBRK: EBX=increment -> EAX=old break */
         f->rdi = (u64)(u32)f->rbx;
         return sys_sbrk(f);
+    case 32:                        /* SYS_GETARGS: EBX=buf ECX=max */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx;
+        return sys_getargs(f);
+    case 29:                        /* SYS_GETENV: EBX=name ECX=buf EDX=max */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx;
+        f->rdx = (u64)(u32)f->rdx;
+        return sys_getenv(f);
     case 60:                        /* SYS_PIPE_CREATE -> EAX=id */
         return sys_pipe_create(f);
     case 61:                        /* SYS_PIPE_WRITE: EBX=id ECX=buf EDX=len */

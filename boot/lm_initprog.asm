@@ -20,6 +20,7 @@ start:
         syscall
 
         lea rdi, [rel path]
+        lea rsi, [rel args]             ; the command line /hello will see
         mov eax, SYS_EXEC
         syscall
 
@@ -33,3 +34,4 @@ start:
 msg:     db "init", 10
 msg_end:
 path:    db "/hello", 0
+args:    db "alpha beta", 0

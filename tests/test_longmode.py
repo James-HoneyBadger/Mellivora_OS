@@ -78,7 +78,7 @@ REQUIRED = (
     "hello",
     "blk=ok",
     "hbfs] root=",
-    "/init=64",
+    "/init=",                # size varies with the demo program
     "/hello_tree=",
     "tasks=7 spaces=7",
     # The write demo: it creates /persist.txt, reads it back through the same
@@ -99,6 +99,10 @@ REQUIRED = (
     "rtc=ok",
     "pipe=ok",
     "api ok: malloc/free, load, pipe",
+    # /init exec's /hello with a command line, and /hello asks for it back
+    # along with one environment entry.
+    "args=alpha beta",
+    "env os=mellivora64",
     # One of the 32-bit tree's own programs, built by `make programs` from
     # programs/hello.asm and loaded unchanged at its 0x00300000 program base.
     "Hello, World! Welcome to Mellivora OS!",

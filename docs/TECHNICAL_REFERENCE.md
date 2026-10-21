@@ -2278,6 +2278,32 @@ its metadata come back from one call. Every user pointer involved - the name buf
 `copy_to_user`, which validates each page with the VMM before storing under
 STAC/CLAC; a bad pointer is a `-1` return, not a kernel fault.
 
+### The heap, pipes and the command line
+
+`MALLOC`/`FREE` sit on the same break `BRK` moves, so a block is page-backed user
+memory that disappears with the task. Each block has a 32-byte header in front of it
+carrying its size and the free-list link, and the links live *in* the freed blocks -
+no kernel memory is spent, and nothing has to be walked when a task exits. `FREE`
+pushes a block back on the list and `MALLOC` takes the first one that fits; there is
+no splitting or coalescing, which is a deliberate stopping point for an allocator
+that would otherwise want its own tests.
+
+The headers are user pages, so every touch happens inside the STAC/CLAC bracket: the
+first version wrote them directly from ring 0 and SMAP turned that into a page fault
+with `err=3` the moment `/api` called `malloc`.
+
+Pipes are four 4 KB ring buffers with a read cursor and a count, created with an
+owner and destroyed by `close`, or implicitly when the task exits. Reading never
+blocks - it returns what is there - which is the same contract `getchar` has, and it
+keeps the kernel free of wait queues for now.
+
+`EXEC` may carry a command line. It is copied into the task struct rather than into
+the task's memory, because `exec` rebuilds that memory: the string has to outlive the
+address space it arrived in. `GETARGS` then copies it back to the caller. `GETENV`
+answers from a five-entry table (`os`, `arch`, `host`, `user`, `cwd`, `path`); unlike
+the 32-bit tree it fills a caller's buffer instead of returning a pointer, because a
+kernel pointer is not reachable from ring 3.
+
 ### The clock
 
 `boot/lm_rtc.c` reads the CMOS chip the 32-bit tree reads: index port 0x70, data port

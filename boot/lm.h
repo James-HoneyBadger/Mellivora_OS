@@ -313,6 +313,8 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_PIPE_WRITE  30
 #define SYS_PIPE_READ   31
 #define SYS_PIPE_CLOSE  32
+#define SYS_GETARGS     33
+#define SYS_GETENV      34
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -499,6 +501,10 @@ void sched_set_brk(u64 value);
 
 /* The task's heap, for MALLOC/FREE: a bump pointer that walks the break, and the
  * head of a free list threaded through the blocks themselves. */
+/* The command line the task was exec'd with, or "" when it had none. */
+const char *sched_args(void);
+void sched_set_args(const char *value);
+
 u64 sched_heap(void);
 void sched_set_heap(u64 value);
 u64 sched_free_list(void);
