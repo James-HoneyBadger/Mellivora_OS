@@ -153,36 +153,55 @@ __asm__(
     "    pushq %rdi\n"              /* user RIP */
     "    iretq\n");
 
+/*
+ * What the boot test runs: the 64-bit demo (which execs /hello), the small
+ * 32-bit demo that proves two tasks see different frames at one address, and one
+ * of the 32-bit tree's own programs, loaded unchanged at its PROGRAM_BASE.
+ */
+struct boot_task {
+    const char *program;
+    u64 code_va;
+    u64 stack_va;
+    u64 stack_top;
+    int compat;
+    u64 expect_exit;
+};
+
+#define BOOT_TASKS 3
+#define LEGACY_CODE_ADDR  0x00300000ULL     /* the tree's PROGRAM_BASE */
+#define LEGACY_STACK_ADDR 0x003FF000ULL
+#define LEGACY_STACK_TOP  0x00400000ULL
+
+static const struct boot_task boot_tasks[BOOT_TASKS] = {
+    {"init",       USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0},
+    {"hello32",    USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   1, 0x32},
+    {"hello_tree", LEGACY_CODE_ADDR, LEGACY_STACK_ADDR, LEGACY_STACK_TOP, 1,
+     TASK_ANY_EXIT},
+};
+
 int lm_user_run(void)
 {
     lm_user_load_gdt();
 
     u64 kernel_space = vmm_current_space();
-    u64 code_phys[2];
-    u64 stack_phys[2];
-    u64 space[2];
-    code_phys[0] = pmm_alloc_frame();
-    code_phys[1] = pmm_alloc_frame();
-    stack_phys[0] = pmm_alloc_frame();
-    stack_phys[1] = pmm_alloc_frame();
-    space[0] = vmm_space_create();
-    space[1] = vmm_space_create();
-    if (code_phys[0] == 0 || code_phys[1] == 0 || stack_phys[0] == 0 ||
-        stack_phys[1] == 0 || space[0] == 0 || space[1] == 0) {
-        kputs("[ring3] FAIL could not build the address spaces\r\n");
-        return -1;
-    }
+    u64 code_phys[BOOT_TASKS];
+    u64 stack_phys[BOOT_TASKS];
+    u64 space[BOOT_TASKS];
+    u64 program_bytes[BOOT_TASKS];
 
-    /* Each task gets its own code frame and its own program: /init is the
-     * 64-bit task, /hello32 the compatibility-mode one. */
-    static const char *const programs[2] = {"init", "hello32"};
-    u64 program_bytes[2] = {0, 0};
+    for (int i = 0; i < BOOT_TASKS; i++) {
+        code_phys[i] = pmm_alloc_frame();
+        stack_phys[i] = pmm_alloc_frame();
+        space[i] = vmm_space_create();
+        if (code_phys[i] == 0 || stack_phys[i] == 0 || space[i] == 0) {
+            kputs("[ring3] FAIL could not build the address spaces\r\n");
+            return -1;
+        }
 
-    for (int i = 0; i < 2; i++) {
-        int handle = vfs_open(programs[i]);
+        int handle = vfs_open(boot_tasks[i].program);
         if (handle < 0) {
             kputs("[ring3] FAIL no /");
-            kputs(programs[i]);
+            kputs(boot_tasks[i].program);
             kputs(" on the disk\r\n");
             return -1;
         }
@@ -198,38 +217,29 @@ int lm_user_run(void)
             kputs("[ring3] FAIL short read of a program\r\n");
             return -1;
         }
-    }
+        memset(vmm_phys(stack_phys[i]), 0, FRAME_SIZE);
 
-    memset(vmm_phys(stack_phys[0]), 0, FRAME_SIZE);
-    memset(vmm_phys(stack_phys[1]), 0, FRAME_SIZE);
-
-    /* Same addresses in both spaces, different frames. The kernel's own space
-     * gets no user mapping at all. */
-    for (int i = 0; i < 2; i++) {
-        if (vmm_map_in(space[i], USER_CODE_ADDR, code_phys[i], VMM_U) != 0 ||
-            vmm_map_in(space[i], USER_STACK_ADDR, stack_phys[i],
+        if (vmm_map_in(space[i], boot_tasks[i].code_va, code_phys[i],
+                       VMM_U) != 0 ||
+            vmm_map_in(space[i], boot_tasks[i].stack_va, stack_phys[i],
                        VMM_W | VMM_U | VMM_NX) != 0) {
             kputs("[ring3] FAIL could not map a task's pages\r\n");
             return -1;
         }
     }
 
-    /* Check each space from the inside: its two pages are user-accessible, and
-     * the kernel's identity map and higher half are not there to be reached
-     * (a task has no PML4[0] entry for physical memory at all). */
-    for (int i = 0; i < 2; i++) {
+    /* Check each space from the inside: its own two pages are user-accessible,
+     * nothing else is, and the stack is NX while the code is not. */
+    for (int i = 0; i < BOOT_TASKS; i++) {
         vmm_space_switch(space[i]);
-        int ok = vmm_user_mapped(USER_CODE_ADDR) &&
-                 vmm_user_mapped(USER_STACK_ADDR) &&
+        int ok = vmm_user_mapped(boot_tasks[i].code_va) &&
+                 vmm_user_mapped(boot_tasks[i].stack_va) &&
                  !vmm_user_mapped(0) && !vmm_user_mapped(0x00100000) &&
                  vmm_translate(0x00100000) == 0 &&
-                 vmm_translate(USER_CODE_ADDR) == code_phys[i] &&
-                 /* The stack is data and must not execute; the code page is
-                  * the one leaf without NX (nothing to check if the CPU has no
-                  * NX to offer). */
+                 vmm_translate(boot_tasks[i].code_va) == code_phys[i] &&
                  (!cpu_nx_enabled() ||
-                  ((vmm_flags(USER_STACK_ADDR) & VMM_NX) != 0 &&
-                   (vmm_flags(USER_CODE_ADDR) & VMM_NX) == 0));
+                  ((vmm_flags(boot_tasks[i].stack_va) & VMM_NX) != 0 &&
+                   (vmm_flags(boot_tasks[i].code_va) & VMM_NX) == 0));
         vmm_space_switch(kernel_space);
         if (!ok) {
             kputs("[ring3] FAIL a task's address space is wrong\r\n");
@@ -237,7 +247,8 @@ int lm_user_run(void)
         }
     }
     /* ... and the kernel's own space is not user-reachable. */
-    if (vmm_user_mapped(USER_CODE_ADDR) || vmm_user_mapped(USER_STACK_ADDR)) {
+    if (vmm_user_mapped(USER_CODE_ADDR) || vmm_user_mapped(USER_STACK_ADDR) ||
+        vmm_user_mapped(LEGACY_CODE_ADDR)) {
         kputs("[ring3] FAIL the kernel space has user pages\r\n");
         return -1;
     }
@@ -252,27 +263,33 @@ int lm_user_run(void)
     kput_hex((u64)(unsigned long)gdt, 16);
     kputs(" tss rsp0=0x");
     kput_hex(tss.rsp0, 16);
-    kputs("\r\n[vfs] /init bytes=");
-    kput_dec(program_bytes[0]);
-    kputs(" /hello32 bytes=");
-    kput_dec(program_bytes[1]);
+    kputs("\r\n[vfs]");
+    for (int i = 0; i < BOOT_TASKS; i++) {
+        kputs(" /");
+        kputs(boot_tasks[i].program);
+        kputs("=");
+        kput_dec(program_bytes[i]);
+    }
     kputs("\r\n");
-    kputs("[ring3] code=0x");
+    kputs("[ring3] tasks=");
+    kput_dec(BOOT_TASKS);
+    kputs(" spaces=");
+    kput_dec(BOOT_TASKS);
+    kputs(" code=0x");
     kput_hex(USER_CODE_ADDR, 8);
-    kputs(" bytes=");
-    kput_dec(program_bytes[0]);
-    kputs("+");
-    kput_dec(program_bytes[1]);
-    kputs(" stacks=0x");
-    kput_hex(USER_STACK_TOP, 8);
-    kputs(" in 2 spaces");
+    kputs("/0x");
+    kput_hex(LEGACY_CODE_ADDR, 8);
+    kputs(" mode=64,32,32");
     kputs("\r\n");
 
     sched_init();
-    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[0], 0) != 0 ||
-        sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[1], 1) != 0) {
-        kputs("[ring3] FAIL could not create the tasks\r\n");
-        return -1;
+    for (int i = 0; i < BOOT_TASKS; i++) {
+        if (sched_create(boot_tasks[i].code_va, boot_tasks[i].stack_top,
+                         space[i], boot_tasks[i].compat,
+                         boot_tasks[i].expect_exit) != 0) {
+            kputs("[ring3] FAIL could not create the tasks\r\n");
+            return -1;
+        }
     }
 
     sched_start();      /* enters ring 3; does not return */

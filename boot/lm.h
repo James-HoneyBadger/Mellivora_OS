@@ -353,10 +353,16 @@ struct lm_task;
 /* Cache the task and kernel-stack objects; called before any task exists. */
 void sched_init(void);
 
+/* A compatibility task's exit code is whatever its program leaves in EBX.
+ * TASK_ANY_EXIT accepts anything (the tree's programs do not set one). */
+#define TASK_ANY_EXIT (~0ULL)
+
 /* Create a task that enters `entry` on `user_stack` in address space `space`
  * (a vmm_space_create() result). `compat` enters it in 32-bit mode through the
- * compatibility code segment. 0 on success. */
-int sched_create(u64 entry, u64 user_stack, u64 space, int compat);
+ * compatibility code segment, and `expect_exit` is the code a compatibility
+ * task must leave (TASK_ANY_EXIT to accept any). 0 on success. */
+int sched_create(u64 entry, u64 user_stack, u64 space, int compat,
+                 u64 expect_exit);
 
 /* Switch to the first runnable task and enter ring 3. Never returns. */
 void sched_start(void) __attribute__((noreturn));

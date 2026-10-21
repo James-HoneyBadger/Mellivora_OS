@@ -2188,7 +2188,7 @@ EBX/ECX/EDX, result in EAX. Everything needed to run them lives beside the LP64 
 | code segment | `SEL_UCODE32` = `0x38`, access `0xFA`, flags `D=1, L=0`, DPL 3 - outside the `0x18`/`0x20` slots SYSRET's `+16`/`+8` arithmetic fixes |
 | entry | `IRETQ` with that CS enters 32-bit mode and uses the low 32 bits of `RIP`; the scheduler needs no special case |
 | gate | IDT vector `0x80`, `DPL=3` (software interrupts check DPL, unlike CPU exceptions) |
-| bridge | `lm_int80_dispatch` moves EBX/ECX/EDX into the LP64 argument registers, translates the tree's numbers (`exit` 0, `open` 5, `read` 6, `write` 7, `close` 8, `getpid` 54) and calls the same handlers |
+| bridge | `lm_int80_dispatch` moves EBX/ECX/EDX into the LP64 argument registers, translates the tree's numbers (`exit` 0, `print` 3, `open` 5, `read` 6, `write` 7, `close` 8, `setcolor` 18, `getpid` 54) and calls the same handlers; `print` walks a NUL-terminated string a page at a time under the STAC/CLAC bracket, and `setcolor` is accepted and ignored until there is a text console |
 
 An interrupt pushes the *caller's* CS and SS, so the frame the shell builds for `INT
 0x80` already returns to the compat segment - the opposite of the `SYSCALL` path, where
@@ -2201,9 +2201,30 @@ The demo's second task runs `/hello32`, a NASM 32-bit flat binary: `write`, `get
 (which must be 1), `exit(0x32)`. Its record prints `mode=32` and checks the `0x32`
 marker instead of the 64-bit task's id/PING/WHOAMI checks.
 
-What is not there yet is the loader: `/hello32` is a flat binary at a fixed address, and
-the existing programs are ELF32 with sections; loading them and answering the other 181
-calls is the remaining compatibility work.
+The third task runs one of the tree's own programs. Those are not ELF32: `programs/`
+builds flat `[BITS 32]` images that carry `[ORG 0x00300000]` in `syscalls.inc`, with the
+program's entry at the start of the image and no headers, relocations or sections. That
+`ORG` *is* the loader contract, so the loader is `vmm_map_in(space, 0x00300000, frame)`
+plus a stack page at `0x003FF000` and an `IRETQ` to `0x00300000` — nothing is parsed and
+nothing in the binary is patched. `make 64bit` builds `programs/hello.asm` with the same
+NASM line `make programs` uses (`-I programs/`), packs it into HBFS as `/hello_tree` and
+`lm_user_run` starts it as a third task, so its `SYS_PRINT` calls land on COM1:
+
+```
+[vfs] /init=64 /hello32=88 /hello_tree=212
+Hello, World! Welcome to Mellivora OS!
+This program is running in 32-bit protected mode.
+[ring3] task=2 calls=6 ticks=0 exit=0x0007 mode=32 brk=ok ring3=ok
+```
+
+The `0x0007` is telling: that program never sets EBX before `SYS_EXIT`, so the code is
+whatever the last `SYS_SETCOLOR` left there. A compatibility task therefore carries an
+`expect_exit` of its own, and `TASK_ANY_EXIT` means "made calls and stopped" — the port
+cannot invent an exit convention the 32-bit tree does not have.
+
+What is not there yet is the other 181 calls behind that bridge (`GETCHAR`, `READDIR`,
+`MKDIR`, `SEEK`, `STAT`, the cursor and video calls), so only programs that stay inside
+the implemented set run.
 
 ### Exec, and file syscalls
 

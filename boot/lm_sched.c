@@ -47,6 +47,7 @@ struct lm_task {
     u64 cr3;            /* the task's address space */
     u64 brk;            /* program break, in the task's own space */
     u64 mode32;         /* non-zero when the task runs in 32-bit mode */
+    u64 expect_exit;    /* what a compatibility task must leave, or ANY */
     void *kstack_obj;
 };
 
@@ -126,7 +127,7 @@ static void become(struct lm_task *next)
  * entered by the same pop-and-IRETQ path as one that was preempted.
  */
 static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space,
-                                int compat)
+                                int compat, u64 expect_exit)
 {
     if (space == 0) {
         return NULL;
@@ -150,6 +151,7 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space,
     t->cr3 = space;
     t->brk = USER_BRK_BASE;
     t->mode32 = compat ? 1 : 0;
+    t->expect_exit = expect_exit;
     t->calls = 0;
     t->ticks = 0;
     t->exit_code = 0;
@@ -175,9 +177,11 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space,
     return t;
 }
 
-int sched_create(u64 entry, u64 user_stack, u64 space, int compat)
+int sched_create(u64 entry, u64 user_stack, u64 space, int compat,
+                 u64 expect_exit)
 {
-    return task_new(entry, user_stack, space, compat) != NULL ? 0 : -1;
+    return task_new(entry, user_stack, space, compat, expect_exit) != NULL
+         ? 0 : -1;
 }
 
 void sched_start(void)
@@ -304,9 +308,10 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
 
     int ok;
     if (t->mode32) {
-        /* The compatibility program has its own marker: exit code 0x32 after
-         * making calls through INT 0x80. */
-        ok = t->exit_code == 0x32 && t->calls > 0;
+        /* The tree's programs do not agree on an exit code, so the task says
+         * what it expects; TASK_ANY_EXIT means "made calls and stopped". */
+        ok = t->calls > 0 &&
+             (t->expect_exit == TASK_ANY_EXIT || t->exit_code == t->expect_exit);
     } else {
         ok = t->exit_code == t->id && t->exit_whoami == cpu_this()->id &&
              t->exit_ping == 0x1234 && t->calls > 0 && brk_ok;

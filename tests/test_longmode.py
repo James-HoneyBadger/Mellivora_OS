@@ -77,7 +77,13 @@ REQUIRED = (
     "hello",
     "blk=ok",
     "hbfs] root=",
-    "/init bytes=",
+    "/init=64",
+    "/hello_tree=",
+    "tasks=3 spaces=3",
+    # One of the 32-bit tree's own programs, built by `make programs` from
+    # programs/hello.asm and loaded unchanged at its 0x00300000 program base.
+    "Hello, World! Welcome to Mellivora OS!",
+    "This program is running in 32-bit protected mode.",
     "[exec] /hello",
     "hello from hbfs",
     "hello from 32-bit mode",

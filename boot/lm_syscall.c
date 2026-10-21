@@ -364,6 +364,29 @@ static const struct lm_syscall syscalls[] = {
  * the result in EAX, and its numbers are not the LP64 ones, so this translates
  * both before calling the same handlers.
  */
+/* SYS_PRINT (the 32-bit tree's number 3): a NUL-terminated string in EBX. */
+static struct lm_fault_frame *int80_print(struct lm_fault_frame *f)
+{
+    u64 addr = (u32)f->rbx;
+    u64 n = 0;
+
+    user_access_begin();
+    for (; n < 4096; n++) {
+        if (!vmm_user_mapped(addr + n)) {
+            break;
+        }
+        char c = *(const char *)(unsigned long)(addr + n);
+        if (c == 0) {
+            break;
+        }
+        kputc(c);
+    }
+    user_access_end();
+
+    f->rax = n;
+    return f;
+}
+
 struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *f)
 {
     if ((f->cs & 3) != 3) {
@@ -404,6 +427,11 @@ struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *f)
         return sys_close(f);
     case 54:                        /* SYS_GETPID */
         f->rax = sched_current_id();
+        return f;
+    case 3:                         /* SYS_PRINT */
+        return int80_print(f);
+    case 18:                        /* SYS_SETCOLOR: no text console yet */
+        f->rax = 0;
         return f;
     default:
         f->rax = (u64)-1;
