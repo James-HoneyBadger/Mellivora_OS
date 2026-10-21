@@ -212,6 +212,19 @@ sched_create_task:
         jmp .find_slot
 
 .found_slot:
+        ; A recycled TCB slot must start with no mmap records. vm_areas is
+        ; indexed by slot (= PID), and the previous occupant's mappings died
+        ; with it; inheriting them would let the new task fault in frames it
+        ; does not own.
+        push edx
+        push edi
+        push ecx                        ; ECX still holds the user stack top
+        mov ecx, edx
+        call vm_clear_table
+        pop ecx
+        pop edi
+        pop edx
+
         ; Allocate this task's page directory (a copy of the master directory)
         push edx
         push edi
@@ -541,9 +554,18 @@ sched_kill_all_tasks:
 .skat_sig:
         mov eax, [edi + TCB_SIG_HAND]
         test eax, eax
-        jz .skat_pd
+        jz .skat_vm
         mov dword [edi + TCB_SIG_HAND], 0
         call pmm_free_page
+.skat_vm:
+        ; Drop the task's mmap areas before its directory disappears; the
+        ; frames may still be shared with a fork relative, so release through
+        ; the reference counts rather than freeing blindly.
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .skat_pd
+        mov ecx, [edi + TCB_PID]
+        call vm_release_all
 .skat_pd:
         ; The master directory is active here, so the task's directory is not
         ; in use and can be released immediately.
@@ -627,6 +649,17 @@ sched_exit_task:
         mov ecx, BG_STACK_PAGES
         call cow_release_range
 .exit_no_ustack:
+
+        ; Release every mmap area the task still owns: frames are dropped
+        ; through their reference counts, so a page shared with a fork parent
+        ; survives until the last owner goes away. The records must be gone
+        ; before the slot (and its PID) can be reused.
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .exit_no_vm
+        mov ecx, [edi + TCB_PID]
+        call vm_release_all
+.exit_no_vm:
 
         ; Queue this task's page directory for release. It cannot be freed here:
         ; this runs in the dying task's context, so CR3 may still point at it,
@@ -2762,6 +2795,26 @@ sys_fork:
         mov  dword [edi + TCB_WAIT_PID],    0
         mov  dword [edi + TCB_ERRNO],       0
 
+        ;--- Inherit the parent's mmap areas ---
+        ; The child's directory is cloned from the parent's, so it maps the
+        ; same virtual ranges and needs the same records; cow_fork_share then
+        ; makes the frames copy-on-write.
+        push edi                        ; child TCB
+        mov  ecx, [fork_parent_pid]
+        call vm_area_base
+        mov  esi, eax
+        mov  ecx, [fork_child_pid_slot]
+        call vm_area_base
+        mov  edi, eax
+        mov  ecx, (VM_AREAS_PER_TASK * VM_AREA_SIZE) / 4
+        cld
+        rep  movsd
+        mov  ecx, [fork_parent_pid]
+        mov  eax, [vm_next + ecx*4]
+        mov  ecx, [fork_child_pid_slot]
+        mov  [vm_next + ecx*4], eax
+        pop  edi                        ; child TCB
+
         ;--- 8a. Child gets its own page directory ---
         ; The TCB copy above inherited the parent's TCB_CR3, but the directory
         ; itself must be cloned from the PARENT (not the master): if the parent
@@ -2823,6 +2876,8 @@ sys_fork:
         ; Could not allocate the child's page directory. The TCB currently holds
         ; the PARENT's PD (inherited by the copy): zero it so nothing frees the
         ; parent's directory, free the slot, and release the kernel stack.
+        mov  ecx, [fork_child_pid_slot]
+        call vm_clear_table
         mov  edi, [fork_child_tcb]
         mov  dword [edi + TCB_CR3], 0
         mov  dword [edi + TCB_STATE], TASK_FREE
@@ -2836,6 +2891,8 @@ sys_fork:
 .fork_fail_cow:
         ; cow_fork_share could not privatise a page table (OOM). No PTE was
         ; touched, so the child directory can simply be released.
+        mov  ecx, [fork_child_pid_slot]
+        call vm_clear_table
         mov  edi, [fork_child_tcb]
         mov  eax, [edi + TCB_CR3]
         call paging_free_pd

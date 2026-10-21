@@ -4,31 +4,19 @@
 ; Implements the contract in docs/spec/VMM.md for the 32-bit tree:
 ;   * user mappings live in the demand zone (128..512 MB)
 ;   * every mapping is recorded in a per-task vm_area table
+;   * anonymous mappings are demand-zero: pages are allocated and zeroed on
+;     first touch, with the area's protection, by the page-fault handler
 ;   * permissions come from PROT_* at map time and are re-applied by
 ;     mprotect; PROT_EXEC|PROT_WRITE is refused (W^X)
-;   * munmap frees the frames and clears the page-table entries
-;
-; Physical frames come from the PMM as one contiguous run per mapping, which
-; keeps munmap a single pmm_free_pages call.
+;   * munmap/mprotect split areas so any page-aligned sub-range works
+;   * frames are released one at a time through their COW reference count,
+;     because a demand-zero mapping has no contiguous physical run
 ;=======================================================================
 
-; Protection bits (mirror of programs/syscalls.inc)
-PROT_NONE          equ 0
-PROT_READ          equ 1
-PROT_WRITE         equ 2
-PROT_EXEC          equ 4
-
-VM_AREA_SIZE       equ 20          ; start, pages, prot, phys, last-page
-VM_AREAS_PER_TASK  equ 32
+; PROT_*, VM_AREA_SIZE/VM_AREAS_PER_TASK and the VMA_* field offsets live in
+; kernel.asm: paging.inc and sched.inc need them too.
 VM_MAX_PAGES       equ 4096        ; 16 MB per mapping
 VM_MAP_JIT         equ 0x40        ; opt-out of W^X (documented, audited)
-
-; vm_area fields
-VMA_START          equ 0
-VMA_PAGES          equ 4
-VMA_PROT           equ 8
-VMA_PHYS           equ 12
-VMA_END            equ 16
 
 ;---------------------------------------
 ; vm_init - seed the mapping randomiser
@@ -304,79 +292,280 @@ vm_flags_for_prot:
         ret
 
 ;---------------------------------------
-; vm_map_run - map a physical run into the current address space
-;   In : EAX = virt, EBX = pages, ECX = phys, EDX = prot
-;   Out: EAX = 0 on success, -1 on failure
+; vm_pte_phys - frame mapped at a virtual address
+;   In : EAX = page directory, EBX = virtual address
+;   Out: EAX = physical frame, or 0 when the page is not present
 ;---------------------------------------
-vm_map_run:
-        pushad
-        mov [.vmr_virt], eax
-        mov [.vmr_pages], ebx
-        mov [.vmr_phys], ecx
-        mov [.vmr_prot], edx
-        mov ebx, edx
+vm_pte_phys:
+        push ebx
+        push ecx
+        push edx
         mov edx, ebx
-        call vm_flags_for_prot
-        mov [.vmr_flags], ecx
-
-.vmr_loop:
-        cmp dword [.vmr_pages], 0
-        jle .vmr_ok
-        ; Make the 4 MB region's page table private before touching it.
-        mov eax, [.vmr_virt]
-        shr eax, 22
-        mov edx, eax            ; PDE index
-        mov eax, cr3
-        call paging_privatize_pde
-        test eax, eax
-        jz .vmr_fail
-
-        mov eax, [.vmr_virt]
-        mov ebx, [.vmr_phys]
-        mov ecx, [.vmr_flags]
-        call paging_map_page_here
-
-        add dword [.vmr_virt], 0x1000
-        add dword [.vmr_phys], 0x1000
-        dec dword [.vmr_pages]
-        jmp .vmr_loop
-.vmr_ok:
-        mov dword [esp + 28], 0
-        popad
+        shr edx, 22
+        mov ecx, [eax + edx*4]
+        test ecx, PG_PRESENT
+        jz .vpp_none
+        and ecx, 0xFFFFF000
+        mov edx, ebx
+        shr edx, 12
+        and edx, 0x3FF
+        mov ecx, [ecx + edx*4]
+        test ecx, PG_PRESENT
+        jz .vpp_none
+        mov eax, ecx
+        and eax, 0xFFFFF000
+        jmp .vpp_done
+.vpp_none:
+        xor eax, eax
+.vpp_done:
+        pop edx
+        pop ecx
+        pop ebx
         ret
-.vmr_fail:
-        mov dword [esp + 28], -1
-        popad
-        ret
-.vmr_virt:  dd 0
-.vmr_pages: dd 0
-.vmr_phys:  dd 0
-.vmr_prot:  dd 0
-.vmr_flags: dd 0
 
 ;---------------------------------------
-; vm_unmap_run - clear mappings (identity of the frames is the caller's job)
-;   In : EAX = virt, EBX = pages
+; vm_clear_pte - drop a mapping from a directory
+;   In : EAX = page directory, EBX = virtual address
 ;---------------------------------------
-vm_unmap_run:
+vm_clear_pte:
+        push eax
+        push ecx
+        push edx
+        mov edx, ebx
+        shr edx, 22
+        mov ecx, [eax + edx*4]
+        test ecx, PG_PRESENT
+        jz .vcp_done
+        and ecx, 0xFFFFF000
+        mov edx, ebx
+        shr edx, 12
+        and edx, 0x3FF
+        mov dword [ecx + edx*4], 0
+        mov edx, cr3
+        cmp edx, [esp + 8]      ; the pushed EAX = directory being edited
+        jne .vcp_done
+        invlpg [ebx]
+.vcp_done:
+        pop edx
+        pop ecx
+        pop eax
+        ret
+
+;---------------------------------------
+; vm_release_area_frames - unmap pages and drop their frame references
+;   In : EAX = page directory, EBX = start, ECX = pages
+;
+; The frame is read from the page table, not from a stored physical run: a
+; demand-zero mapping has no single run (pages are allocated as they are
+; touched), and a forked page may be a copy-on-write share whose reference
+; count must be dropped rather than freed.
+;---------------------------------------
+vm_release_area_frames:
         pushad
-        mov [.vur_virt], eax
-        mov [.vur_pages], ebx
-.vur_loop:
-        cmp dword [.vur_pages], 0
-        jle .vur_done
-        mov eax, [.vur_virt]
-        xor ebx, ebx            ; phys 0
-        xor ecx, ecx            ; flags 0 -> PTE becomes non-present
-        call paging_map_page_here
-        add dword [.vur_virt], 0x1000
-        dec dword [.vur_pages]
-        jmp .vur_loop
-.vur_done:
+        mov [.raf_pd], eax
+        mov [.raf_va], ebx
+        mov [.raf_left], ecx
+.raf_loop:
+        cmp dword [.raf_left], 0
+        jle .raf_done
+        mov eax, [.raf_pd]
+        mov ebx, [.raf_va]
+        call vm_pte_phys
+        test eax, eax
+        jz .raf_next
+        mov [.raf_phys], eax
+        mov eax, [.raf_pd]
+        mov ebx, [.raf_va]
+        call vm_clear_pte
+        mov eax, [.raf_phys]
+        mov ebx, [.raf_va]
+        call cow_release_frame
+.raf_next:
+        add dword [.raf_va], 0x1000
+        dec dword [.raf_left]
+        jmp .raf_loop
+.raf_done:
         popad
         ret
-.vur_virt:  dd 0
-.vur_pages: dd 0
+.raf_pd:   dd 0
+.raf_va:   dd 0
+.raf_left: dd 0
+.raf_phys: dd 0
+
+;---------------------------------------
+; vm_clear_table - forget every mapping of a task slot
+;   In : ECX = task id
+;---------------------------------------
+vm_clear_table:
+        pushad
+        mov eax, ecx
+        imul eax, VM_AREAS_PER_TASK * VM_AREA_SIZE
+        add eax, vm_areas
+        mov edi, eax
+        xor eax, eax
+        mov ecx, (VM_AREAS_PER_TASK * VM_AREA_SIZE) / 4
+        cld
+        rep stosd
+        mov ecx, [esp + 24]     ; original ECX from the pushad frame
+        mov dword [vm_next + ecx*4], 0
+        popad
+        ret
+
+;---------------------------------------
+; vm_split_at - split the area containing an address
+;   In : EBX = address, page aligned, strictly inside an area
+;   Out: EAX = area that now starts at EBX (new or existing), or 0
+;---------------------------------------
+vm_split_at:
+        push ecx
+        push edx
+        push esi
+        push edi
+        mov eax, ebx
+        call vm_find_area
+        test eax, eax
+        jz .vsa_none
+        mov esi, eax
+        cmp ebx, [esi + VMA_START]
+        je .vsa_existing
+        cmp ebx, [esi + VMA_END]
+        jae .vsa_none
+        call vm_free_slot
+        test eax, eax
+        jz .vsa_none
+        mov edi, eax
+
+        ; New right-hand piece: [EBX, old end)
+        mov ecx, [esi + VMA_END]
+        sub ecx, ebx
+        shr ecx, 12
+        mov [edi + VMA_START], ebx
+        mov [edi + VMA_PAGES], ecx
+        mov ecx, [esi + VMA_PROT]
+        mov [edi + VMA_PROT], ecx
+        mov dword [edi + VMA_PHYS], 0
+        mov ecx, [esi + VMA_END]
+        mov [edi + VMA_END], ecx
+
+        ; Shrink the left-hand piece to [old start, EBX)
+        mov ecx, ebx
+        sub ecx, [esi + VMA_START]
+        shr ecx, 12
+        mov [esi + VMA_PAGES], ecx
+        mov [esi + VMA_END], ebx
+        mov eax, edi
+        jmp .vsa_done
+.vsa_existing:
+        mov eax, esi
+        jmp .vsa_done
+.vsa_none:
+        xor eax, eax
+.vsa_done:
+        pop edi
+        pop esi
+        pop edx
+        pop ecx
+        ret
+
+;---------------------------------------
+; vm_isolate - make [start, start+len) exactly one area
+;   In : EBX = start, ECX = length (both page aligned)
+;   Out: EAX = the area covering exactly that range, or 0
+;
+; Returns 0 unless the whole range lies inside a single existing area.
+; A failed second split can leave a harmless extra area behind; no frame or
+; protection has been changed at that point.
+;---------------------------------------
+vm_isolate:
+        push ebx
+        push ecx
+        push edx
+        push esi
+        mov eax, ebx
+        call vm_find_area
+        test eax, eax
+        jz .vis_none
+        mov esi, eax
+        mov edx, ebx
+        add edx, ecx
+        jc .vis_none
+        cmp ebx, [esi + VMA_START]
+        jb .vis_none
+        cmp edx, [esi + VMA_END]
+        ja .vis_none
+
+        call vm_split_at                ; EBX = start
+        test eax, eax
+        jz .vis_none
+        mov esi, eax
+
+        mov eax, ebx
+        add eax, ecx                    ; requested end
+        cmp eax, [esi + VMA_END]
+        jae .vis_have                   ; already ends here
+        push ecx
+        mov ebx, eax
+        call vm_split_at
+        pop ecx
+        test eax, eax
+        jz .vis_none
+.vis_have:
+        mov eax, esi
+        jmp .vis_done
+.vis_none:
+        xor eax, eax
+.vis_done:
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+;---------------------------------------
+; vm_release_all - release every mapping of a task slot
+;   In : EAX = page directory, ECX = task id
+;---------------------------------------
+vm_release_all:
+        pushad
+        mov [.vra_pd], eax
+        mov [.vra_pid], ecx
+        call vm_area_base
+        mov [.vra_rec], eax
+        mov dword [.vra_i], 0
+.vra_loop:
+        cmp dword [.vra_i], VM_AREAS_PER_TASK
+        jge .vra_done
+        mov esi, [.vra_rec]
+        mov eax, [.vra_i]
+        imul eax, VM_AREA_SIZE
+        add esi, eax
+        mov ebx, [esi + VMA_START]
+        test ebx, ebx
+        jz .vra_next
+        mov eax, [.vra_pd]
+        mov ecx, [esi + VMA_PAGES]
+        test ecx, ecx
+        jz .vra_clear
+        call vm_release_area_frames
+.vra_clear:
+        xor eax, eax
+        mov [esi + VMA_START], eax
+        mov [esi + VMA_PAGES], eax
+        mov [esi + VMA_PROT], eax
+        mov [esi + VMA_PHYS], eax
+        mov [esi + VMA_END], eax
+.vra_next:
+        inc dword [.vra_i]
+        jmp .vra_loop
+.vra_done:
+        mov ecx, [.vra_pid]
+        mov dword [vm_next + ecx*4], 0
+        popad
+        ret
+.vra_pd:  dd 0
+.vra_pid: dd 0
+.vra_rec: dd 0
+.vra_i:   dd 0
 
 ;---------------------------------------
 ; sys_mmap (120) - map anonymous memory
@@ -442,7 +631,7 @@ sys_mmap:
         jnz .mm_fail
         mov eax, [.mm_hint]
         mov [.mm_virt], eax
-        jmp .mm_alloc_phys
+        jmp .mm_record
 .mm_pick:
         mov ecx, [.mm_pages]
         call vm_gap
@@ -450,61 +639,30 @@ sys_mmap:
         jz .mm_fail
         mov [.mm_virt], eax
 
-.mm_alloc_phys:
-        mov ecx, [.mm_pages]
-        call pmm_alloc_pages
-        test eax, eax
-        jz .mm_fail
-        mov [.mm_phys], eax
-
-        ; Record the area before mapping so a partial failure can be undone.
+.mm_record:
+        ; Demand-zero: nothing is allocated now. The page-fault handler
+        ; allocates and zeroes each page the first time the task touches it,
+        ; using the area's protection, so an untouched mapping costs no RAM.
         call vm_free_slot
         test eax, eax
-        jz .mm_free_phys
-        mov [.mm_rec], eax
+        jz .mm_fail
         mov ecx, [.mm_virt]
         mov [eax + VMA_START], ecx
         mov ecx, [.mm_pages]
         mov [eax + VMA_PAGES], ecx
         mov ecx, [.mm_prot]
         mov [eax + VMA_PROT], ecx
-        mov ecx, [.mm_phys]
-        mov [eax + VMA_PHYS], ecx
+        mov dword [eax + VMA_PHYS], 0
         mov edx, [.mm_virt]
         mov ecx, [.mm_pages]
         shl ecx, 12
         add edx, ecx
         mov [eax + VMA_END], edx
 
-        ; Zero the frames: a fresh mapping must never expose stale data.
-        mov edi, [.mm_phys]
-        mov ecx, [.mm_pages]
-        shl ecx, 10             ; pages * 1024 dwords
-        xor eax, eax
-        cld
-        rep stosd
-
-        ; Map the run into this process
-        mov eax, [.mm_virt]
-        mov ebx, [.mm_pages]
-        mov ecx, [.mm_phys]
-        mov edx, [.mm_prot]
-        call vm_map_run
-        test eax, eax
-        js .mm_undo
-
         mov eax, [.mm_virt]
         mov [esp + 28], eax
         popad
         iretd
-
-.mm_undo:
-        mov eax, [.mm_rec]
-        mov dword [eax + VMA_START], 0
-.mm_free_phys:
-        mov eax, [.mm_phys]
-        mov ecx, [.mm_pages]
-        call pmm_free_pages
 .mm_fail:
         mov dword [esp + 28], -1
         popad
@@ -514,16 +672,16 @@ sys_mmap:
 .mm_prot:  dd 0
 .mm_pages: dd 0
 .mm_virt:  dd 0
-.mm_phys:  dd 0
-.mm_rec:   dd 0
 
 ;---------------------------------------
-; sys_munmap (121) - release a mapping
+; sys_munmap (121) - release part or all of a mapping
 ;   In : EBX = addr, ECX = length
 ;   Out: EAX = 0, or -1
 ;
-; The address must be the base of a mapping and the length must cover it
-; (partial unmapping is not implemented yet; VMM.md records that).
+; The range is page-aligned outwards, must lie inside a single area, and is
+; split out of that area before its PTEs are dropped. Frames are released one
+; by one through their reference count, so a page shared with a fork parent
+; survives until the last owner unmaps it.
 ;---------------------------------------
 sys_munmap:
         pushad
@@ -531,32 +689,37 @@ sys_munmap:
         jz .mu_fail
         test ecx, ecx
         jz .mu_fail
+
         mov eax, ebx
-        call vm_find_area
+        and eax, 0xFFFFF000             ; start, rounded down
+        mov edx, ebx
+        add edx, ecx                    ; addr + length
+        jc .mu_fail
+        add edx, 0xFFF
+        jc .mu_fail
+        and edx, 0xFFFFF000             ; end, rounded up
+        mov ecx, edx
+        sub ecx, eax                    ; length to unmap
+        jz .mu_fail
+
+        mov ebx, eax
+        call vm_isolate
         test eax, eax
         jz .mu_fail
-        cmp ebx, [eax + VMA_START]
-        jne .mu_fail
-        mov edx, [eax + VMA_END]
-        sub edx, [eax + VMA_START]
-        ; Accept the exact size or a length that covers the mapping.
-        add ecx, 0xFFF
-        shr ecx, 12
-        mov edx, [eax + VMA_PAGES]
-        cmp ecx, edx
-        jb .mu_fail
+        mov esi, eax
 
-        mov esi, eax            ; record
-        ; Unmap the range, then release the frames.
-        mov eax, [esi + VMA_START]
-        mov ebx, [esi + VMA_PAGES]
-        call vm_unmap_run
-        mov eax, [esi + VMA_PHYS]
+        mov eax, cr3
+        mov ebx, [esi + VMA_START]
         mov ecx, [esi + VMA_PAGES]
-        call pmm_free_pages
-        mov dword [esi + VMA_START], 0
-        mov dword [esi + VMA_PAGES], 0
-        mov dword [esi + VMA_PHYS], 0
+        call vm_release_area_frames
+
+        xor eax, eax
+        mov [esi + VMA_START], eax
+        mov [esi + VMA_PAGES], eax
+        mov [esi + VMA_PROT], eax
+        mov [esi + VMA_PHYS], eax
+        mov [esi + VMA_END], eax
+
         mov dword [esp + 28], 0
         popad
         iretd
@@ -566,9 +729,14 @@ sys_munmap:
         iretd
 
 ;---------------------------------------
-; sys_mprotect (122) - change protection of a mapping
+; sys_mprotect (122) - change protection of part or all of a mapping
 ;   In : EBX = addr, ECX = length, EDX = PROT_*
 ;   Out: EAX = 0, or -1
+;
+; The range must lie inside a single area and is split out of it first, so a
+; partial change leaves neighbouring pages with their old protection. PTEs
+; that are not present stay absent: the demand fault will map them with the
+; area's current protection.
 ;---------------------------------------
 sys_mprotect:
         pushad
@@ -583,46 +751,94 @@ sys_mprotect:
         je .mp_fail
         test ebx, ebx
         jz .mp_fail
+        test ecx, ecx
+        jz .mp_fail
+
         mov eax, ebx
-        call vm_find_area
+        and eax, 0xFFFFF000
+        mov edx, ebx
+        add edx, ecx
+        jc .mp_fail
+        add edx, 0xFFF
+        jc .mp_fail
+        and edx, 0xFFFFF000
+        mov ecx, edx
+        sub ecx, eax
+        jz .mp_fail
+
+        mov ebx, eax
+        call vm_isolate
         test eax, eax
         jz .mp_fail
         mov esi, eax
-        ; The whole requested range must sit inside one mapping.
-        mov eax, ecx
-        add eax, 0xFFF
-        shr eax, 12
-        mov edx, ebx
-        shl eax, 12
-        add edx, eax
-        cmp edx, [esi + VMA_END]
-        ja .mp_fail
-        mov eax, [esi + VMA_PROT]
-        mov eax, [.mp_prot]
-        mov [esi + VMA_PROT], eax
+        mov ecx, [.mp_prot]
+        mov [esi + VMA_PROT], ecx
 
-        ; Rewrite the PTEs for the affected pages.
-        mov eax, ebx
-        and eax, ~0xFFF
+        mov eax, [esi + VMA_START]
         mov [.mp_virt], eax
-        mov eax, ecx
-        add eax, 0xFFF
-        shr eax, 12
+        mov eax, [esi + VMA_PAGES]
         mov [.mp_pages], eax
 .mp_loop:
         cmp dword [.mp_pages], 0
         jle .mp_ok
+        mov eax, cr3
+        mov ebx, [.mp_virt]
+        call vm_pte_phys
+        test eax, eax
+        jz .mp_next                    ; not touched yet: fault uses new prot
+
+        mov [.mp_phys], eax
         mov edx, [.mp_prot]
         call vm_flags_for_prot
-        ; Find the frame backing this page from the area's physical run.
+        mov [.mp_flags], ecx
+
+        ; PROT_NONE keeps the frame but takes PG_USER away, so the data
+        ; survives and ring 3 still faults on every access.
+        test dword [.mp_prot], PROT_READ | PROT_WRITE | PROT_EXEC
+        jnz .mp_check_shared
+        mov dword [.mp_flags], PG_PRESENT
+        jmp .mp_map
+
+.mp_check_shared:
+        ; A protection change detaches this address space from a fork share:
+        ; copy the frame first, so neither mprotect(PROT_READ) here nor a
+        ; later mprotect(PROT_WRITE) can change what the other process sees.
+        ; A COW-marked frame counts even when its reference count has dropped
+        ; to one: the mark is what would let the next write fault break it,
+        ; and an explicit read-only protection must outrank that.
+        mov eax, [.mp_phys]
+        call cow_flag
+        test eax, eax
+        jnz .mp_detach
+        mov eax, [.mp_phys]
+        call cow_get
+        cmp eax, 1
+        jbe .mp_map                    ; not shared
+
+.mp_detach:
+        call pmm_alloc_page
+        test eax, eax
+        jz .mp_fail                    ; out of memory
+        mov [.mp_new], eax
+        mov esi, [.mp_phys]
+        mov edi, eax
+        mov ecx, 1024
+        cld
+        rep movsd
+        mov eax, [.mp_phys]
+        mov [.mp_old], eax
+        mov eax, [.mp_new]
+        mov [.mp_phys], eax
+        mov eax, [.mp_old]
+        mov ebx, [.mp_virt]
+        call cow_release_frame
+
+.mp_map:
         mov eax, [.mp_virt]
-        sub eax, [esi + VMA_START]
-        shr eax, 12
-        mov ebx, [esi + VMA_PHYS]
-        shl eax, 12
-        add ebx, eax            ; phys for this page
-        mov eax, [.mp_virt]
+        mov ebx, [.mp_phys]
+        mov ecx, [.mp_flags]
         call paging_map_page_here
+.mp_next:
         add dword [.mp_virt], 0x1000
         dec dword [.mp_pages]
         jmp .mp_loop
@@ -637,3 +853,7 @@ sys_mprotect:
 .mp_prot:  dd 0
 .mp_virt:  dd 0
 .mp_pages: dd 0
+.mp_phys:  dd 0
+.mp_flags: dd 0
+.mp_old:   dd 0
+.mp_new:   dd 0

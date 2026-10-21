@@ -1,5 +1,49 @@
 # Mellivora OS - Changelog
 
+## Unreleased - demand-zero mappings and partial unmapping
+
+### Memory and isolation
+
+- **Anonymous `mmap` is demand-zero** — `SYS_MMAP` now only records the mapping; the
+  first access to each page allocates and zeroes a frame. Reserving memory costs no
+  RAM until it is used, and a fresh page still never exposes stale bytes.
+- **Demand faults honour the mapping's protection** — the handler maps the new page
+  with the area's `PROT_*` instead of unconditional read/write, refuses a write to a
+  read-only mapping, and refuses instruction fetch from a non-executable one. The
+  4 MB page table is privatised before the PTE is written, so a mapping can no longer
+  appear in every address space that shares the master's demand template.
+- **Syscall buffers may be demand-zero** — a supervisor access to a user address that
+  belongs to the current task's own area faults the page in with user access instead of
+  identity-mapping physical memory over the mapping (which would read the wrong bytes
+  and could leak kernel memory to ring 3).
+- **Partial `munmap` and `mprotect`** — both accept any page-aligned sub-range of one
+  area. The area is split into exact pieces; `munmap` releases only the frames in the
+  requested range, `mprotect` changes only its protection. `PROT_NONE` keeps the frame
+  mapped supervisor-only, so data survives a later `mprotect(PROT_READ|PROT_WRITE)`
+  instead of coming back as zeros.
+- **`fork` shares `mmap` areas copy-on-write** — the child inherits the parent's
+  `vm_area` records and its writable pages are marked read-only in both address
+  spaces. Previously the cloned page tables pointed at the same frames and both
+  processes could write them.
+- **`exit` and `exec` release every mapping** — frames are dropped through their COW
+  reference counts and the per-slot records are cleared, so a task's `mmap` frames no
+  longer leak and a recycled PID cannot inherit the previous occupant's mappings.
+- **Protection changes detach COW shares** — `mprotect` copies a shared frame before
+  changing its protection, so one process's `mprotect(PROT_READ)` cannot be undone by
+  the other's write fault, and a later `mprotect(PROT_WRITE)` never hands both
+  processes the same writable page.
+- **COW bookkeeping distinguishes read-only shares** — the per-frame reference byte now
+  uses bit 7 as "writable when shared". A frame that was already read-only at fork is
+  counted (so the last owner frees it) but is not breakable: a write to it remains a
+  protection fault.
+
+### Tooling
+
+- `programs/vmtest2.asm` covers demand-zero allocation, partial `munmap`/`mprotect`,
+  `PROT_NONE` data preservation, fork isolation of `mmap` pages and frame reclamation
+  when a child exits. It is wired into `tests/test_runtime.sh`, so `make check` fails if
+  any of it regresses.
+
 ## Unreleased - guarded, demand-grown user stacks
 
 ### Memory and isolation

@@ -70,6 +70,22 @@ USER_STACK_MAX_PAGES  equ 64                                  ; 256 KB hard cap
 USER_STACK_INIT_PAGES equ 16                                  ; 64 KB mapped at exec
 USER_STACK_BASE       equ PROGRAM_END_ADDR - USER_STACK_MAX_PAGES * 4096
 STACK_GROWTH_SLACK    equ 16                                  ; pages one fault may skip
+
+; mmap protection bits (mirror of programs/syscalls.inc)
+PROT_NONE           equ 0
+PROT_READ           equ 1
+PROT_WRITE          equ 2
+PROT_EXEC           equ 4
+
+; Per-task mmap area records (kernel/vm.inc, storage in kernel/data.inc).
+; Defined here because sched.inc and paging.inc are included before vm.inc.
+VM_AREA_SIZE        equ 20
+VM_AREAS_PER_TASK   equ 32
+VMA_START           equ 0
+VMA_PAGES           equ 4
+VMA_PROT            equ 8
+VMA_PHYS            equ 12
+VMA_END             equ 16
 ; Copy-on-write bookkeeping covers the identity-mapped region only: 128 MB of
 ; RAM / 4 KB = 32768 pages, one refcount byte each (see cow_ref in data.inc).
 COW_MAX_PAGES       equ 32768

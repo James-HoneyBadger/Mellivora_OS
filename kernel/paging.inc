@@ -325,6 +325,19 @@ isr_page_fault:
         mov  eax, [pf_addr]
         cmp  eax, USER_DEMAND_BASE
         jb   .pf_kernel_fault
+
+        ; The kernel may touch a user pointer (a syscall buffer) that is still
+        ; demand-zero. Bring the mapping in with the user's protection instead
+        ; of identity-mapping physical memory over it: the latter would read
+        ; the wrong bytes and could leak kernel memory to ring 3.
+        push eax
+        mov  ebx, eax
+        call vm_find_area
+        pop  ebx
+        test eax, eax
+        jnz  .pf_user_demand
+
+        mov  eax, [pf_addr]
         cmp  eax, [pmm_mem_top]
         jae  .pf_kernel_fault
         and  eax, 0xFFFFF000
@@ -349,28 +362,74 @@ isr_page_fault:
         ; Blindly allocating on any demand-zone touch would resurrect memory
         ; that munmap just released (and turn every stray pointer into a
         ; silent allocation).
+        push ebx
+        push esi
+        push edi
+        push ebp
+
+        mov  eax, [pf_addr]
         push eax
         mov  ebx, eax
         call vm_find_area
         pop  ebx
         test eax, eax
-        jz   .pf_kernel_fault
+        jz   .pf_demand_deny
+        mov  esi, eax                   ; area record
 
-        ; Allocate a physical page
-        call pmm_alloc_page      ; EAX = phys addr or 0
-        test eax, eax
-        jz   .pf_oom
+        ; Honour the area's protection. A demand page must never be mapped
+        ; with more access than the mapping declared: that would turn a
+        ; read-only or PROT_NONE mapping into writable memory on first touch.
+        mov  eax, [pf_errcode]
+        mov  ecx, [esi + VMA_PROT]
+        test ecx, PROT_READ | PROT_WRITE | PROT_EXEC
+        jz   .pf_demand_deny
+        test eax, 0x02                  ; write fault?
+        jz   .pf_demand_not_write
+        test ecx, PROT_WRITE
+        jz   .pf_demand_deny
+.pf_demand_not_write:
+        test eax, 0x10                  ; instruction fetch?
+        jz   .pf_demand_prot_ok
+        test ecx, PROT_EXEC
+        jz   .pf_demand_deny
+.pf_demand_prot_ok:
+        mov  edx, ecx
+        call vm_flags_for_prot          ; ECX = PTE flags
+        mov  ebp, ecx
 
-        ; Map virtual fault address → physical page
-        ; paging_map_page(EAX=virt, EBX=phys, ECX=flags)
-        mov  ecx, eax            ; save phys
-        mov  ebx, eax            ; phys
+        ; The demand-zone PDE may still point at the master's template table.
+        ; Privatise it first, or this task's page would appear in every
+        ; address space that shares the template.
         mov  eax, [pf_addr]
-        and  eax, 0xFFFFF000     ; page-align
-        push ecx
-        mov  ecx, PG_PRESENT | PG_WRITABLE | PG_USER
-        call paging_map_page_here       ; extend the faulting task's directory
-        pop  ecx
+        shr  eax, 22
+        mov  edx, eax
+        mov  eax, cr3
+        call paging_privatize_pde
+        test eax, eax
+        jz   .pf_demand_oom
+
+        ; Allocate a frame and zero it: a fresh mapping must never expose
+        ; bytes left behind by a previous owner.
+        call pmm_alloc_page
+        test eax, eax
+        jz   .pf_demand_oom
+        mov  [pf_demand_frame], eax
+        mov  edi, eax
+        xor  eax, eax
+        mov  ecx, 1024
+        cld
+        rep  stosd
+
+        mov  eax, [pf_addr]
+        and  eax, 0xFFFFF000
+        mov  ebx, [pf_demand_frame]
+        mov  ecx, ebp
+        call paging_map_page_here
+
+        pop  ebp
+        pop  edi
+        pop  esi
+        pop  ebx
 
         ; Success — return to faulting instruction
         pop  edx
@@ -378,6 +437,23 @@ isr_page_fault:
         pop  eax
         add  esp, 4             ; remove error code
         iretd
+
+.pf_demand_deny:
+        pop  ebp
+        pop  edi
+        pop  esi
+        pop  ebx
+        jmp  .pf_kernel_fault
+
+.pf_demand_oom:
+        pop  ebp
+        pop  edi
+        pop  esi
+        pop  ebx
+        pop  edx
+        pop  ecx
+        pop  eax
+        jmp  .pf_show_error
 
 .pf_oom:
         ; Out of memory — fall through to crash handler
@@ -1245,6 +1321,7 @@ pf_try_stack_growth:
 pf_addr:    dd 0
 pf_eip:     dd 0
 pf_errcode: dd 0
+pf_demand_frame: dd 0
 
 ;=======================================================================
 ; COPY-ON-WRITE FORK
@@ -1260,6 +1337,13 @@ pf_errcode: dd 0
 ; directories start as copies of the master.
 ;=======================================================================
 
+; The byte holds a count in bits 0-6 and COW_FLAG in bit 7. The flag is set
+; only for frames that were WRITABLE when they were first shared: those are
+; the ones a write fault may break. A frame that was already read-only at
+; fork time is counted too (both processes map it, so the last owner must be
+; the one that frees it) but a write to it stays a genuine protection fault.
+COW_FLAG equ 0x80
+
 ;-----------------------------------------------------------------------
 ; cow_get — reference count of a frame
 ;   In : EAX = physical address   Out: EAX = count (0 = not shared)
@@ -1270,56 +1354,98 @@ cow_get:
         cmp eax, COW_MAX_PAGES
         jae .cg_zero
         movzx eax, byte [cow_ref + eax]
+        and eax, 0x7F
         ret
 .cg_zero:
         xor eax, eax
         ret
 
 ;-----------------------------------------------------------------------
-; cow_share — account one additional owner
-;   In : EAX = physical address
-;   Clobbers: EAX, EDX   (a first share turns 0 into 2: owner + sharer)
+; cow_flag — is a frame a copy-on-write share (writable at fork time)?
+;   In : EAX = physical address   Out: EAX = COW_FLAG or 0
+;   Clobbers: EAX
 ;-----------------------------------------------------------------------
-cow_share:
+cow_flag:
         shr eax, 12
         cmp eax, COW_MAX_PAGES
-        jae .cs_done
-        mov dl, [cow_ref + eax]
-        cmp dl, 255
-        jae .cs_done                    ; saturated — never wraps to "not shared"
-        test dl, dl
-        jz .cs_first
-        inc dl
-        jmp .cs_store
-.cs_first:
-        mov dl, 2
-.cs_store:
-        mov [cow_ref + eax], dl
-.cs_done:
+        jae .cf_no
+        movzx eax, byte [cow_ref + eax]
+        and eax, COW_FLAG
+        ret
+.cf_no:
+        xor eax, eax
+        ret
+
+;-----------------------------------------------------------------------
+; cow_share — account one additional WRITABLE owner (marks the frame COW)
+; cow_count — account one additional read-only owner
+;   In : EAX = physical address
+;   Clobbers: EAX, ECX, EDX  (a first share turns 0 into 2: owner + sharer)
+;-----------------------------------------------------------------------
+cow_share:
+        mov edx, 1
+        jmp cow_ref_add
+cow_count:
+        xor edx, edx
+cow_ref_add:
+        push edx                        ; COW_FLAG request for this share
+        shr eax, 12
+        cmp eax, COW_MAX_PAGES
+        jae .cra_done
+        movzx ecx, byte [cow_ref + eax]
+        push ecx                        ; whole byte: keeps an existing flag
+        and ecx, 0x7F
+        test ecx, ecx
+        jz .cra_first
+        inc ecx
+        jmp .cra_have
+.cra_first:
+        mov ecx, 2
+.cra_have:
+        cmp ecx, 0x7F
+        jbe .cra_count_ok
+        mov ecx, 0x7F                   ; saturate: never wrap to "not shared"
+.cra_count_ok:
+        pop edx
+        and edx, COW_FLAG               ; a page that was COW stays COW
+        or ecx, edx
+        pop edx
+        test edx, edx
+        jz .cra_store
+        or ecx, COW_FLAG
+.cra_store:
+        mov [cow_ref + eax], cl
+        ret
+.cra_done:
+        pop edx
         ret
 
 ;-----------------------------------------------------------------------
 ; cow_put — drop one reference
 ;   In : EAX = physical address
 ;   Out: EAX = 1 if the caller should pmm_free_page it, 0 if still shared
-;   Clobbers: EAX, EDX
+;   Clobbers: EAX, ECX, EDX
 ;-----------------------------------------------------------------------
 cow_put:
         shr eax, 12
         cmp eax, COW_MAX_PAGES
         jae .cp_owner
-        mov dl, [cow_ref + eax]
-        test dl, dl
+        movzx edx, byte [cow_ref + eax]
+        mov ecx, edx
+        and edx, 0x7F
+        test edx, edx
         jz .cp_owner                    ; untracked frame: we are the only owner
-        dec dl
+        dec edx
+        jz .cp_last
+        and ecx, COW_FLAG               ; the remaining owners keep the flag
+        or edx, ecx
         mov [cow_ref + eax], dl
-        test dl, dl
-        jnz .cp_shared
+        xor eax, eax
+        ret
+.cp_last:
+        mov byte [cow_ref + eax], 0
 .cp_owner:
         mov eax, 1
-        ret
-.cp_shared:
-        xor eax, eax
         ret
 
 ;-----------------------------------------------------------------------
@@ -1401,8 +1527,13 @@ cow_range_body:
         mov ebx, [eax]
         test ebx, PG_PRESENT
         jz .csr_next
+        ; Writable pages become copy-on-write shares: clear PG_WRITABLE and
+        ; count the owner with COW_FLAG so a write fault may break the share.
+        ; A page that was already read-only at fork time is still mapped by
+        ; both processes, so it must be counted too (the last owner frees it)
+        ; — but without COW_FLAG, so a write remains a protection fault.
         test ebx, PG_WRITABLE
-        jz .csr_next                    ; already read-only
+        jz .csr_readonly
         mov edx, ebx
         and edx, ~PG_WRITABLE
         mov [eax], edx
@@ -1411,6 +1542,13 @@ cow_range_body:
         mov eax, ebx
         and eax, 0xFFFFF000
         call cow_share
+        jmp .csr_next
+.csr_readonly:
+        cmp dword [.csr_ref], 0
+        je .csr_next
+        mov eax, ebx
+        and eax, 0xFFFFF000
+        call cow_count
 .csr_next:
         add dword [.csr_va], 4096
         dec dword [.csr_left]
@@ -1532,6 +1670,10 @@ cow_break_page:
         mov eax, ebx
         and eax, 0xFFFFF000
         mov [.cbp_old], eax
+        call cow_flag
+        test eax, eax
+        jz .cbp_fail                    ; read-only at fork: a real protection fault
+        mov eax, [.cbp_old]
         call cow_get
         test eax, eax
         jz .cbp_fail                    ; untracked: real protection violation
@@ -1680,14 +1822,14 @@ cow_fork_share:
         mov esi, [fork_parent_tcb]
         mov ebx, [esi + TCB_USTACK]
         test ebx, ebx
-        jz .cfs_ok
+        jz .cfs_area_scan               ; no separate stack
         add ebx, 4
         sub ebx, BG_STACK_PAGES * 4096  ; first page of the allocation
         cmp ebx, PROGRAM_BASE
         jb  .cfs_stack_do
         mov eax, PROGRAM_BASE + PROGRAM_MAX_SIZE
         cmp ebx, eax
-        jb  .cfs_ok                     ; inside the window: already shared
+        jb  .cfs_area_scan              ; inside the window: already shared
 
 .cfs_stack_do:
         mov eax, [.cfs_parent]
@@ -1708,6 +1850,47 @@ cow_fork_share:
         mov ecx, BG_STACK_PAGES
         call cow_mark_ro_range
 
+.cfs_area_scan:
+        ;--- 4. mmap areas ---
+        ; The child inherits the parent's vm_area records (sys_fork copies the
+        ; table). Their pages were copied into the child's page tables as the
+        ; same frames, so they need the same copy-on-write treatment as the
+        ; program window. Pages not yet faulted in stay absent in both.
+        mov  ecx, [fork_parent_pid]
+        call vm_area_base
+        mov  [.cfs_areas], eax
+        mov  dword [.cfs_idx], 0
+.cfs_area_loop:
+        cmp  dword [.cfs_idx], VM_AREAS_PER_TASK
+        jge  .cfs_ok
+        mov  esi, [.cfs_areas]
+        mov  eax, [.cfs_idx]
+        imul eax, VM_AREA_SIZE
+        add  esi, eax
+        mov  ebx, [esi + VMA_START]
+        test ebx, ebx
+        jz   .cfs_area_next
+        mov  ecx, [esi + VMA_PAGES]
+        test ecx, ecx
+        jz   .cfs_area_next
+
+        mov  eax, [.cfs_parent]
+        call cow_privatize_range
+        test eax, eax
+        js   .cfs_fail
+        mov  eax, [.cfs_child]
+        call cow_privatize_range
+        test eax, eax
+        js   .cfs_fail
+
+        mov  eax, [.cfs_parent]
+        call cow_share_range
+        mov  eax, [.cfs_child]
+        call cow_mark_ro_range
+.cfs_area_next:
+        inc  dword [.cfs_idx]
+        jmp  .cfs_area_loop
+
 .cfs_ok:
         mov dword [esp + 28], 0
         popad
@@ -1719,6 +1902,8 @@ cow_fork_share:
 .cfs_child:  dd 0
 .cfs_parent: dd 0
 .cfs_bg:     dd 0
+.cfs_areas:  dd 0
+.cfs_idx:    dd 0
 
 
 

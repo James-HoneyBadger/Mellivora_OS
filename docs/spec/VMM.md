@@ -52,10 +52,23 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 
 ### 3.2 Rules
 
-- `mmap` with a hint of 0 allocates from the demand zone top-down; `MAP_FIXED` replaces
-  overlapping areas only after unmapping them.
-- `munmap` splits/trims areas and frees frames that are not file-backed or shared.
-- `mprotect` may not add `PROT_WRITE` to a file mapping opened read-only.
+- `mmap` with a hint of 0 allocates from the demand zone; a page-aligned hint is
+  honoured when the range is free. Anonymous mappings are **demand-zero**: `mmap`
+  only records the area, and the first access to each page allocates and zeroes a
+  frame with the area's protection. Reserving memory therefore costs no RAM.
+- `munmap` / `mprotect` operate on any page-aligned sub-range of one area. The area
+  is split so the requested range is exactly one record; `munmap` then releases the
+  frames in it and drops the record, while `mprotect` rewrites the area's protection
+  and the PTEs of pages that are already present. Frames are released through their
+  reference count, so a page still shared with a fork relative survives until the
+  last owner unmaps it.
+- `mprotect(PROT_NONE)` keeps the frame mapped supervisor-only: ring 3 faults on
+  every access but the data survives a later `mprotect(PROT_READ|PROT_WRITE)`.
+- A protection change on a page that is still copy-on-write shared with another
+  address space copies the frame first, so one process's `mprotect` can never change
+  what the other sees.
+- `mprotect` may not add `PROT_WRITE` to a file mapping opened read-only (file-backed
+  mappings are not implemented yet).
 - `PROT_EXEC` on a writable anonymous mapping requires an explicit `MAP_JIT` flag
   (W^X); without it the request fails with `EPERM`.
 - Unmapped pages inside the demand zone fault with `SIGSEGV` (once signals land) or kill
@@ -65,12 +78,17 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 
 | Fault | Cause | Action |
 |---|---|---|
-| Demand zero | Anonymous area, not yet backed | Allocate a zeroed page, map it with the area's protections, retry |
-| File-backed | Area with a `file` | Read the page through the page cache, map it read-only, COW on write if `MAP_PRIVATE` |
-| COW | Write to a shared frame | Copy the frame, drop the old reference, remap writable |
+| Demand zero | Anonymous area, page not yet backed | Allocate a zeroed page, map it with the area's protections, retry |
+| File-backed | Area with a `file` | Read the page through the page cache, map it read-only, COW on write if `MAP_PRIVATE` (not implemented) |
+| COW | Write to a frame that was writable when shared | Copy the frame, drop the old reference, remap writable |
 | Guard page | Access immediately below a stack area | Report stack overflow (task killed, shell survives) |
-| Permission | Write to a read-only or supervisor page | Deny: kill the task, leave the system running |
+| Permission | Write to a read-only or supervisor page, or any access to `PROT_NONE` | Deny: kill the task, leave the system running |
 | Kernel fault | Any fault with `CS & 3 == 0` | Fatal: panic with a symbolised stack |
+
+Kernel access to a demand-zero user page (a syscall copying into the caller's
+buffer, for example) is serviced the same way: the handler first checks whether the
+faulting address belongs to the current task's own area, and if so maps the page with
+the user's protection instead of treating the address as kernel identity memory.
 
 Stack growth (implemented): the user stack has its own region at the top of the program
 window — `USER_STACK_BASE` (0x003C0000) to `PROGRAM_END_ADDR` (0x00400000), 256 KB in
@@ -102,18 +120,28 @@ it. Addresses beyond the reported RAM still fault, so a kernel bug is not hidden
 
 Implemented in `kernel/vm.inc`:
 
-- Per-task `vm_area` table (32 areas per task) recording start, pages, protection
-  and the backing physical run.
-- `mmap`: anonymous mappings in the demand zone, page-aligned, zero-filled, with a
-  randomized first base (16 MB of ASLR spread) and overlap-checked placement.
-- `munmap`: frees the frames, clears the PTEs and drops the record. Only whole
-  mappings are supported for now; a partial range returns `-1`.
-- `mprotect`: rewrites PTE flags for the range and updates the record.
+- Per-task `vm_area` table (32 areas per task) recording start, pages and protection.
+  Records are keyed by task slot (= PID), cleared when the slot is reused, and
+  released on exit/exec.
+- `mmap`: anonymous **demand-zero** mappings in the demand zone, page-aligned, with a
+  randomized first base (16 MB of ASLR spread) and overlap-checked placement. No
+  frame is allocated until a page is touched.
+- Demand faults allocate a zeroed frame, privatise the 4 MB page table first (so the
+  mapping cannot leak into another address space), map it with the area's protection,
+  and refuse any access the protection does not allow. Faults **fail closed**: an
+  address that belongs to no area — including one `munmap` just released — kills the
+  task.
+- `munmap`: accepts any page-aligned sub-range of one area, splits the area, drops the
+  PTEs and releases each frame through its COW reference count.
+- `mprotect`: accepts any page-aligned sub-range, splits the area, updates its
+  protection and rewrites the PTEs that are present. A page still shared copy-on-write
+  is copied first.
+- `PROT_NONE` leaves the frame mapped supervisor-only, so the data survives.
 - W^X: `PROT_WRITE|PROT_EXEC` is refused by both `mmap` and `mprotect` unless
   `MAP_JIT` (0x40) is requested.
-- Demand faults **fail closed**: a fault in the demand zone is only serviced when
-  the address belongs to one of the task's areas. Anything else — including an
-  address that `munmap` just released — kills the task.
+- `fork` copies the parent's area records and marks their writable pages copy-on-write
+  (COW). `exit` and `exec` release every area and its frames; a parent's pages survive
+  a child's exit through the reference count.
 
 Also implemented:
 
@@ -122,9 +150,11 @@ Also implemented:
   the Burrows launch paths; the heap is capped at the stack region in `SYS_SBRK` and
   `set_program_brk_init`.
 - Kernel identity demand above 128 MB, bounded by the firmware-reported memory top.
+- COW reference bytes use bit 7 as a "was writable when shared" mark. A frame that was
+  read-only at fork time is counted (both processes map it) but is not marked, so a
+  write to it stays a protection fault.
 
-Not yet implemented: file-backed mappings, `MAP_SHARED` semantics, demand-zero for
-`mmap` ranges that are painted but never touched, and partial unmapping.
+Not yet implemented: file-backed mappings and `MAP_SHARED` semantics.
 
 ## 5. Isolation invariants (tested)
 
@@ -140,10 +170,20 @@ Not yet implemented: file-backed mappings, `MAP_SHARED` semantics, demand-zero f
    never mapped and the shell survives (`stack_overflow`).
 8. A task can grow its stack down to the last page above the guard, and every grown page
    keeps what was written to it (`stack_test`).
+9. `mmap` allocates nothing until a page is touched, and the first read returns zero
+   (`vmtest2`).
+10. A partial `munmap` removes only that range: the pages on both sides keep their
+    contents and only the removed range faults (`vmtest2`).
+11. A partial `mprotect` changes only its range; `PROT_NONE` denies access but preserves
+    the data (`vmtest2`).
+12. A forked child's writes to an `mmap` page stay private, and a dead child's mappings
+    are reclaimed (`vmtest2`).
+13. A syscall copying into an untouched `mmap` buffer faults the page in with user
+    access; the buffer remains readable and writable by the task (`vmtest2`).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
-`vmtest`, `stack_test` and `stack_overflow` over QEMU and `make check` fails if any
-regresses.
+`vmtest`, `vmtest2`, `stack_test` and `stack_overflow` over QEMU and `make check` fails
+if any regresses.
 
 ## 6. Compatibility exceptions
 

@@ -3159,6 +3159,15 @@ exec_kernel_line:
         jmp .ekl_shared_window
 
 .ekl_have_task:
+        ; exec replaces the address space: the old image's mmap areas go away
+        ; with it (POSIX semantics), and their frames are dropped through the
+        ; reference counts in case a fork relative still shares them.
+        mov ecx, [eax + TCB_PID]
+        mov eax, [eax + TCB_CR3]
+        test eax, eax
+        jz .ekl_no_vm
+        call vm_release_all
+.ekl_no_vm:
         ; Give the exec'ing task a private copy of the program window before the
         ; loader writes the new image there. Every address space otherwise maps
         ; PROGRAM_BASE to the same frames, so a child's exec would overwrite the
