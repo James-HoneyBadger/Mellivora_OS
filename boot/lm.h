@@ -301,6 +301,25 @@ int pci_init(void);
 int pci_count(void);
 const struct pci_device *pci_find(u8 class_code, u8 subclass);
 
+/* HBFS: the on-disk format populate.py writes. */
+struct hbfs_entry {
+    u32 type;
+    u32 size;
+    u32 start;      /* data block number, relative to the data area */
+    u32 blocks;
+};
+
+int hbfs_init(void);
+int hbfs_lookup(const char *name, struct hbfs_entry *out);
+int hbfs_read_at(const struct hbfs_entry *entry, u64 offset, void *buffer,
+                 u64 count);
+
+/* A thin read-only VFS in front of it: open by name, then read by handle. */
+int vfs_init(void);
+int vfs_open(const char *name);        /* handle, or -1 */
+u64 vfs_size(int handle);
+int vfs_read(int handle, void *buffer, u64 count);
+
 /* Polling ATA PIO on the primary channel. */
 int ata_init(void);
 int ata_present(void);

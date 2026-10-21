@@ -115,104 +115,6 @@ static void lm_user_load_gdt(void)
  * User address space
  *---------------------------------------*/
 
-/*---------------------------------------
- * The user program
- *
- * Both tasks run this: PING(0x1234) returns 0x1234, which the program pushes
- * onto its own stack; it asks for its task id, waits for two more timer ticks
- * (surrendering the CPU to the other task whenever one arrives), asks WHOAMI,
- * pops the PING result back and exits with its own id as the code. The nucleus
- * checks the id, the PING value and the WHOAMI answer per task, so a lost
- * register, a task whose stack was not writable or a preemption that resumed
- * the wrong frame shows up as a failed task rather than a passing run.
- *---------------------------------------*/
-
-__asm__(
-    ".pushsection .rodata\n"
-    ".globl lm_user_program\n"
-    ".globl lm_user_program_end\n"
-    "lm_user_program:\n"
-    /* INT3 first: the one fault a handler can resume, and taking it from ring 3
-     * is what proves the TSS.RSP0 transition (the CPU has to load the kernel
-     * stack before the handler runs). */
-    "    int3\n"
-    /* write(1, "hello\n", 6): a syscall that reads a user buffer, which SMAP
-     * would refuse without the kernel's STAC/CLAC bracket. */
-    "    movl $6, %eax\n"          /* SYS_WRITE */
-    "    movl $1, %edi\n"          /* fd 1 */
-    "    leaq 5f(%rip), %rsi\n"
-    "    movl $6, %edx\n"
-    "    syscall\n"
-    "    cmpq $6, %rax\n"
-    "    jne 9f\n"
-    /* PING round trip, through this task's own stack page. */
-    "    movl $1, %eax\n"          /* SYS_PING */
-    "    movl $0x1234, %edi\n"
-    "    syscall\n"
-    "    movq %rax, 0x40001FE8\n"
-    "    movl $5, %eax\n"          /* SYS_GETTID */
-    "    syscall\n"
-    /* The same virtual address in every task, backed by a different frame:
-     * both tasks write here and must read their own value back. */
-    "    movq %rax, 0x40001FF0\n"
-    /* brk: grow one page, write through it, read it back, shrink again. The
-     * nucleus checks the mapping is gone when this task exits. */
-    "    movl $8, %eax\n"          /* SYS_BRK(0): report the break */
-    "    xorl %edi, %edi\n"
-    "    syscall\n"
-    "    movq %rax, %r13\n"
-    "    leaq 4096(%r13), %rdi\n"  /* ... then grow it by a page */
-    "    movl $8, %eax\n"
-    "    syscall\n"
-    "    cmpq %rdi, %rax\n"
-    "    jne 9f\n"
-    "    movl $0xFEEDFACE, %r8d\n"   /* imm64 to memory is not encodable */
-    "    movq %r8, (%r13)\n"
-    "    movq (%r13), %r9\n"
-    "    cmpq %r8, %r9\n"
-    "    jne 9f\n"
-    "    movq %r13, %rdi\n"        /* shrink back to the base */
-    "    movl $8, %eax\n"
-    "    syscall\n"
-    /* Hand the CPU to the other task once, on purpose. */
-    "    movl $7, %eax\n"          /* SYS_YIELD */
-    "    syscall\n"
-    /* Wait for two more ticks. The clock is shared, so this is the point where
-     * the other task gets the CPU: a tick taken in ring 3 preempts. RBX is the
-     * counter because SYSCALL itself clobbers RCX and R11. */
-    "    movl $4, %eax\n"          /* SYS_TICKS */
-    "    syscall\n"
-    "    leaq 2(%rax), %r14\n"     /* target */
-    "    movl $100000, %ebx\n"
-    "1:  movl $4, %eax\n"          /* SYS_TICKS */
-    "    syscall\n"
-    "    cmpq %r14, %rax\n"
-    "    jae 2f\n"
-    "    movl $2000, %r8d\n"       /* spin in user mode between polls */
-    "4:  decl %r8d\n"
-    "    jnz 4b\n"
-    "    decl %ebx\n"
-    "    jnz 1b\n"
-    "    jmp 9f\n"                 /* no tick: fail loudly */
-    "2:  movl $2, %eax\n"          /* SYS_WHOAMI */
-    "    syscall\n"
-    "    movq %rax, %rsi\n"        /* the nucleus checks this is its CPU id */
-    "    movq 0x40001FE8, %rdx\n"  /* PING result back off the stack page */
-    "    movq 0x40001FF0, %rdi\n"  /* ... and the id this address space held */
-    "    movl $3, %eax\n"          /* SYS_EXIT: code = that id */
-    "    syscall\n"
-    "3:  jmp 3b\n"                 /* the kernel never returns to a program */
-    "5:  .ascii \"hello\\n\"\n"
-    "9:  movl $3, %eax\n"          /* a check failed: exit with a bad code */
-    "    movl $0xBAD, %edi\n"
-    "    syscall\n"
-    "6:  jmp 6b\n"
-    "lm_user_program_end:\n"
-    ".popsection\n");
-
-extern const u8 lm_user_program[];
-extern const u8 lm_user_program_end[];
-
 /* IRETQ to a ring-3 CS pops a five-value frame from the *current* (kernel)
  * stack, so it is built here and the CPU switches stacks as part of the return.
  * RDI = entry, RSI = user RSP, RDX = RFLAGS.
@@ -273,12 +175,23 @@ int lm_user_run(void)
         return -1;
     }
 
-    u64 program_bytes = (u64)(lm_user_program_end - lm_user_program);
-    if (program_bytes > FRAME_SIZE) {
-        kputs("[ring3] FAIL user program larger than a page\r\n");
+    /* The program is a file now: /init is read through the VFS (HBFS on the
+     * ATA disk) into the frame both tasks will execute. */
+    int handle = vfs_open("init");
+    if (handle < 0) {
+        kputs("[ring3] FAIL no /init on the disk\r\n");
         return -1;
     }
-    memcpy(code, (const void *)lm_user_program, program_bytes);
+    u64 program_bytes = vfs_size(handle);
+    if (program_bytes == 0 || program_bytes > FRAME_SIZE) {
+        kputs("[ring3] FAIL /init is not one page of code\r\n");
+        return -1;
+    }
+    memset(code, 0, FRAME_SIZE);
+    if (vfs_read(handle, code, program_bytes) != (int)program_bytes) {
+        kputs("[ring3] FAIL short read of /init\r\n");
+        return -1;
+    }
     memset(vmm_phys(stack0_phys), 0, FRAME_SIZE);
     memset(vmm_phys(stack1_phys), 0, FRAME_SIZE);
 
@@ -332,7 +245,10 @@ int lm_user_run(void)
     kput_hex((u64)(unsigned long)gdt, 16);
     kputs(" tss rsp0=0x");
     kput_hex(tss.rsp0, 16);
-    kputs("\r\n[ring3] code=0x");
+    kputs("\r\n[vfs] /init bytes=");
+    kput_dec(program_bytes);
+    kputs("\r\n");
+    kputs("[ring3] code=0x");
     kput_hex(USER_CODE_ADDR, 8);
     kputs(" bytes=");
     kput_dec(program_bytes);

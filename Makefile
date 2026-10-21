@@ -615,7 +615,14 @@ LM_LDFLAGS = -T boot/lm64.ld --oformat binary
 
 KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_pmm.o boot/lm_cpu.o boot/lm_user.o \
                   boot/lm_idt.o boot/lm_vmm.o boot/lm_kmem.o boot/lm_irq.o \
-                  boot/lm_sched.o boot/lm_syscall.o boot/lm_pci.o boot/lm_ata.o
+                  boot/lm_sched.o boot/lm_syscall.o boot/lm_pci.o boot/lm_ata.o \
+                  boot/lm_hbfs.o boot/lm_vfs.o
+
+# The user program is a file in the image now, not part of the nucleus.
+USERPROG_BIN = userprog.bin
+
+$(USERPROG_BIN): boot/lm_userprog.asm
+	$(NASM) -f bin -o $@ $<
 
 boot/%.o: boot/%.c boot/lm.h
 	@[ -n "$(LM_CC)" ] || { \
@@ -643,12 +650,14 @@ kernel64_sectors.inc: $(KERNEL_64BIN)
 $(STAGE2_64BIN): $(STAGE2_SRC) kernel64_sectors.inc
 	$(NASM) -f bin -DKERNEL_64BIT=1 -o $@ -l $(@:.bin=.lst) $<
 
-$(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN)
+$(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROG_BIN)
 	@echo "=== Building 64-bit Mellivora image ==="
 	$(DD) if=/dev/zero of=$(IMAGE_64) bs=1M count=$(IMAGE_SIZE_MB) status=none
 	$(DD) if=$(BOOT_BIN)    of=$(IMAGE_64) bs=512 count=1  conv=notrunc status=none
 	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64) bs=512 seek=1  conv=notrunc status=none
 	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64) bs=512 seek=33 conv=notrunc status=none
+	@echo "  64-bit HBFS: /init from $(USERPROG_BIN)"
+	@python3 tools/mk_hbfs64.py $(IMAGE_64) $(USERPROG_BIN) init
 	@echo "=== $(IMAGE_64) ready ==="
 
 64bit: $(IMAGE_64)

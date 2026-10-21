@@ -443,6 +443,7 @@ void lm_main(void)
     pci_init();
     ata_init();
     ata_selftest();
+    vfs_init();
 
     /* The ring-3 test is the last thing the nucleus does: the program leaves
      * through SYS_EXIT, and lm_user_exited() reports and halts. A failure to

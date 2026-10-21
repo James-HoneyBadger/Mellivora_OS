@@ -2178,6 +2178,35 @@ The user program waits for three ticks before its `PING`/`WHOAMI`/`EXIT` sequenc
 spinning in user mode between polls of `SYS_TICKS`. If none arrives it exits with a code
 the nucleus rejects, so a dead PIT fails the run instead of hanging it.
 
+### Filesystem and loading a program
+
+`boot/lm_hbfs.c` reads the on-disk HBFS format the 32-bit tree writes, so both trees
+see the same image:
+
+| Region | Where |
+| --- | --- |
+| superblock | LBA 4096, one sector: magic `HBFS`, root-dir/bitmap/data LBAs, 4 KB block size |
+| bitmap | LBA 4097, 16 blocks |
+| root directory | LBA 4225, 32 blocks (128 KB) |
+| data | LBA 4481 onwards, addressed by each entry's start block |
+
+A directory entry is 288 bytes - name in the first 252, type at 253, size at 256, start
+block at 260, block count at 264. Fourteen entries fit in a 4 KB block with 64 bytes
+left over, so entries straddle block boundaries; the root directory is therefore read
+once into a 128 KB buffer and scanned linearly rather than block by block.
+
+`boot/lm_vfs.c` is the front-end: `vfs_open` / `vfs_read` over a small handle table.
+It is read-only and root-level for now - directories and the other back-ends are part of
+the rest of the syscall port.
+
+The demo program is not in the nucleus any more. `boot/lm_userprog.asm` assembles to a
+flat binary, and `tools/mk_hbfs64.py` imports populate.py's constants and `FSImage` to
+write it into the image as `/init`, so the layout has one owner. `lm_user_run` opens
+`/init`, checks it fits one page, reads it into the frame both tasks execute and maps
+that frame read-only in both address spaces. `make 64bit` now produces an image with a
+filesystem in it, and the boot log shows `[hbfs] root=4225 data=4481 files=1` followed
+by `[vfs] /init bytes=234`.
+
 ### Storage path (PCI and ATA)
 
 The first driver pair sits under everything the filesystem will need.
@@ -2364,15 +2393,16 @@ Two long-mode details are worth knowing here because both were faults first:
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
 `stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok`, `ring3=ok` (once per
 task), `sched=ok`, `nx=ok`, the hardened `nx=on smep=on smap=on` line, `abi=lp64`,
-`brk=ok` (per task), the user program's `hello`, and `blk=ok` on COM1, so a
+`brk=ok` (per task), the user program's `hello`, `blk=ok`, the HBFS geometry and
+`/init bytes=` on COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
 agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
 timer tick to the TSS stack, preempted a task but resumed the wrong frame, switched
 tasks without switching their address spaces, left a data page executable, failed to
 read a user buffer under SMAP, kept a `brk` page mapped after the program shrank it,
-could not read or write the boot disk, or returned to the wrong stack in ring 3 fails
-rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+could not read or write the boot disk, could not find or load `/init`, or returned to
+the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

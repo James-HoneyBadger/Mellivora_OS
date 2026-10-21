@@ -1,5 +1,26 @@
 # Mellivora OS - Changelog
 
+## Unreleased - HBFS on disk, and a program that comes from it
+
+### Port (P2)
+
+- **`boot/lm_hbfs.c`: the on-disk HBFS read path.** The same format populate.py
+  writes and the 32-bit kernel reads: superblock at LBA 4096 (magic, root/bitmap/data
+  LBAs, 4 KB blocks), a 16-block bitmap, a 32-block root directory and data blocks
+  addressed through each entry's start block. Entries are 288 bytes and not
+  block-aligned (fourteen fit in a block with 64 bytes over), so the root directory is
+  read once into a 128 KB buffer and scanned linearly. It reports
+  `[hbfs] root=4225 data=4481 files=1`.
+- **`boot/lm_vfs.c`: the front-end shape.** Open a name, get a handle, read bytes -
+  read-only, root-level names, with HBFS behind it. Paths, directories and the other
+  back-ends (procfs, devfs, tmpfs) come with the rest of the syscall port.
+- **The user program is no longer linked into the nucleus.** `boot/lm_userprog.asm` is
+  assembled to a flat binary, `tools/mk_hbfs64.py` writes it into the image as `/init`
+  (importing populate.py's constants and entry packing rather than duplicating them),
+  and the nucleus opens and reads it through the VFS into the page both tasks execute.
+  `make 64bit` therefore produces a bootable image with a filesystem in it, which is
+  the first time the 64-bit tree boots code that was not part of the kernel binary.
+
 ## Unreleased - the storage path: PCI, ATA, and a sector round trip
 
 ### Port (P2)
