@@ -127,6 +127,13 @@ run_case "stack guard + growth"          "stack_test"            "STACK_GROW_OK"
 # The guard page must kill the offending task and nothing else: the shell has to
 # survive and run the next command.
 run_case "stack overflow contained"      "stack_overflow"        "task killed"        "hello" "CPU EXCEPTION|STACK_FAIL"
+# Every launch unmaps the lower 48 stack pages of the image it replaces. Their
+# frames are private to that task, so dropping the mapping has to return them:
+# a fork+exec loop must not walk the free-page count down.
+run_case "launch does not leak frames"   "stack_leak_test"       "STACKLEAK_OK"       "" "CPU EXCEPTION|STACKLEAK_FAIL"
+# A task torn down by a signal never runs its own exit path, so the kill has to
+# release what it mapped - frames, page-cache references and page tables.
+run_case "signal kill releases memory"   "kill_leak_test"        "KILLLEAK_OK"        "" "CPU EXCEPTION|KILLLEAK_FAIL"
 
 # Above 128 MB, physical frames live beyond the boot identity map: the allocator
 # walks free-list nodes that are not mapped yet, the fault handler faults on its

@@ -1,5 +1,41 @@
 # Mellivora OS - Changelog
 
+## Unreleased - task teardown returns what it took
+
+### Memory
+
+- **A task's page tables are released with its directory** — `paging_free_pd` freed only
+  the 4 KB directory page, so every table a directory had privatised for a 4 MB region
+  was leaked when the task exited: one page per fork (the window table), plus one for
+  each demand-zone region an mmap touched. It now walks the 1024 PDEs and frees the
+  tables whose address differs from the master's for that slot — the master's template
+  and tables `paging_clone_pd` already copied per child belong to somebody else. Every
+  "free this task's CR3" site now goes through it instead of calling `pmm_free_page`.
+- **`paging_setup_user_stack` releases the frames it drops.** It unmaps all but the top
+  16 of the 64 stack pages of the image it replaces, but the release step had been
+  replaced by a leftover "EXPERIMENT: leak instead of releasing" `nop`, so 48 frames
+  (192 KB) stayed allocated for the life of the boot. The frames are private to the
+  directory being set up, so they are given back through `cow_release_frame`.
+- **A task killed by a signal now returns its memory.** `sched_signal_task` tears the
+  target down itself — the task never runs `sched_exit_task` — and it only freed the
+  kernel stack, fd table, signal table and directory page. Everything the task ever
+  mapped stayed allocated: an 8 MB heap leaked 8 MB per kill. The kill path now releases
+  the private window frames, a separate user stack, and every mmap area with its
+  page-cache references, exactly as an exit does.
+
+### Tooling
+
+- `programs/stack_leak_test.asm` runs sixteen fork+exec cycles and checks the free-page
+  count came back (it fails at ~1 page per launch on the old kernel);
+  `programs/kill_leak_test.asm` kills a child holding an 8 MB mapping and checks the
+  same (it failed with 2054 pages before the fix). Both run in `make check-runtime`.
+
+### Known issue
+
+- `waitpid` for a task someone else killed blocks forever: the kill path frees the slot
+  instead of leaving a `TASK_ZOMBIE`. Recorded on the roadmap; `kill_leak_test` does not
+  wait for the child it killed itself.
+
 ## Unreleased - shared file mappings are coherent
 
 ### Memory and storage

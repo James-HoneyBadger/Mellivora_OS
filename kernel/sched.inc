@@ -397,7 +397,7 @@ sched_create_task:
         test eax, eax
         jz  .create_fail_pop_done
         mov dword [edi + TCB_CR3], 0
-        call pmm_free_page
+        call paging_free_pd
 .create_fail_pop_done:
         pop ecx
         pop ebx
@@ -458,7 +458,7 @@ sched_free_ready_task:
         test eax, eax
         jz .sfr_clear
         mov dword [edi + TCB_CR3], 0
-        call pmm_free_page
+        call paging_free_pd
 .sfr_clear:
         mov dword [edi + TCB_STATE], TASK_FREE
         mov dword [edi + TCB_PID], 0
@@ -573,7 +573,7 @@ sched_kill_all_tasks:
         test eax, eax
         jz .skat_clear
         mov dword [edi + TCB_CR3], 0
-        call pmm_free_page
+        call paging_free_pd
 .skat_clear:
         mov dword [edi + TCB_STATE], TASK_FREE
         mov dword [edi + TCB_PID], 0
@@ -1548,6 +1548,39 @@ sched_signal_task:
         ; Destroy the target's windows/surfaces.
         mov eax, [edi + TCB_PID]
         call gui_cleanup_pid
+
+        ; Release the memory the target owned. It never runs its own exit path,
+        ; so this is the only chance: program-window frames it copied at exec
+        ; time, a separate user stack, and every mmap area with its page-cache
+        ; references. Each goes through its reference count, so a frame still
+        ; shared with the master or with a fork relative survives.
+        mov eax, [edi + TCB_CR3]
+        test eax, eax
+        jz .sst_kill_no_mem
+
+        mov ebx, PROGRAM_BASE
+        mov ecx, PROGRAM_MAX_SIZE / 4096
+        call paging_free_window_private
+
+        mov eax, [edi + TCB_USTACK]
+        test eax, eax
+        jz .sst_kill_no_ustack
+        add eax, 4
+        sub eax, BG_STACK_PAGES * 4096
+        cmp eax, PROGRAM_BASE
+        jb  .sst_kill_free_ustack
+        mov ebx, PROGRAM_BASE + PROGRAM_MAX_SIZE
+        cmp eax, ebx
+        jb  .sst_kill_no_ustack        ; inside the program window
+.sst_kill_free_ustack:
+        mov ecx, BG_STACK_PAGES
+        call cow_release_range
+.sst_kill_no_ustack:
+
+        mov eax, [edi + TCB_CR3]
+        mov ecx, [edi + TCB_PID]
+        call vm_release_all
+.sst_kill_no_mem:
 
         ; Free the signal handler table page (allocated lazily by sigaction)
         mov eax, [edi + TCB_SIG_HAND]
@@ -2616,7 +2649,7 @@ sched_apply_cr3:
         test eax, eax
         jz   .sac_done
         mov  dword [pd_deferred_free], 0
-        call pmm_free_page
+        call paging_free_pd
 .sac_done:
         ret
 

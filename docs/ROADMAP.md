@@ -89,6 +89,11 @@ A phase does not close until these are measured:
   so a forked share above it was freed twice. `make check-runtime` now runs `vmtest`,
   `vmtest2`, `cow_test` and `heaptest` on a 192 MB and a 384 MB guest.
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
+- [ ] `waitpid` after a signal-killed task. `sched_signal_task` frees the target's slot
+  instead of leaving a `TASK_ZOMBIE`, so `waitpid` never finds it, blocks the parent and
+  hands the console back to the shell. The conventional fix is to keep the TCB in
+  `TASK_ZOMBIE` with a "killed by signal N" status for the parent to collect;
+  `kill_leak_test` works around it by not waiting for a task it killed itself.
 
 **Exit:** the isolation conformance test passes, 100 MB heap workload passes
 (`make check-heap`), no stale-data leaks between processes.

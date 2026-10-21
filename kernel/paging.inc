@@ -94,15 +94,50 @@ paging_new_pd:
         ret
 
 ;---------------------------------------
-; paging_free_pd - release a page directory
+; paging_free_pd - release a page directory and the tables it owns
 ;   In : EAX = page-directory address (0 is ignored)
+;
+; A task directory starts life as a copy of the master (or of its parent, via
+; paging_clone_pd), so most PDEs point at a table somebody else owns: the
+; master's shared template. Only a table whose address differs from the
+; master's for the same slot was privatised for this directory alone, and only
+; those are released here. Freeing the directory page without them leaked one
+; 4 KB table for every privatised 4 MB region of every task that ever exited.
 ;---------------------------------------
 paging_free_pd:
+        pushad
         test eax, eax
         jz   .fpd_done
+        cmp  eax, PAGE_DIR_ADDR
+        je   .fpd_done                  ; never the master
+        mov  [.fpd_pd], eax
+        xor  ebx, ebx
+.fpd_loop:
+        cmp  ebx, 1024
+        jae  .fpd_free_pd
+        mov  eax, [.fpd_pd]
+        mov  ecx, [eax + ebx*4]
+        test ecx, PG_PRESENT
+        jz   .fpd_next
+        test ecx, 0x80                  ; a 4 MB page has no table behind it
+        jnz  .fpd_next
+        and  ecx, 0xFFFFF000
+        mov  edx, [PAGE_DIR_ADDR + ebx*4]
+        and  edx, 0xFFFFF000
+        cmp  ecx, edx
+        je   .fpd_next                  ; shared with the master: not ours
+        mov  eax, ecx
+        call pmm_free_page
+.fpd_next:
+        inc  ebx
+        jmp  .fpd_loop
+.fpd_free_pd:
+        mov  eax, [.fpd_pd]
         call pmm_free_page
 .fpd_done:
+        popad
         ret
+.fpd_pd: dd 0
 
 ;---------------------------------------
 ; paging_init - Build page tables and
@@ -1240,8 +1275,10 @@ paging_setup_user_stack:
         jz .psu_clear                   ; already absent
         cmp esi, edi
         je .psu_clear                   ; shared with the master: keep the frame
-        ; EXPERIMENT: leak instead of releasing
-        nop
+        ; Private to this directory: give the frame back with the page.
+        mov eax, esi
+        mov ebx, [.psu_va]
+        call cow_release_frame
 
 .psu_clear:
         mov eax, [.psu_pte]

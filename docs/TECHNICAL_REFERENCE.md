@@ -1523,6 +1523,14 @@ Every teardown path is refcount-aware (`paging_free_window_private`, `cow_releas
 in `sched_exit_task`, the background-exit path), and exec isolation forces `PG_WRITABLE`
 on the private copies it makes while releasing the references it replaces.
 
+A task that is killed rather than exiting never runs `sched_exit_task` at all, so
+`sched_signal_task` releases the same set itself before it drops the TCB: private window
+frames, a separate user stack, and every mmap area with its page-cache references. The
+page directory is then queued (`pd_deferred_free`) and released at the next `CR3` switch
+by `paging_free_pd`, which frees the directory **and** the page tables it privatised — a
+PDE whose table address differs from the master's for the same slot is this directory's
+own, everything else is the shared template.
+
 
 ### Arguments and `execve`
 

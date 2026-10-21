@@ -269,10 +269,15 @@ sub-range) advances that sector by the pages it moved into the new record.
 18. Two shared mappings of one file are coherent in both directions, a forked child
     writes the same pages as its parent, and a fresh mapping reads everything that was
     written back (`vmtest5`).
+19. A launch returns the stack-region frames it drops, so a fork+exec loop does not walk
+    the free-page count down (`stack_leak_test`).
+20. A task torn down by a signal releases its mmap frames, page-cache references and the
+    page tables it privatised (`kill_leak_test`).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
-`vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `vmtest5`, `heaptest`, `stack_test` and
-`stack_overflow` over QEMU and `make check` fails if any regresses.
+`vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `vmtest5`, `heaptest`, `stack_test`,
+`stack_overflow`, `stack_leak_test` and `kill_leak_test` over QEMU and `make check`
+fails if any regresses.
 
 ## 6. Compatibility exceptions
 
