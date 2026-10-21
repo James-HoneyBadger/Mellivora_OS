@@ -1,5 +1,29 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a kernel slab allocator on the heap window
+
+### Port (P2)
+
+- **`boot/lm_kmem.c`: the 32-bit tree's slab allocator, ported.** Caches are keyed by
+  object size, free objects are threaded through their own first eight bytes, a cache
+  takes a page only when its free list runs dry, pages are never handed back, and every
+  object is zeroed on allocation so a recycled slot cannot leak the previous owner's
+  contents. `kmem_cache` returns an existing cache for a size rather than duplicating
+  it, and a free of a pointer outside the heap is refused instead of corrupting a list.
+- **Slab pages are mappings, not physical addresses.** The heap has a 16 MB window of
+  its own at `0xFFFFC00000000000` (PML4[384], which stage2 never touched), and each new
+  slab is a PMM frame mapped there by the VMM. That keeps the heap out of the identity
+  map's range, means only the pages a cache has actually taken exist, and makes every
+  object's address answer `vmm_translate`.
+- The self-test forces two slabs of a 64-byte cache: every object must be distinct,
+  zeroed, mapped and *not* reachable from ring 3, a pattern written to each must land in
+  its own slot, freeing everything must empty the cache's used count, and the next
+  allocation must come back zeroed. The nucleus prints
+  `[kmem] caches=1 slabs=2 objects=128 kmem=ok`.
+- Nothing allocates from it yet beyond this test - the objects that will (task and
+  scheduler structures) arrive with the next sprint, which is why the cache API takes
+  an explicit id instead of guessing a size from a pointer.
+
 ## Unreleased - a VMM: 4 KB mappings over the frame allocator
 
 ### Port (P2)

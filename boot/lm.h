@@ -139,6 +139,28 @@ void *vmm_phys(u64 phys);
 int vmm_selftest(void);
 
 /*---------------------------------------
+ * Kernel slab allocator
+ *
+ * Fixed-size caches; a cache takes a page only when its free list is empty and
+ * never gives one back. Objects are zeroed on allocation, so a recycled slot
+ * cannot leak the previous owner's contents.
+ *---------------------------------------*/
+
+struct kmem_stats {
+    u64 caches;
+    u64 slabs;
+    u64 objects;   /* slots across every slab */
+    u64 used;      /* slots currently handed out */
+};
+
+void kmem_init(void);
+int kmem_cache(u64 size);            /* id, or -1 when unsupported/full */
+void *kmem_alloc(int id);            /* zeroed object, or NULL */
+void kmem_free(int id, void *obj);
+struct kmem_stats kmem_get_stats(void);
+int kmem_selftest(void);
+
+/*---------------------------------------
  * IDT and exceptions
  *---------------------------------------*/
 

@@ -2126,6 +2126,32 @@ when the read faulted and 0 when it was served. The test finishes by checking th
 U/S leaf under the same tables is user-mapped while its kernel neighbour is not, and
 that the identity map and the higher half still are not.
 
+### Kernel heap
+
+`boot/lm_kmem.c` is the slab allocator, the same design as the 32-bit tree's
+`kernel/kmem.inc`: a cache is keyed by object size, free objects are threaded through
+their own first eight bytes, and a cache takes a page only when its free list is empty.
+Pages are never returned - that is the point of a slab - and every object is zeroed
+before it is handed out, so a recycled slot cannot leak the previous owner's contents.
+
+The 64-bit difference is where a page goes. The heap owns a 16 MB window at
+`0xFFFFC00000000000` (`PML4[384]`, which stage2 never filled), and a new slab takes a
+PMM frame and maps it there with `vmm_map`. The window is outside the identity map, only
+the pages a cache has actually taken are mapped, and every object's address can be
+resolved by `vmm_translate` - which the self-test checks, along with `vmm_user_mapped`
+being false, because the heap is kernel-only.
+
+| Call | Behaviour |
+| --- | --- |
+| `kmem_cache(size)` | id of an existing cache for that size, or a new one; -1 for sizes below 8 bytes, above a page, or when the table is full |
+| `kmem_alloc(id)` | a zeroed object, taking and threading a new slab when needed; NULL on OOM |
+| `kmem_free(id, obj)` | pushes the object back onto that cache's list; a pointer outside the heap window is ignored rather than linked in |
+| `kmem_get_stats()` | caches, slabs, total slots and slots in use |
+
+Nothing allocates from the heap yet beyond the self-test. The cache API takes an
+explicit id - rather than inferring a cache from a pointer - because that is what the
+32-bit tree does and what the task structures that arrive with the scheduler will use.
+
 ### Frame allocator
 
 `boot/lm_pmm.c` is the first ported subsystem: a bitmap with one bit per 4 KB frame,
@@ -2167,11 +2193,12 @@ Two long-mode details are worth knowing here because both were faults first:
 
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
-`stack=ok`, `pmm=ok`, `vmm=ok`, `fault=ok` and `ring3=ok` on COM1, so a nucleus that
-booted in the wrong half, broke its SYSCALL path, ran its handler on the wrong stack,
-mis-read the memory map, could not map and unmap a page while the MMU agreed, failed to
-deliver a ring-3 fault to the TSS stack or returned to the wrong stack in ring 3 fails
-rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+`stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok` and `ring3=ok` on COM1, so a
+nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
+wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
+agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault to
+the TSS stack or returned to the wrong stack in ring 3 fails rather than printing a
+marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C
