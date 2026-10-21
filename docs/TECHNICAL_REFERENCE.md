@@ -2210,6 +2210,55 @@ round trip through their own stack, `SYS_GETTID`, a wait for two more shared tic
 the code. Per-task address spaces need the task to own a CR3, which is the next step;
 the switch path does not change when that happens.
 
+### Per-task address spaces
+
+Every task owns a PML4. `vmm_space_create` takes a frame, zeroes it and copies the
+kernel's two entries into it:
+
+| Entry | Why it is shared |
+| --- | --- |
+| `PML4[511]` | the higher half: the image, `.bss` and the direct map at `0xFFFFFFFF80000000` |
+| `PML4[384]` | the heap window; the entry points at the same lower tables, so a slab page mapped later is visible from every space |
+
+The identity map (`PML4[0]`'s `PDPT[0]`) is not copied. A task's `PML4[0]` therefore
+contains only its own user area, and physical memory is not part of a user address space
+at all. `vmm_map_in` names the PML4 to build a mapping in (`vmm_map` is the same call for
+the current space), and `become()` loads CR3 on every switch.
+
+The demo makes the isolation observable rather than assumed: both tasks execute one
+shared read-only code frame at `0x40000000` and have a stack at the *same* virtual
+address `0x40001000` backed by a different frame each. A task writes its id to
+`0x40001FF0`, is preempted at least once, reads the address back and exits with the
+value; the nucleus compares it with the task id. With one shared space the second task's
+store would survive into the first task's read and one of them would exit with the wrong
+code.
+
+`lm_user_run` also inspects each space from the inside before starting anything: both
+pages user-mapped, `0x100000` unmapped (no kernel identity map), and the code leaf
+executable while the stack leaf carries `NX`.
+
+### Hardening: NX, SMEP and SMAP
+
+`cpu_harden()` asks CPUID before touching anything - writing `EFER.NXE` or a `CR4` bit
+the CPU does not implement is a `#GP`, and an `NX` leaf without `EFER.NXE` is a
+reserved-bit `#PF`.
+
+| Feature | Enabled by | Used for |
+| --- | --- | --- |
+| NX | `EFER.NXE` (CPUID `0x80000001:EDX[20]`) | heap pages and user stacks are data; the user code page is the only leaf without it |
+| SMEP | `CR4.SMEP` (CPUID `7.0:EBX[7]`) | the kernel may not execute a user page |
+| SMAP | `CR4.SMAP` (CPUID `7.0:EBX[20]`) | the kernel may not read/write a user page without `AC` |
+
+`vmm_map_in` clears `VMM_NX` when `EFER.NXE` is off, so callers can ask for it
+unconditionally, and `vmm_flags` returns the leaf so the nucleus can verify what was
+installed. The identity and direct maps are still executable 2 MB pages because they
+cover the kernel image; splitting those pages is part of remapping the image.
+
+The test boots `qemu64,+smep,+smap` (the base model exposes neither) and requires
+`[hw] nx=on smep=on smap=on`, so the enable path is exercised. Nothing in this nucleus
+dereferences a user pointer, which is why SMAP can be on; a `copy_from_user` will
+bracket its loads with `STAC`/`CLAC`.
+
 ### Frame allocator
 
 `boot/lm_pmm.c` is the first ported subsystem: a bitmap with one bit per 4 KB frame,
@@ -2252,12 +2301,13 @@ Two long-mode details are worth knowing here because both were faults first:
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
 `stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok`, `ring3=ok` (once per
-task) and `sched=ok` on COM1, so a
+task), `sched=ok`, `nx=ok` and the hardened `nx=on smep=on smap=on` line on COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
 agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
-timer tick to the TSS stack, preempted a task but resumed the wrong frame, or returned to
-the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+timer tick to the TSS stack, preempted a task but resumed the wrong frame, switched
+tasks without switching their address spaces, left a data page executable, or returned
+to the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

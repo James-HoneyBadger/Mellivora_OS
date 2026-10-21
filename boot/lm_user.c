@@ -21,13 +21,14 @@
 
 #include "lm.h"
 
-/* The user program's pages: one shared code page (read/execute, so both tasks
- * run the same code) and one stack per task. 0x40000000 is PDPT[1], which
+/* The user program's pages, at the same addresses in every task's own address
+ * space: one code frame, shared read-only, and one stack page per task. That is
+ * what makes the isolation test meaningful - both tasks write the same virtual
+ * address and each must read back its own value. 0x40000000 is PDPT[1], which
  * stage2 left empty. */
 #define USER_CODE_ADDR  (0x40000000ULL)
-#define USER_STACK0     (0x40001000ULL)
-#define USER_STACK1     (0x40002000ULL)
-#define USER_STACK_TOP(s) ((s) + FRAME_SIZE)
+#define USER_STACK_ADDR (0x40001000ULL)
+#define USER_STACK_TOP  (USER_STACK_ADDR + FRAME_SIZE)
 
 /*---------------------------------------
  * GDT and TSS
@@ -138,20 +139,22 @@ __asm__(
     "    movl $1, %eax\n"          /* LM_SYS_PING */
     "    movl $0x1234, %edi\n"
     "    syscall\n"
-    "    pushq %rax\n"             /* the result must survive on the user stack */
+    "    movq %rax, 0x40001FE8\n"  /* the PING result, in this task's stack page */
     "    movl $5, %eax\n"          /* LM_SYS_GETTID */
     "    syscall\n"
-    "    movq %rax, %r12\n"        /* the task's own id, kept across syscalls */
+    /* The same virtual address in every task, backed by a different frame:
+     * both tasks write here and must read their own value back. */
+    "    movq %rax, 0x40001FF0\n"
     /* Wait for two more ticks. The clock is shared, so this is the point where
      * the other task gets the CPU: a tick taken in ring 3 preempts. RBX is the
      * counter because SYSCALL itself clobbers RCX and R11. */
     "    movl $4, %eax\n"          /* LM_SYS_TICKS */
     "    syscall\n"
-    "    leaq 2(%rax), %r13\n"     /* target */
+    "    leaq 2(%rax), %r14\n"     /* target */
     "    movl $100000, %ebx\n"
     "1:  movl $4, %eax\n"          /* LM_SYS_TICKS */
     "    syscall\n"
-    "    cmpq %r13, %rax\n"
+    "    cmpq %r14, %rax\n"
     "    jae 2f\n"
     "    movl $2000, %r8d\n"       /* spin in user mode between polls */
     "4:  decl %r8d\n"
@@ -164,9 +167,9 @@ __asm__(
     "2:  movl $2, %eax\n"          /* LM_SYS_WHOAMI */
     "    syscall\n"
     "    movq %rax, %rsi\n"        /* the nucleus checks this is its CPU id */
-    "    popq %rdx\n"              /* 0x1234, back off the user stack */
-    "    movl %r12d, %edi\n"       /* exit code: the task id */
-    "    movl $3, %eax\n"          /* LM_SYS_EXIT */
+    "    movq 0x40001FE8, %rdx\n"  /* PING result back off the stack page */
+    "    movq 0x40001FF0, %rdi\n"  /* ... and the id this address space held */
+    "    movl $3, %eax\n"          /* LM_SYS_EXIT: code = that id */
     "    syscall\n"
     "3:  jmp 3b\n"                 /* the kernel never returns to a program */
     "lm_user_program_end:\n"
@@ -222,19 +225,16 @@ int lm_user_run(void)
 {
     lm_user_load_gdt();
 
+    u64 kernel_space = vmm_current_space();
     u64 code_phys = pmm_alloc_frame();
     u64 stack0_phys = pmm_alloc_frame();
     u64 stack1_phys = pmm_alloc_frame();
-    if (code_phys == 0 || stack0_phys == 0 || stack1_phys == 0) {
-        kputs("[ring3] FAIL no frames for the user address space\r\n");
-        return -1;
-    }
-
+    u64 space0 = vmm_space_create();
+    u64 space1 = vmm_space_create();
     u8 *code = vmm_phys(code_phys);
-    u8 *stack0 = vmm_phys(stack0_phys);
-    u8 *stack1 = vmm_phys(stack1_phys);
-    if (code == NULL || stack0 == NULL || stack1 == NULL) {
-        kputs("[ring3] FAIL user frames outside the direct map\r\n");
+    if (code_phys == 0 || stack0_phys == 0 || stack1_phys == 0 ||
+        space0 == 0 || space1 == 0 || code == NULL) {
+        kputs("[ring3] FAIL could not build the address spaces\r\n");
         return -1;
     }
 
@@ -244,24 +244,54 @@ int lm_user_run(void)
         return -1;
     }
     memcpy(code, (const void *)lm_user_program, program_bytes);
-    memset(stack0, 0, FRAME_SIZE);
-    memset(stack1, 0, FRAME_SIZE);
+    memset(vmm_phys(stack0_phys), 0, FRAME_SIZE);
+    memset(vmm_phys(stack1_phys), 0, FRAME_SIZE);
 
-    /* The VMM sets U/S on the way down; the code page is shared and read-only,
-     * the stacks are writable, and the result is checked rather than assumed,
-     * including that the kernel's own mappings did not become user-accessible. */
-    if (vmm_map(USER_CODE_ADDR, code_phys, VMM_U) != 0 ||
-        vmm_map(USER_STACK0, stack0_phys, VMM_W | VMM_U) != 0 ||
-        vmm_map(USER_STACK1, stack1_phys, VMM_W | VMM_U) != 0) {
-        kputs("[ring3] FAIL could not map the user address space\r\n");
+    /* The code frame is shared read-only; each stack frame belongs to one
+     * space, at the same virtual address in both. The kernel's own space gets
+     * no user mapping at all now. */
+    if (vmm_map_in(space0, USER_CODE_ADDR, code_phys, VMM_U) != 0 ||
+        vmm_map_in(space0, USER_STACK_ADDR, stack0_phys, VMM_W | VMM_U | VMM_NX) != 0 ||
+        vmm_map_in(space1, USER_CODE_ADDR, code_phys, VMM_U) != 0 ||
+        vmm_map_in(space1, USER_STACK_ADDR, stack1_phys, VMM_W | VMM_U | VMM_NX) != 0) {
+        kputs("[ring3] FAIL could not map a task's pages\r\n");
         return -1;
     }
-    if (!vmm_user_mapped(USER_CODE_ADDR) || !vmm_user_mapped(USER_STACK0) ||
-        !vmm_user_mapped(USER_STACK1) || vmm_user_mapped(0) ||
-        vmm_user_mapped(0x00100000) || vmm_user_mapped(0xFFFFFFFF80100000ULL)) {
-        kputs("[ring3] FAIL user pages are not isolated\r\n");
+
+    /* Check each space from the inside: its two pages are user-accessible, and
+     * the kernel's identity map and higher half are not there to be reached
+     * (a task has no PML4[0] entry for physical memory at all). */
+    for (int i = 0; i < 2; i++) {
+        u64 space = i == 0 ? space0 : space1;
+        vmm_space_switch(space);
+        int ok = vmm_user_mapped(USER_CODE_ADDR) &&
+                 vmm_user_mapped(USER_STACK_ADDR) &&
+                 !vmm_user_mapped(0) && !vmm_user_mapped(0x00100000) &&
+                 vmm_translate(0x00100000) == 0 &&
+                 vmm_translate(USER_CODE_ADDR) == code_phys &&
+                 /* The stack is data and must not execute; the code page is
+                  * the one leaf without NX (nothing to check if the CPU has no
+                  * NX to offer). */
+                 (!cpu_nx_enabled() ||
+                  ((vmm_flags(USER_STACK_ADDR) & VMM_NX) != 0 &&
+                   (vmm_flags(USER_CODE_ADDR) & VMM_NX) == 0));
+        vmm_space_switch(kernel_space);
+        if (!ok) {
+            kputs("[ring3] FAIL a task's address space is wrong\r\n");
+            return -1;
+        }
+    }
+    /* ... and the kernel's own space is not user-reachable. */
+    if (vmm_user_mapped(USER_CODE_ADDR) || vmm_user_mapped(USER_STACK_ADDR)) {
+        kputs("[ring3] FAIL the kernel space has user pages\r\n");
         return -1;
     }
+
+    kputs("[nx] stack=");
+    kputs(cpu_nx_enabled() ? "nx" : "off");
+    kputs(" code=");
+    kputs(cpu_nx_enabled() ? "exec" : "off");
+    kputs(cpu_nx_enabled() ? " nx=ok\r\n" : "\r\n");
 
     kputs("[ring3] gdt=0x");
     kput_hex((u64)(unsigned long)gdt, 16);
@@ -272,14 +302,13 @@ int lm_user_run(void)
     kputs(" bytes=");
     kput_dec(program_bytes);
     kputs(" stacks=0x");
-    kput_hex(USER_STACK_TOP(USER_STACK0), 8);
-    kputs(",0x");
-    kput_hex(USER_STACK_TOP(USER_STACK1), 8);
+    kput_hex(USER_STACK_TOP, 8);
+    kputs(" in 2 spaces");
     kputs("\r\n");
 
     sched_init();
-    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP(USER_STACK0)) != 0 ||
-        sched_create(USER_CODE_ADDR, USER_STACK_TOP(USER_STACK1)) != 0) {
+    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP, space0) != 0 ||
+        sched_create(USER_CODE_ADDR, USER_STACK_TOP, space1) != 0) {
         kputs("[ring3] FAIL could not create the tasks\r\n");
         return -1;
     }

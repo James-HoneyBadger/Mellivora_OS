@@ -457,10 +457,19 @@ void lm_main(void)
 
     serial_init();
     cpu_init();          /* GS base: the entry path needs it before it can run */
+    struct cpu_features feat = cpu_harden();  /* NX/SMEP/SMAP where offered */
     idt_init();          /* a fault must report, not triple-fault */
     irq_init();          /* PIC remapped and the PIT ticking; IF stays clear */
 
     kputs("[lm] Mellivora x86-64 nucleus (C11)\r\n");
+
+    kputs("[hw] nx=");
+    kputs(feat.nx ? "on" : "off");
+    kputs(" smep=");
+    kputs(feat.smep ? "on" : "off");
+    kputs(" smap=");
+    kputs(feat.smap ? "on" : "off");
+    kputs("\r\n");
 
     kputs("[lm] base=0x");
     kput_hex((u64)(unsigned long)lm_image_start, 16);

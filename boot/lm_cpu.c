@@ -15,6 +15,12 @@
 
 #define MSR_GS_BASE         0xC0000101U
 #define MSR_KERNEL_GS_BASE  0xC0000102U
+#define MSR_EFER            0xC0000080U
+#define EFER_NXE            (1U << 11)      /* no-execute enable */
+
+static int nx_on;
+static int smep_on;
+static int smap_on;
 
 /* 8 KB is enough for the entry path plus a C handler; a ported kernel sizes
  * this per CPU at boot. */
@@ -29,6 +35,75 @@ static void wrmsr_gs_base(u32 msr, u64 value)
     u32 lo = (u32)value;
     u32 hi = (u32)(value >> 32);
     __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
+}
+
+static u64 rdmsr(u32 msr)
+{
+    u32 lo;
+    u32 hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((u64)hi << 32) | lo;
+}
+
+static void cpuid(u32 leaf, u32 subleaf, u32 *a, u32 *b, u32 *c, u32 *d)
+{
+    __asm__ volatile("cpuid"
+                     : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
+                     : "a"(leaf), "c"(subleaf));
+}
+
+int cpu_nx_enabled(void)
+{
+    return nx_on;
+}
+
+/*
+ * Everything here is gated on CPUID: writing EFER.NXE or a CR4 bit an older CPU
+ * does not implement is a #GP, and installing an NX leaf without NXE is a
+ * reserved-bit #PF. What was turned on is returned so the log says which parts
+ * of the hardening this machine actually got.
+ */
+struct cpu_features cpu_harden(void)
+{
+    struct cpu_features f = {0, 0, 0};
+    u32 a, b, c, d;
+
+    cpuid(0x80000000U, 0, &a, &b, &c, &d);
+    if (a >= 0x80000001U) {
+        cpuid(0x80000001U, 0, &a, &b, &c, &d);
+        if ((d & (1U << 20)) != 0) {        /* NX */
+            wrmsr_gs_base(MSR_EFER, rdmsr(MSR_EFER) | EFER_NXE);
+            nx_on = 1;
+            f.nx = 1;
+        }
+    }
+
+    cpuid(0, 0, &a, &b, &c, &d);
+    if (a >= 7U) {
+        cpuid(7U, 0, &a, &b, &c, &d);
+        if ((b & (1U << 7)) != 0) {         /* SMEP */
+            u64 cr4;
+            __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+            cr4 |= 1ULL << 20;
+            __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+            smep_on = 1;
+            f.smep = 1;
+        }
+        if ((b & (1U << 20)) != 0) {        /* SMAP */
+            u64 cr4;
+            __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+            cr4 |= 1ULL << 21;
+            __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+            smap_on = 1;
+            f.smap = 1;
+        }
+    }
+    /* SMAP would stop the kernel touching a user address without AC; nothing in
+     * this nucleus does, and the page-table walkers in the VMM read tables, not
+     * user memory. copy_from_user will bracket its loads with STAC/CLAC. */
+    (void)smep_on;
+    (void)smap_on;
+    return f;
 }
 
 int cpu_init(void)

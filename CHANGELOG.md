@@ -1,5 +1,34 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a page table per task, and NX/SMEP/SMAP
+
+### Port (P2)
+
+- **Every task gets its own PML4.** `vmm_space_create` takes a frame, zeroes it and
+  copies the kernel's two entries into it: the higher half (image and direct map) and
+  the heap window. Those point at the same lower tables, so a slab page mapped later is
+  visible from every space. The identity map is deliberately *not* copied, so a task's
+  PML4[0] holds nothing but its own user area - physical memory is not in a user
+  address space at all. `become()` loads CR3 on every switch.
+- **The two tasks now prove isolation instead of asserting it.** Both run the same code
+  at `0x40000000` (one shared read-only frame) with a stack at the *same* virtual
+  address `0x40001000` backed by a different frame each. Each task stores its id at
+  `0x40001FF0`, waits for a preemption, reads the value back and exits with it; the
+  nucleus checks it against the task id. Two spaces, one address, two answers - if the
+  CR3 switch did not take effect, one task would read the other's value and fail.
+  `lm_user_run` also checks each space from the inside (its pages are user-mapped, the
+  kernel's identity map is absent) and that the kernel's own space has no user pages.
+- **NX, SMEP and SMAP where the CPU offers them.** `cpu_harden()` gates each on CPUID,
+  sets `EFER.NXE`, `CR4.SMEP` and `CR4.SMAP`, and reports `[hw] nx=on smep=on smap=on`.
+  Heap pages and user stacks are mapped with `VMM_NX`; the user code page is the one
+  leaf without it, and `vmm_flags` lets the nucleus check both. `vmm_map_in` strips the
+  bit when `EFER.NXE` is off, because an NX leaf without NXE is a reserved-bit fault.
+  The identity and direct maps are still executable 2 MB pages (they cover the image);
+  splitting them is part of remapping the kernel image later.
+- The test asks QEMU for `qemu64,+smep,+smap` (the plain model has neither) and now
+  requires `nx=ok` and the hardened `[hw]` line, so the enable path is exercised rather
+  than skipped.
+
 ## Unreleased - two tasks, preempted by the timer
 
 ### Port (P2)

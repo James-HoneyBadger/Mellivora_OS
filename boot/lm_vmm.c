@@ -52,14 +52,11 @@ static void tlb_flush(u64 virt)
  * Returns NULL when a level is missing (lookup), when a large page covers the
  * address, or when the frame for a new table cannot be reached.
  */
-static u64 *vmm_leaf(u64 virt, int create, u64 flags)
+static u64 *vmm_leaf_in(u64 space, u64 virt, int create, u64 flags)
 {
     static const int shift[3] = {39, 30, 21};
 
-    u64 cr3;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-
-    u64 *table = vmm_phys(cr3 & PTE_ADDR);
+    u64 *table = vmm_phys(space);
     if (table == NULL) {
         return NULL;
     }
@@ -99,26 +96,78 @@ static u64 *vmm_leaf(u64 virt, int create, u64 flags)
     return &table[(virt >> 12) & 511];
 }
 
-int vmm_map(u64 virt, u64 phys, u64 flags)
+u64 vmm_flags(u64 virt)
+{
+    u64 *leaf = vmm_leaf_in(vmm_current_space(), virt, 0, 0);
+    return leaf != NULL ? *leaf : 0;
+}
+
+u64 vmm_current_space(void)
+{
+    u64 cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    return cr3 & PTE_ADDR;
+}
+
+void vmm_space_switch(u64 space)
+{
+    __asm__ volatile("mov %0, %%cr3" : : "r"(space) : "memory");
+}
+
+/*
+ * A PML4 of its own. The kernel's higher half (image and direct map) and the
+ * heap window are shared by copying their entries: they point at the same lower
+ * tables, so mappings made later in the heap are visible from every space. The
+ * identity map is deliberately not copied - a task has no reason to see
+ * physical memory - so a task's PML4[0] holds nothing but its own user area.
+ */
+u64 vmm_space_create(void)
+{
+    u64 frame = pmm_alloc_frame();
+    u64 *space = vmm_phys(frame);
+    u64 *kernel = vmm_phys(vmm_current_space());
+    if (space == NULL || kernel == NULL) {
+        if (frame != 0) {
+            pmm_free_frame(frame);
+        }
+        return 0;
+    }
+
+    memset(space, 0, FRAME_SIZE);
+    space[KHEAP_PML4_INDEX] = kernel[KHEAP_PML4_INDEX];
+    space[KERNEL_PML4_INDEX] = kernel[KERNEL_PML4_INDEX];
+    return frame;
+}
+
+int vmm_map_in(u64 space, u64 virt, u64 phys, u64 flags)
 {
     if ((virt & (FRAME_SIZE - 1)) != 0 || (phys & (FRAME_SIZE - 1)) != 0 ||
-        phys == 0) {
+        phys == 0 || space == 0) {
         return -1;
     }
 
-    u64 *leaf = vmm_leaf(virt, 1, flags);
+    if (!cpu_nx_enabled()) {
+        flags &= ~VMM_NX;           /* a reserved bit without EFER.NXE */
+    }
+
+    u64 *leaf = vmm_leaf_in(space, virt, 1, flags);
     if (leaf == NULL || (*leaf & VMM_P) != 0) {
         return -1;
     }
 
-    *leaf = phys | VMM_P | (flags & (VMM_W | VMM_U));
+    *leaf = phys | VMM_P | (flags & (VMM_W | VMM_U | VMM_NX));
     tlb_flush(virt);
     return 0;
 }
 
+int vmm_map(u64 virt, u64 phys, u64 flags)
+{
+    return vmm_map_in(vmm_current_space(), virt, phys, flags);
+}
+
 int vmm_unmap(u64 virt)
 {
-    u64 *leaf = vmm_leaf(virt, 0, 0);
+    u64 *leaf = vmm_leaf_in(vmm_current_space(), virt, 0, 0);
     if (leaf == NULL || (*leaf & VMM_P) == 0) {
         return -1;
     }
@@ -132,10 +181,7 @@ u64 vmm_translate(u64 virt)
 {
     static const int shift[4] = {39, 30, 21, 12};
 
-    u64 cr3;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-
-    u64 *table = vmm_phys(cr3 & PTE_ADDR);
+    u64 *table = vmm_phys(vmm_current_space());
     if (table == NULL) {
         return 0;
     }
@@ -168,10 +214,7 @@ int vmm_user_mapped(u64 virt)
 {
     static const int shift[3] = {39, 30, 21};
 
-    u64 cr3;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-
-    u64 *table = vmm_phys(cr3 & PTE_ADDR);
+    u64 *table = vmm_phys(vmm_current_space());
     if (table == NULL) {
         return 0;
     }

@@ -44,6 +44,7 @@ struct lm_task {
     u64 exit_code;
     u64 exit_whoami;
     u64 exit_ping;
+    u64 cr3;            /* the task's address space */
     void *kstack_obj;
 };
 
@@ -111,8 +112,10 @@ static void become(struct lm_task *next)
     current->state = TASK_RUNNING;
     cpu->kstack_top = next->kstack_top;
     cpu->kstack_base = next->kstack_base;
-    /* The next fault or tick from this task must land on its stack. */
+    /* The next fault or tick from this task must land on its stack, and its
+     * user pages must be the ones it can see. */
     lm_tss_set_rsp0(next->kstack_top);
+    vmm_space_switch(next->cr3);
     switches++;
 }
 
@@ -120,8 +123,11 @@ static void become(struct lm_task *next)
  * Build the frame the entry stubs expect, so a task that has never run is
  * entered by the same pop-and-IRETQ path as one that was preempted.
  */
-static struct lm_task *task_new(u64 entry, u64 user_stack)
+static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space)
 {
+    if (space == 0) {
+        return NULL;
+    }
     if (task_count >= MAX_TASKS || stack_cache < 0) {
         return NULL;
     }
@@ -138,6 +144,7 @@ static struct lm_task *task_new(u64 entry, u64 user_stack)
     t->kstack_base = (u64)(unsigned long)kstack;
     t->kstack_top = t->kstack_base + FRAME_SIZE;
     t->user_stack = user_stack;
+    t->cr3 = space;
     t->calls = 0;
     t->ticks = 0;
     t->exit_code = 0;
@@ -161,9 +168,9 @@ static struct lm_task *task_new(u64 entry, u64 user_stack)
     return t;
 }
 
-int sched_create(u64 entry, u64 user_stack)
+int sched_create(u64 entry, u64 user_stack, u64 space)
 {
-    return task_new(entry, user_stack) != NULL ? 0 : -1;
+    return task_new(entry, user_stack, space) != NULL ? 0 : -1;
 }
 
 void sched_start(void)

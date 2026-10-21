@@ -70,6 +70,20 @@ struct lm_cpu {
 struct lm_cpu *cpu_this(void);
 int cpu_init(void);
 
+/* What the CPU offers beyond the baseline. */
+struct cpu_features {
+    int nx;
+    int smep;
+    int smap;
+};
+
+/* Enable NX (EFER.NXE), SMEP and SMAP where CPUID says they exist, and report
+ * what was turned on. Must run before the first NX mapping is installed. */
+struct cpu_features cpu_harden(void);
+
+/* 1 once EFER.NXE is set, so a caller may put VMM_NX in a mapping. */
+int cpu_nx_enabled(void);
+
 /*---------------------------------------
  * Interrupt frame
  *
@@ -104,11 +118,36 @@ struct lm_fault_frame {
 #define VMM_W  0x2ULL
 #define VMM_U  0x4ULL
 #define VMM_PS 0x80ULL
+#define VMM_NX (1ULL << 63)     /* no-execute, when EFER.NXE is on */
 
-/* Map one 4 KB page. `flags` are VMM_W/VMM_U; present is implied. Returns -1 if
- * the address is already mapped, the frame cannot be reached, or a large page
- * covers the address. Intermediate tables are allocated from the PMM. */
+/* The kernel heap window: a 16 MB range of its own, mapped on demand. */
+#define KHEAP_BASE       0xFFFFC00000000000ULL
+#define KHEAP_PAGES      4096ULL
+#define KHEAP_PML4_INDEX ((KHEAP_BASE >> 39) & 511)
+
+/* The kernel's own PML4 (the higher half at 0xFFFFFFFF80000000). */
+#define KERNEL_PML4_INDEX 511ULL
+
+/* Leaf entry for `virt` in the current space, or 0 when it is not mapped. */
+u64 vmm_flags(u64 virt);
+
+/* Map one 4 KB page in the current space. `flags` are VMM_W/VMM_U; present is
+ * implied. Returns -1 if the address is already mapped, the frame cannot be
+ * reached, or a large page covers the address. Tables come from the PMM. */
 int vmm_map(u64 virt, u64 phys, u64 flags);
+
+/* The same, in a PML4 the caller names (a task's space, or one being built). */
+int vmm_map_in(u64 space, u64 virt, u64 phys, u64 flags);
+
+/* CR3's physical base: the space the CPU is walking. */
+u64 vmm_current_space(void);
+
+/* Load CR3 (flushes the TLB - there is no PCID yet). */
+void vmm_space_switch(u64 space);
+
+/* A new PML4 with the kernel's higher half and heap entries shared into it.
+ * Returns its physical address, or 0. */
+u64 vmm_space_create(void);
 
 /* Drop a mapping. Returns -1 when there was none. */
 int vmm_unmap(u64 virt);
@@ -232,8 +271,9 @@ struct lm_task;
 /* Cache the task and kernel-stack objects; called before any task exists. */
 void sched_init(void);
 
-/* Create a task that enters `entry` on `user_stack`. 0 on success. */
-int sched_create(u64 entry, u64 user_stack);
+/* Create a task that enters `entry` on `user_stack` in address space `space`
+ * (a vmm_space_create() result). 0 on success. */
+int sched_create(u64 entry, u64 user_stack, u64 space);
 
 /* Switch to the first runnable task and enter ring 3. Never returns. */
 void sched_start(void) __attribute__((noreturn));

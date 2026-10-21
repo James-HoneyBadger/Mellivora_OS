@@ -68,12 +68,19 @@ REQUIRED = (
     "fault=ok",
     "timer=ok",
     "sched=ok",
+    "nx=ok",
+    "nx=on smep=on smap=on",
 )
 
 # A 4 GB guest has usable E820 ranges above 0x100000000 (there is a hole below
 # 4 GB), so the frame allocator only reports the right numbers if it read the
 # map as 64-bit. The roadmap's scale gate is 8 GB, which is what this asks for.
 BIG_MB = int(os.environ.get("LONGMODE_BIG_MB", "8192"))
+
+# qemu64 leaves SMEP and SMAP out; the nucleus enables them when it sees them, so
+# the test asks for a CPU that has them and requires the hardened report. NX is
+# part of the base model either way.
+CPU_MODEL = os.environ.get("LONGMODE_CPU", "qemu64,+smep,+smap")
 SKIP_BIG = os.environ.get("LONGMODE_SKIP_BIG", "0") == "1"
 
 
@@ -82,7 +89,7 @@ def boot_and_capture(qemu, image, mem_mb, want):
     workdir = tempfile.mkdtemp(prefix="lm-test-")
     ser_path = os.path.join(workdir, "serial.sock")
     proc = subprocess.Popen(
-        [qemu, "-cpu", "qemu64", "-m", str(mem_mb),
+        [qemu, "-cpu", CPU_MODEL, "-m", str(mem_mb),
          "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % image,
          "-boot", "c", "-display", "none", "-no-reboot",
          "-serial", "unix:%s,server=on,wait=on" % ser_path,
@@ -144,7 +151,7 @@ def main():
     # Scale: a guest past 4 GB only reports sane numbers if the E820 map was
     # read as 64-bit, and 8 GB is the P2 gate.
     if SKIP_BIG:
-        print("  PASS  long mode, higher half, VMM, slab heap, ring 3, exceptions, timer, scheduler (big-memory run skipped)")
+        print("  PASS  long mode, VMM, slab heap, per-task spaces, NX/SMEP/SMAP, scheduler (big-memory run skipped)")
         return 0
 
     big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER)
@@ -165,7 +172,7 @@ def main():
         print(big[-800:], file=sys.stderr)
         return 1
 
-    print("  PASS  long mode, higher half, VMM, slab heap, ring 3, exceptions, timer, scheduler, %d MB of RAM" % usable_mb)
+    print("  PASS  long mode, VMM, slab heap, per-task spaces, NX/SMEP/SMAP, scheduler, %d MB of RAM" % usable_mb)
     return 0
 
 

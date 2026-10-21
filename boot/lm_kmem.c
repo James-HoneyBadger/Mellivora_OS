@@ -19,11 +19,6 @@
 
 #define KMEM_CACHES 8
 
-/* A 16 MB window in PML4[384], which stage2 never touched. Only the pages a
- * cache has actually taken are mapped. */
-#define KHEAP_BASE  0xFFFFC00000000000ULL
-#define KHEAP_PAGES 4096ULL
-
 struct kmem_cache {
     u64 object_size;
     u64 per_slab;
@@ -92,7 +87,7 @@ static int kmem_new_slab(int id)
     }
 
     u64 virt = KHEAP_BASE + heap_pages_used * FRAME_SIZE;
-    if (vmm_map(virt, frame, VMM_W) != 0) {
+    if (vmm_map(virt, frame, VMM_W | VMM_NX) != 0) {
         pmm_free_frame(frame);
         return 0;
     }
