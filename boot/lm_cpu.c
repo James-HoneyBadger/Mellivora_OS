@@ -57,6 +57,11 @@ int cpu_nx_enabled(void)
     return nx_on;
 }
 
+int cpu_smap_enabled(void)
+{
+    return smap_on;
+}
+
 /*
  * Everything here is gated on CPUID: writing EFER.NXE or a CR4 bit an older CPU
  * does not implement is a #GP, and installing an NX leaf without NXE is a

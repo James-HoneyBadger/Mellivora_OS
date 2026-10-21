@@ -84,6 +84,10 @@ struct cpu_features cpu_harden(void);
 /* 1 once EFER.NXE is set, so a caller may put VMM_NX in a mapping. */
 int cpu_nx_enabled(void);
 
+/* 1 once CR4.SMAP is set: STAC/CLAC are then legal and user memory is
+ * unreachable without them. */
+int cpu_smap_enabled(void);
+
 /*---------------------------------------
  * Interrupt frame
  *
@@ -263,6 +267,30 @@ void lm_user_enter(u64 entry, u64 user_rsp, u64 rflags) __attribute__((noreturn)
 void lm_enter_task(u64 rsp) __attribute__((noreturn));
 
 /*---------------------------------------
+ * Syscalls
+ *
+ * The LP64 shape the 32-bit tree's int 0x80 path will be bridged to: number in
+ * RAX, arguments in RDI, RSI, RDX, R10, R8, R9, result in RAX. Handlers get the
+ * whole frame, so they can read any argument register and, for exit and yield,
+ * return the frame to run next.
+ *---------------------------------------*/
+
+#define SYS_PING   1
+#define SYS_WHOAMI 2
+#define SYS_EXIT   3
+#define SYS_TICKS  4
+#define SYS_GETTID 5
+#define SYS_WRITE  6
+#define SYS_YIELD  7
+#define SYS_BRK    8
+
+/* The program break starts here and grows in page steps; it lives in the same
+ * PDPT slot as the user stack. */
+#define USER_BRK_BASE 0x41000000ULL
+
+void syscall_init(void);   /* prints the ABI and the table size */
+
+/*---------------------------------------
  * Scheduler
  *---------------------------------------*/
 
@@ -286,6 +314,13 @@ void sched_note_syscall(void);
 
 /* Timer tick: round-robin, returning the frame of the task to run next. */
 struct lm_fault_frame *sched_tick(struct lm_fault_frame *frame);
+
+/* SYS_YIELD: give the CPU up voluntarily. Same switch, no tick accounting. */
+struct lm_fault_frame *sched_yield(struct lm_fault_frame *frame);
+
+/* The running task's program break. */
+u64 sched_brk(void);
+void sched_set_brk(u64 value);
 
 /* SYS_EXIT: retire the running task; returns the frame to run next, or NULL. */
 struct lm_fault_frame *sched_exit(struct lm_fault_frame *frame);

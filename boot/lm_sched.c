@@ -45,6 +45,7 @@ struct lm_task {
     u64 exit_whoami;
     u64 exit_ping;
     u64 cr3;            /* the task's address space */
+    u64 brk;            /* program break, in the task's own space */
     void *kstack_obj;
 };
 
@@ -145,6 +146,7 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space)
     t->kstack_top = t->kstack_base + FRAME_SIZE;
     t->user_stack = user_stack;
     t->cr3 = space;
+    t->brk = USER_BRK_BASE;
     t->calls = 0;
     t->ticks = 0;
     t->exit_code = 0;
@@ -189,13 +191,12 @@ void sched_start(void)
     lm_enter_task(first->rsp);
 }
 
-/* A timer tick: round-robin, or stay put when this is the only task. */
-struct lm_fault_frame *sched_tick(struct lm_fault_frame *f)
+/* Round-robin, or stay put when this is the only task. */
+struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
 {
     if (current == NULL || (f->cs & 3) != 3) {
-        return f;                   /* never preempt the kernel */
+        return f;                   /* never switch away from the kernel */
     }
-    current->ticks++;
 
     struct lm_task *next = pick_next();
     if (next == NULL || next == current) {
@@ -206,6 +207,27 @@ struct lm_fault_frame *sched_tick(struct lm_fault_frame *f)
     current->state = TASK_READY;
     become(next);
     return (struct lm_fault_frame *)(unsigned long)next->rsp;
+}
+
+/* A timer tick is a yield that also charges the quantum. */
+struct lm_fault_frame *sched_tick(struct lm_fault_frame *f)
+{
+    if (current != NULL && (f->cs & 3) == 3) {
+        current->ticks++;
+    }
+    return sched_yield(f);
+}
+
+u64 sched_brk(void)
+{
+    return current != NULL ? current->brk : 0;
+}
+
+void sched_set_brk(u64 value)
+{
+    if (current != NULL) {
+        current->brk = value;
+    }
 }
 
 static void sched_report(void)
@@ -271,8 +293,12 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
     t->exit_whoami = f->rsi;
     t->exit_ping = f->rdx;
 
+    /* The program grows its break, writes through the new page, then shrinks it
+     * back; the mapping must be gone from this task's space when it exits. */
+    int brk_ok = vmm_translate(USER_BRK_BASE) == 0;
+
     int ok = t->exit_code == t->id && t->exit_whoami == cpu_this()->id &&
-             t->exit_ping == 0x1234 && t->calls > 0;
+             t->exit_ping == 0x1234 && t->calls > 0 && brk_ok;
 
     kputs("[ring3] task=");
     kput_dec(t->id);
@@ -286,6 +312,8 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
     kput_hex(t->exit_ping, 4);
     kputs(" whoami=");
     kput_dec(t->exit_whoami);
+    kputs(" brk=");
+    kputs(brk_ok ? "ok" : "FAIL");
     kputs(ok ? " ring3=ok\r\n" : " FAIL ring3\r\n");
 
     t->state = TASK_DEAD;

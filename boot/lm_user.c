@@ -136,23 +136,55 @@ __asm__(
      * is what proves the TSS.RSP0 transition (the CPU has to load the kernel
      * stack before the handler runs). */
     "    int3\n"
-    "    movl $1, %eax\n"          /* LM_SYS_PING */
+    /* write(1, "hello\n", 6): a syscall that reads a user buffer, which SMAP
+     * would refuse without the kernel's STAC/CLAC bracket. */
+    "    movl $6, %eax\n"          /* SYS_WRITE */
+    "    movl $1, %edi\n"          /* fd 1 */
+    "    leaq 5f(%rip), %rsi\n"
+    "    movl $6, %edx\n"
+    "    syscall\n"
+    "    cmpq $6, %rax\n"
+    "    jne 9f\n"
+    /* PING round trip, through this task's own stack page. */
+    "    movl $1, %eax\n"          /* SYS_PING */
     "    movl $0x1234, %edi\n"
     "    syscall\n"
-    "    movq %rax, 0x40001FE8\n"  /* the PING result, in this task's stack page */
-    "    movl $5, %eax\n"          /* LM_SYS_GETTID */
+    "    movq %rax, 0x40001FE8\n"
+    "    movl $5, %eax\n"          /* SYS_GETTID */
     "    syscall\n"
     /* The same virtual address in every task, backed by a different frame:
      * both tasks write here and must read their own value back. */
     "    movq %rax, 0x40001FF0\n"
+    /* brk: grow one page, write through it, read it back, shrink again. The
+     * nucleus checks the mapping is gone when this task exits. */
+    "    movl $8, %eax\n"          /* SYS_BRK(0): report the break */
+    "    xorl %edi, %edi\n"
+    "    syscall\n"
+    "    movq %rax, %r13\n"
+    "    leaq 4096(%r13), %rdi\n"  /* ... then grow it by a page */
+    "    movl $8, %eax\n"
+    "    syscall\n"
+    "    cmpq %rdi, %rax\n"
+    "    jne 9f\n"
+    "    movl $0xFEEDFACE, %r8d\n"   /* imm64 to memory is not encodable */
+    "    movq %r8, (%r13)\n"
+    "    movq (%r13), %r9\n"
+    "    cmpq %r8, %r9\n"
+    "    jne 9f\n"
+    "    movq %r13, %rdi\n"        /* shrink back to the base */
+    "    movl $8, %eax\n"
+    "    syscall\n"
+    /* Hand the CPU to the other task once, on purpose. */
+    "    movl $7, %eax\n"          /* SYS_YIELD */
+    "    syscall\n"
     /* Wait for two more ticks. The clock is shared, so this is the point where
      * the other task gets the CPU: a tick taken in ring 3 preempts. RBX is the
      * counter because SYSCALL itself clobbers RCX and R11. */
-    "    movl $4, %eax\n"          /* LM_SYS_TICKS */
+    "    movl $4, %eax\n"          /* SYS_TICKS */
     "    syscall\n"
     "    leaq 2(%rax), %r14\n"     /* target */
     "    movl $100000, %ebx\n"
-    "1:  movl $4, %eax\n"          /* LM_SYS_TICKS */
+    "1:  movl $4, %eax\n"          /* SYS_TICKS */
     "    syscall\n"
     "    cmpq %r14, %rax\n"
     "    jae 2f\n"
@@ -161,17 +193,20 @@ __asm__(
     "    jnz 4b\n"
     "    decl %ebx\n"
     "    jnz 1b\n"
-    "    movl $3, %eax\n"          /* LM_SYS_EXIT: no tick, so fail loudly */
-    "    movl $0xBAD, %edi\n"
-    "    syscall\n"
-    "2:  movl $2, %eax\n"          /* LM_SYS_WHOAMI */
+    "    jmp 9f\n"                 /* no tick: fail loudly */
+    "2:  movl $2, %eax\n"          /* SYS_WHOAMI */
     "    syscall\n"
     "    movq %rax, %rsi\n"        /* the nucleus checks this is its CPU id */
     "    movq 0x40001FE8, %rdx\n"  /* PING result back off the stack page */
     "    movq 0x40001FF0, %rdi\n"  /* ... and the id this address space held */
-    "    movl $3, %eax\n"          /* LM_SYS_EXIT: code = that id */
+    "    movl $3, %eax\n"          /* SYS_EXIT: code = that id */
     "    syscall\n"
     "3:  jmp 3b\n"                 /* the kernel never returns to a program */
+    "5:  .ascii \"hello\\n\"\n"
+    "9:  movl $3, %eax\n"          /* a check failed: exit with a bad code */
+    "    movl $0xBAD, %edi\n"
+    "    syscall\n"
+    "6:  jmp 6b\n"
     "lm_user_program_end:\n"
     ".popsection\n");
 

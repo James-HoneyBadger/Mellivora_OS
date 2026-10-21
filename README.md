@@ -22,7 +22,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 
 ### Kernel & Architecture
 
-- **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`) that boots a 64-bit nucleus in the higher half, maps 4 KB pages through its own VMM, hands out kernel objects from a slab heap, round-robins ring-3 tasks with their own page tables and kernel stacks, preempted by the timer, with NX/SMEP/SMAP on where the CPU offers them, and reports `MELLIVORA64_OK` on COM1 (`make check-longmode`)
+- **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`) that boots a 64-bit nucleus in the higher half, maps 4 KB pages through its own VMM, hands out kernel objects from a slab heap, round-robins ring-3 tasks with their own page tables and kernel stacks, preempted by the timer, with NX/SMEP/SMAP on where the CPU offers them and an LP64 syscall table (write/brk/yield) behind them, and reports `MELLIVORA64_OK` on COM1 (`make check-longmode`)
 - **UEFI boot** — `boot/uefi_loader.efi` (gnu-efi PE32+) for UEFI firmware; `make uefi` / `make run-uefi`
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
 - **186 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)

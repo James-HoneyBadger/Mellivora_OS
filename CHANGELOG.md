@@ -1,5 +1,27 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a syscall table with an LP64 ABI
+
+### Port (P2)
+
+- **`boot/lm_syscall.c`: dispatch table instead of a switch.** Number in RAX, arguments
+  in RDI/RSI/RDX/R10/R8/R9, result in RAX - the shape the 32-bit tree's 187 `int 0x80`
+  calls will be bridged to. A hole in the table is an unimplemented call; entries that
+  end or yield the caller can only be reached from ring 3. `syscall_init()` reports
+  `[sys] abi=lp64 table=9`.
+- **Three real calls behind the ABI.** `write(fd, buf, count)` reads a user buffer,
+  which SMAP forbids without `STAC`/`CLAC` - the bracket is the one `copy_from_user`
+  will use - and validates each byte's page through the VMM before touching it, so a
+  bad pointer ends the write instead of faulting the kernel. `yield()` goes through
+  the same switch as a timer tick. `brk(addr)` grows and shrinks a per-task mapping
+  through the VMM, freeing the frames it unmaps; the scheduler checks at exit that the
+  program's shrink actually removed the mapping (`brk=ok`).
+- The demo program now writes `hello\n` to the console, grows its break by a page,
+  writes and reads a value through it, shrinks it back and yields once before the tick
+  wait - so the console output, the per-task `brk=ok` and the extra switches in
+  `[sched] switches=6` are all evidence of the new path. The per-task record keeps the
+  id/PING/WHOAMI checks that prove register and address-space isolation.
+
 ## Unreleased - a page table per task, and NX/SMEP/SMAP
 
 ### Port (P2)

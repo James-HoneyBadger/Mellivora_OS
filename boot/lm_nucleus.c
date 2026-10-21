@@ -169,74 +169,6 @@ static u64 rdmsr(u32 msr)
 }
 
 /*
- * The C half of a syscall. It runs on the CPU's own kernel stack, which the
- * entry stub below has already switched to, and gets the whole saved frame:
- * the number in `rax`, the argument in `rdi`, and - on the way out - the
- * selectors and result the stub's IRETQ uses.
- *
- * The return value tells the stub what to do: 0 returns to the caller (ring 3
- * or ring 0, whichever it came from), non-zero means the program is finished
- * and control goes back to the kernel instead.
- */
-#define LM_SYS_PING 1U
-#define LM_SYS_WHOAMI 2U
-#define LM_SYS_EXIT 3U
-#define LM_SYS_TICKS 4U
-#define LM_SYS_GETTID 5U
-
-struct lm_fault_frame *lm_syscall_dispatch(struct lm_fault_frame *f)
-{
-    struct lm_cpu *cpu = cpu_this();
-    u64 rsp;
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-
-    cpu->syscall_count++;
-    sched_note_syscall();
-    cpu->last_rsp = rsp;         /* must be inside the per-CPU kernel stack */
-    cpu->last_nr = f->rax;
-    cpu->last_arg = f->rdi;
-
-    int from_user = cpu->user_mode != 0;
-    if (from_user) {
-        cpu->user_calls++;
-        cpu->last_user_rip = f->rip;
-        cpu->last_user_rsp = f->rsp;
-    }
-
-    /* Whatever ring the caller was in, SYSCALL has already put kernel
-     * selectors in CS/SS; the frame is what IRETQ returns with, so it has to
-     * carry the caller's ring back. */
-    f->cs = from_user ? (SEL_UCODE | RPL_USER) : SEL_KCODE;
-    f->ss = from_user ? (SEL_UDATA | RPL_USER) : SEL_KDATA;
-
-    switch (f->rax) {
-    case LM_SYS_PING:
-        f->rax = f->rdi;
-        return f;
-    case LM_SYS_WHOAMI:
-        f->rax = cpu->id;
-        return f;
-    case LM_SYS_TICKS:
-        f->rax = cpu->ticks;
-        return f;
-    case LM_SYS_GETTID:
-        f->rax = cpu->user_mode ? sched_current_id() : 0;
-        return f;
-    case LM_SYS_EXIT:
-        if (!from_user) {
-            f->rax = (u64)-1;   /* there is no user program to end */
-            return f;
-        }
-        cpu->exit_code = f->rdi;
-        cpu->exit_arg = f->rsi;
-        return sched_exit(f);   /* another task's frame, or NULL */
-    default:
-        f->rax = (u64)-1;
-        return f;
-    }
-}
-
-/*
  * The entry path LSTAR points at. SYSCALL has already switched CS/SS to the
  * kernel selectors but changed nothing else: RSP is still the caller's and GS
  * still holds the caller's base, so the stub starts with SWAPGS (the per-CPU
@@ -338,13 +270,13 @@ static u64 syscall_roundtrip(void)
     u64 rsp_before;
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_before));
 
-    u64 nr = LM_SYS_PING;
+    u64 nr = SYS_PING;
     u64 arg = 0x1234;
     u64 result;
 
     /* RAX carries the number in and the result out; RDI carries the argument.
      * Everything the entry stub and the dispatcher touch is declared as
-     * clobbered, including RBX, which the stub uses to hold the frame. */
+     * clobbered, even though the stub saves and restores them. */
     __asm__ volatile("syscall"
                      : "=a"(result)
                      : "a"(nr), "D"(arg)
@@ -356,7 +288,7 @@ static u64 syscall_roundtrip(void)
     if (result != 0x1234) {
         faulty |= RT_RESULT;
     }
-    if (cpu->syscall_count != 1 || cpu->last_nr != LM_SYS_PING ||
+    if (cpu->syscall_count != 1 || cpu->last_nr != SYS_PING ||
         cpu->last_arg != 0x1234) {
         faulty |= RT_STATE;
     }
@@ -460,6 +392,7 @@ void lm_main(void)
     struct cpu_features feat = cpu_harden();  /* NX/SMEP/SMAP where offered */
     idt_init();          /* a fault must report, not triple-fault */
     irq_init();          /* PIC remapped and the PIT ticking; IF stays clear */
+    syscall_init();
 
     kputs("[lm] Mellivora x86-64 nucleus (C11)\r\n");
 

@@ -2178,6 +2178,40 @@ The user program waits for three ticks before its `PING`/`WHOAMI`/`EXIT` sequenc
 spinning in user mode between polls of `SYS_TICKS`. If none arrives it exits with a code
 the nucleus rejects, so a dead PIT fails the run instead of hanging it.
 
+### Syscalls
+
+`boot/lm_syscall.c` dispatches from a table indexed by number. The ABI is the LP64 one
+the 32-bit tree will be bridged to:
+
+| Register | Meaning |
+| --- | --- |
+| `rax` | number in, result out |
+| `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` | arguments, in that order |
+| `rcx`, `r11` | clobbered by `syscall` itself (return RIP and RFLAGS) |
+
+The stub saves all fifteen registers into the frame, so a handler can read any argument
+and the dispatcher can restore everything on the way out. A hole in the table is an
+unimplemented call (returns -1), and an entry marked `from_user` is refused when the
+caller was ring 0 - `exit` and `yield` must not tear down or give up the kernel context.
+
+| Call | Number | What it does |
+| --- | --- | --- |
+| `ping` / `whoami` / `ticks` / `gettid` | 1 / 2 / 4 / 5 | the boot-test calls: echo, CPU id, timer ticks, task id |
+| `exit` | 3 | retires the task; the scheduler returns the next frame |
+| `write` | 6 | `fd` 1 or 2 to COM1, at most 4096 bytes, every page checked through the VMM first |
+| `yield` | 7 | the tick's switch, without charging a quantum |
+| `brk` | 8 | reports or moves the program break, one page at a time through the VMM |
+
+`write` is where SMAP matters: the buffer is user memory, so the copy runs between
+`STAC` and `CLAC` (only when `CR4.SMAP` is on - the instructions are `#UD` otherwise).
+Page validation uses `vmm_user_mapped`, which walks page tables rather than touching the
+buffer, so an unmapped page ends the write instead of faulting the kernel.
+
+`brk` grows a per-task mapping from `0x41000000`: fresh frames are zeroed, mapped
+`W|U|NX`, and shrinking walks the range with `vmm_translate`, unmaps and frees each
+frame. The scheduler's exit check verifies the mapping is gone, so a program that grows
+and shrinks its break exercises map and unmap from ring 3.
+
 ### Scheduler
 
 `boot/lm_sched.c` puts a task object behind the pieces above. A task owns a kernel stack
@@ -2301,13 +2335,15 @@ Two long-mode details are worth knowing here because both were faults first:
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
 `stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok`, `ring3=ok` (once per
-task), `sched=ok`, `nx=ok` and the hardened `nx=on smep=on smap=on` line on COM1, so a
+task), `sched=ok`, `nx=ok`, the hardened `nx=on smep=on smap=on` line, `abi=lp64`,
+`brk=ok` (per task) and the user program's `hello` on COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
 agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
 timer tick to the TSS stack, preempted a task but resumed the wrong frame, switched
-tasks without switching their address spaces, left a data page executable, or returned
-to the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+tasks without switching their address spaces, left a data page executable, failed to
+read a user buffer under SMAP, kept a `brk` page mapped after the program shrank it, or
+returned to the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C
