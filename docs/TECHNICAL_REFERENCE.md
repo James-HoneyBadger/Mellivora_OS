@@ -1451,14 +1451,19 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 ### Ring 3 Execution
 
 1. Set `program_running = 1`, clear `ctrl_c_flag` and `program_exit_code`
-2. Pick this launch's stack top (`vm_random_stack_top`): `PROGRAM_EXIT_ADDR - 4` minus
+2. Clear `[program_brk_init, PROGRAM_END_ADDR)` - the tail of the shell's window - unless
+   this is an exec in place. A task's window is a copy of the shell's, so without this the
+   next program could read the previous one's heap, `mmap` scratch and whole user stack.
+   `program_brk_init` is the page-aligned end of the image the loader just wrote (and is
+   clamped to `[PROGRAM_BASE + 4K, USER_STACK_BASE]`), so the image is never touched.
+3. Pick this launch's stack top (`vm_random_stack_top`): `PROGRAM_EXIT_ADDR - 4` minus
     a page-granular offset of up to `STACK_ASLR_PAGES` (16) pages, stored in
     `program_stack_top` and, for a task, in `TCB_USTACK`. A task that is *already
     running* - an exec in place via `SYS_EXEC` - keeps its top instead: the pages
     outside its existing window are unmapped in its directory, so a new top could put
     the trampoline in a page that does not exist there. GUI launches always draw a new
     top because they always create a task.
-3. Write **SYS_EXIT trampoline** at the chosen top + 4:
+4. Write **SYS_EXIT trampoline** at the chosen top + 4:
 
    ```nasm
    mov eax, 0    ; SYS_EXIT
@@ -1468,17 +1473,17 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
    The top itself holds the trampoline's address as the return address, so a program that
    ends with `RET` exits instead of running off the end of its code. Neither address is
    fixed any more: both move with the chosen top.
-4. Create the task (`sched_create_task`) and switch to it with `sched_start_task`. The
+5. Create the task (`sched_create_task`) and switch to it with `sched_start_task`. The
    task's own kernel stack becomes TSS ESP0, so kernel work during its syscalls never
    touches the shell's stack. If task creation fails, the legacy direct-IRET path is
    used: TSS ESP0 stays `KERNEL_STACK` and the IRET frame is built by hand.
-5. Set up the Ring 3 stack window below the chosen top (`paging_setup_user_stack` takes
+6. Set up the Ring 3 stack window below the chosen top (`paging_setup_user_stack` takes
    the TCB in `EAX`, reads `TCB_USTACK`): keep the `USER_STACK_INIT_PAGES` pages ending at
    the top page, unmap everything else in `[USER_STACK_BASE, PROGRAM_END_ADDR)` - the
    growth area below and the gap a lowered top leaves above - and release the frames that
    were private to the directory. `TCB_USTACK` is the trampoline's address, so the
    window's exclusive end is `TCB_USTACK + 4`.
-6. Perform `IRETD` to Ring 3 (either from the task's saved frame or, on the legacy
+7. Perform `IRETD` to Ring 3 (either from the task's saved frame or, on the legacy
    path, from a hand-built frame):
    - Push `USER_DS` (0x23) — SS3
    - Push ESP3

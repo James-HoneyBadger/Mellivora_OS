@@ -6233,32 +6233,50 @@ cmd_exec_program:
         mov dword [program_entry], PROGRAM_BASE
 
 .exec_program:
+        ; A launch either creates a task or - when a program calls SYS_EXEC -
+        ; replaces the running one in place. Pick the stack top first, because
+        ; only one of the two may clear the window: exec in place is the same
+        ; process and its stack is live.
+        ;
+        ; A new task's window starts as a copy of the shell's, so whatever the
+        ; last program left above its own image - its heap, its mmap scratch and
+        ; its whole user stack - would otherwise be readable by the next one.
+        call sched_get_current_task
+        mov [.exec_task], eax
+        test eax, eax
+        jz .exec_clear_window
+        cmp byte [gui_launch_flag], 1
+        je .exec_clear_window           ; a GUI launch creates a task
+        mov eax, [eax + TCB_USTACK]
+        test eax, eax
+        jnz .exec_have_top              ; exec in place keeps the top it has
+        call vm_random_stack_top        ; ...but has none to keep: draw one
+        jmp .exec_have_top
+
+.exec_clear_window:
+        ; Clear [image end, window end): the loader has already put this image
+        ; below that point, and the trampoline is written afterwards.
+        mov edi, [program_brk_init]
+        mov ecx, PROGRAM_END_ADDR
+        sub ecx, edi
+        shr ecx, 2
+        xor eax, eax
+        cld
+        rep stosd
+
+        ; The stack top is randomised per launch: the window leaves only a
+        ; little slack, so the spread is small, but the address no longer
+        ; repeats. The trampoline and the mapped window move with it.
+        call vm_random_stack_top
+.exec_have_top:
+        mov [program_stack_top], eax
+
         ; Check if this should be a background job
         cmp byte [bg_launch_flag], 1
         je .exec_bg
 
         mov esi, msg_exec
         call vga_print
-
-        ; Pick this launch's stack top. The window leaves only a little slack,
-        ; so the spread is small, but the exact address no longer repeats.
-        ;
-        ; exec in place is the exception: the task already holds a stack window
-        ; at its current top and the pages outside it were unmapped when it
-        ; started, so a new random top could put the trampoline below in a page
-        ; that does not exist in its directory any more. It keeps its top.
-        call sched_get_current_task
-        test eax, eax
-        jz .exec_random_top
-        cmp byte [gui_launch_flag], 1
-        je .exec_random_top             ; a GUI launch creates a new task
-        mov eax, [eax + TCB_USTACK]
-        test eax, eax
-        jnz .exec_have_top
-.exec_random_top:
-        call vm_random_stack_top
-.exec_have_top:
-        mov [program_stack_top], eax
 
         ; Write the SYS_EXIT trampoline just above the top, and put its address
         ; where the stack's first dword points: B8 00 00 00 00 CD 80 =
@@ -6516,6 +6534,7 @@ cmd_exec_program:
 .bg_prog_addr:   dd 0
 .bg_stack_addr:  dd 0
 .bg_tramp_addr:  dd 0
+.exec_task:      dd 0           ; the task running at exec time, or 0
 
 .path_fsize: dd 0               ; Temp storage for file size during PATH search
 

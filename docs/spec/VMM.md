@@ -293,11 +293,16 @@ sub-range) advances that sector by the pages it moved into the new record.
 21. The user stack top differs between launches of the same program, and every launch
     still exits cleanly through the trampoline at the top it chose (`stack_aslr_test`,
     which `tests/test_runtime.sh` runs four times in one boot and compares).
+22. A new program reads zeros where the previous program had its heap and its stack: a
+    task's window starts as a copy of the launcher's, so the launcher clears
+    `[image end, PROGRAM_END_ADDR)` before it writes the trampoline and before the task
+    is created. exec in place is exempt - the task owns what is there (`stale_write` then
+    `stale_probe`).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
 `vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `vmtest5`, `heaptest`, `stack_test`,
-`stack_overflow`, `stack_leak_test`, `kill_leak_test` and `stack_aslr_test` over QEMU and
-`make check` fails if any regresses.
+`stack_overflow`, `stack_leak_test`, `kill_leak_test`, `stack_aslr_test` and the
+`stale_write`/`stale_probe` pair over QEMU and `make check` fails if any regresses.
 
 ## 6. Compatibility exceptions
 

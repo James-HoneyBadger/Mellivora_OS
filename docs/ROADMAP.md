@@ -100,6 +100,11 @@ A phase does not close until these are measured:
   so a forked share above it was freed twice. `make check-runtime` now runs `vmtest`,
   `vmtest2`, `cow_test` and `heaptest` on a 192 MB and a 384 MB guest.
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
+- [x] No stale bytes between processes. A task's window is a copy of the shell's, and
+  nothing cleared it between launches: the next program could read the previous one's
+  heap, `mmap` scratch and whole user stack. The launcher now clears
+  `[image end, PROGRAM_END_ADDR)` before it writes the trampoline and creates the task,
+  and `stale_write`/`stale_probe` prove it (`STALE_LEAK 00340000` on the old kernel).
 - [x] `waitpid` after a signal-killed task. The kill path freed the target's slot
   instead of leaving a `TASK_ZOMBIE`, so `waitpid` never found it and blocked the parent
   forever. Both death paths now end in `sched_publish_death`: status stored, zombie kept,

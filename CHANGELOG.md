@@ -1,5 +1,26 @@
 # Mellivora OS - Changelog
 
+## Unreleased - no stale bytes in a new program window
+
+### Memory
+
+- **A new program no longer inherits the previous one's memory.** A task's window
+  starts as a copy of the shell's window, and nothing cleared it between launches, so
+  whatever the last program left above its own image - its heap, its `mmap` scratch and
+  its **whole user stack** - was mapped and readable by the next program. `SYS_EXEC`
+  clears `[image end, PROGRAM_END_ADDR)` in the shell's window before the trampoline is
+  written and before the task is created, so the image the loader just wrote is
+  untouched, the break still starts where `set_program_brk_init` put it, and the stack
+  window a task maps is zeros. This was the last open item of the P1 exit criteria ("no
+  stale-data leaks between processes").
+- exec in place is exempt: the task *is* the process that owns what is there, and its
+  stack is live. Only a launch that creates a task clears the window, which means a GUI
+  launch too (it also gets a private copy of the cleared window).
+- `programs/stale_write.asm` fills the image tail, the heap area and its own stack
+  window with a marker; `programs/stale_probe.asm` looks for it at a fixed address and
+  across its stack window. The pair is a `check-runtime` case, and it fails on the
+  previous kernel with `STALE_LEAK 00340000`.
+
 ## Unreleased - randomised stack top
 
 ### Security

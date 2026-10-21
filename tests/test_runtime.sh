@@ -169,6 +169,11 @@ run_case "signal kill releases memory"   "kill_leak_test"        "KILLLEAK_OK"  
 # different place each time it runs. exec keeps its top on purpose (it reuses
 # the task's existing mapping window), so this uses real launches.
 run_varying_case "stack top is randomised"  "stack_aslr_test"     "ASLR_TOP [0-9a-f]\{8\}"
+# A new task's window is a copy of the shell's, so the launcher has to clear
+# what the previous program left above its own image: its heap, its mmap scratch
+# and its whole user stack. stale_write fills all of that with a marker and
+# stale_probe looks for it at a fixed address and across the stack window.
+run_case "no stale bytes from the last program" "stale_write" "STALE_WROTE_OK" "stale_probe" "CPU EXCEPTION|STALE_LEAK|fault"
 
 # Above 128 MB, physical frames live beyond the boot identity map: the allocator
 # walks free-list nodes that are not mapped yet, the fault handler faults on its
