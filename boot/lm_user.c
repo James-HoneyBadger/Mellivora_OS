@@ -200,6 +200,10 @@ __asm__(
     ".globl lm_user_program\n"
     ".globl lm_user_program_end\n"
     "lm_user_program:\n"
+    /* INT3 first: it is the one fault a handler can resume, and taking it from
+     * ring 3 is what proves the TSS.RSP0 transition (the CPU has to load the
+     * kernel stack before the handler runs). */
+    "    int3\n"
     "    movl $1, %eax\n"          /* LM_SYS_PING */
     "    movl $0x1234, %edi\n"
     "    syscall\n"

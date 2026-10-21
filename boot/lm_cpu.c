@@ -37,6 +37,7 @@ int cpu_init(void)
 
     cpu->self = (u64)(unsigned long)cpu;
     cpu->id = 0;
+    cpu->kstack_base = (u64)(unsigned long)cpu0_kstack;
     cpu->kstack_top = (u64)(unsigned long)(cpu0_kstack + KSTACK_BYTES);
     cpu->saved_rsp = 0;
     cpu->syscall_count = 0;

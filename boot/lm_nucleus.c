@@ -44,6 +44,20 @@ _Static_assert(__builtin_offsetof(struct lm_syscall_frame, rsp) == 16 * 8,
 _Static_assert(__builtin_offsetof(struct lm_syscall_frame, ss) == 17 * 8,
                "SS is the last value IRETQ pops");
 
+/* The same contract for the fault frame lm_isr_common builds. */
+_Static_assert(sizeof(struct lm_fault_frame) == 22 * 8,
+               "the CPU and the fault stub push twenty-two values");
+_Static_assert(__builtin_offsetof(struct lm_fault_frame, r15) == 0,
+               "R15 is pushed last and so sits lowest");
+_Static_assert(__builtin_offsetof(struct lm_fault_frame, rax) == 14 * 8,
+               "RAX is pushed first of the registers");
+_Static_assert(__builtin_offsetof(struct lm_fault_frame, vec) == 15 * 8,
+               "the stub's vector follows the registers");
+_Static_assert(__builtin_offsetof(struct lm_fault_frame, rip) == 17 * 8,
+               "the CPU's frame follows the vector and error code");
+_Static_assert(__builtin_offsetof(struct lm_fault_frame, rsp) == 20 * 8,
+               "RSP is only in a privilege-change frame");
+
 #define COM1 0x3F8
 
 /* Higher-half base of the image, from the linker script (0xFFFFFFFF80100000). */
@@ -435,6 +449,7 @@ void lm_main(void)
 
     serial_init();
     cpu_init();          /* GS base: the entry path needs it before it can run */
+    idt_init();          /* a fault must report, not triple-fault */
 
     kputs("[lm] Mellivora x86-64 nucleus (C11)\r\n");
 

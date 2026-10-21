@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
+| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
 
@@ -146,6 +146,13 @@ A phase does not close until these are measured:
   registers in the frame and returns with the user's CS/SS. The program calls
   `PING`, `WHOAMI` and `EXIT`; the exit code is the value `PING` returned,
   carried through the user's own stack, and the nucleus prints `ring3=ok`.
+- [x] IDT and exception entry: `boot/lm_idt.c` installs a long-mode IDT for vectors
+  0..21 (the rest are absent, so the CPU raises `#GP` into the same handler), one stub
+  shape with a dummy error code where the CPU pushes none, `SWAPGS` plus fifteen saved
+  registers on the common path, and a C dispatcher that reports vector, error code,
+  RIP, CS, CR2 and whether the TSS supplied the stack. A ring-3 `INT3` proves the TSS
+  `RSP0` transition and is resumed; an unexpected fault reports and halts instead of
+  triple-faulting.
 - [ ] Port PMM/VMM/slab/scheduler/timers/syscalls and the driver set.
 - [ ] LP64 ABI plus a 32-bit compat shim so existing binaries keep running.
 - [ ] NX, SMEP/SMAP where the CPU provides them.

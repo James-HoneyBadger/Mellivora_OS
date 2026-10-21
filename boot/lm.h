@@ -56,6 +56,7 @@ struct lm_cpu {
     u64 exit_arg;         /* 0x58  second word SYS_EXIT was given */
     u64 last_user_rip;    /* 0x60  user instruction that entered the kernel */
     u64 last_user_rsp;    /* 0x68  user stack pointer it entered with */
+    u64 kstack_base;      /* 0x70  bottom of kstack_top's stack, for the fault check */
 };
 
 #define CPU_KSTACK_TOP_OFF 0x10
@@ -80,6 +81,32 @@ struct lm_syscall_frame {
     u64 rdx, rsi, rdi, rax;
     u64 rip, cs, rflags, rsp, ss;
 };
+
+/*
+ * What the CPU and lm_isr_common leave for the fault handler, in memory order:
+ * the registers the stub pushed last are nearest the stack pointer, and the
+ * values the CPU pushed sit above them.
+ *
+ * `rsp`/`ss` exist only when the fault changed privilege (CS says ring 3); a
+ * fault taken in ring 0 pushes neither, and everything the CPU pushed shifts
+ * down by 16 bytes. The handlers read `rsp`/`ss` only when `(cs & 3) == 3`.
+ */
+struct lm_fault_frame {
+    u64 r15, r14, r13, r12, r11, r10, r9, r8;
+    u64 rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    u64 vec, err;
+    u64 rip, cs, rflags, rsp, ss;
+};
+
+/*---------------------------------------
+ * IDT and exceptions
+ *---------------------------------------*/
+
+/* Install the long-mode IDT (vectors 0..21; the rest stay absent). */
+void idt_init(void);
+
+/* Runs on the stack the CPU selected; 1 resumes the interrupted context. */
+int lm_fault_dispatch(struct lm_fault_frame *frame);
 
 /* GDT selectors. The order matters twice over: SYSCALL loads CS/SS from
  * STAR[47:32] and STAR[47:32]+8, and SYSRET loads CS/SS from

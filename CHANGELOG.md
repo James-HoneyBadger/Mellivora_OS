@@ -1,5 +1,37 @@
 # Mellivora OS - Changelog
 
+## Unreleased - an IDT, and faults that report instead of triple-faulting
+
+### Port (P2)
+
+- **`boot/lm_idt.c`: a long-mode IDT and one exception entry path.** Vectors 0..21 get
+  stubs - the CPU pushes an error code for 8/10/11/12/13/14/17/21 and the stub pushes a
+  zero for the rest, so every frame has the same shape - and anything above 21 stays
+  absent, which makes the CPU turn it into `#GP` and land in the same handler. The
+  common path does `SWAPGS`, saves all fifteen general registers, calls the C dispatcher
+  with the frame, and `IRETQ`s back when the handler asks to resume. The entry frame is
+  pinned by `_Static_assert`s: the registers the stub pushes sit nearest the stack
+  pointer, and the CPU's five values sit above them.
+- **`TSS.RSP0` is now exercised instead of merely declared.** The ring-3 program starts
+  with `INT3`, so the CPU has to load the kernel stack from the TSS before the handler
+  runs. The dispatcher checks that its own RSP is inside the per-CPU kernel stack, that
+  the frame's CS is `0x23` (ring 3, so the CPU really did push `RSP`/`SS`) and records
+  the user stack pointer from that frame; `#BP` is the one vector this nucleus resumes
+  (INT3's saved RIP already points past it), so the program then makes its three
+  syscalls and exits exactly as before.
+- **An unexpected fault no longer triple-faults.** The handler prints the vector and
+  its name, the error code, RIP, CS, the user RSP when there is one, CR2 for `#PF` and
+  whether the handler got a stack from the TSS, then halts without printing the boot
+  marker. Verified by pointing the user program at an unmapped address:
+  `vec=14 (#PF) err=0x0006 rip=0x40000019 cs=0x0023 rsp=0x40002000 cr2=0x50000000
+  stack=ok`, after which the run stops instead of rebooting.
+- The IDT is installed before anything can fault and survives the GDT reload in
+  `lm_user_load_gdt`, because the user GDT keeps kernel code at selector `0x08`.
+- A fault frame is not the same shape at both rings: a fault taken in ring 0 pushes
+  RIP/CS/RFLAGS only, so the C side reads `rsp`/`ss` only when `(cs & 3) == 3`. The
+  first version had the frame struct in push order rather than memory order and read
+  page-table bytes as a vector number - the static asserts now cover it.
+
 ## Unreleased - ring 3: a user GDT/TSS, SWAPGS and a return to a user stack
 
 ### Port (P2)
