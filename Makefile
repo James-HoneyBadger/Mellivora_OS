@@ -122,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults
 
 all: $(IMAGE)
 
@@ -591,15 +591,54 @@ run-uefi: check-qemu $(UEFI_IMAGE)
 # Assembles stage2 with KERNEL_64BIT defined so it enters long mode.
 # -----------------------------------------------------------------------
 KERNEL_64BIN  = kernel64.bin
+KERNEL_64ASM  = kernel64-asm.bin
 STAGE2_64BIN  = stage2-64.bin
 IMAGE_64      = mellivora64.img
 
-# The 64-bit nucleus (roadmap P2). stage2 has already negotiated long mode
-# and jumped to 0x00100000, so this is assembled as plain 64-bit code.
-$(KERNEL_64BIN): boot/lm_nucleus.asm
+# The 64-bit nucleus (roadmap P2) is freestanding C11. The toolchain is probed
+# rather than assumed, because a native gcc on a non-x86 host compiles happily
+# and produces the wrong architecture: tools/find_lm_toolchain.sh tries
+# $LM_CC/$LM_LD, x86_64-elf-gcc, clang --target=x86_64-elf and finally the host
+# gcc, and verifies each by checking e_machine in the object it produces.
+LM_CC   := $(shell sh tools/find_lm_toolchain.sh cc 2>/dev/null)
+LM_LD   := $(shell sh tools/find_lm_toolchain.sh ld 2>/dev/null)
+# -mgeneral-regs-only keeps the compiler off the SSE registers: long mode is
+# entered without the CR4.OSFXSR/OSXMMEXCPT setup that makes SSE legal, so the
+# first auto-vectorised memcpy would be an invalid-opcode fault. The nucleus
+# enables those bits anyway, for the FPU/SSE code that comes later.
+LM_CFLAGS = -std=c11 -m64 -O2 -Wall -Wextra -Werror \
+            -ffreestanding -fno-builtin -fno-stack-protector \
+            -fno-pic -fno-pie -mno-red-zone -mcmodel=kernel \
+            -mgeneral-regs-only -fno-asynchronous-unwind-tables \
+            -fno-unwind-tables
+LM_LDFLAGS = -T boot/lm64.ld --oformat binary
+
+KERNEL_64_OBJ = boot/lm_nucleus.o
+
+$(KERNEL_64_OBJ): boot/lm_nucleus.c
+	@[ -n "$(LM_CC)" ] || { \
+	    echo "  ERROR: no x86-64 C compiler found."; \
+	    echo "  Install x86_64-elf-gcc, or clang + ld.lld, or set LM_CC/LM_LD."; \
+	    exit 1; }
+	$(LM_CC) $(LM_CFLAGS) -c $< -o $@
+
+$(KERNEL_64BIN): $(KERNEL_64_OBJ) boot/lm64.ld
+	@[ -n "$(LM_LD)" ] || { echo "  ERROR: no x86-64 linker found (set LM_LD)."; exit 1; }
+	$(LM_LD) $(LM_LDFLAGS) -o $@ $(KERNEL_64_OBJ)
+	@echo "  64-bit nucleus: $$(wc -c < $@) bytes, linked at 0xFFFFFFFF80100000"
+
+# The original hand-written nucleus, kept as a second target so the boot path
+# can still be exercised without a C toolchain (make 64bit-asm).
+$(KERNEL_64ASM): boot/lm_nucleus.asm
 	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
 
-$(STAGE2_64BIN): $(STAGE2_SRC) kernel_sectors.inc
+# stage2 only needs one sector count, so the 64-bit file defines the same name.
+kernel64_sectors.inc: $(KERNEL_64BIN)
+	@KSECTORS=$$(( ($$(wc -c < $(KERNEL_64BIN)) + 511) / 512 )); \
+		echo "KERNEL_SECTORS  equ $$KSECTORS" > $@; \
+		echo "  64-bit kernel sectors: $$KSECTORS"
+
+$(STAGE2_64BIN): $(STAGE2_SRC) kernel64_sectors.inc
 	$(NASM) -f bin -DKERNEL_64BIT=1 -o $@ -l $(@:.bin=.lst) $<
 
 $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN)
@@ -612,6 +651,22 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN)
 
 64bit: $(IMAGE_64)
 	@echo "=== Run with: make run IMAGE=$(IMAGE_64) ==="
+
+# Same boot path, hand-written nucleus: exercises stage2 and the higher-half
+# mapping without needing a C toolchain at all.
+IMAGE_64_ASM = mellivora64-asm.img
+
+$(STAGE2_64BIN): kernel64_sectors.inc
+
+$(IMAGE_64_ASM): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64ASM)
+	@echo "=== Building 64-bit image (asm nucleus) ==="
+	$(DD) if=/dev/zero of=$(IMAGE_64_ASM) bs=1M count=$(IMAGE_SIZE_MB) status=none
+	$(DD) if=$(BOOT_BIN)     of=$(IMAGE_64_ASM) bs=512 count=1  conv=notrunc status=none
+	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64_ASM) bs=512 seek=1  conv=notrunc status=none
+	$(DD) if=$(KERNEL_64ASM) of=$(IMAGE_64_ASM) bs=512 seek=33 conv=notrunc status=none
+
+64bit-asm: $(IMAGE_64_ASM)
+	@echo "=== Built $(IMAGE_64_ASM) ==="
 
 # Boot the 64-bit nucleus and assert it reached long mode and reported in.
 check-longmode: $(IMAGE_64)
@@ -641,7 +696,8 @@ help:
 	@echo "  Build (v10.0 new targets)"
 	@echo "    make uefi         Build UEFI PE32+ EFI application (boot/uefi_loader.efi)"
 	@echo "    make uefi-image   Build UEFI-bootable GPT disk image (mellivora-uefi.img)"
-	@echo "    make 64bit        Build 64-bit kernel + stage2 image (mellivora64.img)"
+	@echo "    make 64bit        Build the 64-bit image: C11 nucleus, linked high (mellivora64.img)"
+	@echo "    make 64bit-asm    Same, with the hand-written asm nucleus (no C toolchain needed)"
 	@echo "    make hbpkg        Build package manager (tools/hbpkg)"
 	@echo ""
 	@echo "  Run"
@@ -718,5 +774,8 @@ clean:
 	rm -f *.lst
 	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
 	rm -rf .build
+	rm -f $(KERNEL_64BIN) $(KERNEL_64ASM) $(STAGE2_64BIN) $(IMAGE_64) \
+	      $(IMAGE_64_ASM) $(KERNEL_64_OBJ) kernel64_sectors.inc stage2-64.lst \
+	      kernel64-asm.lst
 	# v10.0 additions
 	rm -f $(UEFI_EFI) $(UEFI_SO) $(HBPKG_BIN) $(UEFI_IMAGE)

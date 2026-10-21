@@ -7,6 +7,12 @@ and the nucleus reported in over COM1.
 
 Usage: tests/test_longmode.py [image]
 
+The default assertions are the ones the C nucleus establishes: the image runs
+at its link address in the top 2 GB and a `syscall` reaches a handler. Pass
+--marker-only for the hand-written asm nucleus, which only proves the boot.
+
+Usage: tests/test_longmode.py [image] [--marker-only]
+
 Env:
   LONGMODE_ALLOW_SKIP=1  exit 0 instead of failing when QEMU is missing
   LONGMODE_TIMEOUT=45    seconds to wait for the marker
@@ -23,10 +29,25 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import qemu_drive as qd  # noqa: E402
 
-IMAGE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "mellivora64.img")
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+IMAGE = ARGS[0] if ARGS else os.path.join(ROOT, "mellivora64.img")
+# The hand-written asm nucleus proves the boot path only - it has no C runtime,
+# so it cannot report the higher half or a SYSCALL round trip. --marker-only
+# tests that nucleus; the default asserts everything the C port establishes.
+MARKER_ONLY = "--marker-only" in sys.argv[1:]
 TIMEOUT = int(os.environ.get("LONGMODE_TIMEOUT", "45"))
 ALLOW_SKIP = os.environ.get("LONGMODE_ALLOW_SKIP", "0") == "1"
 MARKER = "MELLIVORA64_OK"
+
+# A boot marker alone would also be produced by a nucleus that ran in the low
+# half. These are the facts the port has to establish, so the test checks them:
+# the image runs at its *link* address in the top 2 GB, and the SYSCALL/SYSRET
+# MSRs are programmed and a 64-bit `syscall` reaches a handler and returns.
+REQUIRED = (
+    "MELLIVORA64_OK",
+    "base=0xFFFFFFFF80100000",
+    "syscall=ok",
+)
 
 
 def main():
@@ -54,20 +75,26 @@ def main():
     try:
         serial = qd.SerialConsole(ser_path)
         deadline = time.time() + TIMEOUT
+        text = ""
         while time.time() < deadline:
             text = serial.text()
             if MARKER in text:
-                ok = True
                 break
             if proc.poll() is not None:
                 break
             time.sleep(0.3)
+        required = (MARKER,) if MARKER_ONLY else REQUIRED
+        missing = [needle for needle in required if needle not in text]
+        ok = not missing
         if ok:
-            print("  PASS  long mode entered and nucleus reported")
+            if MARKER_ONLY:
+                print("  PASS  long mode entered and nucleus reported")
+            else:
+                print("  PASS  long mode, higher half and SYSCALL entry")
         else:
-            print("  FAIL  %s never appeared on COM1" % MARKER, file=sys.stderr)
+            print("  FAIL  missing on COM1: %s" % ", ".join(missing), file=sys.stderr)
             print("---- serial ----", file=sys.stderr)
-            print(serial.text()[-800:], file=sys.stderr)
+            print(text[-800:], file=sys.stderr)
     finally:
         proc.terminate()
         try:

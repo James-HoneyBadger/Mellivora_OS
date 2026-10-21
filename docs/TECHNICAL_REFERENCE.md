@@ -41,6 +41,7 @@ anyone who wants to understand how the system works under the hood.
 31. [Command History](#command-history)
 32. [Tab Completion](#tab-completion)
 33. [Fault Injection (P10)](#fault-injection-p10)
+34. [64-bit Nucleus (P2)](#64-bit-nucleus-p2)
 
 ---
 
@@ -1927,6 +1928,70 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 **Total: 186 syscalls defined (0–185, no gaps).**
 
 ---
+
+## 64-bit Nucleus (P2)
+
+The 32-bit tree is complete and green; the 64-bit tree is being built beside it, starting
+from a nucleus that proves the boot path. `make 64bit` builds `mellivora64.img`, a
+separate image with its own stage2 (`stage2-64.bin`, assembled with `-DKERNEL_64BIT=1`)
+and nucleus; `make` still builds the 32-bit image and nothing in this port changes it.
+
+### Toolchain
+
+`tools/find_lm_toolchain.sh` decides what compiles the nucleus. It tries, in order,
+`$LM_CC`, `x86_64-elf-gcc`, `clang --target=x86_64-elf` and the host `gcc`, and accepts a
+candidate only after compiling a one-line object and reading `e_machine` out of its ELF
+header - a native gcc on an ARM host compiles happily and produces the wrong
+architecture, so "the command exists" is not enough. The linker is chosen the same way
+(`x86_64-elf-ld`, `ld.lld -m elf_x86_64`, `ld -m elf_x86_64`). Compiler flags:
+
+| Flag | Why |
+| --- | --- |
+| `-ffreestanding -fno-builtin` | no libc, no headers; `memcpy`/`memset` are provided by the nucleus |
+| `-mno-red-zone` | an interrupt would otherwise clobber the 128 bytes below RSP |
+| `-mcmodel=kernel` | every symbol reachable with a sign-extended 32-bit displacement, so code is position-dependent but small |
+| `-mgeneral-regs-only` | no SSE: long mode starts with `CR4.OSFXSR` clear (see below) |
+| `-fno-pic -fno-pie -fno-stack-protector` | nothing to relocate and no guard code at this stage |
+| `-fno-asynchronous-unwind-tables -fno-unwind-tables` | no `.eh_frame` in a freestanding image |
+
+### Higher half
+
+`boot/lm64.ld` links the nucleus at `0xFFFFFFFF80100000` and `--oformat binary` emits the
+sections in link order, so the flat image is exactly what stage2 places at physical
+1 MB. stage2 then builds two mappings over the same pages:
+
+| Table | Entry | Covers |
+| --- | --- | --- |
+| `PML4[0]` | `PDPT[0] -> PDT` | identity map, 0..16 MB |
+| `PML4[511]` | `PDPT[510] -> PDH` | `0xFFFFFFFF80000000`..+16 MB |
+
+and jumps to `KERNEL_LINK_ADDR` instead of `0x00100000`, so position-dependent code runs
+where it was linked while low memory (the VGA buffer, stage2's stack) stays reachable.
+The two tables must stay in step: `KERNEL_LINK_ADDR` in `stage2.asm` and the `.` in
+`boot/lm64.ld` are the same number.
+
+### Entry and SYSCALL
+
+`lm_start` (naked, placed in `.text.lm_start` so it lands at the image base) clears
+`CR0.EM`/`TS`, sets `MP` and enables `CR4.OSFXSR`/`OSXMMEXCPT` - firmware leaves them
+clear and the first SSE instruction would otherwise be an invalid-opcode fault. It then
+calls `lm_main`, which zeroes `.bss` (it is `NOBITS`, so the loader carried no bytes for
+it), switches from stage2's low stack to its own 16 KB stack *inside* `.bss` - which is
+why the switch happens after the zeroing - initialises COM1 and reports.
+
+`syscall_roundtrip` programs `EFER.SCE`, `STAR` (kernel CS 0x08 / SS 0x10), `LSTAR`
+(entry point) and `FMASK=0`, executes a 64-bit `syscall`, and the handler returns with
+`iretq` using `RCX`/`R11` as SYSCALL left them. A same-privilege `IRETQ` pops RIP, CS and
+RFLAGS only - it does not pop RSP/SS - so the frame is exactly those three. The ported
+path will add `swapgs` and a per-CPU kernel stack.
+
+### What the test asserts
+
+`tests/test_longmode.py` boots the image under `-cpu qemu64` and requires
+`MELLIVORA64_OK`, `base=0xFFFFFFFF80100000` and `syscall=ok` on COM1, so a nucleus that
+booted in the wrong half or with a broken SYSCALL path fails rather than printing a
+marker. `--marker-only` relaxes this to the marker for the hand-written asm nucleus
+(`make 64bit-asm`), which exists as a boot-path regression that needs no C toolchain.
 
 ## Fault Injection (P10)
 

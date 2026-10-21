@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`) |
+| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven |
 
 ## Phases
 
@@ -118,8 +118,16 @@ A phase does not close until these are measured:
 ### P2 · 64-bit foundation (6 sprints)
 
 - [x] Long-mode boot: CPUID gate, identity map, far jump, 64-bit nucleus on COM1.
-- [ ] Cross toolchain (`x86_64-elf-gcc`), dual-target build.
-- [ ] Higher-half kernel, per-CPU blocks, `SYSCALL` entry.
+- [x] Cross toolchain, dual-target build. `tools/find_lm_toolchain.sh` probes for
+  `$LM_CC`, `x86_64-elf-gcc`, `clang --target=x86_64-elf` or the host gcc and checks the
+  object it produces, so the build works on a non-x86 host (clang+lld here) and on x86
+  CI (host gcc). `make` still builds the 32-bit tree; `make 64bit` builds the C nucleus.
+- [x] Higher-half kernel. The nucleus is linked at `0xFFFFFFFF80100000` and stage2 maps
+  that address range over the same physical pages as the identity map, then jumps to the
+  link address; the nucleus reports its own address to prove where it runs.
+- [x] `SYSCALL` entry (MSRs programmed, 64-bit `syscall` reaches a handler and returns
+  with `iretq`). The per-CPU kernel stack, `swapgs` and per-CPU blocks are what remains.
+- [ ] Per-CPU blocks and the ring-3 syscall path.
 - [ ] Port PMM/VMM/slab/scheduler/timers/syscalls and the driver set.
 - [ ] LP64 ABI plus a 32-bit compat shim so existing binaries keep running.
 - [ ] NX, SMEP/SMAP where the CPU provides them.
@@ -201,6 +209,7 @@ pull request on regression.
   and requires the free-page count to come back each time, a file create whose writes
   all fail to report an error and still work afterwards, and a dropped frame to be
   retried past. `make check-faults` repeats it; `check-runtime` runs it once.
+- [ ] Crash dumps over serial, 24 h soak, performance gates.
 
 ### P11 · Ecosystem and release engineering (continuous)
 

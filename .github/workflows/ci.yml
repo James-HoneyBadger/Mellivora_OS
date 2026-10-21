@@ -121,10 +121,18 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nasm make python3 qemu-system-x86
+          # gcc is the x86-64 C compiler for the nucleus on this x86-64 host;
+          # tools/find_lm_toolchain.sh also accepts x86_64-elf-gcc or clang.
+          sudo apt-get install -y nasm make python3 gcc binutils qemu-system-x86
 
       - name: Build 64-bit image
         run: make 64bit
+
+      - name: Build 64-bit image with the asm nucleus
+        run: make 64bit-asm
+
+      - name: Asm-nucleus boot test
+        run: python3 tests/test_longmode.py mellivora64-asm.img --marker-only
 
       - name: Long-mode boot test
         run: make check-longmode

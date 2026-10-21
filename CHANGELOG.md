@@ -1,5 +1,39 @@
 # Mellivora OS - Changelog
 
+## Unreleased - 64-bit nucleus in C, linked into the higher half
+
+### Port (P2)
+
+- **The 64-bit nucleus is now freestanding C11** (`boot/lm_nucleus.c`) instead of
+  hand-written asm, which is the first time the tree has code a C compiler produces.
+  `tools/find_lm_toolchain.sh` probes for a toolchain that can actually target x86-64 -
+  `$LM_CC`, `x86_64-elf-gcc`, `clang --target=x86_64-elf`, then the host gcc - and
+  verifies each candidate by checking `e_machine` in the object it produces, because a
+  native gcc on a non-x86 host compiles happily and emits the wrong architecture.
+- **The nucleus is linked into the higher half** at `0xFFFFFFFF80100000`
+  (`boot/lm64.ld`), where `-mcmodel=kernel` expects it: stage2 now builds a second 2 MB
+  mapping (`PML4[511]`/`PDPT[510]`) over the same physical range as the identity map and
+  jumps to the link address. The nucleus prints `base=0xFFFFFFFF80100000` and a `.bss`
+  address to prove it is executing where it was linked.
+- `-mgeneral-regs-only` keeps the compiler off the SSE registers: long mode comes up
+  with `CR4.OSFXSR`/`OSXMMEXCPT` clear, so the auto-vectorised `memset` clang generated
+  for `.bss` zeroing was an invalid-opcode fault (a silent triple fault at boot). The
+  entry code now clears `CR0.EM`/`TS`, sets `MP` and enables both `CR4` bits.
+- **SYSCALL entry works**: `EFER.SCE`, `STAR`, `LSTAR` and `FMASK` are programmed and a
+  64-bit `syscall` reaches a handler that returns with `iretq`, reported as
+  `syscall=ok`. This is the shape the ported syscall path will use; the per-CPU stack
+  switch belongs with the per-CPU blocks.
+- `.bss` is `NOBITS` in the flat image, so the loader carries no bytes for it: the
+  nucleus zeroes it itself, on the stack stage2 left (low memory, identity mapped),
+  before switching to its own stack - which lives inside `.bss` and cannot be used until
+  it is clear.
+- `tiny stage2` reads its own sector count now (`kernel64_sectors.inc`, generated from
+  `kernel64.bin`) instead of loading the 32-bit kernel's 1.8 MB into the 64-bit image.
+- `make 64bit` builds the C nucleus; `make 64bit-asm` keeps the hand-written nucleus
+  reachable as a boot-path regression that needs no C toolchain. `make check-longmode`
+  asserts the higher half and the SYSCALL round trip, and `--marker-only` tests the asm
+  nucleus. CI's long-mode job builds and boots both.
+
 ## Unreleased - fault injection for the error paths
 
 ### Reliability
