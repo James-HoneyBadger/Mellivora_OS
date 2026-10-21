@@ -79,12 +79,19 @@ REQUIRED = (
     "hbfs] root=",
     "/init=64",
     "/hello_tree=",
-    "tasks=5 spaces=5",
+    "tasks=6 spaces=6",
     # The write demo: it creates /persist.txt, reads it back through the same
     # open/read path, makes /tmpdir, puts a file in it, unlinks it and sees the
     # directory go empty again.
     "read back: written by mellivora64",
     "write path ok",
+    # The shell: a prompt with the working directory, a listing, a file's
+    # contents, a rejected command and a clean exit.
+    "mellivora:/> ",
+    "  motd size=16",
+    "sh: unknown command",
+    "bye",
+    "exit=0x005A",
     # One of the 32-bit tree's own programs, built by `make programs` from
     # programs/hello.asm and loaded unchanged at its 0x00300000 program base.
     "Hello, World! Welcome to Mellivora OS!",
@@ -117,8 +124,14 @@ CPU_MODEL = os.environ.get("LONGMODE_CPU", "qemu64,+smep,+smap")
 SKIP_BIG = os.environ.get("LONGMODE_SKIP_BIG", "0") == "1"
 
 
-def boot_and_capture(qemu, image, mem_mb, want):
-    """Boot the image with mem_mb of RAM and return the COM1 text once want appears."""
+def boot_and_capture(qemu, image, mem_mb, want, script=()):
+    """Boot the image with mem_mb of RAM and return the COM1 text once want appears.
+
+    `script` is a list of (marker, line to type) steps: when a marker shows up on
+    the console, that line is sent back down the serial line. That is how the
+    shell task is driven - it is the last task to run and it waits for input, so
+    nothing after it happens on its own.
+    """
     workdir = tempfile.mkdtemp(prefix="lm-test-")
     ser_path = os.path.join(workdir, "serial.sock")
     proc = subprocess.Popen(
@@ -129,11 +142,14 @@ def boot_and_capture(qemu, image, mem_mb, want):
          "-monitor", "none", "-net", "none"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     text = ""
+    steps = list(script)
     try:
         serial = qd.SerialConsole(ser_path)
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
             text = serial.text()
+            if steps and steps[0][0] in text:
+                serial.send_line(steps.pop(0)[1])
             if want in text:
                 break
             if proc.poll() is not None:
@@ -220,7 +236,15 @@ def main():
         print("  FAIL  long-mode test: missing %s (run 'make 64bit')" % IMAGE, file=sys.stderr)
         return 1
 
-    text = boot_and_capture(qemu, IMAGE, 256, MARKER)
+    # The shell is the last task: it prints a prompt, lists the working
+    # directory, prints a file, rejects a command it does not know and leaves.
+    SHELL_SCRIPT = (
+        ("mellivora:/> ", "ls"),
+        ("  sh size=", "cat /motd"),
+        ("hello from hbfs\nmellivora:/> ", "nonsense"),
+        ("sh: unknown command", "quit"),
+    )
+    text = boot_and_capture(qemu, IMAGE, 256, MARKER, SHELL_SCRIPT)
     required = (MARKER,) if MARKER_ONLY else REQUIRED
     missing = [needle for needle in required if needle not in text]
     if missing:
@@ -247,7 +271,7 @@ def main():
         print("  PASS  long mode, VMM, tasks, NX/SMEP/SMAP, syscalls, PCI/ATA, HBFS, exec, 32-bit mode (big-memory skipped)")
         return 0
 
-    big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER)
+    big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER, SHELL_SCRIPT)
     stats = parse_pmm(big)
     if stats is None:
         print("  FAIL  no frame-allocator report at %d MB" % BIG_MB, file=sys.stderr)

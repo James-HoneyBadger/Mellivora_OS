@@ -24,6 +24,10 @@ void *memset(void *dst, int value, unsigned long n);
 /* Console: COM1, initialised by the nucleus before anything else prints. */
 void kputc(char c);
 void kputs(const char *s);
+/* The next byte COM1 has received, or -1 when the input register is empty.
+ * Polled: the console is a UART, and a task that wants a key spins with
+ * SYS_YIELD between checks so the other tasks keep running. */
+int kgetc(void);
 void kput_hex(u64 value, int digits);
 void kput_dec(u64 value);
 
@@ -297,6 +301,10 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_MKDIR  18
 #define SYS_UNLINK 19
 #define SYS_CREATE 20
+#define SYS_PUTCHAR 21
+#define SYS_GETCHAR 22
+#define SYS_CLEAR  23
+#define SYS_SLEEP  24
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL

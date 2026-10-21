@@ -485,6 +485,48 @@ static struct lm_fault_frame *sys_create(struct lm_fault_frame *f)
     return f;
 }
 
+static struct lm_fault_frame *sys_putchar(struct lm_fault_frame *f)
+{
+    kputc((char)f->rdi);
+    f->rax = 1;
+    return f;
+}
+
+/* getchar() - the next character from the console, or -1 when there is none.
+ * Non-blocking on purpose: the caller decides whether to spin, and a spin that
+ * yields lets the other tasks run. */
+static struct lm_fault_frame *sys_getchar(struct lm_fault_frame *f)
+{
+    int c = kgetc();
+    f->rax = (u64)(long)c;
+    return f;
+}
+
+/* clear() - the ANSI sequence a terminal understands, since the console is the
+ * UART and there is no text buffer to clear. */
+static struct lm_fault_frame *sys_clear(struct lm_fault_frame *f)
+{
+    kputs("\x1b[2J\x1b[H");
+    f->rax = 0;
+    return f;
+}
+
+/* sleep(milliseconds) - counted in timer ticks. HWLT parks the CPU until the PIT
+ * interrupts, and the tick's own path may switch tasks from here, so this is a
+ * real sleep rather than a spin: the return frame is whatever the tick left to
+ * run, and this task resumes at the hlt below when it is scheduled again. */
+static struct lm_fault_frame *sys_sleep(struct lm_fault_frame *f)
+{
+    u64 want = f->rdi / 10;         /* the PIT runs at 100 Hz */
+    u64 until = cpu_this()->ticks + want;
+
+    while (cpu_this()->ticks < until) {
+        __asm__ volatile("sti; hlt");
+    }
+    f->rax = 0;
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -538,6 +580,10 @@ static const struct lm_syscall syscalls[] = {
     [18] = {"mkdir", sys_mkdir, 1},
     [19] = {"unlink", sys_unlink, 1},
     [20] = {"create", sys_create, 1},
+    [21] = {"putchar", sys_putchar, 0},
+    [22] = {"getchar", sys_getchar, 0},
+    [23] = {"clear", sys_clear, 0},
+    [24] = {"sleep", sys_sleep, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -726,6 +772,16 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
     case 18:                        /* SYS_SETCOLOR: no text console yet */
         f->rax = 0;
         return f;
+    case 1:                         /* SYS_PUTCHAR: EBX=char */
+        return sys_putchar(f);
+    case 2:                         /* SYS_GETCHAR -> EAX=char or -1 */
+    case 4:                         /* SYS_READ_KEY: the same thing here */
+    case 33:                        /* SYS_SERIAL_IN */
+        return sys_getchar(f);
+    case 17:                        /* SYS_CLEAR */
+        return sys_clear(f);
+    case 16:                        /* SYS_SLEEP: EBX=milliseconds */
+        return sys_sleep(f);
     case 10:                        /* SYS_SEEK: EBX=fd ECX=offset EDX=whence */
         f->rdi = (u64)(u32)f->rbx;
         f->rsi = (u64)(s64)(int)(u32)f->rcx;

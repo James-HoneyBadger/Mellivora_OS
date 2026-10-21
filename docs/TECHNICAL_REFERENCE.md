@@ -2278,6 +2278,31 @@ its metadata come back from one call. Every user pointer involved - the name buf
 `copy_to_user`, which validates each page with the VMM before storing under
 STAC/CLAC; a bad pointer is a `-1` return, not a kernel fault.
 
+### The console is a UART
+
+There is no text buffer and no keyboard driver: the console is COM1, so a character
+in is one read of the line status register (`kgetc`, which returns -1 rather than
+blocking) and a character out is one poll of the transmit register (`kputc`). That
+makes the abstract console calls concrete:
+
+| Call | What it does here |
+| --- | --- |
+| `putchar(c)` | `kputc` |
+| `getchar()` | `kgetc` - non-blocking, -1 when nothing has arrived |
+| `clear()` | writes the ANSI `ESC[2J ESC[H` a terminal understands |
+| `sleep(ms)` | `sti; hlt` until the PIT has counted `ms/10` ticks |
+
+`getchar` returning -1 instead of blocking is deliberate: the caller decides how to
+wait, and the test's shell waits with `sleep(10)`, which parks the CPU until the timer
+interrupts and lets the scheduler run anyone else. A program that spun on `getchar`
+instead would still work but would cost six figures of syscalls to wait for a line.
+
+Because a task can now sit inside a syscall while ticks arrive, the scheduler's timer
+report distinguishes them: `ticks` is every PIT interrupt, `user` the ones taken from
+ring 3 and `kernel` the ones taken inside a syscall. What must still hold, and is
+checked, is that every tick landed on that task's own kernel stack - the TSS `RSP0`
+was right - and that ticks do reach ring 3 at all.
+
 ### Writing to the volume
 
 The bitmap is 16 blocks at LBA 4097: one bit per 4 KB data block, numbered from the

@@ -86,6 +86,14 @@ void kputc(char c)
     outb(COM1, (u8)c);
 }
 
+int kgetc(void)
+{
+    if ((inb(COM1 + 5) & 0x01) == 0) {
+        return -1;                  /* the line status register's data-ready bit */
+    }
+    return (int)inb(COM1);
+}
+
 void kputs(const char *s)
 {
     while (*s != '\0') {

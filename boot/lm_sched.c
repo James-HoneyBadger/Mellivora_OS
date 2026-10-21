@@ -277,7 +277,11 @@ static void sched_report(void)
         ok = 0;                     /* nothing was ever preempted */
     }
 
-    int timer_ok = cpu->ticks > 0 && cpu->user_ticks == cpu->ticks &&
+    /* Every tick must land on the task's own kernel stack, and ticks must reach
+     * ring 3 - but not *only* ring 3: a task inside a blocking syscall (the
+     * shell's sleep, waiting for a key) is counted in the kernel, so the two
+     * counters differ by design. */
+    int timer_ok = cpu->ticks > 0 && cpu->user_ticks > 0 &&
                    cpu->tick_stack == cpu->ticks;
     if (!timer_ok) {
         ok = 0;                     /* nothing preempted anything */
@@ -295,6 +299,8 @@ static void sched_report(void)
     kput_dec(cpu->ticks);
     kputs(" user=");
     kput_dec(cpu->user_ticks);
+    kputs(" kernel=");
+    kput_dec(cpu->ticks - cpu->user_ticks);
     kputs(" stack=");
     kputs(cpu->tick_stack == cpu->ticks ? "ok" : "FAIL");
     kputs("\r\n");
