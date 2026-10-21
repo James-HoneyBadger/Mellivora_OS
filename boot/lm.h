@@ -291,6 +291,25 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 void syscall_init(void);   /* prints the ABI and the table size */
 
 /*---------------------------------------
+ * PCI and block storage
+ *---------------------------------------*/
+
+struct pci_device;
+
+/* Enumerate bus 0..255 and report the count; returns it. */
+int pci_init(void);
+int pci_count(void);
+const struct pci_device *pci_find(u8 class_code, u8 subclass);
+
+/* Polling ATA PIO on the primary channel. */
+int ata_init(void);
+int ata_present(void);
+u64 ata_sector_count(void);
+int ata_read(u64 lba, void *buffer);
+int ata_write(u64 lba, const void *buffer);
+int ata_selftest(void);
+
+/*---------------------------------------
  * Scheduler
  *---------------------------------------*/
 

@@ -2178,6 +2178,34 @@ The user program waits for three ticks before its `PING`/`WHOAMI`/`EXIT` sequenc
 spinning in user mode between polls of `SYS_TICKS`. If none arrives it exits with a code
 the nucleus rejects, so a dead PIT fails the run instead of hanging it.
 
+### Storage path (PCI and ATA)
+
+The first driver pair sits under everything the filesystem will need.
+
+`boot/lm_pci.c` walks configuration space through the legacy 0xCF8/0xCFC pair - address
+in, 32-bit read out - bus 0..255, device 0..31, function 0..7, honouring the
+multi-function bit in the header type and recording vendor, device and class for each
+entry. `pci_find(class, subclass)` is how a driver asks for its controller; the
+enumeration reports `[pci] devices=N` and the IDE controller it found.
+
+`boot/lm_ata.c` drives the primary channel in polling PIO mode:
+
+| Step | Detail |
+| --- | --- |
+| IDENTIFY | model string from words 27..46 (big-endian pairs), LBA28 sector count from words 60..61 |
+| select | drive/head `0xE0 \| LBA[27:24]`, then four status reads (the architectural 400 ns) |
+| transfer | 256 `inw`/`outw` per sector, one sector per command |
+| status | bounded poll: BSY clear, DRQ set for a transfer, ERR/DF abort |
+| durability | FLUSH after a write, so a read-back cannot see the old sector |
+
+Polling is a deliberate choice for now: the nucleus cannot route an IRQ to a driver yet,
+and a device touched only at boot has nothing to overlap with.
+
+The self-test reads LBA 0 and checks stage1's `0x55AA`, then writes a pattern to the last
+sector, reads it back and compares. The first half proves the read path against bytes the
+image really contains (the boot sector), the second the write path and the flush. The
+image is disposable, so leaving the pattern on the last sector is harmless.
+
 ### Syscalls
 
 `boot/lm_syscall.c` dispatches from a table indexed by number. The ABI is the LP64 one
@@ -2336,14 +2364,15 @@ Two long-mode details are worth knowing here because both were faults first:
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
 `stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok`, `ring3=ok` (once per
 task), `sched=ok`, `nx=ok`, the hardened `nx=on smep=on smap=on` line, `abi=lp64`,
-`brk=ok` (per task) and the user program's `hello` on COM1, so a
+`brk=ok` (per task), the user program's `hello`, and `blk=ok` on COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
 agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
 timer tick to the TSS stack, preempted a task but resumed the wrong frame, switched
 tasks without switching their address spaces, left a data page executable, failed to
-read a user buffer under SMAP, kept a `brk` page mapped after the program shrank it, or
-returned to the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+read a user buffer under SMAP, kept a `brk` page mapped after the program shrank it,
+could not read or write the boot disk, or returned to the wrong stack in ring 3 fails
+rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

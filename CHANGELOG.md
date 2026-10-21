@@ -1,5 +1,27 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the storage path: PCI, ATA, and a sector round trip
+
+### Port (P2)
+
+- **`boot/lm_pci.c`: configuration-space enumeration.** The legacy 0xCF8/0xCFC pair,
+  walking every bus/device/function and recording vendor, device and class, with the
+  multi-function bit honoured. It reports `[pci] devices=5` and the IDE controller it
+  finds (`8086:7010` under QEMU), which is what a block driver needs to know.
+- **`boot/lm_ata.c`: a polling ATA PIO block driver.** IDENTIFY gives the model string
+  and the LBA28 sector count (`[ata] model=QEMU HARDDISK sectors=4194304`), and
+  `ata_read`/`ata_write` move one 512-byte sector with the 400 ns drive-select delay,
+  a bounded status poll (BSY/DRQ/ERR/DF), and a FLUSH after a write so a read-back
+  cannot see the old data. Polling rather than interrupts is deliberate: the nucleus
+  has no way to hand an IRQ to a driver yet, and a boot-time block device is the case
+  where polling costs nothing.
+- **The self-test uses the disk, not a fixture.** It reads LBA 0 and checks stage1's
+  `0x55AA` signature, then writes a pattern to the last sector, reads it back and
+  compares - so the read path is proven against data the image really contains and the
+  write path against a flush that has to complete. `[blk] blk=ok`.
+- This is the first driver ported to the 64-bit tree; the VFS front-end and HBFS sit on
+  top of `ata_read`, and the PCI list is what the network and display drivers will use.
+
 ## Unreleased - a syscall table with an LP64 ABI
 
 ### Port (P2)

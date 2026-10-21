@@ -615,7 +615,7 @@ LM_LDFLAGS = -T boot/lm64.ld --oformat binary
 
 KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_pmm.o boot/lm_cpu.o boot/lm_user.o \
                   boot/lm_idt.o boot/lm_vmm.o boot/lm_kmem.o boot/lm_irq.o \
-                  boot/lm_sched.o boot/lm_syscall.o
+                  boot/lm_sched.o boot/lm_syscall.o boot/lm_pci.o boot/lm_ata.o
 
 boot/%.o: boot/%.c boot/lm.h
 	@[ -n "$(LM_CC)" ] || { \

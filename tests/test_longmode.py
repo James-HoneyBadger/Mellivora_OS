@@ -53,8 +53,8 @@ MARKER = "MELLIVORA64_OK"
 # allocator and the page tables agree about a mapped page (and the MMU agrees
 # once it is unmapped), the slab heap hands out distinct zeroed objects across
 # two slabs, two ring-3 tasks with their own page tables run with interrupts on,
-# are preempted by timer ticks and use write/brk/yield over LP64 syscalls, each
-# makes three
+# are preempted by timer ticks and use write/brk/yield over LP64 syscalls, the PCI
+# bus and the ATA disk answer, each makes three
 # syscalls from the user page and exits with the value it round-tripped through
 # its own stack, and a fault it takes is caught on the kernel stack the TSS
 # names and resumed.
@@ -74,6 +74,7 @@ REQUIRED = (
     "abi=lp64",
     "brk=ok",
     "hello",
+    "blk=ok",
 )
 
 # A 4 GB guest has usable E820 ranges above 0x100000000 (there is a hole below
@@ -155,7 +156,7 @@ def main():
     # Scale: a guest past 4 GB only reports sane numbers if the E820 map was
     # read as 64-bit, and 8 GB is the P2 gate.
     if SKIP_BIG:
-        print("  PASS  long mode, VMM, slab heap, per-task spaces, NX/SMEP/SMAP, scheduler, LP64 syscalls (big-memory run skipped)")
+        print("  PASS  long mode, VMM, slab heap, tasks, NX/SMEP/SMAP, LP64 syscalls, PCI/ATA (big-memory run skipped)")
         return 0
 
     big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER)
@@ -176,7 +177,7 @@ def main():
         print(big[-800:], file=sys.stderr)
         return 1
 
-    print("  PASS  long mode, VMM, slab heap, per-task spaces, NX/SMEP/SMAP, scheduler, LP64 syscalls, %d MB of RAM" % usable_mb)
+    print("  PASS  long mode, VMM, slab heap, tasks, NX/SMEP/SMAP, LP64 syscalls, PCI/ATA, %d MB of RAM" % usable_mb)
     return 0
 
 
