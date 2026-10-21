@@ -89,6 +89,12 @@ void kputc(char c)
 
 int kgetc(void)
 {
+    /* The keyboard is the console a person at the machine uses; the UART is the
+     * one a test harness or a serial terminal uses. Both feed the same call. */
+    int key = kbd_getc();
+    if (key >= 0) {
+        return key;
+    }
     if ((inb(COM1 + 5) & 0x01) == 0) {
         return -1;                  /* the line status register's data-ready bit */
     }
@@ -399,6 +405,8 @@ void lm_main(void)
     serial_init();
     vga_init();
     vga_selftest();
+    kbd_init();
+    kbd_selftest();
     cpu_init();          /* GS base: the entry path needs it before it can run */
     struct cpu_features feat = cpu_harden();  /* NX/SMEP/SMAP where offered */
     idt_init();          /* a fault must report, not triple-fault */

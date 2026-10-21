@@ -423,6 +423,11 @@ int vfs_unlink(const char *path);
 u32 vfs_free_blocks(void);
 void vfs_release_task(u64 owner);
 
+/* The PS/2 keyboard, polled. */
+void kbd_init(void);
+int kbd_getc(void);          /* the next character, or -1 */
+int kbd_selftest(void);
+
 /* The VGA text console: 80x25 at 0xB8000, the second half of kputc. */
 void vga_init(void);
 void vga_putc(char c);

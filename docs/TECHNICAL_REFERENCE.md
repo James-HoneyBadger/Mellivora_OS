@@ -2299,6 +2299,26 @@ cursor register back to check it agrees with the driver's idea of the cursor, an
 clears the screen to check the blank. `SETCOLOR`, `SETCURSOR` and `CLEAR` are those
 same routines, so they are real calls and not accepted no-ops.
 
+### The keyboard
+
+The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting
+and bit 5 says it came from the mouse, which shares the controller. The default
+scancode set is 1 - one byte per key press, with 0x80 added for the release - so
+shift, control and caps are tracked from the release codes and applied when the *make*
+code for a character arrives. Control-letters are mapped to 1..26, which is what a
+terminal expects of Ctrl-C, and the firmware's leftover bytes are drained at
+initialisation so they cannot be typed into the first program that asks for a key.
+
+`kgetc` asks the keyboard first and the UART second, so one call serves both the person
+at the machine and a serial terminal or test harness. Polling again rather than an IRQ
+and a queue: nothing waits on a key in a way that would make the queue worth its
+locking.
+
+Because QEMU can inject scancodes with the monitor's `sendkey` and can read the text
+buffer with `xp`, the test types at the real keyboard path and then checks the screen:
+the characters go in through the i8042, the shell echoes them to both consoles, and the
+date line is confirmed twice - once on the serial log and once in 0xB8000.
+
 ### The heap, pipes and the command line
 
 `MALLOC`/`FREE` sit on the same break `BRK` moves, so a block is page-backed user

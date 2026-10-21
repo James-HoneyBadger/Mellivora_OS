@@ -42,7 +42,7 @@ import zlib
 COLS, ROWS = 80, 25
 
 KEYS = {
-    " ": "spc", "&": "shift-7", "|": "shift-backslash", "-": "minus",
+    "\n": "ret", "\r": "ret", "\t": "tab", " ": "spc", "&": "shift-7", "|": "shift-backslash", "-": "minus",
     ".": "dot", "/": "slash", ":": "shift-semicolon", "=": "equal",
     "'": "apostrophe", "\"": "shift-apostrophe", "_": "shift-minus",
     "*": "shift-8", ">": "shift-dot", "<": "shift-comma",

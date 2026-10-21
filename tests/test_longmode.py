@@ -98,6 +98,7 @@ REQUIRED = (
     "exit=0x005A",
     "rtc=ok",
     "vga=ok",
+    "kbd=ok",
     "sh: cleared the screen",
     "pipe=ok",
     "api ok: malloc/free, load, pipe",
@@ -175,6 +176,64 @@ def boot_and_capture(qemu, image, mem_mb, want, script=()):
         except Exception:
             proc.kill()
     return text
+
+
+def check_keyboard_and_screen(qemu, image):
+    """Type at the PS/2 keyboard and read the VGA text buffer back.
+
+    The shell is driven with monitor `sendkey` rather than the serial line, so the
+    characters go through the i8042 exactly as a keyboard's would, and the screen
+    is read straight out of 0xB8000 - which is the only way to see what the
+    display actually shows.
+    """
+    workdir = tempfile.mkdtemp(prefix="lm-kbd-")
+    ser_path = os.path.join(workdir, "serial.sock")
+    mon_path = os.path.join(workdir, "monitor.sock")
+    proc = subprocess.Popen(
+        [qemu, "-cpu", CPU_MODEL, "-m", "256",
+         "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % image,
+         "-boot", "c", "-display", "none", "-no-reboot",
+         "-serial", "unix:%s,server=on,wait=on" % ser_path,
+         "-monitor", "unix:%s,server=on,wait=off" % mon_path,
+         "-net", "none"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        serial = qd.SerialConsole(ser_path)
+        if not serial.wait_for("mellivora:/> ", TIMEOUT, proc):
+            return "the shell never reached a prompt"
+        monitor = qd.Monitor(mon_path)
+        monitor.send_text("date\n")
+
+        # Read the screen while the date is still near the bottom: the boot's own
+        # output keeps scrolling, and this is about what the display shows now.
+        deadline = time.time() + TIMEOUT
+        stamp = None
+        while time.time() < deadline and stamp is None:
+            time.sleep(0.5)
+            for line in serial.text().splitlines():
+                if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", line):
+                    stamp = line
+        if stamp is None:
+            return "no date line after typing 'date'"
+
+        screen = monitor.screen()
+        if "mellivora" not in screen:
+            return "the screen does not show the prompt"
+        if stamp not in screen:
+            return "the screen does not show %r" % stamp
+
+        monitor.send_text("quit\n")
+        if not serial.wait_for(MARKER, TIMEOUT, proc):
+            return "the shell did not finish after a typed 'quit'"
+        if "date" not in serial.text():
+            return "the typed command was never echoed"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+    return None
 
 
 def check_written_volume(image):
@@ -287,6 +346,11 @@ def main():
     if abs(guest_year - host_year) > 1:
         print("  FAIL  the clock says %s, this host says %d"
               % (stamp.group(0), host_year), file=sys.stderr)
+        return 1
+
+    problem = check_keyboard_and_screen(qemu, IMAGE)
+    if problem:
+        print("  FAIL  keyboard/screen: %s" % problem, file=sys.stderr)
         return 1
 
     # The guest wrote real HBFS structures, so the host can read them back with
