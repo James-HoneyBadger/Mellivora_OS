@@ -2190,6 +2190,21 @@ EBX/ECX/EDX, result in EAX. Everything needed to run them lives beside the LP64 
 | gate | IDT vector `0x80`, `DPL=3` (software interrupts check DPL, unlike CPU exceptions) |
 | bridge | `lm_int80_dispatch` moves EBX/ECX/EDX into the LP64 argument registers, translates the tree's numbers (`exit` 0, `print` 3, `open` 5, `read` 6, `write` 7, `close` 8, `setcolor` 18, `getpid` 54) and calls the same handlers; `print` walks a NUL-terminated string a page at a time under the STAC/CLAC bracket, and `setcolor` is accepted and ignored until there is a text console |
 
+The bridge passes the 32-bit arguments to the LP64 handlers in RDI/RSI/RDX, which are
+the same frame slots IRETQ loads back into the caller's registers. Writing them there
+is the natural thing to do and it is wrong: after one call the program finds the last
+syscall's arguments where its own EDI/ESI/EDX used to be, so a handle kept in ESI
+becomes the previous call's count. The three slots are saved and restored, and only
+RAX (plus RCX where the tree's ABI returns a size in it) changes.
+
+The compatibility tasks are also the reason the user data descriptor is flat, limit
+`0xFFFFF` with `D/B=1`. In 64-bit mode an SS ignores both fields, but a 32-bit task
+does not: with `D/B=0` the processor uses a 16-bit SP, so a stack pointer of
+`0x40002000` silently becomes `0x2000` and the first push faults. Flat binaries carry
+their data inside their one code page, so a compatibility task's page is mapped
+writable as well - the 64-bit demos keep theirs read-only and put everything mutable
+on the stack.
+
 An interrupt pushes the *caller's* CS and SS, so the frame the shell builds for `INT
 0x80` already returns to the compat segment - the opposite of the `SYSCALL` path, where
 the hardware replaces CS/SS with kernel selectors and the dispatcher has to write the
@@ -2262,6 +2277,37 @@ its metadata come back from one call. Every user pointer involved - the name buf
 `readdir` writes, the stat struct, the `getcwd` string - goes through
 `copy_to_user`, which validates each page with the VMM before storing under
 STAC/CLAC; a bad pointer is a `-1` return, not a kernel fault.
+
+### Writing to the volume
+
+The bitmap is 16 blocks at LBA 4097: one bit per 4 KB data block, numbered from the
+start of the data area, with the first four blocks reserved for the journal. Mount
+reads all of it into memory, and every allocation and free updates the in-memory copy
+and then writes it back along with the superblock's free-block count, so a volume
+written here mounts cleanly in the 32-bit tree.
+
+A directory entry stores one start block and a count, so an allocation has to be
+*contiguous*: `alloc_blocks` walks the bitmap looking for a run of the required length
+and gives up rather than fragmenting. Writes go through one sector of bounce buffer,
+and the tail of the last block is zeroed, so a short file cannot expose the previous
+occupant's bytes to a later reader.
+
+| Operation | Steps |
+| --- | --- |
+| `create(path, type, data, size)` | resolve the parent, free the old blocks if the name exists, allocate, write the data, point the entry at it (or take the first free slot) |
+| `mkdir(path)` | allocate 16 blocks, zero them so every entry reads free, add a `FTYPE_DIR` entry |
+| `unlink(path)` | free the file's blocks, zero its entry; refusing directories |
+
+Two things make this safe with tasks running at the same time. Every entry point takes
+the scheduler lock (`sched_lock`), which defers the tick's switch instead of switching:
+a directory update spans many disk writes that share the bounce buffer and the two
+directory buffers, so another task reading the volume halfway through would see a torn
+directory. And the buffers those operations use are static rather than automatic -
+`write_data` and `mkdir` each need a 4 KB zero page, and a task's kernel stack is
+exactly one 4 KB page, so a local array that size is an overflow.
+
+The 32-bit side reaches the same code through `MKDIR` (12), `DELETE` (9) and `FWRITE`
+(31), where the type argument picks text or executable.
 
 ### Exec, and file syscalls
 

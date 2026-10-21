@@ -44,6 +44,23 @@ start:
         cmp eax, 1              ; task 1 runs this program
         jne fail
 
+        ; The stack: a compatibility-mode task needs a flat 4 GB data segment,
+        ; because with D/B=0 the processor uses a 16-bit SP and 0x40002000
+        ; silently becomes 0x2000. Check the pointer, then push through it.
+        mov eax, esp
+        cmp eax, 0x40002000
+        jne fail
+
+        mov ebx, 0x5A5A
+        push ebx
+        pop ecx
+        cmp ecx, 0x5A5A
+        jne fail
+
+        call stack_round_trip
+        cmp eax, 0x1234
+        jne fail
+
         ; getcwd: the root, one character and its NUL.
         mov eax, SYS_GETCWD
         mov ebx, CWD_BUF
@@ -153,6 +170,11 @@ start:
         mov eax, SYS_EXIT
         mov ebx, 0x32
         int 0x80
+
+; Reached by CALL and left by RET, which is the pair that needs a working stack.
+stack_round_trip:
+        mov eax, 0x1234
+        ret
 
 fail:
         mov eax, SYS_WRITE

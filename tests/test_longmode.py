@@ -79,7 +79,12 @@ REQUIRED = (
     "hbfs] root=",
     "/init=64",
     "/hello_tree=",
-    "tasks=4 spaces=4",
+    "tasks=5 spaces=5",
+    # The write demo: it creates /persist.txt, reads it back through the same
+    # open/read path, makes /tmpdir, puts a file in it, unlinks it and sees the
+    # directory go empty again.
+    "read back: written by mellivora64",
+    "write path ok",
     # One of the 32-bit tree's own programs, built by `make programs` from
     # programs/hello.asm and loaded unchanged at its 0x00300000 program base.
     "Hello, World! Welcome to Mellivora OS!",
@@ -88,7 +93,7 @@ REQUIRED = (
     # The directory demo: a listing of the root (including the docs
     # subdirectory), stat, a seek into /motd, then the same three calls in
     # /docs from the 64-bit task's own working directory.
-    "ent 6 name=docs type=2",
+    "name=docs type=2 size=0",
     "stat /motd type=1 size=16",
     "seek4=o fr",
     "cwd=/docs",
@@ -143,6 +148,58 @@ def boot_and_capture(qemu, image, mem_mb, want):
     return text
 
 
+def check_written_volume(image):
+    """Read the image the way a fresh mount would: the guest wrote these."""
+    sys.path.insert(0, ROOT)
+    import populate
+
+    with open(image, "rb") as f:
+        f.seek(populate.HBFS_ROOT_DIR_START * populate.SECTOR_SIZE)
+        root = f.read(populate.HBFS_ROOT_DIR_SIZE)
+
+        def entries(buf, count, entry_size):
+            out = {}
+            for i in range(count):
+                off = i * entry_size
+                if buf[off + 253] == populate.FTYPE_FREE:
+                    continue
+                name = buf[off:off + populate.HBFS_MAX_FILENAME]
+                name = name.split(b"\0")[0].decode("ascii", "replace")
+                size, start, blocks = __import__("struct").unpack_from(
+                    "<III", buf, off + 256)
+                out[name] = (buf[off + 253], size, start, blocks)
+            return out
+
+        top = entries(root, populate.HBFS_MAX_FILES,
+                      populate.HBFS_DIR_ENTRY_SIZE)
+        if "persist.txt" not in top:
+            return "no /persist.txt in the root directory"
+        ftype, size, start, blocks = top["persist.txt"]
+        if ftype != populate.FTYPE_TEXT or size != 23:
+            return "/persist.txt is type %d size %d" % (ftype, size)
+
+        f.seek((populate.HBFS_DATA_START + start * populate.SECTORS_PER_BLOCK)
+               * populate.SECTOR_SIZE)
+        data = f.read(size)
+        if data != b"written by mellivora64\n":
+            return "/persist.txt reads %r" % data
+
+        if "tmpdir" not in top:
+            return "no /tmpdir in the root directory"
+        ftype, _, start, blocks = top["tmpdir"]
+        if ftype != populate.FTYPE_DIR or blocks != populate.HBFS_SUBDIR_BLOCKS:
+            return "/tmpdir is type %d with %d blocks" % (ftype, blocks)
+
+        f.seek((populate.HBFS_DATA_START + start * populate.SECTORS_PER_BLOCK)
+               * populate.SECTOR_SIZE)
+        inner = entries(f.read(blocks * populate.BLOCK_SIZE),
+                        populate.HBFS_SUBDIR_MAX_FILES,
+                        populate.HBFS_DIR_ENTRY_SIZE)
+        if inner:
+            return "/tmpdir still holds %s after unlink" % sorted(inner)
+    return None
+
+
 def parse_pmm(text):
     """Pull usable=MB and top=0x... out of the nucleus report."""
     m = __import__("re").search(r"usable=(\d+)MB top=0x([0-9A-F]+)", text)
@@ -175,6 +232,14 @@ def main():
     if MARKER_ONLY:
         print("  PASS  long mode entered and nucleus reported")
         return 0
+
+    # The guest wrote real HBFS structures, so the host can read them back with
+    # the same constants populate.py builds images with.
+    problem = check_written_volume(IMAGE)
+    if problem:
+        print("  FAIL  the volume the guest wrote is wrong: %s" % problem,
+              file=sys.stderr)
+        return 1
 
     # Scale: a guest past 4 GB only reports sane numbers if the E820 map was
     # read as 64-bit, and 8 GB is the P2 gate.

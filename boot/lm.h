@@ -294,6 +294,9 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_READDIR 15
 #define SYS_CHDIR  16
 #define SYS_GETCWD 17
+#define SYS_MKDIR  18
+#define SYS_UNLINK 19
+#define SYS_CREATE 20
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -357,6 +360,17 @@ int hbfs_resolve(const char *path, struct hbfs_entry *out);
 int hbfs_chdir(const char *path);
 const char *hbfs_getcwd(void);
 
+/* Writing. A file is created or truncated to exactly `size` bytes; a directory
+ * takes HBFS_SUBDIR_BLOCKS zeroed blocks. Both are idempotent, so re-running a
+ * program that creates its own files works. */
+int hbfs_create(const char *path, u32 type, const void *data, u32 size);
+int hbfs_mkdir(const char *path);
+/* Free a file's blocks and clear its entry; not a directory. */
+int hbfs_remove(const char *path);
+
+/* Free blocks left in the volume, for the directory demo's report. */
+u32 hbfs_free_blocks(void);
+
 /* A thin read-only VFS in front of it: open by name, then read by handle. */
 int vfs_init(void);
 int vfs_open(const char *name);        /* handle, or -1 */
@@ -381,6 +395,12 @@ int vfs_stat(const char *path, struct vfs_stat *out);
 int vfs_readdir(const char *path, u32 index, struct vfs_stat *out);
 int vfs_chdir(const char *path);
 const char *vfs_getcwd(void);
+/* Create or overwrite `path` with `size` bytes from `data`. */
+int vfs_create(const char *path, u32 type, const void *data, u32 size);
+int vfs_mkdir(const char *path);
+int vfs_unlink(const char *path);
+u32 vfs_free_blocks(void);
+void vfs_release_task(u64 owner);
 
 /* Polling ATA PIO on the primary channel. */
 int ata_init(void);
@@ -420,6 +440,14 @@ u64 sched_current_id(void);   /* 0 when no task is running */
 
 /* Per-task syscall counting, called from the dispatcher. */
 void sched_note_syscall(void);
+
+/* A critical section that must not be preempted - a filesystem update runs over
+ * several disk writes that share the sector bounce buffer, so another task
+ * reading the volume halfway through would see a torn directory. The tick keeps
+ * counting but defers the switch while the depth is non-zero. Nestable. */
+void sched_lock(void);
+void sched_unlock(void);
+int sched_locked(void);
 
 /* Timer tick: round-robin, returning the frame of the task to run next. */
 struct lm_fault_frame *sched_tick(struct lm_fault_frame *frame);

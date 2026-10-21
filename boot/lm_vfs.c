@@ -10,11 +10,12 @@
 
 #include "lm.h"
 
-#define VFS_MAX_FILES 8
+#define VFS_MAX_FILES 16
 #define SECTOR_SIZE 512
 
 struct vfs_file {
     int used;
+    u64 owner;          /* the task that opened it */
     u64 size;
     u64 pos;
     struct hbfs_entry entry;
@@ -26,38 +27,69 @@ int vfs_init(void)
 {
     for (int i = 0; i < VFS_MAX_FILES; i++) {
         files[i].used = 0;
+        files[i].owner = 0;
         files[i].size = 0;
         files[i].pos = 0;
     }
     return hbfs_init();
 }
 
+/*
+ * Handles are owned by the task that opened them. The table is shared - there is
+ * one file object per open file - so without an owner two tasks opening the same
+ * file would be handed the same handle and would share its position, and one of
+ * them would read from wherever the other had left it. Finding a slot and
+ * claiming it is one critical section for the same reason.
+ */
 int vfs_open(const char *name)
 {
     struct hbfs_entry entry;
+
+    sched_lock();
     if (hbfs_resolve(name, &entry) != 0 || entry.type == HBFS_FTYPE_DIR) {
+        sched_unlock();
         return -1;
     }
 
     for (int i = 0; i < VFS_MAX_FILES; i++) {
         if (!files[i].used) {
             files[i].used = 1;
+            files[i].owner = sched_current_id();
             files[i].size = entry.size;
             files[i].pos = 0;
             files[i].entry = entry;
+            sched_unlock();
             return i;
         }
     }
+    sched_unlock();
     return -1;
 }
 
 int vfs_close(int handle)
 {
-    if (handle < 0 || handle >= VFS_MAX_FILES || !files[handle].used) {
+    sched_lock();
+    if (handle < 0 || handle >= VFS_MAX_FILES || !files[handle].used ||
+        files[handle].owner != sched_current_id()) {
+        sched_unlock();
         return -1;
     }
     files[handle].used = 0;
+    sched_unlock();
     return 0;
+}
+
+/* A task that exits without closing its files must not leak them: the loader
+ * runs the next program, and nothing would ever free those slots. */
+void vfs_release_task(u64 owner)
+{
+    sched_lock();
+    for (int i = 0; i < VFS_MAX_FILES; i++) {
+        if (files[i].used && files[i].owner == owner) {
+            files[i].used = 0;
+        }
+    }
+    sched_unlock();
 }
 
 u64 vfs_size(int handle)
@@ -167,4 +199,24 @@ int vfs_chdir(const char *path)
 const char *vfs_getcwd(void)
 {
     return hbfs_getcwd();
+}
+
+int vfs_create(const char *path, u32 type, const void *data, u32 size)
+{
+    return hbfs_create(path, type, data, size);
+}
+
+int vfs_mkdir(const char *path)
+{
+    return hbfs_mkdir(path);
+}
+
+int vfs_unlink(const char *path)
+{
+    return hbfs_remove(path);
+}
+
+u32 vfs_free_blocks(void)
+{
+    return hbfs_free_blocks();
 }

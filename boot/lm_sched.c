@@ -81,6 +81,25 @@ struct lm_task *sched_current(void)
     return current;
 }
 
+static int lock_depth;
+
+void sched_lock(void)
+{
+    lock_depth++;
+}
+
+void sched_unlock(void)
+{
+    if (lock_depth > 0) {
+        lock_depth--;
+    }
+}
+
+int sched_locked(void)
+{
+    return lock_depth;
+}
+
 u64 sched_current_id(void)
 {
     return current != NULL ? current->id : 0;
@@ -226,6 +245,9 @@ struct lm_fault_frame *sched_tick(struct lm_fault_frame *f)
     if (current != NULL && (f->cs & 3) == 3) {
         current->ticks++;
     }
+    if (lock_depth > 0) {
+        return f;               /* inside a critical section: keep running */
+    }
     return sched_yield(f);
 }
 
@@ -340,6 +362,7 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
     kputs(ok ? " ring3=ok\r\n" : " FAIL ring3\r\n");
 
     t->state = TASK_DEAD;
+    vfs_release_task(t->id);
 
     struct lm_task *next = pick_next();
     if (next == NULL) {

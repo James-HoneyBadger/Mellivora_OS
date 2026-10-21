@@ -355,6 +355,22 @@ static int copy_to_user(u64 addr, const void *src, u64 count)
     return 0;
 }
 
+static int copy_from_user(u64 addr, void *dst, u64 count)
+{
+    u8 *out = dst;
+    for (u64 i = 0; i < count; i++) {
+        if (!vmm_user_mapped(addr + i)) {
+            return -1;
+        }
+    }
+    user_access_begin();
+    for (u64 i = 0; i < count; i++) {
+        out[i] = *(const u8 *)(unsigned long)(addr + i);
+    }
+    user_access_end();
+    return 0;
+}
+
 /* seek(fd, offset, whence) - whence 0 from the start, 1 from the position,
  * 2 from the end. The new position comes back in RAX. */
 static struct lm_fault_frame *sys_seek(struct lm_fault_frame *f)
@@ -416,6 +432,59 @@ static struct lm_fault_frame *sys_readdir(struct lm_fault_frame *f)
     return f;
 }
 
+static struct lm_fault_frame *sys_mkdir(struct lm_fault_frame *f)
+{
+    char path[64];
+    if (copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)(long)vfs_mkdir(path);
+    return f;
+}
+
+static struct lm_fault_frame *sys_unlink(struct lm_fault_frame *f)
+{
+    char path[64];
+    if (copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)(long)vfs_unlink(path);
+    return f;
+}
+
+/* A page of file data: one page is the largest write this call takes, and a
+ * page does not fit on a 4 KB kernel stack, so it is static. Creating a file is
+ * a multi-step disk update, so the copy happens inside the same critical
+ * section that keeps the filesystem to one task at a time. */
+static u8 file_bounce[FRAME_SIZE];
+
+/* create(path, buf, len) - write a whole file in one call, creating it or
+ * replacing it. The bytes come in through that bounce buffer, so the disk write
+ * never touches ring-3 memory. */
+static struct lm_fault_frame *sys_create(struct lm_fault_frame *f)
+{
+    char path[64];
+    s64 result = -1;
+
+    if (f->rdx == 0 || f->rdx > sizeof(file_bounce)) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    sched_lock();
+    if (copy_user_string(f->rdi, path, sizeof(path)) == 0 &&
+        copy_from_user(f->rsi, file_bounce, f->rdx) == 0 &&
+        vfs_create(path, HBFS_FTYPE_FILE, file_bounce, (u32)f->rdx) == 0) {
+        result = (s64)f->rdx;
+    }
+    sched_unlock();
+
+    f->rax = (u64)result;
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -466,6 +535,9 @@ static const struct lm_syscall syscalls[] = {
     [15] = {"readdir", sys_readdir, 0},
     [16] = {"chdir", sys_chdir, 1},
     [17] = {"getcwd", sys_getcwd, 0},
+    [18] = {"mkdir", sys_mkdir, 1},
+    [19] = {"unlink", sys_unlink, 1},
+    [20] = {"create", sys_create, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -583,6 +655,16 @@ static struct lm_fault_frame *int80_getcwd(struct lm_fault_frame *f)
     return f;
 }
 
+static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr);
+
+/*
+ * The handlers read their arguments from the LP64 registers, and those same
+ * frame slots are what IRETQ loads back into the caller's registers. Writing the
+ * arguments there is convenient but would hand a 32-bit program back its own
+ * arguments in EDI/ESI/EDX - a program that keeps a handle in ESI across a call
+ * would find the last syscall's count there instead. So the three slots are
+ * saved and put back unless the handler returned another task's frame.
+ */
 struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *f)
 {
     if ((f->cs & 3) != 3) {
@@ -606,10 +688,25 @@ struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *f)
     /* The handlers read the LP64 registers; move the arguments there on the
      * same frame. The result comes back in RAX, which a 32-bit caller reads as
      * EAX. */
+    u64 save_rdi = f->rdi;
+    u64 save_rsi = f->rsi;
+    u64 save_rdx = f->rdx;
+
     f->rdi = arg0;
     f->rsi = arg1;
     f->rdx = arg2;
 
+    struct lm_fault_frame *out = int80_call(f, nr);
+    if (out == f) {
+        f->rdi = save_rdi;
+        f->rsi = save_rsi;
+        f->rdx = save_rdx;
+    }
+    return out;
+}
+
+static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
+{
     switch (nr) {
     case 0:                         /* SYS_EXIT */
         return sys_exit(f);
@@ -642,6 +739,20 @@ struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *f)
         return sys_chdir(f);
     case 27:                        /* SYS_GETCWD: EBX=buf -> EAX=length */
         return int80_getcwd(f);
+    case 12:                        /* SYS_MKDIR: EBX=path */
+        return sys_mkdir(f);
+    case 9:                         /* SYS_DELETE: EBX=path */
+        return sys_unlink(f);
+    case 31:                        /* SYS_FWRITE: EBX=name ECX=buf EDX=size
+                                     * ESI=type (0 = text) */
+        if ((u32)f->rsi != 0) {
+            f->rdx = (u64)(u32)f->rdx;
+            f->rsi = (u64)(u32)f->rcx;
+            f->rdi = (u64)(u32)f->rbx;
+            return sys_create(f);
+        }
+        f->rax = (u64)-1;
+        return f;
     default:
         f->rax = (u64)-1;
         return f;

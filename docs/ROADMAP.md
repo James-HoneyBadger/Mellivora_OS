@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; two ring-3 tasks round-robined by that tick with per-task kernel stacks and per-task address spaces; NX on heap and stack pages with SMEP/SMAP enabled where CPUID offers them; a table-driven LP64 syscall ABI with write/yield/brk behind it; PCI enumeration and an ATA PIO block driver whose read/write paths are self-tested; an HBFS reader and VFS front-end, with `/init` loaded from that disk and `exec`/`open`/`read`/`close` behind it; a 32-bit program running in compatibility mode beside the 64-bit tasks through an `INT 0x80` bridge, with one of the tree's own flat binaries loaded unchanged at its `0x00300000` program base; directories and file metadata (`seek`/`stat`/`readdir`/`chdir`/`getcwd`) over a per-task working directory; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
+| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; two ring-3 tasks round-robined by that tick with per-task kernel stacks and per-task address spaces; NX on heap and stack pages with SMEP/SMAP enabled where CPUID offers them; a table-driven LP64 syscall ABI with write/yield/brk behind it; PCI enumeration and an ATA PIO block driver whose read/write paths are self-tested; an HBFS reader and VFS front-end, with `/init` loaded from that disk and `exec`/`open`/`read`/`close` behind it; a 32-bit program running in compatibility mode beside the 64-bit tasks through an `INT 0x80` bridge, with one of the tree's own flat binaries loaded unchanged at its `0x00300000` program base; directories and file metadata (`seek`/`stat`/`readdir`/`chdir`/`getcwd`) over a per-task working directory; a writable HBFS (`create`/`mkdir`/`unlink` over the allocation bitmap) whose output the host test reads back out of the image; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
 
@@ -231,10 +231,20 @@ A phase does not close until these are measured:
   translates. `/ls` lists the root, stats `/motd`, seeks into it, chdirs into
   `/docs` and lists that; `/hello32` makes the same calls from compatibility mode
   and prints `32-bit file calls ok`.
-- [ ] The rest of the 187 syscalls behind that bridge (`GETCHAR`, `MKDIR`, `DELETE`,
-  `FWRITE`, the cursor/video calls, ...), so the whole `programs/` tree runs. The
-  write path is the big one: HBFS is still read-only here because creating a file
-  means the journal, the allocation bitmap and a directory-entry update.
+- [x] Write to the volume. HBFS's allocation bitmap is read at mount and kept in
+  memory; `create`/`mkdir`/`unlink` allocate contiguous blocks, write the data
+  (zero-filling the tail of the last block), add, rewrite or clear a 288-byte
+  directory entry, and write the bitmap and the superblock's free count back.
+  Creating a name that already exists frees its old blocks first, so a program can
+  be re-run without leaking the volume one copy at a time. `/wr` creates
+  `/persist.txt`, reads it back through the same `open`/`read` path, makes
+  `/tmpdir`, puts a file in it, unlinks that file and watches the directory report
+  it gone; the host test then reads `/persist.txt` straight out of the image with
+  the same constants `populate.py` writes it with, which is the proof that what
+  the guest wrote is a real on-disk structure and not a cached illusion.
+- [ ] The rest of the 187 syscalls behind that bridge (`GETCHAR`, `DELETE` of a
+  directory, `FWRITE`'s append and typed forms, the cursor/video calls, ...), so
+  the whole `programs/` tree runs.
 - [x] NX, SMEP/SMAP where the CPU provides them: `cpu_harden()` gates each on CPUID,
   sets `EFER.NXE`/`CR4.SMEP`/`CR4.SMAP` and reports what the machine got. Heap pages
   and user stacks carry `NX`; the user code page is the one leaf without it, checked

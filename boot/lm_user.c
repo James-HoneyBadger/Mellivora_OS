@@ -69,12 +69,16 @@ static void lm_user_load_gdt(void)
      * flags 0x2: long mode (L=1, D=0); a data segment ignores both. */
     gdt[1] = gdt_desc(0, 0, 0x9A, 0x2);   /* SEL_KCODE */
     gdt[2] = gdt_desc(0, 0, 0x92, 0x0);   /* SEL_KDATA */
-    gdt[3] = gdt_desc(0, 0, 0xF2, 0x0);   /* SEL_UDATA */
+    /* The data segment is flat over 4 GB with D/B=1. In 64-bit mode an SS
+     * ignores both, but a compatibility-mode task does not: with D/B=0 the
+     * processor uses a 16-bit SP, so a stack pointer of 0x40002000 becomes
+     * 0x2000 and the first push faults. */
+    gdt[3] = gdt_desc(0, 0xFFFFF, 0xF2, 0xC);   /* SEL_UDATA */
     gdt[4] = gdt_desc(0, 0, 0xFA, 0x2);   /* SEL_UCODE (L=1) */
     /* The 32-bit tree's programs run in compatibility mode: D=1, L=0, DPL 3. It
      * lives outside the STAR window (0x18 data / 0x20 code) because SYSRET's
      * +16/+8 arithmetic fixes those two slots. */
-    gdt[7] = gdt_desc(0, 0, 0xFA, 0x4);   /* SEL_UCODE32 */
+    gdt[7] = gdt_desc(0, 0xFFFFF, 0xFA, 0xC);   /* SEL_UCODE32: flat, D=1 */
 
     /* A 64-bit TSS descriptor is 16 bytes: type 9 (64-bit TSS available),
      * present, DPL 0, and the base is split around the middle. */
@@ -165,10 +169,11 @@ struct boot_task {
     u64 stack_top;
     int compat;
     u64 expect_exit;
-    int self_report;
+    int self_report;    /* ends with PING/WHOAMI and exits with its own id */
+    int code_writable;  /* the image carries its own data, so it writes its page */
 };
 
-#define BOOT_TASKS 4
+#define BOOT_TASKS 5
 #define LEGACY_CODE_ADDR  0x00300000ULL     /* the tree's PROGRAM_BASE */
 #define LEGACY_STACK_ADDR 0x003FF000ULL
 #define LEGACY_STACK_TOP  0x00400000ULL
@@ -176,13 +181,15 @@ struct boot_task {
 static const struct boot_task boot_tasks[BOOT_TASKS] = {
     /* /init execs /hello, which ends with PING/WHOAMI and exits with its id. */
     {"init",       USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
-     1},
+     1, 0},
     {"hello32",    USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   1,
-     0x32, 0},
+     0x32, 0, 1},
     {"hello_tree", LEGACY_CODE_ADDR, LEGACY_STACK_ADDR, LEGACY_STACK_TOP, 1,
-     TASK_ANY_EXIT, 0},
+     TASK_ANY_EXIT, 0, 1},
     {"ls",         USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
-     0},
+     0, 0},
+    {"wr",         USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
+     0, 0},
 };
 
 int lm_user_run(void)
@@ -223,10 +230,21 @@ int lm_user_run(void)
             kputs("[ring3] FAIL short read of a program\r\n");
             return -1;
         }
+        /* The loader runs before any task, so its handles would otherwise be
+         * inherited by task 0: close them and leave the table empty. */
+        vfs_close(handle);
         memset(vmm_phys(stack_phys[i]), 0, FRAME_SIZE);
 
+        /* A flat binary has no section headers, so the loader cannot tell its
+         * data from its code: a program that keeps a buffer in its image needs
+         * the page writable. The 64-bit demos keep theirs read-only and put
+         * everything mutable on the stack. */
+        u32 code_flags = VMM_U;
+        if (boot_tasks[i].code_writable) {
+            code_flags |= VMM_W;
+        }
         if (vmm_map_in(space[i], boot_tasks[i].code_va, code_phys[i],
-                       VMM_U) != 0 ||
+                       code_flags) != 0 ||
             vmm_map_in(space[i], boot_tasks[i].stack_va, stack_phys[i],
                        VMM_W | VMM_U | VMM_NX) != 0) {
             kputs("[ring3] FAIL could not map a task's pages\r\n");
@@ -285,7 +303,7 @@ int lm_user_run(void)
     kput_hex(USER_CODE_ADDR, 8);
     kputs("/0x");
     kput_hex(LEGACY_CODE_ADDR, 8);
-    kputs(" mode=64,32,32,64");
+    kputs(" mode=64,32,32,64,64");
     kputs("\r\n");
 
     sched_init();

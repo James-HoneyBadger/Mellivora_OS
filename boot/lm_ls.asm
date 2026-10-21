@@ -5,6 +5,10 @@
 ; getcwd, readdir, stat, chdir and seek, plus the open/read/close they sit on
 ; top of. It runs as its own task, so a call that returns nonsense fails the
 ; boot test rather than a shell session.
+;
+; Every line is assembled in a buffer and written with one syscall: the other
+; tasks print at the same time, and a line built from six writes can have
+; another task's output in the middle of it.
 ;=======================================================================
 
 [BITS 64]
@@ -21,20 +25,23 @@ SYS_READDIR equ 15
 SYS_CHDIR   equ 16
 SYS_GETCWD  equ 17
 
-; This program lives in one code page plus one stack page (0x40001000), so its
-; buffers sit low in the stack page and the call stack grows down from
-; 0x40002000 into the space above them.
-CWD_BUF  equ 0x40001C00         ; getcwd target
-STAT_BUF equ 0x40001800         ; struct vfs_stat: type, size, blocks, start
+; This program lives in one read-only code page plus one stack page
+; (0x40001000), so its buffers sit low in the stack page and the call stack
+; grows down from 0x40002000 into the space above them.
+LINE_BUF equ 0x40001200         ; the line being assembled
+CWD_BUF  equ 0x40001C00         ; getcwd's target, kept out of LINE_BUF
+LINE_LIMIT equ 0x40001500       ; where the next buffer starts
 DATA_BUF equ 0x40001500         ; what seek/read pulls out of /motd
-DEC_BUF  equ 0x40001700
+DEC_BUF  equ 0x40001600
+STAT_BUF equ 0x40001800         ; struct vfs_stat: type, size, blocks, start
 
-; struct vfs_stat: u32 type, u32 size, u32 blocks, u32 start, char name[256]
-STAT_TYPE  equ STAT_BUF + 0
-STAT_SIZE  equ STAT_BUF + 4
-NAME_BUF   equ STAT_BUF + 16
+STAT_TYPE equ STAT_BUF + 0
+STAT_SIZE equ STAT_BUF + 4
+NAME_BUF  equ STAT_BUF + 16     ; the name field of the same struct
 
 start:
+        cld                             ; string instructions run forwards
+
         ; getcwd(buf, size) -> length
         mov rdi, CWD_BUF
         mov esi, 128
@@ -44,13 +51,13 @@ start:
         js fail
         mov r12, rax
 
+        call begin_line
         lea rsi, [rel s_cwd]
-        mov edx, s_cwd_end - s_cwd
-        call print
-        mov rsi, CWD_BUF
+        call add_str
+        lea rsi, [CWD_BUF]
         mov rdx, r12
-        call print
-        call newline
+        call add_bytes
+        call end_line
 
         ; List the working directory.
         xor edi, edi                    ; NULL path = the cwd
@@ -64,17 +71,16 @@ start:
         test rax, rax
         jnz fail
 
+        call begin_line
         lea rsi, [rel s_motd]
-        mov edx, s_motd_end - s_motd
-        call print
+        call add_str
         mov eax, [STAT_TYPE]
-        call put_dec
+        call add_dec
         lea rsi, [rel s_size]
-        mov edx, s_size_end - s_size
-        call print
+        call add_str
         mov eax, [STAT_SIZE]
-        call put_dec
-        call newline
+        call add_dec
+        call end_line
 
         ; open/seek/read: skip the first four bytes of /motd and read four.
         lea rdi, [rel motd_path]
@@ -104,13 +110,13 @@ start:
         mov eax, SYS_CLOSE
         syscall
 
+        call begin_line
         lea rsi, [rel s_seek]
-        mov edx, s_seek_end - s_seek
-        call print
+        call add_str
         mov rsi, DATA_BUF
         mov edx, 4
-        call print
-        call newline
+        call add_bytes
+        call end_line
 
         ; chdir into the subdirectory and list that.
         lea rdi, [rel docs_path]
@@ -126,13 +132,14 @@ start:
         test rax, rax
         js fail
         mov r12, rax
+
+        call begin_line
         lea rsi, [rel s_cwd]
-        mov edx, s_cwd_end - s_cwd
-        call print
-        mov rsi, CWD_BUF
+        call add_str
+        lea rsi, [CWD_BUF]
         mov rdx, r12
-        call print
-        call newline
+        call add_bytes
+        call end_line
 
         xor edi, edi
         call list_dir
@@ -144,10 +151,11 @@ start:
         syscall
         cmp rax, -1
         jne fail
+
+        call begin_line
         lea rsi, [rel s_miss]
-        mov edx, s_miss_end - s_miss
-        call print
-        call newline
+        call add_str
+        call end_line
 
         xor edi, edi
         mov eax, SYS_EXIT
@@ -156,6 +164,10 @@ start:
         jmp .hang
 
 fail:
+        call begin_line
+        lea rsi, [rel s_fail]
+        call add_str
+        call end_line
         mov eax, SYS_EXIT
         mov edi, 0xBAD
         syscall
@@ -178,28 +190,24 @@ list_dir:
         cmp rax, 1
         jne .done
 
+        call begin_line
         lea rsi, [rel s_entry]
-        mov edx, s_entry_end - s_entry
-        call print
+        call add_str
         mov rax, r14
-        call put_dec
+        call add_dec
         lea rsi, [rel s_name]
-        mov edx, s_name_end - s_name
-        call print
+        call add_str
         mov rsi, NAME_BUF
-        mov rdx, 255
-        call print_name
+        call add_str
         lea rsi, [rel s_type]
-        mov edx, s_type_end - s_type
-        call print
+        call add_str
         mov eax, [STAT_TYPE]
-        call put_dec
+        call add_dec
         lea rsi, [rel s_size]
-        mov edx, s_size_end - s_size
-        call print
+        call add_str
         mov eax, [STAT_SIZE]
-        call put_dec
-        call newline
+        call add_dec
+        call end_line
 
         inc r14
         cmp r14, 16
@@ -207,70 +215,81 @@ list_dir:
 .done:
         ret
 
-; The name buffer is a fixed 256 bytes, so print up to its NUL.
-print_name:
-        xor eax, eax
-.count:
-        cmp byte [NAME_BUF + rax], 0
-        je .have
-        inc eax
-        cmp eax, 255
-        jb .count
-.have:
-        mov rsi, NAME_BUF
-        mov rdx, rax
-        call print
+;-----------------------------------------------------------------------
+; Line assembly. RBP is the write cursor; nothing here uses it as a frame.
+;-----------------------------------------------------------------------
+begin_line:
+        lea rbp, [LINE_BUF]
         ret
 
-; print: rsi = buffer, rdx = length.
-print:
+; add_str: rsi = NUL-terminated string.
+add_str:
+        cld                             ; the direction flag is not ours to assume
+        lodsb
+        test al, al
+        jz .done
+        cmp rbp, LINE_LIMIT             ; never run into the buffers below
+        jae .done
+        mov [rbp], al
+        inc rbp
+        jmp add_str
+.done:
+        ret
+
+; add_bytes: rsi = bytes, rdx = length.
+add_bytes:
+        cld
+        test rdx, rdx
+        jz .done
+.loop:
+        cmp rbp, LINE_LIMIT
+        jae .done
+        lodsb
+        mov [rbp], al
+        inc rbp
+        dec rdx
+        jnz .loop
+.done:
+        ret
+
+; add_dec: eax = value, in decimal. syscall clobbers rcx and r11, and the
+; divide needs ecx, so it is reloaded every digit.
+add_dec:
+        lea rsi, [DEC_BUF + 31]
+        mov byte [rsi], 0
+.digits:
+        mov ecx, 10
+        xor edx, edx
+        div ecx
+        add dl, '0'
+        dec rsi
+        mov [rsi], dl
+        test eax, eax
+        jnz .digits
+        call add_str                    ; rsi now points at the first digit
+        ret
+
+; end_line: newline, then one write of the whole line.
+end_line:
+        mov byte [rbp], 10
+        inc rbp
+        lea rsi, [LINE_BUF]
+        mov rdx, rbp
+        sub rdx, rsi
         mov edi, 1
         mov eax, SYS_WRITE
         syscall
         ret
 
-newline:
-        lea rsi, [rel s_nl]
-        mov edx, 1
-        call print
-        ret
-
-; put_dec: eax = value, printed in decimal.
-put_dec:
-        lea rdi, [DEC_BUF + 31]
-        mov byte [rdi], 0
-.loop:
-        mov ecx, 10
-        xor edx, edx
-        div ecx
-        add dl, '0'
-        dec rdi
-        mov [rdi], dl
-        test eax, eax
-        jnz .loop
-        lea rdx, [DEC_BUF + 31]
-        sub rdx, rdi
-        mov rsi, rdi
-        call print
-        ret
-
-s_nl:      db 10
-s_cwd:     db "cwd="
-s_cwd_end:
-s_entry:   db "ent "
-s_entry_end:
-s_name:    db " name="
-s_name_end:
-s_type:    db " type="
-s_type_end:
-s_size:    db " size="
-s_size_end:
-s_motd:    db "stat /motd type="
-s_motd_end:
-s_seek:    db "seek4="
-s_seek_end:
-s_miss:    db "miss=ok"
-s_miss_end:
+s_cwd: db "cwd=", 0
+s_entry: db "ent ", 0
+s_name: db " name=", 0
+s_type: db " type=", 0
+s_size: db " size=", 0
+s_motd: db "stat /motd type=", 0
+s_seek: db "seek4=", 0
+s_miss: db "miss=ok", 0
+s_fail: db "ls FAILED", 0
 motd_path:    db "/motd", 0
 docs_path:    db "docs", 0
 missing_path: db "/nope", 0

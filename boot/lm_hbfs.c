@@ -33,6 +33,11 @@
 #define HBFS_SUBDIR_BLOCKS   16
 #define HBFS_ROOT_SENTINEL   0xFFFFFFFFU       /* `start` of the root entry */
 
+#define HBFS_BITMAP_BLOCKS   16
+#define HBFS_JOURNAL_BLOCKS  4         /* never handed to a file */
+#define HBFS_MODE_FILE       0644
+#define HBFS_MODE_EXEC       0755
+
 #define HBFS_ROOT_ENTRIES \
     (HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE / HBFS_DIR_ENTRY_SIZE)
 #define HBFS_SUBDIR_ENTRIES \
@@ -41,10 +46,14 @@
 static u8 root_dir[HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE];
 static u8 sub_dir[HBFS_SUBDIR_BLOCKS * HBFS_BLOCK_SIZE];
 static u8 sector_buffer[512];
+static u8 bitmap[HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE];
 static int ready;
 static u32 root_lba;
+static u32 bitmap_lba;
 static u32 data_lba;
 static u32 file_count;
+static u32 total_blocks;
+static u32 free_blocks;
 
 /*
  * A working directory per task, indexed by task id (0 is the kernel's own, used
@@ -102,11 +111,30 @@ static u32 le32(const u8 *p)
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
 
+static void put32(u8 *p, u32 value)
+{
+    p[0] = (u8)value;
+    p[1] = (u8)(value >> 8);
+    p[2] = (u8)(value >> 16);
+    p[3] = (u8)(value >> 24);
+}
+
 static int read_block(u64 lba, void *buffer)
 {
     u8 *p = buffer;
     for (int i = 0; i < HBFS_SECTORS_PER_BLOCK; i++) {
         if (ata_read(lba + (u64)i, p + i * 512) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int write_block(u64 lba, const void *buffer)
+{
+    const u8 *p = buffer;
+    for (int i = 0; i < HBFS_SECTORS_PER_BLOCK; i++) {
+        if (ata_write(lba + (u64)i, p + i * 512) != 0) {
             return -1;
         }
     }
@@ -134,7 +162,18 @@ int hbfs_init(void)
     }
 
     root_lba = le32(sector_buffer + 16);
+    bitmap_lba = le32(sector_buffer + 20);
     data_lba = le32(sector_buffer + 24);
+    total_blocks = le32(sector_buffer + 8);
+    free_blocks = le32(sector_buffer + 12);
+
+    for (u32 i = 0; i < HBFS_BITMAP_BLOCKS; i++) {
+        if (read_block((u64)bitmap_lba + (u64)i * HBFS_SECTORS_PER_BLOCK,
+                       bitmap + i * HBFS_BLOCK_SIZE) != 0) {
+            kputs("[hbfs] allocation bitmap unreadable\r\n");
+            return -1;
+        }
+    }
 
     for (u32 i = 0; i < HBFS_ROOT_DIR_BLOCKS; i++) {
         if (read_block((u64)root_lba + (u64)i * HBFS_SECTORS_PER_BLOCK,
@@ -158,6 +197,8 @@ int hbfs_init(void)
     kput_dec(data_lba);
     kputs(" files=");
     kput_dec(file_count);
+    kputs(" free=");
+    kput_dec(free_blocks);
     kputs("\r\n");
     return 0;
 }
@@ -170,10 +211,13 @@ int hbfs_init(void)
  * in a flat buffer that the 288-byte entries can be scanned out of - they are
  * not block-aligned, and an entry can straddle two blocks.
  */
-static const u8 *dir_data(const struct hbfs_entry *dir, u32 *entries)
+static u8 *dir_buffer(const struct hbfs_entry *dir, u32 *entries, u32 *lba,
+                      u32 *blocks)
 {
     if (dir->start == HBFS_ROOT_SENTINEL) {
         *entries = HBFS_ROOT_ENTRIES;
+        *lba = root_lba;
+        *blocks = HBFS_ROOT_DIR_BLOCKS;
         return root_dir;
     }
     if (dir->type != HBFS_FTYPE_DIR || dir->blocks == 0 ||
@@ -182,14 +226,23 @@ static const u8 *dir_data(const struct hbfs_entry *dir, u32 *entries)
     }
 
     for (u32 i = 0; i < dir->blocks; i++) {
-        u64 lba = (u64)data_lba + (u64)dir->start * HBFS_SECTORS_PER_BLOCK
-                + (u64)i * HBFS_SECTORS_PER_BLOCK;
-        if (read_block(lba, sub_dir + i * HBFS_BLOCK_SIZE) != 0) {
+        u64 block_lba = (u64)data_lba
+                      + (u64)dir->start * HBFS_SECTORS_PER_BLOCK
+                      + (u64)i * HBFS_SECTORS_PER_BLOCK;
+        if (read_block(block_lba, sub_dir + i * HBFS_BLOCK_SIZE) != 0) {
             return NULL;
         }
     }
     *entries = dir->blocks * HBFS_BLOCK_SIZE / HBFS_DIR_ENTRY_SIZE;
+    *lba = (u32)(data_lba + dir->start * HBFS_SECTORS_PER_BLOCK);
+    *blocks = dir->blocks;
     return sub_dir;
+}
+
+static const u8 *dir_data(const struct hbfs_entry *dir, u32 *entries)
+{
+    u32 lba, blocks;
+    return dir_buffer(dir, entries, &lba, &blocks);
 }
 
 static void entry_from(const u8 *raw, struct hbfs_entry *out)
@@ -224,7 +277,7 @@ void hbfs_root(struct hbfs_entry *out)
     out->blocks = HBFS_ROOT_DIR_BLOCKS;
 }
 
-int hbfs_lookup_in(const struct hbfs_entry *dir, const char *name,
+static int hbfs_lookup_in_locked(const struct hbfs_entry *dir, const char *name,
                    struct hbfs_entry *out)
 {
     if (!ready) {
@@ -248,6 +301,15 @@ int hbfs_lookup_in(const struct hbfs_entry *dir, const char *name,
     return -1;
 }
 
+int hbfs_lookup_in(const struct hbfs_entry *dir, const char *name,
+                         struct hbfs_entry *out)
+{
+    sched_lock();
+    int result = hbfs_lookup_in_locked(dir, name, out);
+    sched_unlock();
+    return result;
+}
+
 int hbfs_lookup(const char *name, struct hbfs_entry *out)
 {
     struct hbfs_entry root;
@@ -255,7 +317,7 @@ int hbfs_lookup(const char *name, struct hbfs_entry *out)
     return hbfs_lookup_in(&root, name, out);
 }
 
-int hbfs_readdir(const struct hbfs_entry *dir, u32 index,
+static int hbfs_readdir_locked(const struct hbfs_entry *dir, u32 index,
                  struct hbfs_entry *out, char *name, u32 name_bytes)
 {
     u32 entries;
@@ -280,6 +342,15 @@ int hbfs_readdir(const struct hbfs_entry *dir, u32 index,
         name[n] = '\0';
     }
     return out->type == HBFS_FTYPE_FREE ? 0 : 1;
+}
+
+int hbfs_readdir(const struct hbfs_entry *dir, u32 index,
+                 struct hbfs_entry *out, char *name, u32 name_bytes)
+{
+    sched_lock();
+    int result = hbfs_readdir_locked(dir, index, out, name, name_bytes);
+    sched_unlock();
+    return result;
 }
 
 /* Drop trailing separators, then either keep an absolute path or prefix the
@@ -461,7 +532,7 @@ const char *hbfs_getcwd(void)
  * sector of bounce buffer, so a short tail never writes past the caller's
  * buffer and an unaligned offset is just a partial copy.
  */
-int hbfs_read_at(const struct hbfs_entry *entry, u64 offset, void *buffer,
+static int hbfs_read_at_locked(const struct hbfs_entry *entry, u64 offset, void *buffer,
                  u64 count)
 {
     if (offset >= entry->size) {
@@ -491,4 +562,418 @@ int hbfs_read_at(const struct hbfs_entry *entry, u64 offset, void *buffer,
         done += step;
     }
     return (int)done;
+}
+
+int hbfs_read_at(const struct hbfs_entry *entry, u64 offset, void *buffer,
+                 u64 count)
+{
+    sched_lock();
+    int result = hbfs_read_at_locked(entry, offset, buffer, count);
+    sched_unlock();
+    return result;
+}
+
+/*---------------------------------------
+ * Writing: blocks, entries, files
+ *---------------------------------------*/
+
+/*
+ * A directory being modified. The buffer is one of the two statics, so a second
+ * open_dir() invalidates the first: everything below takes the handle rather
+ * than re-deriving it, which is what keeps a modification from being thrown
+ * away by a reload.
+ */
+struct hbfs_dirbuf {
+    u8 *data;
+    u32 entries;
+    u32 lba;
+    u32 blocks;
+};
+
+static int open_dir(const struct hbfs_entry *dir, struct hbfs_dirbuf *db)
+{
+    db->data = dir_buffer(dir, &db->entries, &db->lba, &db->blocks);
+    return db->data != NULL ? 0 : -1;
+}
+
+static int sync_dirbuf(const struct hbfs_dirbuf *db)
+{
+    for (u32 i = 0; i < db->blocks; i++) {
+        if (write_block((u64)db->lba + (u64)i * HBFS_SECTORS_PER_BLOCK,
+                        db->data + i * HBFS_BLOCK_SIZE) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int block_used(u32 block)
+{
+    return (bitmap[block / 8] & (1u << (block % 8))) != 0;
+}
+
+static void mark_block(u32 block, int used)
+{
+    if (used) {
+        bitmap[block / 8] |= (u8)(1u << (block % 8));
+    } else {
+        bitmap[block / 8] &= (u8)~(1u << (block % 8));
+    }
+}
+
+/* Write the superblock's free count and the whole bitmap back. The count is the
+ * one field the 32-bit tree keeps in the superblock, so it stays right for
+ * whoever mounts this volume next. */
+static int sync_allocator(void)
+{
+    if (ata_read(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
+        return -1;
+    }
+    put32(sector_buffer + 12, free_blocks);
+    if (ata_write(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
+        return -1;
+    }
+
+    for (u32 i = 0; i < HBFS_BITMAP_BLOCKS; i++) {
+        if (write_block((u64)bitmap_lba + (u64)i * HBFS_SECTORS_PER_BLOCK,
+                        bitmap + i * HBFS_BLOCK_SIZE) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Allocate `count` contiguous data blocks, returning the first one. Contiguous
+ * because a directory entry stores one start block and a count - there is no
+ * extents list to fall back on.
+ */
+static int alloc_blocks(u32 count, u32 *start)
+{
+    u32 run = 0;
+    u32 run_start = 0;
+
+    if (free_blocks < count) {
+        return -1;
+    }
+
+    for (u32 b = HBFS_JOURNAL_BLOCKS; b < total_blocks; b++) {
+        if (block_used(b)) {
+            run = 0;
+            continue;
+        }
+        if (run == 0) {
+            run_start = b;
+        }
+        if (++run == count) {
+            for (u32 i = 0; i < count; i++) {
+                mark_block(run_start + i, 1);
+            }
+            free_blocks -= count;
+            *start = run_start;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void release_blocks(u32 start, u32 count)
+{
+    for (u32 i = 0; i < count; i++) {
+        if (start + i < total_blocks && block_used(start + i)) {
+            mark_block(start + i, 0);
+            free_blocks++;
+        }
+    }
+}
+
+/* Write `size` bytes at data block `start`, leaving the rest of the last block
+ * zeroed so a later read of the slack cannot see an older file's bytes. */
+static int write_data(u32 start, const void *data, u32 size, u32 blocks)
+{
+    const u8 *in = data;
+    u32 done = 0;
+
+    for (u32 i = 0; i < blocks; i++) {
+        u64 lba = (u64)data_lba + (u64)(start + i) * HBFS_SECTORS_PER_BLOCK;
+        for (u32 s = 0; s < HBFS_SECTORS_PER_BLOCK; s++) {
+            memset(sector_buffer, 0, sizeof(sector_buffer));
+            for (u32 k = 0; k < 512 && done + k < size; k++) {
+                sector_buffer[k] = in[done + k];
+            }
+            if (ata_write(lba + s, sector_buffer) != 0) {
+                return -1;
+            }
+            done += 512;
+            if (done >= size) {
+                done = size;
+            }
+        }
+    }
+    return 0;
+}
+
+static void entry_to(u8 *raw, const char *name, u32 type, u32 size, u32 start,
+                     u32 blocks)
+{
+    memset(raw, 0, HBFS_DIR_ENTRY_SIZE);
+    for (u32 i = 0; i < HBFS_NAME_BYTES && name[i] != '\0'; i++) {
+        raw[i] = (u8)name[i];
+    }
+    raw[253] = (u8)type;
+    put32(raw + 256, size);
+    put32(raw + 260, start);
+    put32(raw + 264, blocks);
+    put32(raw + 268, 0);            /* created: no clock yet */
+    put32(raw + 272, 0);            /* modified */
+    u16 mode = (type == HBFS_FTYPE_DIR || type == HBFS_FTYPE_EXEC)
+             ? HBFS_MODE_EXEC : HBFS_MODE_FILE;
+    raw[276] = (u8)mode;
+    raw[277] = (u8)(mode >> 8);
+}
+
+/* The entry for `name` in an open directory: its index, or -1. */
+static int find_entry(const struct hbfs_dirbuf *db, const char *name,
+                      struct hbfs_entry *out, u32 *index)
+{
+    for (u32 i = 0; i < db->entries; i++) {
+        const u8 *raw = db->data + i * HBFS_DIR_ENTRY_SIZE;
+        if (raw[253] == HBFS_FTYPE_FREE || !name_matches(raw, name)) {
+            continue;
+        }
+        if (out != NULL) {
+            entry_from(raw, out);
+        }
+        if (index != NULL) {
+            *index = i;
+        }
+        return 0;
+    }
+    return -1;
+}
+
+static int first_free(const struct hbfs_dirbuf *db)
+{
+    for (u32 i = 0; i < db->entries; i++) {
+        if (db->data[i * HBFS_DIR_ENTRY_SIZE + 253] == HBFS_FTYPE_FREE) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/* Split a path into the directory that would hold it and its last component. */
+static int split_parent(const char *path, struct hbfs_entry *parent, char *name)
+{
+    char full[HBFS_PATH_BYTES];
+    if (build_path(path, full, sizeof(full)) != 0) {
+        return -1;
+    }
+
+    const char *rest = full;
+    while (*rest == '/') {
+        rest++;
+    }
+    if (*rest == '\0') {
+        return -1;                  /* the root has no parent */
+    }
+
+    struct hbfs_entry dir;
+    hbfs_root(&dir);
+    char component[HBFS_NAME_BYTES + 1];
+    for (;;) {
+        const char *next;
+        int n = split_first(rest, component, sizeof(component), &next);
+        if (n <= 0) {
+            return -1;
+        }
+        if (*next == '\0') {
+            for (u32 i = 0; i < HBFS_NAME_BYTES; i++) {
+                name[i] = component[i];
+                if (component[i] == '\0') {
+                    break;
+                }
+            }
+            break;
+        }
+        if (!(n == 1 && component[0] == '.') &&
+            !(n == 2 && component[0] == '.' && component[1] == '.')) {
+            if (hbfs_lookup_in(&dir, component, &dir) != 0) {
+                return -1;
+            }
+        }
+        rest = next;
+    }
+
+    if (dir.type != HBFS_FTYPE_DIR || name[0] == '\0') {
+        return -1;
+    }
+    *parent = dir;
+    return 0;
+}
+
+static int hbfs_create_locked(const char *path, u32 type, const void *data, u32 size)
+{
+    if (!ready || size == 0) {
+        return -1;
+    }
+
+    struct hbfs_entry parent;
+    char name[HBFS_NAME_BYTES + 1];
+    if (split_parent(path, &parent, name) != 0) {
+        return -1;
+    }
+
+    struct hbfs_dirbuf db;
+    if (open_dir(&parent, &db) != 0) {
+        return -1;
+    }
+
+    /* Replacing a name frees its old blocks first, so re-running a program does
+     * not leak the volume one copy at a time. */
+    struct hbfs_entry old;
+    u32 index;
+    int exists = find_entry(&db, name, &old, &index) == 0;
+    if (exists) {
+        if (old.type == HBFS_FTYPE_DIR) {
+            return -1;
+        }
+        release_blocks(old.start, old.blocks);
+    } else {
+        int slot = first_free(&db);
+        if (slot < 0) {
+            return -1;              /* directory full */
+        }
+        index = (u32)slot;
+    }
+
+    u32 blocks = (size + HBFS_BLOCK_SIZE - 1) / HBFS_BLOCK_SIZE;
+    u32 start = 0;
+    if (alloc_blocks(blocks, &start) != 0) {
+        return -1;
+    }
+    if (write_data(start, data, size, blocks) != 0) {
+        release_blocks(start, blocks);
+        return -1;
+    }
+
+    entry_to(db.data + index * HBFS_DIR_ENTRY_SIZE, name, type, size, start,
+             blocks);
+    if (sync_dirbuf(&db) != 0 || sync_allocator() != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int hbfs_create(const char *path, u32 type, const void *data, u32 size)
+{
+    sched_lock();
+    int result = hbfs_create_locked(path, type, data, size);
+    sched_unlock();
+    return result;
+}
+
+static int hbfs_mkdir_locked(const char *path)
+{
+    if (!ready) {
+        return -1;
+    }
+
+    struct hbfs_entry parent;
+    char name[HBFS_NAME_BYTES + 1];
+    if (split_parent(path, &parent, name) != 0) {
+        return -1;
+    }
+
+    struct hbfs_dirbuf db;
+    if (open_dir(&parent, &db) != 0) {
+        return -1;
+    }
+
+    struct hbfs_entry existing;
+    if (find_entry(&db, name, &existing, NULL) == 0) {
+        return existing.type == HBFS_FTYPE_DIR ? 0 : -1;
+    }
+    int slot = first_free(&db);
+    if (slot < 0) {
+        return -1;
+    }
+
+    u32 start = 0;
+    if (alloc_blocks(HBFS_SUBDIR_BLOCKS, &start) != 0) {
+        return -1;
+    }
+    /* A fresh directory's entries must all read as free, so zero its blocks. */
+    static u8 zero[HBFS_BLOCK_SIZE];
+    memset(zero, 0, sizeof(zero));
+    for (u32 i = 0; i < HBFS_SUBDIR_BLOCKS; i++) {
+        u64 lba = (u64)data_lba
+                + (u64)(start + i) * HBFS_SECTORS_PER_BLOCK;
+        if (write_block(lba, zero) != 0) {
+            release_blocks(start, HBFS_SUBDIR_BLOCKS);
+            return -1;
+        }
+    }
+
+    entry_to(db.data + (u32)slot * HBFS_DIR_ENTRY_SIZE, name, HBFS_FTYPE_DIR,
+             0, start, HBFS_SUBDIR_BLOCKS);
+    if (sync_dirbuf(&db) != 0 || sync_allocator() != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int hbfs_mkdir(const char *path)
+{
+    sched_lock();
+    int result = hbfs_mkdir_locked(path);
+    sched_unlock();
+    return result;
+}
+
+static int hbfs_remove_locked(const char *path)
+{
+    if (!ready) {
+        return -1;
+    }
+
+    struct hbfs_entry parent;
+    char name[HBFS_NAME_BYTES + 1];
+    if (split_parent(path, &parent, name) != 0) {
+        return -1;
+    }
+
+    struct hbfs_dirbuf db;
+    if (open_dir(&parent, &db) != 0) {
+        return -1;
+    }
+
+    struct hbfs_entry entry;
+    u32 index;
+    if (find_entry(&db, name, &entry, &index) != 0) {
+        return -1;
+    }
+    if (entry.type == HBFS_FTYPE_DIR) {
+        return -1;                  /* removing a directory is not supported */
+    }
+
+    release_blocks(entry.start, entry.blocks);
+    memset(db.data + index * HBFS_DIR_ENTRY_SIZE, 0, HBFS_DIR_ENTRY_SIZE);
+    if (sync_dirbuf(&db) != 0 || sync_allocator() != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int hbfs_remove(const char *path)
+{
+    sched_lock();
+    int result = hbfs_remove_locked(path);
+    sched_unlock();
+    return result;
+}
+
+u32 hbfs_free_blocks(void)
+{
+    return free_blocks;
 }
