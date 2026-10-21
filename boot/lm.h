@@ -327,6 +327,7 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_GETENV      34
 #define SYS_FORK        37
 #define SYS_WAIT        38
+#define SYS_KILL        39
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -550,6 +551,8 @@ s64 sched_fork(struct lm_fault_frame *parent_frame);
  * 1 while it still runs, -1 if pid is not this task's child. Reaping frees the
  * slot, the kernel stack and the address space. */
 int sched_wait(s64 pid, u64 *code);
+/* KILL: retire another task now; its parent's waitpid reaps it. 0 or -1. */
+int sched_kill(s64 pid, u64 signal);
 
 /*---------------------------------------
  * Physical memory manager

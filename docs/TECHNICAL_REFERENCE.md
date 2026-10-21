@@ -2325,6 +2325,13 @@ A fault taken in ring 3 retires the task instead of halting: the vector goes int
 exit code as `0xFA00000D`-style, the record prints, and the scheduler moves on. Before
 this, any bad program - or any file loaded as one - stopped the machine.
 
+`KILL` does the same thing on request: it marks another task dead with the signal in
+its exit code, releases its files and prints a line, leaving the slot, stack and space
+for its parent's `WAITPID` to reap. It refuses the caller itself (that is `EXIT`) and
+tasks that are already gone. With `spawn` in the shell, a program can run in the
+background and be stopped later, which is the shortest demonstration of a preemptive
+scheduler there is: `/spin` loops forever and the shell still answers.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting

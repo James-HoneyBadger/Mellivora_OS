@@ -914,6 +914,13 @@ static struct lm_fault_frame *sys_wait(struct lm_fault_frame *f)
     return f;
 }
 
+/* kill(pid, signal) - retire another task (see sched_kill). */
+static struct lm_fault_frame *sys_kill(struct lm_fault_frame *f)
+{
+    f->rax = (u64)(long)sched_kill((s64)f->rdi, f->rsi);
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -985,6 +992,7 @@ static const struct lm_syscall syscalls[] = {
     [36] = {"setcursor", sys_setcursor, 0},
     [37] = {"fork", sys_fork, 1},
     [38] = {"waitpid", sys_wait, 1},
+    [39] = {"kill", sys_kill, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -1212,6 +1220,10 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         return sys_getenv(f);
     case 103:                       /* SYS_FORK -> EAX=pid, 0 in the child */
         return sys_fork(f);
+    case 53:                        /* SYS_KILL: EBX=pid ECX=signal */
+        f->rdi = (u64)(s64)(int)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx;
+        return sys_kill(f);
     case 92:                        /* SYS_WAITPID: EBX=pid -> EAX=exit code */
         f->rdi = (u64)(s64)(int)(u32)f->rbx;
         return sys_wait(f);

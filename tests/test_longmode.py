@@ -100,6 +100,10 @@ REQUIRED = (
     # one that cannot be loaded reports the child's own failure.
     "sh: /api exited 0x00000000",
     "sh: /nope exited 0x0000007f",
+    # A background child, a command answered while it spins, and the kill that
+    # stops it.
+    "sh: started /spin pid=7",
+    "sh: killed 7",
     "sh: unknown command",
     "bye",
     "exit=0x005A",
@@ -336,6 +340,9 @@ def main():
         ("mellivora:/> ", "rm probe"),
         ("mellivora:/> ", "run /api"),
         ("mellivora:/> ", "run /nope"),
+        ("mellivora:/> ", "spawn /spin"),
+        ("mellivora:/> ", "date"),
+        ("mellivora:/> ", "kill 7"),
         ("mellivora:/> ", "nonsense"),
         ("mellivora:/> ", "quit"),
     )

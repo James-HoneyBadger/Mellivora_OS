@@ -21,6 +21,7 @@ SYS_CLEAR   equ 23
 SYS_EXEC    equ 12
 SYS_FORK    equ 37
 SYS_WAIT    equ 38
+SYS_KILL    equ 39
 SYS_UNLINK  equ 19
 SYS_OPEN    equ 9
 SYS_READ    equ 10
@@ -95,6 +96,20 @@ start:
         call prefix_is
         test rax, rax
         jnz .rm
+
+        ; "spawn <program>" - start it and do not wait
+        lea rsi, [rel cmd_spawn]
+        mov rcx, 6
+        call prefix_is
+        test rax, rax
+        jnz .spawn
+
+        ; "kill <pid>"
+        lea rsi, [rel cmd_kill]
+        mov rcx, 5
+        call prefix_is
+        test rax, rax
+        jnz .kill
 
         ; "run <program> [arguments]"
         lea rsi, [rel cmd_run]
@@ -189,6 +204,101 @@ start:
         syscall
         call begin_line
         lea rsi, [rel s_cleared]
+        call add_str
+        call end_line
+        jmp .next
+
+.spawn:
+        ; The same fork as run, but the parent does not wait: the child runs in
+        ; the background and the shell is ready for the next command.
+        lea rsi, [CMD_BUF + 6]
+        mov rdi, RUN_PROG
+.copy:
+        lodsb
+        stosb
+        test al, al
+        jnz .copy
+
+        mov eax, SYS_FORK
+        syscall
+        cmp rax, -1
+        je .run_failed
+        test rax, rax
+        jz .spawn_child
+
+        mov r15, rax                    ; the child's pid, before add_str
+                                        ; clobbers EAX
+        call begin_line
+        lea rsi, [rel s_started]
+        call add_str
+        mov rsi, RUN_PROG
+        call add_str
+        lea rsi, [rel s_pid_is]
+        call add_str
+        mov rax, r15
+        call add_dec
+        call end_line
+        jmp .next
+.spawn_child:
+        mov rdi, RUN_PROG
+        xor esi, esi
+        mov eax, SYS_EXEC
+        syscall
+        mov edi, 0x7F
+        mov eax, SYS_EXIT
+        syscall
+.hang_spawn:
+        jmp .hang_spawn
+
+.kill:
+        ; parse the pid out of the rest of the line
+        lea rsi, [CMD_BUF + 5]
+        xor eax, eax
+        xor ecx, ecx
+.digits:
+        mov dl, [rsi]
+        cmp dl, '0'
+        jb .digits_done
+        cmp dl, '9'
+        ja .digits_done
+        cmp ecx, 6
+        jae .digits_done
+        imul eax, eax, 10
+        sub edx, '0'
+        add eax, edx
+        inc ecx
+        inc rsi
+        jmp .digits
+.digits_done:
+        test ecx, ecx
+        jz .kill_usage
+
+        mov rdi, rax
+        mov esi, 15                     ; SIGTERM, the number a shell sends
+        mov eax, SYS_KILL
+        syscall
+        mov r15, rdi
+        mov r14, rax
+
+        call begin_line
+        test r14, r14
+        jnz .kill_failed
+        lea rsi, [rel s_killed]
+        call add_str
+        mov rax, r15
+        call add_dec
+        call end_line
+        jmp .next
+.kill_failed:
+        lea rsi, [rel s_nokill]
+        call add_str
+        mov rax, r15
+        call add_dec
+        call end_line
+        jmp .next
+.kill_usage:
+        call begin_line
+        lea rsi, [rel s_kill_usage]
         call add_str
         call end_line
         jmp .next
@@ -625,6 +735,13 @@ cmd_quit:  db "quit", 0
 cmd_ls:    db "ls", 0
 cmd_cat:   db "cat ", 0
 cmd_run:   db "run ", 0
+cmd_spawn: db "spawn ", 0
+cmd_kill:  db "kill ", 0
+s_started: db "sh: started ", 0
+s_pid_is:  db " pid=", 0
+s_killed:  db "sh: killed ", 0
+s_nokill:  db "sh: cannot kill ", 0
+s_kill_usage: db "usage: kill <pid>", 0
 s_ran:     db "sh: ", 0
 s_exit:    db " exited ", 0
 s_hex:     db "0x", 0

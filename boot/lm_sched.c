@@ -500,6 +500,34 @@ int sched_wait(s64 pid, u64 *code)
 }
 
 /*
+ * Kill: retire another task without waiting for it to reach an exit. The task
+ * cannot be the caller (it is the one running) and cannot already be gone, and
+ * its slot, stack and space are left to its parent's waitpid - so a killed child
+ * is reaped exactly like one that exited.
+ */
+int sched_kill(s64 pid, u64 signal)
+{
+    if (current == NULL || pid < 0 || pid >= (s64)task_count) {
+        return -1;
+    }
+    struct lm_task *t = &tasks[pid];
+    if (t->state != TASK_READY || t == current) {
+        return -1;
+    }
+
+    t->exit_code = 0x8E000000ULL | (signal & 0xFF);   /* 'killed by signal n' */
+    t->state = TASK_DEAD;
+    vfs_release_task(t->id);
+
+    kputs("[proc] pid=");
+    kput_dec((u64)pid);
+    kputs(" killed, signal ");
+    kput_dec(signal);
+    kputs("\r\n");
+    return 0;
+}
+
+/*
  * A user program that faults is retired like one that exits, with the vector in
  * its exit code: the machine keeps running, its parent can wait for it, and the
  * record says what happened. Halting here would let one bad program - or a file
