@@ -27,6 +27,7 @@ Env:
 
 import os
 import subprocess
+import re
 import sys
 import tempfile
 import time
@@ -89,9 +90,13 @@ REQUIRED = (
     # contents, a rejected command and a clean exit.
     "mellivora:/> ",
     "  motd size=16",
+    "sh: created probe",
+    "  probe/ size=0",
+    "sh: removed probe",
     "sh: unknown command",
     "bye",
     "exit=0x005A",
+    "rtc=ok",
     # One of the 32-bit tree's own programs, built by `make programs` from
     # programs/hello.asm and loaded unchanged at its 0x00300000 program base.
     "Hello, World! Welcome to Mellivora OS!",
@@ -213,6 +218,9 @@ def check_written_volume(image):
                         populate.HBFS_DIR_ENTRY_SIZE)
         if inner:
             return "/tmpdir still holds %s after unlink" % sorted(inner)
+
+        if "probe" in top:
+            return "the shell's 'rm probe' left the entry behind"
     return None
 
 
@@ -240,9 +248,13 @@ def main():
     # directory, prints a file, rejects a command it does not know and leaves.
     SHELL_SCRIPT = (
         ("mellivora:/> ", "ls"),
-        ("  sh size=", "cat /motd"),
-        ("hello from hbfs\nmellivora:/> ", "nonsense"),
-        ("sh: unknown command", "quit"),
+        ("mellivora:/> ", "cat /motd"),
+        ("mellivora:/> ", "date"),
+        ("mellivora:/> ", "mkdir probe"),
+        ("mellivora:/> ", "ls"),
+        ("mellivora:/> ", "rm probe"),
+        ("mellivora:/> ", "nonsense"),
+        ("mellivora:/> ", "quit"),
     )
     text = boot_and_capture(qemu, IMAGE, 256, MARKER, SHELL_SCRIPT)
     required = (MARKER,) if MARKER_ONLY else REQUIRED
@@ -256,6 +268,17 @@ def main():
     if MARKER_ONLY:
         print("  PASS  long mode entered and nucleus reported")
         return 0
+
+    stamp = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text)
+    if not stamp:
+        print("  FAIL  the shell never printed a date", file=sys.stderr)
+        return 1
+    guest_year = int(stamp.group(0)[:4])
+    host_year = int(__import__("time").strftime("%Y"))
+    if abs(guest_year - host_year) > 1:
+        print("  FAIL  the clock says %s, this host says %d"
+              % (stamp.group(0), host_year), file=sys.stderr)
+        return 1
 
     # The guest wrote real HBFS structures, so the host can read them back with
     # the same constants populate.py builds images with.

@@ -15,6 +15,9 @@ SYS_EXIT    equ 3
 SYS_WRITE   equ 6
 SYS_YIELD   equ 7
 SYS_SLEEP   equ 24
+SYS_DATE    equ 25
+SYS_MKDIR   equ 18
+SYS_UNLINK  equ 19
 SYS_OPEN    equ 9
 SYS_READ    equ 10
 SYS_CLOSE   equ 11
@@ -32,6 +35,7 @@ DEC_BUF  equ 0x40001600
 STAT_BUF equ 0x40001800
 CWD_BUF  equ 0x40001C00
 CWD_LEN  equ 0x40001B80         ; writable state lives in the stack page
+DATE_BUF equ 0x40001B00         ; sec, min, hour, day, month, year
 LINE_LIMIT equ 0x40001380
 
 STAT_TYPE equ STAT_BUF + 0
@@ -59,6 +63,26 @@ start:
         call line_is
         test rax, rax
         jnz .ls
+
+        ; "date"
+        lea rsi, [rel cmd_date]
+        call line_is
+        test rax, rax
+        jnz .date
+
+        ; "mkdir <name>"
+        lea rsi, [rel cmd_mkdir]
+        mov rcx, 6
+        call prefix_is
+        test rax, rax
+        jnz .mkdir
+
+        ; "rm <name>"
+        lea rsi, [rel cmd_rm]
+        mov rcx, 3
+        call prefix_is
+        test rax, rax
+        jnz .rm
 
         ; "cat <name>"
         lea rsi, [rel cmd_cat]
@@ -140,6 +164,88 @@ start:
         mov rsi, OUT_BUF
         call add_str
         call end_line
+
+.date:
+        mov rdi, DATE_BUF
+        mov eax, SYS_DATE
+        syscall
+        cmp rax, -1
+        je .clock_failed
+
+        call begin_line
+        call add_dec                    ; the four-digit year from RAX...
+        lea rsi, [rel s_dash]
+        call add_str
+        movzx eax, byte [DATE_BUF + 4]  ; month
+        call add_2dec
+        lea rsi, [rel s_dash]
+        call add_str
+        movzx eax, byte [DATE_BUF + 3]  ; day
+        call add_2dec
+        lea rsi, [rel s_space]
+        call add_str
+        movzx eax, byte [DATE_BUF + 2]  ; hour
+        call add_2dec
+        lea rsi, [rel s_colon]
+        call add_str
+        movzx eax, byte [DATE_BUF + 1]  ; minute
+        call add_2dec
+        lea rsi, [rel s_colon]
+        call add_str
+        movzx eax, byte [DATE_BUF + 0]  ; second
+        call add_2dec
+        call end_line
+        jmp .next
+.clock_failed:
+        call begin_line
+        lea rsi, [rel s_noclock]
+        call add_str
+        call end_line
+        jmp .next
+
+.mkdir:
+        lea rdi, [CMD_BUF + 6]
+        mov eax, SYS_MKDIR
+        syscall
+        mov r15, rax
+        call begin_line
+        test r15, r15
+        jnz .mkdir_failed
+        lea rsi, [rel s_made]
+        call add_str
+        lea rsi, [CMD_BUF + 6]
+        call add_str
+        call end_line
+        jmp .next
+.mkdir_failed:
+        lea rsi, [rel s_cant]
+        call add_str
+        lea rsi, [CMD_BUF + 6]
+        call add_str
+        call end_line
+        jmp .next
+
+.rm:
+        lea rdi, [CMD_BUF + 3]
+        mov eax, SYS_UNLINK
+        syscall
+        mov r15, rax
+        call begin_line
+        test r15, r15
+        jnz .rm_failed
+        lea rsi, [rel s_removed]
+        call add_str
+        lea rsi, [CMD_BUF + 3]
+        call add_str
+        call end_line
+        jmp .next
+.rm_failed:
+        lea rsi, [rel s_cant]
+        call add_str
+        lea rsi, [CMD_BUF + 3]
+        call add_str
+        call end_line
+        jmp .next
 
 .next:
         call prompt
@@ -314,6 +420,19 @@ add_bytes:
 .done:
         ret
 
+; add_2dec: eax = a value under 100, written as exactly two digits.
+add_2dec:
+        mov ecx, 10
+        xor edx, edx
+        div ecx
+        add al, '0'
+        mov [rbp], al
+        inc rbp
+        add dl, '0'
+        mov [rbp], dl
+        inc rbp
+        ret
+
 add_dec:
         lea rsi, [DEC_BUF + 31]
         mov byte [rsi], 0
@@ -351,3 +470,13 @@ s_bye:     db "bye", 0
 cmd_quit:  db "quit", 0
 cmd_ls:    db "ls", 0
 cmd_cat:   db "cat ", 0
+cmd_date:  db "date", 0
+cmd_mkdir: db "mkdir ", 0
+cmd_rm:    db "rm ", 0
+s_dash:    db "-", 0
+s_colon:   db ":", 0
+s_space:   db " ", 0
+s_made:    db "sh: created ", 0
+s_removed: db "sh: removed ", 0
+s_cant:    db "sh: cannot: ", 0
+s_noclock: db "sh: no clock", 0

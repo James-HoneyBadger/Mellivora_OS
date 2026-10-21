@@ -954,7 +954,20 @@ static int hbfs_remove_locked(const char *path)
         return -1;
     }
     if (entry.type == HBFS_FTYPE_DIR) {
-        return -1;                  /* removing a directory is not supported */
+        /* A directory can go, but only when nothing is left in it: a recursive
+         * delete would have to walk the tree, and a caller that wanted one can
+         * walk it itself with readdir. The parent's entry is in one buffer and
+         * the child's blocks load into the other, so this cannot clobber it. */
+        u32 child_entries;
+        const u8 *child = dir_data(&entry, &child_entries);
+        if (child == NULL) {
+            return -1;
+        }
+        for (u32 i = 0; i < child_entries; i++) {
+            if (child[i * HBFS_DIR_ENTRY_SIZE + 253] != HBFS_FTYPE_FREE) {
+                return -1;          /* not empty */
+            }
+        }
     }
 
     release_blocks(entry.start, entry.blocks);

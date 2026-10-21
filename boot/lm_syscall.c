@@ -527,6 +527,33 @@ static struct lm_fault_frame *sys_sleep(struct lm_fault_frame *f)
     return f;
 }
 
+/*
+ * date(buf): six bytes - second, minute, hour, day, month, two-digit year - and
+ * the four-digit year in RAX, which is the 32-bit tree's shape for SYS_DATE.
+ */
+static struct lm_fault_frame *sys_date(struct lm_fault_frame *f)
+{
+    struct rtc_time t;
+    u8 out[6];
+
+    if (rtc_read(&t) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    out[0] = t.second;
+    out[1] = t.minute;
+    out[2] = t.hour;
+    out[3] = t.day;
+    out[4] = t.month;
+    out[5] = t.year;
+    if (copy_to_user(f->rdi, out, sizeof(out)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = t.full_year;
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -584,6 +611,7 @@ static const struct lm_syscall syscalls[] = {
     [22] = {"getchar", sys_getchar, 0},
     [23] = {"clear", sys_clear, 0},
     [24] = {"sleep", sys_sleep, 1},
+    [25] = {"date", sys_date, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -782,6 +810,11 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         return sys_clear(f);
     case 16:                        /* SYS_SLEEP: EBX=milliseconds */
         return sys_sleep(f);
+    case 25:                        /* SYS_DATE: EBX=6-byte buffer */
+        f->rdi = (u64)(u32)f->rbx;
+        return sys_date(f);
+    case 15:                        /* SYS_GETTIME: ticks since boot */
+        return sys_ticks(f);
     case 10:                        /* SYS_SEEK: EBX=fd ECX=offset EDX=whence */
         f->rdi = (u64)(u32)f->rbx;
         f->rsi = (u64)(s64)(int)(u32)f->rcx;

@@ -2278,6 +2278,28 @@ its metadata come back from one call. Every user pointer involved - the name buf
 `copy_to_user`, which validates each page with the VMM before storing under
 STAC/CLAC; a bad pointer is a `-1` return, not a kernel fault.
 
+### The clock
+
+`boot/lm_rtc.c` reads the CMOS chip the 32-bit tree reads: index port 0x70, data port
+0x71, seconds at 0x00 through the century at 0x32. Three things make a naive read
+wrong, and each is handled:
+
+- The chip updates once a second and sets status-A bit 7 while it is mid-update, so
+  the read waits for that bit to clear - and then reads twice and takes a third
+  sample if the seconds moved, because a read that spans the boundary mixes the two
+  halves.
+- Registers are BCD unless status-B bit 2 says otherwise.
+- Hours are 12-hour with a PM flag unless status-B bit 1 says otherwise, so 12 AM
+  becomes hour 0 and 12 PM stays 12.
+
+The result is range-checked before it is handed out: a chip that answers nonsense
+must not turn into a date in 2147.
+
+`SYS_DATE` keeps the 32-bit tree's shape - a six-byte buffer of second, minute, hour,
+day, month and two-digit year, with the four-digit year in RAX - so a program written
+against the tree reads the same values here. `SYS_GETTIME` is the tick count, which is
+what the tree's own `SYS_GETTIME` returns.
+
 ### The console is a UART
 
 There is no text buffer and no keyboard driver: the console is COM1, so a character

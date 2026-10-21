@@ -305,6 +305,7 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_GETCHAR 22
 #define SYS_CLEAR  23
 #define SYS_SLEEP  24
+#define SYS_DATE   25
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -409,6 +410,20 @@ int vfs_mkdir(const char *path);
 int vfs_unlink(const char *path);
 u32 vfs_free_blocks(void);
 void vfs_release_task(u64 owner);
+
+/* The CMOS real-time clock, read the way the 32-bit tree reads it. */
+struct rtc_time {
+    u8 second;
+    u8 minute;
+    u8 hour;
+    u8 day;
+    u8 month;
+    u8 year;            /* two digits, as the chip stores it */
+    u32 full_year;      /* century * 100 + year, for anything that prints it */
+};
+
+int rtc_read(struct rtc_time *t);   /* 0 or -1 when the chip answers nonsense */
+int rtc_selftest(void);
 
 /* Polling ATA PIO on the primary channel. */
 int ata_init(void);

@@ -400,6 +400,7 @@ void lm_main(void)
     struct cpu_features feat = cpu_harden();  /* NX/SMEP/SMAP where offered */
     idt_init();          /* a fault must report, not triple-fault */
     irq_init();          /* PIC remapped and the PIT ticking; IF stays clear */
+    rtc_selftest();
     syscall_init();
 
     kputs("[lm] Mellivora x86-64 nucleus (C11)\r\n");
