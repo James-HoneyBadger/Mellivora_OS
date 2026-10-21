@@ -1597,7 +1597,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 185 syscalls. See `programs/syscalls.inc` for the authoritative list.
+Quick reference for all 186 syscalls. See `programs/syscalls.inc` for the authoritative list.
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |

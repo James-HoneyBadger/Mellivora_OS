@@ -372,8 +372,10 @@ syscall_table:
         ; v14.0: job control
         dd sys_tcsetpgrp        ; 183 SYS_TCSETPGRP
         dd sys_tcgetpgrp        ; 184 SYS_TCGETPGRP
-        ; Reserved / unimplemented (185..255)
-        times (SYSCALL_MAX - 185) dd syscall_handler.syscall_bad
+        ; Demand-zero file mapping
+        dd sys_mmap_file        ; 185 SYS_MMAP_FILE
+        ; Reserved / unimplemented (186..255)
+        times (SYSCALL_MAX - 186) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)

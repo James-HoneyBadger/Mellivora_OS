@@ -218,21 +218,56 @@ hbfs_read_file:
         ; Save the file size before we use EDI for reading
         mov ebx, [edi + 256]    ; File size
         mov [.save_fsize], ebx
+        mov [.save_fsize_orig], ebx
 
-        ; Get block number and block count, then read all data
+        ; Get block number and block count, then read all data.
+        ;
+        ; The file occupies whole blocks, but the caller sized its buffer from
+        ; the FILE size, so reading every block straight into the destination
+        ; overruns it by up to one block (the padding of the last block). Each
+        ; block therefore lands in the bounce buffer and only the bytes the
+        ; file actually contains are copied out.
         mov eax, [edi + 260]    ; Start block
+        mov [.save_start], eax
         mov ecx, [edi + 264]    ; Block count
         cmp ecx, HBFS_READ_MAX_BLOCKS
         ja  .read_error         ; file is larger than the caller's buffer
+        mov [.save_blocks], ecx
+        mov edi, [.save_dest]
+
+.read_block:
+        cmp dword [.save_blocks], 0
+        je .read_done
+        mov eax, [.save_start]
         shl eax, 3              ; * 8 = sector offset within data area
         add eax, HBFS_DATA_START
-        shl ecx, 3              ; block_count * 8 = total sectors to read
-        mov edi, [.save_dest]
+        mov ecx, HBFS_SECTORS_PER_BLK
+        push edi
+        mov edi, hbfs_block_buf
         call ata_read_sectors
+        pop edi
         jc .read_error
 
+        ; Copy min(remaining file bytes, one block)
+        mov ecx, HBFS_BLOCK_SIZE
+        cmp ecx, [.save_fsize]
+        jbe .have_copy_len
+        mov ecx, [.save_fsize]
+.have_copy_len:
+        jecxz .next_block
+        sub [.save_fsize], ecx
+        push esi
+        mov esi, hbfs_block_buf
+        rep movsb               ; EDI advances past the copied bytes
+        pop esi
+.next_block:
+        inc dword [.save_start]
+        dec dword [.save_blocks]
+        jmp .read_block
+
+.read_done:
         ; Return file size via ECX in pushad frame
-        mov eax, [.save_fsize]
+        mov eax, [.save_fsize_orig]
         mov [esp + 24], eax     ; ECX position in pushad frame
 
         popad
@@ -252,5 +287,8 @@ hbfs_read_file:
         stc
         ret
 
-.save_dest:  dd 0
-.save_fsize: dd 0
+.save_dest:   dd 0
+.save_fsize:  dd 0
+.save_fsize_orig: dd 0
+.save_start:  dd 0
+.save_blocks: dd 0

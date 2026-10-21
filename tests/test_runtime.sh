@@ -115,6 +115,7 @@ run_case "sbrk heap growth"           "sbrk_test"             "SBRK_BIG_OK"     
 run_case "user/kernel memory isolation" "memprot_test"        "MEMPROT_OK"         "" "CPU EXCEPTION|MEMPROT_FAIL"
 run_case "mmap/mprotect/munmap"         "vmtest"                "VM_OK"              "" "CPU EXCEPTION|VMTEST_FAIL"
 run_case "demand-zero + partial munmap"  "vmtest2"               "VM2_OK"             "" "CPU EXCEPTION|VMTEST2_FAIL"
+run_case "file-backed mmap"              "vmtest3"               "VM3_OK"             "" "CPU EXCEPTION|VMTEST3_FAIL"
 run_case "stack guard + growth"          "stack_test"            "STACK_GROW_OK"      "" "CPU EXCEPTION|PAGE FAULT|STACK_FAIL"
 # The guard page must kill the offending task and nothing else: the shell has to
 # survive and run the next command.

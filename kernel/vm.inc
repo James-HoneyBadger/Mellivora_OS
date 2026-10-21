@@ -292,6 +292,46 @@ vm_flags_for_prot:
         ret
 
 ;---------------------------------------
+; vm_fault_file_page - fill a demand frame from the file backing an area
+;   In : EAX = faulting address, ESI = area record, EDI = zeroed frame
+;   Out: EAX = 1 when a block was read, 0 when this page has no file data
+;        (the frame keeps the zeros it was allocated with)
+;
+; The block is read straight into the frame: frames are identity-mapped kernel
+; memory, so a PIO read can target one directly. A read failure reports "no
+; data" rather than raising a fault inside the fault handler.
+;---------------------------------------
+vm_fault_file_page:
+        pushad
+        mov [.vff_rec], esi
+        mov [.vff_dst], edi
+        mov edx, [esi + VMA_SECTOR]
+        test edx, edx
+        jz .vff_none                    ; anonymous mapping
+        mov ecx, eax
+        sub ecx, [esi + VMA_START]
+        shr ecx, 12                     ; page index inside the area
+        cmp ecx, [esi + VMA_BLOCKS]
+        jae .vff_none                   ; past the end of the file: zeros
+        shl ecx, 3                      ; 8 sectors per block
+        mov eax, [esi + VMA_SECTOR]
+        dec eax
+        add eax, ecx
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov edi, [.vff_dst]
+        call ata_read_sectors
+        jc .vff_none
+        mov dword [esp + 28], 1
+        popad
+        ret
+.vff_none:
+        mov dword [esp + 28], 0
+        popad
+        ret
+.vff_rec: dd 0
+.vff_dst: dd 0
+
+;---------------------------------------
 ; vm_pte_phys - frame mapped at a virtual address
 ;   In : EAX = page directory, EBX = virtual address
 ;   Out: EAX = physical frame, or 0 when the page is not present
@@ -435,7 +475,9 @@ vm_split_at:
         jz .vsa_none
         mov edi, eax
 
-        ; New right-hand piece: [EBX, old end)
+        ; New right-hand piece: [EBX, old end). A file mapping keeps its file
+        ; position: the split point advances the sector by the pages moved out
+        ; and shortens the number of blocks the file can still back.
         mov ecx, [esi + VMA_END]
         sub ecx, ebx
         shr ecx, 12
@@ -443,9 +485,33 @@ vm_split_at:
         mov [edi + VMA_PAGES], ecx
         mov ecx, [esi + VMA_PROT]
         mov [edi + VMA_PROT], ecx
-        mov dword [edi + VMA_PHYS], 0
-        mov ecx, [esi + VMA_END]
-        mov [edi + VMA_END], ecx
+
+        mov ecx, ebx
+        sub ecx, [esi + VMA_START]
+        shr ecx, 12                     ; pages moved out of the left piece
+        mov eax, [esi + VMA_SECTOR]
+        test eax, eax
+        jz .vsa_anon
+        mov edx, ecx
+        shl edx, 3                      ; sectors per block: 8
+        add eax, edx                    ; first sector of the new piece
+        mov [edi + VMA_SECTOR], eax
+        mov edx, [esi + VMA_BLOCKS]
+        sub edx, ecx
+        jnc .vsa_blocks_ok
+        xor edx, edx
+.vsa_blocks_ok:
+        mov [edi + VMA_BLOCKS], edx
+        cmp dword [esi + VMA_BLOCKS], ecx   ; the left piece ends at the split
+        jbe .vsa_end
+        mov [esi + VMA_BLOCKS], ecx
+        jmp .vsa_end
+.vsa_anon:
+        mov dword [edi + VMA_SECTOR], 0
+        mov dword [edi + VMA_BLOCKS], 0
+.vsa_end:
+        mov eax, [esi + VMA_END]
+        mov [edi + VMA_END], eax
 
         ; Shrink the left-hand piece to [old start, EBX)
         mov ecx, ebx
@@ -552,7 +618,8 @@ vm_release_all:
         mov [esi + VMA_START], eax
         mov [esi + VMA_PAGES], eax
         mov [esi + VMA_PROT], eax
-        mov [esi + VMA_PHYS], eax
+        mov [esi + VMA_SECTOR], eax
+        mov [esi + VMA_BLOCKS], eax
         mov [esi + VMA_END], eax
 .vra_next:
         inc dword [.vra_i]
@@ -652,7 +719,8 @@ sys_mmap:
         mov [eax + VMA_PAGES], ecx
         mov ecx, [.mm_prot]
         mov [eax + VMA_PROT], ecx
-        mov dword [eax + VMA_PHYS], 0
+        mov dword [eax + VMA_SECTOR], 0     ; anonymous: demand-zero frames
+        mov dword [eax + VMA_BLOCKS], 0
         mov edx, [.mm_virt]
         mov ecx, [.mm_pages]
         shl ecx, 12
@@ -672,6 +740,156 @@ sys_mmap:
 .mm_prot:  dd 0
 .mm_pages: dd 0
 .mm_virt:  dd 0
+
+;---------------------------------------
+; sys_mmap_file (185) - map a file's contents into the address space
+;   In : EBX = path (user string), ECX = length, EDX = PROT_*, ESI = offset
+;   Out: EAX = address, or -1
+;
+; The mapping is private to the task and read-write pages are a fresh copy:
+; the blocks are read into demand frames on first touch and never written back,
+; so a private file mapping cannot corrupt the file. Pages past the end of the
+; file (a short last page, or a length longer than the file) read as zero
+; rather than faulting.
+;
+; Only HBFS files can be mapped: the record stores the file's data sectors, so
+; a path the fd layer cannot open (tmpfs, procfs, devfs) returns -1.
+;---------------------------------------
+MF_PATH_MAX equ 200
+
+sys_mmap_file:
+        pushad
+        mov [.mf_len], ecx
+        mov [.mf_prot], edx
+        mov [.mf_off], esi
+
+        ; Protection mask and W^X: identical rules to SYS_MMAP.
+        mov eax, edx
+        and eax, ~(PROT_READ | PROT_WRITE | PROT_EXEC | VM_MAP_JIT)
+        jnz .mf_fail
+        mov eax, edx
+        and eax, PROT_WRITE | PROT_EXEC
+        cmp eax, PROT_WRITE | PROT_EXEC
+        jne .mf_wx_ok
+        test edx, VM_MAP_JIT
+        jz .mf_fail
+.mf_wx_ok:
+        and dword [.mf_prot], PROT_READ | PROT_WRITE | PROT_EXEC
+
+        cmp dword [.mf_len], 0
+        je .mf_fail
+        cmp dword [.mf_len], USER_PTR_MAX
+        ja .mf_fail
+        test dword [.mf_off], 0xFFF     ; offset must be page aligned
+        jnz .mf_fail
+
+        ; Copy the path into kernel memory.
+        mov eax, ebx
+        mov ecx, MF_PATH_MAX
+        call user_range_ok
+        jc .mf_fail
+        mov esi, ebx
+        mov edi, vm_file_path
+        xor ecx, ecx
+.mf_copy:
+        cmp ecx, MF_PATH_MAX - 1
+        jae .mf_fail
+        mov al, [esi + ecx]
+        mov [edi + ecx], al
+        test al, al
+        jz .mf_copied
+        inc ecx
+        jmp .mf_copy
+.mf_copied:
+
+        ; Open it: the legacy fd entry carries the file's geometry.
+        mov esi, vm_file_path
+        mov ecx, FD_FLAG_READ
+        call fd_open
+        cmp eax, -1
+        je .mf_fail
+        mov [.mf_fd], eax
+        imul eax, FD_ENTRY_SIZE
+
+        mov ecx, [.mf_off]
+        shr ecx, 12                     ; first block of the mapping
+        mov edx, [fd_table + eax + 16]  ; blocks the file occupies
+        cmp ecx, edx
+        jae .mf_close_fail              ; offset at or past the end of the file
+        sub edx, ecx                    ; blocks still available from here
+        mov [.mf_avail], edx
+
+        mov edx, [fd_table + eax + 8]   ; file's first data block
+        add edx, ecx
+        shl edx, 3                      ; sector LBA
+        add edx, HBFS_DATA_START
+        inc edx                         ; 0 means "anonymous"
+        mov [.mf_sector], edx
+
+        ; Pages needed
+        mov eax, [.mf_len]
+        add eax, 0xFFF
+        jc .mf_close_fail
+        shr eax, 12
+        test eax, eax
+        jz .mf_close_fail
+        cmp eax, VM_MAX_PAGES
+        ja .mf_close_fail
+        mov [.mf_pages], eax
+
+        ; The descriptor is not needed any more: the record keeps the sectors.
+        mov ebx, [.mf_fd]
+        call fd_close
+
+        mov ecx, [.mf_pages]
+        call vm_gap
+        test eax, eax
+        jz .mf_fail
+        mov [.mf_virt], eax
+
+        call vm_free_slot
+        test eax, eax
+        jz .mf_fail
+        mov ecx, [.mf_virt]
+        mov [eax + VMA_START], ecx
+        mov ecx, [.mf_pages]
+        mov [eax + VMA_PAGES], ecx
+        mov ecx, [.mf_prot]
+        mov [eax + VMA_PROT], ecx
+        mov ecx, [.mf_sector]
+        mov [eax + VMA_SECTOR], ecx
+        mov ecx, [.mf_avail]
+        cmp ecx, [.mf_pages]
+        jbe .mf_clamp_ok
+        mov ecx, [.mf_pages]
+.mf_clamp_ok:
+        mov [eax + VMA_BLOCKS], ecx
+        mov edx, [.mf_virt]
+        mov ecx, [.mf_pages]
+        shl ecx, 12
+        add edx, ecx
+        mov [eax + VMA_END], edx
+
+        mov eax, [.mf_virt]
+        mov [esp + 28], eax
+        popad
+        iretd
+
+.mf_close_fail:
+        mov ebx, [.mf_fd]
+        call fd_close
+.mf_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+.mf_len:    dd 0
+.mf_prot:   dd 0
+.mf_off:    dd 0
+.mf_fd:     dd 0
+.mf_avail:  dd 0
+.mf_sector: dd 0
+.mf_pages:  dd 0
+.mf_virt:   dd 0
 
 ;---------------------------------------
 ; sys_munmap (121) - release part or all of a mapping
@@ -717,7 +935,8 @@ sys_munmap:
         mov [esi + VMA_START], eax
         mov [esi + VMA_PAGES], eax
         mov [esi + VMA_PROT], eax
-        mov [esi + VMA_PHYS], eax
+        mov [esi + VMA_SECTOR], eax
+        mov [esi + VMA_BLOCKS], eax
         mov [esi + VMA_END], eax
 
         mov dword [esp + 28], 0

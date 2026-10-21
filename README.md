@@ -4,7 +4,7 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 185 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 186 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
 compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
@@ -25,7 +25,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 - **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`) that currently boots a 64-bit nucleus reporting `MELLIVORA64_OK` on COM1 (`make check-longmode`)
 - **UEFI boot** — `boot/uefi_loader.efi` (gnu-efi PE32+) for UEFI firmware; `make uefi` / `make run-uefi`
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **185 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
+- **186 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
 - **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 128 concurrent ring-3 tasks; blocking `waitpid`
 - **Per-task fd isolation** (v12.1) — each task has a private 4 KB fd table page; no cross-task aliasing

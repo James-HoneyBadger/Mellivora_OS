@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, "  HBFS v3  ", 0xF9, "  185 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA
+        db 0xBA, "  HBFS v3  ", 0xF9, "  186 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -126,7 +126,7 @@ msg_boot_suf:   db "s", 0x0A, 0
 msg_boot_ok:    db "MELLIVORA_BOOT_OK", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v13.0.0 - HBFS v3, 185 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
+        db "Mellivora OS v13.0.0 - HBFS v3, 186 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair v13.0 (Honey Badger Lair)", 0x0A
@@ -150,7 +150,7 @@ version_text:
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (185 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (186 syscalls)", 0x0A
         db "  UEFI Boot:     Tianocore EDK2 UEFI loader (boot/uefi_loader.c)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
@@ -1087,9 +1087,10 @@ sb16_buf_len:     resd 1          ; DMA buffer length
 sb16_format:      resd 1          ; Format flags
 
 ; Virtual memory: per-task mmap areas (see kernel/vm.inc).
-vm_areas:         resb MAX_TASKS * 32 * 20   ; 32 areas x 20 bytes per task
+vm_areas:         resb MAX_TASKS * VM_AREAS_PER_TASK * VM_AREA_SIZE
 vm_next:          resd MAX_TASKS             ; per-task allocation bump pointer
 vm_rng:           resd 1
+vm_file_path:     resb 256                    ; SYS_MMAP_FILE path staging
 
 ; Burrows desktop settings: persisted theme (see burrows_config_load/save)
 burrows_cfg_buf:  resb 4096       ; one HBFS block, the read path fills it whole

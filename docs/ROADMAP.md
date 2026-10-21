@@ -39,7 +39,7 @@ A phase does not close until these are measured:
 
 | Phase | State | Landed so far |
 |---|---|---|
-| P1 | in progress | `vm_area` table, demand-zero `mmap`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, `vmtest`/`vmtest2`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
+| P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, `vmtest`/`vmtest2`/`vmtest3`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
 | P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`) |
 
 ## Phases
@@ -63,7 +63,8 @@ A phase does not close until these are measured:
 - [x] Guard pages and on-demand stack growth for the user stack.
 - [x] Demand-zero anonymous mappings; partial `munmap`/`mprotect`; fork COW and
   exit/exec reclaim of `mmap` areas.
-- [ ] File-backed mappings.
+- [x] File-backed (private, demand-paged) mappings via `SYS_MMAP_FILE`.
+- [ ] Shared write-back file mappings (`MAP_SHARED`).
 - [x] **Remove user access to kernel RAM**; map only what a process needs (program
   window, stack, framebuffer, IPC surfaces). See `docs/spec/VMM.md`.
 - [ ] Kernel slab allocator; page cache and unified block cache; user heap on top of VMM.

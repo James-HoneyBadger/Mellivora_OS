@@ -79,13 +79,22 @@ PROT_EXEC           equ 4
 
 ; Per-task mmap area records (kernel/vm.inc, storage in kernel/data.inc).
 ; Defined here because sched.inc and paging.inc are included before vm.inc.
-VM_AREA_SIZE        equ 20
+;
+;   start    first virtual address (page aligned)
+;   pages    page count
+;   prot     PROT_* mask
+;   sector   first file sector (LBA + 1) backing the area; 0 = anonymous
+;   end      exclusive end address
+;   blocks   file blocks present from `sector`; later pages read as zero
+;            (a file mapping whose last page is short, or which runs past EOF)
+VM_AREA_SIZE        equ 24
 VM_AREAS_PER_TASK   equ 32
 VMA_START           equ 0
 VMA_PAGES           equ 4
 VMA_PROT            equ 8
-VMA_PHYS            equ 12
+VMA_SECTOR          equ 12
 VMA_END             equ 16
+VMA_BLOCKS          equ 20
 ; Copy-on-write bookkeeping covers the identity-mapped region only: 128 MB of
 ; RAM / 4 KB = 32768 pages, one refcount byte each (see cow_ref in data.inc).
 COW_MAX_PAGES       equ 32768
@@ -517,6 +526,7 @@ SYS_GETERRNO        equ 181     ; Get errno: -> EAX=errno
 SYS_EXECVE          equ 182     ; execve(path, argv, envp) -> no return / -1
 SYS_TCSETPGRP       equ 183     ; Set terminal foreground pgid: EBX=pgid -> 0/-1
 SYS_TCGETPGRP       equ 184     ; Get terminal foreground pgid: -> EAX=pgid
+SYS_MMAP_FILE       equ 185     ; Map a file: EBX=path ECX=len EDX=prot ESI=off -> addr/-1
 
 ; Signal trampoline — read-only page mapped at top of demand zone
 SIGRETURN_TRAMPOLINE_VADDR equ 0x1FFFF000   ; Last page of demand zone (128–512MB)

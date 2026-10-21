@@ -409,7 +409,8 @@ isr_page_fault:
         jz   .pf_demand_oom
 
         ; Allocate a frame and zero it: a fresh mapping must never expose
-        ; bytes left behind by a previous owner.
+        ; bytes left behind by a previous owner. A file-backed area then fills
+        ; it from the file; pages past the end of the file stay zero.
         call pmm_alloc_page
         test eax, eax
         jz   .pf_demand_oom
@@ -419,6 +420,10 @@ isr_page_fault:
         mov  ecx, 1024
         cld
         rep  stosd
+
+        mov  eax, [pf_addr]
+        mov  edi, [pf_demand_frame]
+        call vm_fault_file_page         ; ESI = area, EDI = frame
 
         mov  eax, [pf_addr]
         and  eax, 0xFFFFF000

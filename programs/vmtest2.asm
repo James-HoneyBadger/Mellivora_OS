@@ -410,9 +410,11 @@ msg_ok:       db "VM2_OK", 10, 0
 msg_fail:     db "VMTEST2_FAIL", 10, 0
 msg_no_fault: db "VMTEST2_FAIL_NO_FAULT", 10, 0
 
-section .bss
-map1:        resd 1
-probe_addr:  resd 1
-free_base:   resd 1
-free_before: resd 1
-kern_buf:    resd 1
+; Buffers live in the loaded image and in the default section: a `section`
+; directive here would restart the address counter at zero, so every buffer
+; would alias the program's own code instead of following it.
+map1:        dd 0
+probe_addr:  dd 0
+free_base:   dd 0
+free_before: dd 0
+kern_buf:    dd 0

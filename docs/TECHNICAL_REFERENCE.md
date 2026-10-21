@@ -1798,7 +1798,7 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 180 | `SYS_TCFLUSH` | EBX=fd, ECX=queue | EAX=0 |
 | 181 | `SYS_GETERRNO` | — | EAX=per-task errno |
 
-**Total: 185 syscalls defined (0–184, no gaps).**
+**Total: 186 syscalls defined (0–185, no gaps).**
 
 ---
 

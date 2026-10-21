@@ -1,5 +1,39 @@
 # Mellivora OS - Changelog
 
+## Unreleased - file-backed mappings
+
+### Memory and isolation
+
+- **`SYS_MMAP_FILE` (185)** — `mmap_file(path, len, prot, offset)` maps an HBFS file
+  into the address space. It is private and demand-paged: `mmap_file` reads nothing,
+  the first touch of each page reads that page's block into a fresh zeroed frame, and
+  nothing is ever written back, so a writable mapping cannot corrupt the file. A
+  page-aligned `offset` maps from that point in the file; pages past the end of the
+  file read as zero instead of faulting. tmpfs/procfs/devfs paths return `-1`.
+- **Splitting a file area keeps its file position** — the area record now carries the
+  file's first data sector and the number of blocks it can back, so `munmap` and
+  `mprotect` of a sub-range hand the right-hand piece the sector that matches its
+  first page. Without that, a split file mapping would serve page N from block 0.
+
+### Fixed
+
+- **`hbfs_read_file` overran the caller's buffer** — the whole-file read copied every
+  block of the file straight into the destination, but callers size their buffer from
+  the *reported* file size, so any file whose length is not a multiple of 4 KB
+  scribbled up to one block (4 KB) of block padding past the end of the buffer. Each
+  block now lands in the bounce buffer and only the bytes the file actually contains
+  are copied out.
+- **`programs/vmtest2.asm` buffers aliased the code** — a `section .bss` directive in a
+  flat binary restarts the address counter at zero, so the test's variables overlapped
+  the program's own first instructions and only worked because they were written after
+  those instructions had run. The buffers now follow the code in the default section.
+
+### Tooling
+
+- `programs/vmtest3.asm` covers file mappings: lazy read, exact contents, zero fill
+  past EOF, page-aligned offsets, private writes, read-only protection, split-position
+  correctness and unmap. It is wired into `tests/test_runtime.sh`.
+
 ## Unreleased - demand-zero mappings and partial unmapping
 
 ### Memory and isolation

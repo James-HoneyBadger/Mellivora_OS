@@ -67,8 +67,12 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 - A protection change on a page that is still copy-on-write shared with another
   address space copies the frame first, so one process's `mprotect` can never change
   what the other sees.
-- `mprotect` may not add `PROT_WRITE` to a file mapping opened read-only (file-backed
-  mappings are not implemented yet).
+- `SYS_MMAP_FILE(path, len, prot, offset)` maps a file's contents. It is private and
+  demand-paged: nothing is read until a page is touched, and the block for that page
+  is read into a fresh frame. Writes through a writable mapping therefore never reach
+  the file, and pages past the end of the file read as zero instead of faulting.
+  `offset` must be page aligned. Only HBFS files can be mapped; tmpfs, procfs and
+  devfs paths return `-1`. There is no `MAP_SHARED` writeback.
 - `PROT_EXEC` on a writable anonymous mapping requires an explicit `MAP_JIT` flag
   (W^X); without it the request fails with `EPERM`.
 - Unmapped pages inside the demand zone fault with `SIGSEGV` (once signals land) or kill
@@ -79,7 +83,7 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 | Fault | Cause | Action |
 |---|---|---|
 | Demand zero | Anonymous area, page not yet backed | Allocate a zeroed page, map it with the area's protections, retry |
-| File-backed | Area with a `file` | Read the page through the page cache, map it read-only, COW on write if `MAP_PRIVATE` (not implemented) |
+| File-backed | Area backed by an HBFS file | Read the page's block into a fresh zeroed frame, then map it with the area's protection |
 | COW | Write to a frame that was writable when shared | Copy the frame, drop the old reference, remap writable |
 | Guard page | Access immediately below a stack area | Report stack overflow (task killed, shell survives) |
 | Permission | Write to a read-only or supervisor page, or any access to `PROT_NONE` | Deny: kill the task, leave the system running |
@@ -131,6 +135,10 @@ Implemented in `kernel/vm.inc`:
   and refuse any access the protection does not allow. Faults **fail closed**: an
   address that belongs to no area — including one `munmap` just released — kills the
   task.
+- `SYS_MMAP_FILE`: maps an HBFS file's contents privately and demand-paged. The record
+  stores the file's first data sector (plus 1, so 0 means anonymous) and the number of
+  blocks the file can back; a demand fault reads the block for the touching page into
+  the frame. No data is read until a page is touched and nothing is ever written back.
 - `munmap`: accepts any page-aligned sub-range of one area, splits the area, drops the
   PTEs and releases each frame through its COW reference count.
 - `mprotect`: accepts any page-aligned sub-range, splits the area, updates its
@@ -154,7 +162,13 @@ Also implemented:
   read-only at fork time is counted (both processes map it) but is not marked, so a
   write to it stays a protection fault.
 
-Not yet implemented: file-backed mappings and `MAP_SHARED` semantics.
+File-backed mappings (`SYS_MMAP_FILE`) are implemented on the same demand path: the
+area records the file's first data sector and how many blocks the file can back, so a
+demand fault reads the right block into the frame. A split (`munmap`/`mprotect` of a
+sub-range) advances that sector by the pages it moved into the new record.
+
+Not yet implemented: shared (write-back) file mappings — `MAP_SHARED` semantics, and
+writing a dirty mapped page back to the file.
 
 ## 5. Isolation invariants (tested)
 
@@ -180,10 +194,15 @@ Not yet implemented: file-backed mappings and `MAP_SHARED` semantics.
     are reclaimed (`vmtest2`).
 13. A syscall copying into an untouched `mmap` buffer faults the page in with user
     access; the buffer remains readable and writable by the task (`vmtest2`).
+14. A file mapping reads no data until a page is touched, returns the file's bytes,
+    zero-fills past the end of the file, honours a page-aligned offset, and never
+    writes through to the file (`vmtest3`).
+15. Splitting a file mapping with `mprotect` keeps each piece bound to its own file
+    block (`vmtest3`).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
-`vmtest`, `vmtest2`, `stack_test` and `stack_overflow` over QEMU and `make check` fails
-if any regresses.
+`vmtest`, `vmtest2`, `vmtest3`, `stack_test` and `stack_overflow` over QEMU and
+`make check` fails if any regresses.
 
 ## 6. Compatibility exceptions
 

@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 185,
-  "highest_syscall_number": 184,
+  "syscall_count": 186,
+  "highest_syscall_number": 185,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -927,6 +927,11 @@
       "name": "SYS_TCGETPGRP",
       "number": 184,
       "summary": "tcgetpgrp() -> EAX=foreground pgid"
+    },
+    {
+      "name": "SYS_MMAP_FILE",
+      "number": 185,
+      "summary": "mmap_file(path,len,prot,off) -> EAX=addr/-1"
     }
   ]
 }
