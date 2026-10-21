@@ -189,6 +189,7 @@ static u64 rdmsr(u32 msr)
 #define LM_SYS_PING 1U
 #define LM_SYS_WHOAMI 2U
 #define LM_SYS_EXIT 3U
+#define LM_SYS_TICKS 4U
 
 u64 lm_syscall_dispatch(struct lm_syscall_frame *f)
 {
@@ -220,6 +221,9 @@ u64 lm_syscall_dispatch(struct lm_syscall_frame *f)
         return 0;
     case LM_SYS_WHOAMI:
         f->rax = cpu->id;
+        return 0;
+    case LM_SYS_TICKS:
+        f->rax = cpu->ticks;
         return 0;
     case LM_SYS_EXIT:
         if (!from_user) {
@@ -450,6 +454,7 @@ void lm_main(void)
     serial_init();
     cpu_init();          /* GS base: the entry path needs it before it can run */
     idt_init();          /* a fault must report, not triple-fault */
+    irq_init();          /* PIC remapped and the PIT ticking; IF stays clear */
 
     kputs("[lm] Mellivora x86-64 nucleus (C11)\r\n");
 

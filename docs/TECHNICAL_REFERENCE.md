@@ -2152,6 +2152,32 @@ Nothing allocates from the heap yet beyond the self-test. The cache API takes an
 explicit id - rather than inferring a cache from a pointer - because that is what the
 32-bit tree does and what the task structures that arrive with the scheduler will use.
 
+### Timers and interrupt delivery
+
+`boot/lm_irq.c` puts the 8259 PIC and the 8254 PIT behind the IDT's vectors 32..47. The
+PIC is remapped (master to vector 32, slave to 40) so hardware interrupts stop colliding
+with the CPU's own exception vectors, everything but IRQ0 is masked, and channel 0 runs
+in mode 2 at 100 Hz.
+
+| Piece | Detail |
+| --- | --- |
+| IDT gates | vectors 32..47, the same stub shape as the exceptions (no error code, so the stub pushes the zero), `DPL=0`, interrupt gates |
+| routing | `lm_fault_dispatch` sends vectors 32..47 to `lm_irq_dispatch` before it counts a fault |
+| EOI | slave first when the IRQ came through it, then the master |
+| accounting | `ticks`, `user_ticks` (arrived while ring 3 ran) and `tick_stack` (handler ran on the TSS stack) per CPU |
+
+Interrupts are enabled in exactly one place: the `RFLAGS` of the ring-3 context
+(`0x202`). The kernel runs with IF clear everywhere - the SYSCALL entry masks it and
+every gate is an interrupt gate - so a tick cannot land in the middle of the kernel, and
+every tick that happens at all is one that crossed from ring 3 to `TSS.RSP0` and back.
+That is what `[timer] hz=100 ticks=3 user=3 stack=ok` asserts, and it is the delivery a
+scheduler will preempt on: the pieces still missing are a task structure, a switch and
+somewhere to return to when a tick arrives.
+
+The user program waits for three ticks before its `PING`/`WHOAMI`/`EXIT` sequence,
+spinning in user mode between polls of `SYS_TICKS`. If none arrives it exits with a code
+the nucleus rejects, so a dead PIT fails the run instead of hanging it.
+
 ### Frame allocator
 
 `boot/lm_pmm.c` is the first ported subsystem: a bitmap with one bit per 4 KB frame,
@@ -2193,12 +2219,13 @@ Two long-mode details are worth knowing here because both were faults first:
 
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
-`stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok` and `ring3=ok` on COM1, so a
+`stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok` and `ring3=ok` on
+COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
-agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault to
-the TSS stack or returned to the wrong stack in ring 3 fails rather than printing a
-marker. The second run boots 8 GB (the roadmap's scale
+agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
+timer tick to the TSS stack, or returned to the wrong stack in ring 3 fails rather than
+printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

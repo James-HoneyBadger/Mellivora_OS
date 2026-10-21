@@ -57,6 +57,9 @@ struct lm_cpu {
     u64 last_user_rip;    /* 0x60  user instruction that entered the kernel */
     u64 last_user_rsp;    /* 0x68  user stack pointer it entered with */
     u64 kstack_base;      /* 0x70  bottom of kstack_top's stack, for the fault check */
+    u64 ticks;            /* 0x78  timer interrupts taken */
+    u64 user_ticks;       /* 0x80  ... of those, taken while ring 3 ran */
+    u64 tick_stack;       /* 0x88  ... whose handler ran on the TSS stack */
 };
 
 #define CPU_KSTACK_TOP_OFF 0x10
@@ -159,6 +162,21 @@ void *kmem_alloc(int id);            /* zeroed object, or NULL */
 void kmem_free(int id, void *obj);
 struct kmem_stats kmem_get_stats(void);
 int kmem_selftest(void);
+
+/*---------------------------------------
+ * Timers and interrupts
+ *---------------------------------------*/
+
+#define LM_IRQ_FIRST 32
+#define LM_IRQ_COUNT 16
+#define LM_TIMER_HZ  100
+
+/* Remap the PIC, start the PIT and unmask IRQ0. Interrupts stay off in the
+ * kernel: only the RFLAGS of a ring-3 context has IF set. */
+void irq_init(void);
+
+/* Vector 32..47, called from the common entry path; 1 resumes. */
+int lm_irq_dispatch(struct lm_fault_frame *frame);
 
 /*---------------------------------------
  * IDT and exceptions

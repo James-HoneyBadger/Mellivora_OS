@@ -52,7 +52,8 @@ MARKER = "MELLIVORA64_OK"
 # are programmed and a 64-bit `syscall` reaches a handler and returns, the frame
 # allocator and the page tables agree about a mapped page (and the MMU agrees
 # once it is unmapped), the slab heap hands out distinct zeroed objects across
-# two slabs, a ring-3 program runs, makes three
+# two slabs, a ring-3 program runs with interrupts on and takes three timer
+# ticks, makes three
 # syscalls from the user page and exits with the value it round-tripped through
 # its own stack, and a fault it takes is caught on the kernel stack the TSS
 # names and resumed.
@@ -65,6 +66,7 @@ REQUIRED = (
     "kmem=ok",
     "ring3=ok",
     "fault=ok",
+    "timer=ok",
 )
 
 # A 4 GB guest has usable E820 ranges above 0x100000000 (there is a hole below
@@ -141,7 +143,7 @@ def main():
     # Scale: a guest past 4 GB only reports sane numbers if the E820 map was
     # read as 64-bit, and 8 GB is the P2 gate.
     if SKIP_BIG:
-        print("  PASS  long mode, higher half, VMM, slab heap, syscall entry, ring 3, exceptions (big-memory run skipped)")
+        print("  PASS  long mode, higher half, VMM, slab heap, syscall entry, ring 3, exceptions, timer (big-memory run skipped)")
         return 0
 
     big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER)
@@ -162,7 +164,7 @@ def main():
         print(big[-800:], file=sys.stderr)
         return 1
 
-    print("  PASS  long mode, higher half, VMM, slab heap, syscall entry, ring 3, exceptions, %d MB of RAM" % usable_mb)
+    print("  PASS  long mode, higher half, VMM, slab heap, syscall entry, ring 3, exceptions, timer, %d MB of RAM" % usable_mb)
     return 0
 
 

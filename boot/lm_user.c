@@ -136,13 +136,30 @@ __asm__(
     "    movl $0x1234, %edi\n"
     "    syscall\n"
     "    pushq %rax\n"             /* the result must survive on the user stack */
-    "    movl $2, %eax\n"          /* LM_SYS_WHOAMI */
+    /* Wait for the timer to tick while this program owns the CPU. RBX is the
+     * counter because SYSCALL itself clobbers RCX and R11. If no tick arrives
+     * the program exits with a code the nucleus rejects, so a dead PIT or an
+     * interrupt that never reaches ring 3 fails the run instead of hanging. */
+    "    movl $200000, %ebx\n"
+    "1:  movl $4, %eax\n"          /* LM_SYS_TICKS */
+    "    syscall\n"
+    "    cmpq $3, %rax\n"          /* three ticks, so more than one crossing */
+    "    jae 2f\n"
+    "    movl $2000, %r8d\n"       /* spin in user mode between polls */
+    "4:  decl %r8d\n"
+    "    jnz 4b\n"
+    "    decl %ebx\n"
+    "    jnz 1b\n"
+    "    movl $3, %eax\n"          /* LM_SYS_EXIT */
+    "    movl $0xBAD, %edi\n"
+    "    syscall\n"
+    "2:  movl $2, %eax\n"          /* LM_SYS_WHOAMI */
     "    syscall\n"
     "    movq %rax, %rsi\n"
     "    popq %rdi\n"              /* 0x1234, back off the user stack */
     "    movl $3, %eax\n"          /* LM_SYS_EXIT */
     "    syscall\n"
-    "1:  jmp 1b\n"                 /* the kernel never returns to a program */
+    "3:  jmp 3b\n"                 /* the kernel never returns to a program */
     "lm_user_program_end:\n"
     ".popsection\n");
 
@@ -223,10 +240,11 @@ int lm_user_run(void)
     kput_dec(program_bytes);
     kputs("\r\n");
 
-    /* IF stays clear: there is no IDT yet, so an interrupt taken in ring 3
-     * would fault, and the only thing this program needs is SYSCALL. */
+    /* IF is set only here: the kernel runs with interrupts off everywhere, so
+     * every tick is delivered to ring 3 and has to cross the TSS stack to be
+     * handled. */
     cpu->user_mode = 1;
-    lm_user_enter(USER_CODE_ADDR, USER_STACK_TOP, 0x2);
+    lm_user_enter(USER_CODE_ADDR, USER_STACK_TOP, 0x202);
 }
 
 void lm_user_exited(u64 code)
@@ -240,7 +258,9 @@ void lm_user_exited(u64 code)
     if (cpu->exit_arg != cpu->id) {
         ok = 0;                     /* WHOAMI's answer did not reach the program */
     }
-    if (cpu->user_calls != 3) {
+    /* At least PING, WHOAMI and EXIT; the wait for the first timer tick polls
+     * SYS_TICKS as many times as it needs to. */
+    if (cpu->user_calls < 3) {
         ok = 0;
     }
     if (cpu->last_user_rip < USER_CODE_ADDR ||
@@ -251,6 +271,19 @@ void lm_user_exited(u64 code)
         cpu->last_user_rsp > USER_STACK_TOP) {
         ok = 0;                     /* ... or not with the user stack */
     }
+
+    int timer_ok = cpu->ticks > 0 && cpu->user_ticks == cpu->ticks &&
+                   cpu->tick_stack == cpu->ticks;
+    kputs("[timer] hz=");
+    kput_dec(LM_TIMER_HZ);
+    kputs(" ticks=");
+    kput_dec(cpu->ticks);
+    kputs(" user=");
+    kput_dec(cpu->user_ticks);
+    kputs(" stack=");
+    kputs(cpu->tick_stack == cpu->ticks ? "ok" : "FAIL");
+    kputs("\r\n");
+    kputs(timer_ok ? "[timer] timer=ok\r\n" : "[timer] FAIL timer never reached ring 3\r\n");
 
     kputs("[ring3] calls=");
     kput_dec(cpu->user_calls);

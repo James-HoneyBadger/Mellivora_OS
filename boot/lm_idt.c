@@ -69,6 +69,24 @@ __asm__(
     "LM_ISR_NOERR 19\n"     /* #XM */
     "LM_ISR_NOERR 20\n"     /* #VE */
     "LM_ISR_ERR   21\n"     /* #CP */
+    /* Hardware interrupts arrive on vectors 32..47 once the PIC is remapped;
+     * none of them carries an error code. */
+    "LM_ISR_NOERR 32\n"
+    "LM_ISR_NOERR 33\n"
+    "LM_ISR_NOERR 34\n"
+    "LM_ISR_NOERR 35\n"
+    "LM_ISR_NOERR 36\n"
+    "LM_ISR_NOERR 37\n"
+    "LM_ISR_NOERR 38\n"
+    "LM_ISR_NOERR 39\n"
+    "LM_ISR_NOERR 40\n"
+    "LM_ISR_NOERR 41\n"
+    "LM_ISR_NOERR 42\n"
+    "LM_ISR_NOERR 43\n"
+    "LM_ISR_NOERR 44\n"
+    "LM_ISR_NOERR 45\n"
+    "LM_ISR_NOERR 46\n"
+    "LM_ISR_NOERR 47\n"
     ".globl lm_isr_common\n"
     "lm_isr_common:\n"
     /* The same GS arrangement as the syscall stub: KERNEL_GS_BASE holds the
@@ -119,6 +137,7 @@ __asm__(
 
 /* The stub addresses, in vector order, for the IDT builder. */
 extern void *const lm_isr_table[LM_ISR_COUNT];
+extern void *const lm_irq_table[LM_IRQ_COUNT];
 
 __asm__(
     ".pushsection .rodata\n"
@@ -128,6 +147,12 @@ __asm__(
     ".quad lm_isr_6,  lm_isr_7,  lm_isr_8,  lm_isr_9,  lm_isr_10, lm_isr_11\n"
     ".quad lm_isr_12, lm_isr_13, lm_isr_14, lm_isr_15, lm_isr_16, lm_isr_17\n"
     ".quad lm_isr_18, lm_isr_19, lm_isr_20, lm_isr_21\n"
+    ".globl lm_irq_table\n"
+    "lm_irq_table:\n"
+    ".quad lm_isr_32, lm_isr_33, lm_isr_34, lm_isr_35\n"
+    ".quad lm_isr_36, lm_isr_37, lm_isr_38, lm_isr_39\n"
+    ".quad lm_isr_40, lm_isr_41, lm_isr_42, lm_isr_43\n"
+    ".quad lm_isr_44, lm_isr_45, lm_isr_46, lm_isr_47\n"
     ".popsection\n");
 
 static u64 idt[256 * 2];    /* 16 bytes per entry, 256 vectors */
@@ -162,6 +187,11 @@ void idt_init(void)
         /* INT3 is executed by the user program, so its gate has to allow CPL 3;
          * the CPU ignores DPL for the exceptions it raises itself. */
         idt_set(v, (u64)(unsigned long)lm_isr_table[v], v == 3 ? 3 : 0);
+    }
+    for (int i = 0; i < LM_IRQ_COUNT; i++) {
+        /* Hardware gates are DPL 0: only the PIC rings them, and an interrupt
+         * gate clears IF on entry, so a handler never nests. */
+        idt_set(LM_IRQ_FIRST + i, (u64)(unsigned long)lm_irq_table[i], 0);
     }
 
     struct {
@@ -201,6 +231,10 @@ int lm_fault_dispatch(struct lm_fault_frame *f)
     struct lm_cpu *cpu = cpu_this();
     u64 rsp;
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+
+    if (f->vec >= LM_IRQ_FIRST && f->vec < LM_IRQ_FIRST + LM_IRQ_COUNT) {
+        return lm_irq_dispatch(f);      /* a device, not a fault */
+    }
 
     fault_count++;
     fault_cr2 = f->vec == 14 ? read_cr2() : 0;

@@ -1,5 +1,32 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a PIT tick that reaches ring 3 across the TSS stack
+
+### Port (P2)
+
+- **`boot/lm_irq.c`: the 8259 PIC and the PIT.** IRQ0-15 are remapped to vectors
+  32..47 (away from the CPU's own `#DE..` range), everything but the timer is masked,
+  and channel 0 runs in mode 2 at 100 Hz. `lm_irq_dispatch` counts ticks per CPU,
+  records how many arrived while ring 3 was running and how many found the handler on
+  the TSS stack, and sends EOI - slave first when the IRQ came through it.
+- **The IDT grew sixteen hardware gates.** The same macro-generated stub works for them
+  (no error code, so the stub pushes the zero); `lm_fault_dispatch` sends vectors
+  32..47 to the IRQ dispatcher before it counts a fault, and every gate is an
+  interrupt gate, so a handler never nests.
+- **Interrupts are on only in ring 3.** The kernel runs with IF clear everywhere - the
+  SYSCALL entry masks it and no gate re-enables it - so a tick cannot land in the
+  middle of the kernel, and every tick that happens at all is one that crossed from
+  ring 3 to `TSS.RSP0` and back. The ring-3 context is entered with `RFLAGS = 0x202`.
+- `SYS_TICKS` is the fourth dummy call, and the user program now waits for three ticks
+  before its `PING`/`WHOAMI`/`EXIT` sequence: the poll spins in user mode between
+  syscalls, so the ticks are taken while user code owns the CPU. If no tick arrives
+  the program exits with a code the nucleus rejects, so a dead PIT or an interrupt
+  that never reaches ring 3 fails the run instead of hanging it.
+- The nucleus reports `[timer] hz=100 ticks=3 user=3 stack=ok timer=ok` only when every
+  tick came from ring 3 and every handler ran on the TSS stack. The ring-3 report's
+  call count is now a lower bound (`>= 3`) because the tick wait adds as many polls as
+  it needs; the exit code still proves the `PING` round trip through the user stack.
+
 ## Unreleased - a kernel slab allocator on the heap window
 
 ### Port (P2)

@@ -50,6 +50,9 @@ int cpu_init(void)
     cpu->exit_arg = 0;
     cpu->last_user_rip = 0;
     cpu->last_user_rsp = 0;
+    cpu->ticks = 0;
+    cpu->user_ticks = 0;
+    cpu->tick_stack = 0;
 
     /* SWAPGS trades these two, so the block goes in KERNEL_GS_BASE and the
      * live GS base keeps the value a user program would have (zero). */
