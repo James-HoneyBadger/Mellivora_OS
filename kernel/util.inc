@@ -1227,7 +1227,7 @@ fd_read:
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK   ; read exactly 1 block (8 sectors)
         mov edi, hbfs_block_buf
-        call ata_read_sectors
+        call blk_cache_read             ; served from the block cache when warm
         pop eax
         pop edx
         pop ecx

@@ -1,5 +1,20 @@
 # Mellivora OS - Changelog
 
+## Unreleased - block cache in front of the disk
+
+### Storage
+
+- **Unified block cache** (`kernel/blkcache.inc`) — a 32-entry, 4 KB block cache
+  (128 KB of BSS) sits between the HBFS data path and the ATA driver. Every
+  whole-block data read is served from it: opening a program, `cat`, `fd_read` and
+  the demand fault of a file-backed mapping all hit the same cache, so a block read
+  twice costs one disk access. Reads that are not whole and block-aligned (the
+  metadata and journal paths) pass straight through, unchanged.
+- **Coherence by construction** — `ata_write_sectors` flushes the whole cache after
+  every successful write, so no block can be served stale. With one writer and no
+  write-back dirty data, per-block invalidation would add bookkeeping without
+  buying anything.
+
 ## Unreleased - file-backed mappings
 
 ### Memory and isolation

@@ -9,6 +9,7 @@
 ;   6. a write to a read-only file mapping faults (only that task dies)
 ;   6b. splitting the mapping keeps each piece bound to its own file block
 ;   7. after munmap the range faults again
+;   8. rewriting a file is visible to the next mapping (no stale cache)
 ;
 ; Prints VM3_OK on success, VMTEST3_FAIL stage <letter> on failure.
 
@@ -218,6 +219,73 @@ start:
         test eax, eax
         jz fail
 
+        ; --- 8. a rewritten file is visible to the next mapping ---
+        ; The read warms the block cache; the new content has to reach a new
+        ; mapping rather than the block that was current before the write.
+        mov al, 'H'
+        call set_stage
+        mov eax, SYS_MMAP_FILE
+        mov ebx, path_data
+        mov ecx, READ_LEN
+        mov edx, PROT_READ
+        xor esi, esi
+        int 0x80
+        cmp eax, -1
+        je fail
+        mov [map_old], eax
+        mov esi, eax
+        mov edi, pattern
+        mov ecx, READ_LEN
+        call compare
+
+        ; Invert every byte and write the file back.
+        mov edi, pattern
+        mov ecx, FILE_LEN
+.invert:
+        mov al, [edi]
+        xor al, 0xFF
+        mov [edi], al
+        inc edi
+        dec ecx
+        jnz .invert
+
+        mov eax, SYS_DELETE
+        mov ebx, path_data
+        int 0x80
+        mov eax, SYS_FWRITE
+        mov ebx, path_data
+        mov ecx, pattern
+        mov edx, FILE_LEN
+        xor esi, esi
+        int 0x80
+        cmp eax, 0
+        jne fail
+
+        mov al, 'I'
+        call set_stage
+        mov eax, SYS_MMAP_FILE
+        mov ebx, path_data
+        mov ecx, READ_LEN
+        mov edx, PROT_READ
+        xor esi, esi
+        int 0x80
+        cmp eax, -1
+        je fail
+        mov [map_new], eax
+        mov esi, eax
+        mov edi, pattern
+        mov ecx, READ_LEN
+        call compare
+
+        mov eax, SYS_MUNMAP
+        mov ebx, [map_old]
+        mov ecx, READ_LEN
+        int 0x80
+        mov eax, SYS_MUNMAP
+        mov ebx, [map_new]
+        mov ecx, READ_LEN
+        int 0x80
+
         ; --- clean up ---
         mov eax, SYS_MUNMAP
         mov ebx, [map_off]
@@ -380,6 +448,8 @@ map_ro:      dd 0
 map_off:     dd 0
 map_rw:      dd 0
 map_split:   dd 0
+map_old:     dd 0
+map_new:     dd 0
 probe_addr:  dd 0
 free_base:   dd 0
 stage:       db 0

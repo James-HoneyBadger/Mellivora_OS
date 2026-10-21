@@ -67,7 +67,9 @@ A phase does not close until these are measured:
 - [ ] Shared write-back file mappings (`MAP_SHARED`).
 - [x] **Remove user access to kernel RAM**; map only what a process needs (program
   window, stack, framebuffer, IPC surfaces). See `docs/spec/VMM.md`.
-- [ ] Kernel slab allocator; page cache and unified block cache; user heap on top of VMM.
+- [x] Unified block cache in front of the disk data path (read-through, flushed on
+  every write).
+- [ ] Kernel slab allocator; page cache with writeback; user heap on top of VMM.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
 

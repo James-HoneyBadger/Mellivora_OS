@@ -244,7 +244,7 @@ hbfs_read_file:
         mov ecx, HBFS_SECTORS_PER_BLK
         push edi
         mov edi, hbfs_block_buf
-        call ata_read_sectors
+        call blk_cache_read
         pop edi
         jc .read_error
 

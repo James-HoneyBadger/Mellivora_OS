@@ -697,7 +697,8 @@ kernel_entry:
         ; Print system info
         call print_sysinfo
 
-        ; Initialize filesystem
+        ; Initialize filesystem (and the block cache in front of it)
+        call blk_cache_init
         call hbfs_init
         call vfs_init
 
@@ -718,6 +719,7 @@ kernel_entry:
 %include "kernel/pit.inc"
 %include "kernel/pmm.inc"
 %include "kernel/ata.inc"
+%include "kernel/blkcache.inc"
 %include "kernel/hbfs.inc"
 %include "kernel/vfs.inc"
 %include "kernel/filesearch.inc"

@@ -1086,6 +1086,11 @@ sb16_buf_addr:    resd 1          ; DMA buffer physical address
 sb16_buf_len:     resd 1          ; DMA buffer length
 sb16_format:      resd 1          ; Format flags
 
+; Block cache (see kernel/blkcache.inc): tag 0 = empty, data 4 KB per entry.
+blk_cache_tags:   resd BLK_CACHE_ENTRIES
+blk_cache_hand:   resd 1
+blk_cache_data:   resb BLK_CACHE_ENTRIES * HBFS_BLOCK_SIZE
+
 ; Virtual memory: per-task mmap areas (see kernel/vm.inc).
 vm_areas:         resb MAX_TASKS * VM_AREAS_PER_TASK * VM_AREA_SIZE
 vm_next:          resd MAX_TASKS             ; per-task allocation bump pointer

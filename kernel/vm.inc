@@ -319,7 +319,7 @@ vm_fault_file_page:
         add eax, ecx
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, [.vff_dst]
-        call ata_read_sectors
+        call blk_cache_read
         jc .vff_none
         mov dword [esp + 28], 1
         popad

@@ -377,6 +377,26 @@ The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x500000). Each bit represe
 HBFS (HoneyBadger File System) is a simple block-based filesystem with flat directories,
 a block allocation bitmap, and support for nested subdirectories.
 
+### Block cache
+
+File data reads are served through a 32-entry, 4 KB block cache
+(`kernel/blkcache.inc`, 128 KB of BSS):
+
+| Routine | Purpose |
+| --- | --- |
+| `blk_cache_read` | Drop-in for `ata_read_sectors`: a whole, block-aligned read is served from the cache on a hit and fills the cache on a miss; anything else passes straight through |
+| `blk_cache_flush` | Marks every entry empty |
+| `blk_cache_init` | Flushes the cache and rewinds the replacement hand at boot |
+
+The cache is keyed by absolute block number and uses a round-robin hand for
+replacement. Coherence is blunt and total: `ata_write_sectors` calls
+`blk_cache_flush` after every successful write, so a block can never serve a
+stale copy. Metadata and journal traffic bypasses the cache completely
+(their reads are not whole-block data reads).
+
+`fd_read`, `hbfs_read_file` and the demand-paged file-mapping path
+(`vm_fault_file_page`) all read through it.
+
 ### On-Disk Layout
 
 | Region | LBA Start | LBA Count | Size | Description |
