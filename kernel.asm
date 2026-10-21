@@ -87,7 +87,8 @@ PROT_EXEC           equ 4
 ;   end      exclusive end address
 ;   blocks   file blocks present from `sector`; later pages read as zero
 ;            (a file mapping whose last page is short, or which runs past EOF)
-VM_AREA_SIZE        equ 24
+;   flags    VM_MAP_* bits that are not a protection (currently VM_MAP_SHARED)
+VM_AREA_SIZE        equ 28
 VM_AREAS_PER_TASK   equ 32
 VMA_START           equ 0
 VMA_PAGES           equ 4
@@ -95,6 +96,7 @@ VMA_PROT            equ 8
 VMA_SECTOR          equ 12
 VMA_END             equ 16
 VMA_BLOCKS          equ 20
+VMA_FLAGS           equ 24
 ; Copy-on-write bookkeeping covers the identity-mapped region only: 128 MB of
 ; RAM / 4 KB = 32768 pages, one refcount byte each (see cow_ref in data.inc).
 COW_MAX_PAGES       equ 32768

@@ -64,7 +64,8 @@ A phase does not close until these are measured:
 - [x] Demand-zero anonymous mappings; partial `munmap`/`mprotect`; fork COW and
   exit/exec reclaim of `mmap` areas.
 - [x] File-backed (private, demand-paged) mappings via `SYS_MMAP_FILE`.
-- [ ] Shared write-back file mappings (`MAP_SHARED`).
+- [x] Shared write-back file mappings (`MF_SHARED`): dirty pages go back to the file
+  when the mapping is released.
 - [x] **Remove user access to kernel RAM**; map only what a process needs (program
   window, stack, framebuffer, IPC surfaces). See `docs/spec/VMM.md`.
 - [x] Unified block cache in front of the disk data path (read-through, flushed on
@@ -72,7 +73,8 @@ A phase does not close until these are measured:
 - [x] User heap on top of the VMM: `SYS_MALLOC`/`SYS_FREE`/`SYS_REALLOC` are
   anonymous demand-zero areas, and the SB16 path stages demand-zone buffers because
   ISA DMA needs a physical address.
-- [ ] Kernel slab allocator; page cache with writeback.
+- [ ] Kernel slab allocator; page cache with writeback. The page cache is what would
+  make two shared mappings of one file coherent with each other.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
 

@@ -193,4 +193,4 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 182 | SYS_EXECVE | execve(path,argv,envp) -> no return / -1 |
 | 183 | SYS_TCSETPGRP | tcsetpgrp(pgid) -> 0/-1 (-1 = no foreground job) |
 | 184 | SYS_TCGETPGRP | tcgetpgrp() -> EAX=foreground pgid |
-| 185 | SYS_MMAP_FILE | mmap_file(path,len,prot,off) -> EAX=addr/-1 |
+| 185 | SYS_MMAP_FILE | mmap_file(path,len,prot,off) -> EAX=addr/-1 (prot may include MF_SHARED) |

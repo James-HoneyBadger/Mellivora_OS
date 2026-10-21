@@ -931,7 +931,7 @@
     {
       "name": "SYS_MMAP_FILE",
       "number": 185,
-      "summary": "mmap_file(path,len,prot,off) -> EAX=addr/-1"
+      "summary": "mmap_file(path,len,prot,off) -> EAX=addr/-1 (prot may include MF_SHARED)"
     }
   ]
 }

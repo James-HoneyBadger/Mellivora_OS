@@ -217,7 +217,7 @@ SYS_GETERRNO        equ 181 ; geterrno() -> EAX=per-task errno
 SYS_EXECVE          equ 182 ; execve(path,argv,envp) -> no return / -1
 SYS_TCSETPGRP       equ 183 ; tcsetpgrp(pgid) -> 0/-1 (-1 = no foreground job)
 SYS_TCGETPGRP       equ 184 ; tcgetpgrp() -> EAX=foreground pgid
-SYS_MMAP_FILE       equ 185 ; mmap_file(path,len,prot,off) -> EAX=addr/-1
+SYS_MMAP_FILE       equ 185 ; mmap_file(path,len,prot,off) -> EAX=addr/-1 (prot may include MF_SHARED)
 ; sysconf name constants
 _SC_ARG_MAX         equ 0
 _SC_CHILD_MAX       equ 1
@@ -306,6 +306,10 @@ MAP_SHARED          equ 0x01
 MAP_PRIVATE         equ 0x02
 MAP_ANONYMOUS       equ 0x20
 MAP_ANON            equ MAP_ANONYMOUS
+
+; SYS_MMAP_FILE: OR this into the protection mask to get write-back semantics
+; (writes through the mapping reach the file when the mapping is released).
+MF_SHARED           equ 0x10
 
 ; SYS_CLOCK_GETTIME clock IDs
 CLOCK_REALTIME      equ 0

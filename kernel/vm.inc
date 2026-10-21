@@ -17,6 +17,7 @@
 ; kernel.asm: paging.inc and sched.inc need them too.
 VM_MAX_PAGES       equ 4096        ; 16 MB per mapping
 VM_MAP_JIT         equ 0x40        ; opt-out of W^X (documented, audited)
+VM_MAP_SHARED      equ 0x10        ; SYS_MMAP_FILE: writes go back to the file
 
 ;---------------------------------------
 ; vm_init - seed the mapping randomiser
@@ -392,19 +393,91 @@ vm_clear_pte:
         ret
 
 ;---------------------------------------
+; vm_writeback_page - write one dirty page of a shared mapping back to its file
+;   In : ESI = area record, EBX = page address, EDX = frame,
+;        EAX = page directory that maps it
+;   Out: EAX = 1 when the block was written, 0 when nothing had to go back
+;
+; Only pages that the file actually owns are written: a page past the end of
+; the file is scratch space, and writing it back would corrupt whichever file
+; owns the block the allocator's geometry suggests.
+;---------------------------------------
+vm_writeback_page:
+        pushad
+        mov [.wbp_rec], esi
+        mov [.wbp_dst], edx
+        mov [.wbp_pd], eax
+        mov eax, [esi + VMA_SECTOR]
+        test eax, eax
+        jz .wbp_none                    ; anonymous area
+        test dword [esi + VMA_FLAGS], VM_MAP_SHARED
+        jz .wbp_none
+
+        mov ecx, ebx
+        sub ecx, [esi + VMA_START]
+        shr ecx, 12                     ; page index inside the area
+        cmp ecx, [esi + VMA_BLOCKS]
+        jae .wbp_none                   ; past the end of the file: not ours
+
+        ; The page must have been written since it was mapped.
+        push ecx
+        mov edx, ebx
+        shr edx, 22
+        mov eax, [.wbp_pd]
+        mov eax, [eax + edx*4]
+        pop ecx
+        test eax, PG_PRESENT
+        jz .wbp_none
+        and eax, 0xFFFFF000
+        mov edx, ebx
+        shr edx, 12
+        and edx, 0x3FF
+        mov eax, [eax + edx*4]
+        test eax, PG_DIRTY
+        jz .wbp_none
+
+        ; sector = first sector of the area + page index * 8
+        mov eax, ecx
+        shl eax, 3
+        mov edx, [.wbp_rec]
+        mov edx, [edx + VMA_SECTOR]
+        dec edx
+        add eax, edx
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov esi, [.wbp_dst]
+        call ata_write_sectors          ; also drops the block cache
+        jc .wbp_none
+        mov dword [esp + 28], 1
+        popad
+        ret
+.wbp_none:
+        mov dword [esp + 28], 0
+        popad
+        ret
+.wbp_rec: dd 0
+.wbp_dst: dd 0
+.wbp_pd:  dd 0
+
+;---------------------------------------
 ; vm_release_area_frames - unmap pages and drop their frame references
-;   In : EAX = page directory, EBX = start, ECX = pages
+;   In : EAX = page directory, EBX = start, ECX = pages, ESI = area record
+;        (or 0 for a range with no record)
 ;
 ; The frame is read from the page table, not from a stored physical run: a
 ; demand-zero mapping has no single run (pages are allocated as they are
 ; touched), and a forked page may be a copy-on-write share whose reference
 ; count must be dropped rather than freed.
+;
+; A shared file mapping is written back here: every page still marked dirty in
+; its PTE goes to the file block it came from, so `munmap`, `free` and a task
+; exiting all flush what the program wrote.
 ;---------------------------------------
 vm_release_area_frames:
         pushad
         mov [.raf_pd], eax
         mov [.raf_va], ebx
         mov [.raf_left], ecx
+        mov [.raf_rec], esi
 .raf_loop:
         cmp dword [.raf_left], 0
         jle .raf_done
@@ -414,6 +487,16 @@ vm_release_area_frames:
         test eax, eax
         jz .raf_next
         mov [.raf_phys], eax
+        mov esi, [.raf_rec]
+        test esi, esi
+        jz .raf_clear
+        test dword [esi + VMA_FLAGS], VM_MAP_SHARED
+        jz .raf_clear
+        mov eax, [.raf_pd]
+        mov ebx, [.raf_va]
+        mov edx, [.raf_phys]
+        call vm_writeback_page
+.raf_clear:
         mov eax, [.raf_pd]
         mov ebx, [.raf_va]
         call vm_clear_pte
@@ -431,6 +514,7 @@ vm_release_area_frames:
 .raf_va:   dd 0
 .raf_left: dd 0
 .raf_phys: dd 0
+.raf_rec:  dd 0
 
 ;---------------------------------------
 ; vm_clear_table - forget every mapping of a task slot
@@ -485,6 +569,8 @@ vm_split_at:
         mov [edi + VMA_PAGES], ecx
         mov ecx, [esi + VMA_PROT]
         mov [edi + VMA_PROT], ecx
+        mov ecx, [esi + VMA_FLAGS]
+        mov [edi + VMA_FLAGS], ecx
 
         mov ecx, ebx
         sub ecx, [esi + VMA_START]
@@ -620,6 +706,7 @@ vm_release_all:
         mov [esi + VMA_PROT], eax
         mov [esi + VMA_SECTOR], eax
         mov [esi + VMA_BLOCKS], eax
+        mov [esi + VMA_FLAGS], eax
         mov [esi + VMA_END], eax
 .vra_next:
         inc dword [.vra_i]
@@ -659,6 +746,7 @@ vm_record_anon:
         mov [edi + VMA_PROT], ecx
         mov dword [edi + VMA_SECTOR], 0     ; anonymous: demand-zero frames
         mov dword [edi + VMA_BLOCKS], 0
+        mov dword [edi + VMA_FLAGS], 0
         mov edx, [.vrec_base]
         mov ecx, [.vrec_pages]
         shl ecx, 12
@@ -721,6 +809,7 @@ vm_release_area:
         mov [esi + VMA_PROT], eax
         mov [esi + VMA_SECTOR], eax
         mov [esi + VMA_BLOCKS], eax
+        mov [esi + VMA_FLAGS], eax
         mov [esi + VMA_END], eax
         pop ecx
         pop ebx
@@ -846,9 +935,10 @@ sys_mmap_file:
         mov [.mf_prot], edx
         mov [.mf_off], esi
 
-        ; Protection mask and W^X: identical rules to SYS_MMAP.
+        ; Protection mask and W^X: identical rules to SYS_MMAP, plus the
+        ; VM_MAP_SHARED flag that asks for writes to go back to the file.
         mov eax, edx
-        and eax, ~(PROT_READ | PROT_WRITE | PROT_EXEC | VM_MAP_JIT)
+        and eax, ~(PROT_READ | PROT_WRITE | PROT_EXEC | VM_MAP_JIT | VM_MAP_SHARED)
         jnz .mf_fail
         mov eax, edx
         and eax, PROT_WRITE | PROT_EXEC
@@ -857,6 +947,9 @@ sys_mmap_file:
         test edx, VM_MAP_JIT
         jz .mf_fail
 .mf_wx_ok:
+        mov eax, edx
+        and eax, VM_MAP_SHARED
+        mov [.mf_flags], eax
         and dword [.mf_prot], PROT_READ | PROT_WRITE | PROT_EXEC
 
         cmp dword [.mf_len], 0
@@ -941,6 +1034,8 @@ sys_mmap_file:
         mov [eax + VMA_PROT], ecx
         mov ecx, [.mf_sector]
         mov [eax + VMA_SECTOR], ecx
+        mov ecx, [.mf_flags]
+        mov [eax + VMA_FLAGS], ecx
         mov ecx, [.mf_avail]
         cmp ecx, [.mf_pages]
         jbe .mf_clamp_ok
@@ -967,6 +1062,7 @@ sys_mmap_file:
         iretd
 .mf_len:    dd 0
 .mf_prot:   dd 0
+.mf_flags:  dd 0
 .mf_off:    dd 0
 .mf_fd:     dd 0
 .mf_avail:  dd 0
@@ -1020,6 +1116,7 @@ sys_munmap:
         mov [esi + VMA_PROT], eax
         mov [esi + VMA_SECTOR], eax
         mov [esi + VMA_BLOCKS], eax
+        mov [esi + VMA_FLAGS], eax
         mov [esi + VMA_END], eax
 
         mov dword [esp + 28], 0
@@ -1136,6 +1233,15 @@ sys_mprotect:
         call cow_release_frame
 
 .mp_map:
+        ; Re-mapping a page loses its dirty bit, so a shared file mapping has to
+        ; push what it wrote back before the protection changes.
+        test dword [esi + VMA_FLAGS], VM_MAP_SHARED
+        jz .mp_remap
+        mov eax, cr3
+        mov ebx, [.mp_virt]
+        mov edx, [.mp_phys]
+        call vm_writeback_page        ; ESI = record; ignores a clean page
+.mp_remap:
         mov eax, [.mp_virt]
         mov ebx, [.mp_phys]
         mov ecx, [.mp_flags]

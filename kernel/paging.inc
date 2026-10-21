@@ -44,6 +44,7 @@ PG_PRESENT       equ 0x01
 PG_WRITABLE      equ 0x02
 PG_USER          equ 0x04
 PG_WRITE_THROUGH equ 0x08
+PG_DIRTY         equ 0x40       ; set by the CPU when the page is written
 
 ;---------------------------------------
 ; paging_new_pd - allocate a page directory for a new address space

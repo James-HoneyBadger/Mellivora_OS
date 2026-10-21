@@ -1,5 +1,32 @@
 # Mellivora OS - Changelog
 
+## Unreleased - shared file mappings
+
+### Memory and storage
+
+- **`SYS_MMAP_FILE` can write back** — OR `MF_SHARED` (0x10) into the protection mask
+  and the mapping becomes shared: every page the CPU marked dirty is written to the
+  file when the mapping is released (`munmap`, `free`, or the task exiting), and
+  before `mprotect` re-maps a page (re-mapping would lose the dirty bit). Pages the
+  program only read keep their file bytes, the file's length never changes, and a
+  page past the end of the file is scratch space that is never pushed back — writing
+  it would land on whichever file owns the next block.
+- Dirty tracking needs no bookkeeping of its own: the PTE dirty bit that x86 sets on
+  the first write decides what goes back.
+
+### Known limitation
+
+- Two mappings of the same file each keep their own frames, so they do not see each
+  other's writes until a file page cache lands; each writes back its own changes and
+  the last release wins. Private mappings are unaffected and still never write
+  through.
+
+### Tooling
+
+- `programs/vmtest4.asm` covers a shared mapping's write-back, the untouched-page and
+  past-EOF cases, the file length and the private-mapping contrast. It runs in
+  `tests/test_runtime.sh`.
+
 ## Unreleased - user heap on the VMM
 
 ### Memory and isolation

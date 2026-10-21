@@ -67,12 +67,22 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 - A protection change on a page that is still copy-on-write shared with another
   address space copies the frame first, so one process's `mprotect` can never change
   what the other sees.
-- `SYS_MMAP_FILE(path, len, prot, offset)` maps a file's contents. It is private and
+- `SYS_MMAP_FILE(path, len, prot, offset)` maps a file's contents. It is
   demand-paged: nothing is read until a page is touched, and the block for that page
-  is read into a fresh frame. Writes through a writable mapping therefore never reach
-  the file, and pages past the end of the file read as zero instead of faulting.
-  `offset` must be page aligned. Only HBFS files can be mapped; tmpfs, procfs and
-  devfs paths return `-1`. There is no `MAP_SHARED` writeback.
+  is read into a fresh frame. Pages past the end of the file read as zero instead of
+  faulting, and the file's length never changes. `offset` must be page aligned. Only
+  HBFS files can be mapped; tmpfs, procfs and devfs paths return `-1`.
+- **Private mappings** (the default) never write back: a program can scribble on a
+  writable private mapping and the file is untouched.
+- **Shared mappings** — OR `MF_SHARED` (0x10) into the protection mask — write back
+  every page the CPU marked dirty, at the moment the mapping is released (`munmap`,
+  `free`, or the task exiting) and before `mprotect` re-maps a page (which would lose
+  the dirty bit). Only pages the file actually owns are written; a page past the end
+  of the file is scratch space and is never pushed back, because the next block in
+  the allocator's geometry belongs to some other file.
+  Two mappings of the same file each get their own frames, so they do not observe
+  each other's writes until the file page cache lands; each writes back its own
+  changes and the last release wins.
 - `PROT_EXEC` on a writable anonymous mapping requires an explicit `MAP_JIT` flag
   (W^X); without it the request fails with `EPERM`.
 - Unmapped pages inside the demand zone fault with `SIGSEGV` (once signals land) or kill
@@ -84,6 +94,7 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 |---|---|---|
 | Demand zero | Anonymous area, page not yet backed | Allocate a zeroed page, map it with the area's protections, retry |
 | File-backed | Area backed by an HBFS file | Read the page's block into a fresh zeroed frame, then map it with the area's protection |
+| Write-back | A shared mapping is released, or `mprotect` re-maps a dirty page | Write the frame back to its file block (only for pages inside the file) |
 | COW | Write to a frame that was writable when shared | Copy the frame, drop the old reference, remap writable |
 | Guard page | Access immediately below a stack area | Report stack overflow (task killed, shell survives) |
 | Permission | Write to a read-only or supervisor page, or any access to `PROT_NONE` | Deny: kill the task, leave the system running |
@@ -210,10 +221,13 @@ writing a dirty mapped page back to the file.
 16. A heap block is zeroed, larger blocks than the program window work, `realloc`
     keeps the data, a freed block faults when touched, a re-allocated block is zeroed
     again, and `free` of a non-base pointer is refused (`heaptest`).
+17. A shared file mapping writes the pages it changed back to the file, leaves pages
+    it only read alone, keeps the file's length, and a private mapping still does not
+    write through (`vmtest4`).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
-`vmtest`, `vmtest2`, `vmtest3`, `stack_test` and `stack_overflow` over QEMU and
-`make check` fails if any regresses.
+`vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `heaptest`, `stack_test` and
+`stack_overflow` over QEMU and `make check` fails if any regresses.
 
 ## 6. Compatibility exceptions
 

@@ -117,6 +117,7 @@ run_case "mmap/mprotect/munmap"         "vmtest"                "VM_OK"         
 run_case "demand-zero + partial munmap"  "vmtest2"               "VM2_OK"             "" "CPU EXCEPTION|VMTEST2_FAIL"
 run_case "file-backed mmap"              "vmtest3"               "VM3_OK"             "" "CPU EXCEPTION|VMTEST3_FAIL"
 run_case "heap on the VMM"               "heaptest"              "HEAP_OK"            "" "CPU EXCEPTION|HEAPTEST_FAIL|PAGE FAULT"
+run_case "shared file mapping writes back" "vmtest4"             "VM4_OK"             "" "CPU EXCEPTION|VMTEST4_FAIL"
 run_case "stack guard + growth"          "stack_test"            "STACK_GROW_OK"      "" "CPU EXCEPTION|PAGE FAULT|STACK_FAIL"
 # The guard page must kill the offending task and nothing else: the shell has to
 # survive and run the next command.
