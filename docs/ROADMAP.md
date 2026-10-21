@@ -76,9 +76,11 @@ A phase does not close until these are measured:
 - [ ] Kernel slab allocator; page cache with writeback. The page cache is what would
   make two shared mappings of one file coherent with each other.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
-- [ ] Fix the buddy allocator above 128 MB: it can hand out a page number above the
-  top of RAM, so a guest with more RAM is not yet usable for real allocations (the
-  system boots and runs, and the 100 MB gate runs on the 128 MB layout).
+- [ ] Fix allocations above 128 MB (pre-existing): a free-list "next" of 0 is walked
+  as page 0, so a guest with more RAM cannot allocate reliably. Leads: `cow_ref`
+  stops at 128 MB (a share above it is counted by neither side and can be freed
+  twice) and the bitmap indexing collides four page numbers onto one bit. The system
+  boots and runs at 192 MB–1 GB, and the 100 MB gate runs on the 128 MB layout.
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
 
 **Exit:** the isolation conformance test passes, 100 MB heap workload passes

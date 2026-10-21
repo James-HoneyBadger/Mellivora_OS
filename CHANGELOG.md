@@ -18,14 +18,20 @@
   block afterwards. It runs in `make check` and in CI.
 - `tools/qemu_drive.py` grew `--mem MB` so a case can choose the guest's RAM.
 
-### Known issue
+### Known issue (pre-existing)
 
-- Allocations on a guest with **more than 128 MB** of RAM are still unreliable: the
-  buddy allocator can serve a block from a free-list entry whose page number is above
-  the top of RAM (at 192 MB it produced page 0xFF53, i.e. 255 MB), which then takes a
-  supervisor fault above `pmm_mem_top`. The system boots and runs at 192 MB, 384 MB
-  and 1 GB, and the 100 MB workload passes on the 128 MB configuration the gate uses,
-  but the high-memory path needs its own fix before more RAM can be relied on.
+- Allocations on a guest with **more than 128 MB** of RAM are unreliable, and this
+  predates the change above: `tools/qemu_drive.py` hard-coded `-m 128` until it grew
+  `--mem`, so no earlier test ever ran a real allocation above 128 MB. With 192 MB or
+  more, `heaptest` fails inside the buddy allocator: a free-list node's "next" pointer
+  is 0 where the NIL sentinel belongs, the chain walks to page 0 and follows the
+  interrupt vector table (0xF000FF53) into a page above the top of RAM, which then
+  faults. Two suspects, both worth checking when this is fixed: `cow_ref` only tracks
+  the first 128 MB, so a copy-on-write share above it is counted by neither side and
+  can be freed twice, and the allocator's bitmap indexing (`btr dword [PMM_BITMAP +
+  page>>3], page&7`) collides four page numbers onto one bit. The system boots and
+  runs at 192 MB, 384 MB and 1 GB, and the 100 MB workload gate runs on the 128 MB
+  layout, which is the shipped configuration.
 
 ## Unreleased - shared file mappings
 
