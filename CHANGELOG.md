@@ -1,5 +1,40 @@
 # Mellivora OS - Changelog
 
+## Unreleased - user heap on the VMM
+
+### Memory and isolation
+
+- **`SYS_MALLOC` is anonymous demand-zero memory** — it used to hand out raw PMM
+  pages mapped at their identity addresses, which meant a fresh block contained
+  whatever the previous owner had left in RAM (a cross-process information leak),
+  `SYS_FREE` released the frames but left the mapping in place (so the block still
+  aliased memory the allocator could hand to someone else), and a heap block could
+  never exceed the 1 MB program window. Blocks are now `vm_area`s in the demand
+  zone: zeroed on first touch, private, reclaimed on `free`, and independent of the
+  window. `SYS_REALLOC` allocates, copies and releases the same way.
+- **`SYS_FREE` rejects anything that is not a block base** — `malloc` always returns
+  an area base, so a pointer into the middle of a block returns `-1` instead of
+  partially unmapping someone's memory.
+- **Supervisor faults can service the task's own areas** — a page fault raised by the
+  *kernel* while touching one of the current task's demand pages (a syscall copying
+  into an untouched buffer, `realloc` copying into a fresh block) now maps the page
+  with the user's protection. Previously every supervisor fault went straight to the
+  panic path, so the first kernel access to an unfaulted user page killed the system.
+
+### Audio
+
+- **`SYS_AUDIO_PLAY` stages demand-zone buffers** — the SB16 reads system memory by
+  physical address, and a demand-mapped buffer has no single physical address. Such
+  buffers are copied into a 64 KB kernel staging range first (one single-cycle DMA
+  transfer cannot be longer anyway); buffers in the identity region are played in
+  place as before.
+
+### Tooling
+
+- `programs/heaptest.asm` covers zero-filled blocks, a 4 MB allocation, `realloc`
+  data preservation, freed-block faults, re-allocation zeroing, `free` validation and
+  playing a demand-zone buffer. It runs in `tests/test_runtime.sh`.
+
 ## Unreleased - block cache in front of the disk
 
 ### Storage

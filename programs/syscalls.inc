@@ -32,8 +32,8 @@ SYS_GETTIME     equ 15
 SYS_SLEEP       equ 16
 SYS_CLEAR       equ 17
 SYS_SETCOLOR    equ 18
-SYS_MALLOC      equ 19
-SYS_FREE        equ 20
+SYS_MALLOC      equ 19          ; Allocate block: EBX=size -> EAX=ptr/0
+SYS_FREE        equ 20          ; Free block: EBX=base -> EAX=0/-1
 SYS_EXEC        equ 21
 SYS_DISK_READ   equ 22          ; Raw disk read (kernel-only; returns -1 from user programs)
 SYS_SBRK        equ 23          ; Adjust program break: EBX=increment -> EAX=old_brk/-1

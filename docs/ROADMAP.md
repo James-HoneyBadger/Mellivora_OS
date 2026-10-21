@@ -69,11 +69,10 @@ A phase does not close until these are measured:
   window, stack, framebuffer, IPC surfaces). See `docs/spec/VMM.md`.
 - [x] Unified block cache in front of the disk data path (read-through, flushed on
   every write).
-- [ ] Kernel slab allocator; page cache with writeback; user heap on top of VMM.
-  `SYS_MALLOC`/`SYS_FREE` still hand out identity-mapped physical pages, so a
-  program can name its own memory in physical terms. Moving them onto `vm_area`
-  means also teaching the SB16/AC'97 paths to copy a user buffer into their own
-  DMA buffer, because ISA DMA needs a physical address.
+- [x] User heap on top of the VMM: `SYS_MALLOC`/`SYS_FREE`/`SYS_REALLOC` are
+  anonymous demand-zero areas, and the SB16 path stages demand-zone buffers because
+  ISA DMA needs a physical address.
+- [ ] Kernel slab allocator; page cache with writeback.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
 

@@ -1082,6 +1082,7 @@ sb16_state:       resb 1          ; 0=idle, 1=playing, 2=done
 sb16_version_major: resb 1
 sb16_version_minor: resb 1
 sb16_sample_rate: resd 1          ; Current sample rate
+sb16_stage:       resb SB16_STAGE_BYTES   ; staging copy for demand-zone buffers
 sb16_buf_addr:    resd 1          ; DMA buffer physical address
 sb16_buf_len:     resd 1          ; DMA buffer length
 sb16_format:      resd 1          ; Format flags

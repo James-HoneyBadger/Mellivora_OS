@@ -27,8 +27,8 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 16 | SYS_SLEEP | - |
 | 17 | SYS_CLEAR | - |
 | 18 | SYS_SETCOLOR | - |
-| 19 | SYS_MALLOC | - |
-| 20 | SYS_FREE | - |
+| 19 | SYS_MALLOC | Allocate block: EBX=size -> EAX=ptr/0 |
+| 20 | SYS_FREE | Free block: EBX=base -> EAX=0/-1 |
 | 21 | SYS_EXEC | - |
 | 22 | SYS_DISK_READ | Raw disk read (kernel-only; returns -1 from user programs) |
 | 23 | SYS_SBRK | Adjust program break: EBX=increment -> EAX=old_brk/-1 |

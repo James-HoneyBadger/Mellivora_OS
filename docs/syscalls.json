@@ -101,12 +101,12 @@
     {
       "name": "SYS_MALLOC",
       "number": 19,
-      "summary": ""
+      "summary": "Allocate block: EBX=size -> EAX=ptr/0"
     },
     {
       "name": "SYS_FREE",
       "number": 20,
-      "summary": ""
+      "summary": "Free block: EBX=base -> EAX=0/-1"
     },
     {
       "name": "SYS_EXEC",

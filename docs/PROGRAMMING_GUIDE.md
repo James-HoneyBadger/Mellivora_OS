@@ -148,8 +148,8 @@ SYS_GETTIME         equ 15  ; Get RTC time -> EAX=packed time
 SYS_SLEEP           equ 16  ; Sleep: EBX=ticks (100 ticks = 1 sec)
 SYS_CLEAR           equ 17  ; Clear screen
 SYS_SETCOLOR        equ 18  ; Set text color: EBX=fg ECX=bg
-SYS_MALLOC          equ 19  ; Allocate heap: EBX=size -> EAX=ptr
-SYS_FREE            equ 20  ; Free heap: EBX=ptr
+SYS_MALLOC          equ 19  ; Allocate block: EBX=size -> EAX=ptr/0
+SYS_FREE            equ 20  ; Free block: EBX=base -> EAX=0/-1
 SYS_EXEC            equ 21  ; Execute program: EBX=name ECX=args -> EAX=0/-1
 SYS_DISK_READ       equ 22  ; Raw disk read (restricted from user-mode)
 SYS_SBRK            equ 23  ; Adjust program break: EBX=increment -> EAX=old_brk
@@ -736,15 +736,37 @@ int 0x80
 ; EAX = current program break
 ```
 
-### `SYS_MALLOC` / `SYS_FREE` (Legacy)
+### `SYS_MALLOC` / `SYS_FREE`
 
-These syscalls operate directly on 4KB physical memory pages. They are less flexible than `sbrk` and are generally not recommended for new applications.
+Block allocation backed by the virtual memory manager. A block is an anonymous
+demand-zero mapping, so it costs no memory until it is touched, reads as zero, and is
+private to the calling task. Blocks are not limited by the 1 MB program window: a
+4 MB allocation works and returns a pointer in the demand zone (`0x08000000` and up).
 
-- **`SYS_MALLOC` (EAX=19)**: Allocates one or more 4KB pages.
-  - **Input:** `EBX` = size in bytes (will be rounded up to the nearest 4KB).
-  - **Output:** `EAX` = physical address of allocated block, or 0 on failure.
-- **`SYS_FREE` (EAX=20)**: Frees pages allocated with `SYS_MALLOC`.
-  - **Input:** `EBX` = physical address, `ECX` = size in bytes.
+- **`SYS_MALLOC` (EAX=19)**: Allocate a block.
+  - **Input:** `EBX` = size in bytes (rounded up to whole 4 KB pages).
+  - **Output:** `EAX` = pointer to the block, or 0 on failure.
+- **`SYS_FREE` (EAX=20)**: Release a block.
+  - **Input:** `EBX` = pointer returned by `SYS_MALLOC` (must be the block base).
+    `ECX` is accepted for compatibility and ignored.
+  - **Output:** `EAX` = 0 on success, `-1` if the pointer is not a block base.
+- **`SYS_REALLOC` (EAX=79)**: Resize a block, keeping its contents.
+  - **Input:** `EBX` = old pointer (0 for a fresh block), `ECX` = new size,
+    `EDX` = old size.
+  - **Output:** `EAX` = new pointer, or 0 on failure.
+
+```nasm
+mov eax, 19         ; SYS_MALLOC
+mov ebx, 4194304    ; 4 MB
+int 0x80
+test eax, eax
+jz .out_of_memory
+mov [buf], eax
+; ... use [buf] ...
+mov eax, 20         ; SYS_FREE
+mov ebx, [buf]
+int 0x80
+```
 
 ---
 

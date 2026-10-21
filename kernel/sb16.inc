@@ -26,6 +26,10 @@
 ; Sound Blaster 16 base port
 SB16_BASE       equ 0x220
 
+; A single-cycle DMA transfer covers at most 64 KB, which is also the size of
+; the staging buffer used for buffers the driver cannot address directly.
+SB16_STAGE_BYTES equ 65536
+
 ; DSP port offsets from SB16_BASE
 SB_RESET        equ SB16_BASE + 0x06
 SB_READ         equ SB16_BASE + 0x0A
@@ -464,15 +468,38 @@ irq_sb16:
 ;   ECX = length in bytes
 ;   EDX = format word
 ; Returns EAX = 0 on success, -1 if no SB16
+;
+; The SB16 reads system memory by PHYSICAL address, and a buffer in the demand
+; zone has no single physical address: each page is mapped wherever the
+; allocator put it. Those buffers are copied into a kernel staging buffer
+; first. Addresses below the demand zone (kernel buffers, the program window)
+; are identity-mapped, so they can be played in place.
 ;---------------------------------------
 sys_audio_play:
-        cmp byte [sb16_present], 0
-        je .sap_fail
+        cmp  byte [sb16_present], 0
+        je   .sap_fail
+        mov  eax, ebx
+        cmp  eax, USER_DEMAND_BASE
+        jb   .sap_play
+        mov  eax, ecx
+        cmp  eax, SB16_STAGE_BYTES
+        jbe  .sap_len_ok
+        mov  eax, SB16_STAGE_BYTES      ; one DMA transfer cannot be longer
+.sap_len_ok:
+        mov  ecx, eax
+        push ecx
+        mov  esi, ebx
+        mov  edi, sb16_stage
+        call copy_from_user
+        pop  ecx
+        jc   .sap_fail
+        mov  ebx, sb16_stage
+.sap_play:
         call sb16_play
-        xor eax, eax
+        xor  eax, eax
         iretd
 .sap_fail:
-        mov eax, -1
+        mov  eax, -1
         iretd
 
 ;---------------------------------------

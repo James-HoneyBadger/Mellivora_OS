@@ -288,9 +288,27 @@ isr_page_fault:
         ; Check: user-mode fault (error bit 2)
         mov  eax, [pf_errcode]
         test eax, 0x04
-        jz   .pf_kernel_fault
+        jnz  .pf_user_fault
 
+        ; --- Supervisor fault ---
+        ; The kernel is allowed to touch this task's own demand pages: a syscall
+        ; copying into an untouched mmap buffer, or SYS_REALLOC copying into a
+        ; fresh block. When the address belongs to one of the task's areas the
+        ; page is mapped with the user's protection, exactly as a ring-3 fault
+        ; would be; anything else falls through to the identity-demand logic
+        ; (and then to the panic path).
+        mov  eax, [pf_addr]
+        push eax
+        mov  ebx, eax
+        call vm_find_area
+        pop  ebx
+        test eax, eax
+        jnz  .pf_user_demand
+        jmp  .pf_identity_demand
+
+.pf_user_fault:
         ; Check: not-present fault (error bit 0 clear)
+        mov  eax, [pf_errcode]
         test eax, 0x01
         jnz  .pf_kernel_fault
 
@@ -312,6 +330,7 @@ isr_page_fault:
         iretd
 .pf_not_stack:
 
+.pf_identity_demand:
         ; Kernel identity demand: the allocator and other kernel code address
         ; physical memory directly, but only the first PAGING_MAP_MB is mapped
         ; at boot. A supervisor, not-present fault in the identity-managed zone
@@ -325,19 +344,6 @@ isr_page_fault:
         mov  eax, [pf_addr]
         cmp  eax, USER_DEMAND_BASE
         jb   .pf_kernel_fault
-
-        ; The kernel may touch a user pointer (a syscall buffer) that is still
-        ; demand-zero. Bring the mapping in with the user's protection instead
-        ; of identity-mapping physical memory over it: the latter would read
-        ; the wrong bytes and could leak kernel memory to ring 3.
-        push eax
-        mov  ebx, eax
-        call vm_find_area
-        pop  ebx
-        test eax, eax
-        jnz  .pf_user_demand
-
-        mov  eax, [pf_addr]
         cmp  eax, [pmm_mem_top]
         jae  .pf_kernel_fault
         and  eax, 0xFFFFF000

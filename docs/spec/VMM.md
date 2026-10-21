@@ -89,10 +89,11 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
 | Permission | Write to a read-only or supervisor page, or any access to `PROT_NONE` | Deny: kill the task, leave the system running |
 | Kernel fault | Any fault with `CS & 3 == 0` | Fatal: panic with a symbolised stack |
 
-Kernel access to a demand-zero user page (a syscall copying into the caller's
-buffer, for example) is serviced the same way: the handler first checks whether the
-faulting address belongs to the current task's own area, and if so maps the page with
-the user's protection instead of treating the address as kernel identity memory.
+A **supervisor** fault is serviced when the address belongs to the current task's own
+areas: a syscall copying into an untouched buffer, or `SYS_REALLOC` copying into a
+fresh block, maps the page with the user's protection exactly as a ring-3 fault would.
+Anything else from ring 0 falls through to the identity-demand logic (RAM above
+128 MB) and then to the panic path, so a genuine kernel bug is still fatal.
 
 Stack growth (implemented): the user stack has its own region at the top of the program
 window — `USER_STACK_BASE` (0x003C0000) to `PROGRAM_END_ADDR` (0x00400000), 256 KB in
@@ -135,6 +136,13 @@ Implemented in `kernel/vm.inc`:
   and refuse any access the protection does not allow. Faults **fail closed**: an
   address that belongs to no area — including one `munmap` just released — kills the
   task.
+- Heap: `SYS_MALLOC`/`SYS_FREE`/`SYS_REALLOC` are thin wrappers over the same
+  machinery. `malloc` creates an anonymous demand-zero area (so a block is zeroed on
+  first touch, the program never learns a physical address, and blocks are not limited
+  by the 1 MB program window), `free` releases the area when the pointer is its base,
+  and `realloc` allocates, copies and releases. Before this, `malloc` handed out raw
+  PMM pages at their identity addresses: a block contained whatever the previous owner
+  had left, and `free` freed the frames while leaving the mapping in place.
 - `SYS_MMAP_FILE`: maps an HBFS file's contents privately and demand-paged. The record
   stores the file's first data sector (plus 1, so 0 means anonymous) and the number of
   blocks the file can back; a demand fault reads the block for the touching page into
@@ -199,6 +207,9 @@ writing a dirty mapped page back to the file.
     writes through to the file (`vmtest3`).
 15. Splitting a file mapping with `mprotect` keeps each piece bound to its own file
     block (`vmtest3`).
+16. A heap block is zeroed, larger blocks than the program window work, `realloc`
+    keeps the data, a freed block faults when touched, a re-allocated block is zeroed
+    again, and `free` of a non-base pointer is refused (`heaptest`).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
 `vmtest`, `vmtest2`, `vmtest3`, `stack_test` and `stack_overflow` over QEMU and

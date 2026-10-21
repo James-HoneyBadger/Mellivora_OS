@@ -635,6 +635,99 @@ vm_release_all:
 .vra_i:   dd 0
 
 ;---------------------------------------
+; vm_record_anon - record an anonymous demand-zero area
+;   In : EAX = base (page aligned), ECX = pages, EDX = PROT_*
+;   Out: EAX = area record, or 0 when the table is full
+;---------------------------------------
+vm_record_anon:
+        push ecx
+        push edx
+        push esi
+        push edi
+        mov [.vrec_base], eax
+        mov [.vrec_pages], ecx
+        mov [.vrec_prot], edx
+        call vm_free_slot
+        test eax, eax
+        jz .vrec_none
+        mov edi, eax
+        mov ecx, [.vrec_base]
+        mov [edi + VMA_START], ecx
+        mov ecx, [.vrec_pages]
+        mov [edi + VMA_PAGES], ecx
+        mov ecx, [.vrec_prot]
+        mov [edi + VMA_PROT], ecx
+        mov dword [edi + VMA_SECTOR], 0     ; anonymous: demand-zero frames
+        mov dword [edi + VMA_BLOCKS], 0
+        mov edx, [.vrec_base]
+        mov ecx, [.vrec_pages]
+        shl ecx, 12
+        add edx, ecx
+        mov [edi + VMA_END], edx
+        mov eax, edi
+        jmp .vrec_done
+.vrec_none:
+        xor eax, eax
+.vrec_done:
+        pop edi
+        pop esi
+        pop edx
+        pop ecx
+        ret
+.vrec_base:  dd 0
+.vrec_pages: dd 0
+.vrec_prot:  dd 0
+
+;---------------------------------------
+; vm_map_anon - create an anonymous demand-zero area for the current task
+;   In : ECX = pages (1..VM_MAX_PAGES), EDX = PROT_*
+;   Out: EAX = base address, or 0
+;---------------------------------------
+vm_map_anon:
+        push ecx                        ; [esp + 4] = pages
+        push edx                        ; [esp]     = prot
+        call vm_gap                     ; ECX = pages -> EAX = base or 0
+        test eax, eax
+        jz .vma_none
+        mov ecx, [esp + 4]              ; pages
+        mov edx, [esp]                  ; prot
+        call vm_record_anon
+        test eax, eax
+        jz .vma_none
+        mov eax, [eax + VMA_START]
+        jmp .vma_done
+.vma_none:
+        xor eax, eax
+.vma_done:
+        pop edx
+        pop ecx
+        ret
+
+;---------------------------------------
+; vm_release_area - drop a record and release everything it maps
+;   In : ESI = area record
+;---------------------------------------
+vm_release_area:
+        push eax
+        push ebx
+        push ecx
+        mov eax, cr3
+        mov ebx, [esi + VMA_START]
+        mov ecx, [esi + VMA_PAGES]
+        call vm_release_area_frames
+        xor eax, eax
+        mov [esi + VMA_START], eax
+        mov [esi + VMA_PAGES], eax
+        mov [esi + VMA_PROT], eax
+        mov [esi + VMA_SECTOR], eax
+        mov [esi + VMA_BLOCKS], eax
+        mov [esi + VMA_END], eax
+        pop ecx
+        pop ebx
+        pop eax
+        ret
+
+;---------------------------------------
 ; sys_mmap (120) - map anonymous memory
 ;   In : EBX = hint (0 = anywhere), ECX = length, EDX = PROT_*
 ;   Out: EAX = address, or -1
@@ -710,22 +803,12 @@ sys_mmap:
         ; Demand-zero: nothing is allocated now. The page-fault handler
         ; allocates and zeroes each page the first time the task touches it,
         ; using the area's protection, so an untouched mapping costs no RAM.
-        call vm_free_slot
+        mov eax, [.mm_virt]
+        mov ecx, [.mm_pages]
+        mov edx, [.mm_prot]
+        call vm_record_anon
         test eax, eax
         jz .mm_fail
-        mov ecx, [.mm_virt]
-        mov [eax + VMA_START], ecx
-        mov ecx, [.mm_pages]
-        mov [eax + VMA_PAGES], ecx
-        mov ecx, [.mm_prot]
-        mov [eax + VMA_PROT], ecx
-        mov dword [eax + VMA_SECTOR], 0     ; anonymous: demand-zero frames
-        mov dword [eax + VMA_BLOCKS], 0
-        mov edx, [.mm_virt]
-        mov ecx, [.mm_pages]
-        shl ecx, 12
-        add edx, ecx
-        mov [eax + VMA_END], edx
 
         mov eax, [.mm_virt]
         mov [esp + 28], eax

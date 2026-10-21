@@ -3367,78 +3367,62 @@ sys_stat:
         iretd
 
 ;---------------------------------------
-; SYS_MALLOC (19): Allocate 4KB-aligned memory pages
-; EBX = size in bytes (rounded up to 4KB pages)
-; Returns: EAX = physical address (0 on failure)
+; SYS_MALLOC (19): allocate zeroed user memory
+; EBX = size in bytes
+; Returns: EAX = pointer (0 on failure)
+;
+; The block is an anonymous demand-zero area in the demand zone. Nothing is
+; allocated until the program touches a page, the program never learns a
+; physical address (the old implementation mapped raw PMM pages at their
+; identity addresses), and SYS_FREE gives the frames back to the allocator.
+; Fresh pages read as zero, so a program can never observe another one's
+; discarded data.
 ;---------------------------------------
 sys_malloc:
-        push ecx
-        ; Round up to pages. A size at or above USER_PTR_MAX is absurd and its
-        ; rounding can wrap 32 bits, allocating 0 pages while the caller treats
-        ; the result as a full-size block.
-        cmp ebx, USER_PTR_MAX
-        ja  .malloc_bad
-        mov eax, ebx
-        add eax, 4095
-        shr eax, 12             ; / 4096 = pages needed
-        mov ecx, eax            ; ECX = page count
-        xor eax, eax
-        cmp ecx, 0
-        je .malloc_done
-        ; Allocate pages from PMM, then publish them to ring 3: the caller is
-        ; a user program and the returned address is its memory.
-        call pmm_alloc_pages
-        test eax, eax
-        jz .malloc_done
-        push eax
-        push ecx
-        mov ecx, [esp + 4]      ; pages
-        call paging_map_phys_user
-        pop ecx
-        pop eax
-.malloc_done:
-        pop ecx
+        test ebx, ebx
+        jz   .malloc_bad
+        cmp  ebx, USER_PTR_MAX
+        ja   .malloc_bad
+        mov  eax, ebx
+        add  eax, 4095
+        jc   .malloc_bad                ; page rounding wrapped 32 bits
+        shr  eax, 12
+        cmp  eax, VM_MAX_PAGES
+        ja   .malloc_bad
+        mov  ecx, eax
+        mov  edx, PROT_READ | PROT_WRITE
+        call vm_map_anon                ; EAX = base address or 0
         iretd
 .malloc_bad:
-        pop ecx
-        xor eax, eax            ; 0 = allocation failure
+        xor  eax, eax                   ; 0 = allocation failure
         iretd
 
 ;---------------------------------------
-; SYS_FREE (20): Free allocated memory pages
-; EBX = physical address (must be page-aligned)
-; ECX = size in bytes (rounded up to 4KB pages)
-; Returns: EAX = 0
+; SYS_FREE (20): release a block from SYS_MALLOC
+; EBX = pointer returned by SYS_MALLOC
+; ECX = size in bytes (accepted for ABI compatibility; ignored)
+; Returns: EAX = 0, or -1 when the pointer is not the base of a block
+;
+; The whole area is released: malloc always hands back an area base, so a
+; pointer into the middle of a block is rejected rather than unmapped
+; partially. Freeing drops the frames through their reference count, so a
+; forked child keeps its own copy.
 ;---------------------------------------
 sys_free:
-        ; Refuse to free kernel-owned memory, and refuse sizes that wrap the
-        ; page rounding. Without the first check a ring-3 program can free the
-        ; PMM bitmap or the page tables and then allocate them itself.
-        cmp ebx, KERNEL_RESERVED_END
-        jb  .free_bad
-        cmp ecx, USER_PTR_MAX
-        ja  .free_bad
-        push ecx
-        push eax
-        mov eax, ecx
-        add eax, 4095
-        shr eax, 12             ; pages
-        mov ecx, eax
-        mov eax, ebx            ; physical address
-        and eax, 0xFFFFF000     ; align to page boundary
-        cmp ecx, 0
-        je .free_done
-.free_loop:
-        call pmm_free_page
-        add eax, 0x1000         ; advance to next page
-        loop .free_loop
-.free_done:
-        pop eax
-        pop ecx
-        xor eax, eax
+        cmp  ebx, PROGRAM_BASE
+        jb   .free_bad
+        mov  eax, ebx
+        call vm_find_area
+        test eax, eax
+        jz   .free_bad
+        cmp  ebx, [eax + VMA_START]
+        jne  .free_bad
+        mov  esi, eax
+        call vm_release_area
+        xor  eax, eax
         iretd
 .free_bad:
-        mov eax, -1
+        mov  eax, -1
         iretd
 
 ;---------------------------------------
@@ -3448,83 +3432,76 @@ sys_free:
 ; EDX = old size in bytes (for copy)
 ; Returns: EAX = new pointer (0 on failure)
 ;
-; Simple implementation: alloc new, copy, free old.
+; Alloc new, copy, free old - all through the same demand-zero path as
+; SYS_MALLOC, so the copy reads and the free releases ordinary user areas.
 ;---------------------------------------
 sys_realloc:
         pushad
-        ; Reject a size whose page rounding would wrap 32 bits.
-        cmp ecx, USER_PTR_MAX
-        ja  .realloc_bad
-        ; If ptr is NULL, just allocate
-        test ebx, ebx
-        jz .realloc_fresh
+        cmp  ecx, USER_PTR_MAX
+        ja   .realloc_bad
+        test ecx, ecx
+        jz   .realloc_bad
+        mov  [.ra_ptr], ebx
+        mov  [.ra_newsize], ecx
+        mov  [.ra_oldsize], edx
 
-        ; EBP = old ptr, EDI = old size, ESI = new size. pushad saved all
-        ; caller registers, so these are scratch.
-        mov ebp, ebx
-        mov edi, edx
-        mov esi, ecx
-
-        ; Allocate the new block.
-        mov eax, esi
-        add eax, 4095
-        shr eax, 12             ; pages needed
-        mov ecx, eax
-        call pmm_alloc_pages
+        mov  eax, ecx
+        add  eax, 4095
+        jc   .realloc_bad
+        shr  eax, 12
+        cmp  eax, VM_MAX_PAGES
+        ja   .realloc_bad
+        mov  ecx, eax
+        mov  edx, PROT_READ | PROT_WRITE
+        call vm_map_anon
         test eax, eax
-        jz .realloc_bad
-        mov ebx, eax            ; EBX = new block
+        jz   .realloc_bad
+        mov  [.ra_new], eax
 
-        ; Copy min(old_size, new_size) bytes.
-        push edi                ; save old size for the free below
-        cmp edi, esi
-        jbe .realloc_copy
-        mov edi, esi
-.realloc_copy:
-        mov ecx, edi
-        mov esi, ebp            ; src = old block
-        mov edi, ebx            ; dest = new block
+        ; Copy min(old_size, new_size) bytes. A fresh allocation (EBX = 0)
+        ; has nothing to copy.
+        mov  ecx, [.ra_oldsize]
+        cmp  ecx, [.ra_newsize]
+        jbe  .ra_len_ok
+        mov  ecx, [.ra_newsize]
+.ra_len_ok:
+        test ecx, ecx
+        jz   .ra_free_old
+        mov  esi, [.ra_ptr]
+        test esi, esi
+        jz   .ra_free_old
+        mov  edi, [.ra_new]
         cld
-        rep movsb
+        rep  movsb
 
-        ; Free the old block. pmm_free_pages rounds ECX up to a power of two,
-        ; so pass the page count derived from the old size, not bytes.
-        pop ecx
-        add ecx, 4095
-        shr ecx, 12
-        mov eax, ebp
-        call pmm_free_pages
+.ra_free_old:
+        mov  ebx, [.ra_ptr]
+        test ebx, ebx
+        jz   .ra_done
+        cmp  ebx, PROGRAM_BASE
+        jb   .ra_done
+        mov  eax, ebx
+        call vm_find_area
+        test eax, eax
+        jz   .ra_done
+        cmp  ebx, [eax + VMA_START]
+        jne  .ra_done                   ; not a block base: leave it alone
+        mov  esi, eax
+        call vm_release_area
 
-        mov [esp + 28], ebx     ; return new pointer
-        popad
-        iretd
-
-.realloc_fresh:
-        ; Fresh allocation (EBX=0)
-        mov eax, ecx
-        add eax, 4095
-        shr eax, 12
-        mov ecx, eax
-        cmp ecx, 0
-        je .realloc_zero
-        call pmm_alloc_pages
-        mov [esp + 28], eax
-        popad
-        iretd
-.realloc_zero:
-        mov dword [esp + 28], 0
+.ra_done:
+        mov  eax, [.ra_new]
+        mov  [esp + 28], eax
         popad
         iretd
 .realloc_bad:
-        ; Invalid size: report failure (0 = no new block).
-        mov dword [esp + 28], 0
+        mov  dword [esp + 28], 0        ; 0 = no block
         popad
         iretd
-.realloc_fail_pop:
-        add esp, 16             ; clean 4 pushes
-        mov dword [esp + 28], 0
-        popad
-        iretd
+.ra_ptr:      dd 0
+.ra_newsize:  dd 0
+.ra_oldsize:  dd 0
+.ra_new:      dd 0
 
 ;---------------------------------------
 ; SYS_DISK_READ (22): Raw disk read

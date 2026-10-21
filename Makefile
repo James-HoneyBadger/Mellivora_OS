@@ -133,9 +133,24 @@ $(BOOT_BIN): $(BOOT_SRC)
 # Kernel include files (split for readability)
 KERNEL_INCS = $(wildcard kernel/*.inc)
 
-# Assemble 32-bit kernel
+# Assemble 32-bit kernel.
+#
+# The image is loaded at 0x00100000 and the program window starts at
+# PROGRAM_BASE (0x00300000), so the kernel must stay below 2 MB: past that it
+# overwrites the program window and then the page directory at 0x00410000.
+# Failing here beats a boot that silently corrupts itself.
+KERNEL_MAX_BYTES = 2097152
+
 $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS)
 	$(NASM) -f bin -O0 -w-zeroing -o $@ -l $(@:.bin=.lst) $<
+	@SIZE=$$(wc -c < $@); \
+	if [ $$SIZE -gt $(KERNEL_MAX_BYTES) ]; then \
+		echo "  ERROR: $@ is $$SIZE bytes (limit $(KERNEL_MAX_BYTES)):"; \
+		echo "  the image is loaded at 0x00100000 and PROGRAM_BASE is 0x00300000,"; \
+		echo "  so the kernel cannot grow past 2 MB."; \
+		exit 1; \
+	fi; \
+	echo "  Kernel size: $$SIZE / $(KERNEL_MAX_BYTES) bytes"
 
 # Symbol-bearing ELF32 build. This is not booted; it exists so GDB can resolve
 # addresses. Symbols are relative to 0 because the ELF has no ORG; gdb is told
