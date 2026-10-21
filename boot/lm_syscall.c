@@ -354,6 +354,63 @@ static const struct lm_syscall syscalls[] = {
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
 
+/*
+ * INT 0x80 from a compatibility-mode task. The CPU pushed the *caller's* CS/SS
+ * (0x3B/0x1B), so the IRETQ frame is already right - unlike SYSCALL, where the
+ * hardware replaces them with kernel selectors and the dispatcher has to put the
+ * user ones back.
+ *
+ * The 32-bit tree's convention is number in EAX, arguments in EBX/ECX/EDX and
+ * the result in EAX, and its numbers are not the LP64 ones, so this translates
+ * both before calling the same handlers.
+ */
+struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *f)
+{
+    if ((f->cs & 3) != 3) {
+        f->rax = (u64)-1;           /* only ring 3 may enter this way */
+        return f;
+    }
+
+    u32 nr = (u32)f->rax;
+    u64 arg0 = (u32)f->rbx;         /* the 32-bit args are the low halves */
+    u64 arg1 = (u32)f->rcx;
+    u64 arg2 = (u32)f->rdx;
+
+    /* The same accounting the LP64 dispatcher keeps, so a compatibility task is
+     * visible in the scheduler's per-task record. */
+    cpu_this()->syscall_count++;
+    cpu_this()->user_calls++;
+    cpu_this()->last_nr = nr;
+    cpu_this()->last_arg = arg0;
+    sched_note_syscall();
+
+    /* The handlers read the LP64 registers; move the arguments there on the
+     * same frame. The result comes back in RAX, which a 32-bit caller reads as
+     * EAX. */
+    f->rdi = arg0;
+    f->rsi = arg1;
+    f->rdx = arg2;
+
+    switch (nr) {
+    case 0:                         /* SYS_EXIT */
+        return sys_exit(f);
+    case 5:                         /* SYS_OPEN */
+        return sys_open(f);
+    case 6:                         /* SYS_READ */
+        return sys_read(f);
+    case 7:                         /* SYS_WRITE */
+        return sys_write(f);
+    case 8:                         /* SYS_CLOSE */
+        return sys_close(f);
+    case 54:                        /* SYS_GETPID */
+        f->rax = sched_current_id();
+        return f;
+    default:
+        f->rax = (u64)-1;
+        return f;
+    }
+}
+
 void syscall_init(void)
 {
     kputs("[sys] abi=lp64 table=");

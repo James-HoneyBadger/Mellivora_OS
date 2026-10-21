@@ -621,12 +621,16 @@ KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_pmm.o boot/lm_cpu.o boot/lm_user.o \
 # The user programs are files in the image now, not part of the nucleus.
 INIT_BIN = initprog.bin
 HELLO_BIN = helloprog.bin
-USERPROGS = $(INIT_BIN) $(HELLO_BIN)
+HELLO32_BIN = hello32.bin
+USERPROGS = $(INIT_BIN) $(HELLO_BIN) $(HELLO32_BIN)
 
 $(INIT_BIN): boot/lm_initprog.asm
 	$(NASM) -f bin -o $@ $<
 
 $(HELLO_BIN): boot/lm_hello.asm
+	$(NASM) -f bin -o $@ $<
+
+$(HELLO32_BIN): boot/lm_hello32.asm
 	$(NASM) -f bin -o $@ $<
 
 boot/%.o: boot/%.c boot/lm.h
@@ -662,7 +666,7 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.
 	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64) bs=512 seek=1  conv=notrunc status=none
 	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64) bs=512 seek=33 conv=notrunc status=none
 	@echo "  64-bit HBFS: /init, /hello, /motd"
-	@python3 tools/mk_hbfs64.py $(IMAGE_64) init=$(INIT_BIN) hello=$(HELLO_BIN) motd=boot/motd.txt
+	@python3 tools/mk_hbfs64.py $(IMAGE_64) init=$(INIT_BIN) hello=$(HELLO_BIN) hello32=$(HELLO32_BIN) motd=boot/motd.txt
 	@echo "=== $(IMAGE_64) ready ==="
 
 64bit: $(IMAGE_64)

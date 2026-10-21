@@ -1,5 +1,30 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a 32-bit task beside the 64-bit ones
+
+### Port (P2)
+
+- **A compatibility-mode code segment.** The GDT gains a DPL-3 descriptor with `L=0,
+  D=1` at selector `0x38` - outside the `0x18`/`0x20` slots SYSRET's `+16`/`+8`
+  arithmetic fixes - and a task's initial frame can use it. `IRETQ` to that selector
+  enters 32-bit mode and uses the low 32 bits of `RIP`, so the scheduler needs no
+  special case: a compat task is preempted by the timer, resumed and killed exactly
+  like a 64-bit one.
+- **`INT 0x80`, the 32-bit tree's entry path.** Vector 0x80 gets a DPL-3 interrupt gate;
+  because an interrupt pushes the *caller's* CS/SS (unlike `SYSCALL`, which replaces
+  them), the IRETQ frame is already correct. `lm_int80_dispatch` reads the 32-bit
+  convention - number in EAX, arguments in EBX/ECX/EDX, result in EAX - translates the
+  tree's numbers onto the LP64 handlers (`exit` 0, `open` 5, `read` 6, `write` 7,
+  `close` 8, `getpid` 54) and shares their accounting, so a compat task shows up in the
+  scheduler's per-task record.
+- **The demo now runs both modes.** Task 0 runs `/init` -> `/hello` in 64-bit mode; task
+  1 runs `/hello32`, a NASM 32-bit flat binary that writes, asks for its pid (1), and
+  exits with `0x32`. The log shows `hello from 32-bit mode` and
+  `[ring3] task=1 calls=3 ticks=0 exit=0x0032 mode=32 ring3=ok`.
+- Two robustness fixes fell out: the ATA driver retries a command once after a failed
+  status poll (a freshly selected drive can miss the first command), which removed an
+  intermittent first-boot `[blk] boot=FAIL`.
+
 ## Unreleased - exec, and file syscalls for userland
 
 ### Port (P2)

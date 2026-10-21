@@ -46,6 +46,7 @@ struct lm_task {
     u64 exit_ping;
     u64 cr3;            /* the task's address space */
     u64 brk;            /* program break, in the task's own space */
+    u64 mode32;         /* non-zero when the task runs in 32-bit mode */
     void *kstack_obj;
 };
 
@@ -124,7 +125,8 @@ static void become(struct lm_task *next)
  * Build the frame the entry stubs expect, so a task that has never run is
  * entered by the same pop-and-IRETQ path as one that was preempted.
  */
-static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space)
+static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space,
+                                int compat)
 {
     if (space == 0) {
         return NULL;
@@ -147,6 +149,7 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space)
     t->user_stack = user_stack;
     t->cr3 = space;
     t->brk = USER_BRK_BASE;
+    t->mode32 = compat ? 1 : 0;
     t->calls = 0;
     t->ticks = 0;
     t->exit_code = 0;
@@ -154,10 +157,12 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space)
     t->exit_ping = 0;
 
     u64 *sp = (u64 *)(unsigned long)t->kstack_top;
-    *--sp = SEL_UDATA | RPL_USER;   /* SS */
+    *--sp = SEL_UDATA | RPL_USER;   /* SS: the same data descriptor serves both */
     *--sp = user_stack;             /* RSP */
     *--sp = 0x202;                  /* RFLAGS, IF set: ring 3 is preemptible */
-    *--sp = SEL_UCODE | RPL_USER;   /* CS */
+    /* A compatibility task's IRETQ returns to a 32-bit code segment, so the
+     * processor uses the low 32 bits of RIP and enters 32-bit mode. */
+    *--sp = (compat ? SEL_UCODE32 : SEL_UCODE) | RPL_USER;
     *--sp = entry;                  /* RIP */
     *--sp = 0;                      /* vector - never seen by the dispatcher */
     *--sp = 0;                      /* error code */
@@ -170,9 +175,9 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space)
     return t;
 }
 
-int sched_create(u64 entry, u64 user_stack, u64 space)
+int sched_create(u64 entry, u64 user_stack, u64 space, int compat)
 {
-    return task_new(entry, user_stack, space) != NULL ? 0 : -1;
+    return task_new(entry, user_stack, space, compat) != NULL ? 0 : -1;
 }
 
 void sched_start(void)
@@ -297,8 +302,15 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
      * back; the mapping must be gone from this task's space when it exits. */
     int brk_ok = vmm_translate(USER_BRK_BASE) == 0;
 
-    int ok = t->exit_code == t->id && t->exit_whoami == cpu_this()->id &&
+    int ok;
+    if (t->mode32) {
+        /* The compatibility program has its own marker: exit code 0x32 after
+         * making calls through INT 0x80. */
+        ok = t->exit_code == 0x32 && t->calls > 0;
+    } else {
+        ok = t->exit_code == t->id && t->exit_whoami == cpu_this()->id &&
              t->exit_ping == 0x1234 && t->calls > 0 && brk_ok;
+    }
 
     kputs("[ring3] task=");
     kput_dec(t->id);
@@ -308,10 +320,14 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
     kput_dec(t->ticks);
     kputs(" exit=0x");
     kput_hex(t->exit_code, 4);
-    kputs(" ping=0x");
-    kput_hex(t->exit_ping, 4);
-    kputs(" whoami=");
-    kput_dec(t->exit_whoami);
+    if (!t->mode32) {
+        kputs(" ping=0x");
+        kput_hex(t->exit_ping, 4);
+        kputs(" whoami=");
+        kput_dec(t->exit_whoami);
+    }
+    kputs(" mode=");
+    kput_dec(t->mode32 ? 32 : 64);
     kputs(" brk=");
     kputs(brk_ok ? "ok" : "FAIL");
     kputs(ok ? " ring3=ok\r\n" : " FAIL ring3\r\n");

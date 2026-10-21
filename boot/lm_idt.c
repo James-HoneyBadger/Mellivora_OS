@@ -87,6 +87,9 @@ __asm__(
     "LM_ISR_NOERR 45\n"
     "LM_ISR_NOERR 46\n"
     "LM_ISR_NOERR 47\n"
+    /* INT 0x80 from a compatibility-mode task: the one gate software in ring 3
+     * reaches through the 32-bit ABI. */
+    "LM_ISR_NOERR 128\n"
     ".globl lm_isr_common\n"
     "lm_isr_common:\n"
     /* The same GS arrangement as the syscall stub: KERNEL_GS_BASE holds the
@@ -135,6 +138,9 @@ __asm__(
     "    hlt\n"
     "    jmp 9b\n"
     ".text\n");
+
+/* The INT 0x80 stub, generated with the others but installed by name. */
+void lm_isr_128(void);
 
 /* The stub addresses, in vector order, for the IDT builder. */
 extern void *const lm_isr_table[LM_ISR_COUNT];
@@ -189,6 +195,9 @@ void idt_init(void)
          * the CPU ignores DPL for the exceptions it raises itself. */
         idt_set(v, (u64)(unsigned long)lm_isr_table[v], v == 3 ? 3 : 0);
     }
+    /* The 32-bit tree's programs reach the kernel with INT 0x80. */
+    idt_set(INT80_VECTOR, (u64)(unsigned long)lm_isr_128, 3);
+
     for (int i = 0; i < LM_IRQ_COUNT; i++) {
         /* Hardware gates are DPL 0: only the PIC rings them, and an interrupt
          * gate clears IF on entry, so a handler never nests. */
@@ -236,6 +245,9 @@ struct lm_fault_frame *lm_fault_dispatch(struct lm_fault_frame *f)
 
     if (f->vec >= LM_IRQ_FIRST && f->vec < LM_IRQ_FIRST + LM_IRQ_COUNT) {
         return lm_irq_dispatch(f);      /* a device, not a fault */
+    }
+    if (f->vec == INT80_VECTOR) {
+        return lm_int80_dispatch(f);    /* a 32-bit program's syscall */
     }
 
     fault_count++;

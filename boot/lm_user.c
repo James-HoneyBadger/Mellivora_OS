@@ -45,7 +45,7 @@ struct tss64 {
     u16 iomap_base;
 } __attribute__((packed));
 
-static u64 gdt[7];
+static u64 gdt[8];
 static struct tss64 tss;
 static struct gdt_ptr gdtr;
 
@@ -70,7 +70,11 @@ static void lm_user_load_gdt(void)
     gdt[1] = gdt_desc(0, 0, 0x9A, 0x2);   /* SEL_KCODE */
     gdt[2] = gdt_desc(0, 0, 0x92, 0x0);   /* SEL_KDATA */
     gdt[3] = gdt_desc(0, 0, 0xF2, 0x0);   /* SEL_UDATA */
-    gdt[4] = gdt_desc(0, 0, 0xFA, 0x2);   /* SEL_UCODE */
+    gdt[4] = gdt_desc(0, 0, 0xFA, 0x2);   /* SEL_UCODE (L=1) */
+    /* The 32-bit tree's programs run in compatibility mode: D=1, L=0, DPL 3. It
+     * lives outside the STAR window (0x18 data / 0x20 code) because SYSRET's
+     * +16/+8 arithmetic fixes those two slots. */
+    gdt[7] = gdt_desc(0, 0, 0xFA, 0x4);   /* SEL_UCODE32 */
 
     /* A 64-bit TSS descriptor is 16 bytes: type 9 (64-bit TSS available),
      * present, DPL 0, and the base is split around the middle. */
@@ -169,31 +173,33 @@ int lm_user_run(void)
         return -1;
     }
 
-    /* Each task gets its own code frame, so exec can replace one task's program
-     * without touching the other's. /init is read once and copied. */
-    int handle = vfs_open("init");
-    if (handle < 0) {
-        kputs("[ring3] FAIL no /init on the disk\r\n");
-        return -1;
+    /* Each task gets its own code frame and its own program: /init is the
+     * 64-bit task, /hello32 the compatibility-mode one. */
+    static const char *const programs[2] = {"init", "hello32"};
+    u64 program_bytes[2] = {0, 0};
+
+    for (int i = 0; i < 2; i++) {
+        int handle = vfs_open(programs[i]);
+        if (handle < 0) {
+            kputs("[ring3] FAIL no /");
+            kputs(programs[i]);
+            kputs(" on the disk\r\n");
+            return -1;
+        }
+        program_bytes[i] = vfs_size(handle);
+        u8 *code = vmm_phys(code_phys[i]);
+        if (program_bytes[i] == 0 || program_bytes[i] > FRAME_SIZE ||
+            code == NULL) {
+            kputs("[ring3] FAIL program is not one page of code\r\n");
+            return -1;
+        }
+        memset(code, 0, FRAME_SIZE);
+        if (vfs_read(handle, code, program_bytes[i]) != (int)program_bytes[i]) {
+            kputs("[ring3] FAIL short read of a program\r\n");
+            return -1;
+        }
     }
-    u64 program_bytes = vfs_size(handle);
-    if (program_bytes == 0 || program_bytes > FRAME_SIZE) {
-        kputs("[ring3] FAIL /init is not one page of code\r\n");
-        return -1;
-    }
-    u8 *code0 = vmm_phys(code_phys[0]);
-    u8 *code1 = vmm_phys(code_phys[1]);
-    if (code0 == NULL || code1 == NULL) {
-        kputs("[ring3] FAIL user frames outside the direct map\r\n");
-        return -1;
-    }
-    memset(code0, 0, FRAME_SIZE);
-    memset(code1, 0, FRAME_SIZE);
-    if (vfs_read(handle, code0, program_bytes) != (int)program_bytes) {
-        kputs("[ring3] FAIL short read of /init\r\n");
-        return -1;
-    }
-    memcpy(code1, code0, FRAME_SIZE);
+
     memset(vmm_phys(stack_phys[0]), 0, FRAME_SIZE);
     memset(vmm_phys(stack_phys[1]), 0, FRAME_SIZE);
 
@@ -247,20 +253,24 @@ int lm_user_run(void)
     kputs(" tss rsp0=0x");
     kput_hex(tss.rsp0, 16);
     kputs("\r\n[vfs] /init bytes=");
-    kput_dec(program_bytes);
+    kput_dec(program_bytes[0]);
+    kputs(" /hello32 bytes=");
+    kput_dec(program_bytes[1]);
     kputs("\r\n");
     kputs("[ring3] code=0x");
     kput_hex(USER_CODE_ADDR, 8);
     kputs(" bytes=");
-    kput_dec(program_bytes);
+    kput_dec(program_bytes[0]);
+    kputs("+");
+    kput_dec(program_bytes[1]);
     kputs(" stacks=0x");
     kput_hex(USER_STACK_TOP, 8);
     kputs(" in 2 spaces");
     kputs("\r\n");
 
     sched_init();
-    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[0]) != 0 ||
-        sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[1]) != 0) {
+    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[0], 0) != 0 ||
+        sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[1], 1) != 0) {
         kputs("[ring3] FAIL could not create the tasks\r\n");
         return -1;
     }

@@ -246,6 +246,7 @@ void lm_probe_faulted(void);
 #define SEL_UDATA 0x18
 #define SEL_UCODE 0x20
 #define SEL_TSS   0x28
+#define SEL_UCODE32 0x38     /* compatibility-mode code segment, DPL 3 */
 #define RPL_USER  3
 
 /*---------------------------------------
@@ -299,6 +300,11 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 
 void syscall_init(void);   /* prints the ABI and the table size */
 
+/* INT 0x80 from a compatibility-mode task: the 32-bit tree's numbering and
+ * register convention, translated onto the LP64 handlers. */
+struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *frame);
+#define INT80_VECTOR 0x80
+
 /*---------------------------------------
  * PCI and block storage
  *---------------------------------------*/
@@ -348,8 +354,9 @@ struct lm_task;
 void sched_init(void);
 
 /* Create a task that enters `entry` on `user_stack` in address space `space`
- * (a vmm_space_create() result). 0 on success. */
-int sched_create(u64 entry, u64 user_stack, u64 space);
+ * (a vmm_space_create() result). `compat` enters it in 32-bit mode through the
+ * compatibility code segment. 0 on success. */
+int sched_create(u64 entry, u64 user_stack, u64 space, int compat);
 
 /* Switch to the first runnable task and enter ring 3. Never returns. */
 void sched_start(void) __attribute__((noreturn));

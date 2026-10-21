@@ -2178,6 +2178,33 @@ The user program waits for three ticks before its `PING`/`WHOAMI`/`EXIT` sequenc
 spinning in user mode between polls of `SYS_TICKS`. If none arrives it exits with a code
 the nucleus rejects, so a dead PIT fails the run instead of hanging it.
 
+### 32-bit compatibility mode
+
+The 32-bit tree's programs reach the kernel with `INT 0x80`, number in EAX, arguments in
+EBX/ECX/EDX, result in EAX. Everything needed to run them lives beside the LP64 path:
+
+| Piece | Detail |
+| --- | --- |
+| code segment | `SEL_UCODE32` = `0x38`, access `0xFA`, flags `D=1, L=0`, DPL 3 - outside the `0x18`/`0x20` slots SYSRET's `+16`/`+8` arithmetic fixes |
+| entry | `IRETQ` with that CS enters 32-bit mode and uses the low 32 bits of `RIP`; the scheduler needs no special case |
+| gate | IDT vector `0x80`, `DPL=3` (software interrupts check DPL, unlike CPU exceptions) |
+| bridge | `lm_int80_dispatch` moves EBX/ECX/EDX into the LP64 argument registers, translates the tree's numbers (`exit` 0, `open` 5, `read` 6, `write` 7, `close` 8, `getpid` 54) and calls the same handlers |
+
+An interrupt pushes the *caller's* CS and SS, so the frame the shell builds for `INT
+0x80` already returns to the compat segment - the opposite of the `SYSCALL` path, where
+the hardware replaces CS/SS with kernel selectors and the dispatcher has to write the
+user ones back. Interrupt frames in IA-32e mode are always 64-bit, so the same
+`lm_fault_frame` layout serves both modes and a compat task is preempted, resumed and
+retired through the same code as a 64-bit one.
+
+The demo's second task runs `/hello32`, a NASM 32-bit flat binary: `write`, `getpid`
+(which must be 1), `exit(0x32)`. Its record prints `mode=32` and checks the `0x32`
+marker instead of the 64-bit task's id/PING/WHOAMI checks.
+
+What is not there yet is the loader: `/hello32` is a flat binary at a fixed address, and
+the existing programs are ELF32 with sections; loading them and answering the other 181
+calls is the remaining compatibility work.
+
 ### Exec, and file syscalls
 
 `SYS_EXEC(path)` loads a file into the calling task. It opens the name through the VFS,
@@ -2423,15 +2450,16 @@ requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 
 `stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok`, `ring3=ok` (once per
 task), `sched=ok`, `nx=ok`, the hardened `nx=on smep=on smap=on` line, `abi=lp64`,
 `brk=ok` (per task), the user program's `hello`, `blk=ok`, the HBFS geometry and
-`/init bytes=`, `[exec] /hello` and the text of `/motd` on COM1, so a
+`/init bytes=`, `[exec] /hello`, the text of `/motd`, `hello from 32-bit mode` and the
+`mode=32` task record on COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
 agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
 timer tick to the TSS stack, preempted a task but resumed the wrong frame, switched
 tasks without switching their address spaces, left a data page executable, failed to
 read a user buffer under SMAP, kept a `brk` page mapped after the program shrank it,
-could not read or write the boot disk, could not find or load `/init`, could not `exec` or read a file back, or returned to
-the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+could not read or write the boot disk, could not find or load `/init`, could not `exec` or read a file back, could not run a 32-bit task through `INT 0x80`,
+or returned to the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

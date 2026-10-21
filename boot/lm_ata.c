@@ -78,7 +78,7 @@ static void ata_delay400(void)
 /* Wait until the drive is idle (or has data, when `want_data`). */
 static int ata_wait(int want_data)
 {
-    for (u32 i = 0; i < 1000000; i++) {
+    for (u32 i = 0; i < 4000000; i++) {
         u8 status = inb(ATA_STATUS);
         if ((status & ATA_SR_ERR) != 0 || (status & ATA_SR_DF) != 0) {
             return -1;
@@ -179,42 +179,56 @@ u64 ata_sector_count(void)
     return sectors;
 }
 
+/*
+ * One retry: a drive that has just been selected can miss the first command
+ * while it spins up, and the retry is cheap because nothing has been transferred
+ * when ata_wait fails.
+ */
 int ata_read(u64 lba, void *buffer)
 {
-    if (!present || ata_select_lba(lba) != 0) {
+    if (!present) {
         return -1;
     }
-    outb(ATA_COMMAND, ATA_CMD_READ);
-    if (ata_wait(1) != 0) {
-        return -1;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (ata_select_lba(lba) != 0) {
+            return -1;
+        }
+        outb(ATA_COMMAND, ATA_CMD_READ);
+        if (ata_wait(1) != 0) {
+            continue;
+        }
+        u16 *out = buffer;
+        for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) {
+            out[i] = inw(ATA_DATA);
+        }
+        return 0;
     }
-
-    u16 *out = buffer;
-    for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) {
-        out[i] = inw(ATA_DATA);
-    }
-    return 0;
+    return -1;
 }
 
 int ata_write(u64 lba, const void *buffer)
 {
-    if (!present || ata_select_lba(lba) != 0) {
+    if (!present) {
         return -1;
     }
-    outb(ATA_COMMAND, ATA_CMD_WRITE);
-    if (ata_wait(1) != 0) {
-        return -1;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (ata_select_lba(lba) != 0) {
+            return -1;
+        }
+        outb(ATA_COMMAND, ATA_CMD_WRITE);
+        if (ata_wait(1) != 0) {
+            continue;
+        }
+        const u16 *in = buffer;
+        for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) {
+            outw(ATA_DATA, in[i]);
+        }
+        /* The write is complete only after the drive says so; without this a
+         * read-back can see the old sector. */
+        outb(ATA_COMMAND, ATA_CMD_FLUSH);
+        return ata_wait(0);
     }
-
-    const u16 *in = buffer;
-    for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) {
-        outw(ATA_DATA, in[i]);
-    }
-
-    /* The write is complete only after the drive says so; without this a
-     * read-back can see the old sector. */
-    outb(ATA_COMMAND, ATA_CMD_FLUSH);
-    return ata_wait(0);
+    return -1;
 }
 
 /*
