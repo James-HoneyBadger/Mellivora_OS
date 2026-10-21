@@ -18,6 +18,9 @@ SYS_SLEEP   equ 24
 SYS_DATE    equ 25
 SYS_MKDIR   equ 18
 SYS_CLEAR   equ 23
+SYS_EXEC    equ 12
+SYS_FORK    equ 37
+SYS_WAIT    equ 38
 SYS_UNLINK  equ 19
 SYS_OPEN    equ 9
 SYS_READ    equ 10
@@ -36,6 +39,8 @@ DEC_BUF  equ 0x40001600
 STAT_BUF equ 0x40001800
 CWD_BUF  equ 0x40001C00
 CWD_LEN  equ 0x40001B80         ; writable state lives in the stack page
+RUN_PROG equ 0x40001A80         ; the program path, for the child's exec
+RUN_ARGS equ 0x40001B00         ; the rest of the line, its command line
 DATE_BUF equ 0x40001B00         ; sec, min, hour, day, month, year
 LINE_LIMIT equ 0x40001380
 
@@ -90,6 +95,13 @@ start:
         call prefix_is
         test rax, rax
         jnz .rm
+
+        ; "run <program> [arguments]"
+        lea rsi, [rel cmd_run]
+        mov rcx, 4
+        call prefix_is
+        test rax, rax
+        jnz .run
 
         ; "cat <name>"
         lea rsi, [rel cmd_cat]
@@ -177,6 +189,107 @@ start:
         syscall
         call begin_line
         lea rsi, [rel s_cleared]
+        call add_str
+        call end_line
+        jmp .next
+
+.run:
+        ; Split "run <program> <arguments>" at the second space: the program path
+        ; is what exec loads, the rest is the command line the child sees.
+        lea rsi, [CMD_BUF + 4]
+        mov rdi, RUN_PROG
+        xor ecx, ecx
+.split:
+        mov al, [rsi]
+        test al, al
+        jz .split_done
+        cmp al, ' '
+        je .have_prog
+        mov [rdi], al
+        inc rdi
+        inc rsi
+        inc ecx
+        jmp .split
+.have_prog:
+        mov byte [rdi], 0
+        inc rsi                         ; step over the space
+        mov rdi, RUN_ARGS
+        xor edx, edx
+.args:
+        mov al, [rsi]
+        test al, al
+        jz .args_done
+        mov [rdi], al
+        inc rdi
+        inc rsi
+        inc edx
+        jmp .args
+.args_done:
+        mov byte [rdi], 0
+        test ecx, ecx
+        jz .run_usage
+.split_done:
+        mov byte [rdi], 0               ; no arguments: terminate the path here
+        test ecx, ecx
+        jz .run_usage
+
+        mov eax, SYS_FORK
+        syscall
+        cmp rax, -1
+        je .run_failed
+        test rax, rax
+        jnz .parent
+
+        ; The child becomes the program. If exec fails there is nothing to go
+        ; back to, so it exits with a code the parent can report.
+        mov rdi, RUN_PROG
+        mov rsi, RUN_ARGS
+        mov eax, SYS_EXEC
+        syscall
+        mov edi, 0x7F
+        mov eax, SYS_EXIT
+        syscall
+.hang_child:
+        jmp .hang_child
+
+.parent:
+        mov r15, rax                    ; the child's pid
+.wait:
+        mov rdi, r15
+        mov eax, SYS_WAIT
+        syscall
+        cmp rax, -2                     ; still running: spin so the tick can
+        jne .reaped                     ; hand the CPU to the child
+        mov ecx, 40000
+.spin:
+        pause
+        dec ecx
+        jnz .spin
+        jmp .wait
+.reaped:
+        mov [RUN_PROG + 64], rax        ; stash: registers have been unreliable here
+
+        call begin_line
+        lea rsi, [rel s_ran]
+        call add_str
+        mov rsi, RUN_PROG
+        call add_str
+        lea rsi, [rel s_exit]
+        call add_str
+        mov rax, [RUN_PROG + 64]
+        call add_hex8
+        call end_line
+        jmp .next
+
+.run_usage:
+        call begin_line
+        lea rsi, [rel s_usage]
+        call add_str
+        call end_line
+        jmp .next
+.run_failed:
+        call begin_line
+        lea rsi, [rel s_nofork]
         call add_str
         call end_line
         jmp .next
@@ -449,6 +562,31 @@ add_2dec:
         inc rbp
         ret
 
+; add_hex8: eax = value, written as 0x and its eight hex digits. The digits
+; come out of a rotate, so the top nibble of the 32-bit value is emitted first.
+add_hex8:
+        mov edx, eax                    ; before add_str, which clobbers AL
+        lea rsi, [rel s_hex]
+        call add_str
+        mov ecx, 8
+.digit:
+        rol edx, 4
+        push rcx
+        mov eax, edx
+        and eax, 0xF
+        cmp al, 10
+        jb .under
+        add al, 'a' - 10
+        jmp .store
+.under:
+        add al, '0'
+.store:
+        mov [rbp], al
+        inc rbp
+        pop rcx
+        loop .digit
+        ret
+
 add_dec:
         lea rsi, [DEC_BUF + 31]
         mov byte [rsi], 0
@@ -486,6 +624,12 @@ s_bye:     db "bye", 0
 cmd_quit:  db "quit", 0
 cmd_ls:    db "ls", 0
 cmd_cat:   db "cat ", 0
+cmd_run:   db "run ", 0
+s_ran:     db "sh: ", 0
+s_exit:    db " exited ", 0
+s_hex:     db "0x", 0
+s_usage:   db "usage: run <program> [arguments]", 0
+s_nofork:  db "sh: cannot fork", 0
 cmd_date:  db "date", 0
 cmd_clear: db "clear", 0
 s_cleared: db "sh: cleared the screen", 0

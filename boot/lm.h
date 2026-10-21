@@ -128,6 +128,7 @@ struct lm_fault_frame {
 #define VMM_U  0x4ULL
 #define VMM_PS 0x80ULL
 #define VMM_NX (1ULL << 63)     /* no-execute, when EFER.NXE is on */
+#define VMM_ADDR_MASK 0x000FFFFFFFFFF000ULL
 
 /* The kernel heap window: a 16 MB range of its own, mapped on demand. */
 #define KHEAP_BASE       0xFFFFC00000000000ULL
@@ -157,6 +158,12 @@ void vmm_space_switch(u64 space);
 /* A new PML4 with the kernel's higher half and heap entries shared into it.
  * Returns its physical address, or 0. */
 u64 vmm_space_create(void);
+/* A duplicate of a task's space: every user page gets its own frame with the
+ * bytes copied. The kernel half and the heap window stay shared. */
+u64 vmm_space_copy(u64 src);
+/* Free that space's frames and its tables. */
+void vmm_space_destroy(u64 space);
+u64 vmm_translate_in(u64 space, u64 virt);
 
 /* Drop a mapping. Returns -1 when there was none. */
 int vmm_unmap(u64 virt);
@@ -318,6 +325,8 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_PIPE_CLOSE  32
 #define SYS_GETARGS     33
 #define SYS_GETENV      34
+#define SYS_FORK        37
+#define SYS_WAIT        38
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -479,6 +488,7 @@ void sched_init(void);
 /* A compatibility task's exit code is whatever its program leaves in EBX.
  * TASK_ANY_EXIT accepts anything (the tree's programs do not set one). */
 #define TASK_ANY_EXIT (~0ULL)
+#define TASK_NO_PARENT (~0ULL)
 
 /* Create a task that enters `entry` on `user_stack` in address space `space`
  * (a vmm_space_create() result). `compat` enters it in 32-bit mode through the
@@ -529,6 +539,17 @@ void sched_set_free_list(u64 value);
 
 /* SYS_EXIT: retire the running task; returns the frame to run next, or NULL. */
 struct lm_fault_frame *sched_exit(struct lm_fault_frame *frame);
+/* Retire a task that faulted: same path as exit, with the vector in the code. */
+struct lm_fault_frame *sched_faulted(struct lm_fault_frame *frame);
+
+/* FORK: a copy of the calling task - its space, its saved frame, its heap and its
+ * command line - that resumes in the same place with 0 in RAX. Returns the child's
+ * id, or -1. */
+s64 sched_fork(struct lm_fault_frame *parent_frame);
+/* WAITPID: 0 when the child has exited and been reaped (*code is its exit code),
+ * 1 while it still runs, -1 if pid is not this task's child. Reaping frees the
+ * slot, the kernel stack and the address space. */
+int sched_wait(s64 pid, u64 *code);
 
 /*---------------------------------------
  * Physical memory manager

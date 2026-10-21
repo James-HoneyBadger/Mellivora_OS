@@ -752,8 +752,10 @@ static struct lm_fault_frame *sys_load(struct lm_fault_frame *f)
     if (size > max) {
         size = max;
     }
+    sched_lock();
     int got = vfs_read(handle, file_bounce, size);
     vfs_close(handle);
+    sched_unlock();
     if (got < 0) {
         f->rax = (u64)-1;
         return f;
@@ -779,11 +781,14 @@ static struct lm_fault_frame *sys_pipe_write(struct lm_fault_frame *f)
     if (len > 4096) {
         len = 4096;
     }
+    sched_lock();
     if (copy_from_user(buf, file_bounce, len) != 0) {
+        sched_unlock();
         f->rax = (u64)-1;
         return f;
     }
     f->rax = (u64)(long)pipe_write((int)f->rdi, file_bounce, (u32)len);
+    sched_unlock();
     return f;
 }
 
@@ -794,15 +799,19 @@ static struct lm_fault_frame *sys_pipe_read(struct lm_fault_frame *f)
     if (max > 4096) {
         max = 4096;
     }
+    sched_lock();
     int got = pipe_read((int)f->rdi, file_bounce, (u32)max);
     if (got < 0) {
+        sched_unlock();
         f->rax = (u64)-1;
         return f;
     }
     if (copy_to_user(buf, file_bounce, (u64)got) != 0) {
+        sched_unlock();
         f->rax = (u64)-1;
         return f;
     }
+    sched_unlock();
     f->rax = (u64)got;
     return f;
 }
@@ -882,6 +891,29 @@ static struct lm_fault_frame *sys_getenv(struct lm_fault_frame *f)
     return f;
 }
 
+/* fork() - the child comes back from this same point with 0 in RAX. */
+static struct lm_fault_frame *sys_fork(struct lm_fault_frame *f)
+{
+    f->rax = (u64)sched_fork(f);
+    return f;
+}
+
+/* waitpid(pid) - the child's exit code once it has gone, -2 while it runs (ask
+ * again), -1 if it is not a child of this task. */
+static struct lm_fault_frame *sys_wait(struct lm_fault_frame *f)
+{
+    u64 code = 0;
+    int state = sched_wait((s64)f->rdi, &code);
+    if (state == 1) {
+        f->rax = (u64)-2;
+    } else if (state < 0) {
+        f->rax = (u64)-1;
+    } else {
+        f->rax = code;
+    }
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -951,6 +983,8 @@ static const struct lm_syscall syscalls[] = {
     [34] = {"getenv", sys_getenv, 0},
     [35] = {"setcolor", sys_setcolor, 0},
     [36] = {"setcursor", sys_setcursor, 0},
+    [37] = {"fork", sys_fork, 1},
+    [38] = {"waitpid", sys_wait, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -1176,6 +1210,11 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         f->rsi = (u64)(u32)f->rcx;
         f->rdx = (u64)(u32)f->rdx;
         return sys_getenv(f);
+    case 103:                       /* SYS_FORK -> EAX=pid, 0 in the child */
+        return sys_fork(f);
+    case 92:                        /* SYS_WAITPID: EBX=pid -> EAX=exit code */
+        f->rdi = (u64)(s64)(int)(u32)f->rbx;
+        return sys_wait(f);
     case 60:                        /* SYS_PIPE_CREATE -> EAX=id */
         return sys_pipe_create(f);
     case 61:                        /* SYS_PIPE_WRITE: EBX=id ECX=buf EDX=len */

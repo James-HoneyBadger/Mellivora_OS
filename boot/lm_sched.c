@@ -23,7 +23,7 @@
 
 #include "lm.h"
 
-#define MAX_TASKS 8
+#define MAX_TASKS 16
 
 enum {
     TASK_FREE = 0,
@@ -47,6 +47,7 @@ struct lm_task {
     u64 cr3;            /* the task's address space */
     u64 brk;            /* program break, in the task's own space */
     char args[256];     /* the command line EXEC was given, for GETARGS */
+    u64 parent;         /* the task that forked this one, or ~0 for a boot task */
     u64 heap;           /* next byte MALLOC hands out, 0 before the first call */
     u64 free_list;      /* blocks returned by FREE, threaded in user memory */
     u64 mode32;         /* non-zero when the task runs in 32-bit mode */
@@ -174,6 +175,7 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space,
     t->cr3 = space;
     t->brk = USER_BRK_BASE;
     t->args[0] = '\0';
+    t->parent = TASK_NO_PARENT;
     t->heap = 0;
     t->free_list = 0;
     t->mode32 = compat ? 1 : 0;
@@ -228,10 +230,24 @@ void sched_start(void)
 }
 
 /* Round-robin, or stay put when this is the only task. */
+/*
+ * Preemption works from ring 0 as well as ring 3. It has to: a task inside a
+ * blocking syscall - the shell waiting for a child, a program waiting for a key -
+ * is in the kernel, and a tick that refused to switch there would starve every
+ * other task for the whole wait. The frame is a ring-0 one (three trailing words
+ * instead of five), which both entry stubs' epilogues handle unchanged.
+ *
+ * The one place a switch must not happen is a critical section, and that is what
+ * the lock is for: a filesystem update keeps a task on the CPU until it is done.
+ */
 struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
 {
-    if (current == NULL || (f->cs & 3) != 3) {
-        return f;                   /* never switch away from the kernel */
+    /* Switching away from ring 0 is not allowed: the frame there has no RSP/SS
+     * and the kernel is not reentrant. So a syscall that waits has to return to
+     * its caller and be asked again - which is why getchar and waitpid answer
+     * "nothing yet" instead of blocking. */
+    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+        return f;
     }
 
     struct lm_task *next = pick_next();
@@ -316,9 +332,12 @@ static void sched_report(void)
     int ok = 1;
 
     for (int i = 0; i < task_count; i++) {
-        if (tasks[i].state != TASK_DEAD || tasks[i].calls == 0) {
-            ok = 0;
+        /* A reaped slot (FREE) is as finished as a dead one. Anything else being
+         * READY or RUNNING here would mean a task was left behind. */
+        if (tasks[i].state == TASK_DEAD || tasks[i].state == TASK_FREE) {
+            continue;
         }
+        ok = 0;
     }
     if (switches == 0 || task_count < 2) {
         ok = 0;                     /* nothing was ever preempted */
@@ -368,6 +387,133 @@ static void sched_report(void)
  * through its own stack and its own kernel entry. Returns the frame to IRETQ
  * into, or NULL when there is nothing left to run.
  */
+/*
+ * Fork. The child gets a copy of the caller's address space and a copy of the
+ * frame the syscall was entered on, so it resumes at the same instruction with
+ * the same registers - except RAX, which is the child's id 0. Both tasks return
+ * from the same syscall into the same code with their own memory.
+ */
+s64 sched_fork(struct lm_fault_frame *parent_frame)
+{
+    if (current == NULL || stack_cache < 0 || parent_frame == NULL) {
+        return -1;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < task_count; i++) {
+        if (tasks[i].state == TASK_FREE) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        if (task_count >= MAX_TASKS) {
+            return -1;
+        }
+        slot = task_count++;
+    }
+
+    u64 space = vmm_space_copy(current->cr3);
+    if (space == 0) {
+        return -1;
+    }
+    void *kstack = kmem_alloc(stack_cache);
+    if (kstack == NULL) {
+        vmm_space_destroy(space);
+        return -1;
+    }
+
+    struct lm_task *child = &tasks[slot];
+    struct lm_task *parent = current;
+
+    *child = *parent;
+    child->id = (u64)slot;
+    /* READY is the last thing set: a tick that preempts this syscall (kernel
+     * preemption is on) must not pick a child whose frame pointer is still the
+     * parent's. */
+    child->state = TASK_FREE;
+    child->kstack_obj = kstack;
+    child->kstack_base = (u64)(unsigned long)kstack;
+    child->kstack_top = child->kstack_base + FRAME_SIZE;
+    child->cr3 = space;
+    child->parent = parent->id;
+    /* A child's exit code belongs to its parent's waitpid, not to the boot
+     * report: the record for a boot task is the demo's, and this is not one. */
+    child->expect_exit = TASK_ANY_EXIT;
+    child->self_report = 0;
+    child->calls = 0;
+    child->ticks = 0;
+    child->exit_code = 0;
+    child->exit_whoami = 0;
+    child->exit_ping = 0;
+
+    struct lm_fault_frame *copy =
+        (struct lm_fault_frame *)(unsigned long)(child->kstack_top -
+                                                 sizeof(struct lm_fault_frame));
+    *copy = *parent_frame;
+    copy->rax = 0;                  /* fork() returns 0 in the child */
+    child->rsp = (u64)(unsigned long)copy;
+
+    child->state = TASK_READY;      /* now it can be picked */
+    return (s64)slot;
+}
+
+/*
+ * 0 when the child has been reaped and *code is its exit code, 1 while it is
+ * still running, -1 when pid is not this task's child or is already gone.
+ *
+ * It does not block. A syscall cannot: the tick refuses to switch away from the
+ * kernel, and a syscall that yields returns to the *caller* rather than resuming
+ * inside the kernel, so "wait" here means the same thing "getchar" means - ask
+ * again after a sleep.
+ */
+int sched_wait(s64 pid, u64 *code)
+{
+    if (current == NULL || pid < 0 || pid >= (s64)task_count) {
+        return -1;
+    }
+
+    struct lm_task *child = &tasks[pid];
+    if (child->state == TASK_FREE || child->parent != current->id ||
+        child->id != (u64)pid) {
+        return -1;                  /* not ours, or already reaped */
+    }
+    if (child->state != TASK_DEAD) {
+        return 1;                   /* still running */
+    }
+
+    if (code != NULL) {
+        *code = child->exit_code;
+    }
+
+    /* Reap: the slot, the kernel stack and the whole address space go back. */
+    u64 id = child->id;
+    vmm_space_destroy(child->cr3);
+    if (child->kstack_obj != NULL) {
+        kmem_free(stack_cache, child->kstack_obj);
+    }
+    memset(child, 0, sizeof(*child));
+    child->id = id;
+    child->state = TASK_FREE;
+    child->parent = TASK_NO_PARENT;
+    return 0;
+}
+
+/*
+ * A user program that faults is retired like one that exits, with the vector in
+ * its exit code: the machine keeps running, its parent can wait for it, and the
+ * record says what happened. Halting here would let one bad program - or a file
+ * that was not a program at all - take the system down.
+ */
+struct lm_fault_frame *sched_faulted(struct lm_fault_frame *f)
+{
+    if (current == NULL) {
+        return NULL;
+    }
+    f->rdi = 0xFA000000ULL | (f->vec & 0xFF);
+    return sched_exit(f);
+}
+
 struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
 {
     struct lm_task *t = current;

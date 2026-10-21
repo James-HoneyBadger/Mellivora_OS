@@ -198,7 +198,12 @@ __asm__(
     ".globl lm_syscall_entry\n"
     "lm_syscall_entry:\n"
     "    swapgs\n"
-    /* Save the caller's RSP, take this CPU's kernel stack. */
+    /* A syscall body runs with interrupts off. The kernel keeps statics of its
+     * own - the sector bounce buffers, the page tables' free lists - and a tick
+     * that switched tasks in the middle of one would corrupt them. The places
+     * that *want* to wait (sleep, a shell polling for a key) say so with
+     * sti; hlt, and that is where preemption resumes. IRETQ puts the caller's
+     * own RFLAGS back, so ring 3 stays preemptible. */
     "    movq %rsp, %gs:0x18\n"
     "    movq %gs:0x10, %rsp\n"
     /* IRETQ in 64-bit mode pops a five-value frame - RIP, CS, RFLAGS, RSP, SS -

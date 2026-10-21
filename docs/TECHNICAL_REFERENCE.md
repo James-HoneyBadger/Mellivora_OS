@@ -2299,6 +2299,32 @@ cursor register back to check it agrees with the driver's idea of the cursor, an
 clears the screen to check the blank. `SETCOLOR`, `SETCURSOR` and `CLEAR` are those
 same routines, so they are real calls and not accepted no-ops.
 
+### Processes
+
+`FORK` duplicates the caller. The address space is copied by walking its page
+tables rather than probing addresses - the user half is 512 GB, which is a few
+thousand entries to walk and 134 million pages to probe - and every 4 KB leaf with
+the user bit gets a fresh frame with the bytes copied; the kernel half and the heap
+window stay shared, as they are in `vmm_space_create`. The saved syscall frame is
+copied too, so the child resumes at the same instruction with the same registers and
+0 in RAX, which is what fork means: one call, two returns.
+
+The child's `state` is set to READY *last*, after its frame pointer exists. A tick can
+preempt a syscall (the timer can arrive anywhere in the kernel), and a child that is
+pickable before its RSP is set would be entered with the parent's stack.
+
+`WAITPID` is non-blocking: it answers the exit code once the child is gone, -2 while
+it runs, -1 if the pid is not this task's child. It cannot block, because a task
+cannot switch away from a ring-0 frame - the frame there has no RSP/SS and the kernel
+is not reentrant - so a syscall that yields would return to its *caller* rather than
+resume inside the kernel. Waiting is therefore "ask again", and the shell spins with
+`pause` between asks so the tick can hand the CPU to the child. Reaping frees the
+slot, the kernel stack and the address space.
+
+A fault taken in ring 3 retires the task instead of halting: the vector goes into the
+exit code as `0xFA00000D`-style, the record prints, and the scheduler moves on. Before
+this, any bad program - or any file loaded as one - stopped the machine.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting

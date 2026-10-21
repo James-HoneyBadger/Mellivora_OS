@@ -92,9 +92,17 @@ __asm__(
     "LM_ISR_NOERR 128\n"
     ".globl lm_isr_common\n"
     "lm_isr_common:\n"
-    /* The same GS arrangement as the syscall stub: KERNEL_GS_BASE holds the
-     * per-CPU block, and a fault can come from either ring. */
+    /* GS is swapped only when the interrupted context was ring 3, where the
+     * live base is the user value and KERNEL_GS_BASE holds the per-CPU block.
+     * An interrupt taken in the kernel (the tick can now preempt a syscall) is
+     * already running with the block in GS, and swapping there would leave the
+     * kernel reading its per-CPU state through a null base. */
+    /* The vector and error code are already pushed (16 bytes), so the
+     * interrupted context's RIP is at 16 and its CS at 24. */
+    "    testb $3, 24(%rsp)\n"    /* CS of the interrupted context */
+    "    jz 8f\n"
     "    swapgs\n"
+    "8:\n"
     "    pushq %rax\n"
     "    pushq %rbx\n"
     "    pushq %rcx\n"
@@ -131,7 +139,10 @@ __asm__(
     "    popq %rbx\n"
     "    popq %rax\n"
     "    addq $16, %rsp\n"      /* vector and error code */
+    "    testb $3, 8(%rsp)\n"  /* CS of the frame we are returning to */
+    "    jz 7f\n"
     "    swapgs\n"
+    "7:\n"
     "    iretq\n"
     "9:\n"
     "    cli\n"
@@ -292,5 +303,13 @@ struct lm_fault_frame *lm_fault_dispatch(struct lm_fault_frame *f)
     kputs(on_kstack ? "ok" : "FAIL");
     kputs(expected ? " fault=ok\r\n" : "\r\n");
 
-    return expected ? f : NULL;
+    if (expected) {
+        return f;
+    }
+    if (from_user) {
+        /* The program is retired, not the machine: its parent can wait for the
+         * fault code and the other tasks never notice. */
+        return sched_faulted(f);
+    }
+    return NULL;                    /* a kernel fault is still fatal */
 }

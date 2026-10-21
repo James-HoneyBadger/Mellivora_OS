@@ -84,7 +84,10 @@ REQUIRED = (
     # The write demo: it creates /persist.txt, reads it back through the same
     # open/read path, makes /tmpdir, puts a file in it, unlinks it and sees the
     # directory go empty again.
-    "read back: written by mellivora64",
+    # /wr prints the file it just wrote; the content itself is checked from the
+    # image below, which is the stronger statement, because this line is two
+    # writes and another task's output can land between them.
+    "read back:",
     "write path ok",
     # The shell: a prompt with the working directory, a listing, a file's
     # contents, a rejected command and a clean exit.
@@ -93,6 +96,10 @@ REQUIRED = (
     "sh: created probe",
     "  probe/ size=0",
     "sh: removed probe",
+    # fork + exec + waitpid: a program run as a child reports its exit code, and
+    # one that cannot be loaded reports the child's own failure.
+    "sh: /api exited 0x00000000",
+    "sh: /nope exited 0x0000007f",
     "sh: unknown command",
     "bye",
     "exit=0x005A",
@@ -321,6 +328,8 @@ def main():
         ("mellivora:/> ", "mkdir probe"),
         ("mellivora:/> ", "ls"),
         ("mellivora:/> ", "rm probe"),
+        ("mellivora:/> ", "run /api"),
+        ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "nonsense"),
         ("mellivora:/> ", "quit"),
     )

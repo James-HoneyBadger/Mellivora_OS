@@ -102,6 +102,14 @@ u64 vmm_flags(u64 virt)
     return leaf != NULL ? *leaf : 0;
 }
 
+/* Translation in a space that is not the current one: the table walk goes through
+ * the direct map, so no CR3 switch is needed. */
+u64 vmm_translate_in(u64 space, u64 virt)
+{
+    u64 *leaf = vmm_leaf_in(space, virt, 0, 0);
+    return leaf != NULL ? *leaf : 0;
+}
+
 u64 vmm_current_space(void)
 {
     u64 cr3;
@@ -350,4 +358,129 @@ int vmm_selftest(void)
 
     kputs(ok ? "[vmm] vmm=ok\r\n" : "[vmm] FAIL address-space round trip\r\n");
     return ok ? 0 : -1;
+}
+
+/*---------------------------------------
+ * Copying and tearing down a task's space
+ *---------------------------------------*/
+
+/*
+ * Duplicate the user half of `src`: every 4 KB leaf reachable from PML4[0] that
+ * carries the user bit gets a frame of its own with the bytes copied. The kernel
+ * half and the heap window are shared, so they are copied as table entries by
+ * vmm_space_create and are never touched here.
+ *
+ * Walking the tables rather than probing addresses matters: the user half is 512
+ * GB, which is 134 million pages to probe and a few thousand entries to walk.
+ */
+u64 vmm_space_copy(u64 src)
+{
+    u64 *source = vmm_phys(src);
+    if (source == NULL) {
+        return 0;
+    }
+
+    u64 dest = vmm_space_create();
+    u64 *target = vmm_phys(dest);
+    if (target == NULL) {
+        return 0;
+    }
+
+    u64 *pdpt = vmm_phys(source[0] & VMM_ADDR_MASK);
+    if (pdpt == NULL) {
+        return dest;                /* nothing user-mapped at all */
+    }
+
+    for (u32 p = 0; p < 512; p++) {
+        if ((pdpt[p] & VMM_P) == 0 || (pdpt[p] & VMM_PS) != 0) {
+            continue;
+        }
+        u64 *pd = vmm_phys(pdpt[p] & VMM_ADDR_MASK);
+        if (pd == NULL) {
+            continue;
+        }
+        for (u32 d = 0; d < 512; d++) {
+            if ((pd[d] & VMM_P) == 0 || (pd[d] & VMM_PS) != 0) {
+                continue;
+            }
+            u64 *pt = vmm_phys(pd[d] & VMM_ADDR_MASK);
+            if (pt == NULL) {
+                continue;
+            }
+            /* PML4 covers 512 GB per entry, the PDPT 1 GB, the PD 2 MB, so a
+             * leaf's address is the three table indices at 30, 21 and 12. */
+            u64 base = ((u64)p << 30) | ((u64)d << 21);
+            for (u32 t = 0; t < 512; t++) {
+                if ((pt[t] & VMM_P) == 0 || (pt[t] & VMM_U) == 0) {
+                    continue;
+                }
+                u64 virt = base | ((u64)t << 12);
+                u64 frame = pmm_alloc_frame();
+                u8 *fresh = vmm_phys(frame);
+                u8 *old = vmm_phys(pt[t] & VMM_ADDR_MASK);
+                if (fresh == NULL || old == NULL) {
+                    if (frame != 0) {
+                        pmm_free_frame(frame);
+                    }
+                    return 0;
+                }
+                for (u32 b = 0; b < FRAME_SIZE; b++) {
+                    fresh[b] = old[b];
+                }
+                u64 flags = VMM_U | ((pt[t] & VMM_W) != 0 ? VMM_W : 0);
+                if (!cpu_nx_enabled()) {
+                    flags &= ~VMM_NX;
+                } else if ((pt[t] & VMM_NX) != 0) {
+                    flags |= VMM_NX;
+                }
+                if (vmm_map_in(dest, virt, frame, flags) != 0) {
+                    pmm_free_frame(frame);
+                    return 0;
+                }
+            }
+        }
+    }
+    return dest;
+}
+
+/* Free every user page and then the tables themselves. */
+void vmm_space_destroy(u64 space)
+{
+    if (space == 0) {
+        return;
+    }
+    u64 *pml4 = vmm_phys(space);
+    if (pml4 == NULL) {
+        return;
+    }
+
+    u64 *pdpt = vmm_phys(pml4[0] & VMM_ADDR_MASK);
+    if (pdpt != NULL) {
+        for (u32 p = 0; p < 512; p++) {
+            u64 *pd = vmm_phys(pdpt[p] & VMM_ADDR_MASK);
+            if ((pdpt[p] & VMM_P) == 0 || (pdpt[p] & VMM_PS) != 0 ||
+                pd == NULL) {
+                continue;
+            }
+            for (u32 d = 0; d < 512; d++) {
+                u64 *pt = vmm_phys(pd[d] & VMM_ADDR_MASK);
+                if ((pd[d] & VMM_P) == 0 || (pd[d] & VMM_PS) != 0 ||
+                    pt == NULL) {
+                    continue;
+                }
+                for (u32 t = 0; t < 512; t++) {
+                    if ((pt[t] & VMM_P) != 0 && (pt[t] & VMM_U) != 0) {
+                        pmm_free_frame(pt[t] & VMM_ADDR_MASK);
+                    }
+                }
+                pmm_free_frame(pd[d] & VMM_ADDR_MASK);
+            }
+            pmm_free_frame(pdpt[p] & VMM_ADDR_MASK);
+        }
+        pmm_free_frame(pml4[0] & VMM_ADDR_MASK);
+    }
+
+    /* The higher half and the heap window are shared with every other space, so
+     * only the top-level table belongs to this one. */
+    pmm_free_frame(space);
 }
