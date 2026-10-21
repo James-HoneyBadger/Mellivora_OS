@@ -97,9 +97,8 @@ VMA_SECTOR          equ 12
 VMA_END             equ 16
 VMA_BLOCKS          equ 20
 VMA_FLAGS           equ 24
-; Copy-on-write bookkeeping covers the identity-mapped region only: 128 MB of
-; RAM / 4 KB = 32768 pages, one refcount byte each (see cow_ref in data.inc).
-COW_MAX_PAGES       equ 32768
+; COW_MAX_PAGES (the copy-on-write refcount table size) is derived from
+; USER_DEMAND_BASE_MAX in kernel/paging.inc; cow_ref in data.inc is that big.
 
 ; Boot info passed by stage 2 at 0x500
 BOOTINFO_DRIVE      equ 0x500

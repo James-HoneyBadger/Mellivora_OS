@@ -703,7 +703,9 @@ D=LightMagenta, E=Yellow, F=White
 - **No memory protection:** No paging; all tasks share the same flat address space.
 - **No file permissions enforcement:** chmod/chown store values but do not block access.
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
-- **128 MB RAM limit:** Physical memory manager supports up to 128 MB (E820 reported).
+- **448 MB RAM limit:** The physical memory manager stops handing out frames at
+  `0x1C000000` so a frame can never collide with a user address. The first 128 MB are
+  identity-mapped at boot; the rest is mapped on demand.
 - **Root: 455 files, Subdirs: 224 files:** Directory entry limits per HBFS layout.
 - **16-level directory nesting:** Maximum subdirectory depth.
 - **Tab completion:** Only completes filenames in the current directory (not PATH-aware).

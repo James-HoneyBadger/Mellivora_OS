@@ -71,17 +71,21 @@ fi
 
 failures=0
 
-# run_case NAME CMD EXPECT [THEN] [REJECT]
+# run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB]
 # An empty EXPECT means "only check that nothing faulted" (useful for a
 # graphics program that owns the screen and prints nothing).
 run_case() {
     local name="$1" cmd="$2" expect="$3" then="${4:-}" reject="${5:-CPU EXCEPTION}"
+    local mem="${6:-}"
     local args=("$IMAGE" "$cmd" --reject "$reject")
     if [ -n "$expect" ]; then
         args+=(--expect "$expect")
     fi
     if [ -n "$then" ]; then
         args+=(--then "$then")
+    fi
+    if [ -n "$mem" ]; then
+        args+=(--mem "$mem")
     fi
     printf '  %-34s ' "$name"
     if timeout "$CASE_TIMEOUT" python3 "$DRIVE" "${args[@]}" >/dev/null 2>&1; then
@@ -123,6 +127,20 @@ run_case "stack guard + growth"          "stack_test"            "STACK_GROW_OK"
 # survive and run the next command.
 run_case "stack overflow contained"      "stack_overflow"        "task killed"        "hello" "CPU EXCEPTION|STACK_FAIL"
 
+# Above 128 MB, physical frames live beyond the boot identity map: the allocator
+# walks free-list nodes that are not mapped yet, the fault handler faults on its
+# own frame zeroing, and a forked share is tracked in cow_ref only if the table
+# covers every frame the allocator can hand out. These cases boot a guest whose
+# RAM is well past that boundary; the same programs also run on the 128 MB
+# default above, so a failure here is specific to the high-memory paths.
+#
+# vmtest2 asks for specific hints (256 MB and 320 MB), so it needs a guest whose
+# demand-zone base is below them: 192 MB is the smallest RAM above the identity
+# map and still leaves the historical hints valid.
+run_case "high memory: fork + COW + munmap" "vmtest"            "VM_OK"              "" "CPU EXCEPTION|VMTEST_FAIL" 384
+run_case "high memory: demand-zero pages"   "vmtest2"           "VM2_OK"             "" "CPU EXCEPTION|VMTEST2_FAIL" 192
+run_case "high memory: copy-on-write fork"  "cow_test"          "COW_OK"             "" "CPU EXCEPTION|COW_FAIL|PAGE FAULT" 384
+run_case "high memory: heap workload"       "heaptest"          "HEAP_OK"            "" "CPU EXCEPTION|HEAPTEST_FAIL|PAGE FAULT" 384
 
 if [ "$failures" -ne 0 ]; then
     fail "$failures runtime case(s) failed"

@@ -76,11 +76,15 @@ A phase does not close until these are measured:
 - [ ] Kernel slab allocator; page cache with writeback. The page cache is what would
   make two shared mappings of one file coherent with each other.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
-- [ ] Fix allocations above 128 MB (pre-existing): a free-list "next" of 0 is walked
-  as page 0, so a guest with more RAM cannot allocate reliably. Leads: `cow_ref`
-  stops at 128 MB (a share above it is counted by neither side and can be freed
-  twice) and the bitmap indexing collides four page numbers onto one bit. The system
-  boots and runs at 192 MB–1 GB, and the 100 MB gate runs on the 128 MB layout.
+- [x] Allocations above 128 MB (pre-existing). Three faults, all only reachable on a
+  guest with more RAM than the boot identity map covers: the page-fault handler saved
+  three registers while its helpers clobbered EBX/ESI/EDI/EBP, so the buddy allocator's
+  free-list cursor was silently replaced by the faulting page number (the "next of 0"
+  that walked to page 0); the handler's `pf_*` scratch was not re-entrant, and it
+  re-enters itself whenever it zeroes a frame above the identity map, which mapped the
+  page at the frame's address instead of the program's; and `cow_ref` stopped at 128 MB,
+  so a forked share above it was freed twice. `make check-runtime` now runs `vmtest`,
+  `vmtest2`, `cow_test` and `heaptest` on a 192 MB and a 384 MB guest.
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
 
 **Exit:** the isolation conformance test passes, 100 MB heap workload passes

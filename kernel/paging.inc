@@ -46,6 +46,15 @@ USER_DEMAND_MIN   equ 0x08000000   ; lowest possible base (128 MB)
 USER_DEMAND_BASE_MAX equ 0x1C000000 ; highest base: keeps 64 MB of user space
 USER_DEMAND_MAX   equ 0x20000000   ; End of demand-paged zone  (512MB)
 
+; Copy-on-write bookkeeping: one refcount byte per 4 KB frame the allocator can
+; hand out (cow_ref in data.inc). pmm_init refuses to seed frames at or above
+; USER_DEMAND_BASE_MAX, so that ceiling is exactly the table size. A frame
+; outside the table is reported as "not shared" by cow_put, which makes every
+; mapping of it look like the sole owner - a forked share above the old 128 MB
+; table was freed twice and the buddy list then served the same page to two
+; callers.
+COW_MAX_PAGES     equ USER_DEMAND_BASE_MAX / 4096
+
 ; Page entry flags
 PG_PRESENT       equ 0x01
 PG_WRITABLE      equ 0x02
@@ -269,25 +278,40 @@ paging_init:
 ;   [ESP+12] EFLAGS
 ;---------------------------------------
 isr_page_fault:
-        ; Save error code and faulting EIP
-        push eax
-        mov eax, [esp + 4]      ; error code (at ESP+4 after our push)
-        mov [pf_errcode], eax
-        mov eax, [esp + 8]      ; faulting EIP (at ESP+8)
-        mov [pf_eip], eax
-        ; Read faulting address from CR2
-        mov eax, cr2
-        mov [pf_addr], eax
-        pop eax
+        ; Save the entire interrupted register set. Every exit below either
+        ; resumes the faulting instruction, which needs its registers exactly
+        ; as they were, or abandons the task. The helpers on these paths
+        ; (vm_find_area, cow_break_page, paging_map_page_all, pmm_alloc_page,
+        ; paging_privatize_pde) clobber EBX/ESI/EDI/EBP as well as EAX/ECX/EDX,
+        ; and kernel code keeps loop cursors in them - the buddy allocator's
+        ; free-list scan lives in EBX - so saving three registers is not
+        ; enough: the interrupted walk gets silently redirected the first time
+        ; it touches a page above the boot identity map.
+        ;
+        ; The pf_* words are single global scratch, and this handler can fault
+        ; on itself: zeroing or filling a freshly allocated frame touches
+        ; physical memory above the boot identity map, which re-enters here
+        ; through the identity-demand path. Preserve the outer entry's scratch
+        ; as well, so a nested fault cannot overwrite the address and frame the
+        ; outer entry is still working with.
+        pushad                  ; [esp+32] = error code, [esp+36] = EIP
+        push dword [pf_errcode]
+        push dword [pf_eip]
+        push dword [pf_addr]
+        push dword [pf_demand_frame]
+
+        mov  eax, [esp + 48]    ; error code
+        mov  [pf_errcode], eax
+        mov  eax, [esp + 52]    ; faulting EIP
+        mov  [pf_eip], eax
+        mov  eax, cr2           ; faulting address
+        mov  [pf_addr], eax
 
         ;-----------------------------------
         ; v9.0 Demand-paging fast path:
         ;   User-mode, not-present fault in
         ;   the demand-paged zone → alloc.
         ;-----------------------------------
-        push eax
-        push ecx
-        push edx
 
         ; --- Copy-on-write: write to a PRESENT page that is read-only because
         ; it is shared with another address space. Supervisor writes count too:
@@ -303,11 +327,7 @@ isr_page_fault:
         call cow_break_page
         test eax, eax
         jz   .pf_not_cow
-        pop  edx
-        pop  ecx
-        pop  eax
-        add  esp, 4                 ; drop the error code
-        iretd
+        jmp  .pf_resume
 .pf_not_cow:
 
         ; Check: user-mode fault (error bit 2)
@@ -323,10 +343,8 @@ isr_page_fault:
         ; would be; anything else falls through to the identity-demand logic
         ; (and then to the panic path).
         mov  eax, [pf_addr]
-        push eax
         mov  ebx, eax
         call vm_find_area
-        pop  ebx
         test eax, eax
         jnz  .pf_user_demand
         jmp  .pf_identity_demand
@@ -348,11 +366,7 @@ isr_page_fault:
         call pf_try_stack_growth
         test eax, eax
         jz   .pf_not_stack
-        pop  edx
-        pop  ecx
-        pop  eax
-        add  esp, 4                 ; drop the error code
-        iretd
+        jmp  .pf_resume
 .pf_not_stack:
 
 .pf_identity_demand:
@@ -379,11 +393,7 @@ isr_page_fault:
         mov  ebx, eax
         mov  ecx, PG_PRESENT | PG_WRITABLE      ; supervisor only
         call paging_map_page_all
-        pop  edx
-        pop  ecx
-        pop  eax
-        add  esp, 4                 ; drop the error code
-        iretd
+        jmp  .pf_resume
 
 .pf_user_demand:
         ; Check: faulting address in demand zone [user_demand_base, USER_DEMAND_MAX)
@@ -397,16 +407,9 @@ isr_page_fault:
         ; Blindly allocating on any demand-zone touch would resurrect memory
         ; that munmap just released (and turn every stray pointer into a
         ; silent allocation).
-        push ebx
-        push esi
-        push edi
-        push ebp
-
         mov  eax, [pf_addr]
-        push eax
         mov  ebx, eax
         call vm_find_area
-        pop  ebx
         test eax, eax
         jz   .pf_demand_deny
         mov  esi, eax                   ; area record
@@ -466,46 +469,38 @@ isr_page_fault:
         mov  ecx, ebp
         call paging_map_page_here
 
-        pop  ebp
-        pop  edi
-        pop  esi
-        pop  ebx
-
         ; Success — return to faulting instruction
-        pop  edx
-        pop  ecx
-        pop  eax
+        jmp  .pf_resume
+
+;---------------------------------------
+; .pf_resume - hand the interrupted context back untouched
+;   Undoes the prologue: the outer entry's pf_* scratch, then the saved
+;   registers, then the error code the CPU pushed, and retries the faulting
+;   instruction.
+;---------------------------------------
+.pf_resume:
+        pop  dword [pf_demand_frame]
+        pop  dword [pf_addr]
+        pop  dword [pf_eip]
+        pop  dword [pf_errcode]
+        popad
         add  esp, 4             ; remove error code
         iretd
 
 .pf_demand_deny:
-        pop  ebp
-        pop  edi
-        pop  esi
-        pop  ebx
         jmp  .pf_kernel_fault
 
 .pf_demand_oom:
-        pop  ebp
-        pop  edi
-        pop  esi
-        pop  ebx
-        pop  edx
-        pop  ecx
-        pop  eax
+        popad
         jmp  .pf_show_error
 
 .pf_oom:
         ; Out of memory — fall through to crash handler
-        pop  edx
-        pop  ecx
-        pop  eax
+        popad
         jmp  .pf_show_error
 
 .pf_kernel_fault:
-        pop  edx
-        pop  ecx
-        pop  eax
+        popad
 
         ; A user-mode fault is an application problem, never a system problem.
         ; Report it in one line and reap only that task; the desktop and the

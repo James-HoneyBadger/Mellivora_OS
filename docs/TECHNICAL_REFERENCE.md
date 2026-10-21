@@ -352,7 +352,11 @@ The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x500000). Each bit represe
 | Bitmap size | 128 KB (0x20000 bytes) |
 | Total bits | 1,048,576 |
 | Max addressable | 4 GB (theoretical) |
-| Practical limit | ~128 MB (E820-reported) |
+| Practical limit | 448 MB (`USER_DEMAND_BASE_MAX`: frames may not reach user space) |
+
+The first 128 MB (`PAGING_MAP_MB`) are identity-mapped at boot; RAM above that is
+mapped on demand by the page-fault handler the first time the kernel touches it, so a
+large guest costs page tables, not boot time.
 
 ### Initialization
 
@@ -1482,9 +1486,11 @@ program's stack at its top), a background task's separately allocated image, and
 background task's separate stack — the last two only when they are outside the window,
 because sharing a range twice would count its frames twice and leak them.
 
-Bookkeeping is `cow_ref` in `data.inc`: one byte per 4 KB frame of identity-mapped RAM
-(`COW_MAX_PAGES` = 128 MB worth). **0 means "not shared"**, so a page that was never
-forked is freed by its owner directly; `cow_put` returns whether the caller should free.
+Bookkeeping is `cow_ref` in `data.inc`: one byte per 4 KB frame the allocator can hand
+out (`COW_MAX_PAGES` = `USER_DEMAND_BASE_MAX / 4096`, 448 MB worth; the allocator stops
+below that ceiling, so no frame can fall outside the table). **0 means "not shared"**, so
+a page that was never forked is freed by its owner directly; `cow_put` returns whether
+the caller should free.
 Every teardown path is refcount-aware (`paging_free_window_private`, `cow_release_range`
 in `sched_exit_task`, the background-exit path), and exec isolation forces `PG_WRITABLE`
 on the private copies it makes while releasing the references it replaces.

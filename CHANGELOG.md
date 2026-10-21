@@ -1,5 +1,40 @@
 # Mellivora OS - Changelog
 
+## Unreleased - memory above 128 MB works
+
+### Memory
+
+- **The page-fault handler gives the interrupted code back its registers** — it used
+  to save only EAX/ECX/EDX, but the helpers it calls (`vm_find_area`,
+  `cow_break_page`, `paging_map_page_all`, `paging_privatize_pde`, `pmm_alloc_page`)
+  clobber EBX/ESI/EDI/EBP as well. Above 128 MB that was quietly fatal: physical RAM
+  is identity-mapped from 128 MB upward only on demand, so the buddy allocator's
+  free-list walk — whose cursor lives in EBX — took the fault the first time it read a
+  block above the boot identity map and came back with EBX holding the faulting page
+  number. The chain then continued at page 0, through the interrupt vector table. The
+  handler now saves the full register set on entry and restores it on every path that
+  resumes the faulting instruction.
+- **The handler survives faulting on itself** — it does exactly that: zeroing or
+  filling a freshly allocated frame above the identity map re-enters the
+  identity-demand path. The `pf_addr`/`pf_eip`/`pf_errcode`/`pf_demand_frame` scratch
+  is now saved and restored around the handler, so a nested fault can no longer
+  redirect the outer mapping. Before this, every demand page backed by a frame above
+  128 MB was mapped at the frame's physical address instead of the address the program
+  touched, and the task died on the next access.
+- **`cow_ref` covers every frame the allocator can hand out** — the table stopped at
+  128 MB, so a forked share above it was counted by neither side: `cow_put` reported
+  each mapping as the sole owner, the frame was freed twice, and the buddy allocator
+  then served the same page to two callers. A fork/exit cycle above 128 MB hung the
+  system. The table size is now derived from `USER_DEMAND_BASE_MAX` (448 MB), the
+  ceiling `pmm_init` already enforces, instead of being a separate literal.
+
+### Tooling
+
+- `tests/test_runtime.sh` takes an optional guest RAM size per case and gained four
+  high-memory cases (`vmtest`, `vmtest2`, `cow_test`, `heaptest`) that boot a 192 MB
+  or 384 MB guest. They fail on the previous kernel: `heaptest` at 384 MB printed
+  `HEAPTEST_FAIL stage 1` and `vmtest` stopped after the second forked child.
+
 ## Unreleased - 100 MB heap workload and a demand base above RAM
 
 ### Memory
@@ -18,20 +53,15 @@
   block afterwards. It runs in `make check` and in CI.
 - `tools/qemu_drive.py` grew `--mem MB` so a case can choose the guest's RAM.
 
-### Known issue (pre-existing)
+### Fixed (pre-existing)
 
-- Allocations on a guest with **more than 128 MB** of RAM are unreliable, and this
-  predates the change above: `tools/qemu_drive.py` hard-coded `-m 128` until it grew
+- Allocations on a guest with **more than 128 MB** of RAM were unreliable, and this
+  predated the change above: `tools/qemu_drive.py` hard-coded `-m 128` until it grew
   `--mem`, so no earlier test ever ran a real allocation above 128 MB. With 192 MB or
-  more, `heaptest` fails inside the buddy allocator: a free-list node's "next" pointer
-  is 0 where the NIL sentinel belongs, the chain walks to page 0 and follows the
-  interrupt vector table (0xF000FF53) into a page above the top of RAM, which then
-  faults. Two suspects, both worth checking when this is fixed: `cow_ref` only tracks
-  the first 128 MB, so a copy-on-write share above it is counted by neither side and
-  can be freed twice, and the allocator's bitmap indexing (`btr dword [PMM_BITMAP +
-  page>>3], page&7`) collides four page numbers onto one bit. The system boots and
-  runs at 192 MB, 384 MB and 1 GB, and the 100 MB workload gate runs on the 128 MB
-  layout, which is the shipped configuration.
+  more, `heaptest` failed inside the buddy allocator: a free-list node's "next"
+  pointer was 0 where the NIL sentinel belongs, the chain walked to page 0 and
+  followed the interrupt vector table into a page above the top of RAM. See "memory
+  above 128 MB works" above for the three faults behind it.
 
 ## Unreleased - shared file mappings
 

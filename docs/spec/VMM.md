@@ -141,6 +141,19 @@ Kernel identity demand: the kernel addresses physical memory directly, but only 
 buddy allocator can use RAM above 128 MB instead of faulting the first time it touches
 it. Addresses beyond the reported RAM still fault, so a kernel bug is not hidden.
 
+Two properties make that safe, and both are easy to lose:
+
+- **The handler returns the interrupted code its registers untouched.** It saves the
+  whole set (`pushad`) and restores it on every path that resumes the fault, because the
+  helpers it calls (`vm_find_area`, `cow_break_page`, `paging_map_page_all`,
+  `paging_privatize_pde`, `pmm_alloc_page`) clobber EBX/ESI/EDI/EBP. Kernel code keeps
+  loop cursors there — the buddy allocator's free-list walk lives in EBX — so a partial
+  save silently redirects whatever was running when the fault arrived.
+- **The handler is re-entrant.** Zeroing or filling a freshly allocated frame above the
+  identity map faults, which re-enters the same handler. `pf_addr`, `pf_eip`,
+  `pf_errcode` and `pf_demand_frame` are therefore saved and restored around it; a
+  nested fault must not overwrite the address the outer entry is still mapping.
+
 ## 4a. Status of the 32-bit implementation (P1)
 
 Implemented in `kernel/vm.inc`:
@@ -185,10 +198,14 @@ Also implemented:
   `pf_try_stack_growth` in `kernel/paging.inc`), set up per task for both the console and
   the Burrows launch paths; the heap is capped at the stack region in `SYS_SBRK` and
   `set_program_brk_init`.
-- Kernel identity demand above 128 MB, bounded by the firmware-reported memory top.
+- Kernel identity demand above 128 MB, bounded by the firmware-reported memory top,
+  with a handler that preserves the interrupted register set and its own scratch across
+  the nested fault that zeroing a high frame causes.
 - COW reference bytes use bit 7 as a "was writable when shared" mark. A frame that was
   read-only at fork time is counted (both processes map it) but is not marked, so a
-  write to it stays a protection fault.
+  write to it stays a protection fault. The table spans every frame the allocator can
+  hand out (to `USER_DEMAND_BASE_MAX`); a frame outside it would be reported as "not
+  shared" and a forked share would be freed twice.
 
 File-backed mappings (`SYS_MMAP_FILE`) are implemented on the same demand path: the
 area records the file's first data sector and how many blocks the file can back, so a
