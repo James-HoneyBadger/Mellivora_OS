@@ -122,6 +122,7 @@ run_case "demand-zero + partial munmap"  "vmtest2"               "VM2_OK"       
 run_case "file-backed mmap"              "vmtest3"               "VM3_OK"             "" "CPU EXCEPTION|VMTEST3_FAIL"
 run_case "heap on the VMM"               "heaptest"              "HEAP_OK"            "" "CPU EXCEPTION|HEAPTEST_FAIL|PAGE FAULT"
 run_case "shared file mapping writes back" "vmtest4"             "VM4_OK"             "" "CPU EXCEPTION|VMTEST4_FAIL"
+run_case "shared mappings are coherent"   "vmtest5"               "VM5_OK"             "" "CPU EXCEPTION|VMTEST5_FAIL"
 run_case "stack guard + growth"          "stack_test"            "STACK_GROW_OK"      "" "CPU EXCEPTION|PAGE FAULT|STACK_FAIL"
 # The guard page must kill the offending task and nothing else: the shell has to
 # survive and run the next command.
@@ -141,6 +142,10 @@ run_case "high memory: fork + COW + munmap" "vmtest"            "VM_OK"         
 run_case "high memory: demand-zero pages"   "vmtest2"           "VM2_OK"             "" "CPU EXCEPTION|VMTEST2_FAIL" 192
 run_case "high memory: copy-on-write fork"  "cow_test"          "COW_OK"             "" "CPU EXCEPTION|COW_FAIL|PAGE FAULT" 384
 run_case "high memory: heap workload"       "heaptest"          "HEAP_OK"            "" "CPU EXCEPTION|HEAPTEST_FAIL|PAGE FAULT" 384
+# The file paths read a block straight into a frame that may sit above the
+# identity map, so they exercise the handler's nested-fault path too.
+run_case "high memory: file-backed mapping" "vmtest3"           "VM3_OK"             "" "CPU EXCEPTION|VMTEST3_FAIL" 384
+run_case "high memory: shared coherence"    "vmtest5"           "VM5_OK"             "" "CPU EXCEPTION|VMTEST5_FAIL" 384
 
 if [ "$failures" -ne 0 ]; then
     fail "$failures runtime case(s) failed"

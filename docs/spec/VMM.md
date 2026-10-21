@@ -89,9 +89,11 @@ Areas are sorted by `start`, never overlap, and are owned by the address space.
   the dirty bit). Only pages the file actually owns are written; a page past the end
   of the file is scratch space and is never pushed back, because the next block in
   the allocator's geometry belongs to some other file.
-  Two mappings of the same file each get their own frames, so they do not observe
-  each other's writes until the file page cache lands; each writes back its own
-  changes and the last release wins.
+  Every shared mapping of a block maps the *same* frame, taken from the page cache
+  (`kernel/pagecache.inc`), so a write through one mapping is immediately visible
+  through every other mapping of that block — in the same task or in another one.
+  fork keeps the frame instead of copy-on-write, which is what `MAP_SHARED` means;
+  each inherited page counts as one more reference.
 - `PROT_EXEC` on a writable anonymous mapping requires an explicit `MAP_JIT` flag
   (W^X); without it the request fails with `EPERM`.
 - Unmapped pages inside the demand zone fault with `SIGSEGV` (once signals land) or kill
@@ -212,8 +214,22 @@ area records the file's first data sector and how many blocks the file can back,
 demand fault reads the right block into the frame. A split (`munmap`/`mprotect` of a
 sub-range) advances that sector by the pages it moved into the new record.
 
-Not yet implemented: shared (write-back) file mappings — `MAP_SHARED` semantics, and
-writing a dirty mapped page back to the file.
+- Page cache (`kernel/pagecache.inc`, 128 entries): one frame per HBFS block, keyed by
+  block number counted from `HBFS_DATA_START`, shared by every `MF_SHARED` mapping of
+  that block. `pc_refs` counts mapped page-table entries; fork adds one per inherited
+  PTE and a release drops one. An entry with references is never evicted; a clean,
+  unreferenced one is, and its frame goes back to the PMM. Dirty state is not tracked
+  here: the writing mapping's own PTE carries the dirty bit and its release flushes
+  the block before dropping the reference, so an entry is clean once its count is 0.
+- If the cache cannot take a block (every entry still mapped, or the frame or the read
+  could not be obtained), a shared page falls back to a private frame: the data is
+  correct but the page is not coherent with other mappings of the block.
+- A disk write drops cached blocks that nobody maps (`pc_invalidate`, called next to
+  `blk_cache_flush`), so a block freed and handed to another file cannot serve its old
+  bytes to the next mapping. A block that is still mapped is left alone: writing the
+  same file through an fd while it is mapped shared is not coherent with the mapping.
+- Not yet implemented: a re-entrant, size-changing `truncate` flushing the affected
+  blocks, and a kernel slab allocator in front of the PMM.
 
 ## 5. Isolation invariants (tested)
 
@@ -250,9 +266,12 @@ writing a dirty mapped page back to the file.
 17. A shared file mapping writes the pages it changed back to the file, leaves pages
     it only read alone, keeps the file's length, and a private mapping still does not
     write through (`vmtest4`).
+18. Two shared mappings of one file are coherent in both directions, a forked child
+    writes the same pages as its parent, and a fresh mapping reads everything that was
+    written back (`vmtest5`).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
-`vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `heaptest`, `stack_test` and
+`vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `vmtest5`, `heaptest`, `stack_test` and
 `stack_overflow` over QEMU and `make check` fails if any regresses.
 
 ## 6. Compatibility exceptions

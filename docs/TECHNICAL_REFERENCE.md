@@ -401,6 +401,34 @@ stale copy. Metadata and journal traffic bypasses the cache completely
 `fd_read`, `hbfs_read_file` and the demand-paged file-mapping path
 (`vm_fault_file_page`) all read through it.
 
+### Page cache
+
+Shared file mappings (`SYS_MMAP_FILE` with `MF_SHARED`) are served by a page cache
+(`kernel/pagecache.inc`, 128 entries) rather than by private frames, because two
+mappings of one file have to see each other's writes:
+
+| Routine | Purpose |
+| --- | --- |
+| `pc_get` | Frame for an HBFS block, loaded on first use, with one reference taken |
+| `pc_ref` / `pc_unref` | Add or drop a reference; `pc_unref` reports whether the cache owns the frame |
+| `pc_ref_range` | Take one reference per present PTE of a range (fork) |
+| `pc_init` | Marks every entry empty at boot |
+
+The key is the HBFS block number counted from `HBFS_DATA_START` - the file's first
+data sector is block-aligned within the file, but the data area does not start on a
+block boundary of the disk. `pc_refs` counts mapped page-table entries, not mappings:
+a demand fault that installs a PTE takes one and fork takes one per inherited PTE,
+because a shared mapping is deliberately not copy-on-write. An entry with references
+is never evicted; an unreferenced one is evicted round-robin and its frame goes back
+to the PMM.
+
+Dirty state is not stored in the cache: the write sets the dirty bit of the PTE that
+performed it, and that mapping's own release writes the block back before dropping its
+reference. So a modified frame always has at least one dirty PTE that will flush it,
+and an entry is clean by the time its count reaches zero. If every entry is still
+mapped, a shared page falls back to a private frame: correct data, but not coherent
+with other mappings of that block until the cache has room.
+
 ### On-Disk Layout
 
 | Region | LBA Start | LBA Count | Size | Description |

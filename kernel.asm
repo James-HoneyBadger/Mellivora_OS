@@ -700,6 +700,7 @@ kernel_entry:
 
         ; Initialize filesystem (and the block cache in front of it)
         call blk_cache_init
+        call pc_init
         call hbfs_init
         call vfs_init
 
@@ -721,6 +722,7 @@ kernel_entry:
 %include "kernel/pmm.inc"
 %include "kernel/ata.inc"
 %include "kernel/blkcache.inc"
+%include "kernel/pagecache.inc"
 %include "kernel/hbfs.inc"
 %include "kernel/vfs.inc"
 %include "kernel/filesearch.inc"

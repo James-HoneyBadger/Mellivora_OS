@@ -1093,6 +1093,13 @@ blk_cache_tags:   resd BLK_CACHE_ENTRIES
 blk_cache_hand:   resd 1
 blk_cache_data:   resb BLK_CACHE_ENTRIES * HBFS_BLOCK_SIZE
 
+; Page cache (see kernel/pagecache.inc): one frame per file block, shared by
+; every MF_SHARED mapping of it. tag 0 = empty; refs counts mapped PTEs.
+pc_tags:          resd PC_ENTRIES
+pc_frames:        resd PC_ENTRIES
+pc_refs:          resb PC_ENTRIES
+pc_hand:          resd 1
+
 ; Virtual memory: per-task mmap areas (see kernel/vm.inc).
 vm_areas:         resb MAX_TASKS * VM_AREAS_PER_TASK * VM_AREA_SIZE
 vm_next:          resd MAX_TASKS             ; per-task allocation bump pointer

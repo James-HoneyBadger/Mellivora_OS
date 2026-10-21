@@ -425,8 +425,9 @@ ata_write_sectors:
         pop esi
         pop eax
         pop ecx
-        ; Any successful write may have changed blocks the cache still holds.
+        ; Any successful write may have changed blocks the caches still hold.
         call blk_cache_flush
+        call pc_invalidate
         clc
         ret
 .aws_oob:

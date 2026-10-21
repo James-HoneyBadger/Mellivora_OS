@@ -293,14 +293,19 @@ vm_flags_for_prot:
         ret
 
 ;---------------------------------------
-; vm_fault_file_page - fill a demand frame from the file backing an area
-;   In : EAX = faulting address, ESI = area record, EDI = zeroed frame
-;   Out: EAX = 1 when a block was read, 0 when this page has no file data
-;        (the frame keeps the zeros it was allocated with)
+; vm_fault_file_page - choose the frame that should back a demand page
+;   In : EAX = faulting address, ESI = area record, EDI = zeroed scratch frame
+;   Out: EAX = the frame to map - EDI for anonymous areas, pages past the end
+;        of the file (zeros) and non-shared file pages, or a referenced page
+;        cache frame for a shared mapping, in which case the caller returns the
+;        scratch frame it allocated
 ;
-; The block is read straight into the frame: frames are identity-mapped kernel
-; memory, so a PIO read can target one directly. A read failure reports "no
-; data" rather than raising a fault inside the fault handler.
+; A shared mapping is served from the page cache instead, so two mappings of
+; the same block - in this task or another - map the same frame and see each
+; other's writes. If the cache cannot take the block (every entry mapped, the
+; allocation failed or the read failed), the page falls back to a private frame
+; like a non-shared mapping: correct data, just not coherent with other
+; mappings until the cache has room.
 ;---------------------------------------
 vm_fault_file_page:
         pushad
@@ -314,19 +319,37 @@ vm_fault_file_page:
         shr ecx, 12                     ; page index inside the area
         cmp ecx, [esi + VMA_BLOCKS]
         jae .vff_none                   ; past the end of the file: zeros
+
+        test dword [esi + VMA_FLAGS], VM_MAP_SHARED
+        jz .vff_read
+        ; The page cache is keyed by HBFS block number, counted from the data
+        ; area: the file's first data sector is block-aligned within the file
+        ; but HBFS_DATA_START is not a multiple of the 8 sectors in a block.
+        mov eax, [esi + VMA_SECTOR]
+        dec eax
+        sub eax, HBFS_DATA_START
+        shr eax, 3                      ; first block of this mapping
+        add eax, ecx                    ; block backing this page
+        call pc_get
+        test eax, eax
+        jz .vff_read
+        mov [esp + 28], eax             ; cache frame: the caller drops the scratch one
+        popad
+        ret
+
+.vff_read:
+        ; Frames are identity-mapped kernel memory, so a block can be read
+        ; straight into one.
         shl ecx, 3                      ; 8 sectors per block
         mov eax, [esi + VMA_SECTOR]
         dec eax
-        add eax, ecx
+        add eax, ecx                    ; sector backing this page
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, [.vff_dst]
         call blk_cache_read
-        jc .vff_none
-        mov dword [esp + 28], 1
-        popad
-        ret
 .vff_none:
-        mov dword [esp + 28], 0
+        mov eax, [.vff_dst]
+        mov [esp + 28], eax
         popad
         ret
 .vff_rec: dd 0
@@ -470,7 +493,8 @@ vm_writeback_page:
 ;
 ; A shared file mapping is written back here: every page still marked dirty in
 ; its PTE goes to the file block it came from, so `munmap`, `free` and a task
-; exiting all flush what the program wrote.
+; exiting all flush what the program wrote. Its frame then goes back to the
+; page cache instead of the PMM - another mapping may still hold it.
 ;---------------------------------------
 vm_release_area_frames:
         pushad
@@ -491,15 +515,32 @@ vm_release_area_frames:
         test esi, esi
         jz .raf_clear
         test dword [esi + VMA_FLAGS], VM_MAP_SHARED
-        jz .raf_clear
-        mov eax, [.raf_pd]
-        mov ebx, [.raf_va]
-        mov edx, [.raf_phys]
-        call vm_writeback_page
+        jnz .raf_shared
 .raf_clear:
         mov eax, [.raf_pd]
         mov ebx, [.raf_va]
         call vm_clear_pte
+        mov eax, [.raf_phys]
+        mov ebx, [.raf_va]
+        call cow_release_frame
+        jmp .raf_next
+
+.raf_shared:
+        ; Push what the program wrote back first - re-mapping or reusing the
+        ; frame would lose the dirty bit - then hand it to the page cache,
+        ; which owns it. A page that did not come from the cache (the fallback
+        ; when every entry was mapped) is released like any other frame.
+        mov eax, [.raf_pd]
+        mov ebx, [.raf_va]
+        mov edx, [.raf_phys]
+        call vm_writeback_page
+        mov eax, [.raf_pd]
+        mov ebx, [.raf_va]
+        call vm_clear_pte
+        mov eax, [.raf_phys]
+        call pc_unref
+        test eax, eax
+        jnz .raf_next
         mov eax, [.raf_phys]
         mov ebx, [.raf_va]
         call cow_release_frame

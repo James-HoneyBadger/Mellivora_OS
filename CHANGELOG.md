@@ -1,5 +1,40 @@
 # Mellivora OS - Changelog
 
+## Unreleased - shared file mappings are coherent
+
+### Memory and storage
+
+- **A page cache sits in front of shared file mappings** — `kernel/pagecache.inc` keeps
+  one frame per HBFS block and every `MF_SHARED` mapping of that block maps the same
+  frame, so a write through one mapping is visible through every other one, in the same
+  task or in another. Before this, each mapping kept private frames: two mappings of one
+  file disagreed with each other and the last release won, which the VMM spec recorded
+  as a known limitation.
+- **`fork` keeps sharing a shared mapping** instead of marking it copy-on-write, which
+  is what `MAP_SHARED` promises: parent and child write the same pages. Each inherited
+  page counts as one more reference in the cache.
+- **Releases hand the frame back to the cache, not the PMM.** `munmap`, `free`, `exec`
+  and task exit still write the dirty pages back first; they now drop a cache reference
+  afterwards. An entry with references is never evicted, so a block cannot be recycled
+  under a mapping that still uses it.
+- Dirty state needs no new bookkeeping: a write sets the dirty bit of the PTE that
+  performed it, and that mapping's release flushes the block before dropping its
+  reference, so an entry is clean by the time its count reaches zero.
+- The cache is keyed by HBFS block number counted from `HBFS_DATA_START`: a file's
+  first data sector is block-aligned within the file, but the data area does not begin
+  on a block boundary of the disk.
+- Every disk write drops cached blocks that nobody maps (`pc_invalidate`, next to the
+  existing `blk_cache_flush`), so a block freed and reused by another file cannot serve
+  its old bytes to the next mapping of it. A block that is still mapped is never
+  dropped - its owner wrote it deliberately and flushes it when the mapping goes.
+
+### Tooling
+
+- `programs/vmtest5.asm` maps one file shared twice and checks that writes cross both
+  ways, that a forked child writes the same pages, that both releases write back, and
+  that a fresh mapping reads the written file. It is in `make check-runtime`, including
+  a 384 MB run, and its failure report names the byte offset that differed.
+
 ## Unreleased - memory above 128 MB works
 
 ### Memory

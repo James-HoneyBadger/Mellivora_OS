@@ -461,8 +461,19 @@ isr_page_fault:
 
         mov  eax, [pf_addr]
         mov  edi, [pf_demand_frame]
-        call vm_fault_file_page         ; ESI = area, EDI = frame
+        call vm_fault_file_page         ; ESI = area, EDI = scratch frame
 
+        ; A shared file page is served from the page cache, whose frame takes
+        ; the scratch frame's place. Give the scratch frame straight back: it
+        ; was never mapped, so nothing else references it.
+        cmp  eax, [pf_demand_frame]
+        je   .pf_demand_frame_ready
+        push eax
+        mov  eax, [pf_demand_frame]
+        call pmm_free_page
+        pop  eax
+        mov  [pf_demand_frame], eax
+.pf_demand_frame_ready:
         mov  eax, [pf_addr]
         and  eax, 0xFFFFF000
         mov  ebx, [pf_demand_frame]
@@ -1918,10 +1929,22 @@ cow_fork_share:
         test eax, eax
         js   .cfs_fail
 
+        ; A shared file mapping is deliberately not copy-on-write: MAP_SHARED
+        ; promises that both processes keep writing the same page, so the child
+        ; keeps the parent's page-cache frames and only has to count them.
+        test dword [esi + VMA_FLAGS], VM_MAP_SHARED
+        jnz  .cfs_area_shared
+
         mov  eax, [.cfs_parent]
         call cow_share_range
         mov  eax, [.cfs_child]
         call cow_mark_ro_range
+        jmp  .cfs_area_next
+.cfs_area_shared:
+        mov  eax, [.cfs_child]
+        mov  ebx, [esi + VMA_START]
+        mov  ecx, [esi + VMA_PAGES]
+        call pc_ref_range
 .cfs_area_next:
         inc  dword [.cfs_idx]
         jmp  .cfs_area_loop

@@ -39,7 +39,7 @@ A phase does not close until these are measured:
 
 | Phase | State | Landed so far |
 |---|---|---|
-| P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), `vmtest`/`vmtest2`/`vmtest3`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
+| P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
 | P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`) |
 
 ## Phases
@@ -73,8 +73,11 @@ A phase does not close until these are measured:
 - [x] User heap on top of the VMM: `SYS_MALLOC`/`SYS_FREE`/`SYS_REALLOC` are
   anonymous demand-zero areas, and the SB16 path stages demand-zone buffers because
   ISA DMA needs a physical address.
-- [ ] Kernel slab allocator; page cache with writeback. The page cache is what would
-  make two shared mappings of one file coherent with each other.
+- [x] Page cache in front of shared file mappings (`kernel/pagecache.inc`): one frame
+  per HBFS block, shared by every `MF_SHARED` mapping of it, so two mappings of one
+  file - in the same task or in different tasks - are coherent with each other, and a
+  fork keeps sharing them instead of copying on write. `vmtest5` covers it.
+- [ ] Kernel slab allocator.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
 - [x] Allocations above 128 MB (pre-existing). Three faults, all only reachable on a
   guest with more RAM than the boot identity map covers: the page-fault handler saved
