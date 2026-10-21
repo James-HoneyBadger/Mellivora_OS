@@ -12,13 +12,18 @@
 
 #define VFS_MAX_FILES 16
 #define SECTOR_SIZE 512
+#define VFS_PATH_BYTES 128
 
 struct vfs_file {
     int used;
+    int writable;
     u64 owner;          /* the task that opened it */
     u64 size;
     u64 pos;
     struct hbfs_entry entry;
+    /* The path, because a write has to find the directory entry again to
+     * change the file's size - the handle's copy of the entry is a snapshot. */
+    char path[VFS_PATH_BYTES];
 };
 
 static struct vfs_file files[VFS_MAX_FILES];
@@ -41,7 +46,7 @@ int vfs_init(void)
  * them would read from wherever the other had left it. Finding a slot and
  * claiming it is one critical section for the same reason.
  */
-int vfs_open(const char *name)
+int vfs_open_mode(const char *name, int write)
 {
     struct hbfs_entry entry;
 
@@ -54,16 +59,28 @@ int vfs_open(const char *name)
     for (int i = 0; i < VFS_MAX_FILES; i++) {
         if (!files[i].used) {
             files[i].used = 1;
+            files[i].writable = write != 0;
             files[i].owner = sched_current_id();
             files[i].size = entry.size;
             files[i].pos = 0;
             files[i].entry = entry;
+            for (u32 k = 0; k < VFS_PATH_BYTES; k++) {
+                files[i].path[k] = name[k];
+                if (name[k] == '\0') {
+                    break;
+                }
+            }
             sched_unlock();
             return i;
         }
     }
     sched_unlock();
     return -1;
+}
+
+int vfs_open(const char *name)
+{
+    return vfs_open_mode(name, 0);
 }
 
 int vfs_close(int handle)
@@ -112,6 +129,36 @@ int vfs_read(int handle, void *buffer, u64 count)
         f->pos += (u64)got;
     }
     return got;
+}
+
+/* Write at the handle's position and advance it, which is what appending is:
+ * seek to the end, then write. The directory entry is reloaded afterwards, so a
+ * file that grew - or moved to a new extent - is still readable through the same
+ * handle and vfs_size() tells the truth. */
+int vfs_write(int handle, const void *data, u64 count)
+{
+    struct hbfs_entry updated;
+
+    sched_lock();
+    if (handle < 0 || handle >= VFS_MAX_FILES || !files[handle].used ||
+        files[handle].owner != sched_current_id() || !files[handle].writable ||
+        count > 4096) {
+        sched_unlock();
+        return -1;
+    }
+
+    struct vfs_file *f = &files[handle];
+    if (hbfs_write(f->path, f->pos, data, (u32)count) != 0 ||
+        hbfs_resolve(f->path, &updated) != 0) {
+        sched_unlock();
+        return -1;
+    }
+
+    f->entry = updated;
+    f->size = updated.size;
+    f->pos += count;
+    sched_unlock();
+    return (int)count;
 }
 
 int vfs_seek(int handle, s64 offset, int whence)

@@ -22,6 +22,12 @@
 
 #include "lm.h"
 
+/* A page of file data. Both directions need a bounce buffer between the disk
+ * (which reads and writes through its own sector buffer) and user memory, and a
+ * page does not fit on a 4 KB kernel stack, so it is static - shared, which is
+ * why every path that uses it holds the scheduler lock. */
+static u8 file_bounce[FRAME_SIZE];
+
 /* The table is indexed by number; a hole is an unimplemented call. */
 struct lm_syscall {
     const char *name;
@@ -77,10 +83,12 @@ static void user_access_end(void)
 }
 
 /*
- * write(fd, buf, count) to the console. Arguments are checked before anything is
- * touched: only fd 1 and 2, a bounded count, and every byte must be in a page
- * the VMM says is user-mapped (that check walks page tables, so it needs no
- * STAC). A short count ends the write rather than faulting the kernel.
+ * write(fd, buf, count). Descriptor 1 and 2 are the console; anything else is a
+ * file handle from open(), which makes appending a seek to the end followed by one
+ * of these. Arguments are checked before anything is touched: a bounded count, and
+ * every byte must be in a page the VMM says is user-mapped (that check walks page
+ * tables, so it needs no STAC). A short count ends the write rather than faulting
+ * the kernel.
  */
 static struct lm_fault_frame *sys_write(struct lm_fault_frame *f)
 {
@@ -88,8 +96,39 @@ static struct lm_fault_frame *sys_write(struct lm_fault_frame *f)
     u64 buf = f->rsi;
     u64 count = f->rdx;
 
-    if ((fd != 1 && fd != 2) || count > 4096) {
+    if (count > 4096) {
         f->rax = (u64)-1;
+        return f;
+    }
+
+    if (fd != 1 && fd != 2) {
+        u64 done = 0;                       /* vfs_write rejects a bad handle */
+        while (done < count) {
+            u64 want = count - done;
+            if (want > sizeof(file_bounce)) {
+                want = sizeof(file_bounce);
+            }
+            int mapped = 1;
+            for (u64 i = 0; i < want; i++) {
+                if (!vmm_user_mapped(buf + done + i)) {
+                    mapped = 0;
+                    break;
+                }
+            }
+            if (!mapped) {
+                break;              /* short write rather than a kernel fault */
+            }
+            user_access_begin();
+            for (u64 i = 0; i < want; i++) {
+                file_bounce[i] = *(const u8 *)(unsigned long)(buf + done + i);
+            }
+            user_access_end();
+            if (vfs_write((int)fd, file_bounce, want) < 0) {
+                break;
+            }
+            done += want;
+        }
+        f->rax = done;
         return f;
     }
 
@@ -214,6 +253,8 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
+/* open(name, flags) - flags bit 0 asks for write access, which is what a program
+ * needs to append to a file rather than replace it. */
 static struct lm_fault_frame *sys_open(struct lm_fault_frame *f)
 {
     char path[64];
@@ -221,7 +262,7 @@ static struct lm_fault_frame *sys_open(struct lm_fault_frame *f)
         f->rax = (u64)-1;
         return f;
     }
-    f->rax = (u64)(long)vfs_open(path);
+    f->rax = (u64)(long)vfs_open_mode(path, (int)(f->rsi & 1));
     return f;
 }
 
@@ -481,11 +522,8 @@ static struct lm_fault_frame *sys_unlink(struct lm_fault_frame *f)
     return f;
 }
 
-/* A page of file data: one page is the largest write this call takes, and a
- * page does not fit on a 4 KB kernel stack, so it is static. Creating a file is
- * a multi-step disk update, so the copy happens inside the same critical
- * section that keeps the filesystem to one task at a time. */
-static u8 file_bounce[FRAME_SIZE];
+/* Creating a file is a multi-step disk update, so the copy happens inside the
+ * same critical section that keeps the filesystem to one task at a time. */
 
 /* create(path, buf, len) - write a whole file in one call, creating it or
  * replacing it. The bytes come in through that bounce buffer, so the disk write

@@ -78,6 +78,9 @@ REQUIRED = (
     "hello",
     "blk=ok",
     "hbfs] root=",
+    # Growing a file in place, growing one that has to move, and giving every
+    # block back afterwards.
+    "[hbfs] append=ok move=ok",
     "/init=",                # size varies with the demo program
     "/hello_tree=",
     "tasks=7 spaces=7",
@@ -96,6 +99,11 @@ REQUIRED = (
     "sh: created probe",
     "  probe/ size=0",
     "sh: removed probe",
+    # Appending: a file that exists gains a line through an open handle, and a
+    # file that does not is created with the same call the shell makes.
+    "sh: appended to /persist.txt",
+    "shell third",
+    "sh: appended to /fresh.txt",
     # fork + exec + waitpid: a program run as a child reports its exit code, and
     # one that cannot be loaded reports the child's own failure.
     "sh: /api exited 0x00000000",
@@ -354,14 +362,26 @@ def check_written_volume(image):
         if "persist.txt" not in top:
             return "no /persist.txt in the root directory"
         ftype, size, start, blocks = top["persist.txt"]
-        if ftype != populate.FTYPE_TEXT or size != 23:
+        # Written by /wr at boot, then appended to by the shell: the two lines
+        # are the whole-file CREATE and the seek-to-the-end + write.
+        appended = b"written by mellivora64\nshell third\n"
+        if ftype != populate.FTYPE_TEXT or size != len(appended):
             return "/persist.txt is type %d size %d" % (ftype, size)
 
         f.seek((populate.HBFS_DATA_START + start * populate.SECTORS_PER_BLOCK)
                * populate.SECTOR_SIZE)
         data = f.read(size)
-        if data != b"written by mellivora64\n":
+        if data != appended:
             return "/persist.txt reads %r" % data
+
+        if "fresh.txt" not in top:
+            return "no /fresh.txt: the shell did not create it"
+        ftype, size, start, blocks = top["fresh.txt"]
+        f.seek((populate.HBFS_DATA_START + start * populate.SECTORS_PER_BLOCK)
+               * populate.SECTOR_SIZE)
+        got = f.read(size)
+        if got != b"first\n":
+            return "/fresh.txt reads %r" % got
 
         if "tmpdir" not in top:
             return "no /tmpdir in the root directory"
@@ -412,6 +432,10 @@ def main():
         ("mellivora:/> ", "mkdir probe"),
         ("mellivora:/> ", "ls"),
         ("mellivora:/> ", "rm probe"),
+        ("mellivora:/> ", "append /persist.txt shell third"),
+        ("mellivora:/> ", "cat /persist.txt"),
+        ("mellivora:/> ", "append /fresh.txt first"),
+        ("mellivora:/> ", "cat /fresh.txt"),
         ("mellivora:/> ", "run /api"),
         ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "spawn /spin"),
@@ -444,6 +468,16 @@ def main():
               % (stamp.group(0), host_year), file=sys.stderr)
         return 1
 
+    # The guest wrote real HBFS structures, so the host can read them back with
+    # the same constants populate.py builds images with. This goes before the
+    # other sessions, which boot the same image again and would overwrite what
+    # the shell just wrote.
+    problem = check_written_volume(IMAGE)
+    if problem:
+        print("  FAIL  the volume the guest wrote is wrong: %s" % problem,
+              file=sys.stderr)
+        return 1
+
     problem = check_keyboard_and_screen(qemu, IMAGE)
     if problem:
         print("  FAIL  keyboard/screen: %s" % problem, file=sys.stderr)
@@ -452,14 +486,6 @@ def main():
     problem = check_mouse(qemu, IMAGE)
     if problem:
         print("  FAIL  mouse: %s" % problem, file=sys.stderr)
-        return 1
-
-    # The guest wrote real HBFS structures, so the host can read them back with
-    # the same constants populate.py builds images with.
-    problem = check_written_volume(IMAGE)
-    if problem:
-        print("  FAIL  the volume the guest wrote is wrong: %s" % problem,
-              file=sys.stderr)
         return 1
 
     # Scale: a guest past 4 GB only reports sane numbers if the E820 map was

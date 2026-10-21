@@ -26,6 +26,8 @@ SYS_UNLINK  equ 19
 SYS_OPEN    equ 9
 SYS_READ    equ 10
 SYS_CLOSE   equ 11
+SYS_SEEK    equ 13
+SYS_CREATE  equ 20
 SYS_STAT    equ 14
 SYS_READDIR equ 15
 SYS_GETCWD  equ 17
@@ -124,6 +126,13 @@ start:
         call prefix_is
         test rax, rax
         jnz .cat
+
+        ; "append <name> <text>" - add a line to a file, creating it if needed
+        lea rsi, [rel cmd_append]
+        mov rcx, 7
+        call prefix_is
+        test rax, rax
+        jnz .append
 
         call begin_line
         lea rsi, [rel s_unknown]
@@ -464,6 +473,101 @@ start:
         call end_line
         jmp .next
 
+;-----------------------------------------------------------------------
+; append <name> <text>: the one thing whole-file CREATE cannot do. The line is
+; assembled in DATA_BUF with a newline on the end, then either handed to CREATE
+; (a file that is not there yet) or written through an open handle seeked to the
+; end. That seek-then-write is exactly what a program appending to a log does.
+;-----------------------------------------------------------------------
+.append:
+        lea rsi, [CMD_BUF + 7]
+        mov rdi, OUT_BUF
+.ap_name:
+        lodsb
+        test al, al
+        jz .ap_usage                    ; a name with no text
+        cmp al, ' '
+        je .ap_named
+        stosb
+        jmp .ap_name
+.ap_named:
+        mov byte [rdi], 0
+
+        mov rdi, DATA_BUF
+        xor ecx, ecx
+.ap_text:
+        lodsb
+        test al, al
+        jz .ap_text_done
+        stosb
+        inc ecx
+        jmp .ap_text
+.ap_text_done:
+        mov byte [rdi], 10              ; a line, so the next one starts fresh
+        inc ecx
+        mov r14, rcx
+
+        mov rdi, OUT_BUF
+        mov esi, 1                      ; bit 0: open for writing
+        mov eax, SYS_OPEN
+        syscall
+        test rax, rax
+        js .ap_create
+        mov r15, rax
+
+        mov rdi, r15
+        xor esi, esi
+        mov edx, 2                      ; whence 2: from the end
+        mov eax, SYS_SEEK
+        syscall
+
+        mov rdi, r15
+        mov rsi, DATA_BUF
+        mov rdx, r14
+        mov eax, SYS_WRITE
+        syscall
+        mov r13, rax                    ; bytes written
+
+        mov rdi, r15
+        mov eax, SYS_CLOSE
+        syscall
+
+        cmp r13, r14
+        jl .ap_failed
+        jmp .ap_done
+
+.ap_create:
+        mov rdi, OUT_BUF
+        mov rsi, DATA_BUF
+        mov rdx, r14
+        mov eax, SYS_CREATE
+        syscall
+        test rax, rax
+        js .ap_failed
+
+.ap_done:
+        call begin_line
+        lea rsi, [rel s_appended]
+        call add_str
+        mov rsi, OUT_BUF
+        call add_str
+        call end_line
+        jmp .next
+.ap_failed:
+        call begin_line
+        lea rsi, [rel s_cant]
+        call add_str
+        mov rsi, OUT_BUF
+        call add_str
+        call end_line
+        jmp .next
+.ap_usage:
+        call begin_line
+        lea rsi, [rel s_ap_usage]
+        call add_str
+        call end_line
+        jmp .next
+
 .rm:
         lea rdi, [CMD_BUF + 3]
         mov eax, SYS_UNLINK
@@ -734,6 +838,7 @@ s_bye:     db "bye", 0
 cmd_quit:  db "quit", 0
 cmd_ls:    db "ls", 0
 cmd_cat:   db "cat ", 0
+cmd_append: db "append ", 0
 cmd_run:   db "run ", 0
 cmd_spawn: db "spawn ", 0
 cmd_kill:  db "kill ", 0
@@ -756,6 +861,8 @@ s_dash:    db "-", 0
 s_colon:   db ":", 0
 s_space:   db " ", 0
 s_made:    db "sh: created ", 0
+s_appended: db "sh: appended to ", 0
+s_ap_usage: db "usage: append <file> <text>", 0
 s_removed: db "sh: removed ", 0
 s_cant:    db "sh: cannot: ", 0
 s_noclock: db "sh: no clock", 0

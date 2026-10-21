@@ -400,16 +400,25 @@ int hbfs_create(const char *path, u32 type, const void *data, u32 size);
 int hbfs_mkdir(const char *path);
 /* Free a file's blocks and clear its entry; not a directory. */
 int hbfs_remove(const char *path);
+/* Write `size` bytes at `offset` into an existing file, growing it if the write
+ * runs past its end. Not a directory, and not a create: that is hbfs_create. */
+int hbfs_write(const char *path, u64 offset, const void *data, u32 size);
 
 /* Free blocks left in the volume, for the directory demo's report. */
 u32 hbfs_free_blocks(void);
 
-/* A thin read-only VFS in front of it: open by name, then read by handle. */
+/* Grow a file in place and grow one that has to move, then clean up. */
+int hbfs_writetest(void);
+
+/* A thin VFS in front of it: open by name, then read by handle. A handle
+ * opened with `write` set may also be written, anywhere in the file. */
 int vfs_init(void);
 int vfs_open(const char *name);        /* handle, or -1 */
+int vfs_open_mode(const char *name, int write);
 int vfs_close(int handle);
 u64 vfs_size(int handle);
 int vfs_read(int handle, void *buffer, u64 count);
+int vfs_write(int handle, const void *data, u64 count);
 /* whence: 0 from the start, 1 from the position, 2 from the end. */
 int vfs_seek(int handle, s64 offset, int whence);
 

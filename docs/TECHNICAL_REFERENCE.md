@@ -2346,6 +2346,39 @@ tasks that are already gone. With `spawn` in the shell, a program can run in the
 background and be stopped later, which is the shortest demonstration of a preemptive
 scheduler there is: `/spin` loops forever and the shell still answers.
 
+### Writing into a file that already exists
+
+A whole-file `CREATE` replaces a file, which is fine for the demos and useless for
+anything that keeps state: an append has to add to what is there. `open` takes a flag
+(`SYS_OPEN`'s second argument, bit 0) that asks for write access, and `write` on that
+handle writes at the handle's position - so appending is `seek(handle, 0, END)` and one
+`write`. The shell's `append <file> <text>` is exactly that, with a `CREATE` for the
+file that is not there yet.
+
+The handle keeps the path as well as the entry, because a write can change the file's
+size and start block, and those live in its directory entry - the handle's copy is a
+snapshot, so `vfs_write` resolves the path again afterwards and reloads it.
+
+HBFS stores a file in one contiguous run of blocks, which decides how a write works.
+Inside the run it is sector arithmetic: a write that covers whole sectors is written
+straight through, one that starts or ends inside a sector reads that sector, patches
+it and writes it back, and the slack past the new end is zeroed so the tail of a
+file cannot show what an older one left there. Running past the end can need more
+blocks, and then there are two cases: the blocks immediately after the extent are
+free, in which case they are simply taken, or they are not, in which case the file
+moves - a new run is allocated, the old sectors are copied into it, the old run is
+released, and the entry's start and block count change. Copying first and releasing
+after matters: `alloc_blocks` cannot hand out blocks that are still marked used, so
+the new run never overlaps the old one.
+
+Both cases get a self-test at boot, because the moving case is the one nobody would
+think to try and the one most likely to lose a sector or leak a block: two scratch
+files are created side by side so the block after the first belongs to the second,
+the first is appended past its block and has to move, the second is appended where
+there is room, both are read back byte for byte and both are removed - and the free
+count has to be exactly where it started. It reports `[hbfs] append=ok move=ok` and
+leaves the volume the demos wrote alone.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting

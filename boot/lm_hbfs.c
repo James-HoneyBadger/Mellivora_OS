@@ -62,6 +62,7 @@ static u32 free_blocks;
  * because there was only ever one program running.
  */
 #define HBFS_MAX_TASKS 8
+#define SECTOR_SIZE     512
 #define HBFS_PATH_BYTES 128
 
 static struct hbfs_entry cwd_of[HBFS_MAX_TASKS];
@@ -812,6 +813,163 @@ static int split_parent(const char *path, struct hbfs_entry *parent, char *name)
     return 0;
 }
 
+/*
+ * Writing into an existing file, which is what makes `open` worth having: a
+ * whole-file CREATE throws the old contents away, and a program that appends a
+ * line - a log, a note, the tree's own `bcal` - has to be able to keep them.
+ *
+ * HBFS stores a file in one contiguous run of blocks, so a write can either
+ * patch sectors in place or have to grow the run, and growing in place is only
+ * possible when the blocks after it are free. Either way the file's size and
+ * block count live in its directory entry, so the entry is rewritten at the end.
+ */
+
+/* Write `size` bytes at `offset` inside the extent that starts at `start`,
+ * reading and rewriting any sector the write does not cover completely.
+ * `zero_tail` clears the rest of the last sector, so the slack past a file's end
+ * never shows what an older file left there. */
+static int write_extent(u32 start, u64 offset, const void *data, u32 size,
+                        int zero_tail)
+{
+    const u8 *in = data;
+    u32 done = 0;
+
+    while (done < size) {
+        u64 at = offset + (u64)done;
+        u32 sector = (u32)(at / SECTOR_SIZE);
+        u32 within = (u32)(at % SECTOR_SIZE);
+        u32 chunk = SECTOR_SIZE - within;
+        if (chunk > size - done) {
+            chunk = size - done;
+        }
+        u64 lba = (u64)data_lba
+                + (u64)start * HBFS_SECTORS_PER_BLOCK + sector;
+
+        if (within == 0 && chunk == SECTOR_SIZE) {
+            memcpy(sector_buffer, in + done, SECTOR_SIZE);
+        } else {
+            if (ata_read(lba, sector_buffer) != 0) {
+                return -1;
+            }
+            memcpy(sector_buffer + within, in + done, chunk);
+            if (zero_tail && done + chunk == size) {
+                memset(sector_buffer + within + chunk, 0,
+                       SECTOR_SIZE - within - chunk);
+            }
+        }
+        if (ata_write(lba, sector_buffer) != 0) {
+            return -1;
+        }
+        done += chunk;
+    }
+    return 0;
+}
+
+/* Copy `bytes` from one extent to another, a sector at a time. */
+static int copy_extent(u32 from, u32 to, u64 bytes)
+{
+    for (u64 done = 0; done < bytes; done += SECTOR_SIZE) {
+        u64 src = (u64)data_lba + (u64)from * HBFS_SECTORS_PER_BLOCK
+                + done / SECTOR_SIZE;
+        u64 dst = (u64)data_lba + (u64)to * HBFS_SECTORS_PER_BLOCK
+                + done / SECTOR_SIZE;
+        if (ata_read(src, sector_buffer) != 0) {
+            return -1;
+        }
+        if (ata_write(dst, sector_buffer) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Take `count` free blocks directly after `after`, or -1 if that is not
+ * possible. Cheaper than moving the file, so it is tried first. */
+static int extend_in_place(u32 after, u32 count)
+{
+    if (after + count >= total_blocks) {
+        return -1;
+    }
+    for (u32 i = 0; i < count; i++) {
+        if (block_used(after + i)) {
+            return -1;
+        }
+    }
+    for (u32 i = 0; i < count; i++) {
+        mark_block(after + i, 1);
+    }
+    free_blocks -= count;
+    return 0;
+}
+
+static int hbfs_write_locked(const char *path, u64 offset, const void *data,
+                             u32 size)
+{
+    if (!ready || size == 0) {
+        return -1;
+    }
+
+    struct hbfs_entry parent;
+    char name[HBFS_NAME_BYTES + 1];
+    if (split_parent(path, &parent, name) != 0) {
+        return -1;
+    }
+
+    struct hbfs_dirbuf db;
+    if (open_dir(&parent, &db) != 0) {
+        return -1;
+    }
+
+    struct hbfs_entry entry;
+    u32 index;
+    if (find_entry(&db, name, &entry, &index) != 0 ||
+        entry.type == HBFS_FTYPE_DIR) {
+        return -1;
+    }
+
+    u64 end = offset + (u64)size;
+    u64 new_size = end > entry.size ? end : entry.size;
+    u32 need = (u32)((new_size + HBFS_BLOCK_SIZE - 1) / HBFS_BLOCK_SIZE);
+    u32 start = entry.start;
+    u32 blocks = entry.blocks;
+
+    if (need > blocks) {
+        u32 grow = need - blocks;
+        if (extend_in_place(entry.start + blocks, grow) != 0) {
+            u32 moved = 0;
+            if (alloc_blocks(need, &moved) != 0) {
+                return -1;
+            }
+            if (copy_extent(entry.start, moved, entry.size) != 0) {
+                release_blocks(moved, need);
+                return -1;
+            }
+            release_blocks(entry.start, entry.blocks);
+            start = moved;
+        }
+        blocks = need;
+    }
+
+    if (write_extent(start, offset, data, size, end >= new_size) != 0) {
+        return -1;
+    }
+
+    entry_to(db.data + index * HBFS_DIR_ENTRY_SIZE, name, entry.type,
+             (u32)new_size, start, blocks);
+    if (sync_dirbuf(&db) != 0 || sync_allocator() != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int hbfs_write(const char *path, u64 offset, const void *data, u32 size)
+{
+    sched_lock();
+    int result = hbfs_write_locked(path, offset, data, size);
+    sched_unlock();
+    return result;
+}
+
 static int hbfs_create_locked(const char *path, u32 type, const void *data, u32 size)
 {
     if (!ready || size == 0) {
@@ -984,6 +1142,90 @@ int hbfs_remove(const char *path)
     int result = hbfs_remove_locked(path);
     sched_unlock();
     return result;
+}
+
+/*
+ * A write self-test, run once at boot before any task exists. Two scratch files
+ * are created side by side, so the block after the first one belongs to the
+ * second; appending to the first therefore *cannot* grow it in place and has to
+ * move it - which is the path a person would never think to try and the one most
+ * likely to leak a block or lose a sector. Both files are removed afterwards, so
+ * the volume the host test reads is the one the demos wrote.
+ */
+int hbfs_writetest(void)
+{
+    static u8 first[4000];
+    static u8 more[200];
+    static u8 check[4200];
+
+    for (u32 i = 0; i < sizeof(first); i++) {
+        first[i] = (u8)('a' + (i % 26));
+    }
+    memset(more, 'Z', sizeof(more));
+
+    /* Nothing below may leak: every block taken is given back when the scratch
+     * files go, so the count has to be exactly where it started. */
+    u32 before = free_blocks;
+
+    if (hbfs_create("/grow1", HBFS_FTYPE_FILE, first, sizeof(first)) != 0 ||
+        hbfs_create("/grow2", HBFS_FTYPE_FILE, first, sizeof(first)) != 0) {
+        kputs("[hbfs] FAIL the write test could not create its files\r\n");
+        return -1;
+    }
+
+    /* 4000 bytes fit in one block; 200 more need a second one. */
+    struct hbfs_entry entry;
+    int grown = hbfs_write("/grow1", sizeof(first), more, sizeof(more));
+    if (grown != 0 || hbfs_resolve("/grow1", &entry) != 0) {
+        kputs("[hbfs] FAIL appending to a file that has to move\r\n");
+        return -1;
+    }
+    if (entry.size != sizeof(first) + sizeof(more) || entry.blocks != 2) {
+        kputs("[hbfs] FAIL the appended file is the wrong size\r\n");
+        return -1;
+    }
+
+    /* The old bytes have to survive the move and the new ones have to be there. */
+    sched_lock();
+    int got = hbfs_read_at(&entry, 0, check, sizeof(check));
+    sched_unlock();
+    if (got != (int)sizeof(check)) {
+        kputs("[hbfs] FAIL the appended file would not read back\r\n");
+        return -1;
+    }
+    for (u32 i = 0; i < sizeof(first); i++) {
+        if (check[i] != first[i]) {
+            kputs("[hbfs] FAIL the move lost the old contents\r\n");
+            return -1;
+        }
+    }
+    for (u32 i = 0; i < sizeof(more); i++) {
+        if (check[sizeof(first) + i] != 'Z') {
+            kputs("[hbfs] FAIL the appended bytes are not there\r\n");
+            return -1;
+        }
+    }
+
+    /* And a second append now has room after it, so it grows in place. */
+    if (hbfs_write("/grow2", sizeof(first), more, sizeof(more)) != 0 ||
+        hbfs_resolve("/grow2", &entry) != 0 ||
+        entry.size != sizeof(first) + sizeof(more)) {
+        kputs("[hbfs] FAIL appending to a file that has room\r\n");
+        return -1;
+    }
+
+    if (hbfs_remove("/grow1") != 0 || hbfs_remove("/grow2") != 0) {
+        kputs("[hbfs] FAIL the write test could not clean up\r\n");
+        return -1;
+    }
+    if (free_blocks != before) {
+        kputs("[hbfs] FAIL the write test leaked blocks\r\n");
+        return -1;
+    }
+
+    kputs("[hbfs] append=ok move=ok");
+    kputs("\r\n");
+    return 0;
 }
 
 u32 hbfs_free_blocks(void)
