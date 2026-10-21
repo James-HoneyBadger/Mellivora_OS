@@ -7,8 +7,9 @@
 ;
 ;   1. fork a child that maps 8 MB and touches every page
 ;   2. once the free-page count shows those pages are really allocated, the
-;      parent answers with SIGKILL. A killed task is torn down inside the
-;      kill, so there is no zombie to wait for (see the roadmap note).
+;      parent answers with SIGKILL and waits for it. A killed task leaves the
+;      same zombie a normal exit does, with the high bit set and the signal in
+;      the low byte.
 ;   3. the free-page count must be back within a small margin. A few pages may
 ;      still be pending: the killed task's own page directory is released at
 ;      the next context switch, not inside the kill.
@@ -54,14 +55,14 @@ start:
         mov ecx, SIGKILL
         int 0x80
 
-        ; Let the scheduler settle: the target is reaped synchronously by the
-        ; kill, so this only stops the parent from measuring mid-teardown.
-        mov ecx, 8
-.settle:
-        mov eax, SYS_YIELD
+        mov eax, SYS_WAITPID
+        mov ebx, [child_pid]
         int 0x80
-        dec ecx
-        jnz .settle
+        test eax, 0x80000000            ; abnormal end?
+        jz fail
+        and eax, 0x7F
+        cmp eax, SIGKILL                ; ...and it names the signal
+        jne fail
 
         mov eax, SYS_MEMINFO
         int 0x80

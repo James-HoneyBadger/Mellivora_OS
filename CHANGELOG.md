@@ -23,18 +23,24 @@
   the private window frames, a separate user stack, and every mmap area with its
   page-cache references, exactly as an exit does.
 
+### Processes
+
+- **A signal-killed task now leaves a zombie its parent can collect.** The kill path used
+  to free the slot outright, so `waitpid` never found the child, blocked the parent and
+  handed the console back to the shell. Both ways a task can die now go through
+  `sched_publish_death`: status stored, TCB left in `TASK_ZOMBIE`, waiters blocked in
+  `waitpid` woken with that status, `SIGCHLD` queued, and a shell-launched task (nobody
+  can wait for it) reaped immediately. A killed task reports `0x80000000 | signal`;
+  `0x80000000` alone is still a contained fault. Killing an existing zombie is a no-op
+  instead of a second teardown.
+
 ### Tooling
 
 - `programs/stack_leak_test.asm` runs sixteen fork+exec cycles and checks the free-page
   count came back (it fails at ~1 page per launch on the old kernel);
-  `programs/kill_leak_test.asm` kills a child holding an 8 MB mapping and checks the
-  same (it failed with 2054 pages before the fix). Both run in `make check-runtime`.
-
-### Known issue
-
-- `waitpid` for a task someone else killed blocks forever: the kill path frees the slot
-  instead of leaving a `TASK_ZOMBIE`. Recorded on the roadmap; `kill_leak_test` does not
-  wait for the child it killed itself.
+  `programs/kill_leak_test.asm` kills a child holding an 8 MB mapping, waits for it,
+  checks the status names `SIGKILL`, and checks the pages came back (it failed with 2054
+  pages before the fix). Both run in `make check-runtime`.
 
 ## Unreleased - shared file mappings are coherent
 

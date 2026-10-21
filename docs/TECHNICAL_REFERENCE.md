@@ -1474,6 +1474,19 @@ re-launching a parent whose `SYS_EXEC` needed it.
 valid task slot: a child forked by the task in slot 0 must still be treated as having a
 parent (`waitpid`, zombie retention, `SIGCHLD`).
 
+Both ways a task can die end in `sched_publish_death`, so a parent sees the same thing
+either way: `SYS_EXIT` runs `sched_exit_task` in the dying task's own context, while a
+signal with a terminating default action is torn down by whoever called `kill` and never
+runs that path at all. It stores the status, marks the TCB `TASK_ZOMBIE`, counts the task
+out, wakes waiters blocked in `waitpid` (writing the status into the EAX slot of their
+saved frame) and queues `SIGCHLD`. A shell-launched task (`TCB_PPID` = -1) has nobody to
+collect it and is reaped at once.
+
+An exit status with the high bit set means the task did not exit: `0x80000000` alone is a
+contained fault, and `0x80000000 | n` is "killed by signal n". `SYS_WAITPID` collects the
+status and clears the slot to `TASK_FREE`; killing an existing zombie is a no-op rather
+than a second teardown.
+
 ### Per-task Program Window (exec isolation)
 
 All directories start as copies of the master, so `PROGRAM_BASE` normally maps the same

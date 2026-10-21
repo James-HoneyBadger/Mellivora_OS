@@ -649,6 +649,9 @@ sched_exit_task:
         mov ecx, BG_STACK_PAGES
         call cow_release_range
 .exit_no_ustack:
+        ; Released (or never separate) - forget it, so a later kill-all sweep
+        ; cannot release the same frames a second time.
+        mov dword [edi + TCB_USTACK], 0
 
         ; Release every mmap area the task still owns: frames are dropped
         ; through their reference counts, so a page shared with a fork parent
@@ -689,104 +692,112 @@ sched_exit_task:
 
         ; Get PID of the dying task for parent wake-up
         mov esi, [edi + TCB_PID]
-
-        ; Clear execution fields but leave PID and exit code for waitpid
-        ; v5.0: TASK_ZOMBIE lets waitpid collect the exit code before reaping
-        mov dword [edi + TCB_STATE], TASK_ZOMBIE
-        mov dword [edi + TCB_ESP], 0
-        mov dword [edi + TCB_KSTACK], 0
-        ; v12.2: Store real exit code (saved in bg_exit_code by sys_exit before EBX was clobbered)
         mov eax, [bg_exit_code]
-        mov [edi + TCB_EXIT_CODE], eax
-
-        dec dword [task_count]
-
-        ; Wake any task blocked in sys_waitpid waiting for this PID
-        push edi
-        push esi
-        mov edi, task_table
-        xor edx, edx
-.exit_wake_scan:
-        cmp edx, MAX_TASKS
-        jge .exit_wake_done
-        cmp dword [edi + TCB_STATE], TASK_BLOCKED
-        jne .exit_wake_next
-        mov eax, [edi + TCB_WAIT_PID]
-        ; waiting for specific PID?
-        cmp eax, esi
-        je .exit_wake_found
-        ; waiting for any child (-1)?
-        cmp eax, -1
-        jne .exit_wake_next
-.exit_wake_found:
-        mov dword [edi + TCB_WAIT_PID], 0
-        mov dword [edi + TCB_STATE], TASK_READY
-        ; v12.2: Write real exit code into the waiter's EAX slot in its pushad frame
-        ; [TCB_ESP+28] = EAX slot
-        mov ebx, [edi + TCB_ESP]
-        mov eax, [bg_exit_code]
-        mov [ebx + 28], eax
-.exit_wake_next:
-        add edi, TCB_SIZE
-        inc edx
-        jmp .exit_wake_scan
-.exit_wake_done:
-        pop esi
-        pop edi
-
-        ; --- v12.2: Deliver SIGCHLD to parent ---
-        ; edi = dying task TCB, esi = dying task PID
-        mov eax, [edi + TCB_PPID]       ; parent PID (-1 = no parent / shell)
-        cmp eax, -1
-        je .exit_reap                   ; no parent → nothing will waitpid()
-
-        push edi                        ; save dying TCB
-        push eax                        ; save parent PID on stack
-        mov edi, task_table
-        xor edx, edx
-.exit_sigchld_scan:
-        cmp edx, MAX_TASKS
-        jge .exit_sigchld_done
-        cmp dword [edi + TCB_STATE], TASK_FREE
-        je .exit_sigchld_next
-        mov ebx, [esp]                  ; parent PID
-        cmp [edi + TCB_PID], ebx
-        je .exit_sigchld_found
-.exit_sigchld_next:
-        add edi, TCB_SIZE
-        inc edx
-        jmp .exit_sigchld_scan
-.exit_sigchld_found:
-        ; Check whether parent has explicitly set SIGCHLD to SIG_IGN
-        mov ebx, [edi + TCB_SIG_HAND]
-        test ebx, ebx
-        jz .exit_sigchld_deliver        ; no handler table → SIG_DFL → deliver
-        cmp dword [ebx + SIGCHLD * 4], SIG_IGN
-        je .exit_sigchld_done           ; explicitly ignored → skip
-.exit_sigchld_deliver:
-        or dword [edi + TCB_SIG_PEND], (1 << SIGCHLD)
-        ; Wake parent if blocked in pause/sigsuspend (NOT in waitpid — that's handled above)
-        cmp dword [edi + TCB_STATE], TASK_BLOCKED
-        jne .exit_sigchld_done
-        cmp dword [edi + TCB_WAIT_PID], 0
-        jne .exit_sigchld_done          ; blocked in waitpid — waitpid scan handles it
-        mov dword [edi + TCB_STATE], TASK_READY
-.exit_sigchld_done:
-        pop eax                         ; discard saved parent PID
-        pop edi                         ; restore dying TCB pointer
-        ; --- end SIGCHLD ---
-        jmp .exit_done
-
-.exit_reap:
-        ; A shell-launched task (PPID = -1) has no parent that could ever call
-        ; waitpid(), so this zombie would stay in the table forever and every
-        ; launch would leak a TCB slot. Reap it immediately.
-        mov dword [edi + TCB_STATE], TASK_FREE
-        mov dword [edi + TCB_PID], 0
-
+        call sched_publish_death
 .exit_done:
         popad
         ret
+
+;---------------------------------------
+; sched_publish_death - hand a dead task to waitpid and wake its parent
+;   In : EDI = TCB of the dying task, ESI = its PID, EAX = exit status
+;
+; Shared by the normal exit path and by a signal kill, which tears a task down
+; without ever running its own exit code; both must leave the same state behind
+; or a parent waiting on the task waits forever. The TCB stays in TASK_ZOMBIE so
+; waitpid can collect the status. A shell-launched task (PPID = -1) has nobody
+; to collect it, so it is reaped at once - otherwise every launch would leak a
+; TCB slot.
+;---------------------------------------
+sched_publish_death:
+        pushad
+        mov [.spd_tcb], edi
+        mov [.spd_pid], esi
+        mov [.spd_code], eax
+
+        ; Leave PID and exit code for waitpid; stop anything else touching it.
+        mov dword [edi + TCB_STATE], TASK_ZOMBIE
+        mov dword [edi + TCB_ESP], 0
+        mov dword [edi + TCB_KSTACK], 0
+        mov [edi + TCB_EXIT_CODE], eax
+        mov [bg_exit_code], eax
+
+        dec dword [task_count]
+
+        ; --- Wake anyone blocked in waitpid for this PID ---
+        mov edi, task_table
+        xor edx, edx
+.spd_wake_scan:
+        cmp edx, MAX_TASKS
+        jge .spd_wake_done
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .spd_wake_next
+        mov ebx, [edi + TCB_WAIT_PID]
+        cmp ebx, [.spd_pid]
+        je .spd_wake_found
+        cmp ebx, -1                     ; waiting for any child?
+        jne .spd_wake_next
+.spd_wake_found:
+        mov dword [edi + TCB_WAIT_PID], 0
+        mov dword [edi + TCB_STATE], TASK_READY
+        mov ebx, [edi + TCB_ESP]
+        mov eax, [.spd_code]
+        mov [ebx + 28], eax             ; EAX slot of the waiter's pushad frame
+.spd_wake_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .spd_wake_scan
+.spd_wake_done:
+
+        ; --- Deliver SIGCHLD to the parent ---
+        mov edi, [.spd_tcb]
+        mov eax, [edi + TCB_PPID]
+        cmp eax, -1
+        je .spd_reap                    ; no parent -> nobody will waitpid()
+        mov [.spd_parent], eax
+
+        mov edi, task_table
+        xor edx, edx
+.spd_chld_scan:
+        cmp edx, MAX_TASKS
+        jge .spd_done
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .spd_chld_next
+        mov ebx, [.spd_parent]
+        cmp [edi + TCB_PID], ebx
+        je .spd_chld_found
+.spd_chld_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .spd_chld_scan
+.spd_chld_found:
+        mov ebx, [edi + TCB_SIG_HAND]
+        test ebx, ebx
+        jz .spd_chld_deliver            ; no handler table: SIG_DFL
+        cmp dword [ebx + SIGCHLD * 4], SIG_IGN
+        je .spd_done                    ; explicitly ignored
+.spd_chld_deliver:
+        or dword [edi + TCB_SIG_PEND], (1 << SIGCHLD)
+        ; Wake a parent blocked in pause/sigsuspend, but not one in waitpid:
+        ; the scan above already handed that one its status.
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .spd_done
+        cmp dword [edi + TCB_WAIT_PID], 0
+        jne .spd_done
+        mov dword [edi + TCB_STATE], TASK_READY
+        jmp .spd_done
+
+.spd_reap:
+        mov edi, [.spd_tcb]
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_PID], 0
+.spd_done:
+        popad
+        ret
+.spd_tcb:    dd 0
+.spd_pid:    dd 0
+.spd_code:   dd 0
+.spd_parent: dd 0
 
 ;---------------------------------------
 ; sys_waitpid - Wait for a task to exit
@@ -1469,6 +1480,11 @@ sched_signal_task:
         mov [.sst_tcb], edi
         mov [.sst_sig], eax
 
+        ; A zombie is dead already and its slot is counted out; a second
+        ; teardown would release what is gone and count it twice.
+        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
+        je  .sst_done
+
         ; A RUNNING task is the caller itself: always queue, never tear it down
         ; (we are standing on its kernel stack). This also covers SIGKILL.
         cmp dword [edi + TCB_STATE], TASK_RUNNING
@@ -1576,6 +1592,7 @@ sched_signal_task:
         mov ecx, BG_STACK_PAGES
         call cow_release_range
 .sst_kill_no_ustack:
+        mov dword [edi + TCB_USTACK], 0 ; see sched_exit_task: no double release
 
         mov eax, [edi + TCB_CR3]
         mov ecx, [edi + TCB_PID]
@@ -1609,20 +1626,19 @@ sched_signal_task:
         ; Queue the page directory (see sched_exit_task: it may be the active one)
         mov eax, [edi + TCB_CR3]
         test eax, eax
-        jz .sst_clear
+        jz .sst_kill_publish
         mov dword [edi + TCB_CR3], 0
         mov [pd_deferred_free], eax
 
-.sst_clear:
-        ; Clear the TCB. A zombie was already counted out of task_count by
-        ; sched_exit_task, so decrementing again would undercount live tasks.
-        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
-        je .sst_clear_uncounted
-        dec dword [task_count]
-.sst_clear_uncounted:
-        mov dword [edi + TCB_STATE], TASK_FREE
-        mov dword [edi + TCB_ESP], 0
-        mov dword [edi + TCB_KSTACK], 0
+.sst_kill_publish:
+        ; Leave behind exactly what a normal exit leaves: a zombie the parent
+        ; can collect, or an immediately reaped slot when nobody can. The high
+        ; bit marks an abnormal end, the low byte names the signal that ended
+        ; it - a fault reports plain 0x80000000.
+        mov esi, [edi + TCB_PID]
+        mov eax, [.sst_sig]
+        or  eax, 0x80000000
+        call sched_publish_death
 
 .sst_done:
         popad
