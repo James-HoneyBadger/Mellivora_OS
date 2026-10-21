@@ -50,7 +50,8 @@ MARKER = "MELLIVORA64_OK"
 # half. These are the facts the port has to establish, so the test checks them:
 # the image runs at its *link* address in the top 2 GB, the SYSCALL/SYSRET MSRs
 # are programmed and a 64-bit `syscall` reaches a handler and returns, the frame
-# allocator reads the map as 64-bit, a ring-3 program runs, makes three
+# allocator and the page tables agree about a mapped page (and the MMU agrees
+# once it is unmapped), a ring-3 program runs, makes three
 # syscalls from the user page and exits with the value it round-tripped through
 # its own stack, and a fault it takes is caught on the kernel stack the TSS
 # names and resumed.
@@ -59,6 +60,7 @@ REQUIRED = (
     "base=0xFFFFFFFF80100000",
     "syscall=ok",
     "pmm=ok",
+    "vmm=ok",
     "ring3=ok",
     "fault=ok",
 )
@@ -137,7 +139,7 @@ def main():
     # Scale: a guest past 4 GB only reports sane numbers if the E820 map was
     # read as 64-bit, and 8 GB is the P2 gate.
     if SKIP_BIG:
-        print("  PASS  long mode, higher half, syscall entry, ring 3, exceptions (big-memory run skipped)")
+        print("  PASS  long mode, higher half, VMM, syscall entry, ring 3, exceptions (big-memory run skipped)")
         return 0
 
     big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER)
@@ -158,7 +160,7 @@ def main():
         print(big[-800:], file=sys.stderr)
         return 1
 
-    print("  PASS  long mode, higher half, syscall entry, ring 3, exceptions, %d MB of RAM" % usable_mb)
+    print("  PASS  long mode, higher half, VMM, syscall entry, ring 3, exceptions, %d MB of RAM" % usable_mb)
     return 0
 
 

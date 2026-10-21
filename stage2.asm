@@ -277,16 +277,19 @@ halt16:
 ; Steps:
 ;   1. Verify CPUID supports long mode (leaf 0x80000001, bit 29 of EDX).
 ;   2. Build minimal page tables at LM_PT_BASE:
-;        PML4[0]   -> PDPT  (identity map of the first 16 MB)
+;        PML4[0]   -> PDPT  (identity map of the first 1 GB)
 ;        PML4[511] -> PDPT  (higher half, -2 GB downwards)
 ;        PDPT[0]   -> PDT   (identity, covers 0..1 GB)
 ;        PDPT[510] -> PDH   (0xFFFFFFFF80000000, the same physical range)
-;        PDT/PDH[0..7] -> 8 x 2-MB large pages covering 0..16 MB
+;        PDT/PDH[0..511] -> 512 x 2-MB large pages covering 0..1 GB
 ;
 ;      The two maps describe the same physical memory: the kernel is *linked*
 ;      in the higher half (boot/lm64.ld) and stage2 jumps to the link address,
 ;      while low scratch memory and the VGA text buffer stay reachable through
-;      the identity map.
+;      the identity map. Covering the whole 1 GB a single PD page can describe
+;      costs the same memory and gives the VMM a direct map for every frame the
+;      frame allocator hands out until RAM passes 1 GB - a 4 KB mapping is then
+;      a table walk away instead of a new mapping scheme.
 ;   3. Load 64-bit GDT.
 ;   4. CR4.PAE = 1, CR3 = PML4, EFER.LME = 1, CR0.PG = 1.
 ;   5. Far-jump into the 64-bit code selector.
@@ -344,9 +347,9 @@ enter_longmode:
         mov dword [LM_PDPT + 510 * 8], (LM_PDH | 0x03)
         mov dword [LM_PDPT + 510 * 8 + 4], 0
 
-        ; PDT and PDH entries: 2 MB large pages 0..15 MB (8 entries each).
-        ; Each 2-MB large page PDE: base | PS(bit7) | Present | Writable
-        xor ebx, ebx               ; page index 0..7
+        ; PDT and PDH entries: 2 MB large pages 0..1 GB (512 entries each, the
+        ; whole page). Each 2-MB large page PDE: base | PS(bit7) | P | W.
+        xor ebx, ebx               ; page index 0..511
 .lm_fill_pdt:
         mov eax, ebx
         shl eax, 21                ; base = page_idx * 2 MB
@@ -356,7 +359,7 @@ enter_longmode:
         mov [LM_PDH + ebx * 8],     eax
         mov dword [LM_PDH + ebx * 8 + 4], 0
         inc ebx
-        cmp ebx, 8
+        cmp ebx, 512
         jl  .lm_fill_pdt
         mark32 6, 'G'          ; page tables built
 

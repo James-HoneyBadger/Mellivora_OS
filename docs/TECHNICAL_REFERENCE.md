@@ -1962,11 +1962,14 @@ sections in link order, so the flat image is exactly what stage2 places at physi
 
 | Table | Entry | Covers |
 | --- | --- | --- |
-| `PML4[0]` | `PDPT[0] -> PDT` | identity map, 0..16 MB |
-| `PML4[511]` | `PDPT[510] -> PDH` | `0xFFFFFFFF80000000`..+16 MB |
+| `PML4[0]` | `PDPT[0] -> PDT` | identity map, 0..1 GB (512 x 2 MB) |
+| `PML4[511]` | `PDPT[510] -> PDH` | `0xFFFFFFFF80000000`..+1 GB (the same pages) |
 
 and jumps to `KERNEL_LINK_ADDR` instead of `0x00100000`, so position-dependent code runs
 where it was linked while low memory (the VGA buffer, stage2's stack) stays reachable.
+Both PD pages are filled completely - one 2 MB page per entry costs no extra memory and
+turns the higher half into a direct map for every frame the allocator hands out, which
+is what lets the VMM zero a new page table it just allocated.
 The two tables must stay in step: `KERNEL_LINK_ADDR` in `stage2.asm` and the `.` in
 `boot/lm64.ld` are the same number.
 
@@ -2044,11 +2047,13 @@ which reports and halts.
 | address space | two frames from the frame allocator at `0x40000000` (code, stack), `U/S` at every level of the walk |
 | `lm_user_enter` | builds `SS`/`RSP`/`RFLAGS`/`CS`/`RIP` and `IRETQ`s to CPL 3 |
 
-The user pages get their own PDPT/PD/PT - `0x40000000` is `PDPT[1]`, which stage2 never
-filled - instead of splitting the 2 MB kernel pages, and only the shared PML4 entry gains
-`U/S`: the identity map's PDPT entry does not have it, so `0..1 GB` stays kernel-only.
+The user pages are mapped through the VMM: `0x40000000` is `PDPT[1]`, which stage2 never
+filled, so no 2 MB kernel page has to be split, and `vmm_map` sets U/S on the shared
+PML4 entry and on the tables it creates. The code page is mapped read-only and the stack
+writable; `lm_user_run` then checks `vmm_user_mapped` for both, and checks that address
+0, the identity map and the higher half are *not* user-mapped, before it enters ring 3.
 Frames are reached through stage2's direct map (`phys + 0xFFFFFFFF80000000`, the first
-16 MB) because there is no VMM in the 64-bit tree yet.
+1 GB).
 
 `lm_user_enter` does **not** `SWAPGS`: the live GS base already holds the user value and
 `KERNEL_GS_BASE` the block, which is the state the entry stub's `SWAPGS` expects to find.
@@ -2088,6 +2093,38 @@ and that its own RSP lies inside the per-CPU kernel stack. That second check is 
 that `TSS.RSP0` did its job, because the CPU had to load it to get here from a user
 stack. `#BP` is the only vector it resumes - INT3's saved RIP already points past the
 instruction - and every other fault is reported and halts without the boot marker.
+
+### Virtual memory
+
+`boot/lm_vmm.c` sits between the frame allocator and everything that needs an address
+space. `vmm_map` walks the four levels from CR3 and, when an intermediate table is
+missing, allocates a frame, zeroes it through the direct map and links it in; the leaf
+carries `VMM_W`/`VMM_U` as the caller asked. `invlpg` follows every map and unmap, and
+`vmm_translate` resolves whatever the walk finds - including the 2 MB pages stage2 used,
+so the identity map answers too.
+
+| Call | Answers |
+| --- | --- |
+| `vmm_map(virt, phys, flags)` | maps one 4 KB page; -1 if already mapped, if a large page covers the address, or if the new table's frame is not reachable |
+| `vmm_unmap(virt)` | clears the leaf and the TLB; -1 when nothing was there |
+| `vmm_translate(virt)` | the physical address, or 0 |
+| `vmm_user_mapped(virt)` | 1 only when **every** level, leaf included, has U/S |
+| `vmm_phys(phys)` | the direct-map pointer for a frame below 1 GB |
+
+`vmm_user_mapped` is the reason the walk upgrades intermediate entries: the `PML4[0]`
+entry is shared by the identity map and the user area, so a user leaf under one of its
+PDPT entries needs U/S on the levels above it. A kernel leaf under the same tables stays
+out of reach because the check does not stop at the first level.
+
+The self-test maps a frame at `0x7F0000000000`, writes through the virtual address and
+reads the value back through the direct map (so the walk, the frame and the TLB all
+have to agree), refuses a second map of the same address, unmaps, and then asks the MMU
+whether it worked. Asking the MMU needs a fault that is survivable: the handler has a
+kernel fix-up path - a ring-0 `#PF` at `lm_fault_fixup_cr2` resumes at
+`lm_fault_fixup_rip` - and `vmm_probe()` arms it around one load, so the answer is 1
+when the read faulted and 0 when it was served. The test finishes by checking that a
+U/S leaf under the same tables is user-mapped while its kernel neighbour is not, and
+that the identity map and the higher half still are not.
 
 ### Frame allocator
 
@@ -2130,10 +2167,11 @@ Two long-mode details are worth knowing here because both were faults first:
 
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
-`stack=ok`, `pmm=ok`, `fault=ok` and `ring3=ok` on COM1, so a nucleus that booted in the
-wrong half, broke its SYSCALL path, ran its handler on the wrong stack, mis-read the
-memory map, failed to deliver a ring-3 fault to the TSS stack or returned to the wrong
-stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+`stack=ok`, `pmm=ok`, `vmm=ok`, `fault=ok` and `ring3=ok` on COM1, so a nucleus that
+booted in the wrong half, broke its SYSCALL path, ran its handler on the wrong stack,
+mis-read the memory map, could not map and unmap a page while the MMU agreed, failed to
+deliver a ring-3 fault to the TSS stack or returned to the wrong stack in ring 3 fails
+rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

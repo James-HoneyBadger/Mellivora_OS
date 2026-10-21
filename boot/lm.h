@@ -99,6 +99,46 @@ struct lm_fault_frame {
 };
 
 /*---------------------------------------
+ * Virtual memory
+ *
+ * A four-level walk over the tables stage2 built, with 4 KB leaves. Shared
+ * with the user path, so `VMM_U` has to be propagated into the intermediate
+ * entries a user leaf sits under; a kernel leaf under the same tables keeps
+ * access because the check is at every level, leaf included.
+ *---------------------------------------*/
+
+#define VMM_P  0x1ULL
+#define VMM_W  0x2ULL
+#define VMM_U  0x4ULL
+#define VMM_PS 0x80ULL
+
+/* Map one 4 KB page. `flags` are VMM_W/VMM_U; present is implied. Returns -1 if
+ * the address is already mapped, the frame cannot be reached, or a large page
+ * covers the address. Intermediate tables are allocated from the PMM. */
+int vmm_map(u64 virt, u64 phys, u64 flags);
+
+/* Drop a mapping. Returns -1 when there was none. */
+int vmm_unmap(u64 virt);
+
+/* Physical address `virt` resolves to, or 0 when it is not mapped. Large
+ * pages are resolved, so the identity map answers too. */
+u64 vmm_translate(u64 virt);
+
+/* 1 only when every level on the way to `virt` carries U/S - the check a
+ * copy_from_user would make. */
+int vmm_user_mapped(u64 virt);
+
+/* 1 when the MMU refuses a read from `virt`, using the fault handler's fix-up
+ * path: the probe load is abandoned and this returns instead of dying. */
+u64 vmm_probe(u64 virt);
+
+/* The nucleus's direct map of physical memory (stage2's PDH, 0..1 GB). */
+void *vmm_phys(u64 phys);
+
+/* Map, translate, unmap a page and prove the MMU agrees. Prints vmm=ok. */
+int vmm_selftest(void);
+
+/*---------------------------------------
  * IDT and exceptions
  *---------------------------------------*/
 
@@ -107,6 +147,17 @@ void idt_init(void);
 
 /* Runs on the stack the CPU selected; 1 resumes the interrupted context. */
 int lm_fault_dispatch(struct lm_fault_frame *frame);
+
+/*
+ * Kernel-mode fix-up: while `lm_fault_fixup_cr2` is non-zero, a ring-0 #PF on
+ * exactly that address resumes at `lm_fault_fixup_rip` instead of reporting.
+ * vmm_probe() arms it around a single load; nothing else may.
+ */
+extern u64 lm_fault_fixup_cr2;
+extern u64 lm_fault_fixup_rip;
+
+u64 lm_probe_read(u64 virt);
+void lm_probe_faulted(void);
 
 /* GDT selectors. The order matters twice over: SYSCALL loads CS/SS from
  * STAR[47:32] and STAR[47:32]+8, and SYSRET loads CS/SS from

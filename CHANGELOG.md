@@ -1,5 +1,34 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a VMM: 4 KB mappings over the frame allocator
+
+### Port (P2)
+
+- **`boot/lm_vmm.c`: the page tables as a subsystem.** A four-level walk from CR3 that
+  creates the intermediate tables a mapping needs (frames from the PMM, zeroed through
+  the direct map), 4 KB map/unmap with an `invlpg`, `vmm_translate` - which also
+  resolves the 2 MB and 1 GB pages stage2 built - and `vmm_user_mapped`, the
+  every-level U/S check a `copy_from_user` will need. The ring-3 path maps its two
+  pages through it instead of writing PDPT/PD/PT entries by hand.
+- **The direct map covers 1 GB instead of 16 MB.** stage2 now fills all 512 entries of
+  each PD page it already had - one 2 MB page per entry, no extra memory - so every
+  frame the allocator hands out (it walks up from 1 MB) is reachable by the kernel. A
+  frame above 1 GB still has no mapping, and `vmm_map` fails rather than corrupting
+  something; a direct map of all RAM belongs with the next step.
+- **The self-test asks the MMU, not just the tables.** It maps a frame at
+  `0x7F0000000000`, writes through the virtual address and reads the value back through
+  the direct map, refuses a second map of the same address, unmaps, and then *faults*
+  on it through a new fix-up path: a ring-0 `#PF` at the address a probe armed resumes
+  at `lm_probe_faulted` instead of killing the machine, so `vmm_probe()` answers "is
+  this mapped?" by trying. It also checks that a U/S leaf needs U/S above it while the
+  kernel leaf beside it stays out of reach, and that the identity map and the higher
+  half are still supervisor-only.
+- The leaf's U/S bit is the gate the kernel relies on: the PML4 entry is shared between
+  the kernel and user mappings, so the walk upgrades an intermediate entry when a user
+  leaf passes through it, and `vmm_user_mapped` verifies the whole path rather than one
+  level - which is what makes "user code can run at 0x40000000 but not read the
+  nucleus" a checked property instead of a hope.
+
 ## Unreleased - an IDT, and faults that report instead of triple-faulting
 
 ### Port (P2)

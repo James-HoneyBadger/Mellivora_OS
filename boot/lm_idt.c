@@ -134,6 +134,12 @@ static u64 idt[256 * 2];    /* 16 bytes per entry, 256 vectors */
 static u64 fault_count;
 static u64 fault_cr2;
 
+/* Armed by vmm_probe() around one load, so a kernel can ask "is this address
+ * mapped?" without a dead machine: a #PF at that exact address resumes at the
+ * given RIP instead of being reported. */
+u64 lm_fault_fixup_cr2;
+u64 lm_fault_fixup_rip;
+
 static void idt_set(int vector, u64 handler, u8 dpl)
 {
     /* offset[15:0], selector, IST=0, type/attributes, offset[31:16]; the high
@@ -200,6 +206,12 @@ int lm_fault_dispatch(struct lm_fault_frame *f)
     fault_cr2 = f->vec == 14 ? read_cr2() : 0;
 
     int from_user = (f->cs & 3) == 3;
+
+    if (f->vec == 14 && !from_user && lm_fault_fixup_cr2 != 0 &&
+        fault_cr2 == lm_fault_fixup_cr2 && lm_fault_fixup_rip != 0) {
+        f->rip = lm_fault_fixup_rip;    /* the probe load is abandoned */
+        return 1;
+    }
     int on_kstack = rsp <= cpu->kstack_top && rsp > cpu->kstack_base;
     int expected = f->vec == 3 && from_user && on_kstack;
 
