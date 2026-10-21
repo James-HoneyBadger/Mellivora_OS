@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 186,
-  "highest_syscall_number": 185,
+  "syscall_count": 187,
+  "highest_syscall_number": 186,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -932,6 +932,11 @@
       "name": "SYS_MMAP_FILE",
       "number": 185,
       "summary": "mmap_file(path,len,prot,off) -> EAX=addr/-1 (prot may include MF_SHARED)"
+    },
+    {
+      "name": "SYS_FAULTINJECT",
+      "number": 186,
+      "summary": "Fault injection: EBX=op ECX=count -> EAX=0/-1 (P10 tests)"
     }
   ]
 }

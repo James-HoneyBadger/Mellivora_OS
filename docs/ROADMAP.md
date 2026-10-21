@@ -195,6 +195,13 @@ Panic screen with symbolised stacks and recovery, crash dumps over serial, 24 h 
 and reboot loops, OOM/disk-full/network-chaos injection, performance gates that fail a
 pull request on regression.
 
+- [x] OOM / disk-full / dropped-frame injection (`kernel/faultinject.inc`,
+  `SYS_FAULTINJECT`): arm a counter and the next page allocations, disk writes or
+  outgoing frames fail. `fault_inject_test` walks every failure depth of the fork path
+  and requires the free-page count to come back each time, a file create whose writes
+  all fail to report an error and still work afterwards, and a dropped frame to be
+  retried past. `make check-faults` repeats it; `check-runtime` runs it once.
+
 ### P11 · Ecosystem and release engineering (continuous)
 
 SDK container with cross toolchain, libc, headers and samples; `hbpkg` v2 with signatures

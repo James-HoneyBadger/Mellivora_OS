@@ -40,6 +40,7 @@ anyone who wants to understand how the system works under the hood.
 30. [Alias System](#alias-system)
 31. [Command History](#command-history)
 32. [Tab Completion](#tab-completion)
+33. [Fault Injection (P10)](#fault-injection-p10)
 
 ---
 
@@ -1921,10 +1922,41 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 179 | `SYS_TCDRAIN` | EBX=fd | EAX=0 |
 | 180 | `SYS_TCFLUSH` | EBX=fd, ECX=queue | EAX=0 |
 | 181 | `SYS_GETERRNO` | — | EAX=per-task errno |
+| 186 | `SYS_FAULTINJECT` | EBX=op, ECX=count | EAX=0/-1; see [Fault Injection](#fault-injection-p10) |
 
 **Total: 186 syscalls defined (0–185, no gaps).**
 
 ---
+
+## Fault Injection (P10)
+
+`kernel/faultinject.inc` makes the kernel fail one thing on purpose so the error paths
+can be tested. Any task arms it with `SYS_FAULTINJECT`, does the operation it wants to
+see fail, and checks both the error *and* that the system is unchanged afterwards.
+
+| Fixture | Choke point | Injected failure |
+| --- | --- | --- |
+| `FI_OP_ALLOC` | `pmm_alloc_buddy_order` | returns 0 (out of memory) |
+| `FI_OP_IO` | `ata_write_sectors` | returns `CF=1` (write failed) |
+| `FI_OP_NET` | `net_send_frame` | the frame is dropped |
+
+Each hook is a single `call`/`jc` in front of the one routine every allocation, write
+and transmit goes through, and each gate (`fi_alloc_gate`, `fi_io_gate`, `fi_net_gate`)
+preserves every register and reports in `CF`, so no caller needed a change. Counters
+mean "inject this many more faults"; `FI_OP_CLEAR` (0) drops what is still armed and
+`FI_OP_TOTAL` (5) reports how many were actually injected, so a test that armed nothing
+fails instead of passing silently.
+
+`programs/fault_inject_test.asm` is the conformance test: it forks with 1..12 page
+allocations failing - one different failure point per prefix, from the child's kernel
+stack through its area table, page directory and COW share - and requires the free-page
+count to come back to its baseline each time; creates a file while every write fails and
+requires `SYS_FWRITE` to return `-1` and the next create to work; and drops one frame
+during a DNS lookup, which the resolver's retry has to absorb. `make check-faults`
+repeats it, `check-runtime` runs it once after `dhcp`.
+
+The facility deliberately has no privilege check: it exists to break the kernel in a
+controlled way, and P6 is where a capability would gate it.
 
 ## Shell Architecture
 

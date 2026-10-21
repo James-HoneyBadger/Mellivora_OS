@@ -218,6 +218,7 @@ SYS_EXECVE          equ 182 ; execve(path,argv,envp) -> no return / -1
 SYS_TCSETPGRP       equ 183 ; tcsetpgrp(pgid) -> 0/-1 (-1 = no foreground job)
 SYS_TCGETPGRP       equ 184 ; tcgetpgrp() -> EAX=foreground pgid
 SYS_MMAP_FILE       equ 185 ; mmap_file(path,len,prot,off) -> EAX=addr/-1 (prot may include MF_SHARED)
+SYS_FAULTINJECT  equ 186        ; Fault injection: EBX=op ECX=count -> EAX=0/-1 (P10 tests)
 ; sysconf name constants
 _SC_ARG_MAX         equ 0
 _SC_CHILD_MAX       equ 1

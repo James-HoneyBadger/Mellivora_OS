@@ -174,6 +174,11 @@ run_varying_case "stack top is randomised"  "stack_aslr_test"     "ASLR_TOP [0-9
 # and its whole user stack. stale_write fills all of that with a marker and
 # stale_probe looks for it at a fixed address and across the stack window.
 run_case "no stale bytes from the last program" "stale_write" "STALE_WROTE_OK" "stale_probe" "CPU EXCEPTION|STALE_LEAK|fault"
+# Reliability: arm a fault, do the operation, require the error path to work.
+# OOM at every depth of the fork path (with the free-page count checked after
+# each), a disk whose writes all fail, and a dropped network frame that the
+# resolver retries past. `dhcp` first, because the network section needs the NIC.
+run_case "fault injection: OOM, disk, net" "dhcp" "FAULT_OK" "fault_inject_test" "CPU EXCEPTION|FAULT_FAIL|fault"
 
 # Above 128 MB, physical frames live beyond the boot identity map: the allocator
 # walks free-list nodes that are not mapped yet, the fault handler faults on its

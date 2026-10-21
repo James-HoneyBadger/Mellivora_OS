@@ -374,8 +374,10 @@ syscall_table:
         dd sys_tcgetpgrp        ; 184 SYS_TCGETPGRP
         ; Demand-zero file mapping
         dd sys_mmap_file        ; 185 SYS_MMAP_FILE
-        ; Reserved / unimplemented (186..255)
-        times (SYSCALL_MAX - 186) dd syscall_handler.syscall_bad
+        ; Reliability testing
+        dd sys_faultinject      ; 186 SYS_FAULTINJECT
+        ; Reserved / unimplemented (187..255)
+        times (SYSCALL_MAX - 187) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)

@@ -1,5 +1,31 @@
 # Mellivora OS - Changelog
 
+## Unreleased - fault injection for the error paths
+
+### Reliability
+
+- **OOM, disk-full and dropped-frame injection** (`kernel/faultinject.inc`). Three
+  counters, armed by any task through `SYS_FAULTINJECT` (186), make the kernel fail one
+  thing on purpose: `pmm_alloc_buddy_order` returns 0, `ata_write_sectors` returns
+  `CF=1`, `net_send_frame` drops the frame. Each hook is a `call`/`jc` in front of the
+  one choke point every path goes through, and each gate preserves every register, so
+  no caller changed.
+- The point is the *error path*, not the fault: `programs/fault_inject_test.asm` forks
+  with 1..12 page allocations failing (kernel stack, area table, page directory, COW
+  share - a different failure point for each prefix) and requires `fork` to report
+  failure **and the free-page count to come back to its baseline every time**; creates a
+  file while every write fails and requires `-1` and a working create afterwards; and
+  drops one frame during a DNS lookup, which the retry has to absorb.
+- `make check-faults` runs the fixture repeatedly (a failure path that leaks only some
+  of the time cannot hide), and `check-runtime` runs it once after `dhcp`.
+- `SYS_FAULTINJECT` reports what is armed (`FI_OP_STATE`) and how many faults it has
+  actually injected (`FI_OP_TOTAL`), so a test that silently armed nothing fails instead
+  of passing. It is a test facility with no privilege check - P6 is where that changes.
+
+### Tooling
+
+- `docs/syscalls.md` / `docs/syscalls.json` regenerated for the new syscall (187 total).
+
 ## Unreleased - no stale bytes in a new program window
 
 ### Memory

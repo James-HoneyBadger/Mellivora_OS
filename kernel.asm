@@ -666,6 +666,7 @@ kernel_entry:
         call pit_init
         call kb_init
         call pmm_init
+        call fi_init
         call kmem_init
         call ata_init
         call serial_init
@@ -725,6 +726,7 @@ kernel_entry:
 %include "kernel/idt.inc"
 %include "kernel/pit.inc"
 %include "kernel/pmm.inc"
+%include "kernel/faultinject.inc"
 %include "kernel/kmem.inc"
 %include "kernel/ata.inc"
 %include "kernel/blkcache.inc"

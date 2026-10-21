@@ -381,6 +381,8 @@ ata_read_sectors:
 
 ; ata_write_sectors_retry: EAX=LBA, ECX=count, ESI=src, CF on error
 ata_write_sectors:
+        call fi_io_gate                 ; injected write failure
+        jc .aws_injected
         ; Phase 1.5: bounds-check LBA range against device size.
         push eax
         push ecx
@@ -436,3 +438,7 @@ ata_write_sectors:
         stc
         ret
 .awsr_tries: dd 0
+
+.aws_injected:
+        stc
+        ret

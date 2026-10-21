@@ -842,6 +842,14 @@ prog_name_buf:   resb 256        ; Parsed program name from command line
 parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
 parent_active:    resb 1         ; 1 = re-launch parent after child exits
 program_stack_top: resd 1        ; randomised user stack top for this launch
+; Fault injection (kernel/faultinject.inc): seconds counters are "faults still
+; to inject", hits are "faults actually injected", both for the runtime tests.
+fi_alloc_left:   resd 1
+fi_io_left:      resd 1
+fi_net_left:     resd 1
+fi_alloc_hits:   resd 1
+fi_io_hits:      resd 1
+fi_net_hits:     resd 1
 program_args_buf: resb 512       ; Command-line arguments for the current launch
 ; Per-task copy of the argument string, indexed by PID and allocated from the
 ; slab cache on first use. A task that calls SYS_GETARGS long after it started

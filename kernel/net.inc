@@ -637,6 +637,8 @@ irq_net:
 ;---------------------------------------
 net_send_frame:
         pushad
+        call fi_net_gate                ; injected frame drop
+        jc .send_fail
         cmp dword [net_state], NET_STATE_UP
         jne .send_fail
         cmp ecx, NET_TX_BUF_SIZE

@@ -174,6 +174,9 @@ pmm_alloc_buddy_order:
         push esi
         push edi
 
+        call fi_alloc_gate              ; injected OOM (fault injection tests)
+        jc   .abo_oom
+
         mov  edi, ecx                   ; EDI = requested order
 
         ;--- Find lowest order >= EDI that has a free block ---
