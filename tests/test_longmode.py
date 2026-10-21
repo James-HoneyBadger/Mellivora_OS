@@ -209,17 +209,23 @@ def check_keyboard_and_screen(qemu, image):
         if not serial.wait_for("mellivora:/> ", TIMEOUT, proc):
             return "the shell never reached a prompt"
         monitor = qd.Monitor(mon_path)
-        monitor.send_text("date\n")
 
-        # Read the screen while the date is still near the bottom: the boot's own
-        # output keeps scrolling, and this is about what the display shows now.
-        deadline = time.time() + TIMEOUT
+        # A keystroke sent the instant the prompt appears can arrive before the
+        # shell is back in its read loop, so the line is retyped if it is not
+        # answered. Reading the screen while the date is still near the bottom
+        # matters too: the boot's own output keeps scrolling it away.
         stamp = None
-        while time.time() < deadline and stamp is None:
+        for _ in range(3):
             time.sleep(0.5)
-            for line in serial.text().splitlines():
-                if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", line):
-                    stamp = line
+            monitor.send_text("date\n")
+            deadline = time.time() + 8
+            while time.time() < deadline and stamp is None:
+                time.sleep(0.3)
+                for line in serial.text().splitlines():
+                    if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", line):
+                        stamp = line
+            if stamp is not None:
+                break
         if stamp is None:
             return "no date line after typing 'date'"
 
