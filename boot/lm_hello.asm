@@ -1,10 +1,10 @@
 ;=======================================================================
-; lm_userprog.asm - the 64-bit demo program
+; lm_hello.asm - the 64-bit demo program, /hello on the HBFS volume
 ;
-; This is no longer linked into the nucleus: mk_hbfs64.py writes it into the
-; image as /init, and the nucleus loads it through the VFS and maps it at
-; 0x40000000. Flat binary, position-independent apart from the two absolute
-; stack-page addresses the two tasks deliberately share.
+; /init execs this. It proves the parts of P2 that need ring 3: a fault the
+; handler resumes, write with a user buffer under SMAP, a file read off the
+; disk, brk grow/shrink, a voluntary yield, timer preemption, and two tasks
+; reading their own value back from the same virtual address.
 ;=======================================================================
 
 [BITS 64]
@@ -18,16 +18,18 @@ SYS_GETTID equ 5
 SYS_WRITE  equ 6
 SYS_YIELD  equ 7
 SYS_BRK    equ 8
+SYS_OPEN   equ 9
+SYS_READ   equ 10
+SYS_CLOSE  equ 11
 
 USER_SLOT  equ 0x40001FE8       ; PING result, in this task's stack page
 TASK_SLOT  equ 0x40001FF0       ; the task id, same address in every space
+BUF        equ 0x40001F00       ; where /motd is read
 
 start:
-        ; INT3 first: the fault a handler can resume, and taking it from ring 3
-        ; is what proves the TSS.RSP0 transition.
         int3
 
-        ; write(1, "hello\n", 6) - a user buffer read under SMAP.
+        ; write(1, "hello\n", 6)
         mov eax, SYS_WRITE
         mov edi, 1
         lea rsi, [rel msg]
@@ -36,7 +38,33 @@ start:
         cmp rax, msg_end - msg
         jne fail
 
-        ; PING round trip, through this task's own stack page.
+        ; open("/motd"), read it, close it, write what was read.
+        lea rdi, [rel motd_path]
+        mov eax, SYS_OPEN
+        syscall
+        test rax, rax
+        js fail
+        mov r15, rax
+        mov edi, r15d
+        mov rsi, BUF
+        mov edx, 64
+        mov eax, SYS_READ
+        syscall
+        test rax, rax
+        jle fail
+        mov r12, rax
+        mov edi, r15d
+        mov eax, SYS_CLOSE
+        syscall
+        mov edi, 1
+        mov rsi, BUF
+        mov rdx, r12
+        mov eax, SYS_WRITE
+        syscall
+        cmp rax, r12
+        jne fail
+
+        ; PING round trip through this task's own stack page.
         mov eax, SYS_PING
         mov edi, 0x1234
         syscall
@@ -107,3 +135,4 @@ fail:
 
 msg:     db "hello", 10
 msg_end:
+motd_path: db "/motd", 0

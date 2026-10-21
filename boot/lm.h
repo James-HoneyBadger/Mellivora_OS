@@ -283,6 +283,15 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_WRITE  6
 #define SYS_YIELD  7
 #define SYS_BRK    8
+#define SYS_OPEN   9
+#define SYS_READ   10
+#define SYS_CLOSE  11
+#define SYS_EXEC   12
+
+/* The user program's addresses, the same in every task's space. */
+#define USER_CODE_ADDR  0x40000000ULL
+#define USER_STACK_ADDR 0x40001000ULL
+#define USER_STACK_TOP  (USER_STACK_ADDR + FRAME_SIZE)
 
 /* The program break starts here and grows in page steps; it lives in the same
  * PDPT slot as the user stack. */
@@ -317,6 +326,7 @@ int hbfs_read_at(const struct hbfs_entry *entry, u64 offset, void *buffer,
 /* A thin read-only VFS in front of it: open by name, then read by handle. */
 int vfs_init(void);
 int vfs_open(const char *name);        /* handle, or -1 */
+int vfs_close(int handle);
 u64 vfs_size(int handle);
 int vfs_read(int handle, void *buffer, u64 count);
 

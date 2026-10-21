@@ -33,6 +33,11 @@ int vfs_init(void)
 
 int vfs_open(const char *name)
 {
+    /* Root-level names for now, so a leading '/' is just a prefix. */
+    while (*name == '/') {
+        name++;
+    }
+
     struct hbfs_entry entry;
     if (hbfs_lookup(name, &entry) != 0) {
         return -1;
@@ -48,6 +53,15 @@ int vfs_open(const char *name)
         }
     }
     return -1;
+}
+
+int vfs_close(int handle)
+{
+    if (handle < 0 || handle >= VFS_MAX_FILES || !files[handle].used) {
+        return -1;
+    }
+    files[handle].used = 0;
+    return 0;
 }
 
 u64 vfs_size(int handle)

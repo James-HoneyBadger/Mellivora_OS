@@ -1,5 +1,25 @@
 # Mellivora OS - Changelog
 
+## Unreleased - exec, and file syscalls for userland
+
+### Port (P2)
+
+- **`SYS_EXEC(path)`.** It copies the path out of user memory (page-validated,
+  `STAC`/`CLAC`-bracketed), loads the file into a private frame, replaces the task's
+  code mapping (freeing the old frame), zeroes its stack page and rewrites the syscall
+  frame's `RIP`/`RSP` - so the syscall's own `IRETQ` lands in the new program. The task
+  keeps its address space, kernel stack and id. Each task now has its own code frame
+  from the start, which is what makes replacing one task's program safe.
+- **`SYS_OPEN` / `SYS_READ` / `SYS_CLOSE`.** `open` copies a path the same way; `read`
+  goes through a kernel bounce buffer and copies out under `STAC`/`CLAC` with every
+  destination page validated, so a bad buffer is a short read rather than a kernel
+  fault. The VFS treats a leading `/` as a prefix on its root-level names.
+- The demo is now two programs: `/init` prints one line and `exec`s `/hello`, which
+  writes, reads `/motd` off the disk, prints it, and then runs the register/brk/tick
+  checks. `[exec] /hello bytes=337` and `hello from hbfs` in the log are the proof that
+  both the replacement and the file read worked. `mk_hbfs64.py` takes `name=path` pairs
+  and writes all three files.
+
 ## Unreleased - HBFS on disk, and a program that comes from it
 
 ### Port (P2)

@@ -21,15 +21,6 @@
 
 #include "lm.h"
 
-/* The user program's pages, at the same addresses in every task's own address
- * space: one code frame, shared read-only, and one stack page per task. That is
- * what makes the isolation test meaningful - both tasks write the same virtual
- * address and each must read back its own value. 0x40000000 is PDPT[1], which
- * stage2 left empty. */
-#define USER_CODE_ADDR  (0x40000000ULL)
-#define USER_STACK_ADDR (0x40001000ULL)
-#define USER_STACK_TOP  (USER_STACK_ADDR + FRAME_SIZE)
-
 /*---------------------------------------
  * GDT and TSS
  *---------------------------------------*/
@@ -163,20 +154,23 @@ int lm_user_run(void)
     lm_user_load_gdt();
 
     u64 kernel_space = vmm_current_space();
-    u64 code_phys = pmm_alloc_frame();
-    u64 stack0_phys = pmm_alloc_frame();
-    u64 stack1_phys = pmm_alloc_frame();
-    u64 space0 = vmm_space_create();
-    u64 space1 = vmm_space_create();
-    u8 *code = vmm_phys(code_phys);
-    if (code_phys == 0 || stack0_phys == 0 || stack1_phys == 0 ||
-        space0 == 0 || space1 == 0 || code == NULL) {
+    u64 code_phys[2];
+    u64 stack_phys[2];
+    u64 space[2];
+    code_phys[0] = pmm_alloc_frame();
+    code_phys[1] = pmm_alloc_frame();
+    stack_phys[0] = pmm_alloc_frame();
+    stack_phys[1] = pmm_alloc_frame();
+    space[0] = vmm_space_create();
+    space[1] = vmm_space_create();
+    if (code_phys[0] == 0 || code_phys[1] == 0 || stack_phys[0] == 0 ||
+        stack_phys[1] == 0 || space[0] == 0 || space[1] == 0) {
         kputs("[ring3] FAIL could not build the address spaces\r\n");
         return -1;
     }
 
-    /* The program is a file now: /init is read through the VFS (HBFS on the
-     * ATA disk) into the frame both tasks will execute. */
+    /* Each task gets its own code frame, so exec can replace one task's program
+     * without touching the other's. /init is read once and copied. */
     int handle = vfs_open("init");
     if (handle < 0) {
         kputs("[ring3] FAIL no /init on the disk\r\n");
@@ -187,36 +181,43 @@ int lm_user_run(void)
         kputs("[ring3] FAIL /init is not one page of code\r\n");
         return -1;
     }
-    memset(code, 0, FRAME_SIZE);
-    if (vfs_read(handle, code, program_bytes) != (int)program_bytes) {
+    u8 *code0 = vmm_phys(code_phys[0]);
+    u8 *code1 = vmm_phys(code_phys[1]);
+    if (code0 == NULL || code1 == NULL) {
+        kputs("[ring3] FAIL user frames outside the direct map\r\n");
+        return -1;
+    }
+    memset(code0, 0, FRAME_SIZE);
+    memset(code1, 0, FRAME_SIZE);
+    if (vfs_read(handle, code0, program_bytes) != (int)program_bytes) {
         kputs("[ring3] FAIL short read of /init\r\n");
         return -1;
     }
-    memset(vmm_phys(stack0_phys), 0, FRAME_SIZE);
-    memset(vmm_phys(stack1_phys), 0, FRAME_SIZE);
+    memcpy(code1, code0, FRAME_SIZE);
+    memset(vmm_phys(stack_phys[0]), 0, FRAME_SIZE);
+    memset(vmm_phys(stack_phys[1]), 0, FRAME_SIZE);
 
-    /* The code frame is shared read-only; each stack frame belongs to one
-     * space, at the same virtual address in both. The kernel's own space gets
-     * no user mapping at all now. */
-    if (vmm_map_in(space0, USER_CODE_ADDR, code_phys, VMM_U) != 0 ||
-        vmm_map_in(space0, USER_STACK_ADDR, stack0_phys, VMM_W | VMM_U | VMM_NX) != 0 ||
-        vmm_map_in(space1, USER_CODE_ADDR, code_phys, VMM_U) != 0 ||
-        vmm_map_in(space1, USER_STACK_ADDR, stack1_phys, VMM_W | VMM_U | VMM_NX) != 0) {
-        kputs("[ring3] FAIL could not map a task's pages\r\n");
-        return -1;
+    /* Same addresses in both spaces, different frames. The kernel's own space
+     * gets no user mapping at all. */
+    for (int i = 0; i < 2; i++) {
+        if (vmm_map_in(space[i], USER_CODE_ADDR, code_phys[i], VMM_U) != 0 ||
+            vmm_map_in(space[i], USER_STACK_ADDR, stack_phys[i],
+                       VMM_W | VMM_U | VMM_NX) != 0) {
+            kputs("[ring3] FAIL could not map a task's pages\r\n");
+            return -1;
+        }
     }
 
     /* Check each space from the inside: its two pages are user-accessible, and
      * the kernel's identity map and higher half are not there to be reached
      * (a task has no PML4[0] entry for physical memory at all). */
     for (int i = 0; i < 2; i++) {
-        u64 space = i == 0 ? space0 : space1;
-        vmm_space_switch(space);
+        vmm_space_switch(space[i]);
         int ok = vmm_user_mapped(USER_CODE_ADDR) &&
                  vmm_user_mapped(USER_STACK_ADDR) &&
                  !vmm_user_mapped(0) && !vmm_user_mapped(0x00100000) &&
                  vmm_translate(0x00100000) == 0 &&
-                 vmm_translate(USER_CODE_ADDR) == code_phys &&
+                 vmm_translate(USER_CODE_ADDR) == code_phys[i] &&
                  /* The stack is data and must not execute; the code page is
                   * the one leaf without NX (nothing to check if the CPU has no
                   * NX to offer). */
@@ -258,8 +259,8 @@ int lm_user_run(void)
     kputs("\r\n");
 
     sched_init();
-    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP, space0) != 0 ||
-        sched_create(USER_CODE_ADDR, USER_STACK_TOP, space1) != 0) {
+    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[0]) != 0 ||
+        sched_create(USER_CODE_ADDR, USER_STACK_TOP, space[1]) != 0) {
         kputs("[ring3] FAIL could not create the tasks\r\n");
         return -1;
     }

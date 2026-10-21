@@ -169,6 +169,174 @@ static struct lm_fault_frame *sys_brk(struct lm_fault_frame *f)
     return f;
 }
 
+/*
+ * Copy a NUL-terminated path out of user memory. Each byte's page is checked
+ * before it is read, and the read itself runs under STAC/CLAC because the buffer
+ * is user memory and SMAP would otherwise refuse it.
+ */
+static int copy_user_string(u64 addr, char *dst, u64 max)
+{
+    u64 i = 0;
+    int ok = -1;
+
+    user_access_begin();
+    for (; i + 1 < max; i++) {
+        if (!vmm_user_mapped(addr + i)) {
+            break;
+        }
+        char c = *(const char *)(unsigned long)(addr + i);
+        dst[i] = c;
+        if (c == 0) {
+            ok = 0;
+            break;
+        }
+    }
+    user_access_end();
+    dst[max - 1] = 0;
+    return ok;
+}
+
+static struct lm_fault_frame *sys_open(struct lm_fault_frame *f)
+{
+    char path[64];
+    if (copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)(long)vfs_open(path);
+    return f;
+}
+
+static struct lm_fault_frame *sys_close(struct lm_fault_frame *f)
+{
+    f->rax = (u64)(long)vfs_close((int)f->rdi);
+    return f;
+}
+
+/* read(fd, buf, count): the bytes come off the disk into a kernel bounce buffer
+ * and are then copied out under STAC/CLAC, one validated page range at a time. */
+static struct lm_fault_frame *sys_read(struct lm_fault_frame *f)
+{
+    int fd = (int)f->rdi;
+    u64 buf = f->rsi;
+    u64 count = f->rdx;
+    u8 bounce[256];
+
+    if (count > 4096) {
+        count = 4096;
+    }
+
+    u64 done = 0;
+    while (done < count) {
+        u64 want = count - done;
+        if (want > sizeof(bounce)) {
+            want = sizeof(bounce);
+        }
+        int got = vfs_read(fd, bounce, want);
+        if (got <= 0) {
+            break;
+        }
+
+        int mapped = 1;
+        for (int i = 0; i < got; i++) {
+            if (!vmm_user_mapped(buf + done + (u64)i)) {
+                mapped = 0;
+                break;
+            }
+        }
+        if (!mapped) {
+            break;                  /* short read rather than a kernel fault */
+        }
+        user_access_begin();
+        for (int i = 0; i < got; i++) {
+            *(u8 *)(unsigned long)(buf + done + (u64)i) = bounce[i];
+        }
+        user_access_end();
+        done += (u64)got;
+    }
+
+    f->rax = done;
+    return f;
+}
+
+/*
+ * exec(path): load that file into this task and restart at the entry. The task
+ * keeps its address space, its kernel stack and its pid; the code page is
+ * replaced with a private frame (the old one is freed), the stack page is
+ * zeroed, and the saved frame's RIP/RSP are rewritten so the syscall's IRETQ
+ * lands in the new program.
+ */
+static struct lm_fault_frame *sys_exec(struct lm_fault_frame *f)
+{
+    char path[64];
+    if ((f->cs & 3) != 3 ||
+        copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    int handle = vfs_open(path);
+    if (handle < 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    u64 size = vfs_size(handle);
+    if (size == 0 || size > FRAME_SIZE) {
+        vfs_close(handle);
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    u64 frame = pmm_alloc_frame();
+    u8 *code = vmm_phys(frame);
+    if (code == NULL) {
+        if (frame != 0) {
+            pmm_free_frame(frame);
+        }
+        vfs_close(handle);
+        f->rax = (u64)-1;
+        return f;
+    }
+    memset(code, 0, FRAME_SIZE);
+    if (vfs_read(handle, code, size) != (int)size) {
+        pmm_free_frame(frame);
+        vfs_close(handle);
+        f->rax = (u64)-1;
+        return f;
+    }
+    vfs_close(handle);
+
+    u64 old_code = vmm_translate(USER_CODE_ADDR);
+    vmm_unmap(USER_CODE_ADDR);
+    if (old_code != 0) {
+        pmm_free_frame(old_code & ~(FRAME_SIZE - 1));
+    }
+    if (vmm_map(USER_CODE_ADDR, frame, VMM_U) != 0) {
+        pmm_free_frame(frame);
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    u64 stack = vmm_translate(USER_STACK_ADDR);
+    if (stack != 0) {
+        u8 *page = vmm_phys(stack & ~(FRAME_SIZE - 1));
+        if (page != NULL) {
+            memset(page, 0, FRAME_SIZE);
+        }
+    }
+
+    kputs("[exec] ");
+    kputs(path);
+    kputs(" bytes=");
+    kput_dec(size);
+    kputs("\r\n");
+
+    f->rip = USER_CODE_ADDR;
+    f->rsp = USER_STACK_TOP;
+    f->rax = 0;
+    return f;
+}
+
 static const struct lm_syscall syscalls[] = {
     [1] = {"ping", sys_ping, 0},
     [2] = {"whoami", sys_whoami, 0},
@@ -178,6 +346,10 @@ static const struct lm_syscall syscalls[] = {
     [6] = {"write", sys_write, 1},
     [7] = {"yield", sys_yield, 1},
     [8] = {"brk", sys_brk, 1},
+    [9] = {"open", sys_open, 1},
+    [10] = {"read", sys_read, 1},
+    [11] = {"close", sys_close, 1},
+    [12] = {"exec", sys_exec, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))

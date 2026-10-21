@@ -2178,6 +2178,35 @@ The user program waits for three ticks before its `PING`/`WHOAMI`/`EXIT` sequenc
 spinning in user mode between polls of `SYS_TICKS`. If none arrives it exits with a code
 the nucleus rejects, so a dead PIT fails the run instead of hanging it.
 
+### Exec, and file syscalls
+
+`SYS_EXEC(path)` loads a file into the calling task. It opens the name through the VFS,
+reads the file into a private frame, unmaps and frees the task's old code page, maps the
+new one at `USER_CODE_ADDR`, zeroes the stack page, and rewrites the *saved syscall
+frame*:
+
+| Frame field | New value |
+| --- | --- |
+| `rip` | `USER_CODE_ADDR` |
+| `rsp` | `USER_STACK_TOP` |
+| `rax` | 0 (the value the new program sees if it returns) |
+
+Nothing else changes - the task keeps its page tables, kernel stack and id - and the
+syscall stub's `IRETQ` is what actually enters the new program. That is the same
+frame-rewrite mechanism `exit` and `yield` use to hand over to another task, which is
+why it needed no new entry path.
+
+Each task owns its code frame from the start (previously they shared one read-only
+frame), because `exec` frees the page it replaces; sharing would have freed the other
+task's code.
+
+`open`/`read`/`close` are the file calls the userland needs next. Paths are copied out of
+user memory one validated byte at a time under `STAC`/`CLAC`; `read` pulls sectors into a
+256-byte kernel bounce buffer and copies out to a user buffer only after every
+destination page is confirmed user-mapped, so a bad pointer produces a short read rather
+than a fault in the kernel. The VFS strips a leading `/` because its names are root-level
+for now.
+
 ### Filesystem and loading a program
 
 `boot/lm_hbfs.c` reads the on-disk HBFS format the 32-bit tree writes, so both trees
@@ -2394,14 +2423,14 @@ requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 
 `stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok`, `ring3=ok` (once per
 task), `sched=ok`, `nx=ok`, the hardened `nx=on smep=on smap=on` line, `abi=lp64`,
 `brk=ok` (per task), the user program's `hello`, `blk=ok`, the HBFS geometry and
-`/init bytes=` on COM1, so a
+`/init bytes=`, `[exec] /hello` and the text of `/motd` on COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
 agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
 timer tick to the TSS stack, preempted a task but resumed the wrong frame, switched
 tasks without switching their address spaces, left a data page executable, failed to
 read a user buffer under SMAP, kept a `brk` page mapped after the program shrank it,
-could not read or write the boot disk, could not find or load `/init`, or returned to
+could not read or write the boot disk, could not find or load `/init`, could not `exec` or read a file back, or returned to
 the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
