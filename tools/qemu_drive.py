@@ -101,6 +101,15 @@ class Monitor:
             if "unknown key" in out.lower() or "invalid" in out.lower():
                 raise SystemExit(f"monitor rejected sendkey {key!r}: {out.strip()[:200]}")
 
+    def send_mouse(self, dx: int, dy: int) -> str:
+        """Move the guest pointer: a relative PS/2 packet, exactly what a hand
+        produces, so the driver sees its bytes and no absolute position."""
+        return self.cmd("mouse_move %d %d" % (dx, dy))
+
+    def send_button(self, mask: int) -> str:
+        """Set the button state as a bitmask (1 = left, 2 = right, 4 = middle)."""
+        return self.cmd("mouse_button %d" % mask)
+
     def screen(self) -> str:
         # `x` format prints hex bytes (0x..); `c` format prints quoted characters.
         raw = self.cmd("xp /4000xb 0xb8000", 0.6)

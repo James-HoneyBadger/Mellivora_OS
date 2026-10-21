@@ -106,8 +106,8 @@ int kbd_selftest(void)
         kputs("[kbd] FAIL the controller does not answer\r\n");
         return -1;
     }
-    /* The mouse's bytes arrive on the same port; kgetc skips them, and the
-     * controller is asked to keep them apart if it will. */
+    /* The mouse's bytes arrive on the same port; kgetc hands them to the mouse
+     * driver and never reads one as a keystroke. */
     kputs("[kbd] ps/2 controller ready kbd=ok\r\n");
     return 0;
 }
@@ -121,7 +121,8 @@ int kbd_getc(void)
         }
         u8 data = inb_port(KBD_DATA);
         if ((status & 0x20) != 0) {
-            continue;                       /* it was the mouse */
+            mouse_feed(data);               /* it was the mouse */
+            continue;
         }
         int c = translate(data);
         if (c != 0) {

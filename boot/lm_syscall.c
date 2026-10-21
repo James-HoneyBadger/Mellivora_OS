@@ -921,6 +921,17 @@ static struct lm_fault_frame *sys_kill(struct lm_fault_frame *f)
     return f;
 }
 
+/* mouse() - x in RAX, y in RDX, buttons in the low bits of RCX with the presses
+ * latched since the last call above them (bits 8-10). Polled from the timer, so
+ * this reads the driver's state and nothing else. */
+static struct lm_fault_frame *sys_mouse(struct lm_fault_frame *f)
+{
+    f->rax = (u64)mouse_x();
+    f->rdx = (u64)mouse_y();
+    f->rcx = (u64)((u32)mouse_buttons() | ((u32)mouse_clicks() << 8));
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -993,6 +1004,7 @@ static const struct lm_syscall syscalls[] = {
     [37] = {"fork", sys_fork, 1},
     [38] = {"waitpid", sys_wait, 1},
     [39] = {"kill", sys_kill, 1},
+    [40] = {"mouse", sys_mouse, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -1224,6 +1236,10 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         f->rdi = (u64)(s64)(int)(u32)f->rbx;
         f->rsi = (u64)(u32)f->rcx;
         return sys_kill(f);
+    case 36:                        /* SYS_MOUSE: EAX=x EBX=y ECX=buttons */
+        sys_mouse(f);
+        f->rbx = f->rdx;            /* the wrapper puts the caller's RDX back */
+        return f;
     case 92:                        /* SYS_WAITPID: EBX=pid -> EAX=exit code */
         f->rdi = (u64)(s64)(int)(u32)f->rbx;
         return sys_wait(f);

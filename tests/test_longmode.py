@@ -110,6 +110,9 @@ REQUIRED = (
     "rtc=ok",
     "vga=ok",
     "kbd=ok",
+    # The pointer: the auxiliary port answers and starts in the middle of the
+    # screen. check_mouse() below moves it.
+    "[mouse] ps/2 pointer at 40,12 mouse=ok",
     "sh: cleared the screen",
     "pipe=ok",
     "api ok: malloc/free, load, pipe",
@@ -187,6 +190,77 @@ def boot_and_capture(qemu, image, mem_mb, want, script=()):
         except Exception:
             proc.kill()
     return text
+
+
+def check_mouse(qemu, image):
+    """Move the guest pointer from the monitor and read the driver's answer.
+
+    The moves are raw PS/2 packets, so this exercises the whole path a hand
+    would: controller bytes, the three-byte packets, the sign bits and the
+    button latch. The demo reports every change, so the positions can be
+    checked exactly - 20 cells right and 6 down from where the pointer starts,
+    which is the middle of an 80x25 screen.
+    """
+    workdir = tempfile.mkdtemp(prefix="lm-mouse-")
+    ser_path = os.path.join(workdir, "serial.sock")
+    mon_path = os.path.join(workdir, "monitor.sock")
+    proc = subprocess.Popen(
+        [qemu, "-cpu", CPU_MODEL, "-m", "256",
+         "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % image,
+         "-boot", "c", "-display", "none", "-no-reboot",
+         "-serial", "unix:%s,server=on,wait=on" % ser_path,
+         "-monitor", "unix:%s,server=on,wait=off" % mon_path,
+         "-net", "none"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        serial = qd.SerialConsole(ser_path)
+        if not serial.wait_for("mellivora:/> ", TIMEOUT, proc):
+            return "the shell never reached a prompt"
+        if "mouse=ok" not in serial.text():
+            return "the auxiliary port never answered"
+        monitor = qd.Monitor(mon_path)
+
+        serial.send_line("run /mouse")
+        time.sleep(1.0)
+        monitor.send_mouse(20, 0)
+        time.sleep(0.4)
+        monitor.send_mouse(0, 6)
+        time.sleep(0.4)
+        monitor.send_button(1)
+        time.sleep(0.4)
+        monitor.send_button(0)
+        time.sleep(0.4)
+
+        seen = []
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            serial.pump()
+            for line in serial.text().splitlines():
+                m = re.search(r"mouse x=(\d+) y=(\d+) b=(\d) press=(\d)", line)
+                if m and m.groups() not in seen:
+                    seen.append(m.groups())
+            if any(g[3] == "1" for g in seen):
+                break
+            time.sleep(0.2)
+        if not seen:
+            return "the demo never reported a position"
+        if seen[0][:2] != ("40", "12"):
+            return "the pointer did not start in the middle: %r" % (seen[0],)
+        if ("60", "18") not in [g[:2] for g in seen]:
+            return "the moves did not add up to 60,18: %r" % (seen,)
+        if not any(g[3] == "1" for g in seen):
+            return "a button press was never reported: %r" % (seen,)
+
+        serial.send_line("quit")
+        if not serial.wait_for(MARKER, TIMEOUT, proc):
+            return "the session did not finish after 'quit'"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+    return None
 
 
 def check_keyboard_and_screen(qemu, image):
@@ -373,6 +447,11 @@ def main():
     problem = check_keyboard_and_screen(qemu, IMAGE)
     if problem:
         print("  FAIL  keyboard/screen: %s" % problem, file=sys.stderr)
+        return 1
+
+    problem = check_mouse(qemu, IMAGE)
+    if problem:
+        print("  FAIL  mouse: %s" % problem, file=sys.stderr)
         return 1
 
     # The guest wrote real HBFS structures, so the host can read them back with

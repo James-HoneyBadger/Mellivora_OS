@@ -2299,6 +2299,20 @@ cursor register back to check it agrees with the driver's idea of the cursor, an
 clears the screen to check the blank. `SETCOLOR`, `SETCURSOR` and `CLEAR` are those
 same routines, so they are real calls and not accepted no-ops.
 
+The PS/2 mouse is the keyboard's neighbour on the same controller, and the driver
+(`boot/lm_mouse.c`) follows the same rule: no interrupt. The timer tick drains the
+auxiliary port a hundred times a second, three-byte packets are reassembled by
+their bit-3 resync marker, and the position is kept in text cells - the only
+coordinate system an 80x25 display has. `kbd_getc` hands an auxiliary byte to the
+mouse rather than reading it as a keystroke, which is what keeps a packet from
+being split by a key press in the middle of it. `MOUSE` returns x in RAX, y in
+RDX, and `buttons | presses << 8` in RCX: the presses are latched 0-to-1
+transitions, cleared when read, so a program that asks once a second still sees
+every click. The 32-bit bridge puts the same state in EAX/EBX/ECX, which is the
+shape the tree's own programs expect. `/mouse` is the demonstration - it draws a
+block cursor where the pointer is - and the test moves the pointer with the
+monitor's `mouse_move`, which reaches the driver as ordinary PS/2 packets.
+
 ### Processes
 
 `FORK` duplicates the caller. The address space is copied by walking its page

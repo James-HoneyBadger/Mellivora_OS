@@ -328,6 +328,8 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_FORK        37
 #define SYS_WAIT        38
 #define SYS_KILL        39
+/* MOUSE returns x in RAX, y in RDX, and buttons|clicks<<8 in RCX. */
+#define SYS_MOUSE       40
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -433,10 +435,22 @@ int vfs_unlink(const char *path);
 u32 vfs_free_blocks(void);
 void vfs_release_task(u64 owner);
 
-/* The PS/2 keyboard, polled. */
+/* The PS/2 keyboard, polled. An auxiliary-port byte is handed to the mouse
+ * rather than dropped, so a packet is never split by a keystroke. */
 void kbd_init(void);
 int kbd_getc(void);          /* the next character, or -1 */
 int kbd_selftest(void);
+
+/* The PS/2 mouse, on the same controller and polled from the timer tick. Its
+ * coordinates are text cells. */
+void mouse_init(void);
+int mouse_selftest(void);
+void mouse_feed(u8 byte);    /* one byte from the auxiliary port */
+void mouse_poll(void);       /* drain the port, leaving keystrokes alone */
+int mouse_x(void);
+int mouse_y(void);
+int mouse_buttons(void);     /* bit 0 left, bit 1 right, bit 2 middle */
+int mouse_clicks(void);      /* presses since the last call, then cleared */
 
 /* The VGA text console: 80x25 at 0xB8000, the second half of kputc. */
 void vga_init(void);

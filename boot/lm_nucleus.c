@@ -412,6 +412,8 @@ void lm_main(void)
     vga_selftest();
     kbd_init();
     kbd_selftest();
+    mouse_init();
+    mouse_selftest();
     cpu_init();          /* GS base: the entry path needs it before it can run */
     struct cpu_features feat = cpu_harden();  /* NX/SMEP/SMAP where offered */
     idt_init();          /* a fault must report, not triple-fault */

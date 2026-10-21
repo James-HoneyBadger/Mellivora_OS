@@ -264,6 +264,10 @@ struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
 /* A timer tick is a yield that also charges the quantum. */
 struct lm_fault_frame *sched_tick(struct lm_fault_frame *f)
 {
+    /* The pointer is drained here whether or not a switch follows: a hundred
+     * polls a second is what keeps it in step with a hand. */
+    mouse_poll();
+
     if (current != NULL && (f->cs & 3) == 3) {
         current->ticks++;
     }
