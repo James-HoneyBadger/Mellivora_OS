@@ -212,18 +212,19 @@ sched_create_task:
         jmp .find_slot
 
 .found_slot:
-        ; A recycled TCB slot must start with no mmap records. vm_areas is
-        ; indexed by slot (= PID), and the previous occupant's mappings died
-        ; with it; inheriting them would let the new task fault in frames it
-        ; does not own.
+        ; Every task gets its own area table, taken from the slab cache and
+        ; zeroed, so a recycled slot cannot inherit the previous occupant's
+        ; mappings - it would let the new task fault in frames it does not own.
         push edx
         push edi
         push ecx                        ; ECX still holds the user stack top
         mov ecx, edx
-        call vm_clear_table
+        call vm_alloc_table
         pop ecx
         pop edi
         pop edx
+        test eax, eax
+        jz .create_fail
 
         ; Allocate this task's page directory (a copy of the master directory)
         push edx
@@ -404,6 +405,9 @@ sched_create_task:
         pop edi
         pop edx
 .create_fail:
+        ; The slot never became a task: give its area table back.
+        mov ecx, edx
+        call vm_free_table
         mov dword [esp + 28], -1        ; Return -1
         popad
         ret
@@ -442,6 +446,10 @@ sched_free_ready_task:
         call pmm_free_page
         mov dword [edi + TCB_KSTACK], 0
 .sfr_fd:
+        mov ecx, [edi + TCB_PID]
+        call vm_free_table
+        mov eax, [edi + TCB_PID]
+        call task_args_free
         mov eax, [edi + TCB_FD_TABLE_PTR]
         test eax, eax
         jz .sfr_sig
@@ -566,6 +574,10 @@ sched_kill_all_tasks:
         jz .skat_pd
         mov ecx, [edi + TCB_PID]
         call vm_release_all
+        mov ecx, [edi + TCB_PID]
+        call vm_free_table
+        mov eax, [edi + TCB_PID]
+        call task_args_free
 .skat_pd:
         ; The master directory is active here, so the task's directory is not
         ; in use and can be released immediately.
@@ -663,6 +675,13 @@ sched_exit_task:
         mov ecx, [edi + TCB_PID]
         call vm_release_all
 .exit_no_vm:
+
+        ; Its area table and argument snapshot have served their purpose: the
+        ; records are gone and the slot is about to be reusable.
+        mov ecx, [edi + TCB_PID]
+        call vm_free_table
+        mov eax, [edi + TCB_PID]
+        call task_args_free
 
         ; Queue this task's page directory for release. It cannot be freed here:
         ; this runs in the dying task's context, so CR3 may still point at it,
@@ -965,14 +984,66 @@ sched_set_task_args:
         pushad
         cmp eax, MAX_TASKS
         jae .ssta_done
+        call task_args_slot
+        test eax, eax
+        jz .ssta_done
         mov edi, eax
-        shl edi, 9                  ; * 512 bytes per slot
-        add edi, task_argv_table
         mov esi, program_args_buf
         mov ecx, 512 / 4
         cld
         rep movsd
 .ssta_done:
+        popad
+        ret
+
+;---------------------------------------
+; task_args_slot - a task's argument snapshot, allocated on first use
+;   In : EAX = task id            Out: EAX = 512-byte buffer, or 0
+;
+; A slab object per live task instead of a fixed array for MAX_TASKS: most
+; tasks never read their arguments, and the array was 64 KB of image for the
+; few that do.
+;---------------------------------------
+task_args_slot:
+        pushad
+        cmp eax, MAX_TASKS
+        jae .tas_fail
+        mov [.tas_pid], eax
+        mov edx, [task_args_ptr + eax*4]
+        test edx, edx
+        jnz .tas_have
+        mov eax, [cache_task_args]
+        call kmem_alloc
+        test eax, eax
+        jz .tas_fail
+        mov edx, [.tas_pid]
+        mov [task_args_ptr + edx*4], eax
+        mov edx, eax
+.tas_have:
+        mov [esp + 28], edx
+        popad
+        ret
+.tas_fail:
+        mov dword [esp + 28], 0
+        popad
+        ret
+.tas_pid: dd 0
+
+;---------------------------------------
+; task_args_free - release a task's argument snapshot
+;   In : EAX = task id
+;---------------------------------------
+task_args_free:
+        pushad
+        cmp eax, MAX_TASKS
+        jae .taf_done
+        mov ebx, [task_args_ptr + eax*4]
+        test ebx, ebx
+        jz .taf_done
+        mov dword [task_args_ptr + eax*4], 0
+        mov eax, [cache_task_args]
+        call kmem_free
+.taf_done:
         popad
         ret
 
@@ -1598,6 +1669,10 @@ sched_signal_task:
         mov ecx, [edi + TCB_PID]
         call vm_release_all
 .sst_kill_no_mem:
+        mov ecx, [edi + TCB_PID]
+        call vm_free_table
+        mov eax, [edi + TCB_PID]
+        call task_args_free
 
         ; Free the signal handler table page (allocated lazily by sigaction)
         mov eax, [edi + TCB_SIG_HAND]
@@ -2844,10 +2919,38 @@ sys_fork:
         mov  dword [edi + TCB_WAIT_PID],    0
         mov  dword [edi + TCB_ERRNO],       0
 
+        ;--- Inherit the parent's argument snapshot ---
+        ; The child is the same program until it execs, so it must report the
+        ; same arguments. Both slots come from the slab cache, so this is a
+        ; copy, not an inherited pointer.
+        mov  eax, [fork_parent_pid]
+        call task_args_slot
+        test eax, eax
+        jz   .fork_args_done
+        mov  [fork_parent_args], eax
+        mov  eax, [fork_child_pid_slot]
+        call task_args_slot
+        test eax, eax
+        jz   .fork_args_done
+        push edi                        ; EDI holds the child TCB
+        mov  edi, eax
+        mov  esi, [fork_parent_args]
+        mov  ecx, 512 / 4
+        cld
+        rep  movsd
+        pop  edi
+.fork_args_done:
+
         ;--- Inherit the parent's mmap areas ---
         ; The child's directory is cloned from the parent's, so it maps the
         ; same virtual ranges and needs the same records; cow_fork_share then
-        ; makes the frames copy-on-write.
+        ; makes the frames copy-on-write. The child's table comes from the
+        ; slab cache, so the records have to be copied into it first.
+        mov  ecx, [fork_child_pid_slot]
+        call vm_alloc_table
+        test eax, eax
+        jz   .fork_fail_pd
+
         push edi                        ; child TCB
         mov  ecx, [fork_parent_pid]
         call vm_area_base
@@ -2922,11 +3025,12 @@ sys_fork:
         iretd
 
 .fork_fail_pd:
-        ; Could not allocate the child's page directory. The TCB currently holds
-        ; the PARENT's PD (inherited by the copy): zero it so nothing frees the
-        ; parent's directory, free the slot, and release the kernel stack.
+        ; Could not allocate the child's page directory (or its area table). The
+        ; TCB currently holds the PARENT's PD (inherited by the copy): zero it so
+        ; nothing frees the parent's directory, free the slot, and release the
+        ; kernel stack. vm_free_table tolerates a table that was never created.
         mov  ecx, [fork_child_pid_slot]
-        call vm_clear_table
+        call vm_free_table
         mov  edi, [fork_child_tcb]
         mov  dword [edi + TCB_CR3], 0
         mov  dword [edi + TCB_STATE], TASK_FREE
@@ -2941,7 +3045,7 @@ sys_fork:
         ; cow_fork_share could not privatise a page table (OOM). No PTE was
         ; touched, so the child directory can simply be released.
         mov  ecx, [fork_child_pid_slot]
-        call vm_clear_table
+        call vm_free_table
         mov  edi, [fork_child_tcb]
         mov  eax, [edi + TCB_CR3]
         call paging_free_pd

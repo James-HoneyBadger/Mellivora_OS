@@ -842,10 +842,11 @@ prog_name_buf:   resb 256        ; Parsed program name from command line
 parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
 parent_active:    resb 1         ; 1 = re-launch parent after child exits
 program_args_buf: resb 512       ; Command-line arguments for the current launch
-; Per-task copy of the argument string, indexed by PID. A task that calls
-; SYS_GETARGS long after it started must not see whichever program the shell
-; launched most recently, so launches snapshot the buffer here.
-task_argv_table: resb MAX_TASKS * 512
+; Per-task copy of the argument string, indexed by PID and allocated from the
+; slab cache on first use. A task that calls SYS_GETARGS long after it started
+; must not see whichever program the shell launched most recently, so launches
+; snapshot the buffer into the task's own object.
+task_args_ptr:    resd MAX_TASKS
 head_lines:      resd 1          ; Line count for head/tail commands
 cmd_flags:       resd 1          ; Bitmask of parsed flags (bit 0='a', bit 13='n', etc.)
 cmd_flag_num:    resd 1          ; Numeric argument from -n N
@@ -954,6 +955,7 @@ cow_ref:          resb COW_MAX_PAGES
 task_create_name: resb 16                             ; v4.0: Name for next task to create
 ; v9.0 fork scratch — kernel-only temporaries used by sys_fork
 fork_parent_pid:  resd 1
+fork_parent_args: resd 1          ; parent's argv snapshot, copied into the child
 fork_parent_tcb:  resd 1
 fork_child_tcb:   resd 1
 fork_child_kstop: resd 1
@@ -1100,8 +1102,16 @@ pc_frames:        resd PC_ENTRIES
 pc_refs:          resb PC_ENTRIES
 pc_hand:          resd 1
 
+; Slab allocator state (see kernel/kmem.inc): object size, objects per slab and
+; free-list head per cache, plus the ids of the caches the kernel uses.
+kmem_obj_size:    resd KMEM_CACHES
+kmem_per_slab:    resd KMEM_CACHES
+kmem_free_list:   resd KMEM_CACHES
+cache_vm_area:    resd 1
+cache_task_args:  resd 1
+
 ; Virtual memory: per-task mmap areas (see kernel/vm.inc).
-vm_areas:         resb MAX_TASKS * VM_AREAS_PER_TASK * VM_AREA_SIZE
+vm_area_ptr:      resd MAX_TASKS             ; per-task area table, from kmem
 vm_next:          resd MAX_TASKS             ; per-task allocation bump pointer
 vm_rng:           resd 1
 vm_file_path:     resb 256                    ; SYS_MMAP_FILE path staging

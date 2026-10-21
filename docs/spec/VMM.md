@@ -161,8 +161,10 @@ Two properties make that safe, and both are easy to lose:
 Implemented in `kernel/vm.inc`:
 
 - Per-task `vm_area` table (32 areas per task) recording start, pages and protection.
-  Records are keyed by task slot (= PID), cleared when the slot is reused, and
-  released on exit/exec.
+  Records are keyed by task slot (= PID). The table is a slab object created with the
+  task and freed when the slot is released, so a recycled slot starts empty by
+  construction rather than by clearing; `vm_area_base` returns 0 for a slot without a
+  table and the fault path treats that as "no mappings".
 - `mmap`: anonymous **demand-zero** mappings in the demand zone, page-aligned, with a
   randomized first base (16 MB of ASLR spread) and overlap-checked placement. No
   frame is allocated until a page is touched.

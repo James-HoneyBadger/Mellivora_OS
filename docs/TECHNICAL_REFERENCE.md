@@ -374,6 +374,33 @@ large guest costs page tables, not boot time.
 | `pmm_alloc_pages` | ECX = count | Allocates N contiguous pages, returns base in EAX |
 | `pmm_count_free` | — | Counts free pages (Kernighan's bit-clearing method) |
 
+### Kernel slab allocator (`kernel/kmem.inc`)
+
+Kernel objects that exist once per task - its mmap area table (896 bytes) and its argv
+snapshot (512 bytes) - used to live in arrays sized for `MAX_TASKS`, so the image carried
+128 copies of each whether or not a task was alive. That was 180 KB of the 2 MB kernel
+for tables most of which never existed; both are now slab objects.
+
+| Routine | Parameters | Description |
+| --- | --- | --- |
+| `kmem_init` | — | Resets the cache table and registers the built-in caches |
+| `kmem_cache` | EAX = object size | Registers a cache; returns its id (EAX), or -1 |
+| `kmem_alloc` | EAX = cache id | Returns a zeroed object (EAX), or 0 when out of memory |
+| `kmem_free` | EAX = cache id, EBX = object | Returns the object to its cache |
+
+A cache records its object size, how many objects fit in a page, and a free-list head.
+Free objects are threaded through their own first dword, so no metadata lives outside
+the objects. A page is taken from the PMM only when the free list is empty, and pages are
+never returned: a cache keeps them and reuses them. `kmem_alloc` zeroes every object it
+hands out, because task slots are recycled as soon as their occupant exits and a stale
+area table would let a new task fault in frames it does not own.
+
+`kmem_alloc` runs on task creation and `SYS_GETARGS`, not from the fault handler: a task's
+area table is allocated before it can run, and `vm_area_base` returns 0 for a slot without
+one so `vm_find_area` fails closed instead of dereferencing it. Task teardown frees both
+objects (`vm_free_table`, `task_args_free`) on every path - normal exit, signal kill,
+ready-task cleanup and the kill-all sweep.
+
 ---
 
 ## HBFS Filesystem

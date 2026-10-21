@@ -2440,10 +2440,9 @@ sys_getargs:
         test eax, eax
         jz .ga_have_src
         mov eax, [eax + TCB_PID]
-        cmp eax, MAX_TASKS
-        jae .ga_have_src
-        shl eax, 9                      ; * 512 bytes per slot
-        add eax, task_argv_table
+        call task_args_slot             ; per-task snapshot, 0 = none
+        test eax, eax
+        jz .ga_have_src
         mov [.ga_src], eax
 .ga_have_src:
         ; Measure the argument string, then validate exactly that range.

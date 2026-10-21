@@ -39,7 +39,7 @@ A phase does not close until these are measured:
 
 | Phase | State | Landed so far |
 |---|---|---|
-| P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
+| P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
 | P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`) |
 
 ## Phases
@@ -77,7 +77,11 @@ A phase does not close until these are measured:
   per HBFS block, shared by every `MF_SHARED` mapping of it, so two mappings of one
   file - in the same task or in different tasks - are coherent with each other, and a
   fork keeps sharing them instead of copying on write. `vmtest5` covers it.
-- [ ] Kernel slab allocator.
+- [x] Kernel slab allocator (`kernel/kmem.inc`): fixed-size objects carved out of
+  4 KB pages taken on demand, with intrusive free lists and zeroed allocations. Its
+  first two users are every task's mmap area table and argv snapshot, which were static
+  arrays sized for `MAX_TASKS`: the kernel image lost 175 KB (2.02 MB → 1.84 MB of the
+  2 MB limit) and now pays only for the tasks that exist.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
 - [x] Allocations above 128 MB (pre-existing). Three faults, all only reachable on a
   guest with more RAM than the boot identity map covers: the page-fault handler saved

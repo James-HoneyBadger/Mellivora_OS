@@ -48,12 +48,69 @@ vm_rand:
 
 ;---------------------------------------
 ; vm_area_base - area table for a task
-;   In : ECX = task id    Out: EAX = table base
+;   In : ECX = task id    Out: EAX = table base, or 0 when none is allocated
+;
+; The table is a kmem object created when the task is created, so a live task
+; always has one; 0 means the slot is free or the id is out of range, and every
+; caller treats that as "no mappings" rather than dereferencing it.
 ;---------------------------------------
 vm_area_base:
         mov eax, ecx
-        imul eax, VM_AREAS_PER_TASK * VM_AREA_SIZE
-        add eax, vm_areas
+        cmp eax, MAX_TASKS
+        jae .vab_none
+        mov eax, [vm_area_ptr + eax*4]
+        ret
+.vab_none:
+        xor eax, eax
+        ret
+
+;---------------------------------------
+; vm_alloc_table - create the area table for a task slot
+;   In : ECX = task id            Out: EAX = 1 on success, 0 on OOM
+;---------------------------------------
+vm_alloc_table:
+        push ecx
+        push edx
+        mov edx, ecx
+        cmp edx, MAX_TASKS
+        jae .vat_fail
+        mov eax, [vm_area_ptr + edx*4]
+        test eax, eax
+        jnz .vat_ok                     ; already allocated
+        mov eax, [cache_vm_area]
+        call kmem_alloc
+        test eax, eax
+        jz .vat_fail
+        mov [vm_area_ptr + edx*4], eax
+        mov dword [vm_next + edx*4], 0
+.vat_ok:
+        mov eax, 1
+        pop edx
+        pop ecx
+        ret
+.vat_fail:
+        xor eax, eax
+        pop edx
+        pop ecx
+        ret
+
+;---------------------------------------
+; vm_free_table - release a task slot's area table
+;   In : ECX = task id
+;---------------------------------------
+vm_free_table:
+        pushad
+        cmp ecx, MAX_TASKS
+        jae .vft_done
+        mov ebx, [vm_area_ptr + ecx*4]
+        test ebx, ebx
+        jz .vft_done
+        mov dword [vm_area_ptr + ecx*4], 0
+        mov dword [vm_next + ecx*4], 0
+        mov eax, [cache_vm_area]
+        call kmem_free
+.vft_done:
+        popad
         ret
 
 ;---------------------------------------
@@ -70,6 +127,8 @@ vm_find_area:
         jz .vfa_none
         mov ecx, [eax + TCB_PID]
         call vm_area_base
+        test eax, eax
+        jz .vfa_none
         mov esi, eax
         mov ecx, VM_AREAS_PER_TASK
 .vfa_loop:
@@ -110,6 +169,8 @@ vm_free_slot:
         jz .vfs_none
         mov ecx, [eax + TCB_PID]
         call vm_area_base
+        test eax, eax
+        jz .vfs_none
         mov esi, eax
         mov ecx, VM_AREAS_PER_TASK
 .vfs_loop:
@@ -133,10 +194,6 @@ vm_free_slot:
 
 ;---------------------------------------
 ; vm_overlaps - does [EAX, EAX+EBX) hit an existing area?
-;   Out: EAX = 1 on overlap, 0 if free. Clobbers EAX/ECX/EDX/ESI.
-;---------------------------------------
-;---------------------------------------
-; vm_overlaps - does [EAX, EAX+EBX) hit an existing area?
 ;   In : EAX = start, EBX = length
 ;   Out: EAX = 1 on overlap, 0 if free
 ;---------------------------------------
@@ -154,6 +211,8 @@ vm_overlaps:
         jz .vo_free
         mov ecx, [eax + TCB_PID]
         call vm_area_base
+        test eax, eax
+        jz .vo_free
         mov esi, eax
         mov ecx, VM_AREAS_PER_TASK
 .vo_loop:
@@ -556,25 +615,6 @@ vm_release_area_frames:
 .raf_left: dd 0
 .raf_phys: dd 0
 .raf_rec:  dd 0
-
-;---------------------------------------
-; vm_clear_table - forget every mapping of a task slot
-;   In : ECX = task id
-;---------------------------------------
-vm_clear_table:
-        pushad
-        mov eax, ecx
-        imul eax, VM_AREAS_PER_TASK * VM_AREA_SIZE
-        add eax, vm_areas
-        mov edi, eax
-        xor eax, eax
-        mov ecx, (VM_AREAS_PER_TASK * VM_AREA_SIZE) / 4
-        cld
-        rep stosd
-        mov ecx, [esp + 24]     ; original ECX from the pushad frame
-        mov dword [vm_next + ecx*4], 0
-        popad
-        ret
 
 ;---------------------------------------
 ; vm_split_at - split the area containing an address

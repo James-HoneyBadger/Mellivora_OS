@@ -1,5 +1,26 @@
 # Mellivora OS - Changelog
 
+## Unreleased - kernel slab allocator
+
+### Kernel
+
+- **A slab allocator for fixed-size kernel objects** (`kernel/kmem.inc`). A cache carves
+  4 KB pages from the PMM on demand and threads the free objects through their own first
+  dword, so nothing is stored outside the objects; pages are kept and reused rather than
+  returned. Every object is zeroed before it is handed out, because a task slot is reused
+  the moment its occupant exits.
+- **Per-task tables come from it.** A task's `vm_area` table (896 bytes) and its argv
+  snapshot (512 bytes) were `MAX_TASKS`-sized static arrays - 128 copies of each, most of
+  them for tasks that never existed. The image drops from 2,015,651 to 1,840,601 bytes,
+  so the headroom under the 2 MB kernel limit grows from 81 KB to 256 KB, and a running
+  system now pays only for its live tasks.
+- The area table is allocated with the task (`vm_alloc_table`) and freed by every teardown
+  path (`vm_free_table`); `vm_area_base` returns 0 for a slot without one, so the fault
+  handler fails closed instead of dereferencing a null table. `vm_clear_table` is gone -
+  a fresh, zeroed object cannot carry the previous occupant's mappings.
+- A forked child copies its parent's argv snapshot into its own object, so `SYS_GETARGS`
+  reports the inherited arguments instead of whatever the recycled slot last held.
+
 ## Unreleased - task teardown returns what it took
 
 ### Memory
