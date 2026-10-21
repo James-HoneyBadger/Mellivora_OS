@@ -13,7 +13,10 @@
  *   - the higher half is mapped and the nucleus executes from it,
  *   - .bss starts zeroed and the stack works,
  *   - SYSCALL/SYSRET MSRs can be programmed and a 64-bit `syscall` reaches a
- *     handler (the shape the ported syscall path will use).
+ *     handler (the shape the ported syscall path will use),
+ *   - ring 3 is reachable and reusable: IRETQ into a user segment returns to a
+ *     user stack, SYSCALL comes back with SWAPGS and a per-CPU kernel stack,
+ *     and three calls later the program exits with everything intact.
  *
  * Everything here is freestanding: no libc, no compiler runtime. The two
  * helpers a freestanding build can still need - memcpy/memset, which the
@@ -21,6 +24,25 @@
  */
 
 #include "lm.h"
+
+/* The entry stub below (and lm_user_enter) address these by byte offset, so the
+ * header's numbers and the structs must not drift apart. */
+_Static_assert(__builtin_offsetof(struct lm_cpu, kstack_top) == CPU_KSTACK_TOP_OFF,
+               "kstack_top offset must match the stub");
+_Static_assert(__builtin_offsetof(struct lm_cpu, saved_rsp) == CPU_SAVED_RSP_OFF,
+               "saved_rsp offset must match the stub");
+_Static_assert(__builtin_offsetof(struct lm_cpu, exit_code) == CPU_EXIT_CODE_OFF,
+               "exit_code offset must match the stub");
+_Static_assert(sizeof(struct lm_syscall_frame) == 18 * 8,
+               "the stub pushes five IRETQ values and thirteen registers");
+_Static_assert(__builtin_offsetof(struct lm_syscall_frame, rax) == 12 * 8,
+               "rax is the syscall number and the result slot");
+_Static_assert(__builtin_offsetof(struct lm_syscall_frame, rip) == 13 * 8,
+               "the IRETQ frame follows the general registers");
+_Static_assert(__builtin_offsetof(struct lm_syscall_frame, rsp) == 16 * 8,
+               "the caller's RSP sits in the IRETQ frame");
+_Static_assert(__builtin_offsetof(struct lm_syscall_frame, ss) == 17 * 8,
+               "SS is the last value IRETQ pops");
 
 #define COM1 0x3F8
 
@@ -142,14 +164,19 @@ static u64 rdmsr(u32 msr)
 
 /*
  * The C half of a syscall. It runs on the CPU's own kernel stack, which the
- * entry stub below has already switched to, and reaches per-CPU state through
- * num, which is a placeholder for the real syscall table the port will have.
- * The two dummy calls exist so the entry path is exercised, not stubbed.
+ * entry stub below has already switched to, and gets the whole saved frame:
+ * the number in `rax`, the argument in `rdi`, and - on the way out - the
+ * selectors and result the stub's IRETQ uses.
+ *
+ * The return value tells the stub what to do: 0 returns to the caller (ring 3
+ * or ring 0, whichever it came from), non-zero means the program is finished
+ * and control goes back to the kernel instead.
  */
 #define LM_SYS_PING 1U
 #define LM_SYS_WHOAMI 2U
+#define LM_SYS_EXIT 3U
 
-u64 lm_syscall_dispatch(u64 nr, u64 arg)
+u64 lm_syscall_dispatch(struct lm_syscall_frame *f)
 {
     struct lm_cpu *cpu = cpu_this();
     u64 rsp;
@@ -157,26 +184,50 @@ u64 lm_syscall_dispatch(u64 nr, u64 arg)
 
     cpu->syscall_count++;
     cpu->last_rsp = rsp;         /* must be inside the per-CPU kernel stack */
-    cpu->last_nr = nr;
-    cpu->last_arg = arg;
+    cpu->last_nr = f->rax;
+    cpu->last_arg = f->rdi;
 
-    switch (nr) {
+    int from_user = cpu->user_mode != 0;
+    if (from_user) {
+        cpu->user_calls++;
+        cpu->last_user_rip = f->rip;
+        cpu->last_user_rsp = f->rsp;
+    }
+
+    /* Whatever ring the caller was in, SYSCALL has already put kernel
+     * selectors in CS/SS; the frame is what IRETQ returns with, so it has to
+     * carry the caller's ring back. */
+    f->cs = from_user ? (SEL_UCODE | RPL_USER) : SEL_KCODE;
+    f->ss = from_user ? (SEL_UDATA | RPL_USER) : SEL_KDATA;
+
+    switch (f->rax) {
     case LM_SYS_PING:
-        return arg;
+        f->rax = f->rdi;
+        return 0;
     case LM_SYS_WHOAMI:
-        return cpu->id;
+        f->rax = cpu->id;
+        return 0;
+    case LM_SYS_EXIT:
+        if (!from_user) {
+            f->rax = (u64)-1;   /* there is no user program to end */
+            return 0;
+        }
+        cpu->exit_code = f->rdi;
+        cpu->exit_arg = f->rsi;
+        return 1;
     default:
-        return (u64)-1;
+        f->rax = (u64)-1;
+        return 0;
     }
 }
 
 /*
- * The entry path LSTAR points at. It must not assume anything about the
- * register state it arrives with, so it saves the caller's stack pointer in the
- * per-CPU block, switches to that CPU's kernel stack and only then touches
- * memory. (SYSCALL from ring 3 would also need SWAPGS and a return to a
- * user-controlled stack; this nucleus runs it from ring 0, where GS already
- * points at the per-CPU block.)
+ * The entry path LSTAR points at. SYSCALL has already switched CS/SS to the
+ * kernel selectors but changed nothing else: RSP is still the caller's and GS
+ * still holds the caller's base, so the stub starts with SWAPGS (the per-CPU
+ * block lives in KERNEL_GS_BASE - see boot/lm_cpu.c) and only then touches
+ * memory. Saving every general register the C dispatcher may clobber is what
+ * lets a ring-3 caller find its RAX, RBX and the rest intact after IRETQ.
  */
 void lm_syscall_entry(void);
 
@@ -184,23 +235,58 @@ __asm__(
     ".text\n"
     ".globl lm_syscall_entry\n"
     "lm_syscall_entry:\n"
+    "    swapgs\n"
     /* Save the caller's RSP, take this CPU's kernel stack. */
     "    movq %rsp, %gs:0x18\n"
     "    movq %gs:0x10, %rsp\n"
     /* IRETQ in 64-bit mode pops a five-value frame - RIP, CS, RFLAGS, RSP, SS -
      * even for a same-privilege return, so RSP is part of the frame or the
-     * return lands with a garbage stack pointer. */
-    "    pushq $0x10\n"             /* SS */
+     * return lands with a garbage stack pointer. The dispatcher rewrites CS/SS
+     * to whatever ring the caller came from. */
+    "    pushq $0x1B\n"             /* SS (placeholder) */
     "    pushq %gs:0x18\n"          /* caller's RSP, restored by IRETQ */
     "    pushq %r11\n"              /* RFLAGS, as SYSCALL left them */
-    "    pushq $0x08\n"             /* CS */
+    "    pushq $0x23\n"             /* CS (placeholder) */
     "    pushq %rcx\n"              /* return RIP, put there by SYSCALL */
-    "    movq %rsp, %rbx\n"         /* RBX is callee-saved: the frame stays put */
-    "    movq %rdi, %rsi\n"         /* arg */
-    "    movq %rax, %rdi\n"         /* number */
+    "    pushq %rax\n"
+    "    pushq %rdi\n"
+    "    pushq %rsi\n"
+    "    pushq %rdx\n"
+    "    pushq %r8\n"
+    "    pushq %r9\n"
+    "    pushq %r10\n"
+    "    pushq %rbx\n"
+    "    pushq %rbp\n"
+    "    pushq %r12\n"
+    "    pushq %r13\n"
+    "    pushq %r14\n"
+    "    pushq %r15\n"
+    "    movq %rsp, %rdi\n"         /* struct lm_syscall_frame * */
     "    call lm_syscall_dispatch\n"
-    "    movq %rbx, %rsp\n"         /* back to the frame */
-    "    iretq\n");
+    "    testq %rax, %rax\n"
+    "    jne 2f\n"                  /* non-zero: the program is finished */
+    "    popq %r15\n"
+    "    popq %r14\n"
+    "    popq %r13\n"
+    "    popq %r12\n"
+    "    popq %rbp\n"
+    "    popq %rbx\n"
+    "    popq %r10\n"
+    "    popq %r9\n"
+    "    popq %r8\n"
+    "    popq %rdx\n"
+    "    popq %rsi\n"
+    "    popq %rdi\n"
+    "    popq %rax\n"
+    "    swapgs\n"                  /* GS base back to the caller's */
+    "    iretq\n"
+    /* SYS_EXIT: discard the syscall frame, take a clean kernel stack and
+     * report from C. lm_user_exited() never returns. */
+    "2:\n"
+    "    movq %gs:0x10, %rsp\n"
+    "    movq %gs:0x50, %rdi\n"     /* exit code */
+    "    call lm_user_exited\n"
+    "    hlt\n");
 
 /* Bitmask of what the round trip got right, so a failure says which part. */
 #define RT_RESULT 1
@@ -218,9 +304,14 @@ static u64 syscall_roundtrip(void)
 
     u64 efer = rdmsr(MSR_EFER);
     wrmsr(MSR_EFER, efer | 1U);                  /* SCE */
-    wrmsr(MSR_STAR, ((u64)0x08 << 32) | ((u64)0x08 << 48));
+    /* Kernel CS 0x08 / SS 0x10 come from STAR[47:32]; SYSRET would take
+     * CS/SS from STAR[63:48]+16 and +8, which is why KDATA sits at 0x10: the
+     * same value names user data at 0x18 and user code at 0x20. */
+    wrmsr(MSR_STAR, ((u64)SEL_KDATA << 48) | ((u64)SEL_KCODE << 32));
     wrmsr(MSR_LSTAR, (u64)(unsigned long)lm_syscall_entry);
-    wrmsr(MSR_FMASK, 0);                         /* nothing masked */
+    /* SYSCALL does not switch stacks: clear IF and DF on entry so the kernel
+     * runs with interrupts off on a stack it has not validated yet. */
+    wrmsr(MSR_FMASK, 0x200U | 0x400U);
 
     u64 rsp_before;
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_before));
@@ -379,6 +470,13 @@ void lm_main(void)
     }
 
     report_memory();
+
+    /* The ring-3 test is the last thing the nucleus does: the program leaves
+     * through SYS_EXIT, and lm_user_exited() reports and halts. A failure to
+     * build the address space returns here instead. */
+    if (rt == 0 && lm_user_run() != 0) {
+        kputs("[ring3] FAIL setup\r\n");
+    }
 
     kputs("MELLIVORA64_OK\r\n");
 

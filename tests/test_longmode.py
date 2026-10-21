@@ -8,7 +8,8 @@ and the nucleus reported in over COM1.
 Usage: tests/test_longmode.py [image]
 
 The default assertions are the ones the C nucleus establishes: the image runs
-at its link address in the top 2 GB and a `syscall` reaches a handler. Pass
+at its link address in the top 2 GB, a `syscall` reaches a handler, and a
+ring-3 program runs and calls back in. Pass
 --marker-only for the hand-written asm nucleus, which only proves the boot.
 
 Usage: tests/test_longmode.py [image] [--marker-only]
@@ -47,13 +48,17 @@ MARKER = "MELLIVORA64_OK"
 
 # A boot marker alone would also be produced by a nucleus that ran in the low
 # half. These are the facts the port has to establish, so the test checks them:
-# the image runs at its *link* address in the top 2 GB, and the SYSCALL/SYSRET
-# MSRs are programmed and a 64-bit `syscall` reaches a handler and returns.
+# the image runs at its *link* address in the top 2 GB, the SYSCALL/SYSRET MSRs
+# are programmed and a 64-bit `syscall` reaches a handler and returns, the frame
+# allocator reads the map as 64-bit, and a ring-3 program runs, makes three
+# syscalls from the user page and exits with the value it round-tripped through
+# its own stack.
 REQUIRED = (
     "MELLIVORA64_OK",
     "base=0xFFFFFFFF80100000",
     "syscall=ok",
     "pmm=ok",
+    "ring3=ok",
 )
 
 # A 4 GB guest has usable E820 ranges above 0x100000000 (there is a hole below
@@ -130,7 +135,7 @@ def main():
     # Scale: a guest past 4 GB only reports sane numbers if the E820 map was
     # read as 64-bit, and 8 GB is the P2 gate.
     if SKIP_BIG:
-        print("  PASS  long mode, higher half, per-CPU syscall entry (big-memory run skipped)")
+        print("  PASS  long mode, higher half, syscall entry, ring 3 (big-memory run skipped)")
         return 0
 
     big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER)
@@ -151,7 +156,7 @@ def main():
         print(big[-800:], file=sys.stderr)
         return 1
 
-    print("  PASS  long mode, higher half, per-CPU syscall entry, %d MB of RAM" % usable_mb)
+    print("  PASS  long mode, higher half, syscall entry, ring 3, %d MB of RAM" % usable_mb)
     return 0
 
 

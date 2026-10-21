@@ -2,19 +2,19 @@
  * lm_cpu.c - per-CPU state for the 64-bit nucleus
  *
  * Roadmap P2. A kernel needs, on every processor, a place to find "my" state
- * without looking at a global: on x86-64 that is the GS base, set through
- * MSR_GS_BASE (kernel) and MSR_KERNEL_GS_BASE (what SWAPGS trades with).
+ * without looking at a global: on x86-64 that is the GS base.
  *
- * The nucleus is single-CPU, so there is one block and cpu_this() could just
- * return its address - but the SYSCALL entry stub reaches the same block
- * through %gs without calling anything, because at that point it has no valid
- * C stack of its own. That is the property the port needs, so it is what the
- * nucleus sets up and tests.
+ * The two halves are set up the way SWAPGS expects them: KERNEL_GS_BASE holds
+ * the block, and the live GS base holds what the user program sees (0 here),
+ * because SWAPGS *exchanges* the two and the entry stub runs it unconditionally
+ * whether the SYSCALL came from ring 0 or ring 3. Ring 0 code therefore cannot
+ * use %gs to reach the block - it calls cpu_this(), which is a direct address.
  */
 
 #include "lm.h"
 
-#define MSR_GS_BASE 0xC0000101U
+#define MSR_GS_BASE         0xC0000101U
+#define MSR_KERNEL_GS_BASE  0xC0000102U
 
 /* 8 KB is enough for the entry path plus a C handler; a ported kernel sizes
  * this per CPU at boot. */
@@ -43,9 +43,17 @@ int cpu_init(void)
     cpu->last_rsp = 0;
     cpu->last_nr = 0;
     cpu->last_arg = 0;
+    cpu->user_mode = 0;
+    cpu->user_calls = 0;
+    cpu->exit_code = 0;
+    cpu->exit_arg = 0;
+    cpu->last_user_rip = 0;
+    cpu->last_user_rsp = 0;
 
-    /* GS base: what the entry stub reads with %gs:0x10 etc. */
-    wrmsr_gs_base(MSR_GS_BASE, cpu->self);
+    /* SWAPGS trades these two, so the block goes in KERNEL_GS_BASE and the
+     * live GS base keeps the value a user program would have (zero). */
+    wrmsr_gs_base(MSR_GS_BASE, 0);
+    wrmsr_gs_base(MSR_KERNEL_GS_BASE, cpu->self);
     return 0;
 }
 

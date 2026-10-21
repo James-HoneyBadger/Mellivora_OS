@@ -1979,38 +1979,85 @@ calls `lm_main`, which zeroes `.bss` (it is `NOBITS`, so the loader carried no b
 it), switches from stage2's low stack to its own 16 KB stack *inside* `.bss` - which is
 why the switch happens after the zeroing - initialises COM1 and reports.
 
-`syscall_roundtrip` programs `EFER.SCE`, `STAR` (kernel CS 0x08 / SS 0x10), `LSTAR`
-(entry point) and `FMASK=0`, executes a 64-bit `syscall`, and the handler returns with
-`iretq` using `RCX`/`R11` as SYSCALL left them. A same-privilege `IRETQ` pops RIP, CS and
-RFLAGS only - it does not pop RSP/SS - so the frame is exactly those three. The ported
-path will add `swapgs` and a per-CPU kernel stack.
+`syscall_roundtrip` programs `EFER.SCE`, `STAR`, `LSTAR` (the entry point) and `FMASK`,
+executes a 64-bit `syscall`, and the handler returns with `iretq` using `RCX`/`R11` as
+SYSCALL left them. Two details come from the rings below:
+
+- `STAR[47:32]` names the kernel CS (0x08, with SS 0x10 next to it) and `STAR[63:48]`
+  is the base SYSRET adds 8 and 16 to, so it holds the kernel data selector 0x10:
+  that names user data 0x18 and user code 0x20, which are also the selectors the IRETQ
+  path returns to. Both return paths therefore agree on the same two descriptors.
+- `FMASK` clears `IF` and `DF` on entry, because SYSCALL does not switch stacks and the
+  kernel must not take an interrupt on the caller's stack before it has switched.
+
+`IRETQ` pops **five** values in 64-bit mode - RIP, CS, RFLAGS, RSP, SS - even when it
+returns to the same privilege level, so the frame always carries both. A three-value
+frame returns with a garbage stack pointer (see the self-test notes below).
 
 ### Per-CPU state and the entry path
 
-`boot/lm_cpu.c` keeps one block per processor, reached through `MSR_GS_BASE` rather than
-a global: the entry path has to find the CPU's kernel stack before it has a stack it can
-call anything on, so the block is addressed as `%gs:<offset>` with no call, no relocation
-and no register assumptions.
+`boot/lm_cpu.c` keeps one block per processor rather than using a global: the entry path
+has to find the CPU's kernel stack before it has a stack it can call anything on, so the
+block is addressed as `%gs:<offset>` with no call, no relocation and no register
+assumptions.
+
+The two GS-base halves are set up for `SWAPGS`: `MSR_KERNEL_GS_BASE` holds the block and
+the live GS base holds what a user program sees (zero here), because `SWAPGS` exchanges
+them and the entry stub runs it unconditionally whichever ring the SYSCALL came from.
+Ring 0 code therefore cannot use `%gs` to reach the block - it calls `cpu_this()`.
 
 | Offset | Field | Use |
 | --- | --- | --- |
 | `0x00` | `self` | the block's own address (how `cpu_this()` would verify itself) |
 | `0x08` | `id` | processor index |
-| `0x10` | `kstack_top` | kernel stack the entry stub switches to |
+| `0x10` | `kstack_top` | kernel stack the entry stub switches to (also TSS `RSP0`) |
 | `0x18` | `saved_rsp` | caller's stack pointer, written by the stub |
 | `0x20` | `syscall_count` | calls taken |
 | `0x28` | `last_rsp` | stack the handler ran on |
 | `0x30`/`0x38` | `last_nr`/`last_arg` | last call, for the self-test |
+| `0x40` | `user_mode` | non-zero while the CPU runs a user program |
+| `0x48` | `user_calls` | calls taken from ring 3 |
+| `0x50`/`0x58` | `exit_code`/`exit_arg` | what `SYS_EXIT` was given |
+| `0x60`/`0x68` | `last_user_rip`/`last_user_rsp` | where the last ring-3 call came from |
 
-The stub (`lm_syscall_entry`, the address in `LSTAR`) does, in order: save RSP to
-`%gs:0x18`, load RSP from `%gs:0x10`, push the five-value IRETQ frame (SS, caller RSP,
-RFLAGS from R11, CS, return RIP from RCX), park the frame pointer in RBX (callee-saved,
-so the C dispatcher preserves it), put the number in RDI and the argument in RSI, call
-`lm_syscall_dispatch`, restore RSP from RBX and `iretq`. The dispatcher therefore runs on
-the per-CPU kernel stack, and the caller's stack pointer comes back exactly as it was.
+The stub (`lm_syscall_entry`, the address in `LSTAR`) does, in order: `SWAPGS`, save RSP
+to `%gs:0x18`, load RSP from `%gs:0x10`, push the five-value IRETQ frame (SS, caller RSP,
+RFLAGS from R11, CS, return RIP from RCX), push every general register the C dispatcher
+may clobber, pass the frame pointer in RDI and call `lm_syscall_dispatch`. The dispatcher
+writes the result into the frame's `rax` and the caller's selectors into `cs`/`ss`; the
+stub pops everything back, `SWAPGS` and `iretq`s. The dispatcher therefore runs on the
+per-CPU kernel stack, and the caller - ring 0 or ring 3 - finds its registers and stack
+exactly as it left them.
 
-This is still ring 0. A ring-3 path adds `SWAPGS` at entry and exit and returns to a user
-stack - the frame layout and the stack switch above are what it will use.
+A non-zero return from the dispatcher means the program is finished (`SYS_EXIT`): the
+stub drops the syscall frame, reloads a clean kernel stack and calls `lm_user_exited`,
+which reports and halts.
+
+### Ring 3
+
+`boot/lm_user.c` adds the user half:
+
+| Piece | What it does |
+| --- | --- |
+| GDT | null, kernel code/data (0x08/0x10), user data/code (0x18/0x20, DPL 3), 16-byte TSS descriptor (0x28) |
+| TSS | `RSP0` = the per-CPU kernel stack, so an interrupt taken in ring 3 lands on a kernel stack; `iomap_base` past the segment, so user `in`/`out` faults |
+| address space | two frames from the frame allocator at `0x40000000` (code, stack), `U/S` at every level of the walk |
+| `lm_user_enter` | builds `SS`/`RSP`/`RFLAGS`/`CS`/`RIP` and `IRETQ`s to CPL 3 |
+
+The user pages get their own PDPT/PD/PT - `0x40000000` is `PDPT[1]`, which stage2 never
+filled - instead of splitting the 2 MB kernel pages, and only the shared PML4 entry gains
+`U/S`: the identity map's PDPT entry does not have it, so `0..1 GB` stays kernel-only.
+Frames are reached through stage2's direct map (`phys + 0xFFFFFFFF80000000`, the first
+16 MB) because there is no VMM in the 64-bit tree yet.
+
+`lm_user_enter` does **not** `SWAPGS`: the live GS base already holds the user value and
+`KERNEL_GS_BASE` the block, which is the state the entry stub's `SWAPGS` expects to find.
+The user program (`lm_user_program`, assembled into `.rodata` and copied into its frame)
+calls `PING(0x1234)`, pushes the result onto its own stack, calls `WHOAMI`, pops the
+value back and exits with it - so the exit code proves both that the return to ring 3
+restored `RAX` and that the user stack is mapped writable. `lm_user_exited` checks the
+exit code, the `WHOAMI` answer, the call count and that the last call came from the user
+code page with the user stack, then prints `ring3=ok`.
 
 ### Frame allocator
 
@@ -2053,9 +2100,9 @@ Two long-mode details are worth knowing here because both were faults first:
 
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
-`stack=ok` and `pmm=ok` on COM1, so a nucleus that booted in the wrong half, broke its
-SYSCALL path, ran its handler on the wrong stack or mis-read the memory map fails rather
-than printing a marker. The second run boots 8 GB (the roadmap's scale
+`stack=ok`, `pmm=ok` and `ring3=ok` on COM1, so a nucleus that booted in the wrong half,
+broke its SYSCALL path, ran its handler on the wrong stack, mis-read the memory map or
+returned to the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

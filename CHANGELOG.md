@@ -1,5 +1,43 @@
 # Mellivora OS - Changelog
 
+## Unreleased - ring 3: a user GDT/TSS, SWAPGS and a return to a user stack
+
+### Port (P2)
+
+- **`boot/lm_user.c`: the first user program.** A 64-bit GDT (null, kernel code/data,
+  user data/code, and a 16-byte TSS descriptor), a TSS with `RSP0` pointing at the
+  per-CPU kernel stack, and an address space built in the existing page tables: two
+  frames from the frame allocator mapped at `0x40000000` with `U/S` at every level of
+  the walk. The identity map and the higher half stay supervisor-only - only the shared
+  PML4 entry gains `U/S`, and its identity-map PDPT entry does not have it - so ring 3
+  reaches the two user pages and nothing else.
+- **The syscall path now crosses rings in both directions.** `lm_user_enter` builds the
+  five-value IRETQ frame with the user's `SS`/`RSP`/`RFLAGS`/`CS`/`RIP`; `SYSCALL`
+  arrives with kernel selectors already loaded but the user's RSP and GS base, so the
+  stub starts with `SWAPGS` before it touches memory. The per-CPU block moved to
+  `MSR_KERNEL_GS_BASE` (the live GS base keeps the user value, `0`), which makes one
+  stub work for a SYSCALL taken from ring 0 and from ring 3.
+- **Every general register survives the call.** The stub saves all of them in the
+  frame, the C dispatcher takes `struct lm_syscall_frame *` instead of two arguments,
+  and writes the result into `rax` plus the return selectors into `cs`/`ss`; a
+  ring-0 caller gets `0x08`/`0x10` back, a ring-3 caller `0x23`/`0x1B`. `FMASK` clears
+  `IF` and `DF` on entry, and `STAR` is set so that SYSRET's `+16`/`+8` arithmetic lands
+  on the same user selectors the IRETQ path uses.
+- The user program is assembled into `.rodata`, copied into its own frame, and does
+  what the assertions need: `PING(0x1234)` returns `0x1234`, the program pushes it onto
+  its own stack, asks `WHOAMI`, pops the value back and exits with it. `SYS_EXIT` hands
+  control to `lm_user_exited`, which checks three things the round trip could break
+  independently - the exit code, the WHOAMI answer, and that the last `SYSCALL` came
+  from the user code page with the user stack - and prints `[ring3] ring3=ok`.
+- `tests/test_longmode.py` requires `ring3=ok` as well, so a nucleus whose IRETQ
+  returns to the wrong stack, whose user pages are not mapped user-accessible, or whose
+  entry stub clobbers a caller register fails instead of printing a marker.
+- Two long-mode details this pass had to get right: a segment descriptor's flag nibble
+  starts at bit 52 (`L=1` is `0x2 << 52`, not `0x2 << 48`, or the kernel code segment
+  comes back as 16-bit and the next far return faults), and `lm_user_enter` must *not*
+  `SWAPGS` - the live GS base already holds the user value and `KERNEL_GS_BASE` the
+  block, which is exactly what the entry stub's `SWAPGS` expects to find.
+
 ## Unreleased - per-CPU state and a real SYSCALL entry path
 
 ### Port (P2)
