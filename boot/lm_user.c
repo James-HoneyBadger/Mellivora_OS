@@ -173,7 +173,7 @@ struct boot_task {
     int code_writable;  /* the image carries its own data, so it writes its page */
 };
 
-#define BOOT_TASKS 6
+#define BOOT_TASKS 7
 #define LEGACY_CODE_ADDR  0x00300000ULL     /* the tree's PROGRAM_BASE */
 #define LEGACY_STACK_ADDR 0x003FF000ULL
 #define LEGACY_STACK_TOP  0x00400000ULL
@@ -189,6 +189,8 @@ static const struct boot_task boot_tasks[BOOT_TASKS] = {
     {"ls",         USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
      0, 0},
     {"wr",         USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
+     0, 0},
+    {"api",        USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
      0, 0},
     /* The shell runs last so its prompt is the last thing on the console. */
     {"sh",         USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0,
@@ -306,7 +308,7 @@ int lm_user_run(void)
     kput_hex(USER_CODE_ADDR, 8);
     kputs("/0x");
     kput_hex(LEGACY_CODE_ADDR, 8);
-    kputs(" mode=64,32,32,64,64,64");
+    kputs(" mode=64,32,32,64,64,64,64");
     kputs("\r\n");
 
     sched_init();

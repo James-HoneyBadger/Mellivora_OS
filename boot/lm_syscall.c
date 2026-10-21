@@ -121,19 +121,18 @@ static struct lm_fault_frame *sys_yield(struct lm_fault_frame *f)
  * maps fresh zeroed frames, shrinking unmaps and frees them. Anything below the
  * base or beyond the window is refused, and the old break comes back.
  */
-static struct lm_fault_frame *sys_brk(struct lm_fault_frame *f)
+#define BRK_LIMIT (USER_BRK_BASE + 16 * FRAME_SIZE)
+
+/* Move the break, mapping or freeing whole pages as it moves. Returns the new
+ * break, or the old one when the move is impossible - the caller cannot tell,
+ * so it re-reads the break. */
+static u64 move_brk(u64 want)
 {
     u64 cur = sched_brk();
-    u64 want = f->rdi;
 
-    if (want == 0) {
-        f->rax = cur;
-        return f;
-    }
     want = (want + FRAME_SIZE - 1) & ~(FRAME_SIZE - 1);
-    if (want < USER_BRK_BASE || want > USER_BRK_BASE + 16 * FRAME_SIZE) {
-        f->rax = cur;
-        return f;
+    if (want < USER_BRK_BASE || want > BRK_LIMIT) {
+        return cur;
     }
 
     if (want > cur) {
@@ -144,14 +143,12 @@ static struct lm_fault_frame *sys_brk(struct lm_fault_frame *f)
                 if (frame != 0) {
                     pmm_free_frame(frame);
                 }
-                f->rax = cur;
-                return f;
+                return cur;
             }
             memset(page, 0, FRAME_SIZE);
             if (vmm_map(addr, frame, VMM_W | VMM_U | VMM_NX) != 0) {
                 pmm_free_frame(frame);
-                f->rax = cur;
-                return f;
+                return cur;
             }
         }
     } else {
@@ -165,7 +162,19 @@ static struct lm_fault_frame *sys_brk(struct lm_fault_frame *f)
     }
 
     sched_set_brk(want);
-    f->rax = want;
+    return want;
+}
+
+static struct lm_fault_frame *sys_brk(struct lm_fault_frame *f)
+{
+    u64 cur = sched_brk();
+    u64 want = f->rdi;
+
+    if (want == 0) {
+        f->rax = cur;
+        return f;
+    }
+    f->rax = move_brk(want);
     return f;
 }
 
@@ -554,6 +563,221 @@ static struct lm_fault_frame *sys_date(struct lm_fault_frame *f)
     return f;
 }
 
+/*
+ * The heap. Blocks come out of the break, so they are page-backed user memory
+ * that disappears with the task; the header in front of each block carries its
+ * size and the free list threads through the blocks themselves, which costs no
+ * kernel memory and needs no bookkeeping when a task exits.
+ *
+ * A freed block is reused by the next request that fits, in first-fit order and
+ * without splitting: an allocator this simple is honest about what it is, and
+ * the alternative (splitting, coalescing) is the sort of thing that wants its
+ * own tests rather than a corner of the syscall table.
+ */
+#define HEAP_ALIGN 16
+#define HEAP_MAGIC 0x4D424C4BU      /* 'MBLK' */
+
+struct heap_header {
+    u64 size;                       /* the block's payload size */
+    u64 magic;
+    u64 next;                       /* the free list link, user VA */
+    u64 pad;
+};
+
+/* sbrk(increment) - the tree's form: move the break by that much and return the
+ * break as it was before the move, or -1. */
+static struct lm_fault_frame *sys_sbrk(struct lm_fault_frame *f)
+{
+    s64 delta = (s64)f->rdi;
+    u64 cur = sched_brk();
+
+    if (delta == 0) {
+        f->rax = cur;
+        return f;
+    }
+    u64 want = (u64)((s64)cur + delta);
+    u64 rounded = (want + FRAME_SIZE - 1) & ~(u64)(FRAME_SIZE - 1);
+    if (move_brk(want) != rounded) {
+        f->rax = (u64)-1;           /* refused: outside the region */
+        return f;
+    }
+    f->rax = cur;
+    return f;
+}
+
+static struct lm_fault_frame *sys_malloc(struct lm_fault_frame *f)
+{
+    u64 size = f->rdi;
+    if (size == 0 || size > 1 << 20) {
+        f->rax = 0;
+        return f;
+    }
+    size = (size + HEAP_ALIGN - 1) & ~(u64)(HEAP_ALIGN - 1);
+
+    struct heap_header *hdr = NULL;
+
+    /* First fit over the free list. The links live in the blocks themselves,
+     * which are user pages, so every touch goes through the STAC/CLAC bracket -
+     * SMAP faults a supervisor access to a user page otherwise. */
+    user_access_begin();
+    u64 prev = 0;
+    for (u64 node = sched_free_list(); node != 0; ) {
+        struct heap_header *candidate = (struct heap_header *)(unsigned long)node;
+        if (candidate->magic == HEAP_MAGIC && candidate->size >= size) {
+            if (prev == 0) {
+                sched_set_free_list(candidate->next);
+            } else {
+                struct heap_header *before =
+                    (struct heap_header *)(unsigned long)prev;
+                before->next = candidate->next;
+            }
+            candidate->next = 0;
+            hdr = candidate;
+            break;
+        }
+        prev = node;
+        node = candidate->next;
+    }
+    user_access_end();
+
+    if (hdr == NULL) {
+        u64 heap = sched_heap();
+        if (heap == 0) {
+            heap = sched_brk();     /* start where the break already is */
+        }
+        u64 need = heap + sizeof(struct heap_header) + size;
+        if (need > sched_brk() && move_brk(need) < need) {
+            f->rax = 0;
+            return f;
+        }
+        hdr = (struct heap_header *)(unsigned long)heap;
+        user_access_begin();
+        hdr->size = size;
+        hdr->magic = HEAP_MAGIC;
+        hdr->next = 0;
+        user_access_end();
+        sched_set_heap(heap + sizeof(struct heap_header) + size);
+    }
+
+    f->rax = (u64)(unsigned long)(hdr + 1);
+    return f;
+}
+
+static struct lm_fault_frame *sys_free(struct lm_fault_frame *f)
+{
+    u64 addr = f->rdi;
+    if (addr == 0) {
+        f->rax = 0;                 /* freeing nothing is not an error */
+        return f;
+    }
+    if (!vmm_user_mapped(addr - 1)) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    struct heap_header *hdr = (struct heap_header *)(unsigned long)(addr) - 1;
+    u64 magic;
+    user_access_begin();
+    magic = hdr->magic;
+    if (magic == HEAP_MAGIC) {
+        hdr->next = sched_free_list();
+    }
+    user_access_end();
+    if (magic != HEAP_MAGIC) {
+        f->rax = (u64)-1;           /* not one of ours */
+        return f;
+    }
+    sched_set_free_list((u64)(unsigned long)hdr);
+    f->rax = 0;
+    return f;
+}
+
+/* load(path, buf, max): read a whole file into a user buffer. */
+static struct lm_fault_frame *sys_load(struct lm_fault_frame *f)
+{
+    char path[64];
+    u64 buf = f->rsi;
+    u64 max = f->rdx;
+
+    if (max == 0 || max > 4096) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    int handle = vfs_open(path);
+    if (handle < 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    u64 size = vfs_size(handle);
+    if (size > max) {
+        size = max;
+    }
+    int got = vfs_read(handle, file_bounce, size);
+    vfs_close(handle);
+    if (got < 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_to_user(buf, file_bounce, (u64)got) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)got;
+    return f;
+}
+
+static struct lm_fault_frame *sys_pipe_create(struct lm_fault_frame *f)
+{
+    f->rax = (u64)(long)pipe_create();
+    return f;
+}
+
+static struct lm_fault_frame *sys_pipe_write(struct lm_fault_frame *f)
+{
+    u64 buf = f->rsi;
+    u64 len = f->rdx;
+    if (len > 4096) {
+        len = 4096;
+    }
+    if (copy_from_user(buf, file_bounce, len) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)(long)pipe_write((int)f->rdi, file_bounce, (u32)len);
+    return f;
+}
+
+static struct lm_fault_frame *sys_pipe_read(struct lm_fault_frame *f)
+{
+    u64 buf = f->rsi;
+    u64 max = f->rdx;
+    if (max > 4096) {
+        max = 4096;
+    }
+    int got = pipe_read((int)f->rdi, file_bounce, (u32)max);
+    if (got < 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_to_user(buf, file_bounce, (u64)got) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)got;
+    return f;
+}
+
+static struct lm_fault_frame *sys_pipe_close(struct lm_fault_frame *f)
+{
+    f->rax = (u64)(long)pipe_close((int)f->rdi);
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -612,6 +836,13 @@ static const struct lm_syscall syscalls[] = {
     [23] = {"clear", sys_clear, 0},
     [24] = {"sleep", sys_sleep, 1},
     [25] = {"date", sys_date, 0},
+    [26] = {"load", sys_load, 0},
+    [27] = {"malloc", sys_malloc, 1},
+    [28] = {"free", sys_free, 1},
+    [29] = {"pipe_create", sys_pipe_create, 0},
+    [30] = {"pipe_write", sys_pipe_write, 1},
+    [31] = {"pipe_read", sys_pipe_read, 0},
+    [32] = {"pipe_close", sys_pipe_close, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -815,6 +1046,35 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         return sys_date(f);
     case 15:                        /* SYS_GETTIME: ticks since boot */
         return sys_ticks(f);
+    case 19:                        /* SYS_MALLOC: EBX=size -> EAX=block */
+        f->rdi = (u64)(u32)f->rbx;
+        return sys_malloc(f);
+    case 20:                        /* SYS_FREE: EBX=block */
+        f->rdi = (u64)(u32)f->rbx;
+        return sys_free(f);
+    case 23:                        /* SYS_SBRK: EBX=increment -> EAX=old break */
+        f->rdi = (u64)(u32)f->rbx;
+        return sys_sbrk(f);
+    case 60:                        /* SYS_PIPE_CREATE -> EAX=id */
+        return sys_pipe_create(f);
+    case 61:                        /* SYS_PIPE_WRITE: EBX=id ECX=buf EDX=len */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx;
+        f->rdx = (u64)(u32)f->rdx;
+        return sys_pipe_write(f);
+    case 62:                        /* SYS_PIPE_READ: EBX=id ECX=buf EDX=max */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx;
+        f->rdx = (u64)(u32)f->rdx;
+        return sys_pipe_read(f);
+    case 63:                        /* SYS_PIPE_CLOSE: EBX=id */
+        f->rdi = (u64)(u32)f->rbx;
+        return sys_pipe_close(f);
+    case 30:                        /* SYS_FREAD: EBX=name ECX=buf -> EAX=bytes */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx;
+        f->rdx = 4096;
+        return sys_load(f);
     case 10:                        /* SYS_SEEK: EBX=fd ECX=offset EDX=whence */
         f->rdi = (u64)(u32)f->rbx;
         f->rsi = (u64)(s64)(int)(u32)f->rcx;

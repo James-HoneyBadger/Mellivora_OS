@@ -306,6 +306,13 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_CLEAR  23
 #define SYS_SLEEP  24
 #define SYS_DATE   25
+#define SYS_LOAD   26      /* load a whole file into a buffer */
+#define SYS_MALLOC 27
+#define SYS_FREE   28
+#define SYS_PIPE_CREATE 29
+#define SYS_PIPE_WRITE  30
+#define SYS_PIPE_READ   31
+#define SYS_PIPE_CLOSE  32
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -411,6 +418,14 @@ int vfs_unlink(const char *path);
 u32 vfs_free_blocks(void);
 void vfs_release_task(u64 owner);
 
+/* Pipes: a ring buffer with a reader and a writer. */
+void pipe_init(void);
+int pipe_create(void);                        /* id, or -1 */
+int pipe_write(int id, const void *data, u32 len);
+int pipe_read(int id, void *buffer, u32 max);
+int pipe_close(int id);
+int pipe_selftest(void);
+
 /* The CMOS real-time clock, read the way the 32-bit tree reads it. */
 struct rtc_time {
     u8 second;
@@ -481,6 +496,13 @@ struct lm_fault_frame *sched_yield(struct lm_fault_frame *frame);
 /* The running task's program break. */
 u64 sched_brk(void);
 void sched_set_brk(u64 value);
+
+/* The task's heap, for MALLOC/FREE: a bump pointer that walks the break, and the
+ * head of a free list threaded through the blocks themselves. */
+u64 sched_heap(void);
+void sched_set_heap(u64 value);
+u64 sched_free_list(void);
+void sched_set_free_list(u64 value);
 
 /* SYS_EXIT: retire the running task; returns the frame to run next, or NULL. */
 struct lm_fault_frame *sched_exit(struct lm_fault_frame *frame);

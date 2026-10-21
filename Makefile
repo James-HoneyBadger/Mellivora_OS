@@ -616,14 +616,15 @@ LM_LDFLAGS = -T boot/lm64.ld --oformat binary
 KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_pmm.o boot/lm_cpu.o boot/lm_user.o \
                   boot/lm_idt.o boot/lm_vmm.o boot/lm_kmem.o boot/lm_irq.o \
                   boot/lm_sched.o boot/lm_syscall.o boot/lm_pci.o boot/lm_ata.o \
-                  boot/lm_hbfs.o boot/lm_vfs.o boot/lm_rtc.o
+                  boot/lm_hbfs.o boot/lm_vfs.o boot/lm_rtc.o \
+		  boot/lm_pipe.o
 
 # The user programs are files in the image now, not part of the nucleus.
 INIT_BIN = initprog.bin
 HELLO_BIN = helloprog.bin
 HELLO32_BIN = hello32.bin
 USERPROGS = $(INIT_BIN) $(HELLO_BIN) $(HELLO32_BIN) $(HELLO_TREE_BIN) \
-	    $(LS_BIN) $(WR_BIN) $(SH_BIN)
+	    $(LS_BIN) $(WR_BIN) $(SH_BIN) $(API_BIN)
 
 $(INIT_BIN): boot/lm_initprog.asm
 	$(NASM) -f bin -o $@ $<
@@ -645,6 +646,11 @@ $(LS_BIN): boot/lm_ls.asm
 WR_BIN = wr.bin
 
 $(WR_BIN): boot/lm_wr.asm
+	$(NASM) -f bin -o $@ $<
+
+API_BIN = api.bin
+
+$(API_BIN): boot/lm_api.asm
 	$(NASM) -f bin -o $@ $<
 
 SH_BIN = sh.bin
@@ -688,7 +694,7 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.
 	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64) bs=512 seek=1  conv=notrunc status=none
 	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64) bs=512 seek=33 conv=notrunc status=none
 	@echo "  64-bit HBFS: /init, /hello, /motd"
-	@python3 tools/mk_hbfs64.py $(IMAGE_64) init=$(INIT_BIN) hello=$(HELLO_BIN) hello32=$(HELLO32_BIN) hello_tree=$(HELLO_TREE_BIN) ls=$(LS_BIN) wr=$(WR_BIN) sh=$(SH_BIN) motd=boot/motd.txt docs/readme.txt=boot/motd.txt
+	@python3 tools/mk_hbfs64.py $(IMAGE_64) init=$(INIT_BIN) hello=$(HELLO_BIN) hello32=$(HELLO32_BIN) hello_tree=$(HELLO_TREE_BIN) ls=$(LS_BIN) wr=$(WR_BIN) sh=$(SH_BIN) api=$(API_BIN) motd=boot/motd.txt docs/readme.txt=boot/motd.txt
 	@echo "=== $(IMAGE_64) ready ==="
 
 64bit: $(IMAGE_64)

@@ -46,6 +46,8 @@ struct lm_task {
     u64 exit_ping;
     u64 cr3;            /* the task's address space */
     u64 brk;            /* program break, in the task's own space */
+    u64 heap;           /* next byte MALLOC hands out, 0 before the first call */
+    u64 free_list;      /* blocks returned by FREE, threaded in user memory */
     u64 mode32;         /* non-zero when the task runs in 32-bit mode */
     u64 expect_exit;    /* the exit code the task must leave, or ANY */
     u64 self_report;    /* ends with PING/WHOAMI in RSI/RDX and its own id */
@@ -170,6 +172,8 @@ static struct lm_task *task_new(u64 entry, u64 user_stack, u64 space,
     t->user_stack = user_stack;
     t->cr3 = space;
     t->brk = USER_BRK_BASE;
+    t->heap = 0;
+    t->free_list = 0;
     t->mode32 = compat ? 1 : 0;
     t->expect_exit = expect_exit;
     t->self_report = self_report ? 1 : 0;
@@ -263,6 +267,30 @@ void sched_set_brk(u64 value)
     }
 }
 
+u64 sched_heap(void)
+{
+    return current != NULL ? current->heap : 0;
+}
+
+void sched_set_heap(u64 value)
+{
+    if (current != NULL) {
+        current->heap = value;
+    }
+}
+
+u64 sched_free_list(void)
+{
+    return current != NULL ? current->free_list : 0;
+}
+
+void sched_set_free_list(u64 value)
+{
+    if (current != NULL) {
+        current->free_list = value;
+    }
+}
+
 static void sched_report(void)
 {
     struct lm_cpu *cpu = cpu_this();
@@ -332,18 +360,20 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
     t->exit_whoami = f->rsi;
     t->exit_ping = f->rdx;
 
-    /* The program grows its break, writes through the new page, then shrinks it
-     * back; the mapping must be gone from this task's space when it exits. */
-    int brk_ok = vmm_translate(USER_BRK_BASE) == 0;
+    /* A self-reporting program is the one that exercises brk: it grows the
+     * break, writes through the new page and shrinks it back, so the mapping
+     * must be gone when it exits. A task that used the heap is allowed to leave
+     * its break where it stands - the pages go with the address space. */
+    int brk_ok = !t->self_report || vmm_translate(USER_BRK_BASE) == 0;
 
     int ok;
     /* The tree's programs do not agree on an exit code, so each task says what
      * it expects; TASK_ANY_EXIT means "made calls and stopped". A task that
      * reports itself additionally has to agree with the CPU it ran on. */
-    ok = t->calls > 0 && brk_ok &&
+    ok = t->calls > 0 &&
          (t->expect_exit == TASK_ANY_EXIT || t->exit_code == t->expect_exit);
     if (t->self_report) {
-        ok = ok && t->exit_code == t->id &&
+        ok = ok && brk_ok && t->exit_code == t->id &&
              t->exit_whoami == cpu_this()->id && t->exit_ping == 0x1234;
     }
 
@@ -363,8 +393,10 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
     }
     kputs(" mode=");
     kput_dec(t->mode32 ? 32 : 64);
-    kputs(" brk=");
-    kputs(brk_ok ? "ok" : "FAIL");
+    if (t->self_report) {
+        kputs(" brk=");
+        kputs(brk_ok ? "ok" : "FAIL");
+    }
     kputs(ok ? " ring3=ok\r\n" : " FAIL ring3\r\n");
 
     t->state = TASK_DEAD;
