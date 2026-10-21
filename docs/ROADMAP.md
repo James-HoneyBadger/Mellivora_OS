@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
+| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; two ring-3 tasks round-robined by that tick with per-task kernel stacks; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
 
@@ -173,7 +173,15 @@ A phase does not close until these are measured:
   only in ring 3, and `SYS_TICKS` lets the program wait for three ticks. The nucleus
   reports `ticks=N user=N stack=ok`, which is true only when every tick came from ring
   3 and crossed the TSS stack - the delivery a scheduler will preempt on.
-- [ ] Port the scheduler, the real syscall table and the driver set.
+- [x] Scheduler: `boot/lm_sched.c` creates tasks with a kernel stack from the slab (a
+  page in the heap window) and a user stack, gives each a saved frame in the same
+  twenty-two-value layout both entry stubs build, and round-robins them at the timer
+  tick and at `SYS_EXIT`. `TSS.RSP0` follows the task on every switch, so the next
+  fault or tick lands on that task's stack. Two tasks run the same program and each
+  exits with its own id after two shared ticks; the nucleus checks every task's id,
+  `PING` value, `WHOAMI` answer and call count, and requires at least one preemption.
+  Tasks share one address space; per-task CR3s come with the address-space work.
+- [ ] Port the real syscall table and the driver set.
 - [ ] LP64 ABI plus a 32-bit compat shim so existing binaries keep running.
 - [ ] NX, SMEP/SMAP where the CPU provides them.
 

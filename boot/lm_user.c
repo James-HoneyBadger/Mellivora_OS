@@ -21,13 +21,13 @@
 
 #include "lm.h"
 
-#define EXIT_MAGIC 0x1234ULL   /* what the user program must hand back at exit */
-
-/* The user program's two pages: code (read/execute) and stack (read/write).
- * 0x40000000 is PDPT[1], which stage2 left empty. */
+/* The user program's pages: one shared code page (read/execute, so both tasks
+ * run the same code) and one stack per task. 0x40000000 is PDPT[1], which
+ * stage2 left empty. */
 #define USER_CODE_ADDR  (0x40000000ULL)
-#define USER_STACK_ADDR (0x40001000ULL)
-#define USER_STACK_TOP  (USER_STACK_ADDR + FRAME_SIZE)
+#define USER_STACK0     (0x40001000ULL)
+#define USER_STACK1     (0x40002000ULL)
+#define USER_STACK_TOP(s) ((s) + FRAME_SIZE)
 
 /*---------------------------------------
  * GDT and TSS
@@ -117,10 +117,13 @@ static void lm_user_load_gdt(void)
 /*---------------------------------------
  * The user program
  *
- * PING(0x1234) returns 0x1234; the program pushes it onto its own stack, asks
- * WHOAMI, then exits with the value it popped. If the return to ring 3 lost
- * RAX, the user stack were not writable, or the second syscall clobbered a
- * register, the exit code would not be 0x1234 and lm_user_exited() says so.
+ * Both tasks run this: PING(0x1234) returns 0x1234, which the program pushes
+ * onto its own stack; it asks for its task id, waits for two more timer ticks
+ * (surrendering the CPU to the other task whenever one arrives), asks WHOAMI,
+ * pops the PING result back and exits with its own id as the code. The nucleus
+ * checks the id, the PING value and the WHOAMI answer per task, so a lost
+ * register, a task whose stack was not writable or a preemption that resumed
+ * the wrong frame shows up as a failed task rather than a passing run.
  *---------------------------------------*/
 
 __asm__(
@@ -128,35 +131,41 @@ __asm__(
     ".globl lm_user_program\n"
     ".globl lm_user_program_end\n"
     "lm_user_program:\n"
-    /* INT3 first: it is the one fault a handler can resume, and taking it from
-     * ring 3 is what proves the TSS.RSP0 transition (the CPU has to load the
-     * kernel stack before the handler runs). */
+    /* INT3 first: the one fault a handler can resume, and taking it from ring 3
+     * is what proves the TSS.RSP0 transition (the CPU has to load the kernel
+     * stack before the handler runs). */
     "    int3\n"
     "    movl $1, %eax\n"          /* LM_SYS_PING */
     "    movl $0x1234, %edi\n"
     "    syscall\n"
     "    pushq %rax\n"             /* the result must survive on the user stack */
-    /* Wait for the timer to tick while this program owns the CPU. RBX is the
-     * counter because SYSCALL itself clobbers RCX and R11. If no tick arrives
-     * the program exits with a code the nucleus rejects, so a dead PIT or an
-     * interrupt that never reaches ring 3 fails the run instead of hanging. */
-    "    movl $200000, %ebx\n"
+    "    movl $5, %eax\n"          /* LM_SYS_GETTID */
+    "    syscall\n"
+    "    movq %rax, %r12\n"        /* the task's own id, kept across syscalls */
+    /* Wait for two more ticks. The clock is shared, so this is the point where
+     * the other task gets the CPU: a tick taken in ring 3 preempts. RBX is the
+     * counter because SYSCALL itself clobbers RCX and R11. */
+    "    movl $4, %eax\n"          /* LM_SYS_TICKS */
+    "    syscall\n"
+    "    leaq 2(%rax), %r13\n"     /* target */
+    "    movl $100000, %ebx\n"
     "1:  movl $4, %eax\n"          /* LM_SYS_TICKS */
     "    syscall\n"
-    "    cmpq $3, %rax\n"          /* three ticks, so more than one crossing */
+    "    cmpq %r13, %rax\n"
     "    jae 2f\n"
     "    movl $2000, %r8d\n"       /* spin in user mode between polls */
     "4:  decl %r8d\n"
     "    jnz 4b\n"
     "    decl %ebx\n"
     "    jnz 1b\n"
-    "    movl $3, %eax\n"          /* LM_SYS_EXIT */
+    "    movl $3, %eax\n"          /* LM_SYS_EXIT: no tick, so fail loudly */
     "    movl $0xBAD, %edi\n"
     "    syscall\n"
     "2:  movl $2, %eax\n"          /* LM_SYS_WHOAMI */
     "    syscall\n"
-    "    movq %rax, %rsi\n"
-    "    popq %rdi\n"              /* 0x1234, back off the user stack */
+    "    movq %rax, %rsi\n"        /* the nucleus checks this is its CPU id */
+    "    popq %rdx\n"              /* 0x1234, back off the user stack */
+    "    movl %r12d, %edi\n"       /* exit code: the task id */
     "    movl $3, %eax\n"          /* LM_SYS_EXIT */
     "    syscall\n"
     "3:  jmp 3b\n"                 /* the kernel never returns to a program */
@@ -176,6 +185,30 @@ extern const u8 lm_user_program_end[];
  * to find. */
 __asm__(
     ".text\n"
+    /* lm_enter_task: RDI is a task's saved frame, in exactly the layout the
+     * entry stubs leave behind, so starting a task and resuming a preempted one
+     * are the same code. No SWAPGS: the kernel's GS base is already the user
+     * value (see lm_user_enter). */
+    ".globl lm_enter_task\n"
+    "lm_enter_task:\n"
+    "    movq %rdi, %rsp\n"
+    "    popq %r15\n"
+    "    popq %r14\n"
+    "    popq %r13\n"
+    "    popq %r12\n"
+    "    popq %r11\n"
+    "    popq %r10\n"
+    "    popq %r9\n"
+    "    popq %r8\n"
+    "    popq %rbp\n"
+    "    popq %rdi\n"
+    "    popq %rsi\n"
+    "    popq %rdx\n"
+    "    popq %rcx\n"
+    "    popq %rbx\n"
+    "    popq %rax\n"
+    "    addq $16, %rsp\n"          /* vector and error code */
+    "    iretq\n"
     ".globl lm_user_enter\n"
     "lm_user_enter:\n"
     "    pushq $0x1B\n"             /* SEL_UDATA | RPL_USER */
@@ -187,20 +220,20 @@ __asm__(
 
 int lm_user_run(void)
 {
-    struct lm_cpu *cpu = cpu_this();
-
     lm_user_load_gdt();
 
     u64 code_phys = pmm_alloc_frame();
-    u64 stack_phys = pmm_alloc_frame();
-    if (code_phys == 0 || stack_phys == 0) {
+    u64 stack0_phys = pmm_alloc_frame();
+    u64 stack1_phys = pmm_alloc_frame();
+    if (code_phys == 0 || stack0_phys == 0 || stack1_phys == 0) {
         kputs("[ring3] FAIL no frames for the user address space\r\n");
         return -1;
     }
 
     u8 *code = vmm_phys(code_phys);
-    u8 *stack = vmm_phys(stack_phys);
-    if (code == NULL || stack == NULL) {
+    u8 *stack0 = vmm_phys(stack0_phys);
+    u8 *stack1 = vmm_phys(stack1_phys);
+    if (code == NULL || stack0 == NULL || stack1 == NULL) {
         kputs("[ring3] FAIL user frames outside the direct map\r\n");
         return -1;
     }
@@ -211,19 +244,21 @@ int lm_user_run(void)
         return -1;
     }
     memcpy(code, (const void *)lm_user_program, program_bytes);
-    memset(stack, 0, FRAME_SIZE);
+    memset(stack0, 0, FRAME_SIZE);
+    memset(stack1, 0, FRAME_SIZE);
 
-    /* The VMM sets U/S on the way down; the code page is read-only and the
-     * stack is writable, and both are checked afterwards rather than assumed,
+    /* The VMM sets U/S on the way down; the code page is shared and read-only,
+     * the stacks are writable, and the result is checked rather than assumed,
      * including that the kernel's own mappings did not become user-accessible. */
     if (vmm_map(USER_CODE_ADDR, code_phys, VMM_U) != 0 ||
-        vmm_map(USER_STACK_ADDR, stack_phys, VMM_W | VMM_U) != 0) {
+        vmm_map(USER_STACK0, stack0_phys, VMM_W | VMM_U) != 0 ||
+        vmm_map(USER_STACK1, stack1_phys, VMM_W | VMM_U) != 0) {
         kputs("[ring3] FAIL could not map the user address space\r\n");
         return -1;
     }
-    if (!vmm_user_mapped(USER_CODE_ADDR) || !vmm_user_mapped(USER_STACK_ADDR) ||
-        vmm_user_mapped(0) || vmm_user_mapped(0x00100000) ||
-        vmm_user_mapped(0xFFFFFFFF80100000ULL)) {
+    if (!vmm_user_mapped(USER_CODE_ADDR) || !vmm_user_mapped(USER_STACK0) ||
+        !vmm_user_mapped(USER_STACK1) || vmm_user_mapped(0) ||
+        vmm_user_mapped(0x00100000) || vmm_user_mapped(0xFFFFFFFF80100000ULL)) {
         kputs("[ring3] FAIL user pages are not isolated\r\n");
         return -1;
     }
@@ -234,72 +269,26 @@ int lm_user_run(void)
     kput_hex(tss.rsp0, 16);
     kputs("\r\n[ring3] code=0x");
     kput_hex(USER_CODE_ADDR, 8);
-    kputs(" ustack=0x");
-    kput_hex(USER_STACK_TOP, 8);
     kputs(" bytes=");
     kput_dec(program_bytes);
+    kputs(" stacks=0x");
+    kput_hex(USER_STACK_TOP(USER_STACK0), 8);
+    kputs(",0x");
+    kput_hex(USER_STACK_TOP(USER_STACK1), 8);
     kputs("\r\n");
 
-    /* IF is set only here: the kernel runs with interrupts off everywhere, so
-     * every tick is delivered to ring 3 and has to cross the TSS stack to be
-     * handled. */
-    cpu->user_mode = 1;
-    lm_user_enter(USER_CODE_ADDR, USER_STACK_TOP, 0x202);
+    sched_init();
+    if (sched_create(USER_CODE_ADDR, USER_STACK_TOP(USER_STACK0)) != 0 ||
+        sched_create(USER_CODE_ADDR, USER_STACK_TOP(USER_STACK1)) != 0) {
+        kputs("[ring3] FAIL could not create the tasks\r\n");
+        return -1;
+    }
+
+    sched_start();      /* enters ring 3; does not return */
+    return -1;
 }
 
-void lm_user_exited(u64 code)
+void lm_tss_set_rsp0(u64 top)
 {
-    struct lm_cpu *cpu = cpu_this();
-    int ok = 1;
-
-    if (code != EXIT_MAGIC) {
-        ok = 0;                     /* RAX or the user stack lost the PING result */
-    }
-    if (cpu->exit_arg != cpu->id) {
-        ok = 0;                     /* WHOAMI's answer did not reach the program */
-    }
-    /* At least PING, WHOAMI and EXIT; the wait for the first timer tick polls
-     * SYS_TICKS as many times as it needs to. */
-    if (cpu->user_calls < 3) {
-        ok = 0;
-    }
-    if (cpu->last_user_rip < USER_CODE_ADDR ||
-        cpu->last_user_rip >= USER_CODE_ADDR + FRAME_SIZE) {
-        ok = 0;                     /* the syscall did not come from the user page */
-    }
-    if (cpu->last_user_rsp <= USER_STACK_ADDR ||
-        cpu->last_user_rsp > USER_STACK_TOP) {
-        ok = 0;                     /* ... or not with the user stack */
-    }
-
-    int timer_ok = cpu->ticks > 0 && cpu->user_ticks == cpu->ticks &&
-                   cpu->tick_stack == cpu->ticks;
-    kputs("[timer] hz=");
-    kput_dec(LM_TIMER_HZ);
-    kputs(" ticks=");
-    kput_dec(cpu->ticks);
-    kputs(" user=");
-    kput_dec(cpu->user_ticks);
-    kputs(" stack=");
-    kputs(cpu->tick_stack == cpu->ticks ? "ok" : "FAIL");
-    kputs("\r\n");
-    kputs(timer_ok ? "[timer] timer=ok\r\n" : "[timer] FAIL timer never reached ring 3\r\n");
-
-    kputs("[ring3] calls=");
-    kput_dec(cpu->user_calls);
-    kputs(" exit=0x");
-    kput_hex(code, 4);
-    kputs(" whoami=");
-    kput_dec(cpu->exit_arg);
-    kputs("\r\n[ring3] rip=0x");
-    kput_hex(cpu->last_user_rip, 8);
-    kputs(" rsp=0x");
-    kput_hex(cpu->last_user_rsp, 8);
-    kputs(" cs=0x23 ss=0x1B\r\n");
-    kputs(ok ? "[ring3] ring3=ok\r\n" : "[ring3] FAIL ring-3 round trip\r\n");
-
-    kputs("MELLIVORA64_OK\r\n");
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+    tss.rsp0 = top;
 }

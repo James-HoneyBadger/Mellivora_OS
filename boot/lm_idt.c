@@ -111,6 +111,7 @@ __asm__(
     "    call lm_fault_dispatch\n"
     "    testq %rax, %rax\n"
     "    jz 9f\n"               /* the handler does not want to resume */
+    "    movq %rax, %rsp\n"     /* this frame, or the task a tick chose */
     "    popq %r15\n"
     "    popq %r14\n"
     "    popq %r13\n"
@@ -223,10 +224,11 @@ static const char *const fault_names[LM_ISR_COUNT] = {
  * same-privilege fault keeps whatever kernel stack was in use, which is why
  * `kstack` is only ever "ok" for a privilege transition.
  *
- * Returns 1 to resume the interrupted context (#BP is the one vector this
- * nucleus can resume: INT3's saved RIP already points past it) and 0 to stop.
+ * Returns the frame to IRETQ into - the same one for a resumed fault (#BP is
+ * the only vector this nucleus resumes: INT3's saved RIP already points past
+ * it) - and NULL to stop.
  */
-int lm_fault_dispatch(struct lm_fault_frame *f)
+struct lm_fault_frame *lm_fault_dispatch(struct lm_fault_frame *f)
 {
     struct lm_cpu *cpu = cpu_this();
     u64 rsp;
@@ -244,7 +246,7 @@ int lm_fault_dispatch(struct lm_fault_frame *f)
     if (f->vec == 14 && !from_user && lm_fault_fixup_cr2 != 0 &&
         fault_cr2 == lm_fault_fixup_cr2 && lm_fault_fixup_rip != 0) {
         f->rip = lm_fault_fixup_rip;    /* the probe load is abandoned */
-        return 1;
+        return f;
     }
     int on_kstack = rsp <= cpu->kstack_top && rsp > cpu->kstack_base;
     int expected = f->vec == 3 && from_user && on_kstack;
@@ -252,6 +254,8 @@ int lm_fault_dispatch(struct lm_fault_frame *f)
     kputs(expected ? "[fault] " : "[fault] FAIL ");
     kputs("n=");
     kput_dec(fault_count);
+    kputs(" task=");
+    kput_dec(sched_current_id());
     kputs(" vec=");
     kput_dec(f->vec);
     kputs(" (");
@@ -276,5 +280,5 @@ int lm_fault_dispatch(struct lm_fault_frame *f)
     kputs(on_kstack ? "ok" : "FAIL");
     kputs(expected ? " fault=ok\r\n" : "\r\n");
 
-    return expected;
+    return expected ? f : NULL;
 }

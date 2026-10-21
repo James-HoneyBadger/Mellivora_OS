@@ -63,10 +63,11 @@ void irq_init(void)
 }
 
 /*
- * Called from the common entry path for vectors 32..47. Returns 1 so the stub
- * resumes whatever it interrupted - there is no scheduler to switch to yet.
+ * Called from the common entry path for vectors 32..47. The tick is the
+ * scheduler's switch point: sched_tick() returns the frame to IRETQ into, which
+ * is this task's own frame unless another one was chosen.
  */
-int lm_irq_dispatch(struct lm_fault_frame *f)
+struct lm_fault_frame *lm_irq_dispatch(struct lm_fault_frame *f)
 {
     struct lm_cpu *cpu = cpu_this();
     int irq = (int)f->vec - LM_IRQ_FIRST;
@@ -87,5 +88,6 @@ int lm_irq_dispatch(struct lm_fault_frame *f)
         outb(PIC2_CMD, 0x20);           /* slave first, when it was involved */
     }
     outb(PIC1_CMD, 0x20);
-    return 1;
+
+    return irq == 0 ? sched_tick(f) : f;
 }

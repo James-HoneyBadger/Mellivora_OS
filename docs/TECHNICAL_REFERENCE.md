@@ -2178,6 +2178,38 @@ The user program waits for three ticks before its `PING`/`WHOAMI`/`EXIT` sequenc
 spinning in user mode between polls of `SYS_TICKS`. If none arrives it exits with a code
 the nucleus rejects, so a dead PIT fails the run instead of hanging it.
 
+### Scheduler
+
+`boot/lm_sched.c` puts a task object behind the pieces above. A task owns a kernel stack
+(a slab page from the heap window - the slab's first real user) and a user stack, and
+its saved context is the same twenty-two-value frame both entry stubs build:
+
+| Field | Meaning |
+| --- | --- |
+| fifteen registers | restored by the stub's pops |
+| `vec`, `err` | zero for a task's initial frame; the real values when a tick saved it |
+| `rip`, `cs`, `rflags`, `rsp`, `ss` | where and how `IRETQ` resumes it |
+
+Because the layout is shared, "start a task", "resume a preempted task" and "return
+another task's frame from `SYS_EXIT`" are the same operation: the dispatcher returns a
+frame pointer, the stub loads it into RSP, pops the registers, drops the two slots and
+`IRETQ`s. That is also why the syscall stub had to grow the two slots the fault stub
+pushes - before that an interrupt frame could not be resumed by the syscall epilogue,
+and the IRQ epilogue had no `movq %rax, %rsp` at all, so the first "switch" resumed the
+interrupted task while the scheduler believed it had moved on.
+
+| Point | What happens |
+| --- | --- |
+| `sched_start` | picks the first runnable task, points `TSS.RSP0` and the per-CPU `kstack_top` at it, and enters it with `lm_enter_task` |
+| timer tick | `lm_irq_dispatch` sends IRQ0 to `sched_tick`, which saves the running frame in the task, marks it ready and returns the next task's frame - `TSS.RSP0` follows the switch |
+| `SYS_EXIT` | `sched_exit` records the frame's `rdi`/`rsi`/`rdx`, checks them against the task's id, the CPU id and the `PING` value, then returns the next task's frame or reports and halts |
+
+Both demo tasks run the same program in one shared address space: `INT3`, a `PING`
+round trip through their own stack, `SYS_GETTID`, a wait for two more shared ticks
+(which is where the other task gets the CPU), `WHOAMI`, and `SYS_EXIT` with the id as
+the code. Per-task address spaces need the task to own a CR3, which is the next step;
+the switch path does not change when that happens.
+
 ### Frame allocator
 
 `boot/lm_pmm.c` is the first ported subsystem: a bitmap with one bit per 4 KB frame,
@@ -2219,13 +2251,13 @@ Two long-mode details are worth knowing here because both were faults first:
 
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
 requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
-`stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok` and `ring3=ok` on
-COM1, so a
+`stack=ok`, `pmm=ok`, `vmm=ok`, `kmem=ok`, `fault=ok`, `timer=ok`, `ring3=ok` (once per
+task) and `sched=ok` on COM1, so a
 nucleus that booted in the wrong half, broke its SYSCALL path, ran its handler on the
 wrong stack, mis-read the memory map, could not map and unmap a page while the MMU
 agreed, handed out a slab object twice or unmapped, failed to deliver a ring-3 fault or a
-timer tick to the TSS stack, or returned to the wrong stack in ring 3 fails rather than
-printing a marker. The second run boots 8 GB (the roadmap's scale
+timer tick to the TSS stack, preempted a task but resumed the wrong frame, or returned to
+the wrong stack in ring 3 fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

@@ -33,20 +33,12 @@ _Static_assert(__builtin_offsetof(struct lm_cpu, saved_rsp) == CPU_SAVED_RSP_OFF
                "saved_rsp offset must match the stub");
 _Static_assert(__builtin_offsetof(struct lm_cpu, exit_code) == CPU_EXIT_CODE_OFF,
                "exit_code offset must match the stub");
-_Static_assert(sizeof(struct lm_syscall_frame) == 18 * 8,
-               "the stub pushes five IRETQ values and thirteen registers");
-_Static_assert(__builtin_offsetof(struct lm_syscall_frame, rax) == 12 * 8,
-               "rax is the syscall number and the result slot");
-_Static_assert(__builtin_offsetof(struct lm_syscall_frame, rip) == 13 * 8,
-               "the IRETQ frame follows the general registers");
-_Static_assert(__builtin_offsetof(struct lm_syscall_frame, rsp) == 16 * 8,
-               "the caller's RSP sits in the IRETQ frame");
-_Static_assert(__builtin_offsetof(struct lm_syscall_frame, ss) == 17 * 8,
-               "SS is the last value IRETQ pops");
-
-/* The same contract for the fault frame lm_isr_common builds. */
+/* Both entry stubs build this frame, so the scheduler can resume a task from
+ * either path. */
 _Static_assert(sizeof(struct lm_fault_frame) == 22 * 8,
-               "the CPU and the fault stub push twenty-two values");
+               "fifteen registers, vector, error code and five IRETQ values");
+_Static_assert(__builtin_offsetof(struct lm_fault_frame, rax) == 14 * 8,
+               "rax is the syscall number and the result slot");
 _Static_assert(__builtin_offsetof(struct lm_fault_frame, r15) == 0,
                "R15 is pushed last and so sits lowest");
 _Static_assert(__builtin_offsetof(struct lm_fault_frame, rax) == 14 * 8,
@@ -190,14 +182,16 @@ static u64 rdmsr(u32 msr)
 #define LM_SYS_WHOAMI 2U
 #define LM_SYS_EXIT 3U
 #define LM_SYS_TICKS 4U
+#define LM_SYS_GETTID 5U
 
-u64 lm_syscall_dispatch(struct lm_syscall_frame *f)
+struct lm_fault_frame *lm_syscall_dispatch(struct lm_fault_frame *f)
 {
     struct lm_cpu *cpu = cpu_this();
     u64 rsp;
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
 
     cpu->syscall_count++;
+    sched_note_syscall();
     cpu->last_rsp = rsp;         /* must be inside the per-CPU kernel stack */
     cpu->last_nr = f->rax;
     cpu->last_arg = f->rdi;
@@ -218,24 +212,27 @@ u64 lm_syscall_dispatch(struct lm_syscall_frame *f)
     switch (f->rax) {
     case LM_SYS_PING:
         f->rax = f->rdi;
-        return 0;
+        return f;
     case LM_SYS_WHOAMI:
         f->rax = cpu->id;
-        return 0;
+        return f;
     case LM_SYS_TICKS:
         f->rax = cpu->ticks;
-        return 0;
+        return f;
+    case LM_SYS_GETTID:
+        f->rax = cpu->user_mode ? sched_current_id() : 0;
+        return f;
     case LM_SYS_EXIT:
         if (!from_user) {
             f->rax = (u64)-1;   /* there is no user program to end */
-            return 0;
+            return f;
         }
         cpu->exit_code = f->rdi;
         cpu->exit_arg = f->rsi;
-        return 1;
+        return sched_exit(f);   /* another task's frame, or NULL */
     default:
         f->rax = (u64)-1;
-        return 0;
+        return f;
     }
 }
 
@@ -266,45 +263,52 @@ __asm__(
     "    pushq %r11\n"              /* RFLAGS, as SYSCALL left them */
     "    pushq $0x23\n"             /* CS (placeholder) */
     "    pushq %rcx\n"              /* return RIP, put there by SYSCALL */
+    /* The fault stub's two slots, so a task frame built for either stub can be
+     * resumed by the other. */
+    "    pushq $0\n"                /* error code */
+    "    pushq $0\n"                /* vector */
     "    pushq %rax\n"
-    "    pushq %rdi\n"
-    "    pushq %rsi\n"
+    "    pushq %rbx\n"
+    "    pushq %rcx\n"
     "    pushq %rdx\n"
+    "    pushq %rsi\n"
+    "    pushq %rdi\n"
+    "    pushq %rbp\n"
     "    pushq %r8\n"
     "    pushq %r9\n"
     "    pushq %r10\n"
-    "    pushq %rbx\n"
-    "    pushq %rbp\n"
+    "    pushq %r11\n"
     "    pushq %r12\n"
     "    pushq %r13\n"
     "    pushq %r14\n"
     "    pushq %r15\n"
-    "    movq %rsp, %rdi\n"         /* struct lm_syscall_frame * */
+    "    movq %rsp, %rdi\n"         /* struct lm_fault_frame * */
     "    call lm_syscall_dispatch\n"
     "    testq %rax, %rax\n"
-    "    jne 2f\n"                  /* non-zero: the program is finished */
+    "    jz 2f\n"                   /* NULL: there is nothing left to run */
+    "    movq %rax, %rsp\n"         /* the same frame, or the next task's */
     "    popq %r15\n"
     "    popq %r14\n"
     "    popq %r13\n"
     "    popq %r12\n"
-    "    popq %rbp\n"
-    "    popq %rbx\n"
+    "    popq %r11\n"
     "    popq %r10\n"
     "    popq %r9\n"
     "    popq %r8\n"
-    "    popq %rdx\n"
-    "    popq %rsi\n"
+    "    popq %rbp\n"
     "    popq %rdi\n"
+    "    popq %rsi\n"
+    "    popq %rdx\n"
+    "    popq %rcx\n"
+    "    popq %rbx\n"
     "    popq %rax\n"
+    "    addq $16, %rsp\n"          /* vector and error code */
     "    swapgs\n"                  /* GS base back to the caller's */
     "    iretq\n"
-    /* SYS_EXIT: discard the syscall frame, take a clean kernel stack and
-     * report from C. lm_user_exited() never returns. */
     "2:\n"
-    "    movq %gs:0x10, %rsp\n"
-    "    movq %gs:0x50, %rdi\n"     /* exit code */
-    "    call lm_user_exited\n"
-    "    hlt\n");
+    "    cli\n"
+    "    hlt\n"
+    "    jmp 2b\n");
 
 /* Bitmask of what the round trip got right, so a failure says which part. */
 #define RT_RESULT 1

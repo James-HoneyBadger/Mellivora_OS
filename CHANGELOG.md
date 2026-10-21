@@ -1,5 +1,38 @@
 # Mellivora OS - Changelog
 
+## Unreleased - two tasks, preempted by the timer
+
+### Port (P2)
+
+- **`boot/lm_sched.c`: a round-robin scheduler over the pieces already built.** A task
+  owns a kernel stack (a slab page mapped in the heap window - its first real user) and
+  a user stack, and its saved context is the same 22-value frame both entry stubs
+  build. Switching saves the running task's frame pointer, loads the next task's, and
+  lets the stub pop the registers and `IRETQ`; a task that has never run gets a frame
+  built by `task_new`, so "start a task" and "resume a preempted one" are one path.
+- **The switch points are the timer tick and `SYS_EXIT`.** A tick taken in ring 3 picks
+  the next runnable task and returns its frame from the IRQ dispatcher; `SYS_EXIT`
+  retires the caller and returns the next task's frame, or reports and halts when none
+  is left. `sched_start` enters the first task from the same frame, and `TSS.RSP0` is
+  updated on every switch so the next fault or tick lands on the right stack.
+- **One frame layout for both entry paths.** The syscall stub now pushes the same two
+  slots (a zero vector and error code) and saves all fifteen registers, so an interrupt
+  frame and a syscall frame are interchangeable - which is what lets a task exit by
+  "returning" another task's interrupt frame. Before that the layouts differed and the
+  IRQ epilogue resumed the interrupted task while the scheduler thought it had
+  switched; it also lacked the `movq %rax, %rsp` that consumes the returned frame, so
+  the first "switch" was a no-op that ran the old task on the old stack.
+- Both tasks run the same user program: `INT3`, `PING(0x1234)` round-tripped through
+  the task's own stack, `SYS_GETTID`, a wait for two more shared ticks, `WHOAMI`, and
+  `SYS_EXIT` with the task id as the code. Each task's record is checked separately -
+  id, PING value, WHOAMI answer, and that it made calls - so a lost register, a stack
+  that was not writable or a preemption that resumed the wrong frame fails that task.
+- The nucleus reports `[ring3] task=N calls=... ticks=... exit=0x... ping=0x1234
+  whoami=0 ring3=ok` per task and `[sched] tasks=2 switches=N sched=ok`, which also
+  requires at least one preemption and the timer's `timer=ok` (every tick taken in
+  ring 3 on the TSS stack). Tasks still share one address space; per-task CR3s arrive
+  with the address-space work.
+
 ## Unreleased - a PIT tick that reaches ring 3 across the TSS stack
 
 ### Port (P2)

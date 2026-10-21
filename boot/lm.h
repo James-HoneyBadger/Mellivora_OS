@@ -71,29 +71,19 @@ struct lm_cpu *cpu_this(void);
 int cpu_init(void);
 
 /*---------------------------------------
- * SYSCALL frame
+ * Interrupt frame
  *
- * What the entry stub pushes, in the order it is laid out in memory: the five
- * values IRETQ pops last, then every general register the C dispatcher may
- * clobber. The dispatcher may rewrite `rax` (the result) and the return
- * selectors; the stub pops the rest back unchanged.
+ * One layout for both entry paths - SYSCALL and the exception/IRQ stub - so a
+ * task's saved frame can be resumed by either, and a task that exits can hand
+ * over to a frame the timer saved. In memory order: the registers the stub
+ * pushed last are nearest the stack pointer, then the vector and error code it
+ * pushed, then the five values IRETQ pops.
+ *
+ * `rsp`/`ss` exist only when the frame came from ring 3; a same-privilege frame
+ * has neither and everything the CPU pushed shifts down by 16 bytes. Code that
+ * reads them checks `(cs & 3) == 3` first.
  *---------------------------------------*/
 
-struct lm_syscall_frame {
-    u64 r15, r14, r13, r12, rbp, rbx, r10, r9, r8;
-    u64 rdx, rsi, rdi, rax;
-    u64 rip, cs, rflags, rsp, ss;
-};
-
-/*
- * What the CPU and lm_isr_common leave for the fault handler, in memory order:
- * the registers the stub pushed last are nearest the stack pointer, and the
- * values the CPU pushed sit above them.
- *
- * `rsp`/`ss` exist only when the fault changed privilege (CS says ring 3); a
- * fault taken in ring 0 pushes neither, and everything the CPU pushed shifts
- * down by 16 bytes. The handlers read `rsp`/`ss` only when `(cs & 3) == 3`.
- */
 struct lm_fault_frame {
     u64 r15, r14, r13, r12, r11, r10, r9, r8;
     u64 rbp, rdi, rsi, rdx, rcx, rbx, rax;
@@ -175,8 +165,12 @@ int kmem_selftest(void);
  * kernel: only the RFLAGS of a ring-3 context has IF set. */
 void irq_init(void);
 
-/* Vector 32..47, called from the common entry path; 1 resumes. */
-int lm_irq_dispatch(struct lm_fault_frame *frame);
+/* Vector 32..47, called from the common entry path; returns the frame to
+ * resume, which a tick may have changed to another task's. */
+struct lm_fault_frame *lm_irq_dispatch(struct lm_fault_frame *frame);
+
+/* The TSS stack a ring-3 fault or tick will land on. Updated on every switch. */
+void lm_tss_set_rsp0(u64 top);
 
 /*---------------------------------------
  * IDT and exceptions
@@ -185,8 +179,9 @@ int lm_irq_dispatch(struct lm_fault_frame *frame);
 /* Install the long-mode IDT (vectors 0..21; the rest stay absent). */
 void idt_init(void);
 
-/* Runs on the stack the CPU selected; 1 resumes the interrupted context. */
-int lm_fault_dispatch(struct lm_fault_frame *frame);
+/* Runs on the stack the CPU selected. Returns the frame to IRETQ into - the same
+ * one to resume, another task's after a switch - or NULL to stop. */
+struct lm_fault_frame *lm_fault_dispatch(struct lm_fault_frame *frame);
 
 /*
  * Kernel-mode fix-up: while `lm_fault_fixup_cr2` is non-zero, a ring-0 #PF on
@@ -225,8 +220,35 @@ int lm_user_run(void);
 /* Enter ring 3 at `entry` with the given stack and RFLAGS. Never returns. */
 void lm_user_enter(u64 entry, u64 user_rsp, u64 rflags) __attribute__((noreturn));
 
-/* Called by the entry stub once SYS_EXIT has been dispatched. Never returns. */
-void lm_user_exited(u64 code) __attribute__((noreturn));
+/* Pop a task's saved frame and IRETQ into it. Never returns. */
+void lm_enter_task(u64 rsp) __attribute__((noreturn));
+
+/*---------------------------------------
+ * Scheduler
+ *---------------------------------------*/
+
+struct lm_task;
+
+/* Cache the task and kernel-stack objects; called before any task exists. */
+void sched_init(void);
+
+/* Create a task that enters `entry` on `user_stack`. 0 on success. */
+int sched_create(u64 entry, u64 user_stack);
+
+/* Switch to the first runnable task and enter ring 3. Never returns. */
+void sched_start(void) __attribute__((noreturn));
+
+struct lm_task *sched_current(void);
+u64 sched_current_id(void);   /* 0 when no task is running */
+
+/* Per-task syscall counting, called from the dispatcher. */
+void sched_note_syscall(void);
+
+/* Timer tick: round-robin, returning the frame of the task to run next. */
+struct lm_fault_frame *sched_tick(struct lm_fault_frame *frame);
+
+/* SYS_EXIT: retire the running task; returns the frame to run next, or NULL. */
+struct lm_fault_frame *sched_exit(struct lm_fault_frame *frame);
 
 /*---------------------------------------
  * Physical memory manager
