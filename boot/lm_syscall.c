@@ -970,6 +970,28 @@ static struct lm_fault_frame *sys_mouse(struct lm_fault_frame *f)
     return f;
 }
 
+/* netping(address, timeout_ms) - an ICMP echo request to one host, returning the
+ * round trip in milliseconds or -1. It polls, so it holds the CPU for its
+ * timeout at worst; a task cannot be switched out from inside a syscall. */
+static struct lm_fault_frame *sys_netping(struct lm_fault_frame *f)
+{
+    u8 ip[4];
+    u32 address = (u32)f->rdi;
+    u32 timeout = (u32)f->rsi;
+
+    ip[0] = (u8)(address >> 24);
+    ip[1] = (u8)(address >> 16);
+    ip[2] = (u8)(address >> 8);
+    ip[3] = (u8)address;
+
+    if (timeout == 0) {
+        timeout = 1000;
+    }
+    f->rax = (u64)(s64)net_ping(ip, (timeout + (1000 / LM_TIMER_HZ) - 1)
+                                       / (1000 / LM_TIMER_HZ));
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -1043,6 +1065,7 @@ static const struct lm_syscall syscalls[] = {
     [38] = {"waitpid", sys_wait, 1},
     [39] = {"kill", sys_kill, 1},
     [40] = {"mouse", sys_mouse, 0},
+    [41] = {"netping", sys_netping, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -1278,6 +1301,9 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         sys_mouse(f);
         f->rbx = f->rdx;            /* the wrapper puts the caller's RDX back */
         return f;
+    case 48:                        /* SYS_PING: EBX=ip -> EAX=rtt/-1 */
+        f->rdi = (u64)(u32)f->rbx;
+        return sys_netping(f);
     case 92:                        /* SYS_WAITPID: EBX=pid -> EAX=exit code */
         f->rdi = (u64)(s64)(int)(u32)f->rbx;
         return sys_wait(f);

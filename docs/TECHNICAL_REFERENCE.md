@@ -2415,6 +2415,25 @@ The boot self-test builds an ARP request for the user-mode network's gateway and
 prints the MAC that answers it, which is the smallest exchange that proves the whole
 path.
 
+### ARP and ICMP echo
+
+`boot/lm_net.c` is the layer above the adapter, and it has two protocols in it
+because two are enough to answer the only question a boot test can ask: is anything
+out there? ARP resolves an address to a hardware address (resolving the gateway once
+at boot, since it is the only peer a user-mode network has), and ICMP echo sends a
+request and waits for the reply with the same id and sequence number.
+
+Both checksums are the same Internet checksum over the header: one's complement of
+the one's complement sum of the 16-bit words, with an odd byte padded. The IPv4 header
+is 20 bytes and the ICMP header 8, and the echo request carries 32 bytes of a counter
+pattern so a reply that is not ours is easy to recognise.
+
+`NETPING` returns the round trip in the 10 ms a 100 Hz tick can resolve, and reports
+10 ms rather than 0 when the reply beats the first tick, because "faster than the
+clock" and "no time at all" are different statements. The wait is bounded by the
+caller's timeout and the call polls, so it holds the CPU for at most that long: a task
+cannot be switched out from inside a syscall.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting

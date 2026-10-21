@@ -332,6 +332,11 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_KILL        39
 /* MOUSE returns x in RAX, y in RDX, and buttons|clicks<<8 in RCX. */
 #define SYS_MOUSE       40
+/* NETPING takes the target address in RDI (its four bytes in network order, so
+ * 10.0.2.2 is 0x0A000202) and a timeout in RSI in milliseconds, and returns the
+ * round trip in milliseconds or -1. The tree's SYS_PING (48, address in EBX)
+ * reaches the same handler through the int 0x80 bridge. */
+#define SYS_NETPING     41
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -530,6 +535,17 @@ int e1000_present(void);
 int e1000_send(const void *frame, u32 length);     /* 0 sent, -1 failed */
 int e1000_recv(void *buffer, u32 *length);         /* 1 got, 0 none, -1 no card */
 const u8 *e1000_mac(void);
+
+/*---------------------------------------
+ * The network layer: ARP and ICMP echo, which is enough to prove the adapter and
+ * to answer "is anything out there?". The addresses are the ones a user-mode
+ * network hands out.
+ *---------------------------------------*/
+int net_init(void);                                  /* resolve the gateway */
+int net_ready(void);
+int net_ping(const u8 *ip, u32 timeout_ticks);      /* round trip in ms, or -1 */
+const u8 *net_gateway_mac(void);
+const u8 *net_local_ip(void);
 
 /*---------------------------------------
  * Scheduler

@@ -126,7 +126,12 @@ REQUIRED = (
     # The network adapter: the MAC it reports, the register window mapped, and a
     # real ARP request answered by the user-mode stack behind the card.
     "[e1000] 52:54:00:12:34:56 bar=",
-    "e1000=ok",
+    "link=up e1000=ok",
+    # ...and the network layer built on it: the gateway resolved by ARP, and
+    # three echo requests that come back.
+    "[net] 10.0.2.2 at 52:55:0A:00:02:02 net=ok",
+    "net: 3 of 3 replied",
+    "sh: /net exited 0x00000003",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
     # along with one environment entry.
@@ -444,6 +449,7 @@ def main():
         ("mellivora:/> ", "append /fresh.txt first"),
         ("mellivora:/> ", "cat /fresh.txt"),
         ("mellivora:/> ", "run /api"),
+        ("mellivora:/> ", "run /net"),
         ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "spawn /spin"),
         ("mellivora:/> ", "date"),
