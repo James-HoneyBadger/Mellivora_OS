@@ -529,11 +529,28 @@ static struct lm_fault_frame *sys_getchar(struct lm_fault_frame *f)
     return f;
 }
 
-/* clear() - the ANSI sequence a terminal understands, since the console is the
- * UART and there is no text buffer to clear. */
+/* clear() - both consoles: the VGA text buffer directly, and the ANSI sequence a
+ * terminal at the other end of the UART understands. */
 static struct lm_fault_frame *sys_clear(struct lm_fault_frame *f)
 {
+    vga_clear();
     kputs("\x1b[2J\x1b[H");
+    f->rax = 0;
+    return f;
+}
+
+/* setcolor(attr) - the VGA attribute byte, background in the high nibble. */
+static struct lm_fault_frame *sys_setcolor(struct lm_fault_frame *f)
+{
+    vga_set_color((u8)f->rdi);
+    f->rax = 0;
+    return f;
+}
+
+/* setcursor(column, row) */
+static struct lm_fault_frame *sys_setcursor(struct lm_fault_frame *f)
+{
+    vga_set_cursor((u32)f->rdi, (u32)f->rsi);
     f->rax = 0;
     return f;
 }
@@ -932,6 +949,8 @@ static const struct lm_syscall syscalls[] = {
     [32] = {"pipe_close", sys_pipe_close, 0},
     [33] = {"getargs", sys_getargs, 0},
     [34] = {"getenv", sys_getenv, 0},
+    [35] = {"setcolor", sys_setcolor, 0},
+    [36] = {"setcursor", sys_setcursor, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -1117,9 +1136,13 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         return f;
     case 3:                         /* SYS_PRINT */
         return int80_print(f);
-    case 18:                        /* SYS_SETCOLOR: no text console yet */
-        f->rax = 0;
-        return f;
+    case 18:                        /* SYS_SETCOLOR: EBX=attribute byte */
+        f->rdi = (u64)(u32)f->rbx;
+        return sys_setcolor(f);
+    case 14:                        /* SYS_SETCURSOR: EBX=column ECX=row */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx;
+        return sys_setcursor(f);
     case 1:                         /* SYS_PUTCHAR: EBX=char */
         return sys_putchar(f);
     case 2:                         /* SYS_GETCHAR -> EAX=char or -1 */

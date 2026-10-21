@@ -2278,6 +2278,27 @@ its metadata come back from one call. Every user pointer involved - the name buf
 `copy_to_user`, which validates each page with the VMM before storing under
 STAC/CLAC; a bad pointer is a `-1` return, not a kernel fault.
 
+### The text console
+
+The VGA text buffer is 80x25 cells of two bytes at 0xB8000: the character and an
+attribute, background in the high nibble. `kputc` writes to COM1 and to that buffer,
+so every line the kernel prints appears on both, and `vga_putc` handles wrapping,
+scrolling and the cursor, which is pushed to the CRTC (registers 0x0E/0x0F) because
+text mode gives no way to ask where it was.
+
+The buffer is reached through the kernel's *direct map*, `0xFFFFFFFF80000000 +
+0xB8000`, not at its physical address. That is not a detail: a task's address space
+leaves the identity map out by design, so a console write from inside a syscall has no
+mapping for 0xB8000 - the first version faulted on its own fault report, printing
+`[fault` over and over until the log was a wall of brackets. The direct map is in
+every space, so this cannot happen.
+
+The driver proves itself before any task starts: it writes through its own path and
+then reads the text memory back to check the characters and attributes, reads the CRTC
+cursor register back to check it agrees with the driver's idea of the cursor, and
+clears the screen to check the blank. `SETCOLOR`, `SETCURSOR` and `CLEAR` are those
+same routines, so they are real calls and not accepted no-ops.
+
 ### The heap, pipes and the command line
 
 `MALLOC`/`FREE` sit on the same break `BRK` moves, so a block is page-backed user

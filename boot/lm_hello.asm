@@ -28,6 +28,7 @@ USER_SLOT  equ 0x40001FE8       ; PING result, in this task's stack page
 TASK_SLOT  equ 0x40001FF0       ; the task id, same address in every space
 BUF        equ 0x40001F00       ; where /motd is read
 ARGSBUF    equ 0x40001D00       ; getargs / getenv destination
+LINEBUF    equ 0x40001E00       ; one output line, written in a single call
 
 start:
         int3
@@ -67,7 +68,10 @@ start:
         cmp rax, r12
         jne fail
 
-        ; getargs(buf, max) - the command line /init exec'd this with.
+        ; getargs(buf, max) - the command line /init exec'd this with; then
+        ; getenv for one entry. Both lines are assembled in memory and written
+        ; once: the other tasks print at the same time, and a line built from
+        ; several writes can have their output in the middle of it.
         mov rdi, ARGSBUF
         mov esi, 64
         mov eax, SYS_GETARGS
@@ -75,7 +79,6 @@ start:
         test rax, rax
         js fail
 
-        ; getenv("os", buf, size) - the same call with a name and a destination.
         lea rdi, [rel osname]
         mov rsi, ARGSBUF + 32
         mov edx, 32
@@ -84,50 +87,25 @@ start:
         test rax, rax
         js fail
 
-        mov edi, 1
+        mov rdi, LINEBUF
         lea rsi, [rel argsmsg]
-        mov edx, argsmsg_end - argsmsg
-        mov eax, SYS_WRITE
-        syscall
-
-        mov rdi, ARGSBUF
-        mov esi, 64
-        mov eax, SYS_GETARGS
-        syscall
-        mov rdx, rax
-        mov edi, 1
+        call append
         mov rsi, ARGSBUF
-        mov eax, SYS_WRITE
-        syscall
-        mov edi, 1
-        lea rsi, [rel nl]
-        mov edx, 1
-        mov eax, SYS_WRITE
-        syscall
+        call append
+        mov byte [rdi], 10
+        inc rdi
+        mov rsi, LINEBUF
+        call write_line
 
-        mov edi, 1
+        mov rdi, LINEBUF
         lea rsi, [rel envmsg]
-        mov edx, envmsg_end - envmsg
-        mov eax, SYS_WRITE
-        syscall
-        xor eax, eax
+        call append
         mov rsi, ARGSBUF + 32
-.count:
-        cmp byte [rsi + rax], 0
-        je .have
-        inc eax
-        jmp .count
-.have:
-        mov rdx, rax
-        mov edi, 1
-        mov rsi, ARGSBUF + 32
-        mov eax, SYS_WRITE
-        syscall
-        mov edi, 1
-        lea rsi, [rel nl]
-        mov edx, 1
-        mov eax, SYS_WRITE
-        syscall
+        call append
+        mov byte [rdi], 10
+        inc rdi
+        mov rsi, LINEBUF
+        call write_line
 
         ; PING round trip through this task's own stack page.
         mov eax, SYS_PING
@@ -191,6 +169,26 @@ done:
 .hang:
         jmp .hang
 
+; append: rdi = where to write, rsi = NUL-terminated string.
+append:
+        cld
+        lodsb
+        test al, al
+        jz .done
+        stosb
+        jmp append
+.done:
+        ret
+
+; write_line: rsi = start, rdi = end (one past the newline).
+write_line:
+        mov rdx, rdi
+        sub rdx, rsi
+        mov edi, 1
+        mov eax, SYS_WRITE
+        syscall
+        ret
+
 fail:
         mov eax, SYS_EXIT
         mov edi, 0xBAD
@@ -200,10 +198,7 @@ fail:
 
 msg:     db "hello", 10
 msg_end:
-argsmsg: db "args=" 
-argsmsg_end:
-envmsg:  db "env os=" 
-envmsg_end:
-nl:      db 10
+argsmsg: db "args=", 0
+envmsg:  db "env os=", 0
 osname:  db "os", 0
 motd_path: db "/motd", 0

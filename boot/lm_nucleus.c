@@ -84,6 +84,7 @@ void kputc(char c)
         /* wait for the transmit register */
     }
     outb(COM1, (u8)c);
+    vga_putc(c);
 }
 
 int kgetc(void)
@@ -396,6 +397,8 @@ void lm_main(void)
     zero_bss();
 
     serial_init();
+    vga_init();
+    vga_selftest();
     cpu_init();          /* GS base: the entry path needs it before it can run */
     struct cpu_features feat = cpu_harden();  /* NX/SMEP/SMAP where offered */
     idt_init();          /* a fault must report, not triple-fault */

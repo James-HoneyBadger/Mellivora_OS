@@ -17,6 +17,7 @@ SYS_YIELD   equ 7
 SYS_SLEEP   equ 24
 SYS_DATE    equ 25
 SYS_MKDIR   equ 18
+SYS_CLEAR   equ 23
 SYS_UNLINK  equ 19
 SYS_OPEN    equ 9
 SYS_READ    equ 10
@@ -63,6 +64,12 @@ start:
         call line_is
         test rax, rax
         jnz .ls
+
+        ; "clear"
+        lea rsi, [rel cmd_clear]
+        call line_is
+        test rax, rax
+        jnz .clear
 
         ; "date"
         lea rsi, [rel cmd_date]
@@ -164,6 +171,15 @@ start:
         mov rsi, OUT_BUF
         call add_str
         call end_line
+
+.clear:
+        mov eax, SYS_CLEAR
+        syscall
+        call begin_line
+        lea rsi, [rel s_cleared]
+        call add_str
+        call end_line
+        jmp .next
 
 .date:
         mov rdi, DATE_BUF
@@ -471,6 +487,8 @@ cmd_quit:  db "quit", 0
 cmd_ls:    db "ls", 0
 cmd_cat:   db "cat ", 0
 cmd_date:  db "date", 0
+cmd_clear: db "clear", 0
+s_cleared: db "sh: cleared the screen", 0
 cmd_mkdir: db "mkdir ", 0
 cmd_rm:    db "rm ", 0
 s_dash:    db "-", 0

@@ -173,7 +173,10 @@ int vmm_user_mapped(u64 virt);
  * path: the probe load is abandoned and this returns instead of dying. */
 u64 vmm_probe(u64 virt);
 
-/* The nucleus's direct map of physical memory (stage2's PDH, 0..1 GB). */
+/* The nucleus's direct map of physical memory (stage2's PDH, 0..1 GB). It is in
+ * every task's address space too, unlike the identity map, which is why kernel
+ * code that runs during a syscall reaches low physical memory through this. */
+#define LM_DIRECT_BASE 0xFFFFFFFF80000000ULL
 void *vmm_phys(u64 phys);
 
 /* Map, translate, unmap a page and prove the MMU agrees. Prints vmm=ok. */
@@ -419,6 +422,15 @@ int vfs_mkdir(const char *path);
 int vfs_unlink(const char *path);
 u32 vfs_free_blocks(void);
 void vfs_release_task(u64 owner);
+
+/* The VGA text console: 80x25 at 0xB8000, the second half of kputc. */
+void vga_init(void);
+void vga_putc(char c);
+void vga_clear(void);
+void vga_set_color(u8 attribute);
+void vga_set_cursor(u32 column, u32 row);
+int vga_selftest(void);
+int vga_cursor(void);
 
 /* Pipes: a ring buffer with a reader and a writer. */
 void pipe_init(void);

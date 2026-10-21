@@ -97,6 +97,8 @@ REQUIRED = (
     "bye",
     "exit=0x005A",
     "rtc=ok",
+    "vga=ok",
+    "sh: cleared the screen",
     "pipe=ok",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
@@ -256,6 +258,7 @@ def main():
         ("mellivora:/> ", "ls"),
         ("mellivora:/> ", "cat /motd"),
         ("mellivora:/> ", "date"),
+        ("mellivora:/> ", "clear"),
         ("mellivora:/> ", "mkdir probe"),
         ("mellivora:/> ", "ls"),
         ("mellivora:/> ", "rm probe"),
