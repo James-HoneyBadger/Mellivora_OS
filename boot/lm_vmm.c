@@ -163,7 +163,7 @@ int vmm_map_in(u64 space, u64 virt, u64 phys, u64 flags)
         return -1;
     }
 
-    *leaf = phys | VMM_P | (flags & (VMM_W | VMM_U | VMM_NX));
+    *leaf = phys | VMM_P | (flags & (VMM_W | VMM_U | VMM_PWT | VMM_PCD | VMM_NX));
     tlb_flush(virt);
     return 0;
 }

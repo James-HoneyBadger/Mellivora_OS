@@ -123,6 +123,10 @@ REQUIRED = (
     "[mouse] ps/2 pointer at 40,12 mouse=ok",
     "sh: cleared the screen",
     "pipe=ok",
+    # The network adapter: the MAC it reports, the register window mapped, and a
+    # real ARP request answered by the user-mode stack behind the card.
+    "[e1000] 52:54:00:12:34:56 bar=",
+    "e1000=ok",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
     # along with one environment entry.
@@ -159,6 +163,11 @@ BIG_MB = int(os.environ.get("LONGMODE_BIG_MB", "8192"))
 CPU_MODEL = os.environ.get("LONGMODE_CPU", "qemu64,+smep,+smap")
 SKIP_BIG = os.environ.get("LONGMODE_SKIP_BIG", "0") == "1"
 
+# Every boot gets a network card, because the nucleus drives one: the 8254x is
+# given the user-mode stack, which answers an ARP for its own address, so the
+# driver's ring test has something to talk to and no host privileges are needed.
+NIC = ["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"]
+
 
 def boot_and_capture(qemu, image, mem_mb, want, script=()):
     """Boot the image with mem_mb of RAM and return the COM1 text once want appears.
@@ -175,7 +184,7 @@ def boot_and_capture(qemu, image, mem_mb, want, script=()):
          "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % image,
          "-boot", "c", "-display", "none", "-no-reboot",
          "-serial", "unix:%s,server=on,wait=on" % ser_path,
-         "-monitor", "none", "-net", "none"],
+         "-monitor", "none"] + NIC,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     text = ""
     steps = list(script)
@@ -217,8 +226,7 @@ def check_mouse(qemu, image):
          "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % image,
          "-boot", "c", "-display", "none", "-no-reboot",
          "-serial", "unix:%s,server=on,wait=on" % ser_path,
-         "-monitor", "unix:%s,server=on,wait=off" % mon_path,
-         "-net", "none"],
+         "-monitor", "unix:%s,server=on,wait=off" % mon_path] + NIC,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         serial = qd.SerialConsole(ser_path)
@@ -287,8 +295,7 @@ def check_keyboard_and_screen(qemu, image):
          "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % image,
          "-boot", "c", "-display", "none", "-no-reboot",
          "-serial", "unix:%s,server=on,wait=on" % ser_path,
-         "-monitor", "unix:%s,server=on,wait=off" % mon_path,
-         "-net", "none"],
+         "-monitor", "unix:%s,server=on,wait=off" % mon_path] + NIC,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         serial = qd.SerialConsole(ser_path)

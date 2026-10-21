@@ -127,6 +127,8 @@ struct lm_fault_frame {
 #define VMM_W  0x2ULL
 #define VMM_U  0x4ULL
 #define VMM_PS 0x80ULL
+#define VMM_PWT (1ULL << 3)     /* write-through */
+#define VMM_PCD (1ULL << 4)     /* cache disabled: device memory */
 #define VMM_NX (1ULL << 63)     /* no-execute, when EFER.NXE is on */
 #define VMM_ADDR_MASK 0x000FFFFFFFFFF000ULL
 
@@ -351,12 +353,27 @@ struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *frame);
  * PCI and block storage
  *---------------------------------------*/
 
-struct pci_device;
+/* One enumerated function. Drivers read the class to find their device and the
+ * vendor/id pair to know which one it is. */
+struct pci_device {
+    u8 bus;
+    u8 device;
+    u8 function;
+    u16 vendor;
+    u16 id;
+    u8 class_code;
+    u8 subclass;
+};
 
 /* Enumerate bus 0..255 and report the count; returns it. */
 int pci_init(void);
 int pci_count(void);
 const struct pci_device *pci_find(u8 class_code, u8 subclass);
+
+/* Configuration space, for a driver that has to enable its device and read its
+ * BARs. Offset is the byte offset of a 32-bit register. */
+u32 pci_config_read32(u8 bus, u8 device, u8 function, u8 offset);
+void pci_config_write32(u8 bus, u8 device, u8 function, u8 offset, u32 value);
 
 /* HBFS: the on-disk format populate.py writes. */
 struct hbfs_entry {
@@ -499,6 +516,20 @@ u64 ata_sector_count(void);
 int ata_read(u64 lba, void *buffer);
 int ata_write(u64 lba, const void *buffer);
 int ata_selftest(void);
+
+/*---------------------------------------
+ * The network adapter
+ *
+ * The 8254x family, polled: the rings live in frames this driver allocates and
+ * the register block is mapped cache-disabled at boot. send() returns once the
+ * descriptor came back, recv() never blocks.
+ *---------------------------------------*/
+int e1000_init(void);
+int e1000_selftest(void);
+int e1000_present(void);
+int e1000_send(const void *frame, u32 length);     /* 0 sent, -1 failed */
+int e1000_recv(void *buffer, u32 *length);         /* 1 got, 0 none, -1 no card */
+const u8 *e1000_mac(void);
 
 /*---------------------------------------
  * Scheduler

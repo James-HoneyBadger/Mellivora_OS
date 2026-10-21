@@ -18,16 +18,6 @@
 
 #define PCI_MAX_DEVICES 16
 
-struct pci_device {
-    u8 bus;
-    u8 device;
-    u8 function;
-    u16 vendor;
-    u16 id;
-    u8 class_code;
-    u8 subclass;
-};
-
 static struct pci_device devices[PCI_MAX_DEVICES];
 static int device_count;
 
@@ -52,6 +42,32 @@ static u32 pci_read(u8 bus, u8 device, u8 function, u8 offset)
                 | (offset & 0xFC);
     outl(PCI_CONFIG_ADDRESS, address);
     return inl(PCI_CONFIG_DATA);
+}
+
+static void pci_write(u8 bus, u8 device, u8 function, u8 offset, u32 value)
+{
+    u32 address = (1U << 31)
+                | ((u32)bus << 16)
+                | ((u32)device << 11)
+                | ((u32)function << 8)
+                | (offset & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, address);
+    outl(PCI_CONFIG_DATA, value);
+}
+
+/*
+ * The two calls a driver needs to take a device over: the command register (to
+ * give it memory space and bus-mastering) and the BARs. Everything else about a
+ * device is its own business, so this is all that is exported.
+ */
+u32 pci_config_read32(u8 bus, u8 device, u8 function, u8 offset)
+{
+    return pci_read(bus, device, function, offset);
+}
+
+void pci_config_write32(u8 bus, u8 device, u8 function, u8 offset, u32 value)
+{
+    pci_write(bus, device, function, offset, value);
 }
 
 static void pci_record(u8 bus, u8 device, u8 function)

@@ -2379,6 +2379,42 @@ there is room, both are read back byte for byte and both are removed - and the f
 count has to be exactly where it started. It reports `[hbfs] append=ok move=ok` and
 leaves the volume the demos wrote alone.
 
+### The network adapter
+
+The Intel 8254x is the first device in the port that needs physical addresses handed
+to it: the receive and transmit rings live in frames the allocator gives out, the
+descriptors carry the physical address of each packet buffer, and the card reads and
+writes them by bus mastering without the CPU's help. So the init path is: find the
+device by class on the PCI bus, set the command register's memory-space and
+bus-master bits (without the second the rings are never read and every descriptor
+looks permanently outstanding), reset the card and wait for it to say it has
+finished, then build the rings.
+
+The register block is memory-mapped at the address in BAR0 - around 0xFEB00000 on a
+PC, which is neither RAM nor inside the 1 GB the direct map covers - so a gigabyte
+window in the kernel's half of the address space (PML4[511]/PDPT[509]) is mapped onto
+it at boot, page by page, with `VMM_PCD` set. Caching a device register is not a
+performance question: a cached read answers from the cache, the driver never sees the
+device move, and the card appears to ignore everything. The window is made once and
+every task sees it, because the kernel half is shared by copying the PML4 entry.
+
+Two details cost time and are worth writing down. Descriptors are read through
+`volatile` pointers - a compiler is entitled to hoist the status load out of a polling
+loop, and at `-O2` it does, which looks exactly like a card that never transmits even
+though the head pointer moved. And an ARP request has four address fields of *different
+lengths* after the operation word: the sender's hardware address, the sender's protocol
+address, the target's hardware address (zero, because that is what is being asked for)
+and the target's protocol address. Writing the target's address where its hardware
+address belongs makes a frame that looks fine and is silently dropped.
+
+`e1000_send` copies the frame in, sets the descriptor's command bits, advances the
+tail and waits for the done bit to come back; `e1000_recv` checks whether the current
+descriptor's done bit is set, copies the frame out and gives the descriptor back by
+writing the receive tail. Neither blocks beyond that, and neither touches interrupts.
+The boot self-test builds an ARP request for the user-mode network's gateway and
+prints the MAC that answers it, which is the smallest exchange that proves the whole
+path.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting
