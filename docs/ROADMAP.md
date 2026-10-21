@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
+| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
 
@@ -132,7 +132,12 @@ A phase does not close until these are measured:
   self-test in the nucleus. Verified at 256 MB and at 8 GB - past 4 GB the map only
   reads correctly with 64-bit arithmetic, and the allocator covers ranges above
   `0x100000000` across the PCI hole.
-- [ ] Per-CPU blocks and the ring-3 syscall path.
+- [x] Per-CPU blocks: `boot/lm_cpu.c` keeps one block per processor behind the GS base
+  MSR, and the SYSCALL entry stub reads it (`%gs:0x10`/`%gs:0x18`) to save the caller's
+  stack pointer and switch to that CPU's kernel stack before it calls any C. The nucleus
+  checks that the handler ran on the kernel stack and that the caller's RSP came back
+  unchanged. Still ring 0.
+- [ ] Ring-3 path: `SWAPGS`, a user GDT/TSS, and the return to a user stack.
 - [ ] Port PMM/VMM/slab/scheduler/timers/syscalls and the driver set.
 - [ ] LP64 ABI plus a 32-bit compat shim so existing binaries keep running.
 - [ ] NX, SMEP/SMAP where the CPU provides them.

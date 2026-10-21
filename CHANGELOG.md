@@ -1,5 +1,24 @@
 # Mellivora OS - Changelog
 
+## Unreleased - per-CPU state and a real SYSCALL entry path
+
+### Port (P2)
+
+- **`boot/lm_cpu.c`: a per-CPU block reachable through the GS base.** Every processor
+  needs state it can find without looking at a global - on x86-64 that is `MSR_GS_BASE`.
+  The block holds the CPU id, the kernel stack to enter on, the caller's saved stack
+  pointer and the counters the entry path keeps.
+- **The SYSCALL entry stub switches stacks before it touches memory.** It saves the
+  caller's RSP into the per-CPU block through `%gs:0x18`, loads that CPU's kernel stack
+  from `%gs:0x10`, builds the five-value IRETQ frame there and only then calls the C
+  dispatcher - which therefore runs on the CPU's own stack, not on whatever the caller
+  had. `lm_syscall_dispatch` handles two dummy calls (`PING`, `WHOAMI`) and records the
+  stack it ran on, so the property is checked rather than assumed.
+- The nucleus reports `[cpu] id=0 calls=1 kstack=0x... stack=ok` and the round trip
+  verifies four things separately (result, per-CPU state, handler stack, caller RSP
+  restored), printing a bitmask if any fails. Still ring 0: `SWAPGS` and the return to a
+  user stack belong with the ring-3 path, which is the next item.
+
 ## Unreleased - the first ported subsystem: a 64-bit frame allocator
 
 ### Port (P2)

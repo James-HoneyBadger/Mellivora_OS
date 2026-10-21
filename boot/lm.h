@@ -21,6 +21,33 @@ void kput_hex(u64 value, int digits);
 void kput_dec(u64 value);
 
 /*---------------------------------------
+ * Per-CPU state
+ *
+ * One block per processor, reachable through the GS base MSR: the entry path
+ * needs somewhere to keep its own stack pointer without assuming anything about
+ * the register state the caller had. Fields are u64 and in this order because
+ * the entry stub addresses them by byte offset.
+ *---------------------------------------*/
+
+struct lm_cpu {
+    u64 self;           /* 0x00  address of this block */
+    u64 id;             /* 0x08  processor index */
+    u64 kstack_top;     /* 0x10  kernel stack this CPU enters on */
+    u64 saved_rsp;      /* 0x18  caller's stack pointer, saved by the entry stub */
+    u64 syscall_count;  /* 0x20  calls taken */
+    u64 last_rsp;       /* 0x28  stack the handler ran on (must be the kernel one) */
+    u64 last_nr;        /* 0x30  last syscall number */
+    u64 last_arg;       /* 0x38  last syscall argument */
+};
+
+#define CPU_KSTACK_TOP_OFF 0x10
+#define CPU_SAVED_RSP_OFF  0x18
+
+/* The processor this nucleus is running on. */
+struct lm_cpu *cpu_this(void);
+int cpu_init(void);
+
+/*---------------------------------------
  * Physical memory manager
  *---------------------------------------*/
 

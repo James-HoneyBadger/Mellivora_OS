@@ -1985,6 +1985,33 @@ why the switch happens after the zeroing - initialises COM1 and reports.
 RFLAGS only - it does not pop RSP/SS - so the frame is exactly those three. The ported
 path will add `swapgs` and a per-CPU kernel stack.
 
+### Per-CPU state and the entry path
+
+`boot/lm_cpu.c` keeps one block per processor, reached through `MSR_GS_BASE` rather than
+a global: the entry path has to find the CPU's kernel stack before it has a stack it can
+call anything on, so the block is addressed as `%gs:<offset>` with no call, no relocation
+and no register assumptions.
+
+| Offset | Field | Use |
+| --- | --- | --- |
+| `0x00` | `self` | the block's own address (how `cpu_this()` would verify itself) |
+| `0x08` | `id` | processor index |
+| `0x10` | `kstack_top` | kernel stack the entry stub switches to |
+| `0x18` | `saved_rsp` | caller's stack pointer, written by the stub |
+| `0x20` | `syscall_count` | calls taken |
+| `0x28` | `last_rsp` | stack the handler ran on |
+| `0x30`/`0x38` | `last_nr`/`last_arg` | last call, for the self-test |
+
+The stub (`lm_syscall_entry`, the address in `LSTAR`) does, in order: save RSP to
+`%gs:0x18`, load RSP from `%gs:0x10`, push the five-value IRETQ frame (SS, caller RSP,
+RFLAGS from R11, CS, return RIP from RCX), park the frame pointer in RBX (callee-saved,
+so the C dispatcher preserves it), put the number in RDI and the argument in RSI, call
+`lm_syscall_dispatch`, restore RSP from RBX and `iretq`. The dispatcher therefore runs on
+the per-CPU kernel stack, and the caller's stack pointer comes back exactly as it was.
+
+This is still ring 0. A ring-3 path adds `SWAPGS` at entry and exit and returns to a user
+stack - the frame layout and the stack switch above are what it will use.
+
 ### Frame allocator
 
 `boot/lm_pmm.c` is the first ported subsystem: a bitmap with one bit per 4 KB frame,
@@ -2025,9 +2052,10 @@ Two long-mode details are worth knowing here because both were faults first:
 ### What the test asserts
 
 `tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
-requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok` and `pmm=ok` on COM1,
-so a nucleus that booted in the wrong half, broke its SYSCALL path or mis-read the memory
-map fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok`, `[cpu] id=0 calls=1`,
+`stack=ok` and `pmm=ok` on COM1, so a nucleus that booted in the wrong half, broke its
+SYSCALL path, ran its handler on the wrong stack or mis-read the memory map fails rather
+than printing a marker. The second run boots 8 GB (the roadmap's scale
 gate) and requires at least 85% of it to be reported usable with a highest address above
 4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
 nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C

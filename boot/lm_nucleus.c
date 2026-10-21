@@ -140,13 +140,43 @@ static u64 rdmsr(u32 msr)
     return ((u64)hi << 32) | lo;
 }
 
-static volatile u64 syscall_hits;
+/*
+ * The C half of a syscall. It runs on the CPU's own kernel stack, which the
+ * entry stub below has already switched to, and reaches per-CPU state through
+ * num, which is a placeholder for the real syscall table the port will have.
+ * The two dummy calls exist so the entry path is exercised, not stubbed.
+ */
+#define LM_SYS_PING 1U
+#define LM_SYS_WHOAMI 2U
+
+u64 lm_syscall_dispatch(u64 nr, u64 arg)
+{
+    struct lm_cpu *cpu = cpu_this();
+    u64 rsp;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+
+    cpu->syscall_count++;
+    cpu->last_rsp = rsp;         /* must be inside the per-CPU kernel stack */
+    cpu->last_nr = nr;
+    cpu->last_arg = arg;
+
+    switch (nr) {
+    case LM_SYS_PING:
+        return arg;
+    case LM_SYS_WHOAMI:
+        return cpu->id;
+    default:
+        return (u64)-1;
+    }
+}
 
 /*
- * The handler has to come back to ring 0 at the instruction after `syscall`,
- * so it rebuilds the frame IRETQ expects out of RCX (return RIP) and R11
- * (flags). A ported kernel would instead switch to a per-CPU kernel stack; the
- * MSR programming and the entry path below are the same.
+ * The entry path LSTAR points at. It must not assume anything about the
+ * register state it arrives with, so it saves the caller's stack pointer in the
+ * per-CPU block, switches to that CPU's kernel stack and only then touches
+ * memory. (SYSCALL from ring 3 would also need SWAPGS and a return to a
+ * user-controlled stack; this nucleus runs it from ring 0, where GS already
+ * points at the per-CPU block.)
  */
 void lm_syscall_entry(void);
 
@@ -154,20 +184,34 @@ __asm__(
     ".text\n"
     ".globl lm_syscall_entry\n"
     "lm_syscall_entry:\n"
-    "    lock incq syscall_hits(%rip)\n"
+    /* Save the caller's RSP, take this CPU's kernel stack. */
+    "    movq %rsp, %gs:0x18\n"
+    "    movq %gs:0x10, %rsp\n"
     /* IRETQ in 64-bit mode pops a five-value frame - RIP, CS, RFLAGS, RSP, SS -
-     * even for a same-privilege return, so RSP has to be part of it or the
+     * even for a same-privilege return, so RSP is part of the frame or the
      * return lands with a garbage stack pointer. */
-    "    movq %rsp, %rax\n"    /* RSP to restore */
-    "    pushq $0x10\n"        /* SS: the 64-bit kernel data selector */
-    "    pushq %rax\n"
-    "    pushq %r11\n"         /* RFLAGS, as SYSCALL left it */
-    "    pushq $0x08\n"        /* CS: the 64-bit kernel code selector */
-    "    pushq %rcx\n"         /* return RIP, put there by SYSCALL */
+    "    pushq $0x10\n"             /* SS */
+    "    pushq %gs:0x18\n"          /* caller's RSP, restored by IRETQ */
+    "    pushq %r11\n"              /* RFLAGS, as SYSCALL left them */
+    "    pushq $0x08\n"             /* CS */
+    "    pushq %rcx\n"              /* return RIP, put there by SYSCALL */
+    "    movq %rsp, %rbx\n"         /* RBX is callee-saved: the frame stays put */
+    "    movq %rdi, %rsi\n"         /* arg */
+    "    movq %rax, %rdi\n"         /* number */
+    "    call lm_syscall_dispatch\n"
+    "    movq %rbx, %rsp\n"         /* back to the frame */
     "    iretq\n");
 
-static int syscall_roundtrip(void)
+/* Bitmask of what the round trip got right, so a failure says which part. */
+#define RT_RESULT 1
+#define RT_STATE  2
+#define RT_STACK  4
+#define RT_RSP    8
+
+static u64 syscall_roundtrip(void)
 {
+    u64 faulty = 0;
+
     if (!cpu_has_syscall()) {
         return 0;
     }
@@ -178,8 +222,46 @@ static int syscall_roundtrip(void)
     wrmsr(MSR_LSTAR, (u64)(unsigned long)lm_syscall_entry);
     wrmsr(MSR_FMASK, 0);                         /* nothing masked */
 
-    __asm__ volatile("syscall" : : : "rcx", "r11", "memory");
-    return syscall_hits == 1;
+    u64 rsp_before;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_before));
+
+    u64 nr = LM_SYS_PING;
+    u64 arg = 0x1234;
+    u64 result;
+
+    /* RAX carries the number in and the result out; RDI carries the argument.
+     * Everything the entry stub and the dispatcher touch is declared as
+     * clobbered, including RBX, which the stub uses to hold the frame. */
+    __asm__ volatile("syscall"
+                     : "=a"(result)
+                     : "a"(nr), "D"(arg)
+                     : "rcx", "r11", "rsi", "rdx", "rbx", "r8", "r9", "r10",
+                       "memory");
+
+    struct lm_cpu *cpu = cpu_this();
+
+    if (result != 0x1234) {
+        faulty |= RT_RESULT;
+    }
+    if (cpu->syscall_count != 1 || cpu->last_nr != LM_SYS_PING ||
+        cpu->last_arg != 0x1234) {
+        faulty |= RT_STATE;
+    }
+
+    /* The handler has to have run on the per-CPU kernel stack, not on the
+     * caller's stack. */
+    u64 kbase = cpu->kstack_top - 8192;
+    if (cpu->last_rsp <= kbase || cpu->last_rsp > cpu->kstack_top) {
+        faulty |= RT_STACK;
+    }
+
+    /* And the caller's stack pointer has to be exactly where it was: the
+     * five-value IRETQ frame is what makes that true. */
+    if (cpu->saved_rsp != rsp_before) {
+        faulty |= RT_RSP;
+    }
+
+    return faulty;
 }
 
 /*---------------------------------------
@@ -261,6 +343,7 @@ void lm_main(void)
     zero_bss();
 
     serial_init();
+    cpu_init();          /* GS base: the entry path needs it before it can run */
 
     kputs("[lm] Mellivora x86-64 nucleus (C11)\r\n");
 
@@ -273,15 +356,26 @@ void lm_main(void)
     kput_hex(cr3, 16);
     kputs("\r\n");
 
-    u64 data_addr = (u64)(unsigned long)&syscall_hits;
+    u64 data_addr = cpu_this()->self;
     kputs("[lm] data=0x");
     kput_hex(data_addr, 16);
     kputs("\r\n");
 
-    if (syscall_roundtrip()) {
+    u64 rt = syscall_roundtrip();
+    if (rt == 0) {
         kputs("[lm] syscall=ok\r\n");
+        kputs("[cpu] id=");
+        kput_dec(cpu_this()->id);
+        kputs(" calls=");
+        kput_dec(cpu_this()->syscall_count);
+        kputs(" kstack=0x");
+        kput_hex(cpu_this()->kstack_top, 16);
+        kputs(" stack=ok\r\n");
     } else {
         kputs("[lm] syscall=unavailable\r\n");
+        kputs("[cpu] FAIL 0x");
+        kput_hex(rt, 2);
+        kputs("\r\n");
     }
 
     report_memory();
