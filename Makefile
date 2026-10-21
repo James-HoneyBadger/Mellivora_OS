@@ -613,18 +613,18 @@ LM_CFLAGS = -std=c11 -m64 -O2 -Wall -Wextra -Werror \
             -fno-unwind-tables
 LM_LDFLAGS = -T boot/lm64.ld --oformat binary
 
-KERNEL_64_OBJ = boot/lm_nucleus.o
+KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_pmm.o
 
-$(KERNEL_64_OBJ): boot/lm_nucleus.c
+boot/%.o: boot/%.c boot/lm.h
 	@[ -n "$(LM_CC)" ] || { \
 	    echo "  ERROR: no x86-64 C compiler found."; \
 	    echo "  Install x86_64-elf-gcc, or clang + ld.lld, or set LM_CC/LM_LD."; \
 	    exit 1; }
 	$(LM_CC) $(LM_CFLAGS) -c $< -o $@
 
-$(KERNEL_64BIN): $(KERNEL_64_OBJ) boot/lm64.ld
+$(KERNEL_64BIN): $(KERNEL_64_OBJS) boot/lm64.ld
 	@[ -n "$(LM_LD)" ] || { echo "  ERROR: no x86-64 linker found (set LM_LD)."; exit 1; }
-	$(LM_LD) $(LM_LDFLAGS) -o $@ $(KERNEL_64_OBJ)
+	$(LM_LD) $(LM_LDFLAGS) -o $@ $(KERNEL_64_OBJS)
 	@echo "  64-bit nucleus: $$(wc -c < $@) bytes, linked at 0xFFFFFFFF80100000"
 
 # The original hand-written nucleus, kept as a second target so the boot path
@@ -775,7 +775,7 @@ clean:
 	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
 	rm -rf .build
 	rm -f $(KERNEL_64BIN) $(KERNEL_64ASM) $(STAGE2_64BIN) $(IMAGE_64) \
-	      $(IMAGE_64_ASM) $(KERNEL_64_OBJ) kernel64_sectors.inc stage2-64.lst \
-	      kernel64-asm.lst
+	      $(IMAGE_64_ASM) $(KERNEL_64_OBJS) kernel64_sectors.inc \
+	      stage2-64.lst kernel64-asm.lst
 	# v10.0 additions
 	rm -f $(UEFI_EFI) $(UEFI_SO) $(HBPKG_BIN) $(UEFI_IMAGE)

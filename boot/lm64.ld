@@ -38,6 +38,20 @@ SECTIONS
         __bss_end = .;
     }
 
+    /* The stack is uninitialised memory, so it gets its own section after .bss
+     * rather than being part of it: the nucleus zeroes .bss while running on
+     * this stack. */
+    .stack (NOLOAD) : {
+        . = ALIGN(16);
+        *(.stack)
+    }
+
+    /* End of everything the nucleus owns in memory. The frame allocator
+     * reserves [1 MB, lm_image_end) so it never hands out its own image, its
+     * .bss or the stack. */
+    . = ALIGN(4096);
+    lm_image_end = .;
+
     /DISCARD/ : {
         *(.comment)
         *(.note*)

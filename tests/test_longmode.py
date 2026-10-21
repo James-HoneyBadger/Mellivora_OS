@@ -13,9 +13,15 @@ at its link address in the top 2 GB and a `syscall` reaches a handler. Pass
 
 Usage: tests/test_longmode.py [image] [--marker-only]
 
+The default (C nucleus) run boots twice: 256 MB for the boot assertions, then a
+large guest to prove the frame allocator reads a 64-bit E820 map - a guest past
+4 GB only reports the right totals if it does. 8 GB is the roadmap's scale gate.
+
 Env:
   LONGMODE_ALLOW_SKIP=1  exit 0 instead of failing when QEMU is missing
   LONGMODE_TIMEOUT=45    seconds to wait for the marker
+  LONGMODE_BIG_MB=8192   guest size for the big-memory run
+  LONGMODE_SKIP_BIG=1    skip it (hosts that cannot give QEMU that much RAM)
 """
 
 import os
@@ -47,7 +53,53 @@ REQUIRED = (
     "MELLIVORA64_OK",
     "base=0xFFFFFFFF80100000",
     "syscall=ok",
+    "pmm=ok",
 )
+
+# A 4 GB guest has usable E820 ranges above 0x100000000 (there is a hole below
+# 4 GB), so the frame allocator only reports the right numbers if it read the
+# map as 64-bit. The roadmap's scale gate is 8 GB, which is what this asks for.
+BIG_MB = int(os.environ.get("LONGMODE_BIG_MB", "8192"))
+SKIP_BIG = os.environ.get("LONGMODE_SKIP_BIG", "0") == "1"
+
+
+def boot_and_capture(qemu, image, mem_mb, want):
+    """Boot the image with mem_mb of RAM and return the COM1 text once want appears."""
+    workdir = tempfile.mkdtemp(prefix="lm-test-")
+    ser_path = os.path.join(workdir, "serial.sock")
+    proc = subprocess.Popen(
+        [qemu, "-cpu", "qemu64", "-m", str(mem_mb),
+         "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % image,
+         "-boot", "c", "-display", "none", "-no-reboot",
+         "-serial", "unix:%s,server=on,wait=on" % ser_path,
+         "-monitor", "none", "-net", "none"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    text = ""
+    try:
+        serial = qd.SerialConsole(ser_path)
+        deadline = time.time() + TIMEOUT
+        while time.time() < deadline:
+            text = serial.text()
+            if want in text:
+                break
+            if proc.poll() is not None:
+                break
+            time.sleep(0.3)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+    return text
+
+
+def parse_pmm(text):
+    """Pull usable=MB and top=0x... out of the nucleus report."""
+    m = __import__("re").search(r"usable=(\d+)MB top=0x([0-9A-F]+)", text)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2), 16)
 
 
 def main():
@@ -62,46 +114,45 @@ def main():
         print("  FAIL  long-mode test: missing %s (run 'make 64bit')" % IMAGE, file=sys.stderr)
         return 1
 
-    workdir = tempfile.mkdtemp(prefix="lm-test-")
-    ser_path = os.path.join(workdir, "serial.sock")
-    proc = subprocess.Popen(
-        [qemu, "-cpu", "qemu64", "-m", "256",
-         "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % IMAGE,
-         "-boot", "c", "-display", "none", "-no-reboot",
-         "-serial", "unix:%s,server=on,wait=on" % ser_path,
-         "-monitor", "none", "-net", "none"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    ok = False
-    try:
-        serial = qd.SerialConsole(ser_path)
-        deadline = time.time() + TIMEOUT
-        text = ""
-        while time.time() < deadline:
-            text = serial.text()
-            if MARKER in text:
-                break
-            if proc.poll() is not None:
-                break
-            time.sleep(0.3)
-        required = (MARKER,) if MARKER_ONLY else REQUIRED
-        missing = [needle for needle in required if needle not in text]
-        ok = not missing
-        if ok:
-            if MARKER_ONLY:
-                print("  PASS  long mode entered and nucleus reported")
-            else:
-                print("  PASS  long mode, higher half and SYSCALL entry")
-        else:
-            print("  FAIL  missing on COM1: %s" % ", ".join(missing), file=sys.stderr)
-            print("---- serial ----", file=sys.stderr)
-            print(text[-800:], file=sys.stderr)
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            proc.kill()
-    return 0 if ok else 1
+    text = boot_and_capture(qemu, IMAGE, 256, MARKER)
+    required = (MARKER,) if MARKER_ONLY else REQUIRED
+    missing = [needle for needle in required if needle not in text]
+    if missing:
+        print("  FAIL  missing on COM1: %s" % ", ".join(missing), file=sys.stderr)
+        print("---- serial ----", file=sys.stderr)
+        print(text[-800:], file=sys.stderr)
+        return 1
+
+    if MARKER_ONLY:
+        print("  PASS  long mode entered and nucleus reported")
+        return 0
+
+    # Scale: a guest past 4 GB only reports sane numbers if the E820 map was
+    # read as 64-bit, and 8 GB is the P2 gate.
+    if SKIP_BIG:
+        print("  PASS  long mode, higher half, SYSCALL entry (big-memory run skipped)")
+        return 0
+
+    big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER)
+    stats = parse_pmm(big)
+    if stats is None:
+        print("  FAIL  no frame-allocator report at %d MB" % BIG_MB, file=sys.stderr)
+        print(big[-800:], file=sys.stderr)
+        return 1
+    usable_mb, top = stats
+    # Not all of the guest is usable: the firmware reserves MMIO just below 4 GB
+    # (QEMU puts the PCI hole at ~0xB0000000), so a fraction of the RAM is
+    # missing from the report by design. 85% still fails loudly if the map was
+    # read as 32-bit, which is the mistake this checks for.
+    expected = BIG_MB * 85 // 100
+    if usable_mb < expected or top <= 0x100000000:
+        print("  FAIL  %d MB guest reported usable=%d MB top=0x%X"
+              % (BIG_MB, usable_mb, top), file=sys.stderr)
+        print(big[-800:], file=sys.stderr)
+        return 1
+
+    print("  PASS  long mode, higher half, SYSCALL entry, %d MB of RAM" % usable_mb)
+    return 0
 
 
 if __name__ == "__main__":

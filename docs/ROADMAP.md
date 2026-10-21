@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven |
+| P2 | in progress | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
 
@@ -127,6 +127,11 @@ A phase does not close until these are measured:
   link address; the nucleus reports its own address to prove where it runs.
 - [x] `SYSCALL` entry (MSRs programmed, 64-bit `syscall` reaches a handler and returns
   with `iretq`). The per-CPU kernel stack, `swapgs` and per-CPU blocks are what remains.
+- [x] First ported subsystem: a 64-bit physical frame allocator (`boot/lm_pmm.c`) with
+  a bitmap over the E820 map, the low megabyte and the nucleus image reserved, and a
+  self-test in the nucleus. Verified at 256 MB and at 8 GB - past 4 GB the map only
+  reads correctly with 64-bit arithmetic, and the allocator covers ranges above
+  `0x100000000` across the PCI hole.
 - [ ] Per-CPU blocks and the ring-3 syscall path.
 - [ ] Port PMM/VMM/slab/scheduler/timers/syscalls and the driver set.
 - [ ] LP64 ABI plus a 32-bit compat shim so existing binaries keep running.

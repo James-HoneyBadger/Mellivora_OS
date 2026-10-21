@@ -1,5 +1,30 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the first ported subsystem: a 64-bit frame allocator
+
+### Port (P2)
+
+- **`boot/lm_pmm.c`: the physical frame allocator, in C, for the 64-bit nucleus.** A
+  bitmap with one bit per 4 KB frame, built from the E820 map stage2 leaves at 0x504,
+  with the low megabyte and the nucleus's own image (including `.bss` and its stack)
+  reserved. This is the first subsystem of the port, and the first place the 64-bit
+  differences matter: E820 entries carry 64-bit base/length values and a guest with 4 GB
+  or more has usable memory above `0x100000000`, so all the arithmetic is 64-bit.
+- The nucleus reports and self-tests it: `usable=`/`top=`/`frames=`/`free=`, then four
+  allocations that must be distinct, aligned and counted, a free of each, a check that
+  the free count returns to its baseline, and a double-free that must be refused
+  (`pmm=ok`). A bitmap sized for 8 GB (256 KB) is the allocator's fixed cost; a buddy
+  allocator with orders replaces it when a port needs contiguous runs for DMA.
+- `tests/test_longmode.py` now boots the image twice: 256 MB for the boot assertions and
+  8 GB (the roadmap's scale gate) for the allocator. At 8 GB the nucleus reports
+  `usable=7167MB top=0x200000000` - it is reading the map above 4 GB, across the PCI
+  hole, which a 32-bit read could not do.
+- Two long-mode faults the port hit and the nucleus now documents in place: an `IRETQ`
+  in 64-bit mode pops a five-value frame (RIP, CS, RFLAGS, RSP, SS) even for a
+  same-privilege return, so the SYSCALL handler's three-value frame returned with a
+  zeroed stack pointer; and the nucleus stack had to move out of `.bss` into its own
+  `NOLOAD` section, because the nucleus zeroes `.bss` while running on that stack.
+
 ## Unreleased - 64-bit nucleus in C, linked into the higher half
 
 ### Port (P2)

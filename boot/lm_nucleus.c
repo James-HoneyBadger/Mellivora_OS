@@ -20,10 +20,7 @@
  * compiler may emit for a struct copy - are provided at the bottom.
  */
 
-typedef unsigned char u8;
-typedef unsigned short u16;
-typedef unsigned int u32;
-typedef unsigned long long u64;
+#include "lm.h"
 
 #define COM1 0x3F8
 
@@ -53,7 +50,7 @@ static void serial_init(void)
     outb(COM1 + 4, 0x0B); /* DTR | RTS | OUT2 */
 }
 
-static void putc(char c)
+void kputc(char c)
 {
     while ((inb(COM1 + 5) & 0x20) == 0) {
         /* wait for the transmit register */
@@ -61,24 +58,36 @@ static void putc(char c)
     outb(COM1, (u8)c);
 }
 
-static void puts(const char *s)
+void kputs(const char *s)
 {
     while (*s != '\0') {
-        putc(*s++);
+        kputc(*s++);
     }
 }
 
-static void put_hex(u64 value, int digits)
+void kput_hex(u64 value, int digits)
 {
     for (int shift = (digits - 1) * 4; shift >= 0; shift -= 4) {
         u8 nibble = (u8)((value >> shift) & 0xF);
-        putc((char)(nibble < 10 ? '0' + nibble : 'A' + nibble - 10));
+        kputc((char)(nibble < 10 ? '0' + nibble : 'A' + nibble - 10));
     }
 }
 
-static void put_hex64(u64 value)
+void kput_dec(u64 value)
 {
-    put_hex(value, 16);
+    char digits[21];
+    int n = 0;
+    if (value == 0) {
+        kputc('0');
+        return;
+    }
+    while (value != 0 && n < (int)sizeof(digits)) {
+        digits[n++] = (char)('0' + (int)(value % 10));
+        value /= 10;
+    }
+    while (n > 0) {
+        kputc(digits[--n]);
+    }
 }
 
 /*---------------------------------------
@@ -146,8 +155,12 @@ __asm__(
     ".globl lm_syscall_entry\n"
     "lm_syscall_entry:\n"
     "    lock incq syscall_hits(%rip)\n"
-    /* Same-privilege IRETQ pops RIP, CS and RFLAGS only - it does not pop
-     * RSP/SS - so the frame is exactly those three. */
+    /* IRETQ in 64-bit mode pops a five-value frame - RIP, CS, RFLAGS, RSP, SS -
+     * even for a same-privilege return, so RSP has to be part of it or the
+     * return lands with a garbage stack pointer. */
+    "    movq %rsp, %rax\n"    /* RSP to restore */
+    "    pushq $0x10\n"        /* SS: the 64-bit kernel data selector */
+    "    pushq %rax\n"
     "    pushq %r11\n"         /* RFLAGS, as SYSCALL left it */
     "    pushq $0x08\n"        /* CS: the 64-bit kernel code selector */
     "    pushq %rcx\n"         /* return RIP, put there by SYSCALL */
@@ -173,51 +186,116 @@ static int syscall_roundtrip(void)
  * Entry
  *---------------------------------------*/
 
+/*
+ * report_memory - bring up the frame allocator and prove it round-trips
+ *
+ * The numbers are what the 64-bit port has to get right: a guest with 4 GB or
+ * more has usable E820 ranges above 0x100000000, so "highest address" only
+ * looks right if the map was read as 64-bit. The allocator then has to hand out
+ * distinct, aligned frames and take them back.
+ */
+static void report_memory(void)
+{
+    if (pmm_init() != 0) {
+        kputs("[pmm] FAIL no usable memory in the E820 map\r\n");
+        return;
+    }
+
+    struct pmm_stats s = pmm_get_stats();
+    kputs("[pmm] usable=");
+    kput_dec(s.usable_bytes >> 20);
+    kputs("MB top=0x");
+    kput_hex(s.highest_addr, 12);
+    kputs(" frames=");
+    kput_dec(s.total_frames);
+    kputs(" free=");
+    kput_dec(s.free_frames);
+    kputs("\r\n");
+
+    u64 baseline = s.free_frames;
+    u64 taken[4];
+    int ok = 1;
+
+    for (int i = 0; i < 4; i++) {
+        taken[i] = pmm_alloc_frame();
+        if (taken[i] == 0 || (taken[i] & (FRAME_SIZE - 1)) != 0) {
+            ok = 0;
+            break;
+        }
+        for (int j = 0; j < i; j++) {
+            if (taken[j] == taken[i]) {
+                ok = 0;              /* handed out twice */
+            }
+        }
+    }
+
+    if (ok && pmm_get_stats().free_frames + 4 != baseline) {
+        ok = 0;                      /* the count did not move */
+    }
+
+    for (int i = 0; i < 4; i++) {
+        if (taken[i] != 0 && pmm_free_frame(taken[i]) != 0) {
+            ok = 0;
+        }
+    }
+
+    if (ok && pmm_get_stats().free_frames != baseline) {
+        ok = 0;                      /* the frames did not come back */
+    }
+
+    /* A frame that is already free must be refused: this is what catches a
+     * double free before it corrupts the bitmap. */
+    if (pmm_free_frame((u64)pmm_get_stats().highest_addr) != -1) {
+        ok = 0;
+    }
+
+    kputs(ok ? "[pmm] pmm=ok\r\n" : "[pmm] FAIL allocator round trip\r\n");
+}
+
 void lm_main(void)
 {
     /* .bss is NOBITS: the flat image carries no bytes for it, so the nucleus
-     * has to clear it itself before anything relies on it being zero. This runs
-     * on the stack stage2 left (low memory, identity mapped), because the
-     * nucleus stack is *inside* .bss and cannot be used until it is clear. */
+     * clears it itself before anything relies on it being zero. The stack lives
+     * in its own section after .bss (a stack never needs zeroing), so clearing
+     * .bss here cannot pull the ground out from under this call. */
     zero_bss();
-
-    __asm__ volatile("lea lm_stack_top(%%rip), %%rax\n"
-                     "mov %%rax, %%rsp\n"
-                     "xor %%rbp, %%rbp\n" : : : "rax");
 
     serial_init();
 
-    puts("[lm] Mellivora x86-64 nucleus (C11)\r\n");
+    kputs("[lm] Mellivora x86-64 nucleus (C11)\r\n");
 
-    puts("[lm] base=0x");
-    put_hex64((u64)(unsigned long)lm_image_start);
+    kputs("[lm] base=0x");
+    kput_hex((u64)(unsigned long)lm_image_start, 16);
 
     u64 cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-    puts(" cr3=0x");
-    put_hex64(cr3);
-    puts("\r\n");
+    kputs(" cr3=0x");
+    kput_hex(cr3, 16);
+    kputs("\r\n");
 
-    u64 stack_marker = (u64)(unsigned long)&syscall_hits;
-    puts("[lm] data=0x");
-    put_hex64(stack_marker);
-    puts("\r\n");
+    u64 data_addr = (u64)(unsigned long)&syscall_hits;
+    kputs("[lm] data=0x");
+    kput_hex(data_addr, 16);
+    kputs("\r\n");
 
     if (syscall_roundtrip()) {
-        puts("[lm] syscall=ok\r\n");
+        kputs("[lm] syscall=ok\r\n");
     } else {
-        puts("[lm] syscall=unavailable\r\n");
+        kputs("[lm] syscall=unavailable\r\n");
     }
 
-    puts("MELLIVORA64_OK\r\n");
+    report_memory();
+
+    kputs("MELLIVORA64_OK\r\n");
 
     for (;;) {
         __asm__ volatile("cli; hlt");
     }
 }
 
-/* stage2 arrives with RSP=0x9FC00 (low memory, identity mapped); lm_main moves
- * to the nucleus stack once .bss is clear. This function never returns. */
+/* stage2 arrives with RSP=0x9FC00 (low memory, identity mapped); the nucleus
+ * switches to its own stack here, before any C runs, so every function it calls
+ * has a proper frame. This function never returns. */
 __attribute__((naked, section(".text.lm_start"))) void lm_start(void)
 {
     __asm__ volatile(
@@ -232,6 +310,7 @@ __attribute__((naked, section(".text.lm_start"))) void lm_start(void)
         "mov %cr4, %rax\n"
         "or  $0x600, %rax\n"                /* OSFXSR | OSXMMEXCPT */
         "mov %rax, %cr4\n"
+        "lea lm_stack_top(%rip), %rsp\n"
         "xor %rbp, %rbp\n"
         "call lm_main\n"
         "1: cli\n"
@@ -240,17 +319,23 @@ __attribute__((naked, section(".text.lm_start"))) void lm_start(void)
 }
 
 /*---------------------------------------
- * Stack (in .bss, so it is mapped by the higher-half mapping and zeroed)
+ * Stack
+ *
+ * Its own NOBITS section *after* .bss, not part of it: the nucleus zeroes .bss
+ * while running on this stack, so the two must not overlap. It is uninitialised
+ * RAM, which is all a stack needs, and lm_image_end covers it so the frame
+ * allocator reserves it.
  *---------------------------------------*/
 
 __asm__(
-    ".bss\n"
+    ".section .stack,\"aw\",@nobits\n"
     ".align 16\n"
     ".globl lm_stack\n"
     "lm_stack:\n"
     "    .space 16384\n"
     ".globl lm_stack_top\n"
-    "lm_stack_top:\n");
+    "lm_stack_top:\n"
+    ".section .text\n");
 
 /*---------------------------------------
  * Compiler helpers a freestanding build still needs

@@ -1985,13 +1985,53 @@ why the switch happens after the zeroing - initialises COM1 and reports.
 RFLAGS only - it does not pop RSP/SS - so the frame is exactly those three. The ported
 path will add `swapgs` and a per-CPU kernel stack.
 
+### Frame allocator
+
+`boot/lm_pmm.c` is the first ported subsystem: a bitmap with one bit per 4 KB frame,
+built from the E820 map stage2 leaves at `0x504` (count) / `0x508` (pointer).
+
+| Step | What it does |
+| --- | --- |
+| pass 1 | totals the usable ranges and finds the highest usable address, capped at 8 GB |
+| reserve | marks every frame used, then hands back the usable ranges above 1 MB |
+| carve out | re-reserves `[1 MB, lm_image_end)` - the image, `.bss` and the stack |
+
+`lm_image_end` comes from the linker script, so the allocator cannot hand out a frame it
+is standing on. `pmm_alloc_frame` rotates a hint through the bitmap; `pmm_free_frame`
+refuses a non-frame address, an address outside the managed range and a double free,
+which is what makes the self-test meaningful.
+
+The 64-bit specifics are the point of doing this first: E820 entries carry 64-bit
+base/length, and a guest at or above 4 GB has usable memory above `0x100000000` on the
+far side of the PCI hole, so every address and size is a `u64`. A 32-bit allocator reads
+those entries, sees a base of 0 and reports the wrong total.
+
+### Nucleus self-test
+
+`report_memory` prints `usable=<MB> top=0x<addr> frames=<n> free=<n>`, allocates four
+frames (they must be distinct, 4 KB aligned and counted), frees them, checks the free
+count returned to its baseline, and checks that freeing an address that is not a frame
+is refused. `pmm=ok` is the result.
+
+Two long-mode details are worth knowing here because both were faults first:
+
+- an `IRETQ` in 64-bit mode pops **five** values - RIP, CS, RFLAGS, RSP, SS - even when
+  it returns to the same privilege level, so a SYSCALL handler that pushes only three
+  returns with a garbage stack pointer (the first symptom was a `syscall=ok` line
+  followed by a fault on the very next `call`, with RSP = 0);
+- the nucleus stack is its own `NOLOAD` section *after* `.bss`, not part of it, because
+  the nucleus zeroes `.bss` while running on that stack.
+
 ### What the test asserts
 
-`tests/test_longmode.py` boots the image under `-cpu qemu64` and requires
-`MELLIVORA64_OK`, `base=0xFFFFFFFF80100000` and `syscall=ok` on COM1, so a nucleus that
-booted in the wrong half or with a broken SYSCALL path fails rather than printing a
-marker. `--marker-only` relaxes this to the marker for the hand-written asm nucleus
-(`make 64bit-asm`), which exists as a boot-path regression that needs no C toolchain.
+`tests/test_longmode.py` boots the image twice under `-cpu qemu64`. The 256 MB run
+requires `MELLIVORA64_OK`, `base=0xFFFFFFFF80100000`, `syscall=ok` and `pmm=ok` on COM1,
+so a nucleus that booted in the wrong half, broke its SYSCALL path or mis-read the memory
+map fails rather than printing a marker. The second run boots 8 GB (the roadmap's scale
+gate) and requires at least 85% of it to be reported usable with a highest address above
+4 GB. `--marker-only` relaxes the first run to the marker for the hand-written asm
+nucleus (`make 64bit-asm`), which exists as a boot-path regression that needs no C
+toolchain.
 
 ## Fault Injection (P10)
 
