@@ -1,5 +1,32 @@
 # Mellivora OS - Changelog
 
+## Unreleased - 100 MB heap workload and a demand base above RAM
+
+### Memory
+
+- **The user demand zone now starts above RAM** — the kernel addresses physical
+  memory 1:1, so with more than 128 MB of RAM a *frame* and a *user address* could be
+  the same number. A task holding an area there would have the kernel's own frame
+  mapped as user scratch (and, after the supervisor-demand change, the fault handler
+  would treat a frame access as a user page). `user_demand_base` is now computed at
+  boot as the first 4 MB boundary at or above the top of RAM: 128 MB on a 128 MB
+  machine (the historical layout), higher on bigger ones. The allocator is capped at
+  `0x1C000000` so a frame can never reach user space.
+- **`make check-heap`** — the P1 exit gate: `programs/heapbig.asm` allocates twenty
+  5 MB blocks (100 MB), writes a marker into every page, reads them all back, frees
+  them, checks the free-page count returned to where it started and allocates a 16 MB
+  block afterwards. It runs in `make check` and in CI.
+- `tools/qemu_drive.py` grew `--mem MB` so a case can choose the guest's RAM.
+
+### Known issue
+
+- Allocations on a guest with **more than 128 MB** of RAM are still unreliable: the
+  buddy allocator can serve a block from a free-list entry whose page number is above
+  the top of RAM (at 192 MB it produced page 0xFF53, i.e. 255 MB), which then takes a
+  supervisor fault above `pmm_mem_top`. The system boots and runs at 192 MB, 384 MB
+  and 1 GB, and the 100 MB workload passes on the 128 MB configuration the gate uses,
+  but the high-memory path needs its own fix before more RAM can be relied on.
+
 ## Unreleased - shared file mappings
 
 ### Memory and storage

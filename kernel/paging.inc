@@ -36,7 +36,14 @@ PAGING_MAP_TABLES equ PAGING_MAP_MB / 4  ; 32 page tables
 ;   Physical pages are allocated on first access.
 DEMAND_MAP_TABLES equ 96           ; Extra page tables: covers 96×4MB = 384MB
 DEMAND_TABLE_BASE equ PAGE_TABLE_BASE + PAGING_MAP_TABLES * 4096  ; 0x431000
-USER_DEMAND_BASE  equ 0x08000000   ; Start of demand-paged zone (128MB)
+; The demand zone starts at user_demand_base (a variable, computed at boot) and
+; runs to USER_DEMAND_MAX. The kernel addresses physical memory 1:1, so user
+; virtual addresses must begin ABOVE the highest byte of RAM: otherwise a kernel
+; access to a frame above 128 MB would look like a user page, and a task with an
+; area there would have its own frame mapped as user scratch. With the original
+; 128 MB of RAM the base is the historical 0x08000000.
+USER_DEMAND_MIN   equ 0x08000000   ; lowest possible base (128 MB)
+USER_DEMAND_BASE_MAX equ 0x1C000000 ; highest base: keeps 64 MB of user space
 USER_DEMAND_MAX   equ 0x20000000   ; End of demand-paged zone  (512MB)
 
 ; Page entry flags
@@ -232,6 +239,23 @@ paging_init:
         ; Install read-only sigreturn trampoline page
         call sigreturn_trampoline_init
 
+        ; Pick the demand-zone base: the first 4 MB boundary above RAM, so that
+        ; physical frames and user virtual addresses can never be confused.
+        mov  eax, [pmm_mem_top]
+        add  eax, 0x3FFFFF
+        jc   .base_max
+        and  eax, ~0x3FFFFF
+        cmp  eax, USER_DEMAND_MIN
+        jae  .base_floor_ok
+        mov  eax, USER_DEMAND_MIN
+.base_floor_ok:
+        cmp  eax, USER_DEMAND_BASE_MAX
+        jbe  .base_store
+.base_max:
+        mov  eax, USER_DEMAND_BASE_MAX
+.base_store:
+        mov  [user_demand_base], eax
+
         popad
         ret
 
@@ -343,7 +367,11 @@ isr_page_fault:
         test eax, 0x05              ; user fault, or a protection violation?
         jnz  .pf_user_demand
         mov  eax, [pf_addr]
-        cmp  eax, USER_DEMAND_BASE
+
+        ; RAM that the boot identity map already covers is not demand territory:
+        ; a fault there is a kernel bug. Above it, physical memory is mapped on
+        ; demand - but only up to the highest usable byte the firmware reported.
+        cmp  eax, PAGING_MAP_MB * 0x100000
         jb   .pf_kernel_fault
         cmp  eax, [pmm_mem_top]
         jae  .pf_kernel_fault
@@ -358,9 +386,9 @@ isr_page_fault:
         iretd
 
 .pf_user_demand:
-        ; Check: faulting address in demand zone [USER_DEMAND_BASE, USER_DEMAND_MAX)
+        ; Check: faulting address in demand zone [user_demand_base, USER_DEMAND_MAX)
         mov  eax, [pf_addr]
-        cmp  eax, USER_DEMAND_BASE
+        cmp  eax, [user_demand_base]
         jb   .pf_kernel_fault
         cmp  eax, USER_DEMAND_MAX
         jae  .pf_kernel_fault

@@ -76,10 +76,13 @@ A phase does not close until these are measured:
 - [ ] Kernel slab allocator; page cache with writeback. The page cache is what would
   make two shared mappings of one file coherent with each other.
 - [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
+- [ ] Fix the buddy allocator above 128 MB: it can hand out a page number above the
+  top of RAM, so a guest with more RAM is not yet usable for real allocations (the
+  system boots and runs, and the 100 MB gate runs on the 128 MB layout).
 - [x] Console-mode fault containment: a crashing task dies, the shell survives.
 
-**Exit:** the isolation conformance test passes, 100 MB heap workload passes, no
-stale-data leaks between processes.
+**Exit:** the isolation conformance test passes, 100 MB heap workload passes
+(`make check-heap`), no stale-data leaks between processes.
 
 ### P2 · 64-bit foundation (6 sprints)
 

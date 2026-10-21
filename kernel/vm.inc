@@ -212,7 +212,7 @@ vm_gap:
         jnz .vg_have_base
         call vm_rand
         and eax, 0x00FFE000     ; up to 16 MB of ASLR offset, page aligned
-        add eax, USER_DEMAND_BASE
+        add eax, [user_demand_base]
         mov [.vg_cand], eax
         jmp .vg_try
 .vg_have_base:
@@ -866,7 +866,7 @@ sys_mmap:
         mov eax, [.mm_hint]
         test eax, 0xFFF
         jnz .mm_fail
-        cmp eax, USER_DEMAND_BASE
+        cmp eax, [user_demand_base]
         jb .mm_fail
         mov edx, eax
         mov ecx, [.mm_pages]

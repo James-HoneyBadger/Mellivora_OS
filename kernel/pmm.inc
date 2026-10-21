@@ -81,6 +81,21 @@ pmm_init:
         mov eax, KERNEL_RESERVED_END
 
 .e820_free:
+        ; The kernel addresses physical memory 1:1, and user virtual space
+        ; starts just above RAM, so frames must stay below USER_DEMAND_BASE_MAX:
+        ; a frame above it could not be told apart from a user mapping. RAM
+        ; beyond that ceiling is left alone until the 64-bit port.
+        cmp  eax, USER_DEMAND_BASE_MAX
+        jae  .e820_next
+        mov  edx, USER_DEMAND_BASE_MAX
+        sub  edx, eax                   ; room left below the ceiling
+        cmp  ebx, edx
+        jbe  .e820_clamped
+        mov  ebx, edx
+.e820_clamped:
+        test ebx, ebx
+        jz   .e820_next
+
         ; Remember the highest usable address: the page-fault handler only
         ; identity-maps RAM that actually exists (see isr_page_fault).
         push eax

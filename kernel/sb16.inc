@@ -479,7 +479,7 @@ sys_audio_play:
         cmp  byte [sb16_present], 0
         je   .sap_fail
         mov  eax, ebx
-        cmp  eax, USER_DEMAND_BASE
+        cmp  eax, [user_demand_base]
         jb   .sap_play
         mov  eax, ecx
         cmp  eax, SB16_STAGE_BYTES

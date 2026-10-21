@@ -682,6 +682,7 @@ default_color:  resb 1
 tick_count:     resd 1
 total_free_pages: resd 1
 pmm_mem_top:      resd 1     ; highest usable physical byte (page-aligned, exclusive)
+user_demand_base: resd 1     ; first user virtual address (above all RAM)
 buddy_free_list:  resd 12          ; v9.0: per-order buddy allocator free-list heads
 
 kb_buffer:      resb KB_BUFFER_SIZE

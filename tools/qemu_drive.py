@@ -20,6 +20,7 @@ Options:
   --screendump FILE   save the framebuffer as PNG (works in VBE graphics modes)
   --json              emit a machine-readable result object
   --out FILE          write the combined serial+screen output to FILE
+  --mem MB            guest RAM in MB (default 128)
 
 Exit: 0 on success, 1 if a CPU exception occurred, an --expect text was missing,
       an --reject text appeared, or the boot marker never showed up.
@@ -251,6 +252,7 @@ def main() -> int:
     then = _opt(args, "--then")
     out_file = _opt(args, "--out")
     screendump = _opt(args, "--screendump")
+    mem_mb = _opt(args, "--mem", "128")
     want_json = "--json" in args
 
     qemu = find_qemu()
@@ -259,7 +261,7 @@ def main() -> int:
     ser_path = os.path.join(tmp, "serial.sock")
 
     proc = subprocess.Popen(
-        [qemu, "-cpu", "486", "-m", "128",
+        [qemu, "-cpu", "486", "-m", str(mem_mb),
          "-drive", f"file={image},format=raw,if=ide,cache=writethrough",
          "-boot", "c", "-display", "none", "-no-reboot",
          # wait=on keeps the VM paused until this process connects, so the boot

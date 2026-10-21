@@ -97,6 +97,9 @@ jobs:
           python3 tools/qemu_drive.py mellivora.img "hello &" --then "ps" \
             --expect "No background jobs"
 
+      - name: 100 MB heap workload (P1 exit gate)
+        run: make check-heap
+
       - name: Run test suite
         run: make check
 

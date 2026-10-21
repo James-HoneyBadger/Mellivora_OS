@@ -25,12 +25,21 @@ the bug.
 | `0x00300000`–`0x003C0000` | Program window: code, data, BSS, heap (grows up, capped at `USER_STACK_BASE`) | read/write/execute |
 | `0x003C0000`–`0x00400000` | Reserved user stack region: guard page at `0x003C0000`, on-demand growth area, then the top 64 KB mapped at exec (stack starts at `PROGRAM_EXIT_ADDR - 4`) | read/write, guard page **never** |
 | `0x00400000`–`0x08000000` | Reserved | **never** |
-| `0x08000000`–`0x20000000` | Demand-paged user zone (`mmap`, large heaps) | read/write, per-`vm_area` permissions |
+| `user_demand_base`–`0x20000000` | Demand-paged user zone (`mmap`, large heaps) | read/write, per-`vm_area` permissions |
 | `0x1FFFF000` | Sigreturn trampoline (single page) | read/execute only |
 | `0xFD000000`+ | VBE linear framebuffer | read/write for the process holding the graphics grant |
 
 Kernel mappings are `PG_PRESENT | PG_WRITABLE` with **no** `PG_USER`. User mappings are
 `PG_PRESENT | PG_USER` plus `PG_WRITABLE` only where the contract says so.
+
+`user_demand_base` is computed at boot: the kernel addresses physical memory 1:1, so
+user virtual addresses must begin **above** the highest byte of RAM. Otherwise a
+kernel access to a frame above 128 MB would land inside the demand zone, and a task
+holding an area there would have that frame mapped as user scratch. The base is the
+first 4 MB boundary at or above the top of RAM, never below `0x08000000` (so a 128 MB
+machine keeps the historical layout) and never above `0x1C000000` (which keeps 64 MB
+of user space below `0x20000000`). For the same reason the allocator only hands out
+frames below `0x1C000000`; RAM above that is not used until the 64-bit port.
 
 ## 3. Objects
 
