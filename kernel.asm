@@ -69,6 +69,10 @@ BG_STACK_PAGES      equ 16             ; Pages per background task user stack (6
 USER_STACK_MAX_PAGES  equ 64                                  ; 256 KB hard cap
 USER_STACK_INIT_PAGES equ 16                                  ; 64 KB mapped at exec
 USER_STACK_BASE       equ PROGRAM_END_ADDR - USER_STACK_MAX_PAGES * 4096
+; Stack ASLR: the stack top starts up to this many pages below the window top,
+; and the trampoline and initial ESP move with it. It has to stay well under
+; USER_STACK_MAX_PAGES - USER_STACK_INIT_PAGES so the stack can still grow.
+STACK_ASLR_PAGES      equ 16
 STACK_GROWTH_SLACK    equ 16                                  ; pages one fault may skip
 
 ; mmap protection bits (mirror of programs/syscalls.inc)

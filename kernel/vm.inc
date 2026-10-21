@@ -21,11 +21,56 @@ VM_MAP_SHARED      equ 0x10        ; SYS_MMAP_FILE: writes go back to the file
 
 ;---------------------------------------
 ; vm_init - seed the mapping randomiser
+;
+; Seeded from the RTC and the PIT counter, not from tick_count: interrupts are
+; still disabled here, so a tick-count seed is always 0 and every boot would
+; lay memory out identically. The counter behind port 0x40 counts down at
+; 1.19 MHz, which gives sub-second variation, and the RTC gives the rest.
+; The mixer is an avalanche step so that two boots a few ticks apart do not
+; produce neighbouring seeds.
 ;---------------------------------------
 vm_init:
         pushad
-        mov eax, [tick_count]
-        xor eax, 0x9E3779B9
+        call rtc_read_time
+        xor ecx, ecx                    ; seed accumulator
+        movzx eax, byte [rtc_sec]
+        or  ecx, eax
+        movzx eax, byte [rtc_min]
+        shl eax, 6
+        xor ecx, eax
+        movzx eax, byte [rtc_hour]
+        shl eax, 12
+        xor ecx, eax
+        movzx eax, byte [rtc_day]
+        shl eax, 17
+        xor ecx, eax
+        movzx eax, byte [rtc_month]
+        shl eax, 22
+        xor ecx, eax
+        movzx eax, byte [rtc_year]
+        shl eax, 26
+        xor ecx, eax
+        in  al, 0x40                    ; PIT channel 0, live counter
+        movzx ebx, al
+        shl ebx, 8
+        in  al, 0x40
+        movzx eax, al
+        or  ebx, eax
+        xor ecx, ebx
+        xor ecx, [tick_count]
+        xor ecx, 0x9E3779B9
+        mov eax, ecx                    ; avalanche
+        mov ebx, eax
+        shr ebx, 16
+        xor eax, ebx
+        imul eax, eax, 0x7FEB352D
+        mov ebx, eax
+        shr ebx, 15
+        xor eax, ebx
+        imul eax, eax, 0x846CA68B
+        mov ebx, eax
+        shr ebx, 16
+        xor eax, ebx
         test eax, eax
         jnz .vi_seeded
         mov eax, 0x12345678
@@ -44,6 +89,24 @@ vm_rand:
         add eax, 12345
         mov [vm_rng], eax
         shr eax, 4
+        ret
+
+;---------------------------------------
+; vm_random_stack_top - pick this launch's user stack top
+;   Out: EAX = PROGRAM_EXIT_ADDR - 4 - n*4096, n < STACK_ASLR_PAGES
+;
+; The heap is randomised by vm_gap; this is the stack's half of the same idea.
+; The program window only leaves STACK_ASLR_PAGES*4 KB of slack between the
+; smallest mapped stack and the top of the window, so the spread is small - it
+; is enough that the exact address differs from launch to launch, not enough to
+; hide the stack from anything that can retry.
+;---------------------------------------
+vm_random_stack_top:
+        call vm_rand
+        and eax, STACK_ASLR_PAGES - 1   ; page-granular offset
+        shl eax, 12
+        neg eax
+        add eax, PROGRAM_EXIT_ADDR - 4
         ret
 
 ;---------------------------------------

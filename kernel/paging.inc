@@ -1212,18 +1212,21 @@ paging_isolate_program_window:
 
 ;-----------------------------------------------------------------------
 ; paging_setup_user_stack — reserve the caller's user stack region
+;   In : EAX = TCB of the task (its directory must be active)
 ;   Out: EAX = 0 on success, -1 on failure
 ;
-; Called once per task, after its image is in the window and its argv/trampoline
-; are in place, with that task's directory active. It privatises the window's
-; page table (so the unmapping below cannot leak into another address space) and
-; unmaps every stack page except the top USER_STACK_INIT_PAGES:
+; Called once per task, after its image is in the window and its trampoline is
+; in place, with that task's directory active. It privatises the window's page
+; table (so the unmapping below cannot leak into another address space) and
+; unmaps every stack page except the USER_STACK_INIT_PAGES below the task's
+; stack top (TCB_USTACK + 4):
 ;
 ;   USER_STACK_BASE                guard page — never mapped
 ;   USER_STACK_BASE+4K ..          growth area — mapped on demand by
 ;                                  pf_try_stack_growth
-;   top USER_STACK_INIT_PAGES      mapped now; holds the trampoline and the
-;                                  first frames the program uses
+;   .. stack top                   mapping window: USER_STACK_INIT_PAGES that
+;                                  hold the trampoline and the first frames
+;   stack top .. PROGRAM_END_ADDR  gap above a randomised top — unmapped
 ;
 ; Frames private to this directory are released; frames still shared with the
 ; master window are left to it (the master keeps the shell's image).
@@ -1234,6 +1237,7 @@ paging_isolate_program_window:
 ;-----------------------------------------------------------------------
 paging_setup_user_stack:
         pushad
+        mov [.psu_tcb], eax
         call paging_current_pd
         mov [.psu_pd], eax
 
@@ -1242,13 +1246,31 @@ paging_setup_user_stack:
         test eax, eax
         jz .psu_fail
 
+        ; The task's mapping window is [keep, top). Everything else in the
+        ; stack region goes: the growth area below it, and - because the top is
+        ; randomised - the gap above it. The master maps the whole region for
+        ; the shell's own image, so both gaps have to be cleared per task.
+        mov eax, [.psu_tcb]
+        mov eax, [eax + TCB_USTACK]
+        test eax, eax
+        jz .psu_fail
+        inc eax                         ; top, exclusive
+        mov [.psu_top], eax
+        sub eax, USER_STACK_INIT_PAGES * 4096
+        mov [.psu_keep], eax
+
         mov dword [.psu_va], USER_STACK_BASE
-        mov dword [.psu_left], USER_STACK_MAX_PAGES - USER_STACK_INIT_PAGES
 
 .psu_loop:
-        cmp dword [.psu_left], 0
-        je .psu_ok
+        mov eax, [.psu_va]
+        cmp eax, PROGRAM_END_ADDR
+        jae .psu_ok
+        cmp eax, [.psu_keep]
+        jb .psu_drop
+        cmp eax, [.psu_top]
+        jb .psu_next                    ; inside the mapped window: leave it
 
+.psu_drop:
         ; PTE address inside the (now private) window page table
         mov eax, [.psu_pd]
         mov eax, [eax + (PROGRAM_BASE >> 22) * 4]
@@ -1285,8 +1307,8 @@ paging_setup_user_stack:
         mov dword [eax], 0              ; not present
         mov eax, [.psu_va]
         invlpg [eax]
+.psu_next:
         add dword [.psu_va], 4096
-        dec dword [.psu_left]
         jmp .psu_loop
 
 .psu_ok:
@@ -1297,9 +1319,11 @@ paging_setup_user_stack:
         mov dword [esp + 28], -1
         popad
         ret
+.psu_tcb:  dd 0
 .psu_pd:   dd 0
 .psu_va:   dd 0
-.psu_left: dd 0
+.psu_top:  dd 0
+.psu_keep: dd 0
 .psu_pte:  dd 0
 
 ;-----------------------------------------------------------------------
@@ -1334,8 +1358,21 @@ pf_try_stack_growth:
         and esi, 0xFFFFF000
         mov [.pfs_pt], esi
 
-        ; Walk down from the top page until a not-present entry is found.
-        mov esi, PROGRAM_END_ADDR - 0x1000
+        ; Walk down from this task's stack top until a not-present entry is
+        ; found. With a randomised top the pages above it are unmapped and are
+        ; not growth area, so the scan cannot start at the top of the window.
+        call sched_get_current_task
+        test eax, eax
+        jz .pfs_out
+        mov esi, [eax + TCB_USTACK]
+        test esi, esi
+        jz .pfs_out
+        inc esi                         ; top, exclusive
+        cmp esi, USER_STACK_BASE
+        jbe .pfs_out
+        cmp esi, PROGRAM_END_ADDR
+        ja .pfs_out                     ; a stack outside the window: no growth
+        sub esi, 0x1000
 .pfs_scan:
         mov eax, esi
         shr eax, 12
@@ -1906,13 +1943,18 @@ cow_fork_share:
         mov ebx, [esi + TCB_USTACK]
         test ebx, ebx
         jz .cfs_area_scan               ; no separate stack
-        add ebx, 4
+        add ebx, 4                      ; top, exclusive
+        ; A foreground launch keeps its stack inside the program window, where
+        ; step 1 has already shared every mapped page. Sharing it a second time
+        ; would count those frames twice - and, now that the top is randomised,
+        ; the range would also reach under the window into kernel identity
+        ; pages that belong to nobody in this address space.
+        cmp ebx, USER_STACK_BASE
+        jbe .cfs_stack_block
+        cmp ebx, PROGRAM_END_ADDR
+        jbe .cfs_area_scan              ; window stack: already shared
+.cfs_stack_block:
         sub ebx, BG_STACK_PAGES * 4096  ; first page of the allocation
-        cmp ebx, PROGRAM_BASE
-        jb  .cfs_stack_do
-        mov eax, PROGRAM_BASE + PROGRAM_MAX_SIZE
-        cmp ebx, eax
-        jb  .cfs_area_scan              ; inside the window: already shared
 
 .cfs_stack_do:
         mov eax, [.cfs_parent]

@@ -9,7 +9,7 @@ makes it possible to assert on output as a user would see it.
 Usage: qemu_drive.py <image> "<command>" [options]
 
 Options:
-  --then CMD          run a second command after the first
+  --then CMD          run another command after the first (repeatable)
   --wait N            keep polling for --expect text for up to N seconds
                       after the command is typed (default 6)
   --timeout N         seconds to wait for the boot marker (default 60)
@@ -249,7 +249,7 @@ def main() -> int:
     transport = _opt(args, "--via", "serial")
     expects = _opt_all(args, "--expect")
     rejects = _opt_all(args, "--reject")
-    then = _opt(args, "--then")
+    thens = _opt_all(args, "--then")
     out_file = _opt(args, "--out")
     screendump = _opt(args, "--screendump")
     mem_mb = _opt(args, "--mem", "128")
@@ -296,7 +296,7 @@ def main() -> int:
                 mon_ctl.cmd("sendkey ret", 0.3)
             time.sleep(1.5)
 
-            if then:
+            for then in thens:
                 if transport == "serial":
                     ser.send_line(then)
                 else:

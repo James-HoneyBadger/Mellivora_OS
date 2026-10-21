@@ -841,6 +841,7 @@ last_bg_pid:     resd 1          ; PID of the most recently launched background 
 prog_name_buf:   resb 256        ; Parsed program name from command line
 parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
 parent_active:    resb 1         ; 1 = re-launch parent after child exits
+program_stack_top: resd 1        ; randomised user stack top for this launch
 program_args_buf: resb 512       ; Command-line arguments for the current launch
 ; Per-task copy of the argument string, indexed by PID and allocated from the
 ; slab cache on first use. A task that calls SYS_GETARGS long after it started

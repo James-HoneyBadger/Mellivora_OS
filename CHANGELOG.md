@@ -1,5 +1,48 @@
 # Mellivora OS - Changelog
 
+## Unreleased - randomised stack top
+
+### Security
+
+- **The user stack now starts at a randomised address.** `vm_random_stack_top` picks a
+  page-granular offset inside the stack region for every launch, so the top - and with it
+  the trampoline and the first ESP - moves between launches instead of always sitting at
+  `PROGRAM_EXIT_ADDR - 4`. The chosen top is threaded through both `sched_create_task`
+  call sites and the legacy IRET path, the trampoline is written at the new top, and
+  `paging_setup_user_stack` now unmaps everything outside `[top - 16 pages, top)` - both
+  the growth area below it and, new, the gap a smaller top leaves above it.
+- `pf_try_stack_growth` finds its frontier by scanning down from the *task's own* top
+  (`TCB_USTACK + 4`) rather than from the top of the region, because the pages above a
+  randomised top are unmapped and are not growth area. It also refuses a top outside the
+  stack region instead of wrapping.
+- **The mapping randomiser is seeded from the clock, not from zero.** `vm_init` ran
+  before interrupts were enabled, so it seeded `vm_rng` from `tick_count` - always 0 -
+  and every boot laid memory out identically. It now mixes the RTC, the live PIT counter
+  and `tick_count` through an avalanche step, so the first mmap and the first stack of a
+  boot differ between boots as well as between launches.
+- **exec in place keeps its stack top.** A task that `execve`s already holds a stack
+  window at its current top and holds nothing outside it, so re-randomising would place
+  the trampoline in a page that no longer exists in its directory. `cmd_exec_program`
+  reuses `TCB_USTACK` when a task is already running, and only a fresh launch draws a
+  new top. (This was a real fault: `argv_test` page-faulted at `0x003FFFF0`, a supervisor
+  write to the new trampoline.)
+- **A forked task's window stack is no longer shared twice.** `cow_fork_share` re-shared
+  the 64 KB below `TCB_USTACK` even when the stack sits inside the program window, which
+  the window range had already shared - double-counting those frames' COW references and
+  walking below `PROGRAM_BASE` into kernel identity pages. A randomised top made that
+  overlap up to 16 pages wide; the stack block is now skipped when its top is inside the
+  window.
+- Background launches (`hello &`) are unchanged: their stack sits at the top of its own
+  64 KB block, which `cow_fork_share` shares as `[top - 64 KB, top)`. Randomising that
+  top would push the shared range below the block into whatever was allocated next.
+
+### Tooling
+
+- `programs/stack_aslr_test.asm` prints its own ESP, and `tests/test_runtime.sh` runs it
+  four times in one boot (`run_varying_case`) and fails if every launch reports the same
+  address - a single launch cannot show that an address is random.
+- `tools/qemu_drive.py --then` is repeatable, so one boot can run a command several times.
+
 ## Unreleased - kernel slab allocator
 
 ### Kernel

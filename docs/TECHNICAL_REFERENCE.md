@@ -222,7 +222,8 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
            │ Kernel code + data      │  Variable (generated sector count)
 0x00300000 ├─────────────────────────┤  ← 3 MB
            │ User program space      │  1 MB max
-0x003FFFF0 │ SYS_EXIT trampoline     │  Safety net for programs that RET
+0x003FFxxx │ SYS_EXIT trampoline     │  Safety net for programs that RET;
+           │ (+ stack top)           │  both move with the per-launch random top
 0x00400000 ├─────────────────────────┤  ← 4 MB
            │ (gap / reserved)        │
 0x00410000 ├─────────────────────────┤
@@ -1248,7 +1249,7 @@ Each task occupies **136 bytes** in the static `task_table` array
 | 0 | 4 | `TCB_ESP` | Saved kernel-mode ESP (pushad + iretd frame) |
 | 4 | 4 | `TCB_STATE` | 0=free, 1=ready, 2=running, 3=blocked, 4=stopped, 5=zombie |
 | 8 | 4 | `TCB_KSTACK` | Top of this task's kernel stack page (TSS ESP0) |
-| 12 | 4 | `TCB_USTACK` | User-mode stack top |
+| 12 | 4 | `TCB_USTACK` | User-mode stack top (randomised per launch; the exit trampoline sits at this address and ESP starts here) |
 | 16 | 4 | `TCB_ENTRY` | Ring-3 entry point |
 | 20 | 4 | `TCB_PID` | Task ID |
 | 24 | 4 | `TCB_PRIORITY` | Priority level (0–3) |
@@ -1450,20 +1451,34 @@ The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
 ### Ring 3 Execution
 
 1. Set `program_running = 1`, clear `ctrl_c_flag` and `program_exit_code`
-2. Write **SYS_EXIT trampoline** at `PROGRAM_EXIT_ADDR` (0x3FFFF0):
+2. Pick this launch's stack top (`vm_random_stack_top`): `PROGRAM_EXIT_ADDR - 4` minus
+    a page-granular offset of up to `STACK_ASLR_PAGES` (16) pages, stored in
+    `program_stack_top` and, for a task, in `TCB_USTACK`. A task that is *already
+    running* - an exec in place via `SYS_EXEC` - keeps its top instead: the pages
+    outside its existing window are unmapped in its directory, so a new top could put
+    the trampoline in a page that does not exist there. GUI launches always draw a new
+    top because they always create a task.
+3. Write **SYS_EXIT trampoline** at the chosen top + 4:
 
    ```nasm
    mov eax, 0    ; SYS_EXIT
    int 0x80
    ```
 
-   This catches programs that use `RET` instead of `SYS_EXIT`
-3. Create the task (`sched_create_task`) and switch to it with `sched_start_task`. The
+   The top itself holds the trampoline's address as the return address, so a program that
+   ends with `RET` exits instead of running off the end of its code. Neither address is
+   fixed any more: both move with the chosen top.
+4. Create the task (`sched_create_task`) and switch to it with `sched_start_task`. The
    task's own kernel stack becomes TSS ESP0, so kernel work during its syscalls never
    touches the shell's stack. If task creation fails, the legacy direct-IRET path is
    used: TSS ESP0 stays `KERNEL_STACK` and the IRET frame is built by hand.
-4. Set up Ring 3 stack at `PROGRAM_EXIT_ADDR - 4`, push trampoline as return address
-5. Perform `IRETD` to Ring 3 (either from the task's saved frame or, on the legacy
+5. Set up the Ring 3 stack window below the chosen top (`paging_setup_user_stack` takes
+   the TCB in `EAX`, reads `TCB_USTACK`): keep the `USER_STACK_INIT_PAGES` pages ending at
+   the top page, unmap everything else in `[USER_STACK_BASE, PROGRAM_END_ADDR)` - the
+   growth area below and the gap a lowered top leaves above - and release the frames that
+   were private to the directory. `TCB_USTACK` is the trampoline's address, so the
+   window's exclusive end is `TCB_USTACK + 4`.
+6. Perform `IRETD` to Ring 3 (either from the task's saved frame or, on the legacy
    path, from a hand-built frame):
    - Push `USER_DS` (0x23) — SS3
    - Push ESP3
@@ -1550,9 +1565,11 @@ address spaces **share frames** until one of them writes:
    protection fault and still crashes.
 
 Shared regions are the program window (`PROGRAM_BASE`, which also holds a foreground
-program's stack at its top), a background task's separately allocated image, and a
-background task's separate stack — the last two only when they are outside the window,
-because sharing a range twice would count its frames twice and leak them.
+program's stack at its top) and a background task's separately allocated image and stack.
+The last two are only shared when they are outside the window, and the stack is skipped
+when `TCB_USTACK + 4` lies inside it: the window range already covered those pages, and a
+second pass would count their frames twice (and, with a randomised top, walk below
+`PROGRAM_BASE` into kernel identity pages).
 
 Bookkeeping is `cow_ref` in `data.inc`: one byte per 4 KB frame the allocator can hand
 out (`COW_MAX_PAGES` = `USER_DEMAND_BASE_MAX / 4096`, 448 MB worth; the allocator stops

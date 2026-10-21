@@ -96,6 +96,37 @@ run_case() {
     fi
 }
 
+# run_varying_case NAME CMD PATTERN RUNS
+# Launches CMD RUNS times in one boot and requires the text matched by PATTERN
+# (one match per launch, in launch order) to take at least two different
+# values. This is how an address that is supposed to be randomised gets tested:
+# a single run cannot show the difference.
+run_varying_case() {
+    local name="$1" cmd="$2" pattern="$3" runs="${4:-4}"
+    local out i
+    out="$(mktemp)"
+    local args=("$IMAGE" "$cmd" --reject "CPU EXCEPTION")
+    for ((i = 1; i < runs; i++)); do
+        args+=(--then "$cmd")
+    done
+    args+=(--out "$out")
+    printf '  %-34s ' "$name"
+    if ! timeout $((CASE_TIMEOUT * 2)) python3 "$DRIVE" "${args[@]}" >/dev/null 2>&1; then
+        echo "FAIL"
+        failures=$((failures + 1))
+    else
+        local -a seen
+        mapfile -t seen < <(grep -o "$pattern" "$out" | sort -u)
+        if [ "${#seen[@]}" -ge 2 ]; then
+            echo "PASS"
+        else
+            echo "FAIL  (every launch used the same address)"
+            failures=$((failures + 1))
+        fi
+    fi
+    rm -f "$out"
+}
+
 echo "  runtime tests: $(basename "$IMAGE"), ${CASE_TIMEOUT}s per case"
 
 run_case "flat binary runs"          "hello"                 "Hello, World!"
@@ -134,6 +165,10 @@ run_case "launch does not leak frames"   "stack_leak_test"       "STACKLEAK_OK" 
 # A task torn down by a signal never runs its own exit path, so the kill has to
 # release what it mapped - frames, page-cache references and page tables.
 run_case "signal kill releases memory"   "kill_leak_test"        "KILLLEAK_OK"        "" "CPU EXCEPTION|KILLLEAK_FAIL"
+# The stack top is chosen per launch, so the same command has to land in a
+# different place each time it runs. exec keeps its top on purpose (it reuses
+# the task's existing mapping window), so this uses real launches.
+run_varying_case "stack top is randomised"  "stack_aslr_test"     "ASLR_TOP [0-9a-f]\{8\}"
 
 # Above 128 MB, physical frames live beyond the boot identity map: the allocator
 # walks free-list nodes that are not mapped yet, the fault handler faults on its

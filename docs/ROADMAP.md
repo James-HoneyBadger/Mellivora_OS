@@ -82,7 +82,14 @@ A phase does not close until these are measured:
   first two users are every task's mmap area table and argv snapshot, which were static
   arrays sized for `MAX_TASKS`: the kernel image lost 175 KB (2.02 MB → 1.84 MB of the
   2 MB limit) and now pays only for the tasks that exist.
-- [ ] ASLR for stack/heap (mmap base is already randomised); NX (with P2).
+- [x] ASLR for stack/heap. The `mmap` base was already randomised; the user stack now
+  starts at a page-granular offset below the top of its region on every launch (4 bits
+  of entropy - the 1 MB window leaves only 16 pages of slack before the stack could no
+  longer grow - so it defeats a fixed-address assumption, not a patient attacker), the
+  trampoline and the mapped window move with it, exec in place keeps its top (it has no
+  mapping left outside its existing window), and the randomiser is seeded from the RTC
+  and the PIT instead of `tick_count`, which was 0 at boot. NX and a wider stack region
+  belong with P2.
 - [x] Allocations above 128 MB (pre-existing). Three faults, all only reachable on a
   guest with more RAM than the boot identity map covers: the page-fault handler saved
   three registers while its helpers clobbered EBX/ESI/EDI/EBP, so the buddy allocator's

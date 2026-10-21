@@ -6240,17 +6240,35 @@ cmd_exec_program:
         mov esi, msg_exec
         call vga_print
 
-        ; Write SYS_EXIT trampoline at end of program area
-        ; Bytes: B8 00 00 00 00 CD 80 = mov eax, 0 / int 0x80
-        mov byte [PROGRAM_EXIT_ADDR], 0xB8
-        mov dword [PROGRAM_EXIT_ADDR + 1], 0
-        mov byte [PROGRAM_EXIT_ADDR + 5], 0xCD
-        mov byte [PROGRAM_EXIT_ADDR + 6], 0x80
+        ; Pick this launch's stack top. The window leaves only a little slack,
+        ; so the spread is small, but the exact address no longer repeats.
+        ;
+        ; exec in place is the exception: the task already holds a stack window
+        ; at its current top and the pages outside it were unmapped when it
+        ; started, so a new random top could put the trampoline below in a page
+        ; that does not exist in its directory any more. It keeps its top.
+        call sched_get_current_task
+        test eax, eax
+        jz .exec_random_top
+        cmp byte [gui_launch_flag], 1
+        je .exec_random_top             ; a GUI launch creates a new task
+        mov eax, [eax + TCB_USTACK]
+        test eax, eax
+        jnz .exec_have_top
+.exec_random_top:
+        call vm_random_stack_top
+.exec_have_top:
+        mov [program_stack_top], eax
 
-        ; Set up ring 3 stack
-        mov eax, PROGRAM_EXIT_ADDR - 4
-        ; Push return address (trampoline) on ring 3 stack
-        mov dword [eax], PROGRAM_EXIT_ADDR
+        ; Write the SYS_EXIT trampoline just above the top, and put its address
+        ; where the stack's first dword points: B8 00 00 00 00 CD 80 =
+        ; mov eax, 0 / int 0x80
+        mov byte [eax + 4], 0xB8
+        mov dword [eax + 5], 0
+        mov byte [eax + 9], 0xCD
+        mov byte [eax + 10], 0x80
+        lea edx, [eax + 4]
+        mov [eax], edx                  ; return address into the trampoline
 
         ; GUI launch (Burrows): create the task READY and return so the
         ; desktop can start it later and other GUI apps keep running.
@@ -6271,7 +6289,7 @@ cmd_exec_program:
         mov esi, prog_name_buf
         call sched_set_create_name
         mov ebx, [program_entry]
-        mov ecx, PROGRAM_EXIT_ADDR - 4
+        mov ecx, [program_stack_top]
         call sched_create_task  ; EAX = pid or -1
         test eax, eax
         js .exec_legacy_ring3
@@ -6286,8 +6304,12 @@ cmd_exec_program:
         push eax
         imul eax, TCB_SIZE
         add eax, task_table
+        push eax                        ; TCB, for the stack set-up below
         call sched_apply_cr3
+        pop eax
+        push eax
         call paging_setup_user_stack
+        pop eax
         xor eax, eax
         call sched_apply_cr3
         pop eax
@@ -6322,7 +6344,7 @@ cmd_exec_program:
         mov dword [tss_struct + 4], KERNEL_STACK
 
 .exec_legacy_iret:
-        mov eax, PROGRAM_EXIT_ADDR - 4
+        mov eax, [program_stack_top]
         mov ebx, [program_entry]
         push dword USER_DS      ; SS3
         push eax                ; ESP3
@@ -6345,7 +6367,7 @@ cmd_exec_program:
         mov esi, prog_name_buf
         call sched_set_create_name
         mov ebx, [program_entry]
-        mov ecx, PROGRAM_EXIT_ADDR - 4
+        mov ecx, [program_stack_top]
         call sched_create_task          ; EAX = task id or -1
         test eax, eax
         js .exec_gui_create_fail
@@ -6355,11 +6377,15 @@ cmd_exec_program:
         push eax                        ; save task id across CR3 switches
         imul eax, TCB_SIZE
         add eax, task_table
+        push eax                        ; TCB, for the stack set-up below
         call sched_apply_cr3            ; run in the new task's directory
         call paging_isolate_program_window
         test eax, eax
-        js .exec_gui_iso_fail
+        js .exec_gui_iso_fail_tcb
+        pop eax
+        push eax
         call paging_setup_user_stack    ; guard page + demand-grown stack
+        pop eax
         xor eax, eax
         call sched_apply_cr3            ; back to the master directory
         pop eax                         ; task id
@@ -6368,6 +6394,8 @@ cmd_exec_program:
         clc
         ret
 
+.exec_gui_iso_fail_tcb:
+        pop eax                         ; drop the TCB copy
 .exec_gui_iso_fail:
         pop eax
         call sched_free_ready_task

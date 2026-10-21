@@ -23,7 +23,7 @@ the bug.
 | `0x000A0000`–`0x000C0000` | Legacy video aperture (VGA text at `0xB8000`) | read/write (compatibility: direct text-mode output is a documented feature) |
 | `0x000C0000`–`0x00300000` | ROMs, kernel workspace | **never** |
 | `0x00300000`–`0x003C0000` | Program window: code, data, BSS, heap (grows up, capped at `USER_STACK_BASE`) | read/write/execute |
-| `0x003C0000`–`0x00400000` | Reserved user stack region: guard page at `0x003C0000`, on-demand growth area, then the top 64 KB mapped at exec (stack starts at `PROGRAM_EXIT_ADDR - 4`) | read/write, guard page **never** |
+| `0x003C0000`–`0x00400000` | Reserved user stack region: guard page at `0x003C0000`, on-demand growth area, then the 64 KB below a per-launch randomised top mapped at exec (the top is drawn from the last 16 pages of the region) | read/write, guard page **never** |
 | `0x00400000`–`0x08000000` | Reserved | **never** |
 | `user_demand_base`–`0x20000000` | Demand-paged user zone (`mmap`, large heaps) | read/write, per-`vm_area` permissions |
 | `0x1FFFF000` | Sigreturn trampoline (single page) | read/execute only |
@@ -117,15 +117,29 @@ fresh block, maps the page with the user's protection exactly as a ring-3 fault 
 Anything else from ring 0 falls through to the identity-demand logic (RAM above
 128 MB) and then to the panic path, so a genuine kernel bug is still fatal.
 
+Stack top (implemented): the top of a task's stack is not a fixed address.
+`vm_random_stack_top` draws a page-granular offset in `[0, STACK_ASLR_PAGES)` and puts
+the top that far below `PROGRAM_EXIT_ADDR - 4`; the exit trampoline is written at the
+chosen top and `TCB_USTACK` records it, so ESP at entry and the first 64 KB of stack move
+with it. The spread is deliberately small - 16 pages, because the region has to keep
+`USER_STACK_MAX_PAGES` of room and `USER_STACK_INIT_PAGES` of it is already mapped - so it
+removes a fixed-address assumption rather than hiding the stack from a patient attacker.
+exec in place is the exception: a task that `execve`s keeps the top it already has,
+because the pages outside its existing window are unmapped in its directory and a new top
+could put the trampoline in one of them.
+
 Stack growth (implemented): the user stack has its own region at the top of the program
 window — `USER_STACK_BASE` (0x003C0000) to `PROGRAM_END_ADDR` (0x00400000), 256 KB in
-total. Only the top `USER_STACK_INIT_PAGES` (64 KB) are mapped when a task starts; the
-page at `USER_STACK_BASE` is a **permanent guard page** and is never mapped. A
-not-present user fault in the region is serviced by `pf_try_stack_growth`, which:
+total. Only the `USER_STACK_INIT_PAGES` (64 KB) below the task's stack top are mapped when
+a task starts, and everything else in the region is unmapped - the growth area *and* the
+gap a randomised top leaves above it; the page at `USER_STACK_BASE` is a **permanent
+guard page**. A not-present user fault in the region is serviced by
+`pf_try_stack_growth`, which:
 
 1. finds the lowest mapped stack page by walking the window's page table down from the
-   top of the region (the page tables *are* the state, so a forked or resumed task needs
-   no bookkeeping);
+   task's own top, `TCB_USTACK + 4` (the page tables *are* the state, so a forked or
+   resumed task needs no bookkeeping), and refuses to act at all when that top lies
+   outside the stack region;
 2. accepts the fault only if it lies at most `STACK_GROWTH_SLACK` (16 pages, 64 KB)
    below that frontier, so a stray pointer cannot reserve the region;
 3. maps every page between the fault and the frontier with a freshly zeroed frame
@@ -198,8 +212,9 @@ Implemented in `kernel/vm.inc`:
 
 Also implemented:
 
-- Stack guard page and on-demand stack growth (`paging_setup_user_stack`,
-  `pf_try_stack_growth` in `kernel/paging.inc`), set up per task for both the console and
+- Stack guard page, randomised stack top and on-demand stack growth
+  (`paging_setup_user_stack`, `pf_try_stack_growth` in `kernel/paging.inc`,
+  `vm_random_stack_top` in `kernel/vm.inc`), set up per task for both the console and
   the Burrows launch paths; the heap is capped at the stack region in `SYS_SBRK` and
   `set_program_brk_init`.
 - Kernel identity demand above 128 MB, bounded by the firmware-reported memory top,
@@ -275,11 +290,14 @@ sub-range) advances that sector by the pages it moved into the new record.
     the free-page count down (`stack_leak_test`).
 20. A task torn down by a signal releases its mmap frames, page-cache references and the
     page tables it privatised (`kill_leak_test`).
+21. The user stack top differs between launches of the same program, and every launch
+    still exits cleanly through the trampoline at the top it chose (`stack_aslr_test`,
+    which `tests/test_runtime.sh` runs four times in one boot and compares).
 
 Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
 `vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `vmtest5`, `heaptest`, `stack_test`,
-`stack_overflow`, `stack_leak_test` and `kill_leak_test` over QEMU and `make check`
-fails if any regresses.
+`stack_overflow`, `stack_leak_test`, `kill_leak_test` and `stack_aslr_test` over QEMU and
+`make check` fails if any regresses.
 
 ## 6. Compatibility exceptions
 
