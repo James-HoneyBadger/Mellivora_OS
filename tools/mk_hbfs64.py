@@ -32,8 +32,15 @@ def main():
             return 2
         with open(path, "rb") as f:
             data = f.read()
-        ftype = populate.FTYPE_EXEC if name != "motd" else populate.FTYPE_TEXT
-        fs.add_file(name, data, ftype=ftype)
+        text = name.endswith(".txt") or name == "motd" or name == "readme"
+        ftype = populate.FTYPE_TEXT if text else populate.FTYPE_EXEC
+        directory = None
+        if "/" in name:
+            # "docs/readme=..." puts the file in /docs, creating that
+            # directory if the volume does not have it yet.
+            directory, _, name = name.rpartition("/")
+            fs.create_subdir(directory)
+        fs.add_file(name, data, directory=directory, ftype=ftype)
     fs.finalize()
     return 0
 

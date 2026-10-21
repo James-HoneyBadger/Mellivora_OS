@@ -337,6 +337,117 @@ static struct lm_fault_frame *sys_exec(struct lm_fault_frame *f)
     return f;
 }
 
+/* The mirror of copy_user_string: validate the pages first, then write under
+ * the STAC/CLAC bracket so SMAP does not fault on the store. */
+static int copy_to_user(u64 addr, const void *src, u64 count)
+{
+    const u8 *in = src;
+    for (u64 i = 0; i < count; i++) {
+        if (!vmm_user_mapped(addr + i)) {
+            return -1;
+        }
+    }
+    user_access_begin();
+    for (u64 i = 0; i < count; i++) {
+        *(u8 *)(unsigned long)(addr + i) = in[i];
+    }
+    user_access_end();
+    return 0;
+}
+
+/* seek(fd, offset, whence) - whence 0 from the start, 1 from the position,
+ * 2 from the end. The new position comes back in RAX. */
+static struct lm_fault_frame *sys_seek(struct lm_fault_frame *f)
+{
+    f->rax = (u64)(long)vfs_seek((int)f->rdi, (s64)f->rsi, (int)f->rdx);
+    return f;
+}
+
+/* stat(path, struct vfs_stat *) - 0 on success, -1 if the path does not
+ * resolve. Blocks are reported in the on-disk size, so a program can tell a
+ * directory from a file without opening it. */
+static struct lm_fault_frame *sys_stat(struct lm_fault_frame *f)
+{
+    char path[64];
+    struct vfs_stat st;
+
+    if (copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (vfs_stat(path, &st) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_to_user(f->rsi, &st, sizeof(st)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = 0;
+    return f;
+}
+
+/* readdir(path, index, struct vfs_stat *) - 1 entry, 0 empty slot, -1 done.
+ * A NULL path lists the working directory, which is what the 32-bit ABI does. */
+static struct lm_fault_frame *sys_readdir(struct lm_fault_frame *f)
+{
+    char path[64];
+    struct vfs_stat st;
+    const char *use = NULL;
+
+    if (f->rdi != 0) {
+        if (copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+            f->rax = (u64)-1;
+            return f;
+        }
+        use = path;
+    }
+
+    int got = vfs_readdir(use, (u32)f->rsi, &st);
+    if (got < 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_to_user(f->rdx, &st, sizeof(st)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)got;
+    return f;
+}
+
+static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
+{
+    char path[64];
+    if (copy_user_string(f->rdi, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)(long)vfs_chdir(path);
+    return f;
+}
+
+/* getcwd(buf, size) - copies the path with its NUL, returns its length. */
+static struct lm_fault_frame *sys_getcwd(struct lm_fault_frame *f)
+{
+    const char *cwd = vfs_getcwd();
+    u64 len = 0;
+
+    while (cwd[len] != '\0') {
+        len++;
+    }
+    if (f->rsi < len + 1) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (copy_to_user(f->rdi, cwd, len + 1) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = len;
+    return f;
+}
+
 static const struct lm_syscall syscalls[] = {
     [1] = {"ping", sys_ping, 0},
     [2] = {"whoami", sys_whoami, 0},
@@ -350,6 +461,11 @@ static const struct lm_syscall syscalls[] = {
     [10] = {"read", sys_read, 1},
     [11] = {"close", sys_close, 1},
     [12] = {"exec", sys_exec, 1},
+    [13] = {"seek", sys_seek, 0},
+    [14] = {"stat", sys_stat, 0},
+    [15] = {"readdir", sys_readdir, 0},
+    [16] = {"chdir", sys_chdir, 1},
+    [17] = {"getcwd", sys_getcwd, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -384,6 +500,86 @@ static struct lm_fault_frame *int80_print(struct lm_fault_frame *f)
     user_access_end();
 
     f->rax = n;
+    return f;
+}
+
+/*
+ * The 32-bit stat buffer is 12 bytes - size, type, mtime - and a NULL buffer is
+ * the legacy form that returns the size in EAX and the block count in ECX.
+ */
+static struct lm_fault_frame *int80_stat(struct lm_fault_frame *f)
+{
+    char path[64];
+    struct vfs_stat st;
+    u32 buf[3];
+
+    if (copy_user_string((u32)f->rbx, path, sizeof(path)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if (vfs_stat(path, &st) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    if ((u32)f->rcx == 0) {
+        f->rax = st.size;
+        f->rcx = st.blocks;
+        return f;
+    }
+
+    buf[0] = st.size;
+    buf[1] = st.type;
+    buf[2] = 0;                     /* mtime: no clock in the 64-bit port yet */
+    if (copy_to_user((u32)f->rcx, buf, sizeof(buf)) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = 0;
+    return f;
+}
+
+/* READDIR over the working directory: the name goes to EBX, the type to EAX
+ * (0 = free slot, -1 = past the end) and the size to ECX. */
+static struct lm_fault_frame *int80_readdir(struct lm_fault_frame *f)
+{
+    struct vfs_stat st;
+    u64 buf = (u32)f->rbx;
+
+    int got = vfs_readdir(NULL, (u32)f->rcx, &st);
+    if (got < 0) {
+        if (vmm_user_mapped(buf)) {
+            user_access_begin();
+            *(char *)(unsigned long)buf = 0;
+            user_access_end();
+        }
+        f->rax = (u64)-1;
+        f->rcx = 0;
+        return f;
+    }
+    if (copy_to_user(buf, st.name, sizeof(st.name)) != 0) {
+        f->rax = (u64)-1;
+        f->rcx = 0;
+        return f;
+    }
+    f->rax = got == 1 ? st.type : 0;
+    f->rcx = got == 1 ? st.size : 0;
+    return f;
+}
+
+/* GETCWD copies the path and its NUL to EBX; EBX is unvalidated, so the copy
+ * goes through copy_to_user rather than the caller's pointer directly. */
+static struct lm_fault_frame *int80_getcwd(struct lm_fault_frame *f)
+{
+    const char *cwd = vfs_getcwd();
+    u64 len = 0;
+    while (cwd[len] != '\0') {
+        len++;
+    }
+    if (copy_to_user((u32)f->rbx, cwd, len + 1) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = len;
     return f;
 }
 
@@ -433,6 +629,19 @@ struct lm_fault_frame *lm_int80_dispatch(struct lm_fault_frame *f)
     case 18:                        /* SYS_SETCOLOR: no text console yet */
         f->rax = 0;
         return f;
+    case 10:                        /* SYS_SEEK: EBX=fd ECX=offset EDX=whence */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(s64)(int)(u32)f->rcx;
+        f->rdx = (u64)(u32)f->rdx;
+        return sys_seek(f);
+    case 11:                        /* SYS_STAT: EBX=name ECX=12-byte buffer */
+        return int80_stat(f);
+    case 13:                        /* SYS_READDIR: EBX=buf ECX=index */
+        return int80_readdir(f);
+    case 26:                        /* SYS_CHDIR: EBX=path */
+        return sys_chdir(f);
+    case 27:                        /* SYS_GETCWD: EBX=buf -> EAX=length */
+        return int80_getcwd(f);
     default:
         f->rax = (u64)-1;
         return f;

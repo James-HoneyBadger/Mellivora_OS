@@ -2226,6 +2226,43 @@ What is not there yet is the other 181 calls behind that bridge (`GETCHAR`, `REA
 `MKDIR`, `SEEK`, `STAT`, the cursor and video calls), so only programs that stay inside
 the implemented set run.
 
+### Directories, and the metadata calls
+
+HBFS's root directory is an entry like any other as far as the reader is concerned,
+except that it has no on-disk entry of its own: `hbfs_root()` synthesises one whose
+`start` is a sentinel, and `dir_data()` turns that into "read the superblock's root
+blocks" while a real entry becomes "read `blocks` blocks from the data area". Both
+paths land in a flat buffer because the 288-byte entries are not block-aligned - one
+can straddle a 4 KB boundary - so the reader never has to reassemble them.
+
+Resolution is `hbfs_resolve(path)`: a relative name is prefixed with the caller's
+working directory, then the path is walked one component at a time through
+`hbfs_lookup_in`, with `.` skipped and `..` meaning the root (subdirectories are one
+level deep until `MKDIR` exists, so that is what it can mean). The path is built into
+a fixed buffer, which is why an over-long name is rejected rather than truncated.
+
+Each task has its own working directory: `cwd_of[]` and `cwd_path[]` are indexed by
+task id, and `this_cwd()` asks the scheduler which task is running. The 32-bit tree
+keeps one global `cwd`, which is correct when there is one program; here `/ls` chdirs
+into `/docs` while `/hello32` chdirs there and back, and neither sees the other's path.
+
+The five calls, and the two shapes the tree asks for them in:
+
+| Call | 64-bit (LP64) | 32-bit (`INT 0x80`) |
+| --- | --- | --- |
+| `seek` | `seek(fd, offset, whence)` -> new position | EBX=fd ECX=offset EDX=whence |
+| `stat` | `stat(path, struct vfs_stat *)` -> 0/-1 | EBX=path, ECX=12-byte buffer; with ECX=0 the legacy form returns size in EAX and blocks in ECX |
+| `readdir` | `readdir(path, index, struct vfs_stat *)` -> 1/0/-1 | EBX=name buffer, ECX=index; returns type in EAX, size in ECX |
+| `chdir` | `chdir(path)` -> 0/-1 | EBX=path |
+| `getcwd` | `getcwd(buf, size)` -> length | EBX=buf -> length |
+
+`struct vfs_stat` is `u32 type, u32 size, u32 blocks, u32 start, char name[256]`, so a
+caller can tell a directory (`type` 2) from a file without opening it, and a name and
+its metadata come back from one call. Every user pointer involved - the name buffer
+`readdir` writes, the stat struct, the `getcwd` string - goes through
+`copy_to_user`, which validates each page with the VMM before storing under
+STAC/CLAC; a bad pointer is a `-1` return, not a kernel fault.
+
 ### Exec, and file syscalls
 
 `SYS_EXEC(path)` loads a file into the calling task. It opens the name through the VFS,

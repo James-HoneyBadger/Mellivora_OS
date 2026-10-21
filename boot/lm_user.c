@@ -165,18 +165,24 @@ struct boot_task {
     u64 stack_top;
     int compat;
     u64 expect_exit;
+    int self_report;
 };
 
-#define BOOT_TASKS 3
+#define BOOT_TASKS 4
 #define LEGACY_CODE_ADDR  0x00300000ULL     /* the tree's PROGRAM_BASE */
 #define LEGACY_STACK_ADDR 0x003FF000ULL
 #define LEGACY_STACK_TOP  0x00400000ULL
 
 static const struct boot_task boot_tasks[BOOT_TASKS] = {
-    {"init",       USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0},
-    {"hello32",    USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   1, 0x32},
+    /* /init execs /hello, which ends with PING/WHOAMI and exits with its id. */
+    {"init",       USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
+     1},
+    {"hello32",    USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   1,
+     0x32, 0},
     {"hello_tree", LEGACY_CODE_ADDR, LEGACY_STACK_ADDR, LEGACY_STACK_TOP, 1,
-     TASK_ANY_EXIT},
+     TASK_ANY_EXIT, 0},
+    {"ls",         USER_CODE_ADDR,   USER_STACK_ADDR,   USER_STACK_TOP,   0, 0,
+     0},
 };
 
 int lm_user_run(void)
@@ -279,14 +285,15 @@ int lm_user_run(void)
     kput_hex(USER_CODE_ADDR, 8);
     kputs("/0x");
     kput_hex(LEGACY_CODE_ADDR, 8);
-    kputs(" mode=64,32,32");
+    kputs(" mode=64,32,32,64");
     kputs("\r\n");
 
     sched_init();
     for (int i = 0; i < BOOT_TASKS; i++) {
         if (sched_create(boot_tasks[i].code_va, boot_tasks[i].stack_top,
                          space[i], boot_tasks[i].compat,
-                         boot_tasks[i].expect_exit) != 0) {
+                         boot_tasks[i].expect_exit,
+                         boot_tasks[i].self_report) != 0) {
             kputs("[ring3] FAIL could not create the tasks\r\n");
             return -1;
         }

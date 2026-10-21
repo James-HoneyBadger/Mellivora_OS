@@ -11,6 +11,7 @@ typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 typedef unsigned long long u64;
+typedef long long s64;
 
 #define NULL ((void *)0)
 
@@ -288,6 +289,11 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_READ   10
 #define SYS_CLOSE  11
 #define SYS_EXEC   12
+#define SYS_SEEK   13
+#define SYS_STAT   14
+#define SYS_READDIR 15
+#define SYS_CHDIR  16
+#define SYS_GETCWD 17
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -324,10 +330,32 @@ struct hbfs_entry {
     u32 blocks;
 };
 
+#define HBFS_FTYPE_FREE 0
+#define HBFS_FTYPE_FILE 1
+#define HBFS_FTYPE_DIR  2
+#define HBFS_FTYPE_EXEC 3
+
 int hbfs_init(void);
 int hbfs_lookup(const char *name, struct hbfs_entry *out);
 int hbfs_read_at(const struct hbfs_entry *entry, u64 offset, void *buffer,
                  u64 count);
+
+/* Directories. The root has no on-disk entry of its own, so `hbfs_root`
+ * synthesises one that `hbfs_readdir`/`hbfs_lookup_in` recognise. */
+void hbfs_root(struct hbfs_entry *out);
+/* 1 = entry written to *out, 0 = free slot (nothing written), -1 = past the
+ * end of the directory. `name` receives the NUL-terminated name. */
+int hbfs_readdir(const struct hbfs_entry *dir, u32 index,
+                 struct hbfs_entry *out, char *name, u32 name_bytes);
+int hbfs_lookup_in(const struct hbfs_entry *dir, const char *name,
+                   struct hbfs_entry *out);
+
+/* Path resolution relative to the (global) working directory: absolute paths
+ * start at the root, ".." walks back to it, "." is skipped. Subdirectories are
+ * one level deep until MKDIR exists, which is what ".." reflects. */
+int hbfs_resolve(const char *path, struct hbfs_entry *out);
+int hbfs_chdir(const char *path);
+const char *hbfs_getcwd(void);
 
 /* A thin read-only VFS in front of it: open by name, then read by handle. */
 int vfs_init(void);
@@ -335,6 +363,24 @@ int vfs_open(const char *name);        /* handle, or -1 */
 int vfs_close(int handle);
 u64 vfs_size(int handle);
 int vfs_read(int handle, void *buffer, u64 count);
+/* whence: 0 from the start, 1 from the position, 2 from the end. */
+int vfs_seek(int handle, s64 offset, int whence);
+
+/* Name and metadata for one directory entry, shared by STAT and READDIR. */
+#define VFS_NAME_BYTES 256
+struct vfs_stat {
+    u32 type;
+    u32 size;
+    u32 blocks;
+    u32 start;
+    char name[VFS_NAME_BYTES];
+};
+
+int vfs_stat(const char *path, struct vfs_stat *out);
+/* 1 = entry, 0 = free slot, -1 = past the end of the directory. */
+int vfs_readdir(const char *path, u32 index, struct vfs_stat *out);
+int vfs_chdir(const char *path);
+const char *vfs_getcwd(void);
 
 /* Polling ATA PIO on the primary channel. */
 int ata_init(void);
@@ -359,10 +405,12 @@ void sched_init(void);
 
 /* Create a task that enters `entry` on `user_stack` in address space `space`
  * (a vmm_space_create() result). `compat` enters it in 32-bit mode through the
- * compatibility code segment, and `expect_exit` is the code a compatibility
- * task must leave (TASK_ANY_EXIT to accept any). 0 on success. */
+ * compatibility code segment. `expect_exit` is the code the task must leave
+ * (TASK_ANY_EXIT to accept any), and `self_report` marks the programs that end
+ * by passing PING/WHOAMI in RSI/RDX and exiting with their own id, which the
+ * report then checks against the CPU. 0 on success. */
 int sched_create(u64 entry, u64 user_stack, u64 space, int compat,
-                 u64 expect_exit);
+                 u64 expect_exit, int self_report);
 
 /* Switch to the first runnable task and enter ring 3. Never returns. */
 void sched_start(void) __attribute__((noreturn));

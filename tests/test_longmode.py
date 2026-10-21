@@ -79,11 +79,21 @@ REQUIRED = (
     "hbfs] root=",
     "/init=64",
     "/hello_tree=",
-    "tasks=3 spaces=3",
+    "tasks=4 spaces=4",
     # One of the 32-bit tree's own programs, built by `make programs` from
     # programs/hello.asm and loaded unchanged at its 0x00300000 program base.
     "Hello, World! Welcome to Mellivora OS!",
     "This program is running in 32-bit protected mode.",
+    "32-bit file calls ok",
+    # The directory demo: a listing of the root (including the docs
+    # subdirectory), stat, a seek into /motd, then the same three calls in
+    # /docs from the 64-bit task's own working directory.
+    "ent 6 name=docs type=2",
+    "stat /motd type=1 size=16",
+    "seek4=o fr",
+    "cwd=/docs",
+    "ent 0 name=readme.txt type=1 size=16",
+    "miss=ok",
     "[exec] /hello",
     "hello from hbfs",
     "hello from 32-bit mode",

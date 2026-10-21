@@ -3,8 +3,9 @@
  *
  * The 32-bit tree's VFS dispatches to several back-ends (HBFS, procfs, devfs,
  * tmpfs). This is the front-end shape with the one back-end the 64-bit tree has
- * so far: open a name, get a handle, read bytes. Paths are root-level names;
- * directories and the other back-ends arrive with the rest of the syscall port.
+ * so far: resolve a path, open it, then read, seek or stat it, and list the
+ * directories on the way. The other back-ends arrive with the rest of the
+ * syscall port.
  */
 
 #include "lm.h"
@@ -33,13 +34,8 @@ int vfs_init(void)
 
 int vfs_open(const char *name)
 {
-    /* Root-level names for now, so a leading '/' is just a prefix. */
-    while (*name == '/') {
-        name++;
-    }
-
     struct hbfs_entry entry;
-    if (hbfs_lookup(name, &entry) != 0) {
+    if (hbfs_resolve(name, &entry) != 0 || entry.type == HBFS_FTYPE_DIR) {
         return -1;
     }
 
@@ -84,4 +80,91 @@ int vfs_read(int handle, void *buffer, u64 count)
         f->pos += (u64)got;
     }
     return got;
+}
+
+int vfs_seek(int handle, s64 offset, int whence)
+{
+    if (handle < 0 || handle >= VFS_MAX_FILES || !files[handle].used) {
+        return -1;
+    }
+
+    s64 base = 0;
+    if (whence == 1) {
+        base = (s64)files[handle].pos;
+    } else if (whence == 2) {
+        base = (s64)files[handle].size;
+    } else if (whence != 0) {
+        return -1;
+    }
+
+    s64 target = base + offset;
+    if (target < 0) {
+        return -1;
+    }
+    if ((u64)target > files[handle].size) {
+        target = (s64)files[handle].size;
+    }
+    files[handle].pos = (u64)target;
+    return (int)target;
+}
+
+int vfs_stat(const char *path, struct vfs_stat *out)
+{
+    struct hbfs_entry entry;
+    if (hbfs_resolve(path, &entry) != 0) {
+        return -1;
+    }
+
+    out->type = entry.type;
+    out->size = entry.size;
+    out->blocks = entry.blocks;
+    out->start = entry.start;
+    out->name[0] = '\0';
+    for (u32 i = 0; i < sizeof(out->name) - 1; ) {
+        char c = path[i];
+        if (c == '\0') {
+            break;
+        }
+        if (c != '/') {
+            out->name[i++] = c;
+        } else {
+            i++;
+        }
+    }
+    return 0;
+}
+
+int vfs_readdir(const char *path, u32 index, struct vfs_stat *out)
+{
+    struct hbfs_entry dir;
+    if (path == NULL || *path == '\0') {
+        if (hbfs_resolve(".", &dir) != 0) {
+            return -1;
+        }
+    } else if (hbfs_resolve(path, &dir) != 0) {
+        return -1;
+    }
+    if (dir.type != HBFS_FTYPE_DIR) {
+        return -1;
+    }
+    struct hbfs_entry entry;
+    int got = hbfs_readdir(&dir, index, &entry, out->name, sizeof(out->name));
+    if (got < 0) {
+        return -1;
+    }
+    out->type = entry.type;
+    out->size = entry.size;
+    out->blocks = entry.blocks;
+    out->start = entry.start;
+    return got;
+}
+
+int vfs_chdir(const char *path)
+{
+    return hbfs_chdir(path);
+}
+
+const char *vfs_getcwd(void)
+{
+    return hbfs_getcwd();
 }
