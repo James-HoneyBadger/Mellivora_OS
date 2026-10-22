@@ -450,6 +450,24 @@ int timer_selftest(void)
     kput_dec(rep_max / 1000ULL);
     kputs("us\r\n");
 
+    /* Two arms in quick succession: if writing the initial count clears a pending
+     * expiry, the first deadline is lost and only the second is seen. That is the
+     * one mechanism left that explains a deadline arriving a whole tick late with
+     * its counter at zero. */
+    selftest_fired = 0;
+    u64 first = now_ns();
+    timer_add_ms(1, selftest_cb, NULL);
+    u64 after_first = 0;
+    timer_add_ms(6, selftest_cb, NULL);         /* re-arms immediately */
+    u64 spins2 = 0;
+    while (!selftest_fired && spins2++ < 200000000ULL) {
+        __asm__ volatile("sti; hlt");
+    }
+    after_first = selftest_at;
+    kputs("[timer] double-arm seen-after=");
+    kput_dec((after_first - first) / 1000ULL);
+    kputs("us (1ms asked first, 6ms second)\r\n");
+
     /* Interrupts go back off: the nucleus has always run them masked, and the
      * iretq into the first task is what turns them on. Leaving them on here would
      * change the timing of everything that boots after this point. */
