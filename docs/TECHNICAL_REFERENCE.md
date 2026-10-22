@@ -2565,6 +2565,33 @@ now owned by the lowest-numbered live task in the space rather than kept per tas
 pointers over the same memory hand out the same block twice, which looks exactly like a
 correct program corrupting itself.
 
+### Waiting, and what to do when nothing can run
+
+A parent that waits for a child is waiting for an event, so it should not be asked again
+every few milliseconds: `waitpid` parks the parent with the child's id recorded on its task,
+and the child's exit wakes exactly that parent and no other. The id matters, because a task
+parked for a futex or a sleep looks the same on the outside, and waking it for the wrong
+reason would turn a correct futex into a lost wake-up. The parked parent comes back from the
+syscall with "ask again"; the second call reaps and returns the code, which is one extra
+syscall and no spin at all.
+
+That change is what makes an idle loop necessary, and the reason is worth stating plainly:
+before it, a task spinning in ring 3 was always runnable, so "nothing runnable" could only
+mean the test run had finished. With a waiter and a sleeper both parked it means "waiting",
+and the machine has to halt until an interrupt - the timer, the keyboard - makes something
+runnable. The idle loop is small and the two details in it are not:
+
+  - it runs on the *boot stack*, not on the stack of the task that just stopped. That task's
+    slot can be reaped while the loop is still running - freeing its kernel stack from
+    underneath the loop - and the boot stack belongs to no task and is freed by nothing.
+  - it points the per-CPU block at that stack, so a tick that arrives while idling is
+    accounted on the kernel stack like any other and the `stack=ok` check keeps meaning
+    something.
+
+Entering a task from the idle loop needs the stubs' epilogue and nothing else, so it lives
+beside them: `lm_frame_resume` writes RSP, pops the register block, skips the vector and
+error-code slots and `iretq`s, swapping GS only when it is returning to ring 3.
+
 ### Finding a deadlock before it happens
 
 Two locks taken in both orders by two paths is a deadlock waiting for two CPUs, and it is a

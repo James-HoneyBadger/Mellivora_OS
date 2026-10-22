@@ -67,14 +67,38 @@ struct lm_task {
     u64 mode32;         /* non-zero when the task runs in 32-bit mode */
     u64 expect_exit;    /* the exit code the task must leave, or ANY */
     u64 self_report;    /* ends with PING/WHOAMI in RSI/RDX and its own id */
+    u64 waiting_for;    /* the child this task is parked waiting for, or 0 */
     void *kstack_obj;
 };
+
+/* The stack lm_start switched to before any C ran, defined in lm_nucleus.c. It
+ * is where the idle loop runs. */
+extern u8 lm_stack[];
+extern u8 lm_stack_top[];
+
+struct lm_fault_frame *sched_idle_wait(void);
+void lm_sched_idle(void) __attribute__((noreturn));
+void lm_frame_resume(struct lm_fault_frame *frame) __attribute__((noreturn));
+
+__asm__(
+    ".text\n"
+    ".globl lm_sched_idle\n"
+    "lm_sched_idle:\n"
+    "    leaq lm_stack_top(%rip), %rsp\n"
+    "1:\n"
+    "    call sched_idle_wait\n"
+    "    testq %rax, %rax\n"
+    "    jz 1b\n"
+    "    jmp lm_frame_resume\n"
+    ".text\n");
 
 static struct lm_task tasks[MAX_TASKS];
 static int task_count;
 static struct lm_task *current;
 static int need_resched;            /* a wake-up asked for a reschedule */
 static u64 switches;
+static u64 wait_blocks;             /* parents that parked for a child */
+static u64 wait_wakes;              /* ... and were woken because it stopped */
 static int stack_cache = -1;
 
 /*
@@ -414,6 +438,52 @@ int sched_need_resched(void)
     return pending;
 }
 
+/*
+ * The same, parked for a particular child. A parent waiting for a child is a wait
+ * with an event behind it, so it does not need to be asked again every few
+ * milliseconds: it is parked, and the child's exit wakes it. The id is recorded
+ * on the task so that an exit wakes the parent that is waiting for *it* and not
+ * one parked for a futex or a sleep.
+ */
+struct lm_fault_frame *sched_park_for(struct lm_fault_frame *f, u64 child)
+{
+    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+        return f;
+    }
+
+    struct lm_task *next = pick_next();
+    if (next == NULL) {
+        return f;               /* nothing else can run: do not park */
+    }
+
+    current->waiting_for = child;
+    current->rsp = (u64)(unsigned long)f;
+    current->state = TASK_BLOCKED;
+    wait_blocks++;
+    become(next);
+    return (struct lm_fault_frame *)(unsigned long)next->rsp;
+}
+
+/* A child stopped. If its parent is parked waiting for exactly this one, that is
+ * the event it is asleep for; a parent parked for another reason is left alone. */
+static void wake_waiting_parent(u64 child_id)
+{
+    if (child_id >= (u64)task_count) {
+        return;
+    }
+    struct lm_task *child = &tasks[child_id];
+    if (child->parent == TASK_NO_PARENT || child->parent >= (u64)task_count) {
+        return;
+    }
+
+    struct lm_task *parent = &tasks[child->parent];
+    if (parent->state == TASK_BLOCKED && parent->waiting_for == child_id) {
+        parent->waiting_for = 0;
+        parent->state = TASK_READY;
+        wait_wakes++;
+    }
+}
+
 struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
 {
     /* Switching away from ring 0 is not allowed: the frame there has no RSP/SS
@@ -559,6 +629,55 @@ void sched_set_free_list(u64 value)
     }
 }
 
+/*
+ * What runs when every task is waiting for something. Parking a sleeper and a
+ * waiter at the same time is not a deadlock - the timer will wake one and the
+ * child will wake the other - but it does mean the CPU has nothing to do until an
+ * interrupt arrives, and a machine that halted there would have to be told the
+ * difference between "waiting" and "finished".
+ *
+ * The idle loop runs on the boot stack and not on the dead task's: that task's
+ * slot can be reaped while the loop is still running, which frees its kernel
+ * stack from underneath. The boot stack belongs to no task and nothing can free
+ * it, and the per-CPU block is pointed at it for the same reason - a tick that
+ * arrives while idling is on the kernel stack like any other.
+ */
+static void sched_report(void);
+
+static int live_tasks(void)
+{
+    int live = 0;
+    for (int i = 0; i < task_count; i++) {
+        if (tasks[i].state == TASK_READY || tasks[i].state == TASK_RUNNING ||
+            tasks[i].state == TASK_BLOCKED) {
+            live++;
+        }
+    }
+    return live;
+}
+
+/* Called from the idle loop, on the boot stack, with the frame it should enter. */
+struct lm_fault_frame *sched_idle_wait(void)
+{
+    struct lm_cpu *cpu = cpu_this();
+
+    if (live_tasks() == 0) {
+        sched_report();             /* every task is gone: say so and stop */
+    }
+
+    cpu->kstack_base = (u64)(unsigned long)lm_stack;
+    cpu->kstack_top = (u64)(unsigned long)lm_stack_top;
+
+    __asm__ volatile("sti; hlt" ::: "memory");
+
+    struct lm_task *next = pick_next();
+    if (next == NULL) {
+        return NULL;
+    }
+    become(next);
+    return (struct lm_fault_frame *)(unsigned long)next->rsp;
+}
+
 static void sched_report(void)
 {
     struct lm_cpu *cpu = cpu_this();
@@ -616,6 +735,15 @@ static void sched_report(void)
      * task: the input driver's interrupt count proves the I/O APIC's routing
      * works, which polling would never show. */
     lockdep_report();
+
+    /* Every parent that parked for a child had to be woken by it, so the two
+     * counts agree or a wait was lost - which is the one failure mode of a
+     * blocking wait and the reason both are counted. */
+    kputs("[wait] blocks=");
+    kput_dec(wait_blocks);
+    kputs(" wakes=");
+    kput_dec(wait_wakes);
+    kputs(wait_blocks == wait_wakes ? " wait=ok\r\n" : " wait=FAIL\r\n");
 
     kputs("[ps2] irqs=");
     kput_dec(kbd_irqs());
@@ -869,6 +997,7 @@ int sched_kill(s64 pid, u64 signal)
     t->exit_code = 0x8E000000ULL | (signal & 0xFF);   /* 'killed by signal n' */
     t->state = TASK_DEAD;
     vfs_release_task(t->id);
+    wake_waiting_parent(t->id);
 
     kputs("[proc] pid=");
     kput_dec((u64)pid);
@@ -945,10 +1074,11 @@ struct lm_fault_frame *sched_exit(struct lm_fault_frame *f)
 
     t->state = TASK_DEAD;
     vfs_release_task(t->id);
+    wake_waiting_parent(t->id);
 
     struct lm_task *next = pick_next();
     if (next == NULL) {
-        sched_report();             /* does not return */
+        lm_sched_idle();            /* does not return */
     }
     become(next);
     return (struct lm_fault_frame *)(unsigned long)next->rsp;

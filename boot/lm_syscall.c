@@ -642,7 +642,13 @@ static struct lm_fault_frame *sys_sleep(struct lm_fault_frame *f)
         if (next != f) {
             return next;                /* the timer will put this one back */
         }
-        timer_cancel(slot);             /* nothing else could run: do not park */
+        /* Nothing else could run, so this task keeps the CPU and waits on the
+         * counter itself. The queued wake-up goes first: left behind, it would
+         * cut short whatever this task sleeps for next. What is armed instead is
+         * the one-shot for the deadline, because the halt below ends on an
+         * interrupt and the tick is the wrong one to end on. */
+        timer_cancel(slot);
+        timer_until_ns(deadline);
     }
 
     if (deadline != 0) {
@@ -998,13 +1004,27 @@ static struct lm_fault_frame *sys_fork(struct lm_fault_frame *f)
 
 /* waitpid(pid) - the child's exit code once it has gone, -2 while it runs (ask
  * again), -1 if it is not a child of this task. */
+/*
+ * waitpid(pid): the call that does not have to be repeated. If the child is still
+ * running the parent is parked and the child's exit wakes it, so a shell waiting
+ * for a program costs nothing at all; the answer it comes back with is "ask
+ * again", and the second call is what reaps and reports the code. A caller that
+ * gets -2 back is therefore right to call again at once.
+ *
+ * Nothing else runnable means the park is refused and -2 is the honest answer:
+ * the caller's loop is then the only thing keeping the machine going.
+ */
 static struct lm_fault_frame *sys_wait(struct lm_fault_frame *f)
 {
     u64 code = 0;
-    int state = sched_wait((s64)f->rdi, &code);
+    s64 pid = (s64)f->rdi;
+    int state = sched_wait(pid, &code);
+
     if (state == 1) {
         f->rax = (u64)-2;
-    } else if (state < 0) {
+        return sched_park_for(f, (u64)pid);
+    }
+    if (state < 0) {
         f->rax = (u64)-1;
     } else {
         f->rax = code;

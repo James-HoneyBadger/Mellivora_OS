@@ -148,6 +148,25 @@ int timer_service(void)
     return ticked;
 }
 
+/*
+ * Arm the one-shot for an absolute instant with nothing in the queue behind it.
+ * This is for the caller that is going to halt on the counter itself - it needs
+ * an interrupt at the deadline and not a callback, and it must not leave a wake-up
+ * behind that would cut short whatever it sleeps for next.
+ */
+void timer_until_ns(u64 deadline)
+{
+    if (!timer_ready) {
+        return;
+    }
+
+    u64 now = now_ns();
+    u64 delta = deadline > now ? deadline - now : 1;
+    u64 ticks = (delta * (u64)lapic_ticks_per_ms() + 999999ULL) / 1000000ULL;
+
+    lapic_timer_arm_once(ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks);
+}
+
 int timer_add_ns(u64 ns, void (*fn)(void *), void *arg)
 {
     if (!timer_ready || fn == NULL) {

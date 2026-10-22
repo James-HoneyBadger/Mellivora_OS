@@ -152,6 +152,36 @@ __asm__(
     "    cli\n"
     "    hlt\n"
     "    jmp 9b\n"
+    /*
+     * Enter a frame from code that is not one of the stubs - the idle loop, which
+     * runs when every task is waiting for something. It is the same epilogue, and
+     * it has to stay the same: the stack pointer, the register block, the vector
+     * and error-code slots, and a SWAPGS decided by the ring it is returning to.
+     */
+    ".globl lm_frame_resume\n"
+    "lm_frame_resume:\n"
+    "    movq %rax, %rsp\n"
+    "    popq %r15\n"
+    "    popq %r14\n"
+    "    popq %r13\n"
+    "    popq %r12\n"
+    "    popq %r11\n"
+    "    popq %r10\n"
+    "    popq %r9\n"
+    "    popq %r8\n"
+    "    popq %rbp\n"
+    "    popq %rdi\n"
+    "    popq %rsi\n"
+    "    popq %rdx\n"
+    "    popq %rcx\n"
+    "    popq %rbx\n"
+    "    popq %rax\n"
+    "    addq $16, %rsp\n"
+    "    testb $3, 8(%rsp)\n"
+    "    jz 6f\n"
+    "    swapgs\n"
+    "6:\n"
+    "    iretq\n"
     ".text\n");
 
 /* The INT 0x80 stub, generated with the others but installed by name. */

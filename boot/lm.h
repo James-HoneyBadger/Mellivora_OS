@@ -662,6 +662,9 @@ int timer_selftest(void);
 int timer_add_ns(u64 ns, void (*fn)(void *), void *arg);
 int timer_add_ms(u64 ms, void (*fn)(void *), void *arg);
 int timer_cancel(int slot);
+/* Arm the one-shot for an instant with no callback behind it: for a caller that
+ * is halting on the counter itself. */
+void timer_until_ns(u64 deadline);
 int timer_pending(void);
 u64 timer_now_ns(void);
 /* Called from the timer interrupt: runs what has expired and reports whether a
@@ -803,6 +806,10 @@ int sched_locked(void);
  * returning from the syscall it is inside; if nothing else can run it is not
  * parked at all and the same frame comes back. */
 struct lm_fault_frame *sched_park(struct lm_fault_frame *frame);
+
+/* The same, parked waiting for that child to stop: its exit is what wakes this
+ * task, so it does not have to be asked again while the child runs. */
+struct lm_fault_frame *sched_park_for(struct lm_fault_frame *frame, u64 child);
 
 /* Make a parked task runnable again. Safe from an interrupt handler, which is
  * where a timer wake-up comes from; 1 if it was blocked and now is not. */

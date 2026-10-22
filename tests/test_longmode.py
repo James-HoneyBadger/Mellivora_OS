@@ -192,6 +192,11 @@ REQUIRED = (
     # none from the kernel's own use of its lock.
     "[lockdep] selftest=ok",
     "errors=0 lockdep=ok",
+    # waitpid blocks: the shell parks on the child it is waiting for, the child's
+    # exit wakes it, and the two counts have to agree - a wait that was answered
+    # by nothing and a wake with nothing to wake are the same bug.
+    "[wait] blocks=",
+    "wait=ok",
     "sh: /hrt exited 0x00000000",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
