@@ -204,6 +204,15 @@ int lapic_selftest(void)
  * counts a whole scheduling tick (10 ms) because that interval is long enough for
  * the count to be accurate; dividing it is what turns the number into the unit a
  * one-shot deadline is expressed in. */
+/* What is left of the one-shot. Read at the top of a timer interrupt it says
+ * whether the counter reached zero (the interrupt was late to be taken) or is
+ * still counting (it fired early, or the count is running slower than the
+ * calibration believes). */
+u32 lapic_timer_current(void)
+{
+    return lapic != NULL ? lapic_read(LAPIC_TIMER_CURRENT) : 0;
+}
+
 u32 lapic_ticks_per_ms(void)
 {
     u32 per_ms = calibrated / (1000 / LM_TIMER_HZ);

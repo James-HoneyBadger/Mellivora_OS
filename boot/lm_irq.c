@@ -143,6 +143,10 @@ struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f)
     /* One interrupt, two jobs: deadlines, and the tick if one is due with them.
      * The one-shot is re-armed before the scheduler is asked anything, because a
      * switch never comes back here and a timer left unarmed would end the clock. */
+    extern u32 timer_irq_current;
+    extern u64 timer_irq_total;
+    timer_irq_total++;
+    timer_irq_current = lapic_timer_current();
     int ticked = timer_service();
     timer_rearm();
 

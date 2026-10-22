@@ -39,6 +39,8 @@ static u64 tick_period;         /* nanoseconds between ticks */
 static int timer_ready;
 static u64 exp_count, exp_late_total, exp_late_max, exp_late_over2ms;
 static u64 last_arm_ns;
+u32 timer_irq_current;
+u64 timer_irq_total;
 static u64 dbg_shown;
 
 /* The counter the whole file is expressed against: the HPET when there is one,
@@ -151,7 +153,9 @@ int timer_service(void)
             if (l > 2000000ULL) exp_late_over2ms++;
             if (dbg_shown < 8 && sched_current_id() != 0) {
                 dbg_shown++;
-                kputs("[exp] armed=");
+                kputs("[exp] cur=");
+                kput_dec(timer_irq_current);
+                kputs(" armed=");
                 kput_dec(last_arm_ns / 1000ULL);
                 kputs("us late=");
                 kput_dec(l / 1000ULL);
@@ -251,6 +255,8 @@ void timer_report(void)
     kput_dec(exp_late_max / 1000ULL);
     kputs("us over2ms=");
     kput_dec(exp_late_over2ms);
+    kputs(" irqs=");
+    kput_dec(timer_irq_total);
     kputs("\r\n");
 }
 
@@ -380,6 +386,34 @@ int timer_selftest(void)
             worst_ms = elapsed_ms;
         }
     }
+
+    /* Twenty one-millisecond deadlines in a row, at boot with nothing else
+     * running: if the arm only works the first time, this says so. */
+    u64 rep_avg = 0;
+    u64 rep_max = 0;
+    for (u32 i = 0; i < 20; i++) {
+        selftest_fired = 0;
+        u64 start = now_ns();
+        int slot = timer_add_ms(1, selftest_cb, NULL);
+        if (slot < 0) {
+            break;
+        }
+        u64 spins = 0;
+        while (!selftest_fired && spins++ < 200000000ULL) {
+            __asm__ volatile("sti; hlt");
+        }
+        u64 late = selftest_at > start + 1000000ULL ? selftest_at - start - 1000000ULL : 0;
+        rep_avg += late;
+        if (late > rep_max) {
+            rep_max = late;
+        }
+    }
+    __asm__ volatile("cli");
+    kputs("[timer] repeat1ms avg=");
+    kput_dec(rep_avg / 20 / 1000ULL);
+    kputs("us max=");
+    kput_dec(rep_max / 1000ULL);
+    kputs("us\r\n");
 
     /* Interrupts go back off: the nucleus has always run them masked, and the
      * iretq into the first task is what turns them on. Leaving them on here would

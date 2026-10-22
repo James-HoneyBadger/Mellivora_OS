@@ -649,6 +649,8 @@ u32 lapic_ticks_per_ms(void);
  * for: from the timer queue on, the timer is a one-shot device and the tick is
  * just its most frequent customer. */
 void lapic_timer_arm_once(u32 ticks);
+/* What the one-shot has left, for diagnosing a late interrupt. */
+u32 lapic_timer_current(void);
 
 /*---------------------------------------
  * High-resolution timers. A deadline queue in nanoseconds on the HPET (or the
