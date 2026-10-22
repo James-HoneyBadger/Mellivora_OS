@@ -28,7 +28,27 @@
 #define HBFS_DATA_START      4481
 #define HBFS_DIR_ENTRY_SIZE  288
 #define HBFS_MAX_FILES       455
-#define HBFS_MAGIC           0x48424653U      /* 'HBFS' */
+#define HBFS_MAGIC           0x48424653U      /* 'HBFS', the volume this port writes */
+/*
+ * HBFS v4 keeps its superblock in the same sector and puts its own magic there,
+ * so a reader can tell the two apart without knowing anything else. The fields
+ * the version needs - a 64-bit block count, a generation counter and a feature
+ * word - sit beyond the v3 fields, which stay where they are so that a v3 volume
+ * is still readable and still the one this port writes until the writer exists.
+ */
+#define HBFS4_MAGIC          0x34424653U      /* 'HBF4' */
+#define HBFS4_OFF_FEATURES   32
+#define HBFS4_OFF_GENERATION 36
+#define HBFS4_OFF_BLOCKS_HI  40
+#define HBFS4_OFF_DATA_HI    44
+#define HBFS4_OFF_CHECKSUM   48
+
+#define HBFS4_FEATURE_EXTENTS  (1U << 0)
+#define HBFS4_FEATURE_JOURNAL  (1U << 1)
+#define HBFS4_FEATURE_SNAPSHOT (1U << 2)
+
+/* 3, or 4 when the volume carries the new magic. 0 before a successful mount. */
+static u32 volume_version;
 #define HBFS_NAME_BYTES      252
 #define HBFS_SUBDIR_BLOCKS   16
 #define HBFS_ROOT_SENTINEL   0xFFFFFFFFU       /* `start` of the root entry */
@@ -153,7 +173,12 @@ int hbfs_init(void)
     if (ata_read(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
         return -1;
     }
-    if (le32(sector_buffer) != HBFS_MAGIC) {
+    u32 magic = le32(sector_buffer);
+    if (magic == HBFS_MAGIC) {
+        volume_version = 3;
+    } else if (magic == HBFS4_MAGIC) {
+        volume_version = 4;         /* readable; written by nothing yet */
+    } else {
         kputs("[hbfs] no superblock at LBA 4096\r\n");
         return -1;
     }
@@ -200,8 +225,19 @@ int hbfs_init(void)
     kput_dec(file_count);
     kputs(" free=");
     kput_dec(free_blocks);
+    kputs(" version=");
+    kput_dec(volume_version);
+    if (volume_version == 4) {
+        kputs(" features=0x");
+        kput_hex(le32(sector_buffer + HBFS4_OFF_FEATURES), 8);
+    }
     kputs("\r\n");
     return 0;
+}
+
+u32 hbfs_version(void)
+{
+    return volume_version;
 }
 
 /*

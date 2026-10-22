@@ -422,6 +422,8 @@ struct hbfs_entry {
 #define HBFS_FTYPE_EXEC 3
 
 int hbfs_init(void);
+/* 3 or 4: which superblock magic the mounted volume carries, 0 when unmounted. */
+u32 hbfs_version(void);
 int hbfs_lookup(const char *name, struct hbfs_entry *out);
 int hbfs_read_at(const struct hbfs_entry *entry, u64 offset, void *buffer,
                  u64 count);
