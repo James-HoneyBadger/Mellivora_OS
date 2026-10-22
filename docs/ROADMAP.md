@@ -609,29 +609,29 @@ All three application processors are in the firmware's own halt loop - the `hlt;
 available at all: an MBR boot can never see an AP in wait-for-SIPI, because SeaBIOS has already
 done its own bring-up and parked them. There is nothing to "not let the firmware do".
 
-That leaves the second option, and it is specific now rather than vague. Those APs are in ring 0
-with paging off, executing 32-bit code against the firmware's GDT, and a `hlt` leaves on any
-delivered interrupt - so an I/O- or inter-processor interrupt with a vector whose IDT entry we
-control makes one of them run *our* code. The firmware's IDT is what it will use, so the work
-is:
+That left the second option: an interrupt through the table those processors are using. It has
+now been checked too, and it does not work either. Scanning the first four megabytes - eight-byte
+aligned, looking for a window whose exception gates are present, typed interrupt/trap gates naming
+one code selector - finds **no 32-bit IDT at all**: the best candidate outside low memory had two
+gates out of thirty-two, which is noise. SeaBIOS boots in real mode and leaves the machine's
+usable table at 0x0000 as a real-mode IVT of four-byte entries, so the processors it parked in
+protected mode are consulting something we cannot find, and a gate cannot be installed in a table
+we cannot locate. The probe was written, run and removed rather than shipped: a scan that finds
+nothing on every boot is noise, and the negative result is the deliverable.
 
-  1. find the firmware's IDTR base (it is in low memory; the gates it installed are
-     recognisable) and check the table is writable;
-  2. put a 32-bit entry stub below 1 MB - paging is off and the firmware's segments are flat,
-     so EIP is a physical address - that immediately loads its own ESP, GDT, PAE, CR3 and LME,
-     and jumps to the 64-bit nucleus. This is the same sequence the earlier trampolines ran;
-     what is new is only *how it is entered*;
-  3. install that vector's gate, send the IPI to one AP, watch it arrive on COM1 with a letter,
-     and only then think about per-CPU blocks, per-CPU GDT/TSS, and the AP's own idle stack.
+So both routes through the firmware are closed, and what is left is not a kernel change:
 
-Each of those three is a milestone with a report line of its own, which is the right size for
-this port. The first one - can the firmware's IDT be found and written - decides whether the
-whole approach works, and is a self-test rather than a feature: find it, print where it is, and
-print whether a gate round-trips through it.
+  1. **Own the APs from the reset vector.** Their first instruction after INIT is the firmware's,
+     not ours; making it ours means not running the firmware's SMP path at all, which an MBR boot
+     cannot arrange.
+  2. **A platform where the APs wait for a SIPI.** Whether QEMU can be asked for that - a
+     firmware setting that leaves `etc/smp-cores` at one core while the machine still has four,
+     a different machine type, or a boot protocol whose contract is that the OS starts the APs -
+     is a question about the target rather than the code, and it is the next thing to establish.
 
-The same run also answered a question nobody had asked: the guest boots and runs its whole
-suite with `-smp 4` and three parked APs - `[ring3] tasks=7` and the ring-3 work all as usual -
-so nothing in the port assumes it is alone, it just does not use anybody else.
+Either way the honest state is that P3's exit gate cannot be met on this firmware without
+changing the platform assumption, and that is a decision to take deliberately rather than to keep
+writing trampolines for.
 
 So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
 firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
