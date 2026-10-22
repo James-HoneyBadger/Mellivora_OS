@@ -25,9 +25,16 @@
 /* 8254 input clock; the divisor has to fit in 16 bits. */
 #define PIT_HZ 1193182U
 
+static int via_ioapic;
+
 static void outb(u16 port, u8 value)
 {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+void irq_use_ioapic(void)
+{
+    via_ioapic = 1;
 }
 
 void irq_init(void)
@@ -97,11 +104,21 @@ struct lm_fault_frame *lm_irq_dispatch(struct lm_fault_frame *f)
     if (irq == 0) {
         tick_account(f, 0);
     }
-
-    if (irq >= 8) {
-        outb(PIC2_CMD, 0x20);           /* slave first, when it was involved */
+    if (irq == 1 || irq == 12) {
+        kbd_irq();                      /* the keyboard and the pointer */
     }
-    outb(PIC1_CMD, 0x20);
+
+    if (via_ioapic) {
+        /* The I/O APIC's entries deliver through the local APIC, so that is
+         * where an interrupt is acknowledged - the 8259 is masked off and would
+         * not know what was being acknowledged anyway. */
+        lapic_eoi();
+    } else {
+        if (irq >= 8) {
+            outb(PIC2_CMD, 0x20);       /* slave first, when it was involved */
+        }
+        outb(PIC1_CMD, 0x20);
+    }
 
     return irq == 0 ? sched_tick(f) : f;
 }

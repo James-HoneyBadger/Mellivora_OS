@@ -473,6 +473,14 @@ void lm_main(void)
     lapic_init();
     lapic_selftest();
     lapic_timer_start();
+    if (ioapic_init() == 0) {
+        /* The keyboard and the pointer are the two lines worth an interrupt:
+         * everything else here is polled, and a byte that arrives between two
+         * polls is a byte lost. */
+        u32 me = lapic_id();
+        ioapic_route(1, LM_IRQ_FIRST + 1, me, 0);
+        ioapic_route(12, LM_IRQ_FIRST + 12, me, 0);
+    }
     pci_init();
     ata_init();
     ata_selftest();

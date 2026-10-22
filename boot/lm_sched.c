@@ -382,6 +382,13 @@ static void sched_report(void)
     kputs(timer_ok ? "[timer] timer=ok\r\n"
                    : "[timer] FAIL timer never reached ring 3\r\n");
 
+    /* Not a scheduler fact, but this is the one place that prints after every
+     * task: the input driver's interrupt count proves the I/O APIC's routing
+     * works, which polling would never show. */
+    kputs("[ps2] irqs=");
+    kput_dec(kbd_irqs());
+    kputs("\r\n");
+
     kputs(ok ? "[sched] sched=ok\r\n" : "[sched] FAIL scheduler round trip\r\n");
     kputs("MELLIVORA64_OK\r\n");
 

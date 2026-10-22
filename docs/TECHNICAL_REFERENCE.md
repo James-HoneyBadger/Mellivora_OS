@@ -2517,6 +2517,30 @@ The spurious vector gets a gate of its own and is deliberately not acknowledged:
 never put in service, and an EOI for it would tell the unit that the last real interrupt
 had been handled, losing whatever was behind it.
 
+### The I/O APIC, and why input wants an interrupt
+
+The I/O APIC is the other end of the path: 24 interrupt lines in, each forwarded to a
+CPU's local APIC on a vector and with a mask of its own. It is two registers - a selector
+at 0x00 and a window at 0x10 - so programming an entry is an index write and two 32-bit
+writes, and the version register says how many entries there are.
+
+Everything starts masked. An unmasked redirection entry pointing at a vector with no
+handler is a machine that dies on its first interrupt rather than one that boots, so the
+default has to be "off" and a driver has to ask.
+
+The keyboard and the pointer are the two lines worth routing, and the reason is the
+difference between a fact and a poll. A keystroke arrives at the controller and waits
+there; the driver only reads it when somebody asks, and the controller holds exactly one
+byte, so a program that computes for a tenth of a second loses every key pressed in it.
+With the interrupt routed, one handler drains the port - the status register says whether
+each byte belongs to the keyboard or the pointer - and the scancodes queue in a 64-byte
+ring that `kgetc` translates from. Polling stays as the fallback for anything that arrived
+while interrupts were off, which is most of the boot.
+
+Because entries deliver through the local APIC, the acknowledge for those interrupts is
+the APIC's EOI register and not the 8259's ports; the 8259 is masked off and knows
+nothing about them.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting

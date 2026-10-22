@@ -560,6 +560,13 @@ void lapic_eoi(void);
  * LM_TIMER_HZ, delivering LAPIC_TIMER_VECTOR. 0 on success. */
 int lapic_timer_start(void);
 
+/* The I/O APIC: every line masked, then routed one at a time to a vector on a
+ * CPU. `gsi` is the machine's interrupt line number, which for the legacy ISA
+ * lines is the same as the IRQ number. */
+int ioapic_init(void);
+int ioapic_route(u32 gsi, u8 vector, u32 dest, int masked);
+u32 ioapic_entries(void);
+
 /* The APIC timer's handler: same bookkeeping as an IRQ0 tick, plus the EOI the
  * local APIC wants instead of the 8259's. */
 struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f);
@@ -568,6 +575,15 @@ struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f);
  * would be a second clock with a different phase. */
 void pic_mask_all(void);
 
+/* Tell the interrupt layer that lines now arrive through the I/O APIC, whose
+ * acknowledge is the local APIC's EOI register and not the 8259's two ports. */
+void irq_use_ioapic(void);
+
+/* Drains the PS/2 controller: what the keyboard and pointer share, called from
+ * the interrupt the I/O APIC routes to both of them. */
+void kbd_irq(void);
+u64 kbd_irqs(void);     /* interrupts the controller has taken */
+
 /*---------------------------------------
  * ACPI: enough of it to find out how the machine describes itself. Discovery
  * only - the MADT says how many CPUs and where the APICs are.
@@ -575,6 +591,7 @@ void pic_mask_all(void);
 int acpi_init(void);
 u64 acpi_lapic_address(void);
 u32 acpi_cpu_count(void);
+u32 acpi_ioapic_address(void);
 
 /*---------------------------------------
  * The PC speaker: the 8254's channel 2 through the gate in port 0x61. The only

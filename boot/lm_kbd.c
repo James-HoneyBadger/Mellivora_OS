@@ -7,9 +7,17 @@
  * 0x80 added for the release, so a shifted key needs the state of the shift key
  * to be tracked from those release codes.
  *
- * Polling, not interrupts, for the same reason the UART is polled: kgetc is
- * called from a syscall that can afford to look, and a ring buffer with a wake-up
- * path is the sort of thing to add when something actually waits on it.
+ * The controller's bytes are collected by an interrupt now that there is one to
+ * collect them with: the I/O APIC routes IRQ1 and IRQ12 to this driver, the
+ * handler drains the port into a ring of scancodes, and kgetc translates from
+ * there. That matters because a keystroke is a fact - polling only reads the port
+ * when somebody asks, and between two asks the controller holds exactly one byte.
+ * A program that computes for a tenth of a second used to lose every key pressed
+ * in it; now they queue.
+ *
+ * Polling is still the fallback, because a key pressed before interrupts are on
+ * (during the boot, or inside a syscall with IF clear) is sitting in the port and
+ * nothing else will come for it.
  */
 
 #include "lm.h"
@@ -84,6 +92,62 @@ static int translate(u8 code)
     return (int)(u8)c;
 }
 
+#define KBD_RING_BYTES 64
+
+static u8 ring[KBD_RING_BYTES];
+static u64 irq_count;
+static u32 ring_head;       /* where the handler writes */
+static u32 ring_tail;       /* where kgetc reads */
+
+static void ring_push(u8 code)
+{
+    u32 next = (ring_head + 1) % KBD_RING_BYTES;
+    if (next == ring_tail) {
+        return;                         /* full: drop the newest, keep the order */
+    }
+    ring[ring_head] = code;
+    ring_head = next;
+}
+
+static int ring_pop(u8 *out)
+{
+    if (ring_head == ring_tail) {
+        return 0;
+    }
+    *out = ring[ring_tail];
+    ring_tail = (ring_tail + 1) % KBD_RING_BYTES;
+    return 1;
+}
+
+/*
+ * The controller's one output port carries both devices, and which one a byte
+ * belongs to is bit 5 of the status register. So there is one drain for both
+ * interrupts, and it is the only place in the driver that reads the port while
+ * interrupts are on.
+ */
+u64 kbd_irqs(void)
+{
+    return irq_count;
+}
+
+void kbd_irq(void)
+{
+    irq_count++;
+
+    for (int guard = 0; guard < 32; guard++) {
+        u8 status = inb_port(KBD_STATUS);
+        if ((status & 0x01) == 0) {
+            return;
+        }
+        u8 data = inb_port(KBD_DATA);
+        if ((status & 0x20) != 0) {
+            mouse_feed(data);           /* the pointer's packet byte */
+        } else {
+            ring_push(data);
+        }
+    }
+}
+
 void kbd_init(void)
 {
     /* Anything the firmware left in the buffer would be typed into the first
@@ -97,6 +161,9 @@ void kbd_init(void)
     shift_down = 0;
     ctrl_down = 0;
     caps_on = 0;
+    ring_head = 0;
+    ring_tail = 0;
+    irq_count = 0;
 }
 
 int kbd_selftest(void)
@@ -106,25 +173,30 @@ int kbd_selftest(void)
         kputs("[kbd] FAIL the controller does not answer\r\n");
         return -1;
     }
-    /* The mouse's bytes arrive on the same port; kgetc hands them to the mouse
-     * driver and never reads one as a keystroke. */
+    /* The pointer's bytes arrive on the same port; the drain hands them to the
+     * mouse driver and never reads one as a keystroke. */
     kputs("[kbd] ps/2 controller ready kbd=ok\r\n");
     return 0;
 }
 
 int kbd_getc(void)
 {
-    for (int guard = 0; guard < 16; guard++) {
-        u8 status = inb_port(KBD_STATUS);
-        if ((status & 0x01) == 0) {
-            return -1;                      /* nothing waiting */
+    /* What the handler collected comes first; anything still in the port is
+     * drained here for the case where interrupts were off when it arrived. */
+    for (int guard = 0; guard < 32; guard++) {
+        u8 code;
+        if (!ring_pop(&code)) {
+            u8 status = inb_port(KBD_STATUS);
+            if ((status & 0x01) == 0) {
+                return -1;                  /* nothing waiting */
+            }
+            code = inb_port(KBD_DATA);
+            if ((status & 0x20) != 0) {
+                mouse_feed(code);           /* it was the mouse */
+                continue;
+            }
         }
-        u8 data = inb_port(KBD_DATA);
-        if ((status & 0x20) != 0) {
-            mouse_feed(data);               /* it was the mouse */
-            continue;
-        }
-        int c = translate(data);
+        int c = translate(code);
         if (c != 0) {
             return c;
         }

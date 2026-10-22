@@ -223,3 +223,8 @@ u32 acpi_cpu_count(void)
 {
     return info.cpu_count;
 }
+
+u32 acpi_ioapic_address(void)
+{
+    return info.ioapic_address;
+}

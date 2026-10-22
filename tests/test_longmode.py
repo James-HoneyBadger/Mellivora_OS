@@ -138,6 +138,10 @@ REQUIRED = (
     # the 8254 until the APIC has a vector of its own.
     "[lapic] id=0 version=14",
     " lapic=ok",
+    # The I/O APIC takes the machine's interrupt lines; every redirection entry
+    # starts masked and the keyboard and pointer are then routed through it.
+    "[ioapic] id=0 version=",
+    " ioapic=ok",
     # ... and the tick is the APIC's now, at the same 100 Hz the PIT was: the
     # calibration is measured against the PIT's spare channel, and the 8259 is
     # masked off so nothing can deliver a second clock alongside it.
@@ -361,6 +365,11 @@ def check_keyboard_and_screen(qemu, image):
             return "the shell did not finish after a typed 'quit'"
         if "date" not in serial.text():
             return "the typed command was never echoed"
+        # The characters went through the i8042, so they arrived as interrupts
+        # from the I/O APIC - which polling would never have shown.
+        m = re.search(r"\[ps2\] irqs=(\d+)", serial.text())
+        if not m or int(m.group(1)) < 5:
+            return "the keyboard's interrupt handler never ran: %r" % (m and m.group(0))
     finally:
         proc.terminate()
         try:
