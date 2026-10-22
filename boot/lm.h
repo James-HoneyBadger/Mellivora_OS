@@ -526,6 +526,14 @@ int ata_write(u64 lba, const void *buffer);
 int ata_selftest(void);
 
 /*---------------------------------------
+ * ACPI: enough of it to find out how the machine describes itself. Discovery
+ * only - the MADT says how many CPUs and where the APICs are.
+ *---------------------------------------*/
+int acpi_init(void);
+u64 acpi_lapic_address(void);
+u32 acpi_cpu_count(void);
+
+/*---------------------------------------
  * The PC speaker: the 8254's channel 2 through the gate in port 0x61. The only
  * sound hardware every machine has, and the only one with nothing to read back.
  *---------------------------------------*/

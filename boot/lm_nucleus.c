@@ -469,6 +469,7 @@ void lm_main(void)
     kmem_init();
     kmem_selftest();
 
+    acpi_init();
     pci_init();
     ata_init();
     ata_selftest();

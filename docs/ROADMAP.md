@@ -40,6 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
+| P3 | in progress | ACPI/RSDP/MADT discovery: the machine's own description of its CPUs and interrupt controllers is found and read |
 | P2 | done, exit gates met | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; two ring-3 tasks round-robined by that tick with per-task kernel stacks and per-task address spaces; NX on heap and stack pages with SMEP/SMAP enabled where CPUID offers them; a table-driven LP64 syscall ABI with write/yield/brk behind it; PCI enumeration and an ATA PIO block driver whose read/write paths are self-tested; an HBFS reader and VFS front-end, with `/init` loaded from that disk and `exec`/`open`/`read`/`close` behind it; a 32-bit program running in compatibility mode beside the 64-bit tasks through an `INT 0x80` bridge, with one of the tree's own flat binaries loaded unchanged at its `0x00300000` program base; directories and file metadata (`seek`/`stat`/`readdir`/`chdir`/`getcwd`) over a per-task working directory; a writable HBFS (`create`/`mkdir`/`unlink` over the allocation bitmap, plus writes through an open handle, so a file can be appended to) whose output the host test reads back out of the image; console input over COM1 with a line-based shell (`ls`/`cat`/`date`/`mkdir`/`rm`/`quit`) that the host test types at; a CMOS clock; a user-space heap, whole-file load and pipes, with `exec` passing a command line on to `getargs`; a VGA text console with real colour, cursor and clear calls; a PS/2 keyboard whose input the test types with real scancodes; a PS/2 pointer polled from the timer tick, with a `/mouse` cursor demo the test drives through real packets; fork/exec/waitpid, so the shell can run programs and report their exit codes; children that fault are retired instead of stopping the machine; kill and background spawn; an e1000 network driver with ARP and ICMP echo on top of it, so a ring-3 program can ping; the PC speaker behind `BEEP`; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
@@ -392,9 +393,18 @@ driver.
 
 ### P3 · Concurrency and scale (4 sprints)
 
-ACPI/MADT, local APIC + IOAPIC, SMP to 8 vCPUs, per-CPU run queues, spinlocks, atomics,
-IPIs, TLB shootdown, preemptible kernel, lockdep-style lock validation, threads
-(`clone` with shared VM), futex, TLS, HPET/TSC clocksource, high-resolution timers.
+- [x] ACPI discovery: `boot/lm_acpi.c` finds the RSDP by looking for its signature on
+  a 16-byte boundary in the EBDA and then in the ROM area, checks the checksum, follows
+  either the RSDT or - on a machine with a revision 2 RSDP - the 64-bit XSDT, and reads
+  the MADT for the local APIC address, the enabled-CPU count, the I/O APIC and how many
+  interrupt-source overrides the firmware published. Discovery only: nothing is
+  programmed, so the machine behaves exactly as it did before, and the report is the
+  proof - `[acpi] rsdp=000F52E0 rsdt=4 lapic=FEE00000 cpus=1 ioapic=FEC00000 acpi=ok`,
+  with `cpus=` following `-smp` because the count comes from the table and not from a
+  guess.
+- [ ] Local APIC + IOAPIC, SMP to 8 vCPUs, per-CPU run queues, spinlocks, atomics,
+  IPIs, TLB shootdown, preemptible kernel, lockdep-style lock validation, threads
+  (`clone` with shared VM), futex, TLS, HPET/TSC clocksource, high-resolution timers.
 
 **Exit:** near-linear scaling on a parallel workload; 24 h SMP stress with no lost
 wakeups.

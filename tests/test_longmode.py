@@ -125,6 +125,12 @@ REQUIRED = (
     "pipe=ok",
     # The network adapter: the MAC it reports, the register window mapped, and a
     # real ARP request answered by the user-mode stack behind the card.
+    # ACPI discovery: the firmware's own description of the machine, found by
+    # checksum and read far enough to say where the APICs are and how many CPUs
+    # it has - which is what the next phase needs to know before it can use more
+    # than one of them.
+    "[acpi] rsdp=",
+    "lapic=FEE00000 cpus=1 ioapic=FEC00000 acpi=ok",
     "[e1000] 52:54:00:12:34:56 bar=",
     "link=up e1000=ok",
     # ...and the network layer built on it: the gateway resolved by ARP, and

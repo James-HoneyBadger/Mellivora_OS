@@ -166,7 +166,10 @@ start:
         call add_dec
         call end_line
         inc r14
-        cmp r14, 16
+        ; readdir already says when the directory is done, so this is only a
+        ; guard against a volume that answers "entry" for ever. It used to be 16,
+        ; which silently hid everything past the sixteenth file in the root.
+        cmp r14, 64
         jb .ent
         jmp .next
 

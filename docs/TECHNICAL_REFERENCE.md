@@ -2458,6 +2458,27 @@ middle of the call. At *boot* the same wait has to spin instead, because there i
 task to switch to yet and a tick has nothing to switch. Two contexts, two waits, and
 getting that wrong is a boot that hangs.
 
+### ACPI discovery
+
+The firmware publishes a set of tables that describe the machine: how many CPUs there
+are, where their local APICs are, where the I/O APIC is and which ISA interrupt goes
+where. Finding them is a search with a checksum as its only validation. The RSDP sits
+on a 16-byte boundary in the first kilobyte of the extended BIOS data area or in the
+BIOS ROM area above it, and its 20-byte checksum is what tells a real one from a
+coincidence. It names either a 32-bit RSDT or - when its revision is 2 or more and its
+extended checksum holds - a 64-bit XSDT, and each entry in that root table is another
+table.
+
+The MADT is the one that matters for the next step: at offset 36 it has the local APIC
+address, and after that a list of variable-length entries - one per processor, one per
+I/O APIC, one per interrupt source override. The entry lengths are what makes the walk
+safe, so every one is bounds-checked against the table's own length before it is
+trusted.
+
+Everything is reached through the direct map, which means an address above the 1 GB it
+covers cannot be read; that case is checked (`vmm_phys` returns NULL) and reported as
+unreadable rather than followed off the end of a mapping.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting
