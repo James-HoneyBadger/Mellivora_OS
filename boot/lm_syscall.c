@@ -998,6 +998,22 @@ static struct lm_fault_frame *sys_futex_wake(struct lm_fault_frame *f)
     return f;
 }
 
+/*
+ * set_tls(base) - the address this task's FS points at, which is what user code
+ * reaches thread-local storage through. The page has to be in the caller's space,
+ * so a task cannot make the kernel fault on its next `fs:[0]`.
+ */
+static struct lm_fault_frame *sys_set_tls(struct lm_fault_frame *f)
+{
+    u64 base = f->rdi;
+    if (base != 0 && (!vmm_user_mapped(base) || (base & 0x7) != 0)) {
+        f->rax = (u64)-1;
+        return f;
+    }
+    f->rax = (u64)(s64)sched_set_tls(base);
+    return f;
+}
+
 /* kill(pid, signal) - retire another task (see sched_kill). */
 static struct lm_fault_frame *sys_kill(struct lm_fault_frame *f)
 {
@@ -1125,6 +1141,7 @@ static const struct lm_syscall syscalls[] = {
     [43] = {"clone", sys_clone, 1},
     [44] = {"futex_wait", sys_futex_wait, 1},
     [45] = {"futex_wake", sys_futex_wake, 1},
+    [46] = {"set_tls", sys_set_tls, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))

@@ -62,6 +62,7 @@ struct lm_task {
     char args[256];     /* the command line EXEC was given, for GETARGS */
     u64 parent;         /* the task that forked this one, or ~0 for a boot task */
     u64 heap;           /* next byte MALLOC hands out, 0 before the first call */
+    u64 fs_base;        /* thread-local storage: loaded into IA32_FS_BASE */
     u64 free_list;      /* blocks returned by FREE, threaded in user memory */
     u64 mode32;         /* non-zero when the task runs in 32-bit mode */
     u64 expect_exit;    /* the exit code the task must leave, or ANY */
@@ -182,6 +183,10 @@ static void become(struct lm_task *next)
      * user pages must be the ones it can see. */
     lm_tss_set_rsp0(next->kstack_top);
     vmm_space_switch(next->cr3);
+    /* Thread-local storage is a task's, not a CPU's, so it is part of the
+     * switch. A thread that set its own base must not see its creator's, and the
+     * creator must get its own back. */
+    cpu_write_msr(MSR_FS_BASE, next->fs_base);
     switches++;
 }
 
@@ -441,6 +446,25 @@ void sched_set_args(const char *value)
         current->args[i] = value[i];
     }
     current->args[i] = '\0';
+}
+
+/*
+ * The thread-local base. User code reads it through FS, and the ABI is the one
+ * `arch_prctl(ARCH_SET_FS)` established: whatever this task last asked for, or 0.
+ */
+int sched_set_tls(u64 base)
+{
+    if (current == NULL) {
+        return -1;
+    }
+    current->fs_base = base;
+    cpu_write_msr(MSR_FS_BASE, base);
+    return 0;
+}
+
+u64 sched_tls(void)
+{
+    return current != NULL ? current->fs_base : 0;
 }
 
 u64 sched_heap(void)

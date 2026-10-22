@@ -37,6 +37,15 @@ static void wrmsr_gs_base(u32 msr, u64 value)
     __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
 }
 
+/* The MSR pair, for the parts of the kernel that own a per-task MSR rather than
+ * a per-CPU one - the thread-local storage base, which changes with the task. */
+void cpu_write_msr(u32 msr, u64 value)
+{
+    wrmsr_gs_base(msr, value);
+}
+
+u64 cpu_read_msr(u32 msr);
+
 static u64 rdmsr(u32 msr)
 {
     u32 lo;
@@ -109,6 +118,11 @@ struct cpu_features cpu_harden(void)
     (void)smep_on;
     (void)smap_on;
     return f;
+}
+
+u64 cpu_read_msr(u32 msr)
+{
+    return rdmsr(msr);
 }
 
 int cpu_init(void)

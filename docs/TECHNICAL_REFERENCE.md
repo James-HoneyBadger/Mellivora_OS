@@ -2565,6 +2565,25 @@ now owned by the lowest-numbered live task in the space rather than kept per tas
 pointers over the same memory hand out the same block twice, which looks exactly like a
 correct program corrupting itself.
 
+### Thread-local storage
+
+User code reaches its own data through `fs:`, and the base of that segment is per *task*
+rather than per CPU - which makes it part of the context switch, next to the page tables and
+the kernel stack. `become()` writes the task's value into `IA32_FS_BASE`; `SET_TLS` sets it,
+having checked the address is in the caller's own space so a task cannot make the kernel
+fault on its next `fs:[0]`; and a new thread inherits its creator's base until it asks for
+something else, which is what `pthread_self()` and friends expect.
+
+The switch is a `wrmsr`, about a hundred cycles, on every task change. FSGSBASE would turn
+that into a register write and is the obvious optimisation - it is also a feature to detect
+rather than assume, so the MSR version is the one to have first.
+
+Two things are worth remembering when writing a program against this. A new thread starts
+with **zeroed registers**: nothing is inherited but memory and the base itself, so a value
+has to be found at an address or passed as an argument rather than left in a register the
+creator happened to be using. And a fault through `fs:[0]` with CR2 zero means the base is
+zero, which means `SET_TLS` was never called on that task.
+
 ### A futex that really waits
 
 Every other waiting call in this kernel answers "nothing yet" and is asked again, because

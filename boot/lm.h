@@ -274,6 +274,7 @@ void lm_probe_faulted(void);
 #define SEL_KDATA 0x10
 #define SEL_UDATA 0x18
 #define SEL_UCODE 0x20
+#define MSR_FS_BASE 0xC0000100     /* thread-local storage's base, per task */
 #define SEL_TSS   0x28
 #define SEL_UCODE32 0x38     /* compatibility-mode code segment, DPL 3 */
 #define RPL_USER  3
@@ -359,6 +360,8 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
  * takes the address and a count. Both are on the caller's own memory. */
 #define SYS_FUTEX_WAIT  44
 #define SYS_FUTEX_WAKE  45
+/* SET_TLS takes the address of this task's thread-local block, or 0. */
+#define SYS_SET_TLS     46
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -543,6 +546,9 @@ u64 ata_sector_count(void);
 int ata_read(u64 lba, void *buffer);
 int ata_write(u64 lba, const void *buffer);
 int ata_selftest(void);
+
+void cpu_write_msr(u32 msr, u64 value);
+u64 cpu_read_msr(u32 msr);
 
 /*---------------------------------------
  * Atomics and locks
@@ -769,6 +775,9 @@ s64 sched_clone(u64 entry, u64 user_stack);
  * frame comes back to life when it is picked again. */
 struct lm_fault_frame *sched_block(struct lm_fault_frame *f, u64 address);
 int sched_wake(u64 address, int count);
+/* Thread-local storage: the FS base a task runs with, restored on every switch. */
+int sched_set_tls(u64 base);
+u64 sched_tls(void);
 /* WAITPID: 0 when the child has exited and been reaped (*code is its exit code),
  * 1 while it still runs, -1 if pid is not this task's child. Reaping frees the
  * slot, the kernel stack and the address space. */

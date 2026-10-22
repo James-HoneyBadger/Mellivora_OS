@@ -178,6 +178,11 @@ REQUIRED = (
     "futex: sleeper tid=",
     "futex: sleeper woke with flag=1 exit=0x00000003",
     "sh: /futex exited 0x00000000",
+    # Thread-local storage that is really per task: two bases, one address
+    # space, and each task reads back its own value through fs:[0].
+    "tls: main read 1111 thread read 2222",
+    "tls: two bases, one address space",
+    "sh: /tls exited 0x00000000",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
     # along with one environment entry.
@@ -504,6 +509,7 @@ def main():
         ("mellivora:/> ", "run /beep"),
         ("mellivora:/> ", "run /threads"),
         ("mellivora:/> ", "run /futex"),
+        ("mellivora:/> ", "run /tls"),
         ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "spawn /spin"),
         ("mellivora:/> ", "date"),
