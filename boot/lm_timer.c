@@ -38,10 +38,10 @@ static u64 tick_deadline;       /* when the next 100 Hz tick is due */
 static u64 tick_period;         /* nanoseconds between ticks */
 static int timer_ready;
 static u64 exp_count, exp_late_total, exp_late_max, exp_late_over2ms;
-static u64 last_arm_ns;
+static u64 arms_total, arms_tick_only;
 u32 timer_irq_current;
 u64 timer_irq_total;
-static u64 dbg_shown;
+
 
 /* The counter the whole file is expressed against: the HPET when there is one,
  * the TSC when there is not. Both are free-running and neither is ever reset, so
@@ -98,6 +98,10 @@ void timer_rearm(void)
     u64 now = now_ns();
     u64 target = tick_deadline;
     u64 deadline = next_deadline();
+    arms_total++;
+    if (deadline == 0) {
+        arms_tick_only++;               /* nothing queued: the tick is all there is */
+    }
     if (deadline != 0 && deadline < target) {
         target = deadline;
     }
@@ -107,7 +111,6 @@ void timer_rearm(void)
 
     /* A count that has already gone by still has to interrupt once, or the queue
      * would sit there waiting for a tick that is not armed. */
-    last_arm_ns = delta;
     lapic_timer_arm_once(ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks);
 }
 
@@ -151,16 +154,6 @@ int timer_service(void)
             exp_late_total += l;
             if (l > exp_late_max) exp_late_max = l;
             if (l > 2000000ULL) exp_late_over2ms++;
-            if (dbg_shown < 8 && sched_current_id() != 0) {
-                dbg_shown++;
-                kputs("[exp] cur=");
-                kput_dec(timer_irq_current);
-                kputs(" armed=");
-                kput_dec(last_arm_ns / 1000ULL);
-                kputs("us late=");
-                kput_dec(l / 1000ULL);
-                kputs("us\r\n");
-            }
         }
         slots[i].used = 0;              /* cleared first: the callback may arm one */
         slots[i].expiry = 0;
@@ -187,7 +180,6 @@ void timer_until_ns(u64 deadline)
     u64 delta = deadline > now ? deadline - now : 1;
     u64 ticks = (delta * (u64)lapic_ticks_per_ms() + 999999ULL) / 1000000ULL;
 
-    last_arm_ns = delta;
     lapic_timer_arm_once(ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks);
 }
 
@@ -257,6 +249,10 @@ void timer_report(void)
     kput_dec(exp_late_over2ms);
     kputs(" irqs=");
     kput_dec(timer_irq_total);
+    kputs(" arms=");
+    kput_dec(arms_total);
+    kputs(" tickonly=");
+    kput_dec(arms_tick_only);
     kputs("\r\n");
 }
 

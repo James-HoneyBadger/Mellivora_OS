@@ -601,16 +601,13 @@ static struct lm_fault_frame *sys_setcursor(struct lm_fault_frame *f)
  * behaves like a tick has to be one of two things, and these three numbers say
  * which: the task parked and was woken by a callback, or it kept the CPU and ended
  * its own halt when the counter reached the deadline. */
-static u64 sleep_parked;
 static u64 sleep_halted;
 static u64 sleep_late;
 static u64 sleep_worst_ns;
 
 void sleep_report(void)
 {
-    kputs("[sleep] parked=");
-    kput_dec(sleep_parked);
-    kputs(" halted=");
+    kputs("[sleep] halted=");
     kput_dec(sleep_halted);
     kputs(" late=");
     kput_dec(sleep_late);
@@ -662,7 +659,6 @@ static struct lm_fault_frame *sys_sleep(struct lm_fault_frame *f)
     if (slot >= 0) {
         struct lm_fault_frame *next = sched_park(f);
         if (next != f) {
-            sleep_parked++;
             return next;                /* the timer will put this one back */
         }
         /* Nothing else could run, so this task keeps the CPU and waits on the
