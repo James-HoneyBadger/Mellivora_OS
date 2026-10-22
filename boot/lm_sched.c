@@ -740,6 +740,9 @@ static void sched_report(void)
     kputs(timer_ok ? "[timer] timer=ok\r\n"
                    : "[timer] FAIL timer never reached ring 3\r\n");
 
+    sleep_report();
+    timer_report();
+
     /* Not a scheduler fact, but this is the one place that prints after every
      * task: the input driver's interrupt count proves the I/O APIC's routing
      * works, which polling would never show. */
@@ -753,6 +756,8 @@ static void sched_report(void)
     kputs(" wakes=");
     kput_dec(wait_wakes);
     kputs(wait_blocks == wait_wakes ? " wait=ok\r\n" : " wait=FAIL\r\n");
+
+    sleep_report();
 
     /* Not a scheduler fact, but this is the one place that prints after every
      * task: the input driver's interrupt count proves the I/O APIC's routing

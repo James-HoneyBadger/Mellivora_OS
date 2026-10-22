@@ -37,6 +37,9 @@ static struct timer_slot slots[TIMER_SLOTS];
 static u64 tick_deadline;       /* when the next 100 Hz tick is due */
 static u64 tick_period;         /* nanoseconds between ticks */
 static int timer_ready;
+static u64 exp_count, exp_late_total, exp_late_max, exp_late_over2ms;
+static u64 last_arm_ns;
+static u64 dbg_shown;
 
 /* The counter the whole file is expressed against: the HPET when there is one,
  * the TSC when there is not. Both are free-running and neither is ever reset, so
@@ -102,6 +105,7 @@ void timer_rearm(void)
 
     /* A count that has already gone by still has to interrupt once, or the queue
      * would sit there waiting for a tick that is not armed. */
+    last_arm_ns = delta;
     lapic_timer_arm_once(ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks);
 }
 
@@ -139,6 +143,21 @@ int timer_service(void)
         void (*fn)(void *) = slots[i].fn;
         void *arg = slots[i].arg;
 
+        if (sched_current_id() != 0 || 1) {
+            u64 l = now > slots[i].expiry ? now - slots[i].expiry : 0;
+            exp_count++;
+            exp_late_total += l;
+            if (l > exp_late_max) exp_late_max = l;
+            if (l > 2000000ULL) exp_late_over2ms++;
+            if (dbg_shown < 8 && sched_current_id() != 0) {
+                dbg_shown++;
+                kputs("[exp] armed=");
+                kput_dec(last_arm_ns / 1000ULL);
+                kputs("us late=");
+                kput_dec(l / 1000ULL);
+                kputs("us\r\n");
+            }
+        }
         slots[i].used = 0;              /* cleared first: the callback may arm one */
         slots[i].expiry = 0;
         if (fn != NULL) {
@@ -164,6 +183,7 @@ void timer_until_ns(u64 deadline)
     u64 delta = deadline > now ? deadline - now : 1;
     u64 ticks = (delta * (u64)lapic_ticks_per_ms() + 999999ULL) / 1000000ULL;
 
+    last_arm_ns = delta;
     lapic_timer_arm_once(ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks);
 }
 
@@ -219,6 +239,19 @@ int timer_cancel(int slot)
 
     timer_rearm();
     return was;
+}
+
+void timer_report(void)
+{
+    kputs("[expire] n=");
+    kput_dec(exp_count);
+    kputs(" avg=");
+    kput_dec(exp_count ? exp_late_total / exp_count / 1000ULL : 0);
+    kputs("us max=");
+    kput_dec(exp_late_max / 1000ULL);
+    kputs("us over2ms=");
+    kput_dec(exp_late_over2ms);
+    kputs("\r\n");
 }
 
 int timer_pending(void)

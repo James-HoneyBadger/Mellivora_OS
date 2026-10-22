@@ -597,6 +597,28 @@ static struct lm_fault_frame *sys_setcursor(struct lm_fault_frame *f)
  * interrupts, and the tick's own path may switch tasks from here, so this is a
  * real sleep rather than a spin: the return frame is whatever the tick left to
  * run, and this task resumes at the hlt below when it is scheduled again. */
+/* Which way each sleep waited, and how late the halting ones ended. A sleep that
+ * behaves like a tick has to be one of two things, and these three numbers say
+ * which: the task parked and was woken by a callback, or it kept the CPU and ended
+ * its own halt when the counter reached the deadline. */
+static u64 sleep_parked;
+static u64 sleep_halted;
+static u64 sleep_late;
+static u64 sleep_worst_ns;
+
+void sleep_report(void)
+{
+    kputs("[sleep] parked=");
+    kput_dec(sleep_parked);
+    kputs(" halted=");
+    kput_dec(sleep_halted);
+    kputs(" late=");
+    kput_dec(sleep_late);
+    kputs(" worst=");
+    kput_dec(sleep_worst_ns / 1000ULL);
+    kputs("us\r\n");
+}
+
 static void sleep_wake(void *arg)
 {
     sched_wake_task((u64)(unsigned long)arg);
@@ -640,6 +662,7 @@ static struct lm_fault_frame *sys_sleep(struct lm_fault_frame *f)
     if (slot >= 0) {
         struct lm_fault_frame *next = sched_park(f);
         if (next != f) {
+            sleep_parked++;
             return next;                /* the timer will put this one back */
         }
         /* Nothing else could run, so this task keeps the CPU and waits on the
@@ -652,8 +675,16 @@ static struct lm_fault_frame *sys_sleep(struct lm_fault_frame *f)
     }
 
     if (deadline != 0) {
+        sleep_halted++;
         while (timer_now_ns() < deadline) {
             __asm__ volatile("sti; hlt");
+        }
+        u64 late = timer_now_ns() - deadline;
+        if (late > 2000000ULL) {
+            sleep_late++;
+        }
+        if (late > sleep_worst_ns) {
+            sleep_worst_ns = late;
         }
         return f;
     }

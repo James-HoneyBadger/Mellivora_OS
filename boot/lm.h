@@ -24,6 +24,7 @@ void *memset(void *dst, int value, unsigned long n);
 /* Console: COM1, initialised by the nucleus before anything else prints. */
 void kputc(char c);
 u64 kputc_count(void);
+void sleep_report(void);
 void kputs(const char *s);
 /* The next byte COM1 has received, or -1 when the input register is empty.
  * Polled: the console is a UART, and a task that wants a key spins with
@@ -669,6 +670,7 @@ int timer_cancel(int slot);
  * is halting on the counter itself. */
 void timer_until_ns(u64 deadline);
 int timer_pending(void);
+void timer_report(void);
 u64 timer_now_ns(void);
 /* Called from the timer interrupt: runs what has expired and reports whether a
  * scheduling tick came due with it. */
