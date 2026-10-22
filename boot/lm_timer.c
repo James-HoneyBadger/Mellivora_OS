@@ -40,7 +40,7 @@ static int timer_ready;
 static u64 exp_count, exp_late_total, exp_late_max, exp_late_over2ms;
 static u64 arms_total, arms_tick_only;
 u32 timer_irq_current;
-u64 timer_irq_total;
+u64 timer_irq_total, timer_irq_ring0, timer_irq_ring3;
 
 
 /* The counter the whole file is expressed against: the HPET when there is one,
@@ -253,6 +253,10 @@ void timer_report(void)
     kput_dec(arms_total);
     kputs(" tickonly=");
     kput_dec(arms_tick_only);
+    kputs(" ring0=");
+    kput_dec(timer_irq_ring0);
+    kputs(" ring3=");
+    kput_dec(timer_irq_ring3);
     kputs("\r\n");
 }
 
