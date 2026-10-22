@@ -2539,6 +2539,28 @@ self-test can only prove what a single CPU can observe - that the instructions d
 they say, that a failed compare-and-swap does not write, that trylock refuses a lock it
 already holds, and that the interrupt flag survives a section exactly - and says so.
 
+### Why the other processors are not started yet
+
+The start-up sequence for an application processor is prescribed: INIT, wait ten
+milliseconds, STARTUP IPI pointing at a page below 1 MB that holds a 16-bit trampoline,
+and the trampoline walks the processor through protected mode into long mode. A
+trampoline for this kernel was written twice, with a letter printed to COM1 at each stage
+- a processor that faults before it has an IDT can only be traced by the code doing the
+faulting - and it never printed the first letter.
+
+What the monitor shows instead: the application processor is halted inside the firmware,
+in protected mode, with CR3 zero and its instruction pointer in the ROM. That is the
+firmware's own park loop, not the architectural state that accepts a STARTUP IPI, which is
+why the SIPI is delivered and ignored. An INIT does restart the processor - QEMU's log
+records the reset - and then the whole machine resets, because the processor's next
+instructions are the firmware's, not the trampoline's, and that path faults.
+
+So starting the APs needs the firmware's cooperation: either its own handshake, through
+the vector page it already uses, or a different boot path. Until that is read properly the
+kernel stays on one processor, and the pieces that were proved on their own - the delivery
+of an inter-processor interrupt, the boot clock, the MADT's processor ids - stay in the
+tree.
+
 ### Waiting during the boot
 
 Before there are ticks there is nothing to wait on, so a boot-time delay has to make its

@@ -65,7 +65,10 @@ int lapic_send_ipi(u32 dest, u32 mode, u8 vector)
 
     u32 command = ((u32)mode << 8) | (u32)vector | ((dest & 0xFF) << 24);
     if (mode == LAPIC_IPI_INIT) {
-        command |= (1u << 14);              /* level: assert */
+        /* An INIT is a level-triggered assert: bit 15 says the trigger is level
+         * and bit 14 that the level is asserted. Sending it edge-triggered is
+         * what a lot of example code does and what the architecture does not. */
+        command |= (1u << 15) | (1u << 14);
     }
 
     lapic_write(LAPIC_ICR_HIGH, 0);

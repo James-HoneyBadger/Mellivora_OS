@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P3 | in progress | ACPI/RSDP/MADT discovery; the local APIC's timer calibrated against the PIT and carrying the 100 Hz tick; the I/O APIC routing the keyboard and pointer, which are now interrupt-driven; atomics and a spinlock under the kernel's critical section; IPI delivery and an interrupt-free boot clock, with AP start-up attempted and pulled with its findings written down |
+| P3 | in progress | ACPI/RSDP/MADT discovery; the local APIC's timer calibrated against the PIT and carrying the 100 Hz tick; the I/O APIC routing the keyboard and pointer, which are now interrupt-driven; atomics and a spinlock under the kernel's critical section; IPI delivery and an interrupt-free boot clock; AP start-up attempted twice and pulled, with the firmware's behaviour documented |
 | P2 | done, exit gates met | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; two ring-3 tasks round-robined by that tick with per-task kernel stacks and per-task address spaces; NX on heap and stack pages with SMEP/SMAP enabled where CPUID offers them; a table-driven LP64 syscall ABI with write/yield/brk behind it; PCI enumeration and an ATA PIO block driver whose read/write paths are self-tested; an HBFS reader and VFS front-end, with `/init` loaded from that disk and `exec`/`open`/`read`/`close` behind it; a 32-bit program running in compatibility mode beside the 64-bit tasks through an `INT 0x80` bridge, with one of the tree's own flat binaries loaded unchanged at its `0x00300000` program base; directories and file metadata (`seek`/`stat`/`readdir`/`chdir`/`getcwd`) over a per-task working directory; a writable HBFS (`create`/`mkdir`/`unlink` over the allocation bitmap, plus writes through an open handle, so a file can be appended to) whose output the host test reads back out of the image; console input over COM1 with a line-based shell (`ls`/`cat`/`date`/`mkdir`/`rm`/`quit`) that the host test types at; a CMOS clock; a user-space heap, whole-file load and pipes, with `exec` passing a command line on to `getargs`; a VGA text console with real colour, cursor and clear calls; a PS/2 keyboard whose input the test types with real scancodes; a PS/2 pointer polled from the timer tick, with a `/mouse` cursor demo the test drives through real packets; fork/exec/waitpid, so the shell can run programs and report their exit codes; children that fault are retired instead of stopping the machine; kill and background spawn; an e1000 network driver with ARP and ICMP echo on top of it, so a ring-3 program can ping; the PC speaker behind `BEEP`; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
@@ -451,46 +451,56 @@ driver.
   bit, and the MADT's processor ids are kept, not just counted. Both are tested: with
   `-smp 2`, QEMU's own `-d int,cpu_reset` log shows `CPU Reset (CPU 1)` when an INIT is
   sent to the second processor, which is the delivery working.
-- [ ] SMP to 8 vCPUs. Attempted and pulled: see below.
+- [ ] SMP to 8 vCPUs. Attempted twice and pulled both times: the firmware parks APs in a
+  state that ignores a SIPI, and an INIT hands them back to the firmware's own path, which
+  faults. See below for exactly what the evidence showed and what the next attempt has to
+  read first.
 - [ ] Per-CPU run queues, IPIs, TLB shootdown, preemptible kernel, lockdep-style lock
   validation, threads (`clone` with shared VM), futex, TLS, HPET/TSC clocksource,
   high-resolution timers.
 
 #### AP start-up: what was tried, and what it taught
 
-A 16-bit to 32-bit to 64-bit trampoline was written (`boot/lm_tramp.asm`), copied to a
-page below 1 MB, described to the processor through a parameter block (CR3, stack, entry,
-the boot processor's GDTR and IDTR), and started with the prescribed sequence: INIT, a
-delay, then SIPI twice. Its details were the ones that matter and are easy to get wrong -
-the trampoline's own GDT has to agree with the kernel's about selectors 0x08 and 0x10,
-because the IDT's gates name 0x08 for the kernel's code segment; PAE, PGE and the SSE
-bits go into CR4 before paging is switched on; the kernel's GDT and IDT are loaded only
-once those selectors mean the same thing.
+A 16-bit to 32-bit to 64-bit trampoline was written, copied to a page below 1 MB,
+described to the processor through a parameter block (CR3, stack, entry, the boot
+processor's GDTR and IDTR), and started with the prescribed sequence. It printed a letter
+per stage on COM1, because a processor that faults before it has an IDT can only be traced
+by the code that is faulting. Its details were the ones that matter: the trampoline's own
+GDT has to agree with the kernel's about selectors 0x08 and 0x10, because the IDT's gates
+name 0x08 for the kernel's code segment; PAE, PGE and the SSE bits go into CR4 before
+paging is switched on; the kernel's GDT and IDT are loaded only once those selectors mean
+the same thing.
 
 It does not work under this machine's firmware, and the tree does not keep code that does
-not work. What the evidence says:
+not work. The evidence, in the order it was gathered:
 
-- A SIPI on its own, to a processor the firmware has already parked, does nothing. The
-  delivery-status bit clears, and no processor starts. Parked is not "waiting for a
-  SIPI".
-- An INIT does reach the AP - QEMU's log records the reset of CPU 1 - and then the whole
-  machine resets, which is a triple fault on the AP taking the system with it. That is
-  the firmware's warm-start path for an application processor running into something,
-  most likely the same page the firmware uses for its own AP start-up: 0x9000 is where
-  SeaBIOS puts its trampoline, and the SIPI vector it hands out is 0x09. Copying our
-  trampoline there, or anywhere the firmware still needs, turns its warm start into a
-  jump into our code.
-- Moving the trampoline to 0x8000 and leaving the firmware's page alone did not change
-  the outcome, and neither did shortening the delay between INIT and SIPI from 10 ms to
-  1 ms. The next attempt needs the AP's own fault report rather than the boot
-  processor's, which means a dedicated 4 KB stack per AP and a fault path that prints
-  from a processor with no per-CPU block yet.
+- **The processor is not where the architecture says it should be.** Inspecting CPU 1 with
+  QEMU's monitor shows it halted in *protected mode inside the ROM*: CS is a 32-bit code
+  segment, CR0.PE is set, CR3 is zero, and EIP is 0xfd0b1, which is the firmware's own
+  AP park loop. The architectural state that accepts a SIPI - real mode, waiting for one -
+  is not this.
+- **So a SIPI is ignored.** The delivery-status bit clears, the machine is fine, and not
+  one letter of the trampoline's trace appears: the vector page was never fetched.
+- **An INIT does reach it** - QEMU's `-d int,cpu_reset` log records `CPU Reset (CPU 1)` -
+  **and then the whole machine resets**, which is a triple fault on the AP taking the
+  system with it. That happened with the trampoline at 0x9000 (where the firmware keeps
+  its own AP trampoline, SIPI vector 0x09 - not a safe choice), at 0x8000, with the delay
+  between INIT and SIPI at 10 ms and at 1 ms, and with the INIT's trigger bits corrected
+  to level-asserted as the architecture requires. So the AP's post-INIT path is the
+  firmware's, not ours, and it ends in a fault.
 
-Two things came out of it anyway, and are in the tree: the boot clock above, and one
-lesson about the console. A bounded spin in `kputc` looked like robustness - a UART that
-stops answering should cost characters, not the machine - and it silently dropped log
-lines, because the transmit register stays busy while the host is not draining the
-socket. It went back to waiting.
+What that means for the next attempt: the firmware has to be part of the answer rather
+than bypassed. Either an AP is started **through the firmware's own handshake** - its
+SIPI vector at 0x9000 plus whatever word in its data area it reads to decide whether it
+is running for the BIOS or for an OS - or the machine is booted by something that leaves
+APs in the architectural wait-for-SIPI state. Both are a bigger piece of work than one
+milestone, and neither is guessable: the next attempt starts by reading the firmware.
+
+Two things came out of the attempt anyway, and are in the tree: the boot clock above, and
+one lesson about the console. A bounded spin in `kputc` looked like robustness - a UART
+that stops answering should cost characters, not the machine - and it silently dropped log
+lines, because the transmit register stays busy while the host is not draining the socket.
+It went back to waiting.
 
 **Exit:** near-linear scaling on a parallel workload; 24 h SMP stress with no lost
 wakeups.
