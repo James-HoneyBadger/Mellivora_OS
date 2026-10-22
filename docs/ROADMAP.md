@@ -596,6 +596,14 @@ a boot path where the APs are still in wait-for-SIPI when we get control, or tak
 over with an interrupt whose handler redirects it, which needs a gate in an IDT the AP is
 actually using (the firmware's, not ours).
 
+The experiment that decides between the two, before any kernel code is written: boot the same
+image with `-smp 4` under QEMU and check, in the monitor, whether the other three cores end up in
+that same `hlt; jmp` loop (`info registers -a`, EIP `0xfd0b0`) or stay in wait-for-SIPI
+(`HALT=0`, no CS loaded). If they are in the firmware loop with an MBR boot, then the entry path
+is what has to change - a loader the firmware hands control to earlier, or a firmware option that
+leaves the APs alone - and that is a design decision rather than a patch. Half an hour of
+monitor work answers it, and it is the first thing to do next.
+
 So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
 firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
 wait-for-SIPI. It also says what the right tool is. The AP will leave `hlt` on an *interrupt*,
