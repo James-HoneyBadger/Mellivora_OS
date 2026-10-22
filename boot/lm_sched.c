@@ -110,7 +110,7 @@ void sched_init(void)
     /* Kernel stacks are the slab's first real users: one page each, mapped in
      * the heap window, and they stay allocated for the life of the system. */
     stack_cache = kmem_cache(FRAME_SIZE);
-    spin_init(&lock_guard);
+    spin_init_named(&lock_guard, "sched");
 }
 
 struct lm_task *sched_current(void)
@@ -615,6 +615,8 @@ static void sched_report(void)
     /* Not a scheduler fact, but this is the one place that prints after every
      * task: the input driver's interrupt count proves the I/O APIC's routing
      * works, which polling would never show. */
+    lockdep_report();
+
     kputs("[ps2] irqs=");
     kput_dec(kbd_irqs());
     kputs("\r\n");

@@ -564,12 +564,43 @@ int irqs_enabled(void);
 
 typedef struct {
     volatile u32 locked;
+    u16 klass;              /* which lock this is, for the order checker */
+    u16 named;              /* 1 once lockdep has seen it */
 } lm_spinlock;
 
 void spin_init(lm_spinlock *lock);
+/* The same, with a name for the order checker: the name is what a report says
+ * when two locks were taken in the wrong order. */
+void spin_init_named(lm_spinlock *lock, const char *name);
 void spin_lock(lm_spinlock *lock);
 int spin_trylock(lm_spinlock *lock);
 void spin_unlock(lm_spinlock *lock);
+
+/*---------------------------------------
+ * Lock validation, in the shape lockdep established: every lock is given a class
+ * when it is initialised, each CPU keeps a stack of the classes it is holding,
+ * and the two things that can go wrong on one CPU are checked as they happen -
+ * taking a lock that is already held, and releasing one that is not the
+ * innermost. On top of that a graph records which classes have been seen inside
+ * which, so a pair taken in both orders is reported the second time it happens:
+ * that pair is a deadlock waiting for two CPUs.
+ *
+ * One class per lock object rather than per type, which is enough for a port with
+ * six locks and honest about the difference.
+ *---------------------------------------*/
+#define LOCKDEP_MAX_LOCKS 32
+#define LOCKDEP_MAX_HELD  8
+
+/* Called by the lock primitives. A lock with no class (0) is not tracked. */
+u32 lockdep_register(const void *lock, const char *name);
+void lockdep_acquire(int klass);
+void lockdep_release(int klass);
+
+int lockdep_selftest(void);
+/* Print what the checker saw: how many locks it knows, the deepest nest, and how
+ * many violations. */
+void lockdep_report(void);
+u64 lockdep_errors(void);
 
 u32 atomic_xchg32(volatile u32 *target, u32 value);
 int atomic_cmpxchg32(volatile u32 *target, u32 expected, u32 value);

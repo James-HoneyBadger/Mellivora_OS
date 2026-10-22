@@ -620,7 +620,8 @@ KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_atomic.o boot/lm_pmm.o boot/lm_cpu.o 
                   boot/lm_hbfs.o boot/lm_vfs.o boot/lm_rtc.o \
 		  boot/lm_pipe.o boot/lm_vga.o boot/lm_kbd.o boot/lm_mouse.o \
 		  boot/lm_e1000.o boot/lm_net.o boot/lm_spk.o boot/lm_acpi.o \
-		  boot/lm_lapic.o boot/lm_ioapic.o boot/lm_hpet.o boot/lm_timer.o
+		  boot/lm_lapic.o boot/lm_ioapic.o boot/lm_hpet.o boot/lm_timer.o \
+		  boot/lm_lockdep.o
 
 # The user programs are files in the image now, not part of the nucleus.
 INIT_BIN = initprog.bin

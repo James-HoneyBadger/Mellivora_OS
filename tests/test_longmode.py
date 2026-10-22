@@ -188,6 +188,10 @@ REQUIRED = (
     # waiting for the next tick.
     "hrt: one 50ms sleep took ",
     "hrt: deadlines, not ticks",
+    # The lock order checker: four planted violations found by the self-test, and
+    # none from the kernel's own use of its lock.
+    "[lockdep] selftest=ok",
+    "errors=0 lockdep=ok",
     "sh: /hrt exited 0x00000000",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back

@@ -2565,6 +2565,33 @@ now owned by the lowest-numbered live task in the space rather than kept per tas
 pointers over the same memory hand out the same block twice, which looks exactly like a
 correct program corrupting itself.
 
+### Finding a deadlock before it happens
+
+Two locks taken in both orders by two paths is a deadlock waiting for two CPUs, and it is a
+fact about the code rather than about the schedule - which means the first path that tries
+the second order can report it, with no need to reproduce anything. That is what
+`boot/lm_lockdep.c` does: every lock gets a class when it is initialised (`spin_init_named`),
+and each acquisition records that the classes already held contain it, so a pair seen in both
+directions is reported the moment the second direction is taken.
+
+The same per-CPU stack of held classes catches the two mistakes one CPU can make on its own:
+taking a lock it already holds, which is a self-deadlock, and releasing a lock that is not
+the innermost, which means the code thinks it holds something it does not. Both are reported
+with the lock's name, because a report that says "lock 3" is a report nobody acts on.
+
+The self-test plants one of each and counts what came back. This is the part worth copying:
+a checker that silently agrees with everything is indistinguishable from a correct kernel, so
+the only evidence that the checker works is a violation it was asked to find and did. The
+planted ones are printed with a different word - `planted` rather than `FAIL` - and the
+graph is emptied afterwards, since the orderings the probes created are not facts about the
+kernel.
+
+Two simplifications, both honest: a class per lock object rather than per type of lock, which
+merges two filesystem locks into one class in the real thing and keeps them apart here; and a
+single stack rather than one per CPU, which is correct exactly because interrupts are off
+while a spinlock is held and there is one processor. Both are the first things to change when
+the other processors start.
+
 ### Deadlines instead of ticks
 
 The tick answers "whose turn is it" and answers "when should this happen" badly, because it

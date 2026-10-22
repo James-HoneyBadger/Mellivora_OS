@@ -473,6 +473,8 @@ void lm_main(void)
     kmem_init();
     kmem_selftest();
 
+    lockdep_selftest();
+
     acpi_init();
     hpet_init();
     lapic_init();

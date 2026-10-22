@@ -59,9 +59,16 @@ u32 atomic_add32(volatile u32 *target, u32 value)
     return __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
 }
 
-void spin_init(lm_spinlock *lock)
+void spin_init_named(lm_spinlock *lock, const char *name)
 {
     lock->locked = 0;
+    lock->klass = (u16)lockdep_register(lock, name);
+    lock->named = 1;
+}
+
+void spin_init(lm_spinlock *lock)
+{
+    spin_init_named(lock, "lock");
 }
 
 /* The exchange is the lock: whoever turns 0 into 1 owns it, and everyone else
@@ -71,6 +78,9 @@ void spin_lock(lm_spinlock *lock)
 {
     for (;;) {
         if (atomic_xchg32(&lock->locked, 1) == 0) {
+            if (lock->named) {
+                lockdep_acquire(lock->klass);
+            }
             return;
         }
         while (__atomic_load_n(&lock->locked, __ATOMIC_RELAXED) != 0) {
@@ -81,11 +91,20 @@ void spin_lock(lm_spinlock *lock)
 
 int spin_trylock(lm_spinlock *lock)
 {
-    return atomic_xchg32(&lock->locked, 1) == 0;
+    if (atomic_xchg32(&lock->locked, 1) != 0) {
+        return 0;
+    }
+    if (lock->named) {
+        lockdep_acquire(lock->klass);
+    }
+    return 1;
 }
 
 void spin_unlock(lm_spinlock *lock)
 {
+    if (lock->named) {
+        lockdep_release(lock->klass);
+    }
     __atomic_store_n(&lock->locked, 0, __ATOMIC_SEQ_CST);
 }
 
