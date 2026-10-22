@@ -422,9 +422,11 @@ start:
         syscall
         cmp rax, -1
         je .clock_failed
+        mov r13, rax                    ; the four-digit year, out of harm's way
 
         call begin_line
-        call add_dec                    ; the four-digit year from RAX...
+        mov eax, r13d                   ; add_str walks over EAX: load it last
+        call add_dec                    ; the four-digit year
         lea rsi, [rel s_dash]
         call add_str
         movzx eax, byte [DATE_BUF + 4]  ; month
@@ -733,6 +735,12 @@ copy_to_out:
 
 ;-----------------------------------------------------------------------
 ; Line assembly. RBP is the write cursor.
+;
+; Contract: add_str and add_bytes walk over EAX with `lodsb`, so a value for
+; add_dec has to be loaded *after* the last add_str rather than before it.
+; begin_line and end_line leave EAX alone. This has bitten the tree twice - a
+; spawned pid and a ping's round trip that both printed 0 - so anything that has
+; to survive a call is kept in a callee-saved register (r13-r15).
 ;-----------------------------------------------------------------------
 begin_line:
         lea rbp, [LINE_BUF]

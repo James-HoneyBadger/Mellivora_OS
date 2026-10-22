@@ -2567,9 +2567,11 @@ what the tree's own `SYS_GETTIME` returns.
 
 ### The console is a UART
 
-There is no text buffer and no keyboard driver: the console is COM1, so a character
-in is one read of the line status register (`kgetc`, which returns -1 rather than
-blocking) and a character out is one poll of the transmit register (`kputc`). That
+The console started as COM1 alone - a character in is one read of the line status
+register (`kgetc`, which returns -1 rather than blocking) and a character out is one
+poll of the transmit register (`kputc`). The keyboard and the VGA text buffer came
+later and are described below; `kgetc` asks the keyboard first and the UART second, and
+`kputc` fans out to both, so a caller does not have to know which one is in use. That
 makes the abstract console calls concrete:
 
 | Call | What it does here |
@@ -2578,6 +2580,18 @@ makes the abstract console calls concrete:
 | `getchar()` | `kgetc` - non-blocking, -1 when nothing has arrived |
 | `clear()` | writes the ANSI `ESC[2J ESC[H` a terminal understands |
 | `sleep(ms)` | `sti; hlt` until the PIT has counted `ms/10` ticks |
+
+### The demos and the shell
+
+Every program in `boot/lm_*.asm` is a flat binary loaded at `0x40000000`, and they all
+share the same two traps, which are worth stating once because both are silent when
+they happen. A line is assembled in a buffer and written with one `write`, because the
+other tasks print at the same time and a line built from six writes can have somebody
+else's output in the middle of it. And the line-building helpers walk over EAX with
+`lodsb`, so a value meant for the decimal formatter has to be loaded *after* the last
+`add_str` rather than before it - a spawned pid and a ping's round trip both printed 0
+before that rule was written down, and the values that have to survive a call now live
+in `r13`-`r15`.
 
 `getchar` returning -1 instead of blocking is deliberate: the caller decides how to
 wait, and the test's shell waits with `sleep(10)`, which parks the CPU until the timer

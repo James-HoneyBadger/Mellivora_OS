@@ -126,6 +126,16 @@ static void reg_flush(void)
     (void)reg_read(REG_STATUS);
 }
 
+/* A compiler barrier for the handoff with the device: it reads the frame and the
+ * descriptor it points at, and that the stores are complete before the tail moves
+ * is the whole contract. x86 orders stores, so this is about the compiler and not
+ * the CPU - but without it the memcpy below is free to sink past the register
+ * write that tells the device to look. */
+static void dma_barrier(void)
+{
+    __asm__ volatile("" ::: "memory");
+}
+
 static void pause_loops(u32 count)
 {
     for (u32 i = 0; i < count; i++) {
@@ -339,6 +349,7 @@ int e1000_send(const void *frame, u32 length)
     tx_ring[slot].length = (u16)length;
     tx_ring[slot].command = TX_CMD_EOP | TX_CMD_IFCS | TX_CMD_RS;
     tx_ring[slot].status = 0;
+    dma_barrier();                      /* the frame is written before the tail */
 
     tx_next = (slot + 1) % TX_COUNT;
     reg_write(REG_TDT, (u32)tx_next);
@@ -366,6 +377,7 @@ int e1000_recv(void *buffer, u32 *length)
     }
 
     u32 len = rx_ring[slot].length;
+    dma_barrier();                      /* DD was set after the frame was written */
     if (len > RX_BUFFER_SIZE) {
         len = RX_BUFFER_SIZE;
     }
