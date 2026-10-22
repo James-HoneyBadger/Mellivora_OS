@@ -526,6 +526,28 @@ int ata_write(u64 lba, const void *buffer);
 int ata_selftest(void);
 
 /*---------------------------------------
+ * The kernel's device-memory window: a gigabyte of the kernel half (PML4[511],
+ * PDPT[509]) that nothing else maps, one slot per driver. Device registers are
+ * mapped here with caching disabled - a cached read would answer from the cache
+ * and never see the device move.
+ *---------------------------------------*/
+#define LM_MMIO_BASE   0xFFFFFFFF40000000ULL
+#define LM_MMIO_PAGE(n) (LM_MMIO_BASE + (u64)(n) * FRAME_SIZE)
+
+#define LM_MMIO_E1000       0       /* the network card's 128 KB register file */
+#define LM_MMIO_E1000_PAGES 32
+#define LM_MMIO_LAPIC       32      /* the local APIC's page */
+#define LM_MMIO_IOAPIC      33      /* and the I/O APIC's */
+
+/*---------------------------------------
+ * The local APIC. Its timer is the point of it: the 8254 stays the tick source
+ * until the IDT has a gate for the vector this would deliver.
+ *---------------------------------------*/
+int lapic_init(void);
+int lapic_selftest(void);
+u32 lapic_id(void);
+
+/*---------------------------------------
  * ACPI: enough of it to find out how the machine describes itself. Discovery
  * only - the MADT says how many CPUs and where the APICs are.
  *---------------------------------------*/

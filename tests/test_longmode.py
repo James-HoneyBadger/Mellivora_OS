@@ -131,6 +131,11 @@ REQUIRED = (
     # than one of them.
     "[acpi] rsdp=",
     "lapic=FEE00000 cpus=1 ioapic=FEC00000 acpi=ok",
+    # The local APIC: the page the firmware named is mapped and its timer counts
+    # down while the unit is switched on for the test - the tick itself stays on
+    # the 8254 until the APIC has a vector of its own.
+    "[lapic] id=0 version=14",
+    " lapic=ok",
     "[e1000] 52:54:00:12:34:56 bar=",
     "link=up e1000=ok",
     # ...and the network layer built on it: the gateway resolved by ARP, and

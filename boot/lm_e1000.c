@@ -25,10 +25,6 @@
 
 #include "lm.h"
 
-/* A window of its own in the kernel half: PML4[511]/PDPT[509], a gigabyte no
- * other part of the port uses. */
-#define E1000_MMIO_BASE  0xFFFFFFFF40000000ULL
-#define E1000_MMIO_PAGES 32                    /* 128 KB: the whole register file */
 
 #define REG_CTRL   0x0000
 #define REG_STATUS 0x0008
@@ -269,15 +265,15 @@ int e1000_init(void)
     }
     bar0 = raw & 0xFFFFFFF0u;
 
-    for (u32 i = 0; i < E1000_MMIO_PAGES; i++) {
-        if (vmm_map(E1000_MMIO_BASE + (u64)i * FRAME_SIZE,
+    for (u32 i = 0; i < LM_MMIO_E1000_PAGES; i++) {
+        if (vmm_map(LM_MMIO_PAGE(LM_MMIO_E1000 + (int)i),
                     (u64)(bar0 & ~0xFFFu) + (u64)i * FRAME_SIZE,
                     VMM_W | VMM_PCD | VMM_NX) != 0) {
             kputs("[e1000] FAIL the register window would not map\r\n");
             return -1;
         }
     }
-    regs = (volatile u8 *)(unsigned long)E1000_MMIO_BASE;
+    regs = (volatile u8 *)(unsigned long)LM_MMIO_BASE;
 
     /* Reset, and wait for the device to say it is done rather than guessing how
      * long it takes. */

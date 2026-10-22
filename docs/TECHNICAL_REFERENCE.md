@@ -2479,6 +2479,24 @@ Everything is reached through the direct map, which means an address above the 1
 covers cannot be read; that case is checked (`vmm_phys` returns NULL) and reported as
 unreadable rather than followed off the end of a mapping.
 
+### The local APIC
+
+The register page sits at the address the MADT names, so it is mapped into the driver
+window like any other device's - and then there is a catch worth knowing: on a machine
+whose local APIC can be enabled, the 8259 reaches the CPU *through* it, on the LINT0
+pin, in ExtINT delivery mode. Masking LINT0 to keep the APIC quiet therefore silences
+every ISA interrupt, and the timer stops with them; the first version of this test did
+exactly that and left a machine that booted, printed its prompt and then ignored the
+keyboard. Restoring LINT0 to ExtINT before switching the unit off again is what puts
+the old path back.
+
+The APIC's timer only counts while the unit is enabled (the spurious-vector register's
+enable bit), which is why the test has to switch it on to prove it moves: it sets
+everything masked, enables with spurious vector 0xFF as a placeholder, starts the
+counter at a million, watches the current count fall, then stops it and switches the
+unit off. Interrupts are off at boot, so nothing can be delivered while it is enabled -
+that is the whole reason this can be proved before there is a vector to deliver to.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting
