@@ -759,6 +759,62 @@ quotas, ACLs. VFS page cache with writeback and readahead. NVMe, AHCI NCQ, GPT.
 
 **Exit:** 1 TB image, > 100 MB/s, 10 000 crash-injection iterations clean.
 
+#### Entered with two P3 items deliberately left open
+
+P3's exit gate needs application processors, and the firmware gives no route to them that has
+been found: they are halted inside SeaBIOS with nothing to hand over to, no IDT to hijack, and
+an INIT that completes but whose window a startup IPI has not yet hit. That is a platform
+question and it is parked, with the evidence written down. The other open item is the timer: a
+one-millisecond deadline is delivered 194us late at boot, twenty in a row, and 7-21ms late while
+a task is sleeping, from ring 3 with interrupts enabled. Both are recorded above.
+
+Storage does not need either of them, which is why it can start. What it does need is to be
+written *as if* they existed: every structure that will be touched from more than one processor
+gets its lock now, and every long operation gets a place to yield. That is cheaper than
+retrofitting it later, and it is the one discipline this phase owes the last.
+
+#### Sprint 1 - the on-disk format, and the tools that prove it
+
+The format comes first and it comes with its validator, in the order the earlier phases used:
+`tools/validate_constants.py` pairs every constant between builder and kernel, and P4 extends
+that to the new structures rather than inventing a second mechanism.
+
+- [ ] HBFS v4 superblock: 64-bit block numbers, a generation counter for snapshots, and a
+      feature word so a v3 volume can still be mounted read-only. The validator reads the
+      builder's copy and the kernel's and fails on any disagreement.
+- [ ] Extents: an inode's data described by runs of blocks rather than a list, with the inline
+      case kept for small files so nothing about the current fast path gets slower.
+- [ ] A checksum on every metadata block, and the tool that recomputes them offline
+      (`tools/fsck_hbfs.py` grows a `--complain` mode that prints every block whose checksum
+      does not match its contents).
+- [ ] Mount, read, and `ls` a v4 volume; the existing suite keeps passing on a v3 one.
+
+#### Sprint 2 - the journal, and the crash test that means something
+
+- [ ] A write-ahead journal with a checksummed commit record: intent, commit, then the real
+      blocks. A volume that is interrupted between any two of those must come back to a state
+      the fsck calls consistent.
+- [ ] The crash harness: `tools/crash_inject.py` exists for the 32-bit tree, so the 64-bit
+      path gets the same treatment - power the guest off at a chosen sector write and re-mount.
+      The exit gate is ten thousand iterations, so the harness has to run unattended and count.
+- [ ] Online fsck: the volume reports and repairs itself while mounted, because the offline
+      tool is the one that only runs when something has already gone wrong.
+
+#### Sprint 3 - the cache, and the devices
+
+- [ ] A page cache in front of HBFS: readahead on sequential reads, writeback on a deadline,
+      and a flush that a program can ask for. Every entry carries the lock its future SMP self
+      will need.
+- [ ] COW snapshots and quotas, which the generation counter and the extent list were designed
+      for from sprint 1.
+- [ ] GPT and NVMe. Both are new drivers, and both are what make the 1 TB and 100 MB/s halves
+      of the exit gate reachable at all - ATA PIO will not do either.
+
+**Order matters here.** The exit gate has three numbers and the format decides two of them:
+1 TB is a 64-bit block number, and 100 MB/s is extents plus a cache plus a driver that does
+more than one sector per interrupt. Ten thousand crash iterations is the journal. Doing them
+in this order means each sprint's exit is measurable on its own.
+
 ### P5 · Networking (3 sprints)
 
 Socket layer with non-blocking I/O, `select/poll/epoll`, `SO_*` options and
