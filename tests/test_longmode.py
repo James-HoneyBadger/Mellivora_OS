@@ -183,6 +183,12 @@ REQUIRED = (
     "tls: main read 1111 thread read 2222",
     "tls: two bases, one address space",
     "sh: /tls exited 0x00000000",
+    # High-resolution timers: deadlines on the HPET delivered by the APIC's
+    # one-shot timer, and a scheduler that switches at the wake-up instead of
+    # waiting for the next tick.
+    "hrt: one 50ms sleep took ",
+    "hrt: deadlines, not ticks",
+    "sh: /hrt exited 0x00000000",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
     # along with one environment entry.
@@ -510,6 +516,7 @@ def main():
         ("mellivora:/> ", "run /threads"),
         ("mellivora:/> ", "run /futex"),
         ("mellivora:/> ", "run /tls"),
+        ("mellivora:/> ", "run /hrt"),
         ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "spawn /spin"),
         ("mellivora:/> ", "date"),

@@ -139,8 +139,25 @@ struct lm_fault_frame *lm_irq_dispatch(struct lm_fault_frame *f)
 struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f)
 {
     lapic_eoi();
-    tick_account(f, 1);
-    return sched_tick(f);
+
+    /* One interrupt, two jobs: deadlines, and the tick if one is due with them.
+     * The one-shot is re-armed before the scheduler is asked anything, because a
+     * switch never comes back here and a timer left unarmed would end the clock. */
+    int ticked = timer_service();
+    timer_rearm();
+
+    if (ticked) {
+        tick_account(f, 1);
+        return sched_tick(f);
+    }
+
+    /* A deadline that woke a task is reason enough to switch: the sleeper asked
+     * for that instant, and waiting for the next tick to hand over the CPU would
+     * give it the tick's accuracy back. */
+    if (sched_need_resched()) {
+        return sched_yield(f);
+    }
+    return f;
 }
 
 /*

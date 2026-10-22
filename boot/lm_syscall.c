@@ -597,15 +597,75 @@ static struct lm_fault_frame *sys_setcursor(struct lm_fault_frame *f)
  * interrupts, and the tick's own path may switch tasks from here, so this is a
  * real sleep rather than a spin: the return frame is whatever the tick left to
  * run, and this task resumes at the hlt below when it is scheduled again. */
+static void sleep_wake(void *arg)
+{
+    sched_wake_task((u64)(unsigned long)arg);
+}
+
+/*
+ * sleep(ms): a deadline rather than a count of ticks. The task is parked and a
+ * high-resolution timer wakes it, so the wait is as accurate as the APIC timer is
+ * - a millisecond sleep takes about a millisecond - instead of being rounded up
+ * to the next ten-millisecond tick.
+ *
+ * If nothing else can run the task is not parked - parking the only runnable task
+ * stops the machine - and instead halts on the same deadline itself. That is not
+ * the same as waiting for a tick: the halt ends at the instant the timer fires,
+ * so a one-millisecond sleep costs a millisecond and not ten, and the only thing
+ * delayed by it is a task that was woken while the CPU was asleep, which is
+ * nothing that the sleep itself did not already delay.
+ *
+ * A machine with no counter and no timer queue - whose clock is the 8259 - is the
+ * one case left on the tick, because there is nothing better to wait on there.
+ */
 static struct lm_fault_frame *sys_sleep(struct lm_fault_frame *f)
 {
-    u64 want = f->rdi / 10;         /* the PIT runs at 100 Hz */
-    u64 until = cpu_this()->ticks + want;
+    u64 ms = f->rdi;
+    u64 id = sched_current_id();
+    u64 now = timer_now_ns();
+    u64 deadline = 0;
 
+    f->rax = 0;
+    if (ms == 0) {
+        return f;
+    }
+    if (ms > 0xFFFFFFFFULL) {
+        ms = 0xFFFFFFFFULL;             /* a century is long enough for one wait */
+    }
+    if (now != 0) {
+        deadline = now + ms * 1000000ULL;
+    }
+
+    int slot = id != 0 ? timer_add_ms(ms, sleep_wake, (void *)(unsigned long)id) : -1;
+    if (slot >= 0) {
+        struct lm_fault_frame *next = sched_park(f);
+        if (next != f) {
+            return next;                /* the timer will put this one back */
+        }
+        timer_cancel(slot);             /* nothing else could run: do not park */
+    }
+
+    if (deadline != 0) {
+        while (timer_now_ns() < deadline) {
+            __asm__ volatile("sti; hlt");
+        }
+        return f;
+    }
+
+    u64 until = cpu_this()->ticks + ms / (1000 / LM_TIMER_HZ) + 1;
     while (cpu_this()->ticks < until) {
         __asm__ volatile("sti; hlt");
     }
-    f->rax = 0;
+    return f;
+}
+
+/* time(): the free-running counter in nanoseconds. Monotonic, cheap, and the only
+ * way ring 3 can measure an interval shorter than a tick - which is what a
+ * program needs to see that its sleeps are accurate. */
+static struct lm_fault_frame *sys_time(struct lm_fault_frame *f)
+{
+    u64 now = timer_now_ns();
+    f->rax = now != 0 ? now : cpu_this()->ticks * (1000000000ULL / LM_TIMER_HZ);
     return f;
 }
 
@@ -1142,6 +1202,7 @@ static const struct lm_syscall syscalls[] = {
     [44] = {"futex_wait", sys_futex_wait, 1},
     [45] = {"futex_wake", sys_futex_wake, 1},
     [46] = {"set_tls", sys_set_tls, 1},
+    [47] = {"time", sys_time, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))

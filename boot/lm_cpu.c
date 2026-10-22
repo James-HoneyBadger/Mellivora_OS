@@ -22,11 +22,13 @@ static int nx_on;
 static int smep_on;
 static int smap_on;
 
-/* 8 KB is enough for the entry path plus a C handler; a ported kernel sizes
- * this per CPU at boot. */
-#define KSTACK_BYTES 8192
-
-static u8 cpu0_kstack[KSTACK_BYTES] __attribute__((aligned(16)));
+/* The stack lm_start switches to before any C runs, defined in lm_nucleus.c. It
+ * *is* this CPU's kernel stack until a task brings one of its own, so the
+ * per-CPU block has to name it: an interrupt that arrives during boot lands there
+ * like any other, and a range that described some other array would make the
+ * tick accounting below report every one of them as off-stack. */
+extern u8 lm_stack[];
+extern u8 lm_stack_top[];
 
 static struct lm_cpu cpu0_block;
 
@@ -131,8 +133,8 @@ int cpu_init(void)
 
     cpu->self = (u64)(unsigned long)cpu;
     cpu->id = 0;
-    cpu->kstack_base = (u64)(unsigned long)cpu0_kstack;
-    cpu->kstack_top = (u64)(unsigned long)(cpu0_kstack + KSTACK_BYTES);
+    cpu->kstack_base = (u64)(unsigned long)lm_stack;
+    cpu->kstack_top = (u64)(unsigned long)lm_stack_top;
     cpu->saved_rsp = 0;
     cpu->syscall_count = 0;
     cpu->last_rsp = 0;

@@ -2565,6 +2565,52 @@ now owned by the lowest-numbered live task in the space rather than kept per tas
 pointers over the same memory hand out the same block twice, which looks exactly like a
 correct program corrupting itself.
 
+### Deadlines instead of ticks
+
+The tick answers "whose turn is it" and answers "when should this happen" badly, because it
+arrives a hundred times a second: every wait expressed against it is rounded to the next ten
+milliseconds, and a hundred one-millisecond sleeps take a second. What a wait wants is an
+instant on a free-running counter and a device that can be told to interrupt at that instant.
+The HPET is the counter (the TSC is the fallback, and both report nanoseconds through
+`timer_now_ns()`), and the local APIC's timer is the device - once it is used as a one-shot
+rather than a metronome.
+
+`boot/lm_timer.c` keeps sixty-four deadlines and one rule: the one-shot is always armed for
+whichever comes first, the next deadline or the next tick. An empty queue still gets the
+tick, so the 100 Hz scheduler is not lost, and a deadline halfway between two ticks arrives
+halfway between two ticks. The interrupt does both jobs in one pass - it counts the tick if
+one is due, runs everything that has expired, and re-arms - and it re-arms *before* the
+scheduler is consulted, because a switch never returns to that point and a timer left unarmed
+would end the clock.
+
+A slot is cleared before its callback runs, so a callback may arm another timer. The
+interrupt runs with interrupts off, which is what keeps the queue consistent against the
+mutators: they mask interrupts for the same reason. That is enough for one CPU and not for
+several; a per-CPU base with its own lock is the shape this has to become when the other
+processors start.
+
+`SLEEP` parks the task and leaves a callback holding its id. If nothing else can run the
+task is not parked - parking the only runnable task stops the machine - and halts on the same
+deadline itself, which is still not the same as waiting for a tick: the halt ends at the
+instant the timer fires.
+
+The wake asks for a reschedule. `sched_wake_task()` sets a flag that the interrupt return
+path reads, and the switch happens at the wake instead of at the next tick. Without that line
+the deadline queue was accurate and the sleep was not: two hundred one-millisecond sleeps
+took three seconds, because every sleeper waited up to a tick to be picked after its timer
+had already fired. The flag is not a preemption of the kernel - a frame in ring 0 is still
+refused, so a wake waits for the tick when the running task is inside a syscall - but it is
+the difference between a timer that is accurate and a task that observes accuracy.
+
+What the self-test measures is worth reading carefully. It arms 1, 2, 4 and 8 ms deadlines
+and reports the worst lateness; the number that means something is that the lateness does
+not grow with the interval, which is what separates a device that delivers an instant from
+one that rounds to something. The absolute figure belongs to the machine - an emulated one
+delivers interrupts from its main loop, and this one showed four hundred to sixteen hundred
+microseconds at boot and about six hundred typically under load - so it is reported and not
+asserted on. The comparison that is asserted on is against the tick, which could never do
+better than ten milliseconds.
+
 ### Thread-local storage
 
 User code reaches its own data through `fs:`, and the base of that segment is per *task*

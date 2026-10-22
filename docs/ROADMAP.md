@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P3 | in progress | threads (`clone` with a shared address space), a blocking futex, a shared heap and thread-local storage; ACPI/RSDP/MADT/HPET discovery; the local APIC's timer calibrated against the PIT and carrying the 100 Hz tick; the I/O APIC routing the keyboard and pointer, which are now interrupt-driven; atomics and a spinlock under the kernel's critical section; IPI delivery, an interrupt-free boot clock, and the HPET with the TSC calibrated against it; AP start-up attempted twice and pulled, with the firmware's behaviour documented |
+| P3 | in progress | threads (`clone` with a shared address space), a blocking futex, a shared heap and thread-local storage; ACPI/RSDP/MADT/HPET discovery; the local APIC's timer calibrated against the PIT and carrying the 100 Hz tick; the I/O APIC routing the keyboard and pointer, which are now interrupt-driven; atomics and a spinlock under the kernel's critical section; IPI delivery, an interrupt-free boot clock, and the HPET with the TSC calibrated against it; AP start-up attempted twice and pulled, with the firmware's behaviour documented; high-resolution timers, so `SLEEP` is a deadline and `TIME` reports nanoseconds |
 | P2 | done, exit gates met | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; two ring-3 tasks round-robined by that tick with per-task kernel stacks and per-task address spaces; NX on heap and stack pages with SMEP/SMAP enabled where CPUID offers them; a table-driven LP64 syscall ABI with write/yield/brk behind it; PCI enumeration and an ATA PIO block driver whose read/write paths are self-tested; an HBFS reader and VFS front-end, with `/init` loaded from that disk and `exec`/`open`/`read`/`close` behind it; a 32-bit program running in compatibility mode beside the 64-bit tasks through an `INT 0x80` bridge, with one of the tree's own flat binaries loaded unchanged at its `0x00300000` program base; directories and file metadata (`seek`/`stat`/`readdir`/`chdir`/`getcwd`) over a per-task working directory; a writable HBFS (`create`/`mkdir`/`unlink` over the allocation bitmap, plus writes through an open handle, so a file can be appended to) whose output the host test reads back out of the image; console input over COM1 with a line-based shell (`ls`/`cat`/`date`/`mkdir`/`rm`/`quit`) that the host test types at; a CMOS clock; a user-space heap, whole-file load and pipes, with `exec` passing a command line on to `getargs`; a VGA text console with real colour, cursor and clear calls; a PS/2 keyboard whose input the test types with real scancodes; a PS/2 pointer polled from the timer tick, with a `/mouse` cursor demo the test drives through real packets; fork/exec/waitpid, so the shell can run programs and report their exit codes; children that fault are retired instead of stopping the machine; kill and background spawn; an e1000 network driver with ARP and ICMP echo on top of it, so a ring-3 program can ping; the PC speaker behind `BEEP`; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
@@ -501,8 +501,23 @@ driver.
   each writing and reading `fs:[0]` in the middle of the other's run: `tls: main read 1111
   thread read 2222`. A `wrmsr` per switch is a hundred cycles; FSGSBASE would make it a
   register write, and is the optimisation not the milestone.
+- [x] High-resolution timers. The APIC timer stopped being a metronome and became a
+  one-shot device, so a deadline is an instant on the HPET and not a count of ticks
+  (`boot/lm_timer.c`). Sixty-four deadlines sit in a queue that is scanned on every timer
+  interrupt; the one-shot is then armed for whichever is nearer, the next deadline or the
+  next tick, so the 100 Hz tick survives at no extra cost. `SLEEP` parks the task against a
+  deadline and a callback wakes it, `TIME` (47) hands ring 3 the same free-running counter
+  in nanoseconds, and a wake-up now asks the scheduler for a switch at once instead of
+  waiting for the next tick - without that the timer's accuracy was wasted on a scheduler
+  that still thought in ten-millisecond steps. The boot self-test arms 1, 2, 4 and 8 ms
+  deadlines and checks that the lateness does not grow with the interval; `/hrt` asks for
+  two hundred one-millisecond sleeps and reports the total, the worst one and how many
+  overran: `hrt: deadlines, not ticks` in about a quarter of the time a tick would take.
+  Two things stay as they were, deliberately: a task inside a syscall is not switched out
+  (that is preemption, and the next line), so a wake can wait for the tick when the running
+  task is in the kernel; and a machine with no APIC timer still runs on the 8259's tick.
 - [ ] Per-CPU run queues, IPIs, TLB shootdown, preemptible kernel, lockdep-style lock
-  validation, high-resolution timers.
+  validation.
 
 #### AP start-up: what was tried, and what it taught
 

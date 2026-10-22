@@ -40,6 +40,7 @@
 static volatile u32 *lapic;
 static u32 apic_id;
 static u32 apic_version;
+static u32 calibrated;              /* APIC timer ticks per scheduling tick */
 
 static u32 lapic_read(u32 offset)
 {
@@ -188,6 +189,33 @@ int lapic_selftest(void)
 /* How many APIC ticks pass in one PIT tick (10 ms at 100 Hz). Zero if the
  * machine would not answer. The interval comes from the PIT's spare channel,
  * which is the one clock at boot that does not need interrupts. */
+/* How many APIC timer ticks pass in one millisecond. The calibration below
+ * counts a whole scheduling tick (10 ms) because that interval is long enough for
+ * the count to be accurate; dividing it is what turns the number into the unit a
+ * one-shot deadline is expressed in. */
+u32 lapic_ticks_per_ms(void)
+{
+    u32 per_ms = calibrated / (1000 / LM_TIMER_HZ);
+    return per_ms != 0 ? per_ms : 1;
+}
+
+/* Arm the timer for one shot: it counts down from `ticks` and then interrupts
+ * once. This is what makes a deadline possible - a periodic timer can only say
+ * "ten milliseconds have gone by", while a one-shot says "wake me at this
+ * instant", which is the whole point of a high-resolution timer. A zero count is
+ * turned into one so that "as soon as possible" still arrives. */
+void lapic_timer_arm_once(u32 ticks)
+{
+    if (lapic == NULL) {
+        return;
+    }
+    if (ticks == 0) {
+        ticks = 1;
+    }
+    lapic_write(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR);    /* one shot, unmasked */
+    lapic_write(LAPIC_TIMER_INIT, ticks);
+}
+
 static u32 measure_per_tick(void)
 {
     lapic_write(LAPIC_TIMER_DIVIDE, 0);         /* divide by two */
@@ -212,13 +240,16 @@ int lapic_timer_start(void)
         return -1;
     }
 
+    calibrated = per_tick;
+
     /* The unit has to be on for its timer to run, and the spurious vector has to
      * point at a gate that exists - a spurious interrupt is not acknowledged, so
-     * it must simply return. */
+     * it must simply return. The timer itself is left stopped: from here on it is
+     * a one-shot device, armed by the timer queue for the next event that needs
+     * one, which may be a deadline or merely the next scheduling tick. */
     lapic_write(LAPIC_TPR, 0);
-    lapic_write(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | TIMER_PERIODIC);
     lapic_write(LAPIC_TIMER_DIVIDE, 0);
-    lapic_write(LAPIC_TIMER_INIT, per_tick);
+    lapic_write(LAPIC_LVT_TIMER, LVT_MASKED);
     lapic_write(LAPIC_SPURIOUS, SPURIOUS_ENABLE | LAPIC_SPURIOUS_VECTOR);
 
     /* The 8259 has had it: the PIT keeps counting into a masked controller. */
@@ -230,6 +261,7 @@ int lapic_timer_start(void)
     kput_dec(LAPIC_TIMER_VECTOR);
     kputs(" hz=");
     kput_dec(LM_TIMER_HZ);
-    kputs(" tick=lapic\r\n");
+    kputs(" tick=lapic");
+    kputs(" mode=oneshot\r\n");
     return 0;
 }

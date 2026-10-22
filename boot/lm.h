@@ -362,6 +362,7 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 #define SYS_FUTEX_WAKE  45
 /* SET_TLS takes the address of this task's thread-local block, or 0. */
 #define SYS_SET_TLS     46
+#define SYS_TIME        47      /* nanoseconds on the free-running counter */
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -609,6 +610,34 @@ int lapic_send_ipi(u32 dest, u32 mode, u8 vector);
 /* Calibrate the APIC timer against the PIT's spare channel and start it at
  * LM_TIMER_HZ, delivering LAPIC_TIMER_VECTOR. 0 on success. */
 int lapic_timer_start(void);
+/* APIC timer ticks in one millisecond, from the calibration above. */
+u32 lapic_ticks_per_ms(void);
+/* Arm it for a single interrupt `ticks` from now, replacing whatever it was set
+ * for: from the timer queue on, the timer is a one-shot device and the tick is
+ * just its most frequent customer. */
+void lapic_timer_arm_once(u32 ticks);
+
+/*---------------------------------------
+ * High-resolution timers. A deadline queue in nanoseconds on the HPET (or the
+ * TSC when there is no HPET), delivered by the APIC's one-shot timer. The tick
+ * stays at LM_TIMER_HZ, and the one-shot is armed for whichever is nearer: the
+ * next deadline, or the next tick.
+ *---------------------------------------*/
+#define TIMER_MAX_SLOTS 64
+
+int timer_init(void);
+int timer_selftest(void);
+/* Arm `fn(arg)` `ns` from now; a slot number, or -1 when the queue is full. */
+int timer_add_ns(u64 ns, void (*fn)(void *), void *arg);
+int timer_add_ms(u64 ms, void (*fn)(void *), void *arg);
+int timer_cancel(int slot);
+int timer_pending(void);
+u64 timer_now_ns(void);
+/* Called from the timer interrupt: runs what has expired and reports whether a
+ * scheduling tick came due with it. */
+int timer_service(void);
+/* Arm the one-shot for the next event. Must precede any task switch. */
+void timer_rearm(void);
 
 /* The I/O APIC: every line masked, then routed one at a time to a vector on a
  * CPU. `gsi` is the machine's interrupt line number, which for the legacy ISA
@@ -737,6 +766,21 @@ void sched_note_syscall(void);
 void sched_lock(void);
 void sched_unlock(void);
 int sched_locked(void);
+
+/* Park the running task with nothing to wait on but a wake-up from somewhere
+ * else - a timer, typically. The caller's frame is saved, so the task resumes by
+ * returning from the syscall it is inside; if nothing else can run it is not
+ * parked at all and the same frame comes back. */
+struct lm_fault_frame *sched_park(struct lm_fault_frame *frame);
+
+/* Make a parked task runnable again. Safe from an interrupt handler, which is
+ * where a timer wake-up comes from; 1 if it was blocked and now is not. */
+int sched_wake_task(u64 id);
+
+/* Did a wake-up happen since this was last asked? The interrupt return path uses
+ * it to switch to the task that was woken instead of letting the running one
+ * finish a quantum it no longer deserves. */
+int sched_need_resched(void);
 
 /* Timer tick: round-robin, returning the frame of the task to run next. */
 struct lm_fault_frame *sched_tick(struct lm_fault_frame *frame);

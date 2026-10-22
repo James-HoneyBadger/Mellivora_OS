@@ -73,6 +73,7 @@ struct lm_task {
 static struct lm_task tasks[MAX_TASKS];
 static int task_count;
 static struct lm_task *current;
+static int need_resched;            /* a wake-up asked for a reschedule */
 static u64 switches;
 static int stack_cache = -1;
 
@@ -344,10 +345,73 @@ int sched_wake(u64 address, int count)
         futex_waiters[i].address = 0;
         if (id < (u64)task_count && tasks[id].state == TASK_BLOCKED) {
             tasks[id].state = TASK_READY;
+            need_resched = 1;
             woken++;
         }
     }
     return woken;
+}
+
+/*
+ * Park the running task until somebody else makes it runnable. This is the piece
+ * a sleep needs and a futex does not: there is no word to wait on, only a promise
+ * that a timer will call sched_wake_task() later. The frame saved is the caller's
+ * ring-3 one, so the task resumes by returning from the syscall it is inside.
+ *
+ * If nothing else can run the task keeps the CPU: parking the only runnable task
+ * is a machine that stops. The caller is told that by getting its own frame back
+ * and is expected to do the waiting itself.
+ */
+struct lm_fault_frame *sched_park(struct lm_fault_frame *f)
+{
+    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+        return f;
+    }
+
+    struct lm_task *next = pick_next();
+    if (next == NULL) {
+        return f;
+    }
+
+    current->rsp = (u64)(unsigned long)f;
+    current->state = TASK_BLOCKED;
+    become(next);
+    return (struct lm_fault_frame *)(unsigned long)next->rsp;
+}
+
+/* A wake-up from a timer interrupt: the task was parked, and is now ready to be
+ * picked. The lock is taken here because the caller is an interrupt handler and
+ * has no idea what the interrupted code was holding. */
+int sched_wake_task(u64 id)
+{
+    if (id == 0 || id >= (u64)task_count) {
+        return 0;
+    }
+
+    sched_lock();
+    int woken = 0;
+    if (tasks[id].state == TASK_BLOCKED) {
+        tasks[id].state = TASK_READY;
+        woken = 1;
+        need_resched = 1;
+    }
+    sched_unlock();
+    return woken;
+}
+
+/*
+ * A wake-up happened during an interrupt: the running task should be asked to
+ * step aside rather than being allowed to finish its quantum. Without this a
+ * sleeper that is woken one millisecond into its wait would not run until the
+ * next tick - the accuracy of the timer would be wasted on a scheduler that
+ * still thought in ten-millisecond steps, and a task that asked to sleep for a
+ * millisecond would observe fifteen.
+ */
+int sched_need_resched(void)
+{
+    int pending = need_resched;
+    need_resched = 0;
+    return pending;
 }
 
 struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
@@ -544,6 +608,7 @@ static void sched_report(void)
     kputs(" source=");
     kputs(from_apic ? "lapic" : "pit+mixed");
     kputs("\r\n");
+
     kputs(timer_ok ? "[timer] timer=ok\r\n"
                    : "[timer] FAIL timer never reached ring 3\r\n");
 
