@@ -581,6 +581,21 @@ at (EIP `0xfd0b1`, i.e. file offset `0x3d0b1`), is
     0xfd0b4:  66 b8 80 da 00 00   mov ax, 0xda80
     0xfd0ba:  8e d8     mov ds, ax
 
+and the instructions immediately *after* the loop are the wake path:
+
+    0xfd0b2:  fa fc                 cli; cld
+    0xfd0b4:  66 b8 80 da 00 00     mov ax, 0xda80
+    0xfd0ba:  8e d8                 mov ds, ax
+    0xfd0bc:  8e d0                 mov ss, ax
+    0xfd0be:  66 bc 18 fa 00 00     mov sp, 0xfa18
+    0xfd0c4:  e9 99 f9              jmp 0xfca61
+
+which is a resumption stub, not the next function: it builds a segment pair and a small stack
+in segment 0xda80 and hands over to the firmware's 16-bit region at 0xfca61. A `hlt` loop
+followed by a ready-made resumption frame is the classic shape of "parked, wake me and point
+me here" - the waker is an interrupt whose handler rewrites the stacked return address, which
+is exactly the mechanism the earlier attempts could not reach with INIT/SIPI.
+
 So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
 firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
 wait-for-SIPI. It also says what the right tool is. The AP will leave `hlt` on an *interrupt*,
