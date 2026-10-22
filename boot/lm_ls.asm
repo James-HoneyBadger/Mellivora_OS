@@ -187,6 +187,11 @@ list_dir:
         mov rdx, STAT_BUF
         mov eax, SYS_READDIR
         syscall
+        ; 1 is an entry, 0 is a slot whose file has been deleted, -1 is the end of
+        ; the directory. A listing skips the holes: readdir reports slots - /wr
+        ; depends on that - and it is the caller that wanted entries.
+        cmp rax, 0
+        je .skip
         cmp rax, 1
         jne .done
 
@@ -214,6 +219,7 @@ list_dir:
         ; invisible while the root held fewer than sixteen entries and then quietly
         ; hid every one after that, including the `docs` directory the test suite
         ; lists for.
+.skip:
         inc r14
         jmp .loop
 .done:

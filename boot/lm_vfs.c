@@ -226,32 +226,16 @@ int vfs_readdir(const char *path, u32 index, struct vfs_stat *out)
     if (dir.type != HBFS_FTYPE_DIR) {
         return -1;
     }
-    /*
-     * `index` counts the entries a caller has been given, not the slots in the
-     * directory. A slot whose type is FREE is a file that was deleted, and treating
-     * one as the end of the listing hides every entry after it - which is exactly
-     * what happened the first time this suite deleted a file and then listed the
-     * directory again.
-     */
-    u32 slot = 0;
-    for (u32 ordinal = 0;; slot++) {
-        struct hbfs_entry entry;
-        int got = hbfs_readdir(&dir, slot, &entry, out->name, sizeof(out->name));
-        if (got < 0) {
-            return -1;              /* the end of the directory */
-        }
-        if (got == 0) {
-            continue;               /* deleted: not one of the entries */
-        }
-        if (ordinal == index) {
-            out->type = entry.type;
-            out->size = entry.size;
-            out->blocks = entry.blocks;
-            out->start = entry.start;
-            return 1;
-        }
-        ordinal++;
+    struct hbfs_entry entry;
+    int got = hbfs_readdir(&dir, index, &entry, out->name, sizeof(out->name));
+    if (got < 0) {
+        return -1;
     }
+    out->type = entry.type;
+    out->size = entry.size;
+    out->blocks = entry.blocks;
+    out->start = entry.start;
+    return got;
 }
 
 int vfs_chdir(const char *path)

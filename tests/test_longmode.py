@@ -275,7 +275,10 @@ def boot_and_capture(qemu, image, mem_mb, want, script=()):
                 break
             if proc.poll() is not None:
                 break
-            time.sleep(0.3)
+            # Drain the console promptly rather than every third of a second: the
+            # emulated UART is a socket on the other side of a process boundary,
+            # and a peer that reads in bursts is a peer that can be written past.
+            time.sleep(0.05)
     finally:
         proc.terminate()
         try:

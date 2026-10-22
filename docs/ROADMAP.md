@@ -733,17 +733,21 @@ suite lists for, which is how it was finally noticed: a required line disappeari
 in three as the image grew.
 
 Two fixes came out of it. The cap is gone, because `readdir` is what says when there is nothing
-left to read. And `vfs_readdir` now skips slots whose type is FREE: `index` counts the entries a
-caller has been given, not the raw slots in the directory, so a file that was deleted no longer
-reads as the end of the listing. Both are the kind of bug that only a program with more than
+left to read. And the listing skips slots whose type is FREE, so a file that was deleted no
+longer reads as the end of the listing - but that skip belongs in the *caller*, and the first
+attempt put it in `vfs_readdir`, where it broke the write demo, which asks for slot 0 of a
+directory and expects an entry. `readdir` reports slots and always has; only a caller that
+wanted a listing skips the holes. Both are the kind of bug that only a program with more than
 sixteen files can find, which is worth remembering when the next limit is written.
 
-The suite also retries a boot once when a single required line is missing, and says so loudly
-when it does - a flake that is retried silently is a flake that is hidden. It fired on one run
-in three while this was being investigated, with a *different* line each time (a boot selftest
-line, then a program's output), so there is a second, unrelated cause of lost console output
-still to find: the writer waits for the transmitter, so the loss is either in the emulated UART
-or in the harness's socket read.
+The suite retries a boot once when a single required line is missing, and says so loudly when
+it does - a flake retried silently is a flake hidden. It is not enough. Under the retry the
+missing set is *different every time*: a boot self-test line (` hpet=ok`), a program's output
+(`write path ok`, now explained and fixed), the timer selftest's, and once `/hrt` reporting
+`these are ticks, not deadlines` - which is not a lost line at all but a deadline queue that
+behaved as if it were a tick. That last one is the important one: it means the intermittent
+fault is not confined to the console path, and until it is found no single failing run can be
+told from a regression. It is the top of the list.
 
 **Exit:** near-linear scaling on a parallel workload; 24 h SMP stress with no lost
 wakeups.
