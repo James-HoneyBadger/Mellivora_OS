@@ -99,6 +99,7 @@ static int need_resched;            /* a wake-up asked for a reschedule */
 static u64 switches;
 static u64 wait_blocks;             /* parents that parked for a child */
 static u64 wait_wakes;              /* ... and were woken because it stopped */
+
 static int stack_cache = -1;
 
 /*
@@ -310,6 +311,27 @@ void sched_start(void)
  * the lock is for: a filesystem update keeps a task on the CPU until it is done.
  */
 /*
+ * May this frame be switched away from? Ring 3 always; a frame in the kernel,
+ * never - and the reason is the GS base rather than the frame itself.
+ *
+ * A frame says what ring it returns to, so both stubs can swap the GS base only
+ * when they are going back to ring 3 (which they now do). What is *not* settled is
+ * when a task's own kernel side may be suspended: a syscall's C stack cannot be
+ * resumed by anyone, and an interrupt frame inside the kernel can - but then the
+ * task is resumed by whatever path is running, which may be another task's syscall
+ * epilogue, and the two have to agree about the GS base and about who else might
+ * have been mid-update. That agreement is the work of making the kernel
+ * preemptible, and the experiment that tried it here (a thread holding a note in a
+ * syscall while another thread ran) showed it is not a one-line change: with the
+ * epilogue made ring-aware the machine booted, took eight ring-0 switches, and the
+ * second thread still observed only one slice in four hundred milliseconds.
+ */
+static int may_preempt(const struct lm_fault_frame *f)
+{
+    return (f->cs & 3) == 3;
+}
+
+/*
  * A futex wait that actually waits. The task is marked BLOCKED, recorded against
  * the word and switched away from - and because the frame being switched away
  * from is the *caller's* ring-3 frame, the switch is allowed (the ring-0 refusal
@@ -322,7 +344,7 @@ void sched_start(void)
  */
 struct lm_fault_frame *sched_block(struct lm_fault_frame *f, u64 address)
 {
-    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+    if (current == NULL || sched_locked() || !may_preempt(f)) {
         f->rax = (u64)-1;
         return f;
     }
@@ -388,7 +410,7 @@ int sched_wake(u64 address, int count)
  */
 struct lm_fault_frame *sched_park(struct lm_fault_frame *f)
 {
-    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+    if (current == NULL || sched_locked() || !may_preempt(f)) {
         return f;
     }
 
@@ -447,7 +469,7 @@ int sched_need_resched(void)
  */
 struct lm_fault_frame *sched_park_for(struct lm_fault_frame *f, u64 child)
 {
-    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+    if (current == NULL || sched_locked() || !may_preempt(f)) {
         return f;
     }
 
@@ -490,7 +512,7 @@ struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
      * and the kernel is not reentrant. So a syscall that waits has to return to
      * its caller and be asked again - which is why getchar and waitpid answer
      * "nothing yet" instead of blocking. */
-    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+    if (current == NULL || sched_locked() || !may_preempt(f)) {
         return f;
     }
 
@@ -744,6 +766,7 @@ static void sched_report(void)
     kputs(" wakes=");
     kput_dec(wait_wakes);
     kputs(wait_blocks == wait_wakes ? " wait=ok\r\n" : " wait=FAIL\r\n");
+
 
     kputs("[ps2] irqs=");
     kput_dec(kbd_irqs());

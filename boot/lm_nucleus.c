@@ -258,7 +258,16 @@ __asm__(
     "    popq %rbx\n"
     "    popq %rax\n"
     "    addq $16, %rsp\n"          /* vector and error code */
+    /* The frame this returns to is not always the caller's: a tick can preempt a
+     * task inside a syscall, and the dispatcher may hand back the frame of another
+     * task that was interrupted in the kernel. So the GS swap is decided by the
+     * frame, exactly as the fault stub decides it - swapping unconditionally left
+     * the kernel running with the user's GS base, and the next `syscall` faulted
+     * in its own prologue at %gs:0x18. */
+    "    testb $3, 8(%rsp)\n"       /* CS of the frame we are returning to */
+    "    jz 3f\n"
     "    swapgs\n"                  /* GS base back to the caller's */
+    "3:\n"
     "    iretq\n"
     "2:\n"
     "    cli\n"
@@ -305,6 +314,13 @@ static u64 syscall_roundtrip(void)
                      : "a"(nr), "D"(arg)
                      : "rcx", "r11", "rsi", "rdx", "rbx", "r8", "r9", "r10",
                        "memory");
+
+    /* The entry stub swaps the GS base unconditionally, because SYSCALL cannot
+     * tell it the caller's ring; the exit swaps back only when the frame it
+     * returns to is a ring-3 one, because it can be another task's frame. This
+     * call came from ring 0, so the swap the entry made is undone by the caller
+     * that knows it made it. */
+    __asm__ volatile("swapgs" ::: "memory");
 
     struct lm_cpu *cpu = cpu_this();
 

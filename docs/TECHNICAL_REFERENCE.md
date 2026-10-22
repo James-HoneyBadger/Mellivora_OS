@@ -2565,6 +2565,24 @@ now owned by the lowest-numbered live task in the space rather than kept per tas
 pointers over the same memory hand out the same block twice, which looks exactly like a
 correct program corrupting itself.
 
+### Who owns the GS base
+
+The per-CPU block is reached through `%gs`, and the user's GS base is something else
+entirely, so every crossing between the two has to swap them exactly once. The fault stub
+asks the frame which ring it is returning to and swaps only for ring 3; the SYSCALL stub used
+to swap unconditionally, on the reasoning that a syscall always comes from ring 3 - which is
+true of every syscall the system makes, but not of the boot self-test, which makes one from
+ring 0 to prove the entry path works. Both stubs now decide by the frame, and a syscall made
+from the kernel undoes the swap its entry made, because the caller is the only one that knows
+it came from there.
+
+That matters before anything else tries to switch tasks from inside the kernel. The frame an
+exit stub returns is not necessarily the frame of the task that entered it: `SYS_YIELD` hands
+back another task's frame, and once the kernel itself can be switched out at an interrupt,
+that frame can be a ring-0 one. An exit that swapped unconditionally would leave the kernel
+running with the user's GS base, and the next `syscall` - whose first instruction assumes the
+base it has to swap from - would fault on `%gs:0x18` before it reached a single line of C.
+
 ### Waiting, and what to do when nothing can run
 
 A parent that waits for a child is waiting for an event, so it should not be asked again

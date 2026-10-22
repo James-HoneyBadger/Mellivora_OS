@@ -535,7 +535,16 @@ driver.
   interrupt makes something runnable, and only reports when every task is gone. `[wait]
   blocks=N wakes=N wait=ok`, and the two counts are the whole invariant: a wait answered by
   nothing and a wake with nothing to wake are the same bug.
-- [ ] Per-CPU run queues, IPIs, TLB shootdown, preemptible kernel.
+- [ ] Per-CPU run queues, IPIs, TLB shootdown, preemptible kernel. The kernel half was
+  attempted and pulled, and the attempt is worth more than the code was: both exit stubs now
+  decide the GS-base swap from the frame they are returning to (see the reference), because a
+  frame handed back by a syscall need not be the caller's. With that in place a thread holding
+  a 400 ms note inside a syscall could be switched out and the machine stayed up - eight
+  ring-0 switches - but the other thread still saw only one slice in four hundred
+  milliseconds, so the switches were not being taken where they were expected to be. That
+  count is the thing to chase next: `pick_next` found nothing runnable on twenty of the ticks
+  that interrupted the kernel, which means the waiting task was not in the state the
+  experiment assumed.
 
 #### AP start-up: what was tried, and what it taught
 
