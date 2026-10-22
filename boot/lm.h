@@ -225,6 +225,12 @@ int kmem_selftest(void);
  * spurious-interrupt vector it falls back to. */
 #define LAPIC_TIMER_VECTOR    64
 #define LAPIC_SPURIOUS_VECTOR 255
+
+/* The most processors this port will start, and the two delivery modes a
+ * start-up needs: INIT wakes one up into real mode, STARTUP tells it where. */
+#define LM_MAX_CPUS 8
+#define LAPIC_IPI_INIT    5
+#define LAPIC_IPI_STARTUP 6
 #define LM_TIMER_HZ  100
 
 /* Remap the PIC, start the PIT and unmask IRQ0. Interrupts stay off in the
@@ -582,6 +588,10 @@ u32 lapic_id(void);
 /* Acknowledge the interrupt just taken: a write to the local APIC's EOI. */
 void lapic_eoi(void);
 
+/* Send an inter-processor interrupt to `dest`: LAPIC_IPI_INIT or
+ * LAPIC_IPI_STARTUP with a vector, which for STARTUP is a page number. */
+int lapic_send_ipi(u32 dest, u32 mode, u8 vector);
+
 /* Calibrate the APIC timer against the PIT's spare channel and start it at
  * LM_TIMER_HZ, delivering LAPIC_TIMER_VECTOR. 0 on success. */
 int lapic_timer_start(void);
@@ -601,6 +611,10 @@ struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f);
  * would be a second clock with a different phase. */
 void pic_mask_all(void);
 
+/* Wait `ms` milliseconds on the PIT's spare channel, with interrupts as they are.
+ * The clock the rest of the boot uses for its delays. */
+void pit_delay_ms(u32 ms);
+
 /* Tell the interrupt layer that lines now arrive through the I/O APIC, whose
  * acknowledge is the local APIC's EOI register and not the 8259's two ports. */
 void irq_use_ioapic(void);
@@ -618,6 +632,8 @@ int acpi_init(void);
 u64 acpi_lapic_address(void);
 u32 acpi_cpu_count(void);
 u32 acpi_ioapic_address(void);
+/* The APIC id of the processor the MADT listed at `index`; 0xFFFFFFFF if none. */
+u32 acpi_apic_id(u32 index);
 
 /*---------------------------------------
  * The PC speaker: the 8254's channel 2 through the gate in port 0x61. The only

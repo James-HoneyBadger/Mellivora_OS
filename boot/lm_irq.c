@@ -32,6 +32,13 @@ static void outb(u16 port, u8 value)
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
+static u8 inb(u16 port)
+{
+    u8 value;
+    __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
 void irq_use_ioapic(void)
 {
     via_ioapic = 1;
@@ -134,6 +141,40 @@ struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f)
     lapic_eoi();
     tick_account(f, 1);
     return sched_tick(f);
+}
+
+/*
+ * A delay that does not need interrupts: the PIT's channel 2 is a counter nothing
+ * else in this port uses, its output is visible as bit 5 of port 0x61, and one
+ * shot of it is an accurate interval. Everything at boot that has to wait - the
+ * APIC's calibration, the pause between an INIT and its SIPI - waits on this,
+ * because at boot there are no ticks to wait for yet.
+ */
+void pit_delay_ms(u32 ms)
+{
+    u8 gate = (u8)(inb(0x61) & ~0x02);          /* the speaker stays silent */
+
+    while (ms > 0) {
+        u32 chunk = ms > 50 ? 50 : ms;          /* 50 ms is under the 16-bit limit */
+        u32 divisor = (PIT_HZ / 1000u) * chunk;
+        if (divisor > 0xFFFF) {
+            divisor = 0xFFFF;
+        }
+
+        /* Channel 2, mode 0 (interrupt on terminal count), LSB then MSB. */
+        outb(0x43, 0xB0);
+        outb(0x42, (u8)(divisor & 0xFF));
+        outb(0x42, (u8)(divisor >> 8));
+        outb(0x61, (u8)(gate | 0x01));          /* gate on: it starts counting */
+
+        for (u32 spin = 0; spin < 200000000u; spin++) {
+            if ((inb(0x61) & 0x20) != 0) {      /* its output went high */
+                break;
+            }
+        }
+        outb(0x61, gate);
+        ms -= chunk;
+    }
 }
 
 /* Every line masked: the PIT keeps counting but nothing it says is delivered. */

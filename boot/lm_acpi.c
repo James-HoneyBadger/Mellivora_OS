@@ -36,6 +36,7 @@ struct acpi_info {
     u32 ioapic_address;
     u32 ioapic_gsi;
     u32 cpu_count;          /* local APICs that say they are enabled */
+    u32 apic_ids[LM_MAX_CPUS];
     u32 iso_count;
 };
 
@@ -120,6 +121,9 @@ static void scan_table(u64 address)
              * and the flags say whether this one is actually usable. */
             u32 flags = *(const u32 *)(table + offset + 4);
             if ((flags & 0x01) != 0) {
+                if (info.cpu_count < LM_MAX_CPUS) {
+                    info.apic_ids[info.cpu_count] = table[offset + 3];
+                }
                 info.cpu_count++;
             }
             break;
@@ -222,6 +226,14 @@ u64 acpi_lapic_address(void)
 u32 acpi_cpu_count(void)
 {
     return info.cpu_count;
+}
+
+u32 acpi_apic_id(u32 index)
+{
+    if (index >= info.cpu_count || index >= LM_MAX_CPUS) {
+        return 0xFFFFFFFFu;
+    }
+    return info.apic_ids[index];
 }
 
 u32 acpi_ioapic_address(void)

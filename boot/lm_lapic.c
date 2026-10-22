@@ -29,6 +29,8 @@
 #define LAPIC_TIMER_INIT    0x380
 #define LAPIC_TIMER_CURRENT 0x390
 #define LAPIC_TIMER_DIVIDE  0x3E0
+#define LAPIC_ICR_LOW       0x300
+#define LAPIC_ICR_HIGH      0x310
 
 #define SPURIOUS_ENABLE     (1u << 8)
 #define LVT_MASKED          (1u << 16)
@@ -48,6 +50,33 @@ static void lapic_write(u32 offset, u32 value)
 {
     lapic[offset / 4] = value;
     (void)lapic_read(LAPIC_ID);         /* make the store land before the next */
+}
+
+/*
+ * An inter-processor interrupt: the destination in the low register's top byte,
+ * the delivery mode in bits 8-10, and for a start-up the page number in bits 0-7.
+ * Delivery has to finish before the next one is sent, which is what bit 12 says.
+ */
+int lapic_send_ipi(u32 dest, u32 mode, u8 vector)
+{
+    if (lapic == NULL) {
+        return -1;
+    }
+
+    u32 command = ((u32)mode << 8) | (u32)vector | ((dest & 0xFF) << 24);
+    if (mode == LAPIC_IPI_INIT) {
+        command |= (1u << 14);              /* level: assert */
+    }
+
+    lapic_write(LAPIC_ICR_HIGH, 0);
+    lapic_write(LAPIC_ICR_LOW, command);
+    for (int spin = 0; spin < 1000000; spin++) {
+        if ((lapic_read(LAPIC_ICR_LOW) & (1u << 12)) == 0) {   /* delivered */
+            return 0;
+        }
+        __asm__ volatile("pause");
+    }
+    return -1;
 }
 
 int lapic_init(void)
@@ -153,46 +182,19 @@ int lapic_selftest(void)
  * falls out of the arithmetic.
  *---------------------------------------*/
 
-static void outb_port(u16 port, u8 value)
-{
-    __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static u8 inb_port(u16 port)
-{
-    u8 value;
-    __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-
 /* How many APIC ticks pass in one PIT tick (10 ms at 100 Hz). Zero if the
- * machine would not answer. */
+ * machine would not answer. The interval comes from the PIT's spare channel,
+ * which is the one clock at boot that does not need interrupts. */
 static u32 measure_per_tick(void)
 {
-    /* Channel 2, mode 0 (interrupt on terminal count), LSB then MSB. */
-    u32 divisor = 1193182u / LM_TIMER_HZ;
-    outb_port(0x43, 0xB0);
-    outb_port(0x42, (u8)(divisor & 0xFF));
-    outb_port(0x42, (u8)(divisor >> 8));
-
-    /* The gate is bit 0; starting the counter with the gate held low would leave
-     * it waiting. Bit 1 stays clear so the speaker does not click. */
-    outb_port(0x61, (u8)((inb_port(0x61) & ~0x02) | 0x01));
-
     lapic_write(LAPIC_TIMER_DIVIDE, 0);         /* divide by two */
     lapic_write(LAPIC_TIMER_INIT, 0xFFFFFFFFu);
 
-    u32 elapsed = 0;
-    for (int spin = 0; spin < 100000000; spin++) {
-        if ((inb_port(0x61) & 0x20) != 0) {     /* channel 2's output went high */
-            u32 left = lapic_read(LAPIC_TIMER_CURRENT);
-            elapsed = 0xFFFFFFFFu - left;
-            break;
-        }
-    }
+    pit_delay_ms(1000 / LM_TIMER_HZ);
+
+    u32 left = lapic_read(LAPIC_TIMER_CURRENT);
     lapic_write(LAPIC_TIMER_INIT, 0);
-    outb_port(0x61, (u8)(inb_port(0x61) & ~0x01));
-    return elapsed;
+    return 0xFFFFFFFFu - left;
 }
 
 int lapic_timer_start(void)

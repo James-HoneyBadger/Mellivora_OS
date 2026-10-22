@@ -2539,6 +2539,20 @@ self-test can only prove what a single CPU can observe - that the instructions d
 they say, that a failed compare-and-swap does not write, that trylock refuses a lock it
 already holds, and that the interrupt flag survives a section exactly - and says so.
 
+### Waiting during the boot
+
+Before there are ticks there is nothing to wait on, so a boot-time delay has to make its
+own clock. The PIT's second channel is that clock: it is a counter nothing else in this
+port uses, its gate and its output are both visible in port 0x61 (bit 0 in, bit 5 out),
+and one shot of it is an accurate interval. `pit_delay_ms` is the whole of it, and it is
+what the APIC timer's calibration measures against, what spaces an INIT from its SIPI,
+and what the AP start-up waits with.
+
+The alternative in a hurry is a bounded spin, and it is worth knowing why that is wrong
+here: a loop that gives up after N polls of the serial port's transmit register looks
+like robustness and behaves like data loss, because the register stays busy exactly while
+the host is not draining the socket. A kernel's own log is the last thing it should drop.
+
 ### The I/O APIC, and why input wants an interrupt
 
 The I/O APIC is the other end of the path: 24 interrupt lines in, each forwarded to a

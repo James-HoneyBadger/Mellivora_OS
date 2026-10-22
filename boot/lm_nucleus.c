@@ -81,7 +81,10 @@ static void serial_init(void)
 void kputc(char c)
 {
     while ((inb(COM1 + 5) & 0x20) == 0) {
-        /* wait for the transmit register */
+        /* Wait for the transmit register. A bound here looks safer than it is:
+         * the register stays busy while the host is not draining the socket, so
+         * giving up after a fixed number of polls drops output exactly when the
+         * machine is talking fastest. Losing a log line is worse than waiting. */
     }
     outb(COM1, (u8)c);
     vga_putc(c);
