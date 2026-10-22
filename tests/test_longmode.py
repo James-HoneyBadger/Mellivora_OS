@@ -173,6 +173,11 @@ REQUIRED = (
     "threads: cloned tid=",
     "hello from the other thread",
     "sh: /threads exited 0x00000000",
+    # A thread parked in the kernel until another one hands it the news - a
+    # futex, not a spin.
+    "futex: sleeper tid=",
+    "futex: sleeper woke with flag=1 exit=0x00000003",
+    "sh: /futex exited 0x00000000",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
     # along with one environment entry.
@@ -498,6 +503,7 @@ def main():
         ("mellivora:/> ", "run /net"),
         ("mellivora:/> ", "run /beep"),
         ("mellivora:/> ", "run /threads"),
+        ("mellivora:/> ", "run /futex"),
         ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "spawn /spin"),
         ("mellivora:/> ", "date"),

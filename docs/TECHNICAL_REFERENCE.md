@@ -2559,10 +2559,28 @@ reaped - `space_users()` counts them, including the dead-but-not-collected - and
 before. A thread that exits leaves its stack and its memory for its siblings, which is
 exactly what a thread is.
 
-What is missing is everything that makes threads safe rather than merely possible: two
-threads that allocate at the same time race in the allocator, because there is nothing to
-block on. That is the futex milestone, and until it exists `/threads` only shares a buffer
-it writes before it exits.
+What was missing is everything that makes threads safe rather than merely possible: two
+threads that allocate at the same time race in the allocator, because there was nothing to
+block on.
+
+### A futex that really waits
+
+Every other waiting call in this kernel answers "nothing yet" and is asked again, because
+a syscall could not be switched away from - the frame it would leave has no RSP or SS.
+That reasoning applies to a frame taken from *ring 0*. A syscall taken from ring 3 leaves
+the user's own frame, and that one can be switched away from perfectly well. `FUTEX_WAIT`
+does exactly that: it marks the task `BLOCKED`, records it against the address and yields,
+and when something wakes it the task resumes by returning from the call it is inside with
+the answer already in RAX.
+
+The word is read *inside* the syscall rather than trusted from the caller. That is what
+closes the race every futex must close: if the caller checked the word, decided to wait,
+and the news arrived in between, the kernel sees the value has changed and returns at once
+instead of parking a task nobody will wake. Waking scans the waiter table for the address,
+up to the count asked for, and puts those tasks back on the run queue.
+
+If no other task can run, the waiter keeps the CPU and the call fails: a machine with one
+runnable task and one waiter has nothing to wait for, and parking it would hang the box.
 
 ### A clock the tick cannot be
 

@@ -29,8 +29,21 @@ enum {
     TASK_FREE = 0,
     TASK_READY,
     TASK_RUNNING,
+    TASK_BLOCKED,       /* waiting on a futex word, and not to be picked */
     TASK_DEAD,
 };
+
+/* Who is waiting on which word. A table rather than a list per word: sixteen
+ * tasks can wait on at most sixteen addresses, and a scan of sixteen entries is
+ * cheaper than the bookkeeping it would save. */
+#define FUTEX_SLOTS MAX_TASKS
+
+struct futex_waiter {
+    u64 address;        /* 0 when the slot is free */
+    u64 task;           /* the task id waiting on it */
+};
+
+static struct futex_waiter futex_waiters[FUTEX_SLOTS];
 
 struct lm_task {
     u64 id;
@@ -266,6 +279,72 @@ void sched_start(void)
  * The one place a switch must not happen is a critical section, and that is what
  * the lock is for: a filesystem update keeps a task on the CPU until it is done.
  */
+/*
+ * A futex wait that actually waits. The task is marked BLOCKED, recorded against
+ * the word and switched away from - and because the frame being switched away
+ * from is the *caller's* ring-3 frame, the switch is allowed (the ring-0 refusal
+ * only applies to a frame that has no RSP/SS). When the task is picked again it
+ * resumes by returning from the syscall it is inside, with the answer already in
+ * RAX, which is exactly what a waiter wants to see.
+ *
+ * If nothing else can run the task keeps the CPU: a machine with one runnable
+ * task and a waiter is a machine with nothing to wait for.
+ */
+struct lm_fault_frame *sched_block(struct lm_fault_frame *f, u64 address)
+{
+    if (current == NULL || sched_locked() || (f->cs & 3) != 3) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < FUTEX_SLOTS; i++) {
+        if (futex_waiters[i].address == 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        f->rax = (u64)-1;               /* too many waiters */
+        return f;
+    }
+
+    futex_waiters[slot].address = address;
+    futex_waiters[slot].task = current->id;
+
+    struct lm_task *next = pick_next();
+    if (next == NULL) {
+        futex_waiters[slot].address = 0;
+        f->rax = (u64)-1;               /* nobody else could run: do not park */
+        return f;
+    }
+
+    f->rax = 0;                         /* woken: the answer is "you are awake" */
+    current->rsp = (u64)(unsigned long)f;
+    current->state = TASK_BLOCKED;
+    become(next);
+    return (struct lm_fault_frame *)(unsigned long)next->rsp;
+}
+
+/* Wake up to `count` of them. Returns how many were woken. */
+int sched_wake(u64 address, int count)
+{
+    int woken = 0;
+
+    for (int i = 0; i < FUTEX_SLOTS && woken < count; i++) {
+        if (futex_waiters[i].address != address) {
+            continue;
+        }
+        u64 id = futex_waiters[i].task;
+        futex_waiters[i].address = 0;
+        if (id < (u64)task_count && tasks[id].state == TASK_BLOCKED) {
+            tasks[id].state = TASK_READY;
+            woken++;
+        }
+    }
+    return woken;
+}
+
 struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
 {
     /* Switching away from ring 0 is not allowed: the frame there has no RSP/SS
@@ -512,7 +591,8 @@ static int space_users(u64 space)
     for (int i = 0; i < task_count; i++) {
         u64 state = tasks[i].state;
         if (tasks[i].cr3 == space &&
-            (state == TASK_READY || state == TASK_RUNNING || state == TASK_DEAD)) {
+            (state == TASK_READY || state == TASK_RUNNING ||
+             state == TASK_BLOCKED || state == TASK_DEAD)) {
             users++;
         }
     }

@@ -355,6 +355,10 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 /* CLONE takes an entry point and a stack top in RDI/RSI, both in the caller's own
  * space, and returns the new thread's id. */
 #define SYS_CLONE       43
+/* FUTEX_WAIT takes the address and the value it expects in RDI/RSI; FUTEX_WAKE
+ * takes the address and a count. Both are on the caller's own memory. */
+#define SYS_FUTEX_WAIT  44
+#define SYS_FUTEX_WAKE  45
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -761,6 +765,10 @@ s64 sched_fork(struct lm_fault_frame *parent_frame);
 /* CLONE: a task in the caller's address space, entering ring 3 at `entry` on
  * `user_stack`. Returns the new task's id, or -1. */
 s64 sched_clone(u64 entry, u64 user_stack);
+/* Park the caller on `address` until somebody wakes it, and switch away; the
+ * frame comes back to life when it is picked again. */
+struct lm_fault_frame *sched_block(struct lm_fault_frame *f, u64 address);
+int sched_wake(u64 address, int count);
 /* WAITPID: 0 when the child has exited and been reaped (*code is its exit code),
  * 1 while it still runs, -1 if pid is not this task's child. Reaping frees the
  * slot, the kernel stack and the address space. */

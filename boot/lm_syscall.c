@@ -959,6 +959,45 @@ static struct lm_fault_frame *sys_clone(struct lm_fault_frame *f)
     return f;
 }
 
+/*
+ * futex_wait(address, expected) - sleep until the word changes, the one thing a
+ * thread needs that a syscall could not do before. The value is read *here*, so a
+ * wake that arrives between the caller's test and this call is still seen: if the
+ * word is not the expected value any more the call returns at once with -1.
+ */
+static struct lm_fault_frame *sys_futex_wait(struct lm_fault_frame *f)
+{
+    u64 address = f->rdi;
+    u64 expected = f->rsi;
+
+    if (!vmm_user_mapped(address) || (address & 0x3) != 0) {
+        f->rax = (u64)-1;
+        return f;
+    }
+
+    u64 value;
+    user_access_begin();
+    value = *(volatile const u64 *)(unsigned long)address;
+    user_access_end();
+    if (value != expected) {
+        f->rax = (u64)-1;               /* it already changed: nothing to wait for */
+        return f;
+    }
+
+    return sched_block(f, address);
+}
+
+/* futex_wake(address, count) - wake up to `count` of them. */
+static struct lm_fault_frame *sys_futex_wake(struct lm_fault_frame *f)
+{
+    int count = (int)f->rsi;
+    if (count <= 0) {
+        count = 1;
+    }
+    f->rax = (u64)(s64)sched_wake(f->rdi, count);
+    return f;
+}
+
 /* kill(pid, signal) - retire another task (see sched_kill). */
 static struct lm_fault_frame *sys_kill(struct lm_fault_frame *f)
 {
@@ -1084,6 +1123,8 @@ static const struct lm_syscall syscalls[] = {
     [41] = {"netping", sys_netping, 1},
     [42] = {"beep", sys_beep, 0},
     [43] = {"clone", sys_clone, 1},
+    [44] = {"futex_wait", sys_futex_wait, 1},
+    [45] = {"futex_wake", sys_futex_wake, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
