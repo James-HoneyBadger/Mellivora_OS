@@ -299,32 +299,20 @@ void sched_start(void)
     lm_enter_task(first->rsp);
 }
 
-/* Round-robin, or stay put when this is the only task. */
 /*
- * Preemption works from ring 0 as well as ring 3. It has to: a task inside a
- * blocking syscall - the shell waiting for a child, a program waiting for a key -
- * is in the kernel, and a tick that refused to switch there would starve every
- * other task for the whole wait. The frame is a ring-0 one (three trailing words
- * instead of five), which both entry stubs' epilogues handle unchanged.
+ * May this frame be switched away from? Ring 3, and only ring 3 - for now.
  *
- * The one place a switch must not happen is a critical section, and that is what
- * the lock is for: a filesystem update keeps a task on the CPU until it is done.
- */
-/*
- * May this frame be switched away from? Ring 3 always; a frame in the kernel,
- * never - and the reason is the GS base rather than the frame itself.
- *
- * A frame says what ring it returns to, so both stubs can swap the GS base only
- * when they are going back to ring 3 (which they now do). What is *not* settled is
- * when a task's own kernel side may be suspended: a syscall's C stack cannot be
- * resumed by anyone, and an interrupt frame inside the kernel can - but then the
- * task is resumed by whatever path is running, which may be another task's syscall
- * epilogue, and the two have to agree about the GS base and about who else might
- * have been mid-update. That agreement is the work of making the kernel
- * preemptible, and the experiment that tried it here (a thread holding a note in a
- * syscall while another thread ran) showed it is not a one-line change: with the
- * epilogue made ring-aware the machine booted, took eight ring-0 switches, and the
- * second thread still observed only one slice in four hundred milliseconds.
+ * The kernel half works and is not yet trustworthy. Allowing it takes one
+ * predicate: a frame says what it came from (vector zero for the SYSCALL stub,
+ * 0x80 for the compatibility bridge, a gate's own vector for an interrupt), and an
+ * interrupt frame in ring 0 is a complete save on that task's own kernel stack, so
+ * it can be left and resumed where a syscall's C stack cannot. Both exit stubs
+ * already decide the GS-base swap from the frame for that reason. With the
+ * predicate in place a task holding a note inside a syscall was switched out
+ * fifteen times while another program ran in ring 3, and the note still ended when
+ * it should - but one run in two then hung after the shell exited, which is a
+ * livelock that has not been found yet. A feature that fails one run in two is not
+ * a feature, so the predicate stays as it was until it is.
  */
 static int may_preempt(const struct lm_fault_frame *f)
 {
@@ -520,7 +508,6 @@ struct lm_fault_frame *sched_yield(struct lm_fault_frame *f)
     if (next == NULL || next == current) {
         return f;
     }
-
     current->rsp = (u64)(unsigned long)f;
     current->state = TASK_READY;
     become(next);
@@ -767,7 +754,9 @@ static void sched_report(void)
     kput_dec(wait_wakes);
     kputs(wait_blocks == wait_wakes ? " wait=ok\r\n" : " wait=FAIL\r\n");
 
-
+    /* Not a scheduler fact, but this is the one place that prints after every
+     * task: the input driver's interrupt count proves the I/O APIC's routing
+     * works, which polling would never show. */
     kputs("[ps2] irqs=");
     kput_dec(kbd_irqs());
     kputs("\r\n");
