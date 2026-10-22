@@ -190,6 +190,11 @@ REQUIRED = (
     "hrt: deadlines, not ticks",
     # The lock order checker: four planted violations found by the self-test, and
     # none from the kernel's own use of its lock.
+    # The tick is a deadline like any other now, so its rate is measured rather
+    # than assumed: ten ticks inside a tenth of a second, on the counter the
+    # deadlines are expressed in.
+    "[timer] tick=ok",
+    # The lock order checker: four planted violations found by the self-test, and
     "[lockdep] selftest=ok",
     "errors=0 lockdep=ok",
     # waitpid blocks: the shell parks on the child it is waiting for, the child's

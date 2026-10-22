@@ -252,6 +252,40 @@ int timer_init(void)
 }
 
 /*
+ * The tick used to be a device that ran by itself; it is a deadline like any other
+ * now, armed by the same queue that serves everything else, so "it still arrives at
+ * LM_TIMER_HZ" is a thing to check rather than assume. Measure a tenth of a second
+ * on the counter the deadlines are expressed in and count the ticks inside it: ten,
+ * give or take the one the interval boundary falls on.
+ */
+int tick_selftest(void)
+{
+    if (!timer_ready) {
+        kputs("[timer] tick=unavailable\r\n");
+        return -1;
+    }
+
+    u64 start = now_ns();
+    u64 before = cpu_this()->ticks;
+
+    while (now_ns() - start < 100000000ULL) {
+        __asm__ volatile("sti; hlt");
+    }
+
+    u64 ticks = cpu_this()->ticks - before;
+    __asm__ volatile("cli");
+
+    int ok = ticks >= LM_TIMER_HZ / 10 - 1 && ticks <= LM_TIMER_HZ / 10 + 1;
+    kputs(ok ? "[timer] tick=ok" : "[timer] tick=FAIL");
+    kputs(" measured=");
+    kput_dec(ticks);
+    kputs(" in=100ms hz=");
+    kput_dec(LM_TIMER_HZ);
+    kputs("\r\n");
+    return ok ? 0 : -1;
+}
+
+/*
  * The self-test arms four deadlines - 1, 2, 4 and 8 ms - and measures how late
  * each was delivered. The number that matters is that the lateness does not grow
  * with the interval: a deadline that arrives a hundredth of the way into a

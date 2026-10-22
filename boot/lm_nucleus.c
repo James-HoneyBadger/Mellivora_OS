@@ -499,6 +499,7 @@ void lm_main(void)
     timer_init();
     hpet_selftest();
     timer_selftest();
+    tick_selftest();
     if (ioapic_init() == 0) {
         /* The keyboard and the pointer are the two lines worth an interrupt:
          * everything else here is polled, and a byte that arrives between two

@@ -2674,7 +2674,13 @@ had already fired. The flag is not a preemption of the kernel - a frame in ring 
 refused, so a wake waits for the tick when the running task is inside a syscall - but it is
 the difference between a timer that is accurate and a task that observes accuracy.
 
-What the self-test measures is worth reading carefully. It arms 1, 2, 4 and 8 ms deadlines
+The tick is measured too, and it is the check that would have caught the refactor going
+wrong: it stopped being a device that runs by itself and became an entry in the queue, so
+"ten ticks in a tenth of a second" is now a fact to verify rather than a property of the
+hardware. A queue that always preferred a deadline to the tick would starve the scheduler
+silently, and every sleep would still look accurate while the round-robin quietly stopped.
+
+What the deadline self-test measures is worth reading carefully. It arms 1, 2, 4 and 8 ms deadlines
 and reports the worst lateness; the number that means something is that the lateness does
 not grow with the interval, which is what separates a device that delivers an instant from
 one that rounds to something. The absolute figure belongs to the machine - an emulated one

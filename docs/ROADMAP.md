@@ -515,7 +515,10 @@ driver.
   overran: `hrt: deadlines, not ticks` in about a quarter of the time a tick would take.
   Two things stay as they were, deliberately: a task inside a syscall is not switched out
   (that is preemption, and the next line), so a wake can wait for the tick when the running
-  task is in the kernel; and a machine with no APIC timer still runs on the 8259's tick.
+  task is in the kernel; and a machine with no APIC timer still runs on the 8259's tick. The
+  tick itself is now measured rather than assumed - ten ticks inside a tenth of a second,
+  counted on the same counter the deadlines use - because it stopped being a device that runs
+  by itself and became an entry in the queue.
 - [x] Lock-order validation (`boot/lm_lockdep.c`). Every lock is given a class when it is
   initialised, the classes it is held inside are recorded as a graph, and the first path
   that takes the pair the other way round is reported - which is a fact about the code and

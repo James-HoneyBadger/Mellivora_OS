@@ -658,6 +658,8 @@ void lapic_timer_arm_once(u32 ticks);
 
 int timer_init(void);
 int timer_selftest(void);
+/* The tick is a deadline too, so check it still arrives at LM_TIMER_HZ. */
+int tick_selftest(void);
 /* Arm `fn(arg)` `ns` from now; a slot number, or -1 when the queue is full. */
 int timer_add_ns(u64 ns, void (*fn)(void *), void *arg);
 int timer_add_ms(u64 ms, void (*fn)(void *), void *arg);
