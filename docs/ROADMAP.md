@@ -596,13 +596,42 @@ a boot path where the APs are still in wait-for-SIPI when we get control, or tak
 over with an interrupt whose handler redirects it, which needs a gate in an IDT the AP is
 actually using (the firmware's, not ours).
 
-The experiment that decides between the two, before any kernel code is written: boot the same
-image with `-smp 4` under QEMU and check, in the monitor, whether the other three cores end up in
-that same `hlt; jmp` loop (`info registers -a`, EIP `0xfd0b0`) or stay in wait-for-SIPI
-(`HALT=0`, no CS loaded). If they are in the firmware loop with an MBR boot, then the entry path
-is what has to change - a loader the firmware hands control to earlier, or a firmware option that
-leaves the APs alone - and that is a design decision rather than a patch. Half an hour of
-monitor work answers it, and it is the first thing to do next.
+The experiment has been run, and it settles the question. Booting the same image with
+`-smp 4` and asking the monitor for every CPU's state once the kernel is up:
+
+    CPU#0  RIP=ffffffff80109772  CPL=0 HLT=1        <- us, in the final cli/hlt
+    CPU#1  EIP=000fd0b1          CPL=0 HLT=1
+    CPU#2  EIP=000fd0b1          CPL=0 HLT=1
+    CPU#3  EIP=000fd0b1          CPL=0 HLT=1
+
+All three application processors are in the firmware's own halt loop - the `hlt; jmp` at
+0xfd0af - by the time our first MBR sector runs. So the first option on the list is not
+available at all: an MBR boot can never see an AP in wait-for-SIPI, because SeaBIOS has already
+done its own bring-up and parked them. There is nothing to "not let the firmware do".
+
+That leaves the second option, and it is specific now rather than vague. Those APs are in ring 0
+with paging off, executing 32-bit code against the firmware's GDT, and a `hlt` leaves on any
+delivered interrupt - so an I/O- or inter-processor interrupt with a vector whose IDT entry we
+control makes one of them run *our* code. The firmware's IDT is what it will use, so the work
+is:
+
+  1. find the firmware's IDTR base (it is in low memory; the gates it installed are
+     recognisable) and check the table is writable;
+  2. put a 32-bit entry stub below 1 MB - paging is off and the firmware's segments are flat,
+     so EIP is a physical address - that immediately loads its own ESP, GDT, PAE, CR3 and LME,
+     and jumps to the 64-bit nucleus. This is the same sequence the earlier trampolines ran;
+     what is new is only *how it is entered*;
+  3. install that vector's gate, send the IPI to one AP, watch it arrive on COM1 with a letter,
+     and only then think about per-CPU blocks, per-CPU GDT/TSS, and the AP's own idle stack.
+
+Each of those three is a milestone with a report line of its own, which is the right size for
+this port. The first one - can the firmware's IDT be found and written - decides whether the
+whole approach works, and is a self-test rather than a feature: find it, print where it is, and
+print whether a gate round-trips through it.
+
+The same run also answered a question nobody had asked: the guest boots and runs its whole
+suite with `-smp 4` and three parked APs - `[ring3] tasks=7` and the ring-3 work all as usual -
+so nothing in the port assumes it is alone, it just does not use anybody else.
 
 So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
 firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
