@@ -581,20 +581,20 @@ at (EIP `0xfd0b1`, i.e. file offset `0x3d0b1`), is
     0xfd0b4:  66 b8 80 da 00 00   mov ax, 0xda80
     0xfd0ba:  8e d8     mov ds, ax
 
-and the instructions immediately *after* the loop are the wake path:
+and what follows the loop is *not* a wake path - a correction to an earlier reading of these
+same bytes. `0xfd0b2` is `cli; cld`, `mov ax, 0xda80`, `ds = ss = ax`, `sp = 0xfa18`, then a
+jump into `0xfca61`, which reads and clears CMOS register 0x0F and hands over to the firmware's
+16-bit reset path. That is the reset handler, laid out next to the halt loop by the linker and
+not by design: two instructions of padding is all that separates them, and reading a
+neighbouring routine as a handshake was a mistake worth recording so the next attempt does not
+repeat it.
 
-    0xfd0b2:  fa fc                 cli; cld
-    0xfd0b4:  66 b8 80 da 00 00     mov ax, 0xda80
-    0xfd0ba:  8e d8                 mov ds, ax
-    0xfd0bc:  8e d0                 mov ss, ax
-    0xfd0be:  66 bc 18 fa 00 00     mov sp, 0xfa18
-    0xfd0c4:  e9 99 f9              jmp 0xfca61
-
-which is a resumption stub, not the next function: it builds a segment pair and a small stack
-in segment 0xda80 and hands over to the firmware's 16-bit region at 0xfca61. A `hlt` loop
-followed by a ready-made resumption frame is the classic shape of "parked, wake me and point
-me here" - the waker is an interrupt whose handler rewrites the stacked return address, which
-is exactly the mechanism the earlier attempts could not reach with INIT/SIPI.
+What that means is narrower and more useful: the firmware parks its APs with `hlt; jmp` and
+provides nothing to hand them over to. There is no landing pad to aim at and no parameter block
+to fill in, so the tool cannot be "cooperate with the firmware's AP stub" - it has to be either
+a boot path where the APs are still in wait-for-SIPI when we get control, or taking a parked AP
+over with an interrupt whose handler redirects it, which needs a gate in an IDT the AP is
+actually using (the firmware's, not ours).
 
 So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
 firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
