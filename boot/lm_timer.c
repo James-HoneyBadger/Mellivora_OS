@@ -39,6 +39,12 @@ static u64 tick_period;         /* nanoseconds between ticks */
 static int timer_ready;
 static u64 exp_count, exp_late_total, exp_late_max, exp_late_over2ms;
 static u64 arms_total, arms_tick_only;
+/* The arm as it was set: when, how many ticks were programmed, and what the
+ * counter read at that instant. Comparing that with the next interrupt says
+ * whether the countdown ran at the rate the calibration believes. */
+static u64 arm_at_ns;
+static u32 arm_set_ticks;
+static u64 rate_lo, rate_hi;
 u32 timer_irq_current;
 u64 timer_irq_total, timer_irq_ring0, timer_irq_ring3;
 
@@ -111,7 +117,9 @@ void timer_rearm(void)
 
     /* A count that has already gone by still has to interrupt once, or the queue
      * would sit there waiting for a tick that is not armed. */
-    lapic_timer_arm_once(ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks);
+    arm_set_ticks = ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks;
+    arm_at_ns = now;
+    lapic_timer_arm_once(arm_set_ticks);
 }
 
 /*
@@ -128,6 +136,25 @@ int timer_service(void)
 
     u64 now = now_ns();
     int ticked = 0;
+
+    /* What the countdown actually did between the arm and this interrupt. A rate
+     * well under the calibrated one would mean the same numbers mean different
+     * intervals in different states, which is the only explanation left for a
+     * deadline that fires late with its counter at zero. */
+    u64 elapsed = now > arm_at_ns ? now - arm_at_ns : 0;
+    if (elapsed > 200000ULL && arm_set_ticks != 0) {
+        u32 cur = lapic_timer_current();
+        u64 used = cur < arm_set_ticks ? (u64)(arm_set_ticks - cur) : 0;
+        u64 rate = elapsed != 0 ? used / (elapsed / 1000ULL) : 0;   /* ticks per us */
+        u64 want = (u64)lapic_ticks_per_ms() / 1000ULL;
+        if (rate_hi == 0) {
+            rate_lo = rate;
+            rate_hi = rate;
+        }
+        if (rate < rate_lo) rate_lo = rate;
+        if (rate > rate_hi) rate_hi = rate;
+        (void)want;
+    }
 
     if (now >= tick_deadline) {
         ticked = 1;
@@ -180,7 +207,9 @@ void timer_until_ns(u64 deadline)
     u64 delta = deadline > now ? deadline - now : 1;
     u64 ticks = (delta * (u64)lapic_ticks_per_ms() + 999999ULL) / 1000000ULL;
 
-    lapic_timer_arm_once(ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks);
+    arm_set_ticks = ticks > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (u32)ticks;
+    arm_at_ns = now;
+    lapic_timer_arm_once(arm_set_ticks);
 }
 
 int timer_add_ns(u64 ns, void (*fn)(void *), void *arg)
@@ -257,6 +286,12 @@ void timer_report(void)
     kput_dec(timer_irq_ring0);
     kputs(" ring3=");
     kput_dec(timer_irq_ring3);
+    kputs(" rate=");
+    kput_dec(rate_lo);
+    kputs("-");
+    kput_dec(rate_hi);
+    kputs("/us want=");
+    kput_dec((u64)lapic_ticks_per_ms() / 1000ULL);
     kputs("\r\n");
 }
 
