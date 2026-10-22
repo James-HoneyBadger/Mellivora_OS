@@ -549,6 +549,31 @@ driver.
   that interrupted the kernel, which means the waiting task was not in the state the
   experiment assumed.
 
+#### AP start-up: the plan for the next attempt
+
+Three attempts have been pulled and the evidence is in the section below: a bare SIPI is
+ignored because the parked AP is halted *inside the firmware* in protected mode (CR0.PE=1,
+CR3=0, EIP=0xfd0b1) rather than in wait-for-SIPI, and an INIT hands it back to firmware code
+that then triple-faults. So the next attempt starts by reading the firmware instead of
+guessing at it:
+
+1. Read SeaBIOS's own AP path — `src/smp.c` (how it copies and points its AP boot code, what
+   it writes into the parameter block, and what address it SIPIs) and the 16-bit/32-bit entry
+   it lands on in `src/romlayout.S`. The question to answer from the source is precise: what is
+   the parked AP waiting for, and what does it do when it gets it?
+2. From that, pick one of three: cooperate with the firmware's AP boot page (send the vector
+   the firmware set up and let its code jump to our trampoline through the parameter block);
+   or persuade the APs to stay in wait-for-SIPI by not letting the firmware's own SMP bring-up
+   run (a different boot path); or give the firmware its INIT and wait long enough — hundreds
+   of milliseconds, not the tens of microseconds the last attempt used — before the SIPI.
+3. Evidence, before code: `-d int,cpu_reset` showed the difference between "ignored" and
+   "reset" last time, and the QEMU monitor's `info registers -a` shows each CPU's state. A
+   per-stage trace letter on COM1 from the trampoline was what made the first attempt
+   debuggable and should be the first thing written again.
+
+Nothing in this is worth doing until step 1 has an answer: the three pulled attempts all
+guessed, and the guesses were wrong in the same way.
+
 #### AP start-up: what was tried, and what it taught
 
 A 16-bit to 32-bit to 64-bit trampoline was written, copied to a page below 1 MB,
