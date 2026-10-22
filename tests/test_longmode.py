@@ -145,6 +145,11 @@ REQUIRED = (
     # starts masked and the keyboard and pointer are then routed through it.
     "[ioapic] id=0 version=",
     " ioapic=ok",
+    # A clock that is neither the PIT nor the APIC: the firmware's HPET, at 100
+    # MHz, cross-checked against the PIT's ten milliseconds, and used to wait
+    # half a millisecond - a length the tick cannot express.
+    "[hpet] base=FED00000 hz=100000000",
+    " hpet=ok",
     # ... and the tick is the APIC's now, at the same 100 Hz the PIT was: the
     # calibration is measured against the PIT's spare channel, and the 8259 is
     # masked off so nothing can deliver a second clock alongside it.

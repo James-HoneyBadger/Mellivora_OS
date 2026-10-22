@@ -576,6 +576,7 @@ int atomic_selftest(void);
 #define LM_MMIO_E1000_PAGES 32
 #define LM_MMIO_LAPIC       32      /* the local APIC's page */
 #define LM_MMIO_IOAPIC      33      /* and the I/O APIC's */
+#define LM_MMIO_HPET        34      /* the high-precision event timer */
 
 /*---------------------------------------
  * The local APIC. Its timer is the point of it: the 8254 stays the tick source
@@ -632,8 +633,23 @@ int acpi_init(void);
 u64 acpi_lapic_address(void);
 u32 acpi_cpu_count(void);
 u32 acpi_ioapic_address(void);
+u64 acpi_hpet_address(void);
 /* The APIC id of the processor the MADT listed at `index`; 0xFFFFFFFF if none. */
 u32 acpi_apic_id(u32 index);
+
+/*---------------------------------------
+ * The high-precision event timer, and the TSC beside it. Both are free-running
+ * counters; the HPET counts at a rate the firmware published, and the TSC counts
+ * at whatever the core does, which has to be measured.
+ *---------------------------------------*/
+int hpet_init(void);
+int hpet_selftest(void);
+u64 hpet_counter(void);
+u32 hpet_hz(void);
+u64 tsc_hz(void);
+u64 tsc_counter(void);
+/* Wait `us` microseconds on the HPET: an accuracy the 10 ms tick cannot give. */
+void hpet_delay_us(u32 us);
 
 /*---------------------------------------
  * The PC speaker: the 8254's channel 2 through the gate in port 0x61. The only

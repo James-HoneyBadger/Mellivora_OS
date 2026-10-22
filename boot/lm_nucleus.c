@@ -474,9 +474,11 @@ void lm_main(void)
     kmem_selftest();
 
     acpi_init();
+    hpet_init();
     lapic_init();
     lapic_selftest();
     lapic_timer_start();
+    hpet_selftest();
     if (ioapic_init() == 0) {
         /* The keyboard and the pointer are the two lines worth an interrupt:
          * everything else here is polled, and a byte that arrives between two

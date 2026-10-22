@@ -38,6 +38,8 @@ struct acpi_info {
     u32 cpu_count;          /* local APICs that say they are enabled */
     u32 apic_ids[LM_MAX_CPUS];
     u32 iso_count;
+    u64 hpet_address;
+    u32 hpet_period_fs;
 };
 
 static struct acpi_info info;
@@ -91,11 +93,27 @@ static u32 find_rsdp(void)
     return 0;
 }
 
-/* Walk one table's entries looking for the MADT. */
+/* The HPET's table is four fields and a base address: nothing to walk, just an
+ * address space descriptor whose 64-bit address is the register block. */
+static void scan_hpet(const u8 *table)
+{
+    /* Offset 40 is the address space id, 44 the 64-bit address itself. */
+    info.hpet_address = *(const u64 *)(table + 44);
+}
+
+/* Walk one table looking for the ones that matter: the MADT for the interrupt
+ * controllers and the HPET for a clock that is not the PIT. */
 static void scan_table(u64 address)
 {
     const u8 *table = at(address);
-    if (table == NULL || !signature_is(table, "APIC")) {
+    if (table == NULL) {
+        return;
+    }
+    if (signature_is(table, "HPET")) {
+        scan_hpet(table);
+        return;
+    }
+    if (!signature_is(table, "APIC")) {
         return;
     }
 
@@ -239,4 +257,9 @@ u32 acpi_apic_id(u32 index)
 u32 acpi_ioapic_address(void)
 {
     return info.ioapic_address;
+}
+
+u64 acpi_hpet_address(void)
+{
+    return info.hpet_address;
 }

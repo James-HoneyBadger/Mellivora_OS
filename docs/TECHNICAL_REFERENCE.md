@@ -2539,6 +2539,27 @@ self-test can only prove what a single CPU can observe - that the instructions d
 they say, that a failed compare-and-swap does not write, that trylock refuses a lock it
 already holds, and that the interrupt flag survives a section exactly - and says so.
 
+### A clock the tick cannot be
+
+A hundred interrupts a second is the right unit for deciding who runs next and far too
+coarse for anything else: a disk read, a start-up window, half a millisecond. The HPET is
+the answer the firmware already provides - a free-running 64-bit counter at a rate it
+publishes in the ACPI table, found by a signature and nothing else to walk, mapped like
+any other device. Its period comes in femtoseconds, so unlike the PIT's rounded divisor
+its rate is exact; the driver turns one into the other once, at boot.
+
+The time-stamp counter comes with everything except a rate. `rdtsc` is two cycles and
+needs no mapping, but "invariant" only promises the rate is constant, not what it is - so
+it is calibrated against the HPET over one PIT tick and reported, which is what makes it
+usable later as a per-CPU clock without another driver.
+
+The self-test is a cross-check rather than a formality: it measures the PIT's ten
+millisecond tick with both counters and refuses to pass if they disagree by more than a
+tenth, which is loose enough for the PIT's own rounding and tight enough to catch a wrong
+period or a counter being read at the wrong width. It then waits half a millisecond with
+the HPET and measures that too, because a delay primitive nobody has measured is a
+guess.
+
 ### Why the other processors are not started yet
 
 The start-up sequence for an application processor is prescribed: INIT, wait ten
