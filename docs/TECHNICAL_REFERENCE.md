@@ -2517,6 +2517,28 @@ The spurious vector gets a gate of its own and is deliberately not acknowledged:
 never put in service, and an EOI for it would tell the unit that the last real interrupt
 had been handled, losing whatever was behind it.
 
+### Atomics, and the lock the scheduler was already using
+
+Everything in this port was safe by construction while there was one CPU: interrupts
+were off inside a syscall, and the scheduler refused to switch away from a ring-0 frame.
+A second processor ends that, and the two things it needs are an instruction the bus
+will not let two CPUs interleave, and a word that says somebody is inside a critical
+section.
+
+`sched_lock` used to be a counter and nothing else. It is now a counter *and* a
+spinlock: the outermost acquisition takes the word and turns interrupts off, and nested
+acquisitions only bump the count, because a word cannot count and a nested attempt to
+take a non-recursive lock is a deadlock by definition. The interrupt flag saved at the
+outermost acquisition is the one restored at the outermost release, which is what makes
+the same call correct from both contexts - from ring 3 it comes back with interrupts on,
+from inside a syscall with them off.
+
+Turning interrupts off there is worth having on one CPU as well: a timer tick can no
+longer land in the middle of a directory update and read it half-written. The
+self-test can only prove what a single CPU can observe - that the instructions do what
+they say, that a failed compare-and-swap does not write, that trylock refuses a lock it
+already holds, and that the interrupt flag survives a section exactly - and says so.
+
 ### The I/O APIC, and why input wants an interrupt
 
 The I/O APIC is the other end of the path: 24 interrupt lines in, each forwarded to a

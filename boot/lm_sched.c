@@ -62,6 +62,23 @@ static struct lm_task *current;
 static u64 switches;
 static int stack_cache = -1;
 
+/*
+ * The critical section that keeps the filesystem - and everything else that owns
+ * a static - to one task at a time.
+ *
+ * Two things have to be true, and with more than one CPU they are different
+ * facts. The spinlock keeps another processor out, and it is taken only by the
+ * outermost acquisition, because the lock nests and a word cannot count. Turning
+ * interrupts off keeps the timer out, and it is what makes a tick unable to
+ * observe a half-written directory; the flag that was there before the outermost
+ * acquisition is the one that gets put back, so a section entered from ring 3
+ * (where interrupts are on) leaves them on and one entered from a syscall (where
+ * they are already off) leaves them off.
+ */
+static lm_spinlock lock_guard;
+static int lock_depth;
+static u64 lock_flags;
+
 void sched_init(void)
 {
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -78,6 +95,7 @@ void sched_init(void)
     /* Kernel stacks are the slab's first real users: one page each, mapped in
      * the heap window, and they stay allocated for the life of the system. */
     stack_cache = kmem_cache(FRAME_SIZE);
+    spin_init(&lock_guard);
 }
 
 struct lm_task *sched_current(void)
@@ -85,17 +103,25 @@ struct lm_task *sched_current(void)
     return current;
 }
 
-static int lock_depth;
-
 void sched_lock(void)
 {
+    u64 flags = irq_save();
+    if (lock_depth == 0) {
+        lock_flags = flags;
+        spin_lock(&lock_guard);
+    }
     lock_depth++;
 }
 
 void sched_unlock(void)
 {
-    if (lock_depth > 0) {
-        lock_depth--;
+    if (lock_depth == 0) {
+        return;
+    }
+    lock_depth--;
+    if (lock_depth == 0) {
+        spin_unlock(&lock_guard);
+        irq_restore(lock_flags);
     }
 }
 

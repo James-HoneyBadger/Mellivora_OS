@@ -435,6 +435,14 @@ driver.
   through the local APIC, so that is where the EOI goes and the 8259 knows nothing.
   The test types at the machine with `sendkey` and requires `[ps2] irqs=` to be more
   than zero, which polling could never show.
+- [x] Atomics and a real lock. Exchange, compare-and-swap and fetch-add are the
+  instructions a second CPU cannot interleave, and `sched_lock` is now built on them:
+  the outermost acquisition takes a spinlock word and turns interrupts off, so a tick
+  can no longer observe a half-written file table, and the interrupt flag that was
+  there before it is the one put back - a section entered from ring 3 leaves interrupts
+  on, one entered from a syscall leaves them off. The boot self-test proves what one CPU
+  can prove (`[lock] spin=ok atomic=ok irq=ok`), and every filesystem path in the suite
+  is the regression test for the lock itself.
 - [ ] SMP to 8 vCPUs, per-CPU run queues, spinlocks, atomics,
   IPIs, TLB shootdown, preemptible kernel, lockdep-style lock validation, threads
   (`clone` with shared VM), futex, TLS, HPET/TSC clocksource, high-resolution timers.

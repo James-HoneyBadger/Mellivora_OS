@@ -414,6 +414,7 @@ void lm_main(void)
     kbd_selftest();
     mouse_init();
     mouse_selftest();
+    atomic_selftest();
     cpu_init();          /* GS base: the entry path needs it before it can run */
     struct cpu_features feat = cpu_harden();  /* NX/SMEP/SMAP where offered */
     idt_init();          /* a fault must report, not triple-fault */

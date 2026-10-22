@@ -532,6 +532,32 @@ int ata_write(u64 lba, const void *buffer);
 int ata_selftest(void);
 
 /*---------------------------------------
+ * Atomics and locks
+ *
+ * One CPU made most of this unnecessary; a second one makes it the only way to
+ * touch anything shared. irq_save/irq_restore bracket a critical section against
+ * interrupts, and the spinlock word says whether another CPU is inside one.
+ *---------------------------------------*/
+u64 irq_save(void);
+void irq_restore(u64 flags);
+int irqs_enabled(void);
+
+typedef struct {
+    volatile u32 locked;
+} lm_spinlock;
+
+void spin_init(lm_spinlock *lock);
+void spin_lock(lm_spinlock *lock);
+int spin_trylock(lm_spinlock *lock);
+void spin_unlock(lm_spinlock *lock);
+
+u32 atomic_xchg32(volatile u32 *target, u32 value);
+int atomic_cmpxchg32(volatile u32 *target, u32 expected, u32 value);
+u32 atomic_add32(volatile u32 *target, u32 value);
+
+int atomic_selftest(void);
+
+/*---------------------------------------
  * The kernel's device-memory window: a gigabyte of the kernel half (PML4[511],
  * PDPT[509]) that nothing else maps, one slot per driver. Device registers are
  * mapped here with caching disabled - a cached read would answer from the cache

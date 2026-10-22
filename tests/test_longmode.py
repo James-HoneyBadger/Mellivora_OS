@@ -73,6 +73,9 @@ REQUIRED = (
     "sched=ok",
     "nx=ok",
     "nx=on smep=on smap=on",
+    # The primitives a second CPU will need: exchange, compare-and-swap, trylock
+    # and an interrupt state that comes back exactly as it was.
+    "[lock] spin=ok atomic=ok irq=ok",
     # Every tick came from the local APIC and landed on the task's kernel stack.
     " stack=ok source=lapic",
     "abi=lp64",
