@@ -209,9 +209,13 @@ list_dir:
         call add_dec
         call end_line
 
+        ; An index that keeps growing, because readdir is what says when there is
+        ; nothing left. There used to be a `cmp r14, 16` here - a limit that was
+        ; invisible while the root held fewer than sixteen entries and then quietly
+        ; hid every one after that, including the `docs` directory the test suite
+        ; lists for.
         inc r14
-        cmp r14, 16
-        jb .loop
+        jmp .loop
 .done:
         ret
 

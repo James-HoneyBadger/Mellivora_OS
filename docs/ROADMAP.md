@@ -724,6 +724,27 @@ that stops answering should cost characters, not the machine - and it silently d
 lines, because the transmit register stays busy while the host is not draining the socket.
 It went back to waiting.
 
+### A directory listing that hid files
+
+`ls` printed at most sixteen entries. `boot/lm_ls.asm` counted them and stopped at a literal
+`cmp r14, 16`, which was invisible for as long as the root directory held fewer than sixteen
+entries and then silently hid every one after that - including the `docs` directory the test
+suite lists for, which is how it was finally noticed: a required line disappearing from one run
+in three as the image grew.
+
+Two fixes came out of it. The cap is gone, because `readdir` is what says when there is nothing
+left to read. And `vfs_readdir` now skips slots whose type is FREE: `index` counts the entries a
+caller has been given, not the raw slots in the directory, so a file that was deleted no longer
+reads as the end of the listing. Both are the kind of bug that only a program with more than
+sixteen files can find, which is worth remembering when the next limit is written.
+
+The suite also retries a boot once when a single required line is missing, and says so loudly
+when it does - a flake that is retried silently is a flake that is hidden. It fired on one run
+in three while this was being investigated, with a *different* line each time (a boot selftest
+line, then a program's output), so there is a second, unrelated cause of lost console output
+still to find: the writer waits for the transmitter, so the loss is either in the emulated UART
+or in the harness's socket read.
+
 **Exit:** near-linear scaling on a parallel workload; 24 h SMP stress with no lost
 wakeups.
 

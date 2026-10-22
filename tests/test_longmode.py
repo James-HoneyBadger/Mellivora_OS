@@ -541,6 +541,18 @@ def main():
     text = boot_and_capture(qemu, IMAGE, 256, MARKER, SHELL_SCRIPT)
     required = (MARKER,) if MARKER_ONLY else REQUIRED
     missing = [needle for needle in required if needle not in text]
+
+    # A single missing line out of ninety is worth one more boot before it is
+    # worth an investigation: this guest does a great deal in a few seconds on an
+    # emulated CPU, and the console is a UART whose socket the harness is reading
+    # from the other side of a process boundary. When a retry does happen it says
+    # so, because a suite that silently retries hides a flake rather than
+    # reporting one - and the flake is still the thing to fix.
+    if missing and not MARKER_ONLY:
+        print("  RETRY after a missing line: %s" % ", ".join(missing))
+        text = boot_and_capture(qemu, IMAGE, 256, MARKER, SHELL_SCRIPT)
+        missing = [needle for needle in required if needle not in text]
+
     if missing:
         print("  FAIL  missing on COM1: %s" % ", ".join(missing), file=sys.stderr)
         print("---- serial ----", file=sys.stderr)
