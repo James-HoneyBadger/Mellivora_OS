@@ -40,13 +40,16 @@ start:
         mov eax, SYS_NETPING
         syscall
 
+        mov r13, rax                    ; add_str walks over EAX, so keep it
+
         call begin_line
         lea rsi, [rel s_ping]
         call add_str
-        cmp rax, -1
+        cmp r13, -1
         je .lost
         inc r15
-        call add_dec                    ; the round trip, in milliseconds
+        mov eax, r13d                   ; the round trip, in milliseconds
+        call add_dec
         lea rsi, [rel s_ms]
         call add_str
         jmp .line

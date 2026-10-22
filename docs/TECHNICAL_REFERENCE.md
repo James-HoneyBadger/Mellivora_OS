@@ -2434,6 +2434,30 @@ clock" and "no time at all" are different statements. The wait is bounded by the
 caller's timeout and the call polls, so it holds the CPU for at most that long: a task
 cannot be switched out from inside a syscall.
 
+### The PC speaker
+
+The oldest sound hardware there is, and the only one every machine has: the 8254's
+third channel drives a square wave, and a gate in port 0x61 connects it to the
+speaker. Channel 2 is not wired to interrupts, so programming it is only the divisor -
+1193182 Hz divided by it, because the channel counts down and toggles its output on
+every pass. Both gate bits have to be set: the timer's output and the speaker's own
+enable.
+
+There is nothing to read back, so the boot self-test proves the one thing that can be
+proved - that the gate bits follow the driver - and leaves the listening to a person.
+`BEEP` waits on the tick for its duration, which means it holds the CPU: a tone is not
+worth a wake-up path.
+
+That wait is where the rule about waiting inside a syscall shows up again. `SYSCALL`
+clears IF through the FMASK MSR, so a syscall body runs with interrupts off - a spin
+on the tick counter would wait forever, because the timer that advances it cannot
+fire. Every wait therefore opens them again with `sti; hlt`, which parks the CPU until
+the next interrupt and lets the tick through. This is safe for the reason the design
+gives: a task cannot be switched out of a ring-0 frame, so nothing else runs in the
+middle of the call. At *boot* the same wait has to spin instead, because there is no
+task to switch to yet and a tick has nothing to switch. Two contexts, two waits, and
+getting that wrong is a boot that hangs.
+
 ### The keyboard
 
 The i8042 answers on port 0x64 (status) and 0x60 (data): bit 0 says a byte is waiting

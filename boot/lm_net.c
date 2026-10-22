@@ -71,6 +71,33 @@ static u8 local_mac[6];
 static int have_gateway;
 static u16 next_id;
 
+/*
+ * Waiting for the clock, from the two contexts this runs in - and they are not
+ * the same wait.
+ *
+ * In a syscall interrupts are off by design, so waiting means opening them
+ * again: hlt parks the CPU until the next interrupt, which at 100 Hz is the tick
+ * itself. That is how SYS_SLEEP waits, and it is safe for the same reason - a
+ * task cannot be switched out of a ring-0 frame, so nothing else runs until this
+ * call finishes.
+ *
+ * At boot there is no task to switch to yet, so a tick is not something to wait
+ * for; the ARP self-test simply polls the ring while the clock is stopped. It
+ * always answers long before the budget runs out, and the budget is what bounds
+ * the wait when nothing answers at all.
+ */
+static void wait_for_tick(void)
+{
+    __asm__ volatile("sti; hlt" ::: "memory");
+}
+
+static void wait_for_frame(void)
+{
+    for (int i = 0; i < 2000; i++) {
+        __asm__ volatile("pause");
+    }
+}
+
 static void put_be16(u8 *at, u16 value)
 {
     at[0] = (u8)(value >> 8);
@@ -165,11 +192,11 @@ static void build_ping(u8 *frame, u16 id, u16 seq)
              checksum(frame + ICMP_START, ICMP_BYTES + PING_DATA_BYTES));
 }
 
-static int wait_arp_reply(u64 deadline)
+static int wait_arp_reply(void)
 {
     static u8 frame[NET_FRAME_MAX];
 
-    while (cpu_this()->ticks < deadline) {
+    for (int spin = 0; spin < 200000; spin++) {
         u32 length = 0;
         int got = e1000_recv(frame, &length);
         if (got < 0) {
@@ -187,6 +214,7 @@ static int wait_arp_reply(u64 deadline)
             }
             return 0;
         }
+        wait_for_frame();
     }
     return -1;
 }
@@ -210,10 +238,7 @@ int net_init(void)
         return -1;
     }
 
-    /* A user-mode stack answers at once and a switch answers in milliseconds;
-     * half a second covers both and a card with nobody behind it costs no more
-     * than that. */
-    if (wait_arp_reply(cpu_this()->ticks + 50) != 0) {
+    if (wait_arp_reply() != 0) {
         kputs("[net] no answer to the ARP request net=none\r\n");
         return -1;
     }
@@ -267,7 +292,11 @@ static int resolve(const u8 *ip, u8 *out_mac, u32 timeout_ticks)
         if (got < 0) {
             return -1;
         }
-        if (got == 0 || length < ARP_FRAME_BYTES ||
+        if (got == 0) {
+            wait_for_tick();
+            continue;
+        }
+        if (length < ARP_FRAME_BYTES ||
             get_be16(reply + ETH_TYPE) != ETH_TYPE_ARP ||
             get_be16(reply + ARP_OP) != ARP_IS_AT ||
             reply[ARP_SENDER_IP] != ip[0] || reply[ARP_SENDER_IP + 1] != ip[1] ||
@@ -329,6 +358,7 @@ int net_ping(const u8 *ip, u32 timeout_ticks)
             return -1;
         }
         if (got == 0) {
+            wait_for_tick();
             continue;
         }
         if (length < PING_FRAME_BYTES ||

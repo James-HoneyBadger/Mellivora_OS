@@ -618,7 +618,7 @@ KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_pmm.o boot/lm_cpu.o boot/lm_user.o \
                   boot/lm_sched.o boot/lm_syscall.o boot/lm_pci.o boot/lm_ata.o \
                   boot/lm_hbfs.o boot/lm_vfs.o boot/lm_rtc.o \
 		  boot/lm_pipe.o boot/lm_vga.o boot/lm_kbd.o boot/lm_mouse.o \
-		  boot/lm_e1000.o boot/lm_net.o
+		  boot/lm_e1000.o boot/lm_net.o boot/lm_spk.o
 
 # The user programs are files in the image now, not part of the nucleus.
 INIT_BIN = initprog.bin
@@ -626,7 +626,7 @@ HELLO_BIN = helloprog.bin
 HELLO32_BIN = hello32.bin
 USERPROGS = $(INIT_BIN) $(HELLO_BIN) $(HELLO32_BIN) $(HELLO_TREE_BIN) \
 	    $(LS_BIN) $(WR_BIN) $(SH_BIN) $(API_BIN) $(SPIN_BIN) $(MOUSE_BIN) \
-	    $(NET_BIN)
+	    $(NET_BIN) $(BEEP_BIN)
 
 $(INIT_BIN): boot/lm_initprog.asm
 	$(NASM) -f bin -o $@ $<
@@ -663,6 +663,11 @@ $(MOUSE_BIN): boot/lm_mouse.asm
 NET_BIN = net.bin
 
 $(NET_BIN): boot/lm_net.asm
+	$(NASM) -f bin -o $@ $<
+
+BEEP_BIN = beep.bin
+
+$(BEEP_BIN): boot/lm_beep.asm
 	$(NASM) -f bin -o $@ $<
 
 API_BIN = api.bin
@@ -711,7 +716,7 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.
 	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64) bs=512 seek=1  conv=notrunc status=none
 	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64) bs=512 seek=33 conv=notrunc status=none
 	@echo "  64-bit HBFS: /init, /hello, /motd"
-	@python3 tools/mk_hbfs64.py $(IMAGE_64) init=$(INIT_BIN) hello=$(HELLO_BIN) hello32=$(HELLO32_BIN) hello_tree=$(HELLO_TREE_BIN) ls=$(LS_BIN) wr=$(WR_BIN) sh=$(SH_BIN) api=$(API_BIN) spin=$(SPIN_BIN) mouse=$(MOUSE_BIN) net=$(NET_BIN) motd=boot/motd.txt docs/readme.txt=boot/motd.txt
+	@python3 tools/mk_hbfs64.py $(IMAGE_64) init=$(INIT_BIN) hello=$(HELLO_BIN) hello32=$(HELLO32_BIN) hello_tree=$(HELLO_TREE_BIN) ls=$(LS_BIN) wr=$(WR_BIN) sh=$(SH_BIN) api=$(API_BIN) spin=$(SPIN_BIN) mouse=$(MOUSE_BIN) net=$(NET_BIN) beep=$(BEEP_BIN) motd=boot/motd.txt docs/readme.txt=boot/motd.txt
 	@echo "=== $(IMAGE_64) ready ==="
 
 64bit: $(IMAGE_64)

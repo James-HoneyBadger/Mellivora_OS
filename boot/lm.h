@@ -337,6 +337,9 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
  * round trip in milliseconds or -1. The tree's SYS_PING (48, address in EBX)
  * reaches the same handler through the int 0x80 bridge. */
 #define SYS_NETPING     41
+/* BEEP takes a frequency in RDI and a duration in milliseconds in RSI, and
+ * returns 0. The tree's SYS_BEEP (24) passes the duration in ticks instead. */
+#define SYS_BEEP        42
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -521,6 +524,15 @@ u64 ata_sector_count(void);
 int ata_read(u64 lba, void *buffer);
 int ata_write(u64 lba, const void *buffer);
 int ata_selftest(void);
+
+/*---------------------------------------
+ * The PC speaker: the 8254's channel 2 through the gate in port 0x61. The only
+ * sound hardware every machine has, and the only one with nothing to read back.
+ *---------------------------------------*/
+void speaker_tone(u32 hz);        /* 0 silences */
+void speaker_off(void);
+void speaker_beep(u32 hz, u32 ms);
+int speaker_selftest(void);
 
 /*---------------------------------------
  * The network adapter

@@ -992,6 +992,15 @@ static struct lm_fault_frame *sys_netping(struct lm_fault_frame *f)
     return f;
 }
 
+/* beep(frequency, milliseconds) - a tone on the PC speaker, then silence. It
+ * waits on the tick, so it costs the CPU for its duration, like SYS_SLEEP. */
+static struct lm_fault_frame *sys_beep(struct lm_fault_frame *f)
+{
+    speaker_beep((u32)f->rdi, (u32)f->rsi);
+    f->rax = 0;
+    return f;
+}
+
 static struct lm_fault_frame *sys_chdir(struct lm_fault_frame *f)
 {
     char path[64];
@@ -1066,6 +1075,7 @@ static const struct lm_syscall syscalls[] = {
     [39] = {"kill", sys_kill, 1},
     [40] = {"mouse", sys_mouse, 0},
     [41] = {"netping", sys_netping, 1},
+    [42] = {"beep", sys_beep, 0},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))
@@ -1301,6 +1311,10 @@ static struct lm_fault_frame *int80_call(struct lm_fault_frame *f, u32 nr)
         sys_mouse(f);
         f->rbx = f->rdx;            /* the wrapper puts the caller's RDX back */
         return f;
+    case 24:                        /* SYS_BEEP: EBX=hz ECX=ticks -> EAX=0 */
+        f->rdi = (u64)(u32)f->rbx;
+        f->rsi = (u64)(u32)f->rcx * (1000 / LM_TIMER_HZ);
+        return sys_beep(f);
     case 48:                        /* SYS_PING: EBX=ip -> EAX=rtt/-1 */
         f->rdi = (u64)(u32)f->rbx;
         return sys_netping(f);

@@ -474,6 +474,7 @@ void lm_main(void)
     ata_selftest();
     vfs_init();
     hbfs_writetest();
+    speaker_selftest();
     e1000_init();
     e1000_selftest();
     net_init();

@@ -132,6 +132,12 @@ REQUIRED = (
     "[net] 10.0.2.2 at 52:55:0A:00:02:02 net=ok",
     "net: 3 of 3 replied",
     "sh: /net exited 0x00000003",
+    # The speaker: the gate bits read back what was written to them, and a
+    # program can ask for three notes from ring 3.
+    "[spk] pit channel 2, 1193182 Hz clock spk=ok",
+    "beep: tone 440 Hz",
+    "beep: silent",
+    "sh: /beep exited 0x00000000",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
     # along with one environment entry.
@@ -450,6 +456,7 @@ def main():
         ("mellivora:/> ", "cat /fresh.txt"),
         ("mellivora:/> ", "run /api"),
         ("mellivora:/> ", "run /net"),
+        ("mellivora:/> ", "run /beep"),
         ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "spawn /spin"),
         ("mellivora:/> ", "date"),
