@@ -382,15 +382,47 @@ struct lm_fault_frame *sched_tick(struct lm_fault_frame *f)
     return sched_yield(f);
 }
 
+/*
+ * The heap belongs to the address space, not to the task: a thread shares its
+ * creator's memory, so it has to share the bump pointer and the free list too.
+ * Two of each would hand out the same block twice, which looks like a correct
+ * program corrupting itself.
+ *
+ * The owner is the lowest-numbered live task in the space. That choice is
+ * arbitrary but stable for as long as the space exists - it does not move when a
+ * thread exits, which is what matters: a heap that changed owner would change
+ * its idea of where the free memory starts.
+ */
+static struct lm_task *heap_owner(void)
+{
+    if (current == NULL) {
+        return NULL;
+    }
+    struct lm_task *owner = current;
+    for (int i = 0; i < task_count; i++) {
+        struct lm_task *t = &tasks[i];
+        if (t->cr3 != current->cr3 || t->state == TASK_FREE ||
+            t->state == TASK_DEAD) {
+            continue;
+        }
+        if (t->id < owner->id) {
+            owner = t;
+        }
+    }
+    return owner;
+}
+
 u64 sched_brk(void)
 {
-    return current != NULL ? current->brk : 0;
+    struct lm_task *owner = heap_owner();
+    return owner != NULL ? owner->brk : 0;
 }
 
 void sched_set_brk(u64 value)
 {
-    if (current != NULL) {
-        current->brk = value;
+    struct lm_task *owner = heap_owner();
+    if (owner != NULL) {
+        owner->brk = value;
     }
 }
 
@@ -413,25 +445,29 @@ void sched_set_args(const char *value)
 
 u64 sched_heap(void)
 {
-    return current != NULL ? current->heap : 0;
+    struct lm_task *owner = heap_owner();
+    return owner != NULL ? owner->heap : 0;
 }
 
 void sched_set_heap(u64 value)
 {
-    if (current != NULL) {
-        current->heap = value;
+    struct lm_task *owner = heap_owner();
+    if (owner != NULL) {
+        owner->heap = value;
     }
 }
 
 u64 sched_free_list(void)
 {
-    return current != NULL ? current->free_list : 0;
+    struct lm_task *owner = heap_owner();
+    return owner != NULL ? owner->free_list : 0;
 }
 
 void sched_set_free_list(u64 value)
 {
-    if (current != NULL) {
-        current->free_list = value;
+    struct lm_task *owner = heap_owner();
+    if (owner != NULL) {
+        owner->free_list = value;
     }
 }
 

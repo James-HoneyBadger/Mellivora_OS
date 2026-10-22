@@ -2559,9 +2559,11 @@ reaped - `space_users()` counts them, including the dead-but-not-collected - and
 before. A thread that exits leaves its stack and its memory for its siblings, which is
 exactly what a thread is.
 
-What was missing is everything that makes threads safe rather than merely possible: two
-threads that allocate at the same time race in the allocator, because there was nothing to
-block on.
+What was missing was everything that makes threads safe rather than merely possible. The
+first of those was the heap: it belongs to the *address space*, not to the task, so it is
+now owned by the lowest-numbered live task in the space rather than kept per task. Two bump
+pointers over the same memory hand out the same block twice, which looks exactly like a
+correct program corrupting itself.
 
 ### A futex that really waits
 

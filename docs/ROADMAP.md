@@ -489,6 +489,11 @@ driver.
   syscall, so a wake that arrives between the caller's test and the call is not lost: if
   the word has already changed, the wait returns at once. `/futex` parks a thread, wakes
   it eight yields later and collects it; nothing polls.
+- [x] A heap that belongs to the address space. Threads share their creator's memory, so
+  they now share the bump pointer and the free list as well - owned by the lowest-numbered
+  live task in the space, a choice that is arbitrary but does not move when a thread exits.
+  Two of each handed out the same block twice, which reads as a correct program corrupting
+  itself.
 - [ ] Per-CPU run queues, IPIs, TLB shootdown, preemptible kernel, lockdep-style lock
   validation, TLS, high-resolution timers.
 
