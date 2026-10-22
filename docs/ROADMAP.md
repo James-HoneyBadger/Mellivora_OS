@@ -619,6 +619,390 @@ protected mode are consulting something we cannot find, and a gate cannot be ins
 we cannot locate. The probe was written, run and removed rather than shipped: a scan that finds
 nothing on every boot is noise, and the negative result is the deliverable.
 
+A bug in the INIT itself was found while trying to observe the window, and it explains more
+than the timing question: `lapic_send_ipi` asserted the INIT and then waited for the ICR's
+delivered bit to clear, but a level-triggered INIT holds that bit set for as long as the level
+is asserted. So every earlier attempt *hung inside the send* - it never reported a failure and
+never reached its startup IPI, and what looked like "the machine resets on INIT" was partly the
+boot sitting in a million-iteration wait. The sequence is an assertion and a release of it:
+assert, deassert, and the second message is the one that completes. That is fixed and in
+(`boot/lm_lapic.c`), and it is a plain bug regardless of what happens to AP start-up.
+
+With the send no longer hanging, the observation stands: the INIT completes, and the machine
+then dies within milliseconds - before a trace sampling every twenty milliseconds can catch
+what the processor did. Two readings fit: the processor re-runs enough of the firmware's start-up
+to arrive back at the parked loop (making a later SIPI fatal, which is what killed one run), or
+it runs something that faults outright. Distinguishing them needs a trace finer than the window,
+which is a host-side job: `-d in_asm` for that CPU only, or a sampling interval of one
+millisecond.
+
+The third route - the architecture's own, INIT then a startup IPI - has been tried again with
+what has been learnt since the earlier attempts, and it is closer than the notes suggested. With
+the corrected level-asserted INIT encoding the INIT is now *clean*: `-d cpu_reset` shows the
+processor resetting and the machine carrying on, where the earlier attempt lost the whole
+machine. A real-mode stub at the SIPI page (`mov dx,0x3f8 / mov al,'A' / out dx,al` so the log
+shows the arrival, then a marker word the boot processor polls for) was installed, the INIT was
+sent, ten milliseconds were allowed, and the SIPI followed - twice, then repeatedly every ten
+milliseconds for two seconds. The marker never lands.
+
+One thing was learnt from the failures, and it explains the shape of the problem: a startup IPI
+that arrives while the processor is back in protected mode is fatal, because the vector is taken
+as a *real-mode* `CS:IP` and the firmware's selector for it does not exist - which is how one run
+ended with the machine gone. So the window is real and narrow: after INIT the processor runs the
+firmware's own reset path and ends up parked again, and a SIPI outside that window is not
+"ignored", it is a triple fault. The next probe has to *see* the window rather than guess at it:
+sample that processor's EIP from the monitor every twenty milliseconds between the INIT and the
+first startup IPI, with a monitor client that survives a prompt arriving mid-read, and the
+picture of where it goes - and when it is in real mode waiting - is the answer.
+
+So both routes through the firmware are closed, and what is left is not a kernel change:
+
+  1. **Own the APs from the reset vector.** Their first instruction after INIT is the firmware's,
+     not ours; making it ours means not running the firmware's SMP path at all, which an MBR boot
+     cannot arrange.
+  2. **A platform where the APs wait for a SIPI.** Whether QEMU can be asked for that - a
+     firmware setting that leaves `etc/smp-cores` at one core while the machine still has four,
+     a different machine type, or a boot protocol whose contract is that the OS starts the APs -
+     is a question about the target rather than the code, and it is the next thing to establish.
+
+Either way the honest state is that P3's exit gate cannot be met on this firmware without
+changing the platform assumption, and that is a decision to take deliberately rather than to keep
+writing trampolines for.
+
+So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
+firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
+wait-for-SIPI. It also says what the right tool is. The AP will leave `hlt` on an *interrupt*,
+and its handler is what has to redirect it (the firmware-style trick is to rewrite the stacked
+return address so the `iret` lands elsewhere); or the loop is polling a flag the BSP writes and
+the interrupt only exists to break it out of the halt. Either way the handshake is with the
+firmware's AP stub, not with our trampoline, and the segment setup right after the loop
+(`ax=0xda80`, then `ds`/`ss`/`sp`) is the stub the next attempt has to make sense of.
+
+Nothing in this is worth doing until step 1 has that answer: the three pulled attempts all
+guessed, and the guesses were wrong in the same way.
+
+#### AP start-up: what was tried, and what it taught
+
+A 16-bit to 32-bit to 64-bit trampoline was written, copied to a page below 1 MB,
+described to the processor through a parameter block (CR3, stack, entry, the boot
+processor's GDTR and IDTR), and started with the prescribed sequence. It printed a letter
+per stage on COM1, because a processor that faults before it has an IDT can only be traced
+by the code that is faulting. Its details were the ones that matter: the trampoline's own
+GDT has to agree with the kernel's about selectors 0x08 and 0x10, because the IDT's gates
+name 0x08 for the kernel's code segment; PAE, PGE and the SSE bits go into CR4 before
+paging is switched on; the kernel's GDT and IDT are loaded only once those selectors mean
+the same thing.
+
+It does not work under this machine's firmware, and the tree does not keep code that does
+not work. The evidence, in the order it was gathered:
+
+- **The processor is not where the architecture says it should be.** Inspecting CPU 1 with
+  QEMU's monitor shows it halted in *protected mode inside the ROM*: CS is a 32-bit code
+  segment, CR0.PE is set, CR3 is zero, and EIP is 0xfd0b1, which is the firmware's own
+  AP park loop. The architectural state that accepts a SIPI - real mode, waiting for one -
+  is not this.
+- **So a SIPI is ignored.** The delivery-status bit clears, the machine is fine, and not
+  one letter of the trampoline's trace appears: the vector page was never fetched.
+- **An INIT does reach it** - QEMU's `-d int,cpu_reset` log records `CPU Reset (CPU 1)` -
+  **and then the whole machine resets**, which is a triple fault on the AP taking the
+  system with it. That happened with the trampoline at 0x9000 (where the firmware keeps
+  its own AP trampoline, SIPI vector 0x09 - not a safe choice), at 0x8000, with the delay
+  between INIT and SIPI at 10 ms and at 1 ms, and with the INIT's trigger bits corrected
+  to level-asserted as the architecture requires. So the AP's post-INIT path is the
+  firmware's, not ours, and it ends in a fault.
+
+What that means for the next attempt: the firmware has to be part of the answer rather
+than bypassed. Either an AP is started **through the firmware's own handshake** - its
+SIPI vector at 0x9000 plus whatever word in its data area it reads to decide whether it
+is running for the BIOS or for an OS - or the machine is booted by something that leaves
+APs in the architectural wait-for-SIPI state. Both are a bigger piece of work than one
+milestone, and neither is guessable: the next attempt starts by reading the firmware.
+
+Two things came out of the attempt anyway, and are in the tree: the boot clock above, and
+one lesson about the console. A bounded spin in `kputc` looked like robustness - a UART
+that stops answering should cost characters, not the machine - and it silently dropped log
+lines, because the transmit register stays busy while the host is not draining the socket.
+It went back to waiting.
+
+**Exit:** near-linear scaling on a parallel workload; 24 h SMP stress with no lost
+wakeups.
+
+### P4 · Storage (3 sprints)
+
+HBFS v4: 64-bit block numbers, extents, checksummed journal, online fsck, COW snapshots,
+quotas, ACLs. VFS page cache with writeback and readahead. NVMe, AHCI NCQ, GPT.
+
+**Exit:** 1 TB image, > 100 MB/s, 10 000 crash-injection iterations clean.
+
+### P5 · Networking (3 sprints)
+
+Socket layer with non-blocking I/O, `select/poll/epoll`, `SO_*` options and
+`getsockopt`; TCP window scaling, SACK, RTT/RTO estimation, TIME_WAIT; UNIX sockets;
+netdevice abstraction; IPv6 basics; stateful packet filter; TLS 1.3 port; service
+supervisor (DHCP renew, DNS cache, NTP).
+
+**Exit:** line-rate virtio throughput, 1 000 sockets, chaos-tested under loss.
+
+### P6 · Security and multi-user (4 sprints)
+
+Accounts with shadow password hashes, login and sessions, `su`/`sudo` equivalent, groups;
+**enforced capabilities** from app manifests; object manager for hierarchical config with
+ACLs; audit log; kernel KASLR; hardened allocator; stack canaries; secure RNG.
+
+**Exit:** unprivileged code cannot reach a device, peer memory or a forbidden file;
+permission suite and fuzzers clean.
+
+### P7 · Devices, PnP and power (3 sprints)
+
+PCI BAR assignment, MSI/MSI-X, driver registry with probe/attach and refcounts; ACPI
+shutdown/reboot/sleep/battery/thermal; USB (UHCI/EHCI) + HID; virtio-gpu; HDA audio.
+
+**Exit:** clean shutdown, USB input, audio, no hard-coded IRQs or addresses.
+
+### P8 · UI and UX (4 sprints)
+
+Damage-tracked compositing, vsync-aware flip, hardware cursor, shadows and rounded
+corners, window animations, 1080p/4K, multi-monitor; TrueType rasterizer and a system
+font; widget toolkit and design system; taskbar grouping with live thumbnails,
+start-menu search and favourites, notification centre with actions, drag and drop,
+multi-format clipboard, shortcut editor, settings with live preview, onboarding,
+accessibility (keyboard navigation, focus rings, high contrast, scalable UI).
+
+**Exit:** 60 FPS at 1080p with 30 windows, UI latency < 50 ms, drag and drop between
+editor and file manager, one visual language.
+
+### P9 · Applications and utilities (continuous from P1)
+
+Productivity (BEdit+ with multi-document and undo tree, BSheet, BWriter, BSlides,
+BDraw, BMail, BCal, BContacts, BTasks), system tools (BTerm+ tabs/splits/256 colours,
+BForager+ tabs/previews/archives, task manager, package manager GUI, backup, disk
+tools), internet (BBrowser with an HTML 4 / CSS1 subset, feed reader), development
+(BDev IDE, debugger front-end, disassembler, `bscript`), media (image viewer, player,
+screen capture), and a shell grown to ~200 commands with consistent flags and man pages.
+
+### P10 · Reliability and performance (continuous)
+
+Panic screen with symbolised stacks and recovery, crash dumps over serial, 24 h soak
+and reboot loops, OOM/disk-full/network-chaos injection, performance gates that fail a
+pull request on regression.
+
+- [x] OOM / disk-full / dropped-frame injection (`kernel/faultinject.inc`,
+  `SYS_FAULTINJECT`): arm a counter and the next page allocations, disk writes or
+  outgoing frames fail. `fault_inject_test` walks every failure depth of the fork path
+  and requires the free-page count to come back each time, a file create whose writes
+  all fail to report an error and still work afterwards, and a dropped frame to be
+  retried past. `make check-faults` repeats it; `check-runtime` runs it once.
+- [ ] Crash dumps over serial, 24 h soak, performance gates.
+
+### P11 · Ecosystem and release engineering (continuous)
+
+SDK container with cross toolchain, libc, headers and samples; `hbpkg` v2 with signatures
+and dependencies; reproducible builds, SBOM, signed ISOs; generated API reference;
+porting guide.
+
+## Out of scope
+
+Printing, domains/Active Directory, COM/DCOM, Terminal Services, and binary compatibility
+with Win32 applications. These would consume the effort the kernel needs and cannot be
+reached credibly.
+
+## Specs
+
+Normative documents live in `docs/spec/`:
+
+| Document | Covers |
+|---|---|
+| `VMM.md` | Address spaces, isolation rules, `mmap` semantics, fault handling |
+| `ABI.md` | Syscall conventions, 32/64-bit compatibility, structure layouts |
+| `SCHED.md` | Task model, priorities, preemption, SMP affinity, signals |
+| `FS_V4.md` | On-disk format, journal, snapshots, quotas, ACLs |
+| `DRIVER_MODEL.md` | Driver registry, probe/attach, IRQ/MSI, DMA rules |
+| `SECURITY.md` | Identities, capabilities, ACLs, audit, sandboxing |
+| `COMPOSITOR.md` | Surface model, damage, present path, input routing |
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| 64-bit port stalls | 32-bit tree stays green; port behind a HAL, subsystem by subsystem; go/no-go at P2 exit |
+| C in the kernel erodes style | Freestanding subset only, MISRA-lite rules in `STYLE_GUIDE.md`, enforced by `make lint` |
+| Scope explosion | Fixed sprint exit criteria and the explicit out-of-scope list above |
+| Emulator-only confidence | QEMU first, then real hardware; KVM in CI |
+| CI time balloons | Snapshot-based QEMU tests, parallel jobs, hard 10-minute budget |
+So both routes through the firmware are closed, and what is left is not a kernel change:
+
+  1. **Own the APs from the reset vector.** Their first instruction after INIT is the firmware's,
+     not ours; making it ours means not running the firmware's SMP path at all, which an MBR boot
+     cannot arrange.
+  2. **A platform where the APs wait for a SIPI.** Whether QEMU can be asked for that - a
+     firmware setting that leaves `etc/smp-cores` at one core while the machine still has four,
+     a different machine type, or a boot protocol whose contract is that the OS starts the APs -
+     is a question about the target rather than the code, and it is the next thing to establish.
+
+Either way the honest state is that P3's exit gate cannot be met on this firmware without
+changing the platform assumption, and that is a decision to take deliberately rather than to keep
+writing trampolines for.
+
+So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
+firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
+wait-for-SIPI. It also says what the right tool is. The AP will leave `hlt` on an *interrupt*,
+and its handler is what has to redirect it (the firmware-style trick is to rewrite the stacked
+return address so the `iret` lands elsewhere); or the loop is polling a flag the BSP writes and
+the interrupt only exists to break it out of the halt. Either way the handshake is with the
+firmware's AP stub, not with our trampoline, and the segment setup right after the loop
+(`ax=0xda80`, then `ds`/`ss`/`sp`) is the stub the next attempt has to make sense of.
+
+Nothing in this is worth doing until step 1 has that answer: the three pulled attempts all
+guessed, and the guesses were wrong in the same way.
+
+#### AP start-up: what was tried, and what it taught
+
+A 16-bit to 32-bit to 64-bit trampoline was written, copied to a page below 1 MB,
+described to the processor through a parameter block (CR3, stack, entry, the boot
+processor's GDTR and IDTR), and started with the prescribed sequence. It printed a letter
+per stage on COM1, because a processor that faults before it has an IDT can only be traced
+by the code that is faulting. Its details were the ones that matter: the trampoline's own
+GDT has to agree with the kernel's about selectors 0x08 and 0x10, because the IDT's gates
+name 0x08 for the kernel's code segment; PAE, PGE and the SSE bits go into CR4 before
+paging is switched on; the kernel's GDT and IDT are loaded only once those selectors mean
+the same thing.
+
+It does not work under this machine's firmware, and the tree does not keep code that does
+not work. The evidence, in the order it was gathered:
+
+- **The processor is not where the architecture says it should be.** Inspecting CPU 1 with
+  QEMU's monitor shows it halted in *protected mode inside the ROM*: CS is a 32-bit code
+  segment, CR0.PE is set, CR3 is zero, and EIP is 0xfd0b1, which is the firmware's own
+  AP park loop. The architectural state that accepts a SIPI - real mode, waiting for one -
+  is not this.
+- **So a SIPI is ignored.** The delivery-status bit clears, the machine is fine, and not
+  one letter of the trampoline's trace appears: the vector page was never fetched.
+- **An INIT does reach it** - QEMU's `-d int,cpu_reset` log records `CPU Reset (CPU 1)` -
+  **and then the whole machine resets**, which is a triple fault on the AP taking the
+  system with it. That happened with the trampoline at 0x9000 (where the firmware keeps
+  its own AP trampoline, SIPI vector 0x09 - not a safe choice), at 0x8000, with the delay
+  between INIT and SIPI at 10 ms and at 1 ms, and with the INIT's trigger bits corrected
+  to level-asserted as the architecture requires. So the AP's post-INIT path is the
+  firmware's, not ours, and it ends in a fault.
+
+What that means for the next attempt: the firmware has to be part of the answer rather
+than bypassed. Either an AP is started **through the firmware's own handshake** - its
+SIPI vector at 0x9000 plus whatever word in its data area it reads to decide whether it
+is running for the BIOS or for an OS - or the machine is booted by something that leaves
+APs in the architectural wait-for-SIPI state. Both are a bigger piece of work than one
+milestone, and neither is guessable: the next attempt starts by reading the firmware.
+
+Two things came out of the attempt anyway, and are in the tree: the boot clock above, and
+one lesson about the console. A bounded spin in `kputc` looked like robustness - a UART
+that stops answering should cost characters, not the machine - and it silently dropped log
+lines, because the transmit register stays busy while the host is not draining the socket.
+It went back to waiting.
+
+**Exit:** near-linear scaling on a parallel workload; 24 h SMP stress with no lost
+wakeups.
+
+### P4 · Storage (3 sprints)
+
+HBFS v4: 64-bit block numbers, extents, checksummed journal, online fsck, COW snapshots,
+quotas, ACLs. VFS page cache with writeback and readahead. NVMe, AHCI NCQ, GPT.
+
+**Exit:** 1 TB image, > 100 MB/s, 10 000 crash-injection iterations clean.
+
+### P5 · Networking (3 sprints)
+
+Socket layer with non-blocking I/O, `select/poll/epoll`, `SO_*` options and
+`getsockopt`; TCP window scaling, SACK, RTT/RTO estimation, TIME_WAIT; UNIX sockets;
+netdevice abstraction; IPv6 basics; stateful packet filter; TLS 1.3 port; service
+supervisor (DHCP renew, DNS cache, NTP).
+
+**Exit:** line-rate virtio throughput, 1 000 sockets, chaos-tested under loss.
+
+### P6 · Security and multi-user (4 sprints)
+
+Accounts with shadow password hashes, login and sessions, `su`/`sudo` equivalent, groups;
+**enforced capabilities** from app manifests; object manager for hierarchical config with
+ACLs; audit log; kernel KASLR; hardened allocator; stack canaries; secure RNG.
+
+**Exit:** unprivileged code cannot reach a device, peer memory or a forbidden file;
+permission suite and fuzzers clean.
+
+### P7 · Devices, PnP and power (3 sprints)
+
+PCI BAR assignment, MSI/MSI-X, driver registry with probe/attach and refcounts; ACPI
+shutdown/reboot/sleep/battery/thermal; USB (UHCI/EHCI) + HID; virtio-gpu; HDA audio.
+
+**Exit:** clean shutdown, USB input, audio, no hard-coded IRQs or addresses.
+
+### P8 · UI and UX (4 sprints)
+
+Damage-tracked compositing, vsync-aware flip, hardware cursor, shadows and rounded
+corners, window animations, 1080p/4K, multi-monitor; TrueType rasterizer and a system
+font; widget toolkit and design system; taskbar grouping with live thumbnails,
+start-menu search and favourites, notification centre with actions, drag and drop,
+multi-format clipboard, shortcut editor, settings with live preview, onboarding,
+accessibility (keyboard navigation, focus rings, high contrast, scalable UI).
+
+**Exit:** 60 FPS at 1080p with 30 windows, UI latency < 50 ms, drag and drop between
+editor and file manager, one visual language.
+
+### P9 · Applications and utilities (continuous from P1)
+
+Productivity (BEdit+ with multi-document and undo tree, BSheet, BWriter, BSlides,
+BDraw, BMail, BCal, BContacts, BTasks), system tools (BTerm+ tabs/splits/256 colours,
+BForager+ tabs/previews/archives, task manager, package manager GUI, backup, disk
+tools), internet (BBrowser with an HTML 4 / CSS1 subset, feed reader), development
+(BDev IDE, debugger front-end, disassembler, `bscript`), media (image viewer, player,
+screen capture), and a shell grown to ~200 commands with consistent flags and man pages.
+
+### P10 · Reliability and performance (continuous)
+
+Panic screen with symbolised stacks and recovery, crash dumps over serial, 24 h soak
+and reboot loops, OOM/disk-full/network-chaos injection, performance gates that fail a
+pull request on regression.
+
+- [x] OOM / disk-full / dropped-frame injection (`kernel/faultinject.inc`,
+  `SYS_FAULTINJECT`): arm a counter and the next page allocations, disk writes or
+  outgoing frames fail. `fault_inject_test` walks every failure depth of the fork path
+  and requires the free-page count to come back each time, a file create whose writes
+  all fail to report an error and still work afterwards, and a dropped frame to be
+  retried past. `make check-faults` repeats it; `check-runtime` runs it once.
+- [ ] Crash dumps over serial, 24 h soak, performance gates.
+
+### P11 · Ecosystem and release engineering (continuous)
+
+SDK container with cross toolchain, libc, headers and samples; `hbpkg` v2 with signatures
+and dependencies; reproducible builds, SBOM, signed ISOs; generated API reference;
+porting guide.
+
+## Out of scope
+
+Printing, domains/Active Directory, COM/DCOM, Terminal Services, and binary compatibility
+with Win32 applications. These would consume the effort the kernel needs and cannot be
+reached credibly.
+
+## Specs
+
+Normative documents live in `docs/spec/`:
+
+| Document | Covers |
+|---|---|
+| `VMM.md` | Address spaces, isolation rules, `mmap` semantics, fault handling |
+| `ABI.md` | Syscall conventions, 32/64-bit compatibility, structure layouts |
+| `SCHED.md` | Task model, priorities, preemption, SMP affinity, signals |
+| `FS_V4.md` | On-disk format, journal, snapshots, quotas, ACLs |
+| `DRIVER_MODEL.md` | Driver registry, probe/attach, IRQ/MSI, DMA rules |
+| `SECURITY.md` | Identities, capabilities, ACLs, audit, sandboxing |
+| `COMPOSITOR.md` | Surface model, damage, present path, input routing |
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| 64-bit port stalls | 32-bit tree stays green; port behind a HAL, subsystem by subsystem; go/no-go at P2 exit |
+| C in the kernel erodes style | Freestanding subset only, MISRA-lite rules in `STYLE_GUIDE.md`, enforced by `make lint` |
+| Scope explosion | Fixed sprint exit criteria and the explicit out-of-scope list above |
+| Emulator-only confidence | QEMU first, then real hardware; KVM in CI |
+| CI time balloons | Snapshot-based QEMU tests, parallel jobs, hard 10-minute budget |
 The third route - the architecture's own, INIT then a startup IPI - has been tried again with
 what has been learnt since the earlier attempts, and it is closer than the notes suggested. With
 the corrected level-asserted INIT encoding the INIT is now *clean*: `-d cpu_reset` shows the

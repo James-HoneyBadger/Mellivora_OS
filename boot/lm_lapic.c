@@ -65,11 +65,22 @@ int lapic_send_ipi(u32 dest, u32 mode, u8 vector)
     }
 
     u32 command = ((u32)mode << 8) | (u32)vector | ((dest & 0xFF) << 24);
+    u32 level = (1u << 15);             /* the trigger is level, not edge */
+
     if (mode == LAPIC_IPI_INIT) {
-        /* An INIT is a level-triggered assert: bit 15 says the trigger is level
-         * and bit 14 that the level is asserted. Sending it edge-triggered is
-         * what a lot of example code does and what the architecture does not. */
-        command |= (1u << 15) | (1u << 14);
+        /* An INIT is not one message but an assertion and a release of it, and the
+         * delivered bit stays set for as long as the level is held - so a sender
+         * that asserts and then waits for the bit to clear waits for ever. That was
+         * the bug: every earlier attempt at starting a processor hung here without
+         * saying so, because the wait has no timeout that a fast machine reaches.
+         * Assert, then deassert, and the second message is the one that completes.
+         */
+        lapic_write(LAPIC_ICR_HIGH, 0);
+        lapic_write(LAPIC_ICR_LOW, command | level | (1u << 14));
+        for (int spin = 0; spin < 100000; spin++) {
+            __asm__ volatile("pause");
+        }
+        command &= ~(1u << 14);         /* level, but no longer asserted */
     }
 
     lapic_write(LAPIC_ICR_HIGH, 0);
