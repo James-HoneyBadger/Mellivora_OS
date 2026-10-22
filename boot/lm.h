@@ -23,6 +23,7 @@ void *memset(void *dst, int value, unsigned long n);
 
 /* Console: COM1, initialised by the nucleus before anything else prints. */
 void kputc(char c);
+u64 kputc_count(void);
 void kputs(const char *s);
 /* The next byte COM1 has received, or -1 when the input register is empty.
  * Polled: the console is a UART, and a task that wants a key spins with

@@ -762,6 +762,13 @@ static void sched_report(void)
     kputs("\r\n");
 
     kputs(ok ? "[sched] sched=ok\r\n" : "[sched] FAIL scheduler round trip\r\n");
+    /* How many characters went out, so the harness can tell a lost line from one
+     * that was never printed. The number is the count before this line, which is
+     * why the line itself is added on the reading side. */
+    kputs("[log] chars=");
+    kput_dec(kputc_count() - 0);
+    kputs("\r\n");
+
     kputs("MELLIVORA64_OK\r\n");
 
     for (;;) {

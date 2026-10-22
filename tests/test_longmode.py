@@ -557,6 +557,15 @@ def main():
         missing = [needle for needle in required if needle not in text]
 
     if missing:
+        # The guest counts every character it emits and prints the total before the
+        # marker, so a missing line can be attributed: equal numbers mean the line
+        # was never printed, and a short count means characters were lost between
+        # the UART and this socket.
+        m = re.search(r"\[log\] chars=(\d+)", text)
+        if m:
+            declared = int(m.group(1)) + len(text[m.start():].split(MARKER)[0])
+            print("  NOTE  the guest declared %d characters, this run captured %d"
+                  % (declared, len(text.split(MARKER)[0])), file=sys.stderr)
         print("  FAIL  missing on COM1: %s" % ", ".join(missing), file=sys.stderr)
         print("---- serial ----", file=sys.stderr)
         print(text[-800:], file=sys.stderr)

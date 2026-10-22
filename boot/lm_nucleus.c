@@ -78,8 +78,19 @@ static void serial_init(void)
     outb(COM1 + 4, 0x0B); /* DTR | RTS | OUT2 */
 }
 
+/* Everything the console ever emitted, so a harness can compare what it captured
+ * with what was sent. A missing line then means either a lost character or a line
+ * that was never printed, and those are very different bugs. */
+static u64 chars_out;
+
+u64 kputc_count(void)
+{
+    return chars_out;
+}
+
 void kputc(char c)
 {
+    chars_out++;
     while ((inb(COM1 + 5) & 0x20) == 0) {
         /* Wait for the transmit register. A bound here looks safer than it is:
          * the register stays busy while the host is not draining the socket, so
