@@ -571,7 +571,26 @@ guessing at it:
    per-stage trace letter on COM1 from the trampoline was what made the first attempt
    debuggable and should be the first thing written again.
 
-Nothing in this is worth doing until step 1 has an answer: the three pulled attempts all
+Step 1 has partly been answered, from the firmware this machine actually boots rather than
+from upstream: `~/.local/share/qemu/bios-256k.bin`, at the address the parked AP was measured
+at (EIP `0xfd0b1`, i.e. file offset `0x3d0b1`), is
+
+    0xfd0af:  f4        hlt
+    0xfd0b0:  eb fd     jmp  -3        <- a two-instruction halt loop
+    0xfd0b2:  fa fc     cli; cld
+    0xfd0b4:  66 b8 80 da 00 00   mov ax, 0xda80
+    0xfd0ba:  8e d8     mov ds, ax
+
+So the AP is not in wait-for-SIPI at all - it is halted in a `hlt; jmp` loop inside the
+firmware, which is exactly why a bare SIPI was ignored: SIPI only means anything to a core in
+wait-for-SIPI. It also says what the right tool is. The AP will leave `hlt` on an *interrupt*,
+and its handler is what has to redirect it (the firmware-style trick is to rewrite the stacked
+return address so the `iret` lands elsewhere); or the loop is polling a flag the BSP writes and
+the interrupt only exists to break it out of the halt. Either way the handshake is with the
+firmware's AP stub, not with our trampoline, and the segment setup right after the loop
+(`ax=0xda80`, then `ds`/`ss`/`sp`) is the stub the next attempt has to make sense of.
+
+Nothing in this is worth doing until step 1 has that answer: the three pulled attempts all
 guessed, and the guesses were wrong in the same way.
 
 #### AP start-up: what was tried, and what it taught
