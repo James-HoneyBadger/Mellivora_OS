@@ -501,6 +501,104 @@ s64 sched_fork(struct lm_fault_frame *parent_frame)
 }
 
 /*
+ * How many tasks are living in one address space. A thread shares its creator's,
+ * so the space belongs to whichever of them is still there and is only released
+ * when the last one has been reaped - a task that has exited but not yet been
+ * collected still owns it.
+ */
+static int space_users(u64 space)
+{
+    int users = 0;
+    for (int i = 0; i < task_count; i++) {
+        u64 state = tasks[i].state;
+        if (tasks[i].cr3 == space &&
+            (state == TASK_READY || state == TASK_RUNNING || state == TASK_DEAD)) {
+            users++;
+        }
+    }
+    return users;
+}
+
+/*
+ * A thread: a task that runs in the caller's address space rather than a copy of
+ * it, starting at `entry` on `user_stack`. That is the whole difference from
+ * fork - there is no new space and no copied memory, so what one thread writes
+ * the other sees, which is the point and also the hazard: nothing here
+ * serialises two of them, so a thread that allocates while another allocates is
+ * still a race. What it does get right is the lifetime: the space outlives the
+ * first of them to exit.
+ */
+s64 sched_clone(u64 entry, u64 user_stack)
+{
+    if (current == NULL || current->mode32) {
+        return -1;
+    }
+    if (user_stack == 0 || !vmm_user_mapped(entry) ||
+        !vmm_user_mapped(user_stack - 1)) {
+        return -1;                  /* the entry or the stack is not in the space */
+    }
+
+    int slot = -1;
+    for (int i = 0; i < task_count; i++) {
+        if (tasks[i].state == TASK_FREE) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        if (task_count >= MAX_TASKS) {
+            return -1;
+        }
+        slot = task_count++;
+    }
+
+    void *kstack = kmem_alloc(stack_cache);
+    if (kstack == NULL) {
+        return -1;
+    }
+
+    struct lm_task *child = &tasks[slot];
+    struct lm_task *parent = current;
+
+    *child = *parent;
+    child->id = (u64)slot;
+    child->state = TASK_FREE;       /* the frame is not there yet */
+    child->kstack_obj = kstack;
+    child->kstack_base = (u64)(unsigned long)kstack;
+    child->kstack_top = child->kstack_base + FRAME_SIZE;
+    child->cr3 = parent->cr3;       /* the same space, not a copy of it */
+    child->parent = parent->id;
+    child->expect_exit = TASK_ANY_EXIT;
+    child->self_report = 0;
+    child->calls = 0;
+    child->ticks = 0;
+    child->exit_code = 0;
+    child->exit_whoami = 0;
+    child->exit_ping = 0;
+
+    /* A frame of its own, built rather than copied: it enters ring 3 at `entry`
+     * on the stack it was given, with interrupts on, which is what a thread's
+     * first instruction in the world looks like. */
+    struct lm_fault_frame *frame =
+        (struct lm_fault_frame *)(unsigned long)(child->kstack_top -
+                                                 sizeof(struct lm_fault_frame));
+    memset(frame, 0, sizeof(*frame));
+    frame->rip = entry;
+    /* The selectors need their ring in the low two bits: IRETQ refuses a CS whose
+     * RPL is not the privilege it is returning to, so these are the same values
+     * the syscall entry stub pushes (0x23 and 0x1B) and not the raw table
+     * indexes. */
+    frame->cs = SEL_UCODE | 3;
+    frame->rflags = 0x202;          /* IF, and the bit that is always set */
+    frame->rsp = user_stack;
+    frame->ss = SEL_UDATA | 3;
+    child->rsp = (u64)(unsigned long)frame;
+
+    child->state = TASK_READY;
+    return (s64)slot;
+}
+
+/*
  * 0 when the child has been reaped and *code is its exit code, 1 while it is
  * still running, -1 when pid is not this task's child or is already gone.
  *
@@ -528,9 +626,13 @@ int sched_wait(s64 pid, u64 *code)
         *code = child->exit_code;
     }
 
-    /* Reap: the slot, the kernel stack and the whole address space go back. */
+    /* Reap: the slot, the kernel stack and - when this was the last task living
+     * in it - the whole address space go back. A thread's space is still in use
+     * by whatever created it. */
     u64 id = child->id;
-    vmm_space_destroy(child->cr3);
+    if (space_users(child->cr3) <= 1) {
+        vmm_space_destroy(child->cr3);
+    }
     if (child->kstack_obj != NULL) {
         kmem_free(stack_cache, child->kstack_obj);
     }

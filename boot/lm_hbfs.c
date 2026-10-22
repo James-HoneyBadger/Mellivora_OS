@@ -602,6 +602,9 @@ static int sync_dirbuf(const struct hbfs_dirbuf *db)
     for (u32 i = 0; i < db->blocks; i++) {
         if (write_block((u64)db->lba + (u64)i * HBFS_SECTORS_PER_BLOCK,
                         db->data + i * HBFS_BLOCK_SIZE) != 0) {
+            kputs("[hbfs] FAIL the directory write at sector ");
+            kput_dec((u64)db->lba + (u64)i * HBFS_SECTORS_PER_BLOCK);
+            kputs("\r\n");
             return -1;
         }
     }
@@ -1017,7 +1020,10 @@ static int hbfs_create_locked(const char *path, u32 type, const void *data, u32 
 
     entry_to(db.data + index * HBFS_DIR_ENTRY_SIZE, name, type, size, start,
              blocks);
-    if (sync_dirbuf(&db) != 0 || sync_allocator() != 0) {
+    if (sync_dirbuf(&db) != 0) {
+        return -1;
+    }
+    if (sync_allocator() != 0) {
         return -1;
     }
     return 0;

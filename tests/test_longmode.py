@@ -167,6 +167,12 @@ REQUIRED = (
     "beep: tone 440 Hz",
     "beep: silent",
     "sh: /beep exited 0x00000000",
+    # Two threads in one address space: the second one runs in the first one's
+    # memory, so what it writes is there for the first one to read.
+    "threads: main tid=",
+    "threads: cloned tid=",
+    "hello from the other thread",
+    "sh: /threads exited 0x00000000",
     "api ok: malloc/free, load, pipe",
     # /init exec's /hello with a command line, and /hello asks for it back
     # along with one environment entry.
@@ -491,6 +497,7 @@ def main():
         ("mellivora:/> ", "run /api"),
         ("mellivora:/> ", "run /net"),
         ("mellivora:/> ", "run /beep"),
+        ("mellivora:/> ", "run /threads"),
         ("mellivora:/> ", "run /nope"),
         ("mellivora:/> ", "spawn /spin"),
         ("mellivora:/> ", "date"),

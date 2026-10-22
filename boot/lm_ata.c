@@ -75,10 +75,12 @@ static void ata_delay400(void)
     }
 }
 
-/* Wait until the drive is idle (or has data, when `want_data`). */
+/* Wait until the drive is idle (or has data, when `want_data`). The bound is
+ * generous on purpose: a write-through cache turns a flush into a real one, and a
+ * poll that gives up too early reports a disk error that is not one. */
 static int ata_wait(int want_data)
 {
-    for (u32 i = 0; i < 4000000; i++) {
+    for (u32 i = 0; i < 20000000; i++) {
         u8 status = inb(ATA_STATUS);
         if ((status & ATA_SR_ERR) != 0 || (status & ATA_SR_DF) != 0) {
             return -1;
@@ -211,7 +213,7 @@ int ata_write(u64 lba, const void *buffer)
     if (!present) {
         return -1;
     }
-    for (int attempt = 0; attempt < 2; attempt++) {
+    for (int attempt = 0; attempt < 3; attempt++) {
         if (ata_select_lba(lba) != 0) {
             return -1;
         }
@@ -224,9 +226,13 @@ int ata_write(u64 lba, const void *buffer)
             outw(ATA_DATA, in[i]);
         }
         /* The write is complete only after the drive says so; without this a
-         * read-back can see the old sector. */
+         * read-back can see the old sector. A flush that reports an error is
+         * retried with the sector: the alternative is a filesystem that loses a
+         * directory because the drive was slow once. */
         outb(ATA_COMMAND, ATA_CMD_FLUSH);
-        return ata_wait(0);
+        if (ata_wait(0) == 0) {
+            return 0;
+        }
     }
     return -1;
 }

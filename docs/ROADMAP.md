@@ -40,7 +40,7 @@ A phase does not close until these are measured:
 | Phase | State | Landed so far |
 |---|---|---|
 | P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
-| P3 | in progress | ACPI/RSDP/MADT/HPET discovery; the local APIC's timer calibrated against the PIT and carrying the 100 Hz tick; the I/O APIC routing the keyboard and pointer, which are now interrupt-driven; atomics and a spinlock under the kernel's critical section; IPI delivery, an interrupt-free boot clock, and the HPET with the TSC calibrated against it; AP start-up attempted twice and pulled, with the firmware's behaviour documented |
+| P3 | in progress | threads (`clone` with a shared address space) and their lifetime; ACPI/RSDP/MADT/HPET discovery; the local APIC's timer calibrated against the PIT and carrying the 100 Hz tick; the I/O APIC routing the keyboard and pointer, which are now interrupt-driven; atomics and a spinlock under the kernel's critical section; IPI delivery, an interrupt-free boot clock, and the HPET with the TSC calibrated against it; AP start-up attempted twice and pulled, with the firmware's behaviour documented |
 | P2 | done, exit gates met | long-mode boot path end to end: stage2 builds the identity map, enters long mode and starts a 64-bit nucleus that reports over COM1 (`make check-longmode`, CI job `longmode`); freestanding C11 nucleus built by a probed cross toolchain, linked into the higher half at `0xFFFFFFFF80100000` with a second mapping in stage2, SYSCALL/SYSRET MSRs programmed and a `syscall` round trip proven; per-CPU blocks behind the GS base and a SYSCALL entry stub that switches to the CPU's kernel stack; ring 3 reached and returned to (user GDT/TSS, `U/S` user pages, `SWAPGS` at entry, three syscalls from the user program with the caller's stack and registers intact); an IDT that catches a ring-3 fault on the TSS `RSP0` stack, resumes it and reports any other fault instead of triple-faulting; a VMM over the frame allocator with 4 KB map/unmap, translation and a per-level U/S check, exercised by a self-test that faults on an unmapped page on purpose; a slab allocator over a dedicated heap window mapped by that VMM; a 100 Hz PIT whose ticks reach ring 3 through the TSS stack; two ring-3 tasks round-robined by that tick with per-task kernel stacks and per-task address spaces; NX on heap and stack pages with SMEP/SMAP enabled where CPUID offers them; a table-driven LP64 syscall ABI with write/yield/brk behind it; PCI enumeration and an ATA PIO block driver whose read/write paths are self-tested; an HBFS reader and VFS front-end, with `/init` loaded from that disk and `exec`/`open`/`read`/`close` behind it; a 32-bit program running in compatibility mode beside the 64-bit tasks through an `INT 0x80` bridge, with one of the tree's own flat binaries loaded unchanged at its `0x00300000` program base; directories and file metadata (`seek`/`stat`/`readdir`/`chdir`/`getcwd`) over a per-task working directory; a writable HBFS (`create`/`mkdir`/`unlink` over the allocation bitmap, plus writes through an open handle, so a file can be appended to) whose output the host test reads back out of the image; console input over COM1 with a line-based shell (`ls`/`cat`/`date`/`mkdir`/`rm`/`quit`) that the host test types at; a CMOS clock; a user-space heap, whole-file load and pipes, with `exec` passing a command line on to `getargs`; a VGA text console with real colour, cursor and clear calls; a PS/2 keyboard whose input the test types with real scancodes; a PS/2 pointer polled from the timer tick, with a `/mouse` cursor demo the test drives through real packets; fork/exec/waitpid, so the shell can run programs and report their exit codes; children that fault are retired instead of stopping the machine; kill and background spawn; an e1000 network driver with ARP and ICMP echo on top of it, so a ring-3 program can ping; the PC speaker behind `BEEP`; first ported subsystem is a 64-bit frame allocator over the E820 map, self-tested at 256 MB and at 8 GB |
 
 ## Phases
@@ -465,8 +465,25 @@ driver.
   `[hpet] base=FED00000 hz=100000000 timers=3 bits=64`,
   `[hpet] a tick measures 10048us (the pit says 10000us), tsc=1005MHz waited=546us
   hpet=ok`.
+- [x] Threads. `CLONE` takes an entry point and a stack top, both in the caller's own
+  space, and builds a task that runs in that space instead of a copy of it - so what one
+  writes the other reads, which is the point and the hazard. The frame is built rather
+  than copied: it enters ring 3 at the entry with interrupts on, and the selectors carry
+  their ring in the low two bits (0x23 and 0x1B), because `IRETQ` refuses a CS whose RPL
+  is not the privilege it is returning to - the first version used the raw table indexes
+  and took a `#GP` on the way back to ring 3. The space is shared, so it now outlives the
+  first of its tasks to exit: the last one reaped releases it, which is what
+  `space_users()` decides. `/threads` shows the whole thing - a thread writes into the
+  parent's memory, exits with 7, and the parent's `WAITPID` collects it and prints what
+  the thread left behind. Nothing serialises two threads yet: an allocator shared between
+  them is still a race, and that is the futex milestone's problem.
+- [x] A disk write that reports an error is retried. Chasing a flaky boot showed the
+  write-through cache turning a flush into a real one and the poll giving up too early,
+  which reads as a filesystem error. The flush is now retried with the sector and the
+  wait bound is twenty times larger; a failing directory write says which sector it was,
+  so the next one of these is not a mystery.
 - [ ] Per-CPU run queues, IPIs, TLB shootdown, preemptible kernel, lockdep-style lock
-  validation, threads (`clone` with shared VM), futex, TLS, high-resolution timers.
+  validation, futex, TLS, high-resolution timers.
 
 #### AP start-up: what was tried, and what it taught
 

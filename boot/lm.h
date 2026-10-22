@@ -352,6 +352,9 @@ void lm_enter_task(u64 rsp) __attribute__((noreturn));
 /* BEEP takes a frequency in RDI and a duration in milliseconds in RSI, and
  * returns 0. The tree's SYS_BEEP (24) passes the duration in ticks instead. */
 #define SYS_BEEP        42
+/* CLONE takes an entry point and a stack top in RDI/RSI, both in the caller's own
+ * space, and returns the new thread's id. */
+#define SYS_CLONE       43
 
 /* The user program's addresses, the same in every task's space. */
 #define USER_CODE_ADDR  0x40000000ULL
@@ -755,6 +758,9 @@ struct lm_fault_frame *sched_faulted(struct lm_fault_frame *frame);
  * command line - that resumes in the same place with 0 in RAX. Returns the child's
  * id, or -1. */
 s64 sched_fork(struct lm_fault_frame *parent_frame);
+/* CLONE: a task in the caller's address space, entering ring 3 at `entry` on
+ * `user_stack`. Returns the new task's id, or -1. */
+s64 sched_clone(u64 entry, u64 user_stack);
 /* WAITPID: 0 when the child has exited and been reaped (*code is its exit code),
  * 1 while it still runs, -1 if pid is not this task's child. Reaping frees the
  * slot, the kernel stack and the address space. */

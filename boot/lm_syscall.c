@@ -952,6 +952,13 @@ static struct lm_fault_frame *sys_wait(struct lm_fault_frame *f)
     return f;
 }
 
+/* clone(entry, stack) - a thread in this address space (see sched_clone). */
+static struct lm_fault_frame *sys_clone(struct lm_fault_frame *f)
+{
+    f->rax = (u64)(s64)sched_clone(f->rdi, f->rsi);
+    return f;
+}
+
 /* kill(pid, signal) - retire another task (see sched_kill). */
 static struct lm_fault_frame *sys_kill(struct lm_fault_frame *f)
 {
@@ -1076,6 +1083,7 @@ static const struct lm_syscall syscalls[] = {
     [40] = {"mouse", sys_mouse, 0},
     [41] = {"netping", sys_netping, 1},
     [42] = {"beep", sys_beep, 0},
+    [43] = {"clone", sys_clone, 1},
 };
 
 #define SYSCALL_COUNT (sizeof(syscalls) / sizeof(syscalls[0]))

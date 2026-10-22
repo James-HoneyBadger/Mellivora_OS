@@ -2539,6 +2539,31 @@ self-test can only prove what a single CPU can observe - that the instructions d
 they say, that a failed compare-and-swap does not write, that trylock refuses a lock it
 already holds, and that the interrupt flag survives a section exactly - and says so.
 
+### Threads
+
+`FORK` copies the caller's address space. `CLONE` does not: it takes an entry point and a
+stack top, both in the caller's own space, and builds a task that runs *in* that space. What
+one writes the other sees, which is the point and the hazard at once.
+
+The frame is built rather than copied, because there is no parent frame to copy - the new
+task has never run. It enters ring 3 at the entry point with interrupts on, and the two
+selectors carry their ring in the low two bits: 0x23 and 0x1B, the same values the syscall
+entry stub pushes. The raw table indexes (0x20 and 0x18) look right and are not: `IRETQ`
+refuses a CS whose requested privilege is not the one it is returning to, and the failure
+arrives as a `#GP` raised *at* the `IRETQ` with the kernel's own RIP in the frame, which
+reads like a kernel bug rather than a bad selector.
+
+Sharing a space changes who owns it. A task that exits is not necessarily the last user of
+its page tables, so the address space is released when the *last* task living in it is
+reaped - `space_users()` counts them, including the dead-but-not-collected - and not
+before. A thread that exits leaves its stack and its memory for its siblings, which is
+exactly what a thread is.
+
+What is missing is everything that makes threads safe rather than merely possible: two
+threads that allocate at the same time race in the allocator, because there is nothing to
+block on. That is the futex milestone, and until it exists `/threads` only shares a buffer
+it writes before it exits.
+
 ### A clock the tick cannot be
 
 A hundred interrupts a second is the right unit for deciding who runs next and far too
