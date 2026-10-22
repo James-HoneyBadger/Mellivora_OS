@@ -73,6 +73,8 @@ REQUIRED = (
     "sched=ok",
     "nx=ok",
     "nx=on smep=on smap=on",
+    # Every tick came from the local APIC and landed on the task's kernel stack.
+    " stack=ok source=lapic",
     "abi=lp64",
     "brk=ok",
     "hello",
@@ -136,6 +138,10 @@ REQUIRED = (
     # the 8254 until the APIC has a vector of its own.
     "[lapic] id=0 version=14",
     " lapic=ok",
+    # ... and the tick is the APIC's now, at the same 100 Hz the PIT was: the
+    # calibration is measured against the PIT's spare channel, and the 8259 is
+    # masked off so nothing can deliver a second clock alongside it.
+    "vector=64 hz=100 tick=lapic",
     "[e1000] 52:54:00:12:34:56 bar=",
     "link=up e1000=ok",
     # ...and the network layer built on it: the gateway resolved by ARP, and

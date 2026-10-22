@@ -63,25 +63,39 @@ void irq_init(void)
 }
 
 /*
+ * One tick's bookkeeping, whichever unit delivered it: the count the rest of the
+ * kernel reads, how much of it was ring 3, and whether the handler ran on the
+ * task's own kernel stack (which is what proves the TSS RSP0 was right).
+ */
+static void tick_account(struct lm_fault_frame *f, int from_apic)
+{
+    struct lm_cpu *cpu = cpu_this();
+    u64 rsp;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+
+    cpu->ticks++;
+    if (from_apic) {
+        cpu->apic_ticks++;
+    }
+    if ((f->cs & 3) == 3) {
+        cpu->user_ticks++;
+    }
+    if (rsp <= cpu->kstack_top && rsp > cpu->kstack_base) {
+        cpu->tick_stack++;
+    }
+}
+
+/*
  * Called from the common entry path for vectors 32..47. The tick is the
  * scheduler's switch point: sched_tick() returns the frame to IRETQ into, which
  * is this task's own frame unless another one was chosen.
  */
 struct lm_fault_frame *lm_irq_dispatch(struct lm_fault_frame *f)
 {
-    struct lm_cpu *cpu = cpu_this();
     int irq = (int)f->vec - LM_IRQ_FIRST;
-    u64 rsp;
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
 
     if (irq == 0) {
-        cpu->ticks++;
-        if ((f->cs & 3) == 3) {
-            cpu->user_ticks++;
-        }
-        if (rsp <= cpu->kstack_top && rsp > cpu->kstack_base) {
-            cpu->tick_stack++;
-        }
+        tick_account(f, 0);
     }
 
     if (irq >= 8) {
@@ -90,4 +104,24 @@ struct lm_fault_frame *lm_irq_dispatch(struct lm_fault_frame *f)
     outb(PIC1_CMD, 0x20);
 
     return irq == 0 ? sched_tick(f) : f;
+}
+
+/*
+ * The same thing from the local APIC, whose acknowledge is a write to its own
+ * EOI register rather than the 8259's two ports. Once this is the tick, the
+ * 8259 is masked off entirely: two clocks with different phases would double
+ * the rate and make every sleep and timeout wrong.
+ */
+struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f)
+{
+    lapic_eoi();
+    tick_account(f, 1);
+    return sched_tick(f);
+}
+
+/* Every line masked: the PIT keeps counting but nothing it says is delivered. */
+void pic_mask_all(void)
+{
+    outb(PIC1_DATA, 0xFF);
+    outb(PIC2_DATA, 0xFF);
 }

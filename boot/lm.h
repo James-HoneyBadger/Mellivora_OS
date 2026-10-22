@@ -65,6 +65,7 @@ struct lm_cpu {
     u64 ticks;            /* 0x78  timer interrupts taken */
     u64 user_ticks;       /* 0x80  ... of those, taken while ring 3 ran */
     u64 tick_stack;       /* 0x88  ... whose handler ran on the TSS stack */
+    u64 apic_ticks;       /* 0x90  ... of those, delivered by the local APIC */
 };
 
 #define CPU_KSTACK_TOP_OFF 0x10
@@ -219,6 +220,11 @@ int kmem_selftest(void);
 
 #define LM_IRQ_FIRST 32
 #define LM_IRQ_COUNT 16
+
+/* Vectors above the 8259's block, for the local APIC: its timer and the
+ * spurious-interrupt vector it falls back to. */
+#define LAPIC_TIMER_VECTOR    64
+#define LAPIC_SPURIOUS_VECTOR 255
 #define LM_TIMER_HZ  100
 
 /* Remap the PIC, start the PIT and unmask IRQ0. Interrupts stay off in the
@@ -546,6 +552,21 @@ int ata_selftest(void);
 int lapic_init(void);
 int lapic_selftest(void);
 u32 lapic_id(void);
+
+/* Acknowledge the interrupt just taken: a write to the local APIC's EOI. */
+void lapic_eoi(void);
+
+/* Calibrate the APIC timer against the PIT's spare channel and start it at
+ * LM_TIMER_HZ, delivering LAPIC_TIMER_VECTOR. 0 on success. */
+int lapic_timer_start(void);
+
+/* The APIC timer's handler: same bookkeeping as an IRQ0 tick, plus the EOI the
+ * local APIC wants instead of the 8259's. */
+struct lm_fault_frame *lm_apic_timer_dispatch(struct lm_fault_frame *f);
+
+/* Stop the 8259 delivering anything: with the APIC ticking, the PIT's IRQ0
+ * would be a second clock with a different phase. */
+void pic_mask_all(void);
 
 /*---------------------------------------
  * ACPI: enough of it to find out how the machine describes itself. Discovery

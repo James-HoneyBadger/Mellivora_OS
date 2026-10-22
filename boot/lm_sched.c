@@ -347,11 +347,14 @@ static void sched_report(void)
         ok = 0;                     /* nothing was ever preempted */
     }
 
-    /* Every tick must land on the task's own kernel stack, and ticks must reach
-     * ring 3 - but not *only* ring 3: a task inside a blocking syscall (the
-     * shell's sleep, waiting for a key) is counted in the kernel, so the two
-     * counters differ by design. */
-    int timer_ok = cpu->ticks > 0 && cpu->user_ticks > 0 &&
+    /* Every tick must land on the task's own kernel stack, must reach ring 3 -
+     * but not *only* ring 3: a task inside a blocking syscall (the shell's
+     * sleep, waiting for a key) is counted in the kernel, so the two counters
+     * differ by design - and must come from the local APIC. A single tick from
+     * the 8259 would mean the old clock is still running alongside the new one,
+     * which doubles the rate and makes every sleep and timeout wrong. */
+    int from_apic = cpu->ticks > 0 && cpu->apic_ticks == cpu->ticks;
+    int timer_ok = from_apic && cpu->ticks > 0 && cpu->user_ticks > 0 &&
                    cpu->tick_stack == cpu->ticks;
     if (!timer_ok) {
         ok = 0;                     /* nothing preempted anything */
@@ -373,6 +376,8 @@ static void sched_report(void)
     kput_dec(cpu->ticks - cpu->user_ticks);
     kputs(" stack=");
     kputs(cpu->tick_stack == cpu->ticks ? "ok" : "FAIL");
+    kputs(" source=");
+    kputs(from_apic ? "lapic" : "pit+mixed");
     kputs("\r\n");
     kputs(timer_ok ? "[timer] timer=ok\r\n"
                    : "[timer] FAIL timer never reached ring 3\r\n");

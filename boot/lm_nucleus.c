@@ -472,6 +472,7 @@ void lm_main(void)
     acpi_init();
     lapic_init();
     lapic_selftest();
+    lapic_timer_start();
     pci_init();
     ata_init();
     ata_selftest();

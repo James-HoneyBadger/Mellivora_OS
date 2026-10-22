@@ -77,6 +77,15 @@ u32 lapic_id(void)
 /* On, count, off. Interrupts are off at boot, so nothing can arrive from the
  * unit while it is enabled - which is the whole reason this can be done before
  * there is a vector to deliver. */
+/* Acknowledge the interrupt just taken. Called from the timer handler before
+ * anything that might be preempted. */
+void lapic_eoi(void)
+{
+    if (lapic != NULL) {
+        lapic_write(LAPIC_EOI, 0);
+    }
+}
+
 int lapic_selftest(void)
 {
     if (lapic == NULL) {
@@ -112,7 +121,6 @@ int lapic_selftest(void)
 
     u32 last = lapic_read(LAPIC_TIMER_CURRENT);
     lapic_write(LAPIC_TIMER_INIT, 0);
-    lapic_write(LAPIC_EOI, 0);
 
     /* Put the 8259's line back the way it was found. On a machine whose APIC can
      * be enabled, the PIC reaches the CPU through this pin in ExtINT mode, so a
@@ -120,7 +128,6 @@ int lapic_selftest(void)
      * LINT1 stays masked; it is the NMI pin and nothing here wants one. */
     lapic_write(LAPIC_LVT_LINT1, LVT_MASKED);
     lapic_write(LAPIC_LVT_LINT0, LINT0_EXTINT);
-    lapic_write(LAPIC_SPURIOUS, 0);     /* off again until it has a vector */
 
     kputs(" count=");
     kput_dec(first);
@@ -131,5 +138,93 @@ int lapic_selftest(void)
         return -1;
     }
     kputs(" lapic=ok\r\n");
+    return 0;
+}
+
+/*---------------------------------------
+ * The tick
+ *
+ * The APIC timer counts at the bus clock divided by the divider, which the
+ * firmware does not tell you and which no two machines agree on - so it is
+ * measured against something known. The PIT's channel 2 is that something: it is
+ * a spare counter nothing else in this port uses, its output is visible as bit 5
+ * of port 0x61, and a one-shot there is an accurate ten milliseconds. Count the
+ * APIC down from its maximum until the PIT's output goes high and the divisor
+ * falls out of the arithmetic.
+ *---------------------------------------*/
+
+static void outb_port(u16 port, u8 value)
+{
+    __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static u8 inb_port(u16 port)
+{
+    u8 value;
+    __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+/* How many APIC ticks pass in one PIT tick (10 ms at 100 Hz). Zero if the
+ * machine would not answer. */
+static u32 measure_per_tick(void)
+{
+    /* Channel 2, mode 0 (interrupt on terminal count), LSB then MSB. */
+    u32 divisor = 1193182u / LM_TIMER_HZ;
+    outb_port(0x43, 0xB0);
+    outb_port(0x42, (u8)(divisor & 0xFF));
+    outb_port(0x42, (u8)(divisor >> 8));
+
+    /* The gate is bit 0; starting the counter with the gate held low would leave
+     * it waiting. Bit 1 stays clear so the speaker does not click. */
+    outb_port(0x61, (u8)((inb_port(0x61) & ~0x02) | 0x01));
+
+    lapic_write(LAPIC_TIMER_DIVIDE, 0);         /* divide by two */
+    lapic_write(LAPIC_TIMER_INIT, 0xFFFFFFFFu);
+
+    u32 elapsed = 0;
+    for (int spin = 0; spin < 100000000; spin++) {
+        if ((inb_port(0x61) & 0x20) != 0) {     /* channel 2's output went high */
+            u32 left = lapic_read(LAPIC_TIMER_CURRENT);
+            elapsed = 0xFFFFFFFFu - left;
+            break;
+        }
+    }
+    lapic_write(LAPIC_TIMER_INIT, 0);
+    outb_port(0x61, (u8)(inb_port(0x61) & ~0x01));
+    return elapsed;
+}
+
+int lapic_timer_start(void)
+{
+    if (lapic == NULL) {
+        return -1;
+    }
+
+    u32 per_tick = measure_per_tick();
+    if (per_tick < 1000) {
+        kputs("[lapic] FAIL the timer would not calibrate\r\n");
+        return -1;
+    }
+
+    /* The unit has to be on for its timer to run, and the spurious vector has to
+     * point at a gate that exists - a spurious interrupt is not acknowledged, so
+     * it must simply return. */
+    lapic_write(LAPIC_TPR, 0);
+    lapic_write(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | TIMER_PERIODIC);
+    lapic_write(LAPIC_TIMER_DIVIDE, 0);
+    lapic_write(LAPIC_TIMER_INIT, per_tick);
+    lapic_write(LAPIC_SPURIOUS, SPURIOUS_ENABLE | LAPIC_SPURIOUS_VECTOR);
+
+    /* The 8259 has had it: the PIT keeps counting into a masked controller. */
+    pic_mask_all();
+
+    kputs("[lapic] timer per tick=");
+    kput_dec(per_tick);
+    kputs(" vector=");
+    kput_dec(LAPIC_TIMER_VECTOR);
+    kputs(" hz=");
+    kput_dec(LM_TIMER_HZ);
+    kputs(" tick=lapic\r\n");
     return 0;
 }

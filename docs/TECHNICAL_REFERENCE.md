@@ -2492,10 +2492,30 @@ the old path back.
 
 The APIC's timer only counts while the unit is enabled (the spurious-vector register's
 enable bit), which is why the test has to switch it on to prove it moves: it sets
-everything masked, enables with spurious vector 0xFF as a placeholder, starts the
-counter at a million, watches the current count fall, then stops it and switches the
-unit off. Interrupts are off at boot, so nothing can be delivered while it is enabled -
-that is the whole reason this can be proved before there is a vector to deliver to.
+everything masked, enables with a placeholder vector, starts the counter at a million,
+watches the current count fall, then stops it.
+
+### The tick moves to the APIC
+
+The timer inside the APIC runs from the bus clock divided by a divider the firmware does
+not publish and no two machines agree on. So it is measured rather than assumed, and
+the measuring stick is the PIT's spare channel: channel 2 is a counter nothing else in
+this port uses, its output is readable as bit 5 of port 0x61, and a one-shot there is an
+accurate ten milliseconds whether or not interrupts are enabled. The APIC is counted
+down from its maximum until that output goes high, and the count it lost is the divisor
+- 5 004 165 on this machine, which is a 500 MHz timer input at divide-by-two.
+
+With the divisor known the timer is set to reload it every tick, vector 64 carries it,
+and the 8259 is masked off entirely. That last part is not tidiness: the PIT is still
+programmed and still firing IRQ0 into a controller that would happily deliver it, and
+two clocks with different phases would double the tick rate - every sleep, every ping
+timeout and the scheduler's own accounting would be wrong in a way that looks like a
+slow machine rather than a bug. The report says `source=lapic` only when *every* tick
+came from the APIC, so a PIT tick that escapes is a failure and not a footnote.
+
+The spurious vector gets a gate of its own and is deliberately not acknowledged: it was
+never put in service, and an EOI for it would tell the unit that the last real interrupt
+had been handled, losing whatever was behind it.
 
 ### The keyboard
 

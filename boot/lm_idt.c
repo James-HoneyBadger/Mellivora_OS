@@ -90,6 +90,10 @@ __asm__(
     /* INT 0x80 from a compatibility-mode task: the one gate software in ring 3
      * reaches through the 32-bit ABI. */
     "LM_ISR_NOERR 128\n"
+    /* The local APIC's own two: its timer, and the spurious vector it falls back
+     * to when an interrupt is withdrawn before it is delivered. */
+    "LM_ISR_NOERR 64\n"
+    "LM_ISR_NOERR 255\n"
     ".globl lm_isr_common\n"
     "lm_isr_common:\n"
     /* GS is swapped only when the interrupted context was ring 3, where the
@@ -152,6 +156,8 @@ __asm__(
 
 /* The INT 0x80 stub, generated with the others but installed by name. */
 void lm_isr_128(void);
+void lm_isr_64(void);
+void lm_isr_255(void);
 
 /* The stub addresses, in vector order, for the IDT builder. */
 extern void *const lm_isr_table[LM_ISR_COUNT];
@@ -209,6 +215,11 @@ void idt_init(void)
     /* The 32-bit tree's programs reach the kernel with INT 0x80. */
     idt_set(INT80_VECTOR, (u64)(unsigned long)lm_isr_128, 3);
 
+    /* The local APIC's two vectors. Both DPL 0, like the 8259's: only the unit
+     * rings them. */
+    idt_set(LAPIC_TIMER_VECTOR, (u64)(unsigned long)lm_isr_64, 0);
+    idt_set(LAPIC_SPURIOUS_VECTOR, (u64)(unsigned long)lm_isr_255, 0);
+
     for (int i = 0; i < LM_IRQ_COUNT; i++) {
         /* Hardware gates are DPL 0: only the PIC rings them, and an interrupt
          * gate clears IF on entry, so a handler never nests. */
@@ -256,6 +267,15 @@ struct lm_fault_frame *lm_fault_dispatch(struct lm_fault_frame *f)
 
     if (f->vec >= LM_IRQ_FIRST && f->vec < LM_IRQ_FIRST + LM_IRQ_COUNT) {
         return lm_irq_dispatch(f);      /* a device, not a fault */
+    }
+    if (f->vec == LAPIC_TIMER_VECTOR) {
+        return lm_apic_timer_dispatch(f);
+    }
+    if (f->vec == LAPIC_SPURIOUS_VECTOR) {
+        /* A spurious interrupt was never put in service, so it is not
+         * acknowledged: an EOI here would tell the unit that the last real
+         * interrupt had been handled, and the one behind it would be lost. */
+        return f;
     }
     if (f->vec == INT80_VECTOR) {
         return lm_int80_dispatch(f);    /* a 32-bit program's syscall */
