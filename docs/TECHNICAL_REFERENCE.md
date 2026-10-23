@@ -1935,10 +1935,11 @@ The 32-bit tree is complete and green; the 64-bit tree is being built beside it,
 from a nucleus that proves the boot path. `make 64bit` builds `mellivora64.img`, a
 separate image with its own stage2 (`stage2-64.bin`, assembled with `-DKERNEL_64BIT=1`)
 and nucleus; `make` still builds the 32-bit image and nothing in this port changes it.
-`make 64bit-v4` builds `mellivora64-v4.img`: the same volume with a v4 superblock and
-checksums on every metadata run. It mounts read-only, because the nucleus cannot yet
-recompute those checksums on a write, so the image that the boot suite writes to stays
-the v3 one.
+`make 64bit-v4` builds `mellivora64-v4.img`: the same volume with a v4 superblock,
+checksums on every metadata run and the journal feature bit. The nucleus mounts it
+writable and writes through the journal, restamping each run it touches; the v3 image and
+the boot suite that writes to it are unchanged, and `tests/test_longmode_v4.py` writes to
+the v4 one and then audits it from the host.
 
 ### Toolchain
 
@@ -3022,12 +3023,15 @@ entry moved. A run-level checksum cannot say which block inside it is bad; per-b
 trailers need the bitmap to grow a block and directory entries to stop straddling block
 boundaries, which changes both readers, so they belong with the v4 writer.
 
-`hbfs_init` prints which one it mounted (`version=3`, or `version=4 features=0x... ro`). A
-v4 volume mounts read-only for the reason the trailers exist: a write would have to restamp
-runs this port does not restamp, so every write entry point refuses it and the write
-self-test reports the skip. `tools/fsck_hbfs.py --complain` recomputes the trailer of every
-metadata region from the bytes on disk and prints the ones that disagree, and
-`tools/validate_constants.py` holds the reader's copy of the layout, the builder's
+`hbfs_init` prints which one it mounted (`version=3`, or `version=4 features=0x...`, with
+` ro` when the volume has no journal to write through). Every metadata write goes through
+`meta_sync`, which reads the sector first and does nothing if it has not changed - that is
+what keeps a transaction inside the journal's fifteen records - and which journals the old
+contents before writing the new ones. `sync_dirbuf` and `sync_allocator` restamp their run's
+trailer before their sectors go out, and the superblock is restamped wherever it is patched,
+including for the journal's own state word. `tools/fsck_hbfs.py --complain` recomputes the
+trailer of every metadata region from the bytes on disk and prints the ones that disagree,
+and `tools/validate_constants.py` holds the reader's copy of the layout, the builder's
 (`populate.py`) and the checker's to the same numbers.
 
 The write-ahead journal lives in the first `HBFS_JOURNAL_BLOCKS` data blocks, which the
@@ -3043,8 +3047,11 @@ pre-image back trades a half-applied transaction for a corrupt volume. The state
 epoch keep the offsets the 32-bit tree gave them (40, 44 and 56) - that is why the v4 header
 begins at 60 - and a superblock patch restamps its CRC, so the "dirty" marker is covered by
 the checksum too. `tools/hbfs_journal.py` is the reference implementation and
-`tests/test_hbfs_journal.py` crashes it at every sector write it performs. The nucleus does
-not write through the journal yet: v4 mounts read-only.
+`tests/test_hbfs_journal.py` crashes it at every sector write it performs; `boot/lm_hbfs.c`
+carries the same protocol in C, with `journal_begin`/`journal_log`/`journal_commit` around
+each public write entry point and `journal_replay` at mount. A volume that cannot be
+replayed - a pre-image whose CRC fails - mounts read-only rather than having the torn
+pre-image written back.
 
 `boot/lm_vfs.c` is the front-end: `vfs_open` / `vfs_read` over a small handle table.
 It is read-only and root-level for now - directories and the other back-ends are part of

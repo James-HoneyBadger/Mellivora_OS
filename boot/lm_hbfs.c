@@ -80,14 +80,17 @@
 /* 3, or 4 when the volume carries the new magic. 0 before a successful mount. */
 static u32 volume_version;
 /*
- * A v4 volume mounts read-only: its metadata runs carry checksums that this port
- * does not recompute yet, so one write would leave the volume failing the audit
- * its own format asks for. The read paths ignore this; every write entry point
- * checks it, and hbfs_writetest reports the skip rather than pretending.
+ * A v4 volume is writable only when it advertises a journal, because a write has
+ * to keep two things true at once: the runs it touches have to be restamped, and
+ * a crash half way through has to be replayable. Without the feature bit the
+ * mount is read-only and every write entry point refuses it; a journal that
+ * cannot be replayed (a torn pre-image) also lands here, so nothing makes a
+ * half-applied volume worse.
  */
 static int read_only;
 
 #define HBFS_WRITABLE (ready && !read_only)
+
 
 /* Which extent block is in the buffer below, so that a read of one 4 KB block
  * does not fetch it eight times. Invalidated by a mount. */
@@ -97,7 +100,50 @@ static u32 extent_cached;
 #define HBFS_ROOT_SENTINEL   0xFFFFFFFFU       /* `start` of the root entry */
 
 #define HBFS_BITMAP_BLOCKS   16
+#define HBFS_BITMAP_BYTES    (HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE)
 #define HBFS_JOURNAL_BLOCKS  4         /* never handed to a file */
+
+/*
+ * The v4 write-ahead journal (roadmap P4, sprint 2). An undo log in the first
+ * HBFS_JOURNAL_BLOCKS data blocks: a metadata sector's old contents are written
+ * there, with the target LBA, the epoch and a CRC-32C, before the new contents
+ * are written; commit writes a record carrying the record count and its own
+ * CRC-32C, so a torn commit cannot pass for a commit. Recovery either clears the
+ * state or writes the pre-images back, and refuses to write back one whose CRC
+ * fails. tools/hbfs_journal.py is the same protocol in Python and
+ * tests/test_hbfs_journal.py crashes it at every write it makes.
+ *
+ * Only v4 volumes are journalled here: a v3 volume has no checksums, so the
+ * pre-image records could not be validated, and v3 images are what the 32-bit
+ * tree's own journal already covers.
+ */
+#define HBFS4_JRNL_MAGIC       0x4A524E4CU    /* 'JRNL', as the 32-bit tree */
+#define HBFS4_JRNL_T_PRE       1
+#define HBFS4_JRNL_T_COMMIT    2
+#define HBFS4_JRNL_SECTS       (HBFS_JOURNAL_BLOCKS * HBFS_SECTORS_PER_BLOCK)
+/* Two sectors per record, and the commit record needs one of its own. */
+#define HBFS4_JRNL_MAX_RECS    ((HBFS4_JRNL_SECTS - 2) / 2)
+#define HBFS4_SB_JRNL_STATE    40              /* dword: 0 clean, 1 open */
+#define HBFS4_SB_JRNL_PTR      44              /* dword: next free journal sector */
+#define HBFS4_SB_JRNL_EPOCH    56              /* dword: transaction counter */
+#define HBFS4_JRNL_PRE_CRC     16              /* dword: CRC of the pre-image */
+#define HBFS4_JRNL_OFF_RECORDS 20              /* dword, commit: record count */
+#define HBFS4_JRNL_OFF_CRC     24              /* dword, commit: CRC of itself */
+
+/* The journal's own state. One transaction at a time; the outermost caller of a
+ * metadata operation owns it, which is why there is no nesting counter: nothing
+ * inside this file starts a second one. */
+static u32 journal_lba;          /* data area start, from the superblock */
+static u32 jrnl_epoch;
+static u32 jrnl_ptr;
+static u32 jrnl_targets[HBFS4_JRNL_MAX_RECS];
+static u32 jrnl_count;
+static int jrnl_open;
+static int jrnl_failed;
+static u8 jrnl_sector[512];      /* pre-image or header, one at a time */
+static u8 meta_sector[512];      /* the read-back used to skip unchanged sectors */
+static u32 crc_table[256];
+
 #define HBFS_MODE_FILE       0644
 #define HBFS_MODE_EXEC       0755
 
@@ -205,10 +251,305 @@ static int write_block(u64 lba, const void *buffer)
     return 0;
 }
 
+/*---------------------------------------
+ * CRC-32C, and the journal that depends on it
+ *---------------------------------------*/
+
+/*
+ * The Castagnoli polynomial, the same one the journal's commit record, every
+ * pre-image and every v4 metadata trailer use. The table is built once at mount
+ * because a checksum that walks a 128 KB directory bit by bit is a checksum that
+ * costs more than the write it protects.
+ */
+static void crc_init(void)
+{
+    for (u32 i = 0; i < 256; i++) {
+        u32 crc = i;
+        for (int bit = 0; bit < 8; bit++) {
+            crc = (crc >> 1) ^ (0x82F63B78U & (0U - (crc & 1U)));
+        }
+        crc_table[i] = crc;
+    }
+}
+
+static u32 crc32c(const void *data, u32 length)
+{
+    const u8 *p = data;
+    u32 crc = 0xFFFFFFFFU;
+    for (u32 i = 0; i < length; i++) {
+        crc = crc_table[(crc ^ p[i]) & 0xFFU] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFFU;
+}
+
+/* A v4 metadata run's trailer, recomputed after its contents changed. */
+static void stamp_run(u8 *run, u32 bytes)
+{
+    put32(run + bytes - HBFS4_RUN_CHECKSUM_BYTES, 0);
+    put32(run + bytes - HBFS4_RUN_CHECKSUM_BYTES,
+          crc32c(run, bytes));
+}
+
+/* The superblock keeps its checksum at a fixed offset rather than in a trailer. */
+static void stamp_superblock(u8 *sb)
+{
+    put32(sb + HBFS4_OFF_CHECKSUM, 0);
+    put32(sb + HBFS4_OFF_CHECKSUM, crc32c(sb, 512));
+}
+
+static int bytes_equal(const u8 *a, const u8 *b, u32 n)
+{
+    for (u32 i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * The superblock's journal state, pointer and epoch. These writes are the
+ * protocol's markers, so they are never journalled themselves - but they are
+ * restamped, because on v4 the marker is inside the checksummed sector.
+ */
+static int sb_journal_state(int open)
+{
+    if (ata_read(HBFS_SUPERBLOCK_LBA, jrnl_sector) != 0) {
+        return -1;
+    }
+    put32(jrnl_sector + HBFS4_SB_JRNL_STATE, open ? 1U : 0U);
+    put32(jrnl_sector + HBFS4_SB_JRNL_PTR, open ? jrnl_ptr : 0U);
+    put32(jrnl_sector + HBFS4_SB_JRNL_EPOCH, jrnl_epoch);
+    if (volume_version == 4) {
+        stamp_superblock(jrnl_sector);
+    }
+    return ata_write(HBFS_SUPERBLOCK_LBA, jrnl_sector);
+}
+
+static int journal_begin(void)
+{
+    if (volume_version != 4) {
+        return 0;                   /* v3 is not journalled by this port */
+    }
+    if (jrnl_open) {
+        return 0;
+    }
+    if (ata_read(HBFS_SUPERBLOCK_LBA, jrnl_sector) != 0) {
+        return -1;
+    }
+    jrnl_epoch = le32(jrnl_sector + HBFS4_SB_JRNL_EPOCH) + 1;
+    jrnl_ptr = 0;
+    jrnl_count = 0;
+    jrnl_failed = 0;
+    jrnl_open = 1;
+    if (sb_journal_state(1) != 0) {
+        jrnl_open = 0;
+        return -1;
+    }
+    return 0;
+}
+
+/* Save one sector's old contents. A second log of the same sector is a no-op:
+ * the first record already holds the pre-transaction bytes. */
+static int journal_log(u32 lba)
+{
+    for (u32 i = 0; i < jrnl_count; i++) {
+        if (jrnl_targets[i] == lba) {
+            return 0;
+        }
+    }
+    if (!jrnl_open || jrnl_failed) {
+        return -1;
+    }
+    if (jrnl_count >= HBFS4_JRNL_MAX_RECS) {
+        jrnl_failed = 1;
+        kputs("[hbfs] journal full\r\n");
+        return -1;
+    }
+    if (ata_read(lba, jrnl_sector) != 0) {
+        jrnl_failed = 1;
+        return -1;
+    }
+    u8 header[512];
+    memset(header, 0, sizeof(header));
+    put32(header + 0, HBFS4_JRNL_MAGIC);
+    put32(header + 4, HBFS4_JRNL_T_PRE);
+    put32(header + 8, lba);
+    put32(header + 12, jrnl_epoch);
+    put32(header + HBFS4_JRNL_PRE_CRC, crc32c(jrnl_sector, 512));
+    /* Payload first: a crash between the two writes leaves a record whose
+     * header is not valid yet, and replay ignores those. */
+    if (ata_write(journal_lba + jrnl_ptr + 1, jrnl_sector) != 0 ||
+        ata_write(journal_lba + jrnl_ptr, header) != 0) {
+        jrnl_failed = 1;
+        return -1;
+    }
+    jrnl_targets[jrnl_count++] = lba;
+    jrnl_ptr += 2;
+    return 0;
+}
+
+static int journal_commit(void)
+{
+    if (volume_version != 4 || !jrnl_open) {
+        return 0;
+    }
+    if (jrnl_failed) {
+        return -1;
+    }
+    u8 header[512];
+    memset(header, 0, sizeof(header));
+    put32(header + 0, HBFS4_JRNL_MAGIC);
+    put32(header + 4, HBFS4_JRNL_T_COMMIT);
+    put32(header + 8, 0);
+    put32(header + 12, jrnl_epoch);
+    put32(header + HBFS4_JRNL_OFF_RECORDS, jrnl_count);
+    put32(header + HBFS4_JRNL_OFF_CRC, 0);
+    put32(header + HBFS4_JRNL_OFF_CRC, crc32c(header, 512));
+    int result = ata_write(journal_lba + jrnl_ptr, header);
+    jrnl_open = 0;
+    jrnl_ptr = 0;
+    jrnl_count = 0;
+    if (sb_journal_state(0) != 0) {
+        result = -1;
+    }
+    return result;
+}
+
+/* Roll back what this transaction logged, newest first. The pre-images are on
+ * disk, so they are re-read rather than kept in memory. */
+static void journal_abort(void)
+{
+    if (volume_version != 4 || !jrnl_open) {
+        return;
+    }
+    for (u32 i = jrnl_count; i-- > 0; ) {
+        if (ata_read(journal_lba + (u64)i * 2 + 1, jrnl_sector) == 0) {
+            ata_write(jrnl_targets[i], jrnl_sector);
+        }
+    }
+    jrnl_open = 0;
+    jrnl_ptr = 0;
+    jrnl_count = 0;
+    sb_journal_state(0);
+}
+
+/*
+ * A metadata sector: journal it if it is changing, then write it. A sector whose
+ * bytes are already what the buffer says is not written at all, which is what
+ * keeps a transaction small enough for the journal - the allocator rewrites the
+ * whole bitmap otherwise.
+ */
+static int meta_sync(u32 lba, const u8 *data)
+{
+    if (ata_read(lba, meta_sector) == 0 && bytes_equal(meta_sector, data, 512)) {
+        return 0;
+    }
+    if (volume_version == 4 && journal_log(lba) != 0) {
+        return -1;
+    }
+    return ata_write(lba, data);
+}
+
+/*
+ * Recover a volume whose last transaction may not have finished, before
+ * anything else trusts its metadata. A valid commit record means the writes
+ * landed and only the state needs clearing; otherwise every pre-image goes back.
+ */
+static int journal_replay(void)
+{
+    if (volume_version != 4) {
+        return 0;
+    }
+    if (ata_read(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
+        return -1;
+    }
+    u32 state = le32(sector_buffer + HBFS4_SB_JRNL_STATE);
+    if (state == 0) {
+        return 0;
+    }
+    u32 epoch = le32(sector_buffer + HBFS4_SB_JRNL_EPOCH);
+    u32 records = 0;
+    int committed = 0;
+    int torn = 0;
+
+    for (u32 index = 0; index + 1 < HBFS4_JRNL_SECTS; index += 2) {
+        if (ata_read(journal_lba + index, jrnl_sector) != 0) {
+            break;
+        }
+        if (le32(jrnl_sector + 0) != HBFS4_JRNL_MAGIC ||
+            le32(jrnl_sector + 12) != epoch) {
+            break;
+        }
+        u32 type = le32(jrnl_sector + 4);
+        if (type == HBFS4_JRNL_T_COMMIT) {
+            u32 declared = le32(jrnl_sector + HBFS4_JRNL_OFF_RECORDS);
+            u32 crc = le32(jrnl_sector + HBFS4_JRNL_OFF_CRC);
+            put32(jrnl_sector + HBFS4_JRNL_OFF_CRC, 0);
+            committed = (declared == records) &&
+                        (crc == 0 || crc32c(jrnl_sector, 512) == crc);
+            break;
+        }
+        if (type != HBFS4_JRNL_T_PRE) {
+            break;
+        }
+        records++;
+    }
+
+    if (!committed) {
+        for (u32 i = records; i-- > 0; ) {
+            if (ata_read(journal_lba + i * 2, meta_sector) != 0 ||
+                ata_read(journal_lba + i * 2 + 1, jrnl_sector) != 0) {
+                torn = 1;
+                break;
+            }
+            u32 crc = le32(meta_sector + HBFS4_JRNL_PRE_CRC);
+            if (crc != 0 && crc32c(jrnl_sector, 512) != crc) {
+                torn = 1;
+                break;
+            }
+            if (ata_write(le32(meta_sector + 8), jrnl_sector) != 0) {
+                torn = 1;
+                break;
+            }
+        }
+    }
+
+    if (torn) {
+        /* Writing back a pre-image that failed its own checksum would trade a
+         * half-applied transaction for a corrupt volume. Leave it alone and
+         * mount read-only so nothing makes it worse. */
+        kputs("[hbfs] journal=unreplayable (torn pre-image), mounting read-only\r\n");
+        return 1;
+    }
+
+    /* Re-read: if the superblock was one of the sectors rolled back, the copy
+     * read at entry holds the modified free count, and patching that copy would
+     * quietly undo the undo. */
+    if (ata_read(HBFS_SUPERBLOCK_LBA, jrnl_sector) != 0) {
+        return -1;
+    }
+    put32(jrnl_sector + HBFS4_SB_JRNL_STATE, 0);
+    put32(jrnl_sector + HBFS4_SB_JRNL_PTR, 0);
+    if (volume_version == 4) {
+        stamp_superblock(jrnl_sector);
+    }
+    if (ata_write(HBFS_SUPERBLOCK_LBA, jrnl_sector) != 0) {
+        return -1;
+    }
+    kputs("[hbfs] journal=");
+    kputs(committed ? "committed" : "rolled-back");
+    kputs(" records=");
+    kput_dec(records);
+    kputs("\r\n");
+    return 0;
+}
+
 int hbfs_init(void)
 {
     ready = 0;
     read_only = 0;
+    jrnl_open = 0;
     extent_cached = HBFS_ROOT_SENTINEL;
     file_count = 0;
 
@@ -218,12 +559,17 @@ int hbfs_init(void)
     if (ata_read(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
         return -1;
     }
+    crc_init();
+
     u32 magic = le32(sector_buffer);
     if (magic == HBFS_MAGIC) {
         volume_version = 3;
     } else if (magic == HBFS4_MAGIC) {
         volume_version = 4;
-        read_only = 1;              /* readable; the writer has not landed */
+        /* Writable only if the volume says it has a journal: without one the
+         * writer could not keep the checksums true across a crash. */
+        read_only = (le32(sector_buffer + HBFS4_OFF_FEATURES)
+                     & HBFS4_FEATURE_JOURNAL) == 0;
     } else {
         kputs("[hbfs] no superblock at LBA 4096\r\n");
         return -1;
@@ -237,6 +583,22 @@ int hbfs_init(void)
     bitmap_lba = le32(sector_buffer + 20);
     data_lba = le32(sector_buffer + 24);
     total_blocks = le32(sector_buffer + 8);
+    free_blocks = le32(sector_buffer + 12);
+    journal_lba = data_lba;
+
+    /* Before anything trusts the metadata: finish or undo the last transaction.
+     * Then re-read the superblock, because replay may have restored it. */
+    int replayed = journal_replay();
+    if (replayed < 0) {
+        kputs("[hbfs] journal replay failed\r\n");
+        return -1;
+    }
+    if (replayed > 0) {
+        read_only = 1;
+    }
+    if (ata_read(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
+        return -1;
+    }
     free_blocks = le32(sector_buffer + 12);
 
     for (u32 i = 0; i < HBFS_BITMAP_BLOCKS; i++) {
@@ -275,7 +637,9 @@ int hbfs_init(void)
     if (volume_version == 4) {
         kputs(" features=0x");
         kput_hex(le32(sector_buffer + HBFS4_OFF_FEATURES), 8);
-        kputs(" ro");
+        if (read_only) {
+            kputs(" ro");
+        }
     }
     kputs("\r\n");
     return 0;
@@ -736,11 +1100,17 @@ static int open_dir(const struct hbfs_entry *dir, struct hbfs_dirbuf *db)
 
 static int sync_dirbuf(const struct hbfs_dirbuf *db)
 {
-    for (u32 i = 0; i < db->blocks; i++) {
-        if (write_block((u64)db->lba + (u64)i * HBFS_SECTORS_PER_BLOCK,
-                        db->data + i * HBFS_BLOCK_SIZE) != 0) {
+    u32 bytes = db->blocks * HBFS_BLOCK_SIZE;
+    if (volume_version == 4) {
+        /* A directory entry does not align to a sector, so the trailer of the
+         * run has to be restamped here, where the whole run is in one buffer. */
+        stamp_run(db->data, bytes);
+    }
+    for (u32 sector = 0; sector < bytes / 512; sector++) {
+        u32 lba = db->lba + sector;
+        if (meta_sync(lba, db->data + sector * 512) != 0) {
             kputs("[hbfs] FAIL the directory write at sector ");
-            kput_dec((u64)db->lba + (u64)i * HBFS_SECTORS_PER_BLOCK);
+            kput_dec(lba);
             kputs("\r\n");
             return -1;
         }
@@ -767,19 +1137,25 @@ static void mark_block(u32 block, int used)
  * whoever mounts this volume next. */
 static int sync_allocator(void)
 {
+    if (volume_version == 4) {
+        stamp_run(bitmap, HBFS_BITMAP_BYTES);
+    }
+    /* Sector by sector, so that only what changed is journalled and written. */
+    for (u32 sector = 0; sector < HBFS_BITMAP_BYTES / 512; sector++) {
+        if (meta_sync(bitmap_lba + sector, bitmap + sector * 512) != 0) {
+            return -1;
+        }
+    }
+
     if (ata_read(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
         return -1;
     }
     put32(sector_buffer + 12, free_blocks);
-    if (ata_write(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
-        return -1;
+    if (volume_version == 4) {
+        stamp_superblock(sector_buffer);
     }
-
-    for (u32 i = 0; i < HBFS_BITMAP_BLOCKS; i++) {
-        if (write_block((u64)bitmap_lba + (u64)i * HBFS_SECTORS_PER_BLOCK,
-                        bitmap + i * HBFS_BLOCK_SIZE) != 0) {
-            return -1;
-        }
+    if (meta_sync(HBFS_SUPERBLOCK_LBA, sector_buffer) != 0) {
+        return -1;
     }
     return 0;
 }
@@ -1105,7 +1481,14 @@ static int hbfs_write_locked(const char *path, u64 offset, const void *data,
 int hbfs_write(const char *path, u64 offset, const void *data, u32 size)
 {
     sched_lock();
-    int result = hbfs_write_locked(path, offset, data, size);
+    int result = -1;
+    if (journal_begin() == 0) {
+        if (hbfs_write_locked(path, offset, data, size) == 0) {
+            result = journal_commit();
+        } else {
+            journal_abort();
+        }
+    }
     sched_unlock();
     return result;
 }
@@ -1169,7 +1552,14 @@ static int hbfs_create_locked(const char *path, u32 type, const void *data, u32 
 int hbfs_create(const char *path, u32 type, const void *data, u32 size)
 {
     sched_lock();
-    int result = hbfs_create_locked(path, type, data, size);
+    int result = -1;
+    if (journal_begin() == 0) {
+        if (hbfs_create_locked(path, type, data, size) == 0) {
+            result = journal_commit();
+        } else {
+            journal_abort();
+        }
+    }
     sched_unlock();
     return result;
 }
@@ -1227,7 +1617,14 @@ static int hbfs_mkdir_locked(const char *path)
 int hbfs_mkdir(const char *path)
 {
     sched_lock();
-    int result = hbfs_mkdir_locked(path);
+    int result = -1;
+    if (journal_begin() == 0) {
+        if (hbfs_mkdir_locked(path) == 0) {
+            result = journal_commit();
+        } else {
+            journal_abort();
+        }
+    }
     sched_unlock();
     return result;
 }
@@ -1282,7 +1679,14 @@ static int hbfs_remove_locked(const char *path)
 int hbfs_remove(const char *path)
 {
     sched_lock();
-    int result = hbfs_remove_locked(path);
+    int result = -1;
+    if (journal_begin() == 0) {
+        if (hbfs_remove_locked(path) == 0) {
+            result = journal_commit();
+        } else {
+            journal_abort();
+        }
+    }
     sched_unlock();
     return result;
 }

@@ -837,7 +837,8 @@ that to the new structures rather than inventing a second mechanism.
 - [ ] A write-ahead journal with a checksummed commit record: intent, commit, then the real
       blocks. A volume that is interrupted between any two of those must come back to a state
       the fsck calls consistent. **The format and the recovery rules are written and
-      crash-tested; the nucleus does not write through it yet.** `tools/hbfs_journal.py` is the
+      crash-tested, and the nucleus now writes through them; the port itself has not been
+      booted.** `tools/hbfs_journal.py` is the
       protocol as an executable specification: pre-images in the journal area with their own
       CRCs, a commit record that carries the record count and its own CRC-32C (a torn commit
       must not count as one), the state/pointer/epoch at 40/44/56 - the same offsets v3 uses,
@@ -853,13 +854,26 @@ that to the new structures rather than inventing a second mechanism.
       replay that undoes the superblock must re-read it before patching the state, or it
       writes the *modified* free count back over the undo. `make check-journal-crash` asks for
       the roadmap's ten thousand iterations; it takes about twenty minutes.
+
+      In the nucleus the same protocol runs around each public write entry point, and
+      `meta_sync` is what keeps a transaction small enough for the journal's fifteen records:
+      it reads the sector first and does nothing when the bytes have not changed, so a
+      bitmap that was rebuilt in memory costs one sector plus the sector holding its trailer.
+      `sync_dirbuf` and `sync_allocator` restamp run trailers, the superblock is restamped
+      wherever it is patched - including for the journal's own state word - and a volume whose
+      journal cannot be replayed (a torn pre-image) mounts read-only instead of having the
+      torn pre-image written back. A v4 volume is writable only when its feature word says it
+      has a journal, so an older image still mounts read-only. **None of that has been
+      booted:** `make check-longmode-v4` writes to the volume from the shell and then audits
+      it from the host, which is the run that would prove it.
 - [ ] The crash harness: `tools/crash_inject.py` exists for the 32-bit tree, so the 64-bit
       path gets the same treatment - power the guest off at a chosen sector write and re-mount.
       The exit gate is ten thousand iterations, so the harness has to run unattended and count.
       **Done offline:** the crashes above are injected at the write itself, which is a stricter
-      thing than powering a guest off - it is the same event with the scheduler taken out.
-      Powering the *guest* off still needs QEMU, and is what the kernel port will be tested
-      with.
+      thing than powering a guest off - it is the same event with the scheduler taken out. The
+      boot test writes through the journal in the nucleus but does not cut its power: powering
+      the guest off at a chosen sector write is still the next thing to build, and it needs
+      QEMU.
 - [ ] Online fsck: the volume reports and repairs itself while mounted, because the offline
       tool is the one that only runs when something has already gone wrong.
 

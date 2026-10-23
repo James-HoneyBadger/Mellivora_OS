@@ -208,14 +208,16 @@ def create_superblock(version=3, features=None, generation=0):
     generation words, the high halves of the 64-bit block counters and a
     CRC-32C over the sector with the checksum field read as zero.
 
-    `features` defaults to what this builder can actually produce: extents, for
-    v4. A volume that says it has no extents while its entries name runs would be
-    lying to the checker, which is the kind of lie a feature word exists to stop.
+    `features` defaults to what this builder can actually produce: extents and a
+    journal, for v4. A volume that says it has no extents while its entries name
+    runs would be lying to the checker, and one that claims no journal is one the
+    kernel mounts read-only - which is exactly what a feature word is for.
     """
     if version not in (3, 4):
         raise ValueError("HBFS version %r is not supported" % (version,))
     if features is None:
-        features = HBFS4_FEATURE_EXTENTS if version == 4 else 0
+        features = (HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL
+                    if version == 4 else 0)
     sb = bytearray(SECTOR_SIZE)
     struct.pack_into('<I', sb, 0,
                      HBFS_MAGIC if version == 3 else HBFS4_MAGIC)  # Magic

@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-"""Boot the v4 volume and prove the mount did not write to it.
+"""Boot the v4 volume, write through its journal, and audit what is left.
 
-The 64-bit nucleus reads HBFS v3 and v4; a v4 volume mounts read-only, because
-its metadata runs carry checksums this port does not recompute, so one write
-would leave the volume failing its own audit. That is a claim about the *kernel*,
-and the only way to check it is to boot it:
+The 64-bit nucleus reads HBFS v3 and v4; a v4 volume that advertises a journal
+mounts writable, and every metadata operation goes through the undo log, with
+each touched run restamped so its checksum still holds afterwards. That is a
+claim about the *kernel*, and the only way to check it is to boot it and then
+read the volume back from outside:
 
-  * the mount line says which format it accepted,
+  * the mount line says which format it accepted and that it is writable,
   * a program reads a file off the volume (`hello from hbfs`),
   * the shell lists the volume and prints a file - the `ls` and `cat` the
-    roadmap's exit criterion asks for, both of them reads,
-  * the write self-test reports the skip instead of pretending to have written,
-  * and the metadata - superblock, bitmap and root directory - is byte-identical
-    afterwards, which no stray write could leave it.
+    roadmap's exit criterion asks for,
+  * the write self-test finishes (`append=ok move=ok`) instead of reporting a
+    skip, which means create, grow, move and remove all went through the journal,
+  * the shell creates and removes a file of its own,
+  * the extent file still reads (`cat /frag`), and
+  * afterwards the metadata is *different* - something really was written - and
+    `fsck_hbfs.py` still calls the volume consistent, checksums included. That
+    last pair is the whole point: a writer that left a stale run checksum would
+    pass the first and fail the second.
 
-The image is built by `make 64bit-v4`; this test only boots it and reads it.
+The image is built by `make 64bit-v4`; this test boots it, writes to it and then
+audits it from the host.
 
 Usage: tests/test_longmode_v4.py [image]
 
@@ -47,6 +54,9 @@ PROMPT = "mellivora:/> "
 SHELL_SCRIPT = (
     (PROMPT, "ls"),
     (PROMPT, "cat /motd"),
+    (PROMPT, "mkdir probe"),
+    (PROMPT, "append /fresh.txt first"),
+    (PROMPT, "rm probe"),
     # /frag is the one file whose entry names an extent block instead of its
     # data, so this read is the only thing in the image that exercises the
     # mapping: three runs, and the last line is in the third of them.
@@ -99,9 +109,12 @@ def main():
         return fail("the mount line does not report a version", text)
     if m.group(1) != "4":
         return fail("the image mounted as v%s, expect v4" % m.group(1), text)
-    if not re.search(r"\[hbfs\][^\r\n]* features=0x[0-9A-Fa-f]{8} ro\b",
-                     text):
-        return fail("the mount line does not report the volume read-only", text)
+    mount = [line for line in text.split("\r\n") if "[hbfs] root=" in line]
+    if not mount:
+        return fail("the mount line is missing", text)
+    if not re.search(r"features=0x[0-9A-Fa-f]{8}$", mount[0].rstrip()):
+        return fail("the mount line does not end at the feature word, so the "
+                    "volume mounted read-only: %r" % mount[0], text)
 
     # Reads off the volume: the program's own read, then the shell's listing
     # and `cat`, which is what the sprint asks a v4 mount to do.
@@ -120,27 +133,35 @@ def main():
     if "bye" not in text:
         return fail("the shell did not leave cleanly", text)
 
-    # The write self-test has to notice and say so, rather than claim a pass.
-    if "[hbfs] append=skipped (read-only volume)" not in text:
-        return fail("the write self-test did not report the read-only skip", text)
-    if "read back:" in text or "write path ok" in text:
-        return fail("something wrote to the volume anyway", text)
+    # The write self-test is the journal's first customer: create, grow, move
+    # and remove, each one a transaction.
+    if "[hbfs] append=ok move=ok" not in text:
+        return fail("the write self-test did not finish through the journal", text)
 
-    # The statement this test exists for: the mount left the metadata alone.
+    # ...and the shell created and removed a file of its own.
+    if "sh: created probe" not in text or "sh: removed probe" not in text:
+        return fail("the shell's mkdir/rm did not go through", text)
+    if "sh: appended to /fresh.txt" not in text:
+        return fail("the shell's append did not go through", text)
+
+    # The statement this test exists for: something was written, and the volume
+    # is still consistent - which means every run the writer touched was
+    # restamped, not just rewritten.
     after = metadata_digest(IMAGE)
-    if before != after:
-        return fail("the boot changed the volume's metadata", text)
+    if before == after:
+        return fail("nothing was written to the volume", text)
 
-    audit = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "tools", "fsck_hbfs.py"), IMAGE,
-         "--complain"],
-        capture_output=True, text=True)
-    if audit.returncode != 0:
-        print(audit.stdout, file=sys.stderr)
-        return fail("the volume fails its own checksum audit after a boot", text)
+    for args in (["--complain"], []):
+        audit = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "fsck_hbfs.py"), IMAGE]
+            + args,
+            capture_output=True, text=True)
+        if audit.returncode != 0:
+            print(audit.stdout, file=sys.stderr)
+            return fail("the volume the guest wrote is not consistent", text)
 
-    print("  PASS  v4 mounted read-only, ls and cat off the volume (including "
-          "the extent file), metadata unchanged, checksums intact")
+    print("  PASS  v4 mounted writable, writes went through the journal "
+          "(including the extent file), and the volume still checks out")
     return 0
 
 

@@ -28,6 +28,7 @@ POPULATE_PATH = ROOT / "populate.py"
 TEST_HBFS_PATH = ROOT / "tests" / "test_hbfs.py"
 LM_HBFS_PATH = ROOT / "boot" / "lm_hbfs.c"
 FSCK_PATH = ROOT / "tools" / "fsck_hbfs.py"
+JOURNAL_PATH = ROOT / "tools" / "hbfs_journal.py"
 
 # Kernel symbol -> (populate symbol, test_hbfs symbol)
 CONSTANT_MAP = {
@@ -75,6 +76,23 @@ LM_CONSTANT_MAP = {
     "HBFS4_FEATURE_EXTENTS": ("HBFS4_FEATURE_EXTENTS", None),
     "HBFS4_FEATURE_JOURNAL": ("HBFS4_FEATURE_JOURNAL", None),
     "HBFS4_FEATURE_SNAPSHOT": ("HBFS4_FEATURE_SNAPSHOT", None),
+}
+
+# The journal's format, in three languages: the nucleus's copy, the checker's and
+# the reference implementation's. A record whose epoch field moved would be an
+# unrecognised record at boot, which is worth a lint failure rather than a trip
+# to the emulator.
+JOURNAL_CONSTANT_MAP = {
+    "HBFS4_JRNL_MAGIC": ("HBFS_JRNL_MAGIC", "JRNL_MAGIC"),
+    "HBFS4_JRNL_T_PRE": ("HBFS_JRNL_T_PRE", "JRNL_T_PRE"),
+    "HBFS4_JRNL_T_COMMIT": ("HBFS_JRNL_T_COMMIT", "JRNL_T_COMMIT"),
+    "HBFS4_SB_JRNL_STATE": (None, "SB_JRNL_STATE"),
+    "HBFS4_SB_JRNL_PTR": (None, "SB_JRNL_PTR"),
+    "HBFS4_SB_JRNL_EPOCH": (None, "SB_JRNL_EPOCH"),
+    "HBFS4_JRNL_PRE_CRC": (None, "PRE_OFF_CRC"),
+    "HBFS4_JRNL_OFF_RECORDS": ("HBFS4_JRNL_OFF_RECORDS", "COMMIT_OFF_RECORDS"),
+    "HBFS4_JRNL_OFF_CRC": ("HBFS4_JRNL_OFF_CRC", "COMMIT_OFF_CRC"),
+    "HBFS4_JRNL_SECTS": ("HBFS_JOURNAL_SECTS", None),
 }
 
 ALLOWED_BINOPS = {
@@ -284,12 +302,16 @@ def main() -> int:
     test_hbfs = parse_python_assignments(TEST_HBFS_PATH)
     lm_hbfs = parse_c_defines(LM_HBFS_PATH)
     fsck = parse_python_assignments(FSCK_PATH)
+    journal = parse_python_assignments(JOURNAL_PATH)
 
     groups = [
         (CONSTANT_MAP, [("kernel.asm", kernel), ("populate.py", populate),
                         ("tests/test_hbfs.py", test_hbfs)]),
         (LM_CONSTANT_MAP, [("boot/lm_hbfs.c", lm_hbfs), ("populate.py", populate),
                            ("tools/fsck_hbfs.py", fsck)]),
+        (JOURNAL_CONSTANT_MAP, [("boot/lm_hbfs.c", lm_hbfs),
+                                ("tools/fsck_hbfs.py", fsck),
+                                ("tools/hbfs_journal.py", journal)]),
     ]
 
     errors = []
