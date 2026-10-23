@@ -6,7 +6,7 @@ image `make 64bit` produces needs a filesystem in it. The on-disk format is the
 one the 32-bit tree already uses - populate.py owns the layout, so this imports
 its constants and FSImage rather than duplicating 288-byte entry packing.
 
-Usage: tools/mk_hbfs64.py <image> <name>=<path> [<name>=<path> ...]
+Usage: tools/mk_hbfs64.py [--version 3|4] <image> <name>=<path> [...]
 """
 
 import os
@@ -19,13 +19,23 @@ import populate  # noqa: E402  (path set up above)
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("usage: mk_hbfs64.py <image> <name>=<path> ...", file=sys.stderr)
+    args = sys.argv[1:]
+    version = 3
+    if args[:1] == ["--version"]:
+        if len(args) < 2 or args[1] not in ("3", "4"):
+            print("--version takes 3 or 4", file=sys.stderr)
+            return 2
+        version = int(args[1])
+        args = args[2:]
+
+    if len(args) < 2:
+        print("usage: mk_hbfs64.py [--version 3|4] <image> <name>=<path> ...",
+              file=sys.stderr)
         return 2
 
-    image = sys.argv[1]
-    fs = populate.FSImage(image)
-    for spec in sys.argv[2:]:
+    image = args[0]
+    fs = populate.FSImage(image, version=version)
+    for spec in args[1:]:
         name, _, path = spec.partition("=")
         if not name or not path:
             print("bad file spec: %s" % spec, file=sys.stderr)

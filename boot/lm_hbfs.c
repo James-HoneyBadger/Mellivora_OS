@@ -64,6 +64,15 @@
 
 /* 3, or 4 when the volume carries the new magic. 0 before a successful mount. */
 static u32 volume_version;
+/*
+ * A v4 volume mounts read-only: its metadata runs carry checksums that this port
+ * does not recompute yet, so one write would leave the volume failing the audit
+ * its own format asks for. The read paths ignore this; every write entry point
+ * checks it, and hbfs_writetest reports the skip rather than pretending.
+ */
+static int read_only;
+
+#define HBFS_WRITABLE (ready && !read_only)
 #define HBFS_NAME_BYTES      252
 #define HBFS_SUBDIR_BLOCKS   16
 #define HBFS_ROOT_SENTINEL   0xFFFFFFFFU       /* `start` of the root entry */
@@ -180,6 +189,7 @@ static int write_block(u64 lba, const void *buffer)
 int hbfs_init(void)
 {
     ready = 0;
+    read_only = 0;
     file_count = 0;
 
     if (!ata_present()) {
@@ -192,7 +202,8 @@ int hbfs_init(void)
     if (magic == HBFS_MAGIC) {
         volume_version = 3;
     } else if (magic == HBFS4_MAGIC) {
-        volume_version = 4;         /* readable; written by nothing yet */
+        volume_version = 4;
+        read_only = 1;              /* readable; the writer has not landed */
     } else {
         kputs("[hbfs] no superblock at LBA 4096\r\n");
         return -1;
@@ -245,6 +256,7 @@ int hbfs_init(void)
     if (volume_version == 4) {
         kputs(" features=0x");
         kput_hex(le32(sector_buffer + HBFS4_OFF_FEATURES), 8);
+        kputs(" ro");
     }
     kputs("\r\n");
     return 0;
@@ -959,7 +971,7 @@ static int extend_in_place(u32 after, u32 count)
 static int hbfs_write_locked(const char *path, u64 offset, const void *data,
                              u32 size)
 {
-    if (!ready || size == 0) {
+    if (!HBFS_WRITABLE || size == 0) {
         return -1;
     }
 
@@ -1026,7 +1038,7 @@ int hbfs_write(const char *path, u64 offset, const void *data, u32 size)
 
 static int hbfs_create_locked(const char *path, u32 type, const void *data, u32 size)
 {
-    if (!ready || size == 0) {
+    if (!HBFS_WRITABLE || size == 0) {
         return -1;
     }
 
@@ -1090,7 +1102,7 @@ int hbfs_create(const char *path, u32 type, const void *data, u32 size)
 
 static int hbfs_mkdir_locked(const char *path)
 {
-    if (!ready) {
+    if (!HBFS_WRITABLE) {
         return -1;
     }
 
@@ -1148,7 +1160,7 @@ int hbfs_mkdir(const char *path)
 
 static int hbfs_remove_locked(const char *path)
 {
-    if (!ready) {
+    if (!HBFS_WRITABLE) {
         return -1;
     }
 
@@ -1223,6 +1235,11 @@ int hbfs_writetest(void)
     /* Nothing below may leak: every block taken is given back when the scratch
      * files go, so the count has to be exactly where it started. */
     u32 before = free_blocks;
+
+    if (read_only) {
+        kputs("[hbfs] append=skipped (read-only volume)\r\n");
+        return 0;
+    }
 
     if (hbfs_create("/grow1", HBFS_FTYPE_FILE, first, sizeof(first)) != 0 ||
         hbfs_create("/grow2", HBFS_FTYPE_FILE, first, sizeof(first)) != 0) {

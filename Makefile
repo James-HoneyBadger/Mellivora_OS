@@ -122,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum
 
 all: $(IMAGE)
 
@@ -604,6 +604,7 @@ KERNEL_64BIN  = kernel64.bin
 KERNEL_64ASM  = kernel64-asm.bin
 STAGE2_64BIN  = stage2-64.bin
 IMAGE_64      = mellivora64.img
+IMAGE_64_V4   = mellivora64-v4.img
 
 # The 64-bit nucleus (roadmap P2) is freestanding C11. The toolchain is probed
 # rather than assumed, because a native gcc on a non-x86 host compiles happily
@@ -743,6 +744,15 @@ kernel64_sectors.inc: $(KERNEL_64BIN)
 $(STAGE2_64BIN): $(STAGE2_SRC) kernel64_sectors.inc
 	$(NASM) -f bin -DKERNEL_64BIT=1 -o $@ -l $(@:.bin=.lst) $<
 
+# The volume both 64-bit images carry, and the one file list that builds it: a
+# v4 image differs from a v3 one in the superblock's magic and the checksums,
+# not in what is on it.
+HBFS64_FILES = init=$(INIT_BIN) hello=$(HELLO_BIN) hello32=$(HELLO32_BIN) \
+	hello_tree=$(HELLO_TREE_BIN) ls=$(LS_BIN) wr=$(WR_BIN) sh=$(SH_BIN) \
+	api=$(API_BIN) spin=$(SPIN_BIN) mouse=$(MOUSE_BIN) net=$(NET_BIN) \
+	beep=$(BEEP_BIN) threads=$(THREADS_BIN) futex=$(FUTEX_BIN) tls=$(TLS_BIN) \
+	hrt=$(HRT_BIN) motd=boot/motd.txt docs/readme.txt=boot/motd.txt
+
 $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.txt
 	@echo "=== Building 64-bit Mellivora image ==="
 	$(DD) if=/dev/zero of=$(IMAGE_64) bs=1M count=$(IMAGE_SIZE_MB) status=none
@@ -750,11 +760,27 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.
 	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64) bs=512 seek=1  conv=notrunc status=none
 	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64) bs=512 seek=33 conv=notrunc status=none
 	@echo "  64-bit HBFS: /init, /hello, /motd"
-	@python3 tools/mk_hbfs64.py $(IMAGE_64) init=$(INIT_BIN) hello=$(HELLO_BIN) hello32=$(HELLO32_BIN) hello_tree=$(HELLO_TREE_BIN) ls=$(LS_BIN) wr=$(WR_BIN) sh=$(SH_BIN) api=$(API_BIN) spin=$(SPIN_BIN) mouse=$(MOUSE_BIN) net=$(NET_BIN) beep=$(BEEP_BIN) threads=$(THREADS_BIN) futex=$(FUTEX_BIN) tls=$(TLS_BIN) hrt=$(HRT_BIN) motd=boot/motd.txt docs/readme.txt=boot/motd.txt
+	@python3 tools/mk_hbfs64.py $(IMAGE_64) $(HBFS64_FILES)
 	@echo "=== $(IMAGE_64) ready ==="
+
+# The same volume as v4: a different superblock magic, the feature and
+# generation words, and a checksum on the superblock and on every metadata run.
+# It mounts read-only, which is why it is a second image rather than the first:
+# the boot suite writes to its volume and that stays a v3 image's job.
+$(IMAGE_64_V4): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.txt
+	@echo "=== Building the v4 64-bit image ==="
+	$(DD) if=/dev/zero of=$(IMAGE_64_V4) bs=1M count=$(IMAGE_SIZE_MB) status=none
+	$(DD) if=$(BOOT_BIN)    of=$(IMAGE_64_V4) bs=512 count=1  conv=notrunc status=none
+	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64_V4) bs=512 seek=1  conv=notrunc status=none
+	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64_V4) bs=512 seek=33 conv=notrunc status=none
+	@python3 tools/mk_hbfs64.py --version 4 $(IMAGE_64_V4) $(HBFS64_FILES)
+	@echo "=== $(IMAGE_64_V4) ready ==="
 
 64bit: $(IMAGE_64)
 	@echo "=== Run with: make run IMAGE=$(IMAGE_64) ==="
+
+64bit-v4: $(IMAGE_64_V4)
+	@echo "=== Run with: make run IMAGE=$(IMAGE_64_V4) ==="
 
 # Same boot path, hand-written nucleus: exercises stage2 and the higher-half
 # mapping without needing a C toolchain at all.
@@ -775,6 +801,12 @@ $(IMAGE_64_ASM): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64ASM)
 # Boot the 64-bit nucleus and assert it reached long mode and reported in.
 check-longmode: $(IMAGE_64)
 	@python3 tests/test_longmode.py $(IMAGE_64)
+
+# Boot the v4 volume: the mount has to say so, a file has to come off it, and
+# the metadata has to be byte-identical afterwards - a read-only mount that
+# wrote would invalidate the checksums it was mounted for.
+check-longmode-v4: $(IMAGE_64_V4)
+	@python3 tests/test_longmode_v4.py $(IMAGE_64_V4)
 
 # -----------------------------------------------------------------------
 # v10.0: Package manager (tools/hbpkg)
@@ -801,6 +833,7 @@ help:
 	@echo "    make uefi         Build UEFI PE32+ EFI application (boot/uefi_loader.efi)"
 	@echo "    make uefi-image   Build UEFI-bootable GPT disk image (mellivora-uefi.img)"
 	@echo "    make 64bit        Build the 64-bit image: C11 nucleus, linked high (mellivora64.img)"
+	@echo "    make 64bit-v4     Same image with a v4 superblock and checksums (mellivora64-v4.img)"
 	@echo "    make 64bit-asm    Same, with the hand-written asm nucleus (no C toolchain needed)"
 	@echo "    make hbpkg        Build package manager (tools/hbpkg)"
 	@echo ""

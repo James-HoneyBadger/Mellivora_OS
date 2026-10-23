@@ -806,6 +806,17 @@ that to the new structures rather than inventing a second mechanism.
       `make check-hbfs-checksum` builds a v4 image with a subdirectory, passes it, then flips
       one byte in each of the four regions and requires the audit to name that region.
 - [ ] Mount, read, and `ls` a v4 volume; the existing suite keeps passing on a v3 one.
+      **Written, not yet booted here.** `make 64bit-v4` builds `mellivora64-v4.img` - the same
+      volume with the v4 superblock and a checksum on every metadata run - and `hbfs_init`
+      mounts it read-only: a write would have to restamp runs this port does not restamp, so
+      every write entry point refuses it, the mount line ends in `ro`, and the write self-test
+      prints `append=skipped (read-only volume)` rather than claiming a pass.
+      `tests/test_longmode_v4.py` boots that image, requires the shell's `ls` and `cat /motd`,
+      and then requires the metadata region - superblock, bitmap and root directory - to be
+      byte-identical and `--complain` to pass, which is a stronger statement than "it still
+      mounts": it is that the mount wrote nothing. The v3 image is unchanged and the suite that
+      writes to it still runs on v3. **The boot test has not been run**: this host has no QEMU.
+      `make check-longmode-v4` is the command that closes this item.
 
 #### Sprint 2 - the journal, and the crash test that means something
 

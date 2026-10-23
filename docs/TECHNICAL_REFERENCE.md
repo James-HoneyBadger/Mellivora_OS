@@ -1935,6 +1935,10 @@ The 32-bit tree is complete and green; the 64-bit tree is being built beside it,
 from a nucleus that proves the boot path. `make 64bit` builds `mellivora64.img`, a
 separate image with its own stage2 (`stage2-64.bin`, assembled with `-DKERNEL_64BIT=1`)
 and nucleus; `make` still builds the 32-bit image and nothing in this port changes it.
+`make 64bit-v4` builds `mellivora64-v4.img`: the same volume with a v4 superblock and
+checksums on every metadata run. It mounts read-only, because the nucleus cannot yet
+recompute those checksums on a write, so the image that the boot suite writes to stays
+the v3 one.
 
 ### Toolchain
 
@@ -3009,10 +3013,13 @@ entry moved. A run-level checksum cannot say which block inside it is bad; per-b
 trailers need the bitmap to grow a block and directory entries to stop straddling block
 boundaries, which changes both readers, so they belong with the v4 writer.
 
-`hbfs_init` prints which one it mounted (`version=3`, or `version=4 features=0x...`), and
-`tools/fsck_hbfs.py --complain` recomputes the checksum from the bytes on disk and prints
-every block that disagrees. `tools/validate_constants.py` holds the reader's copy of the
-layout, the builder's (`populate.py`) and the checker's to the same numbers.
+`hbfs_init` prints which one it mounted (`version=3`, or `version=4 features=0x... ro`). A
+v4 volume mounts read-only for the reason the trailers exist: a write would have to restamp
+runs this port does not restamp, so every write entry point refuses it and the write
+self-test reports the skip. `tools/fsck_hbfs.py --complain` recomputes the trailer of every
+metadata region from the bytes on disk and prints the ones that disagree, and
+`tools/validate_constants.py` holds the reader's copy of the layout, the builder's
+(`populate.py`) and the checker's to the same numbers.
 
 `boot/lm_vfs.c` is the front-end: `vfs_open` / `vfs_read` over a small handle table.
 It is read-only and root-level for now - directories and the other back-ends are part of
