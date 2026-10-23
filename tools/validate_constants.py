@@ -67,6 +67,11 @@ LM_CONSTANT_MAP = {
     "HBFS4_OFF_CHECKSUM": ("HBFS4_OFF_CHECKSUM", "HBFS4_OFF_CHECKSUM"),
     "HBFS4_RUN_CHECKSUM_BYTES": ("HBFS4_RUN_CHECKSUM_BYTES",
                                  "HBFS4_RUN_CHECKSUM_BYTES"),
+    "HBFS4_DE_EXTENTS": ("HBFS4_DE_EXTENTS", "HBFS4_DE_EXTENTS"),
+    "HBFS4_EXTENT_MAGIC": ("HBFS4_EXTENT_MAGIC", "HBFS4_EXTENT_MAGIC"),
+    "HBFS4_EXTENT_HDR": ("HBFS4_EXTENT_HDR", "HBFS4_EXTENT_HDR"),
+    "HBFS4_EXTENT_RECORD": ("HBFS4_EXTENT_RECORD", "HBFS4_EXTENT_RECORD"),
+    "HBFS4_EXTENT_MAX": ("HBFS4_EXTENT_MAX", "HBFS4_EXTENT_MAX"),
     "HBFS4_FEATURE_EXTENTS": ("HBFS4_FEATURE_EXTENTS", None),
     "HBFS4_FEATURE_JOURNAL": ("HBFS4_FEATURE_JOURNAL", None),
     "HBFS4_FEATURE_SNAPSHOT": ("HBFS4_FEATURE_SNAPSHOT", None),
@@ -153,12 +158,34 @@ def parse_kernel_symbols(path: Path) -> Dict[str, int]:
     return symbols
 
 
+def python_logical_lines(text: str):
+    """Join lines that open a bracket they have not closed yet.
+
+    A constant written as `X = ((A - B\n     - C) // D)` is one statement, and a
+    line-at-a-time reader would either miss it or read half an expression.
+    """
+    depth = 0
+    current = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0]
+        if not line.strip() and not current:
+            continue
+        current.append(line.strip())
+        depth += sum(line.count(c) for c in "([{")
+        depth -= sum(line.count(c) for c in ")]}")
+        if depth <= 0:
+            yield " ".join(current)
+            current = []
+            depth = 0
+    if current:
+        yield " ".join(current)
+
+
 def parse_python_assignments(path: Path) -> Dict[str, int]:
     symbols: Dict[str, int] = {}
     pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$")
 
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.split("#", 1)[0].strip()
+    for line in python_logical_lines(path.read_text(encoding="utf-8")):
         if not line or line.startswith("def ") or line.startswith("class "):
             continue
         m = pattern.match(line)
@@ -166,6 +193,10 @@ def parse_python_assignments(path: Path) -> Dict[str, int]:
             continue
         name, expr = m.group(1), m.group(2).strip()
         if name in symbols:
+            continue
+        if '"' in expr or "'" in expr:
+            # A string or a dict of them, joined into one logical line: not a
+            # constant this compares, and parsing it only produces warnings.
             continue
         try:
             symbols[name] = safe_eval_expr(expr, symbols)
@@ -182,8 +213,14 @@ CPP_DEFINE = re.compile(
 
 
 def strip_c_comments(text: str) -> str:
+    """Drop both comment forms and join backslash continuations.
+
+    The join has to come after the comments, or a `//` comment that ends in a
+    backslash would swallow the line after it.
+    """
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
-    return re.sub(r"//[^\n]*", "", text)
+    text = re.sub(r"//[^\n]*", "", text)
+    return re.sub(r"\\[ \t]*\n", " ", text)
 
 
 def parse_c_defines(path: Path) -> Dict[str, int]:

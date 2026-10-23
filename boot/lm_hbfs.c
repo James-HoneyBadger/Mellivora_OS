@@ -57,6 +57,21 @@
  * here yet; tools/fsck_hbfs.py --complain does.
  */
 #define HBFS4_RUN_CHECKSUM_BYTES 4
+/*
+ * Extents (roadmap P4). An entry that sets HBFS4_DE_EXTENTS in its flags word
+ * keeps its data in several runs instead of one: `start` then names a metadata
+ * block holding {block, count} records, and `blocks` is still the number of data
+ * blocks the file occupies. A file that is one run - every small file, and
+ * every file this port writes - stays inline and is read exactly as it always
+ * was, which is the case that must not get slower.
+ */
+#define HBFS4_DE_EXTENTS       0x0001U
+#define HBFS4_EXTENT_MAGIC     0x34584248U   /* on disk: 'H','B','X','4' */
+#define HBFS4_EXTENT_HDR       8             /* magic, record count */
+#define HBFS4_EXTENT_RECORD    8             /* start block, block count */
+#define HBFS4_EXTENT_MAX \
+    ((HBFS_BLOCK_SIZE - HBFS4_EXTENT_HDR - HBFS4_RUN_CHECKSUM_BYTES) / \
+     HBFS4_EXTENT_RECORD)
 
 #define HBFS4_FEATURE_EXTENTS  (1U << 0)
 #define HBFS4_FEATURE_JOURNAL  (1U << 1)
@@ -73,6 +88,10 @@ static u32 volume_version;
 static int read_only;
 
 #define HBFS_WRITABLE (ready && !read_only)
+
+/* Which extent block is in the buffer below, so that a read of one 4 KB block
+ * does not fetch it eight times. Invalidated by a mount. */
+static u32 extent_cached;
 #define HBFS_NAME_BYTES      252
 #define HBFS_SUBDIR_BLOCKS   16
 #define HBFS_ROOT_SENTINEL   0xFFFFFFFFU       /* `start` of the root entry */
@@ -242,7 +261,7 @@ int hbfs_init(void)
 
     cwd_ready = 0;      /* every task starts at the root */
 
-    ready = 1;
+    extent_cached = HBFS_ROOT_SENTINEL;
     kputs("[hbfs] root=");
     kput_dec(root_lba);
     kputs(" data=");
@@ -315,6 +334,7 @@ static void entry_from(const u8 *raw, struct hbfs_entry *out)
     out->size = le32(raw + 256);
     out->start = le32(raw + 260);
     out->blocks = le32(raw + 264);
+    out->flags = (u32)raw[254] | ((u32)raw[255] << 8);
 }
 
 /* Compare a NUL-terminated wanted name against an entry's fixed-width one. */
@@ -339,6 +359,7 @@ void hbfs_root(struct hbfs_entry *out)
     out->size = 0;
     out->start = HBFS_ROOT_SENTINEL;
     out->blocks = HBFS_ROOT_DIR_BLOCKS;
+    out->flags = 0;
 }
 
 static int hbfs_lookup_in_locked(const struct hbfs_entry *dir, const char *name,
@@ -592,6 +613,55 @@ const char *hbfs_getcwd(void)
 }
 
 /*
+ * Which data block holds block number `block` of a file.
+ *
+ * An inline entry is one run starting at entry->start, so this is an addition;
+ * an extent entry names a block of {start, count} records and the block is
+ * found by walking them. The extent block is cached on its number because a
+ * read of one 4 KB block asks eight times whether it has moved.
+ */
+static int file_block(const struct hbfs_entry *entry, u32 block, u32 *out)
+{
+    if ((entry->flags & HBFS4_DE_EXTENTS) == 0) {
+        *out = entry->start + block;
+        return 0;
+    }
+
+    static u8 extent_buffer[HBFS_BLOCK_SIZE];
+    if (extent_cached != entry->start) {
+        if (read_block((u64)data_lba + (u64)entry->start * HBFS_SECTORS_PER_BLOCK,
+                       extent_buffer) != 0) {
+            return -1;
+        }
+        if (le32(extent_buffer) != HBFS4_EXTENT_MAGIC) {
+            extent_cached = HBFS_ROOT_SENTINEL;
+            return -1;
+        }
+        extent_cached = entry->start;
+    }
+
+    u32 count = le32(extent_buffer + 4);
+    if (count == 0 || count > HBFS4_EXTENT_MAX) {
+        return -1;
+    }
+    u32 at = 0;
+    for (u32 i = 0; i < count; i++) {
+        const u8 *record = extent_buffer + HBFS4_EXTENT_HDR + i * HBFS4_EXTENT_RECORD;
+        u32 start = le32(record);
+        u32 blocks = le32(record + 4);
+        if (blocks == 0 || blocks > entry->blocks) {
+            return -1;      /* a corrupt record, not a shorter file */
+        }
+        if (block >= at && block - at < blocks) {
+            *out = start + (block - at);
+            return 0;
+        }
+        at += blocks;
+    }
+    return -1;
+}
+
+/*
  * Copy `count` bytes at `offset` out of a file. The transfer goes through one
  * sector of bounce buffer, so a short tail never writes past the caller's
  * buffer and an unaligned offset is just a partial copy.
@@ -610,8 +680,12 @@ static int hbfs_read_at_locked(const struct hbfs_entry *entry, u64 offset, void 
     u64 done = 0;
     while (done < count) {
         u64 pos = offset + done;
-        u64 lba = (u64)data_lba + (u64)entry->start * HBFS_SECTORS_PER_BLOCK
-                + pos / 512;
+        u32 physical;
+        if (file_block(entry, (u32)(pos / HBFS_BLOCK_SIZE), &physical) != 0) {
+            return -1;
+        }
+        u64 lba = (u64)data_lba + (u64)physical * HBFS_SECTORS_PER_BLOCK
+                + (pos % HBFS_BLOCK_SIZE) / 512;
         u64 in_sector = pos % 512;
         if (ata_read(lba, sector_buffer) != 0) {
             return -1;

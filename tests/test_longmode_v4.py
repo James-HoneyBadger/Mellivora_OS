@@ -47,6 +47,10 @@ PROMPT = "mellivora:/> "
 SHELL_SCRIPT = (
     (PROMPT, "ls"),
     (PROMPT, "cat /motd"),
+    # /frag is the one file whose entry names an extent block instead of its
+    # data, so this read is the only thing in the image that exercises the
+    # mapping: three runs, and the last line is in the third of them.
+    (PROMPT, "cat /frag"),
     (PROMPT, "quit"),
 )
 
@@ -107,6 +111,12 @@ def main():
         return fail("the shell's ls did not list the volume", text)
     if text.count("hello from hbfs") < 2:
         return fail("cat /motd printed nothing", text)
+    # The extent file: first line, last line, and the trailer, which are in
+    # three different runs. A reader that ignored the extent block would print
+    # the extent records as if they were text and none of these would appear.
+    for needle in ("line 001:", "line 130:", "END OF THE FRAGMENTED FILE"):
+        if needle not in text:
+            return fail("cat /frag is missing %r (extent mapping?)" % needle, text)
     if "bye" not in text:
         return fail("the shell did not leave cleanly", text)
 
@@ -129,8 +139,8 @@ def main():
         print(audit.stdout, file=sys.stderr)
         return fail("the volume fails its own checksum audit after a boot", text)
 
-    print("  PASS  v4 mounted read-only, ls and cat off the volume, "
-          "metadata unchanged, checksums intact")
+    print("  PASS  v4 mounted read-only, ls and cat off the volume (including "
+          "the extent file), metadata unchanged, checksums intact")
     return 0
 
 

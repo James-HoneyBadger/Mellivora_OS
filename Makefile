@@ -122,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents
 
 all: $(IMAGE)
 
@@ -396,7 +396,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum
+check: full check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -412,6 +412,11 @@ check-constants:
 # build their own images in a temporary directory, so this needs no build.
 check-hbfs-checksum:
 	@python3 tests/test_hbfs_checksum.py
+
+# The extent form: a file whose entry names runs instead of data. Offline, like
+# the checksum test - it builds its own images.
+check-hbfs-extents:
+	@python3 tests/test_hbfs_extents.py
 
 validate-syscalls:
 	@python3 tools/validate_syscalls.py
@@ -446,7 +451,7 @@ launcher-catalog: docs/app-catalog.json tools/generate_launcher_catalog.py
 check-launcher-catalog:
 	@python3 tools/generate_launcher_catalog.py --check
 
-lint: validate-constants check-constants check-hbfs-checksum validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest
+lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
 	@echo "=== Lint checks complete ==="
 
@@ -773,7 +778,8 @@ $(IMAGE_64_V4): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/mo
 	$(DD) if=$(BOOT_BIN)    of=$(IMAGE_64_V4) bs=512 count=1  conv=notrunc status=none
 	$(DD) if=$(STAGE2_64BIN) of=$(IMAGE_64_V4) bs=512 seek=1  conv=notrunc status=none
 	$(DD) if=$(KERNEL_64BIN) of=$(IMAGE_64_V4) bs=512 seek=33 conv=notrunc status=none
-	@python3 tools/mk_hbfs64.py --version 4 $(IMAGE_64_V4) $(HBFS64_FILES)
+	@python3 tools/mk_hbfs64.py --version 4 --fragment frag \
+		$(IMAGE_64_V4) $(HBFS64_FILES) frag=boot/frag.txt
 	@echo "=== $(IMAGE_64_V4) ready ==="
 
 64bit: $(IMAGE_64)

@@ -1,0 +1,146 @@
+HBFS v4 extents - a file that is three runs
+==========================================
+
+This file is here to be read off a v4 volume whose directory entry does not
+point at its data directly: the entry names an extent block, and the extent
+block names three runs of one block each. A reader has to walk that list to
+find the block an offset falls in, and a reader that ignores it reads the
+extent block itself as if it were the file.
+
+Nothing about these lines is special except how many there are: the file is
+longer than a block, which is the only excuse the builder needs to split it.
+The first line and the last line are in different runs, so a read that stops
+at the first one is caught by the test that reads this file.
+
+line 001: one of three blocks of text, one block per run.
+line 002: one of three blocks of text, one block per run.
+line 003: one of three blocks of text, one block per run.
+line 004: one of three blocks of text, one block per run.
+line 005: one of three blocks of text, one block per run.
+line 006: one of three blocks of text, one block per run.
+line 007: one of three blocks of text, one block per run.
+line 008: one of three blocks of text, one block per run.
+line 009: one of three blocks of text, one block per run.
+line 010: one of three blocks of text, one block per run.
+line 011: one of three blocks of text, one block per run.
+line 012: one of three blocks of text, one block per run.
+line 013: one of three blocks of text, one block per run.
+line 014: one of three blocks of text, one block per run.
+line 015: one of three blocks of text, one block per run.
+line 016: one of three blocks of text, one block per run.
+line 017: one of three blocks of text, one block per run.
+line 018: one of three blocks of text, one block per run.
+line 019: one of three blocks of text, one block per run.
+line 020: one of three blocks of text, one block per run.
+line 021: one of three blocks of text, one block per run.
+line 022: one of three blocks of text, one block per run.
+line 023: one of three blocks of text, one block per run.
+line 024: one of three blocks of text, one block per run.
+line 025: one of three blocks of text, one block per run.
+line 026: one of three blocks of text, one block per run.
+line 027: one of three blocks of text, one block per run.
+line 028: one of three blocks of text, one block per run.
+line 029: one of three blocks of text, one block per run.
+line 030: one of three blocks of text, one block per run.
+line 031: one of three blocks of text, one block per run.
+line 032: one of three blocks of text, one block per run.
+line 033: one of three blocks of text, one block per run.
+line 034: one of three blocks of text, one block per run.
+line 035: one of three blocks of text, one block per run.
+line 036: one of three blocks of text, one block per run.
+line 037: one of three blocks of text, one block per run.
+line 038: one of three blocks of text, one block per run.
+line 039: one of three blocks of text, one block per run.
+line 040: one of three blocks of text, one block per run.
+line 041: one of three blocks of text, one block per run.
+line 042: one of three blocks of text, one block per run.
+line 043: one of three blocks of text, one block per run.
+line 044: one of three blocks of text, one block per run.
+line 045: one of three blocks of text, one block per run.
+line 046: one of three blocks of text, one block per run.
+line 047: one of three blocks of text, one block per run.
+line 048: one of three blocks of text, one block per run.
+line 049: one of three blocks of text, one block per run.
+line 050: one of three blocks of text, one block per run.
+line 051: one of three blocks of text, one block per run.
+line 052: one of three blocks of text, one block per run.
+line 053: one of three blocks of text, one block per run.
+line 054: one of three blocks of text, one block per run.
+line 055: one of three blocks of text, one block per run.
+line 056: one of three blocks of text, one block per run.
+line 057: one of three blocks of text, one block per run.
+line 058: one of three blocks of text, one block per run.
+line 059: one of three blocks of text, one block per run.
+line 060: one of three blocks of text, one block per run.
+line 061: one of three blocks of text, one block per run.
+line 062: one of three blocks of text, one block per run.
+line 063: one of three blocks of text, one block per run.
+line 064: one of three blocks of text, one block per run.
+line 065: one of three blocks of text, one block per run.
+line 066: one of three blocks of text, one block per run.
+line 067: one of three blocks of text, one block per run.
+line 068: one of three blocks of text, one block per run.
+line 069: one of three blocks of text, one block per run.
+line 070: one of three blocks of text, one block per run.
+line 071: one of three blocks of text, one block per run.
+line 072: one of three blocks of text, one block per run.
+line 073: one of three blocks of text, one block per run.
+line 074: one of three blocks of text, one block per run.
+line 075: one of three blocks of text, one block per run.
+line 076: one of three blocks of text, one block per run.
+line 077: one of three blocks of text, one block per run.
+line 078: one of three blocks of text, one block per run.
+line 079: one of three blocks of text, one block per run.
+line 080: one of three blocks of text, one block per run.
+line 081: one of three blocks of text, one block per run.
+line 082: one of three blocks of text, one block per run.
+line 083: one of three blocks of text, one block per run.
+line 084: one of three blocks of text, one block per run.
+line 085: one of three blocks of text, one block per run.
+line 086: one of three blocks of text, one block per run.
+line 087: one of three blocks of text, one block per run.
+line 088: one of three blocks of text, one block per run.
+line 089: one of three blocks of text, one block per run.
+line 090: one of three blocks of text, one block per run.
+line 091: one of three blocks of text, one block per run.
+line 092: one of three blocks of text, one block per run.
+line 093: one of three blocks of text, one block per run.
+line 094: one of three blocks of text, one block per run.
+line 095: one of three blocks of text, one block per run.
+line 096: one of three blocks of text, one block per run.
+line 097: one of three blocks of text, one block per run.
+line 098: one of three blocks of text, one block per run.
+line 099: one of three blocks of text, one block per run.
+line 100: one of three blocks of text, one block per run.
+line 101: one of three blocks of text, one block per run.
+line 102: one of three blocks of text, one block per run.
+line 103: one of three blocks of text, one block per run.
+line 104: one of three blocks of text, one block per run.
+line 105: one of three blocks of text, one block per run.
+line 106: one of three blocks of text, one block per run.
+line 107: one of three blocks of text, one block per run.
+line 108: one of three blocks of text, one block per run.
+line 109: one of three blocks of text, one block per run.
+line 110: one of three blocks of text, one block per run.
+line 111: one of three blocks of text, one block per run.
+line 112: one of three blocks of text, one block per run.
+line 113: one of three blocks of text, one block per run.
+line 114: one of three blocks of text, one block per run.
+line 115: one of three blocks of text, one block per run.
+line 116: one of three blocks of text, one block per run.
+line 117: one of three blocks of text, one block per run.
+line 118: one of three blocks of text, one block per run.
+line 119: one of three blocks of text, one block per run.
+line 120: one of three blocks of text, one block per run.
+line 121: one of three blocks of text, one block per run.
+line 122: one of three blocks of text, one block per run.
+line 123: one of three blocks of text, one block per run.
+line 124: one of three blocks of text, one block per run.
+line 125: one of three blocks of text, one block per run.
+line 126: one of three blocks of text, one block per run.
+line 127: one of three blocks of text, one block per run.
+line 128: one of three blocks of text, one block per run.
+line 129: one of three blocks of text, one block per run.
+line 130: one of three blocks of text, one block per run.
+
+END OF THE FRAGMENTED FILE

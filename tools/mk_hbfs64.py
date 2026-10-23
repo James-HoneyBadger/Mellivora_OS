@@ -6,7 +6,11 @@ image `make 64bit` produces needs a filesystem in it. The on-disk format is the
 one the 32-bit tree already uses - populate.py owns the layout, so this imports
 its constants and FSImage rather than duplicating 288-byte entry packing.
 
-Usage: tools/mk_hbfs64.py [--version 3|4] <image> <name>=<path> [...]
+Usage: tools/mk_hbfs64.py [--version 3|4] [--fragment NAME] <image> <name>=<path> [...]
+
+--fragment writes that file as three runs described by an extent block, which
+is the only way to put a fragmented file in an image before there is a kernel
+writer to fragment one by growing it.
 """
 
 import os
@@ -21,11 +25,18 @@ import populate  # noqa: E402  (path set up above)
 def main():
     args = sys.argv[1:]
     version = 3
-    if args[:1] == ["--version"]:
-        if len(args) < 2 or args[1] not in ("3", "4"):
-            print("--version takes 3 or 4", file=sys.stderr)
-            return 2
-        version = int(args[1])
+    fragmented = set()
+    while args[:1] in (["--version"], ["--fragment"]):
+        if args[0] == "--version":
+            if len(args) < 2 or args[1] not in ("3", "4"):
+                print("--version takes 3 or 4", file=sys.stderr)
+                return 2
+            version = int(args[1])
+        else:
+            if len(args) < 2:
+                print("--fragment takes a file name", file=sys.stderr)
+                return 2
+            fragmented.add(args[1])
         args = args[2:]
 
     if len(args) < 2:
@@ -50,7 +61,9 @@ def main():
             # directory if the volume does not have it yet.
             directory, _, name = name.rpartition("/")
             fs.create_subdir(directory)
-        fs.add_file(name, data, directory=directory, ftype=ftype)
+        fragments = 3 if name in fragmented else None
+        fs.add_file(name, data, directory=directory, ftype=ftype,
+                    fragments=fragments)
     fs.finalize()
     return 0
 

@@ -2991,10 +2991,19 @@ see the same image:
 | root directory | LBA 4225, 32 blocks (128 KB) |
 | data | LBA 4481 onwards, addressed by each entry's start block |
 
-A directory entry is 288 bytes - name in the first 252, type at 253, size at 256, start
-block at 260, block count at 264. Fourteen entries fit in a 4 KB block with 64 bytes
-left over, so entries straddle block boundaries; the root directory is therefore read
+A directory entry is 288 bytes - name in the first 252, type at 253, flags at 254, size at
+256, start block at 260, block count at 264. Fourteen entries fit in a 4 KB block with 64
+bytes left over, so entries straddle block boundaries; the root directory is therefore read
 once into a 128 KB buffer and scanned linearly rather than block by block.
+
+In v4 a flag bit changes what `start` means. With bit 0 of the flags word clear - which is
+what v3 always writes - `start` is the file's first data block and the file is one run. With
+it set, `start` names an extent block: 4096 bytes holding a magic (`HBX4` on disk), a record
+count, then {block, count} records, and a checksum trailer in the last four bytes, so 510
+runs fit. `blocks` counts data blocks either way, and the bitmap marks the extent block as
+well as each run, which is what keeps the allocator honest about a file that is not
+contiguous. A read maps its block number through the list - `file_block` in `boot/lm_hbfs.c`
+- and a small file never pays for the walk.
 
 The superblock sector also carries the version's own header, and neither version moves the
 other's fields - the magic is what tells them apart:

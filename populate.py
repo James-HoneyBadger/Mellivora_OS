@@ -74,6 +74,18 @@ HBFS4_FEATURE_SNAPSHOT = 1 << 2
 # straddling, which changes both readers, so they belong with the v4 writer.
 HBFS4_RUN_CHECKSUM_BYTES = 4
 
+# Extents (roadmap P4). An entry that sets HBFS4_DE_EXTENTS in its flags word -
+# the two bytes at 254 that v3 has always written as zero - keeps its data in
+# several runs instead of one. `start` then names a metadata block of
+# {block, count} records and `blocks` is still the number of data blocks the file
+# occupies. A file that is one run stays inline and is read exactly as before.
+HBFS4_DE_EXTENTS = 1 << 0
+HBFS4_EXTENT_MAGIC = 0x34584248          # on disk: 'H','B','X','4'
+HBFS4_EXTENT_HDR = 8                     # magic, record count
+HBFS4_EXTENT_RECORD = 8                  # start block, block count
+HBFS4_EXTENT_MAX = ((BLOCK_SIZE - HBFS4_EXTENT_HDR
+                     - HBFS4_RUN_CHECKSUM_BYTES) // HBFS4_EXTENT_RECORD)
+
 # A 2048 MiB image has 523727 complete 4 KB data blocks after the metadata
 # (data starts at LBA 4481). Declaring 524288 made the last 561 blocks point
 # past the end of the image.
@@ -220,7 +232,7 @@ def create_superblock(version=3, features=0, generation=0):
 
 
 def create_dir_entry(filename, ftype, size, start_block,
-                     block_count, timestamp=1000):
+                     block_count, timestamp=1000, flags=0):
     """Create a single HBFS directory entry (288 bytes)."""
     entry = bytearray(HBFS_DIR_ENTRY_SIZE)
 
@@ -237,8 +249,9 @@ def create_dir_entry(filename, ftype, size, start_block,
     # Type: byte 253
     entry[253] = ftype
 
-    # Flags: bytes 254-255
-    struct.pack_into('<H', entry, 254, 0)
+    # Flags: bytes 254-255. v3 has always written zero; v4 uses bit 0 for
+    # "this entry's data is a list of extents".
+    struct.pack_into('<H', entry, 254, flags)
 
     # File size: bytes 256-259
     struct.pack_into('<I', entry, 256, size)
@@ -422,7 +435,14 @@ class FSImage:
                     '<I', directory_buf, off + 260)[0]
                 block_count = struct.unpack_from(
                     '<I', directory_buf, off + 264)[0]
-                if block_count > 0:
+                flags = struct.unpack_from('<H', directory_buf, off + 254)[0]
+                if flags & HBFS4_DE_EXTENTS:
+                    # The entry names an extent block; the data blocks are the
+                    # runs inside it, and they need not be contiguous.
+                    self._mark_block_range(fresh, start_block, 1)
+                    for run_start, run_blocks in self._read_extents(start_block):
+                        self._mark_block_range(fresh, run_start, run_blocks)
+                elif block_count > 0:
                     self._mark_block_range(fresh, start_block, block_count)
                 entries.append((name, ftype, start_block, block_count))
             return entries
@@ -443,6 +463,65 @@ class FSImage:
         self.bitmap = fresh
         self.next_block = self._find_next_block()
         return sum(bin(byte).count('1') for byte in self.bitmap)
+
+    def _read_extents(self, extent_block):
+        """Read an extent block back into a list of (start, blocks) runs.
+
+        A block that does not parse reads as no runs, because the builder is not
+        the checker: fsck_hbfs.py is, and it is the one that has to complain.
+        """
+        lba = HBFS_DATA_START + extent_block * SECTORS_PER_BLOCK
+        self.img.seek(lba_to_offset(lba))
+        raw = self.img.read(BLOCK_SIZE)
+        if len(raw) < BLOCK_SIZE:
+            return []
+        if struct.unpack_from('<I', raw, 0)[0] != HBFS4_EXTENT_MAGIC:
+            return []
+        count = struct.unpack_from('<I', raw, 4)[0]
+        if count > HBFS4_EXTENT_MAX:
+            return []
+        return [struct.unpack_from('<II', raw,
+                                   HBFS4_EXTENT_HDR + i * HBFS4_EXTENT_RECORD)
+                for i in range(count)]
+
+    def _write_fragments(self, data, blocks_needed, fragments):
+        """Write a file as several runs, described by one extent block.
+
+        The runs are allocated one after another, which is not how a fragmented
+        file comes about in practice - growth does that - but it is the only way
+        to put one in an image without a writer, and it exercises exactly what
+        the reader has to do: map a block number through a list that is not
+        monotonic in anything but its own order.
+        """
+        count = max(1, min(fragments, blocks_needed))
+        per = (blocks_needed + count - 1) // count
+
+        runs = []
+        remaining = blocks_needed
+        offset = 0
+        while remaining:
+            take = min(per, remaining)
+            start = self._alloc_blocks(take)
+            self._write_data(start, data[offset:offset + take * BLOCK_SIZE], take)
+            runs.append((start, take))
+            offset += take * BLOCK_SIZE
+            remaining -= take
+        if len(runs) > HBFS4_EXTENT_MAX:
+            raise ValueError("%d extents is more than a block holds" % len(runs))
+
+        block = self._alloc_blocks(1)
+        buf = bytearray(BLOCK_SIZE)
+        struct.pack_into('<I', buf, 0, HBFS4_EXTENT_MAGIC)
+        struct.pack_into('<I', buf, 4, len(runs))
+        for i, (start, take) in enumerate(runs):
+            struct.pack_into('<II', buf,
+                             HBFS4_EXTENT_HDR + i * HBFS4_EXTENT_RECORD,
+                             start, take)
+        stamp_run_checksum(buf)
+        lba = HBFS_DATA_START + block * SECTORS_PER_BLOCK
+        self.img.seek(lba_to_offset(lba))
+        self.img.write(buf)
+        return block, sum(take for _start, take in runs), HBFS4_DE_EXTENTS
 
     def _write_data(self, block_num, data, blocks_needed):
         """Write data to disk at the given block."""
@@ -520,7 +599,8 @@ class FSImage:
               f"  -> block {block_num} (LBA {data_lba})")
         return block_num
 
-    def add_file(self, filename, data, directory=None, ftype=None):
+    def add_file(self, filename, data, directory=None, ftype=None,
+                 fragments=None):
         """Add or update a file in root or a subdirectory."""
         if ftype is None:
             if filename.endswith('.txt') or filename.endswith('.c'):
@@ -531,16 +611,26 @@ class FSImage:
                 ftype = FTYPE_EXEC
 
         blocks_needed = max(1, (len(data) + BLOCK_SIZE - 1) // BLOCK_SIZE)
-        block_num = self._alloc_blocks(blocks_needed)
-        data_lba = self._write_data(block_num, data, blocks_needed)
+        flags = 0
+        if fragments and fragments > 1 and self.version != 4:
+            raise ValueError("extents are a v4 entry flag; a v3 volume has none")
+        if fragments and fragments > 1:
+            block_num, entry_blocks, flags = self._write_fragments(
+                data, blocks_needed, fragments)
+            data_lba = HBFS_DATA_START + block_num * SECTORS_PER_BLOCK
+        else:
+            block_num = self._alloc_blocks(blocks_needed)
+            data_lba = self._write_data(block_num, data, blocks_needed)
+            entry_blocks = blocks_needed
 
         entry = create_dir_entry(
             filename=filename,
             ftype=ftype,
             size=len(data),
             start_block=block_num,
-            block_count=blocks_needed,
-            timestamp=1000 + self.total_files * 100
+            block_count=entry_blocks,
+            timestamp=1000 + self.total_files * 100,
+            flags=flags
         )
 
         if directory and directory in self.subdirs:

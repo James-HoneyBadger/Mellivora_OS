@@ -789,8 +789,22 @@ that to the new structures rather than inventing a second mechanism.
       one number in a copy of the C source and requires the report to name it, and deletes one
       and requires that too. The suite asserts the version, so the day the writer lands and the
       image becomes v4, that assertion is what notices. Nothing writes v4 yet.
-- [ ] Extents: an inode's data described by runs of blocks rather than a list, with the inline
-      case kept for small files so nothing about the current fast path gets slower.
+- [x] Extents: an inode's data described by runs of blocks rather than a list, with the inline
+      case kept for small files so nothing about the current fast path gets slower. An entry
+      whose flags word - the two bytes at 254 that v3 has always written as zero - sets bit 0
+      keeps `start` as an *extent block*: a metadata block of {block, count} records with the
+      same checksum trailer as any other run, room for 510 of them. `blocks` still counts data
+      blocks, so every size and allocation check reads as it did, and a file that is one run is
+      inline with flags 0 and `start` pointing straight at its data. `boot/lm_hbfs.c` gained
+      `file_block`, which walks the list and caches the block it last read, so the v3 path -
+      an addition instead of a walk - is exactly the code it was. `populate.py` can write a
+      fragmented file (`add_file(..., fragments=N)`; `mk_hbfs64.py --fragment`), which is how
+      `/frag` gets into the v4 image, and `tests/test_hbfs_extents.py` holds the format to its
+      promises offline: five blocks in three runs, reassembled byte for byte, the extent block
+      allocated and checksummed, and a one-run file still inline. **Not booted here:**
+      `cat /frag` in `tests/test_longmode_v4.py` is the assertion that the C walk is right, and
+      that needs QEMU. 64-bit block numbers are still to come - the superblock carries the high
+      halves and the validator holds them, but the entry still addresses blocks in 32 bits.
 - [ ] A checksum on every metadata block, and the tool that recomputes them offline
       (`tools/fsck_hbfs.py` grows a `--complain` mode that prints every block whose checksum
       does not match its contents). **Done at run granularity:** the superblock carries a

@@ -414,6 +414,10 @@ struct hbfs_entry {
     u32 size;
     u32 start;      /* data block number, relative to the data area */
     u32 blocks;
+    /* v4 entry flags (word at 254). HBFS4_DE_EXTENTS means `start` names a
+     * block of extents rather than the file's first data block; a v3 entry
+     * always reads as 0, which is what keeps the v3 path exactly as it was. */
+    u32 flags;
 };
 
 #define HBFS_FTYPE_FREE 0

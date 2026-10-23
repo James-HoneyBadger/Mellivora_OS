@@ -49,6 +49,14 @@ HBFS4_OFF_CHECKSUM = 76
 # directory and every subdirectory. The runs have the room without moving a bit
 # or an entry, which is why the checksum is per run rather than per block.
 HBFS4_RUN_CHECKSUM_BYTES = 4
+# Extents: an entry whose flags word sets bit 0 keeps its data in several runs,
+# named by {block, count} records in a metadata block `start` points at.
+HBFS4_DE_EXTENTS = 1 << 0
+HBFS4_EXTENT_MAGIC = 0x34584248      # on disk: 'H','B','X','4'
+HBFS4_EXTENT_HDR = 8                 # magic, record count
+HBFS4_EXTENT_RECORD = 8              # start block, block count
+HBFS4_EXTENT_MAX = ((BLOCK_SIZE - HBFS4_EXTENT_HDR
+                     - HBFS4_RUN_CHECKSUM_BYTES) // HBFS4_EXTENT_RECORD)
 HBFS_SUPERBLOCK_LBA = 4096
 HBFS_BITMAP_BLOCKS = 16
 HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
@@ -81,6 +89,7 @@ FTYPE_NAMES = {
 
 # Directory entry offsets (must match kernel.asm).
 DE_TYPE = 253
+DE_FLAGS = 254
 DE_SIZE = 256
 DE_BLOCK = 260
 DE_BLKCNT = 264
@@ -177,7 +186,21 @@ def complain_checksums(image: str) -> int:
                 ftype = run[off + DE_TYPE]
                 start_block, count = struct.unpack_from("<II", run,
                                                          off + DE_BLOCK)
-                if ftype == FTYPE_DIR and count > 0:
+                flags = struct.unpack_from("<H", run, off + DE_FLAGS)[0]
+                if flags & HBFS4_DE_EXTENTS:
+                    # The extent block is metadata like any other and carries a
+                    # trailer; the runs it names are data and are not checked.
+                    f.seek((HBFS_DATA_START
+                            + start_block * SECTORS_PER_BLOCK) * SECTOR_SIZE)
+                    extents = f.read(BLOCK_SIZE)
+                    label_here = label.rstrip("/") + "/" + name
+                    if struct.unpack_from("<I", extents, 0)[0] != HBFS4_EXTENT_MAGIC:
+                        print(f"  ERROR  {label_here}: {start_block} is not an "
+                              f"extent block")
+                        bad.append((label_here, 0, 0))
+                    else:
+                        take(label_here, extents)
+                elif ftype == FTYPE_DIR and count > 0:
                     walk(HBFS_DATA_START + start_block * SECTORS_PER_BLOCK,
                          count, label.rstrip("/") + "/" + name, depth + 1, seen)
 
