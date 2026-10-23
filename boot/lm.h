@@ -483,8 +483,9 @@ int vfs_seek(int handle, s64 offset, int whence);
 struct vfs_stat {
     u32 type;
     u32 size;
-    u32 blocks;
-    u32 start;
+    u32 blocks;     /* data blocks, whatever form the entry uses */
+    u32 start;      /* first data block, or the extent block for a file whose
+                     * entry names runs instead of data (HBFS4_DE_EXTENTS) */
     char name[VFS_NAME_BYTES];
 };
 

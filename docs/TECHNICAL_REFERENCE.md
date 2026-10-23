@@ -3032,7 +3032,10 @@ metadata region from the bytes on disk and prints the ones that disagree, and
 
 `boot/lm_vfs.c` is the front-end: `vfs_open` / `vfs_read` over a small handle table.
 It is read-only and root-level for now - directories and the other back-ends are part of
-the rest of the syscall port.
+the rest of the syscall port. `vfs_stat` hands userland the entry's `start` and `blocks`
+unchanged, so for a file whose entry names extents `start` is the extent block and `blocks`
+is still the number of data blocks; a caller that wants the file's bytes asks `read`, which
+maps the offsets for it.
 
 The demo program is not in the nucleus any more. `boot/lm_userprog.asm` assembles to a
 flat binary, and `tools/mk_hbfs64.py` imports populate.py's constants and `FSImage` to

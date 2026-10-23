@@ -209,6 +209,7 @@ int hbfs_init(void)
 {
     ready = 0;
     read_only = 0;
+    extent_cached = HBFS_ROOT_SENTINEL;
     file_count = 0;
 
     if (!ata_present()) {
@@ -261,7 +262,6 @@ int hbfs_init(void)
 
     cwd_ready = 0;      /* every task starts at the root */
 
-    extent_cached = HBFS_ROOT_SENTINEL;
     kputs("[hbfs] root=");
     kput_dec(root_lba);
     kputs(" data=");
