@@ -49,8 +49,15 @@ HBFS4_OFF_CHECKSUM = 76
 # directory and every subdirectory. The runs have the room without moving a bit
 # or an entry, which is why the checksum is per run rather than per block.
 HBFS4_RUN_CHECKSUM_BYTES = 4
+# The v4 commit record: how many pre-images the transaction wrote, and a CRC-32C
+# over the record with this field zeroed, so a torn commit is not a commit.
+HBFS4_JRNL_OFF_RECORDS = 20
+HBFS4_JRNL_OFF_CRC = 24
 # Extents: an entry whose flags word sets bit 0 keeps its data in several runs,
 # named by {block, count} records in a metadata block `start` points at.
+HBFS4_FEATURE_EXTENTS = 1 << 0
+HBFS4_FEATURE_JOURNAL = 1 << 1
+HBFS4_FEATURE_SNAPSHOT = 1 << 2
 HBFS4_DE_EXTENTS = 1 << 0
 HBFS4_EXTENT_MAGIC = 0x34584248      # on disk: 'H','B','X','4'
 HBFS4_EXTENT_HDR = 8                 # magic, record count
@@ -100,13 +107,31 @@ DE_XATTR_COUNT = 282
 DE_XATTR_LBA = 284
 
 
-def crc32c(data: bytes) -> int:
-    """CRC-32C (Castagnoli), the checksum used by the HBFS journal."""
-    crc = 0xFFFFFFFF
-    for byte in data:
-        crc ^= byte
+def _crc32c_table() -> list:
+    table = []
+    for value in range(256):
+        crc = value
         for _ in range(8):
             crc = (crc >> 1) ^ 0x82F63B78 if crc & 1 else crc >> 1
+        table.append(crc)
+    return table
+
+
+CRC32C_TABLE = _crc32c_table()
+
+
+def crc32c(data: bytes) -> int:
+    """CRC-32C (Castagnoli), the checksum the journal and every v4 metadata
+    trailer use.
+
+    Table-driven because this runs over whole metadata runs - the root directory
+    is 128 KB - and a bit-at-a-time loop makes an audit of one volume cost more
+    than the rest of the check put together.
+    """
+    crc = 0xFFFFFFFF
+    table = CRC32C_TABLE
+    for byte in data:
+        crc = table[(crc ^ byte) & 0xFF] ^ (crc >> 8)
     return crc ^ 0xFFFFFFFF
 
 
@@ -118,32 +143,81 @@ def run_checksum(run: bytes) -> int:
     return crc32c(bytes(view))
 
 
+def v4_checksum_report(f):
+    """Yield (label, stored, computed) for every checksummed region of a v4 volume.
+
+    The superblock's checksum lives at a fixed offset of its sector; every other
+    region keeps one in its last four bytes. The directories are walked rather
+    than taken from the superblock's word, because a checksum on a directory
+    nothing reaches protects nothing, and an extent block is metadata like any
+    other, so it is checked where the entry that names it is found.
+    """
+
+    def compare(label, run, field=None):
+        offset = (len(run) - HBFS4_RUN_CHECKSUM_BYTES
+                  if field is None else field)
+        view = bytearray(run)
+        stored = struct.unpack_from("<I", view, offset)[0]
+        struct.pack_into("<I", view, offset, 0)
+        return label, stored, crc32c(bytes(view))
+
+    f.seek(HBFS_SUPERBLOCK_LBA * SECTOR_SIZE)
+    sb = f.read(SECTOR_SIZE)
+    if len(sb) < SECTOR_SIZE:
+        return
+    yield compare("superblock", sb, HBFS4_OFF_CHECKSUM)
+
+    f.seek(HBFS_BITMAP_START * SECTOR_SIZE)
+    bitmap = f.read(HBFS_BITMAP_SIZE)
+    if len(bitmap) == HBFS_BITMAP_SIZE:
+        yield compare("bitmap", bitmap)
+
+    def walk(lba, blocks, label, depth, seen):
+        if depth > HBFS_MAX_DEPTH or blocks <= 0 or lba in seen:
+            return
+        seen.add(lba)
+        f.seek(lba * SECTOR_SIZE)
+        run = f.read(blocks * BLOCK_SIZE)
+        if len(run) < blocks * BLOCK_SIZE:
+            return
+        yield compare(label, run)
+        for i in range(len(run) // HBFS_DIR_ENTRY_SIZE):
+            off = i * HBFS_DIR_ENTRY_SIZE
+            if run[off + DE_TYPE] == FTYPE_FREE or run[off] == 0:
+                continue
+            end = run.find(b"\x00", off, off + HBFS_MAX_FILENAME + 1)
+            if end < 0:
+                end = off + HBFS_MAX_FILENAME
+            name = run[off:end].decode("ascii", errors="replace")
+            ftype = run[off + DE_TYPE]
+            start_block, count = struct.unpack_from("<II", run, off + DE_BLOCK)
+            flags = struct.unpack_from("<H", run, off + DE_FLAGS)[0]
+            here = label.rstrip("/") + "/" + name
+            if flags & HBFS4_DE_EXTENTS:
+                f.seek((HBFS_DATA_START
+                        + start_block * SECTORS_PER_BLOCK) * SECTOR_SIZE)
+                block_bytes = f.read(BLOCK_SIZE)
+                if len(block_bytes) == BLOCK_SIZE:
+                    yield compare(here, block_bytes)
+            elif ftype == FTYPE_DIR and count > 0:
+                yield from walk(HBFS_DATA_START + start_block * SECTORS_PER_BLOCK,
+                                count, here, depth + 1, seen)
+
+    yield from walk(HBFS_ROOT_DIR_START, HBFS_ROOT_DIR_BLOCKS, "/", 1, set())
+
+
 def complain_checksums(image: str) -> int:
     """Recompute every metadata checksum and print the ones that disagree.
 
     On a v3 volume there is nothing to check and it says so. On a v4 volume the
-    superblock, the bitmap, the root directory and every subdirectory carry one;
-    the directories are walked rather than trusted to be where the superblock
-    says, because a checksum on a directory nothing reaches protects nothing.
+    superblock, the bitmap, every directory and every extent block carry one.
     """
-    bad: list[tuple[str, int, int]] = []
-    checked: list[str] = []
-
-    def take(label: str, run: bytes) -> None:
-        offset = len(run) - HBFS4_RUN_CHECKSUM_BYTES
-        stored = struct.unpack_from("<I", run, offset)[0]
-        computed = run_checksum(run)
-        checked.append(label)
-        if stored != computed:
-            bad.append((label, stored, computed))
-
     with open(image, "rb") as f:
         f.seek(HBFS_SUPERBLOCK_LBA * SECTOR_SIZE)
         sb = f.read(SECTOR_SIZE)
         if len(sb) < SECTOR_SIZE:
             print(f"  ERROR  cannot read the superblock at LBA {HBFS_SUPERBLOCK_LBA}")
             return 1
-
         magic = struct.unpack_from("<I", sb, 0)[0]
         if magic == HBFS_MAGIC:
             print("  NOTE   v3 volume: the superblock carries no checksum")
@@ -153,67 +227,21 @@ def complain_checksums(image: str) -> int:
             print(f"  ERROR  bad superblock magic 0x{magic:08X}")
             return 1
 
-        stored = struct.unpack_from("<I", sb, HBFS4_OFF_CHECKSUM)[0]
-        computed = crc32c(bytes(sb[:HBFS4_OFF_CHECKSUM] + bytes(4)
-                                + sb[HBFS4_OFF_CHECKSUM + 4:]))
-        checked.append("superblock")
-        if stored != computed:
-            bad.append(("superblock", stored, computed))
-
-        f.seek(HBFS_BITMAP_START * SECTOR_SIZE)
-        take("bitmap", f.read(HBFS_BITMAP_SIZE))
-
-        def walk(lba: int, blocks: int, label: str, depth: int,
-                 seen: set) -> None:
-            if depth > HBFS_MAX_DEPTH or lba in seen or blocks <= 0:
-                return
-            seen.add(lba)
-            f.seek(lba * SECTOR_SIZE)
-            run = f.read(blocks * BLOCK_SIZE)
-            if len(run) < blocks * BLOCK_SIZE:
-                print(f"  ERROR  {label}: the run is short on disk")
-                bad.append((label, 0, 0))
-                return
-            take(label, run)
-            for i in range(len(run) // HBFS_DIR_ENTRY_SIZE):
-                off = i * HBFS_DIR_ENTRY_SIZE
-                if run[off + DE_TYPE] == FTYPE_FREE or run[off] == 0:
-                    continue
-                end = run.find(b"\x00", off, off + HBFS_MAX_FILENAME + 1)
-                if end < 0:
-                    end = off + HBFS_MAX_FILENAME
-                name = run[off:end].decode("ascii", errors="replace")
-                ftype = run[off + DE_TYPE]
-                start_block, count = struct.unpack_from("<II", run,
-                                                         off + DE_BLOCK)
-                flags = struct.unpack_from("<H", run, off + DE_FLAGS)[0]
-                if flags & HBFS4_DE_EXTENTS:
-                    # The extent block is metadata like any other and carries a
-                    # trailer; the runs it names are data and are not checked.
-                    f.seek((HBFS_DATA_START
-                            + start_block * SECTORS_PER_BLOCK) * SECTOR_SIZE)
-                    extents = f.read(BLOCK_SIZE)
-                    label_here = label.rstrip("/") + "/" + name
-                    if struct.unpack_from("<I", extents, 0)[0] != HBFS4_EXTENT_MAGIC:
-                        print(f"  ERROR  {label_here}: {start_block} is not an "
-                              f"extent block")
-                        bad.append((label_here, 0, 0))
-                    else:
-                        take(label_here, extents)
-                elif ftype == FTYPE_DIR and count > 0:
-                    walk(HBFS_DATA_START + start_block * SECTORS_PER_BLOCK,
-                         count, label.rstrip("/") + "/" + name, depth + 1, seen)
-
-        walk(HBFS_ROOT_DIR_START, HBFS_ROOT_DIR_BLOCKS, "/", 1, set())
+        labels = []
+        bad = []
+        for label, stored, computed in v4_checksum_report(f):
+            labels.append(label)
+            if stored != computed:
+                bad.append((label, stored, computed))
 
     for label, stored, computed in bad:
         print(f"  ERROR  {label}: checksum 0x{stored:08X}, "
               f"contents say 0x{computed:08X}")
     if bad:
-        print(f"  FAIL   {len(bad)} of {len(checked)} checksummed regions disagree")
+        print(f"  FAIL   {len(bad)} of {len(labels)} checksummed regions disagree")
         return 1
-    print(f"  PASS   {len(checked)} of {len(checked)} checksummed regions match "
-          f"({', '.join(checked)})")
+    print(f"  PASS   {len(labels)} of {len(labels)} checksummed regions match "
+          f"({', '.join(labels)})")
     return 0
 
 
@@ -233,6 +261,8 @@ class Fsck:
             "journal_records": 0,
         }
         self.total_blocks = 0
+        self.v4 = False
+        self.features = 0
         self.data_lba = HBFS_DATA_START
         self.bitmap = b""
         self.claims: dict[int, str] = {}
@@ -278,10 +308,34 @@ class Fsck:
         features = struct.unpack_from("<I", sb, 48)[0]
         root_uid, root_gid = struct.unpack_from("<HH", sb, 52)
 
-        if magic != HBFS_MAGIC:
-            self.error(f"bad superblock magic 0x{magic:08X} (expected 'HBFS')")
+        if magic not in (HBFS_MAGIC, HBFS4_MAGIC):
+            self.error(f"bad superblock magic 0x{magic:08X} "
+                       "(expected 'HBFS' or 'HBF4')")
             return root_lba
-        if version not in (1, 2, 3):
+        self.v4 = magic == HBFS4_MAGIC
+        if self.v4:
+            if version != 4:
+                self.warn(f"v4 volume says version {version}, expected 4")
+            features = struct.unpack_from("<I", sb, HBFS4_OFF_FEATURES)[0]
+            known = (HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL
+                     | HBFS4_FEATURE_SNAPSHOT)
+            if features & ~known:
+                self.warn(f"feature word 0x{features:08X} has unknown bits "
+                          f"0x{features & ~known:08X}")
+            self.features = features
+            stored = struct.unpack_from("<I", sb, HBFS4_OFF_CHECKSUM)[0]
+            view = bytearray(sb)
+            struct.pack_into("<I", view, HBFS4_OFF_CHECKSUM, 0)
+            if stored != crc32c(bytes(view)):
+                self.error(f"superblock checksum 0x{stored:08X}, contents say "
+                           f"0x{crc32c(bytes(view)):08X}")
+            # The high halves exist so a volume can outgrow 2 TiB; this checker
+            # reads the low half only, and says so rather than pretending.
+            if (struct.unpack_from("<I", sb, HBFS4_OFF_BLOCKS_HI)[0]
+                    or struct.unpack_from("<I", sb, HBFS4_OFF_DATA_HI)[0]):
+                self.warn("the volume uses 64-bit block numbers; this checker "
+                          "validates the low halves only")
+        elif version not in (1, 2, 3):
             self.warn(f"unexpected HBFS version {version} (expected 1..3)")
         if block_size != BLOCK_SIZE:
             self.error(f"block size is {block_size}, expected {BLOCK_SIZE}")
@@ -347,6 +401,20 @@ class Fsck:
                 break
             if rtype == HBFS_JRNL_T_COMMIT:
                 committed = True
+                if self.v4:
+                    declared = struct.unpack_from(
+                        "<I", hdr, HBFS4_JRNL_OFF_RECORDS)[0]
+                    commit_crc = struct.unpack_from(
+                        "<I", hdr, HBFS4_JRNL_OFF_CRC)[0]
+                    if commit_crc:
+                        view = bytearray(hdr[:SECTOR_SIZE])
+                        struct.pack_into("<I", view, HBFS4_JRNL_OFF_CRC, 0)
+                        if crc32c(bytes(view)) != commit_crc:
+                            self.error("commit record fails its CRC32C (a torn "
+                                       "commit must not count as one)")
+                    if declared != records:
+                        self.error(f"commit record says {declared} records, the "
+                                   f"log holds {records}")
                 break
             if rtype != HBFS_JRNL_T_PRE:
                 self.warn(f"journal record at sector {index} has unknown "
@@ -379,8 +447,10 @@ class Fsck:
         if len(self.bitmap) != HBFS_BITMAP_SIZE:
             self.error("short read of the allocation bitmap")
             return
+        # A v4 bitmap ends in a four-byte checksum trailer, which is past the
+        # volume's last block; its bits are not allocations.
         self.stats["blocks_allocated"] = sum(
-            bin(byte).count("1") for byte in self.bitmap)
+            1 for block in range(self.total_blocks) if self.bitmap_bit(block))
 
     # -- ownership ------------------------------------------------------
     def claim(self, start: int, count: int, owner: str) -> None:
@@ -445,6 +515,15 @@ class Fsck:
                 continue
 
             size, start, count = struct.unpack_from("<III", entry, DE_SIZE)
+            flags = struct.unpack_from("<H", entry, DE_FLAGS)[0]
+            if flags & ~HBFS4_DE_EXTENTS:
+                self.warn(f"{display}: unknown entry flags 0x{flags:04X}")
+            if flags & HBFS4_DE_EXTENTS and ftype == FTYPE_DIR:
+                self.error(f"{display}: a directory cannot be extent-mapped")
+                flags = 0
+            if flags & HBFS4_DE_EXTENTS and not self.v4:
+                self.error(f"{display}: extents are a v4 entry flag")
+                flags = 0
             mode = struct.unpack_from("<H", entry, DE_MODE)[0]
             if mode == 0:
                 self.stats["legacy_mode_entries"] += 1
@@ -458,6 +537,9 @@ class Fsck:
                 self.visited_dirs.add(start)
                 self.claim(start, count, display + "/")
                 self.walk(self.block_lba(start), count, display + "/", depth + 1)
+            elif flags & HBFS4_DE_EXTENTS:
+                self.stats["files"] += 1
+                self.claim_extents(display, entry, size, start, count)
             else:
                 self.stats["files"] += 1
                 if count == 0 and size > 0:
@@ -482,6 +564,39 @@ class Fsck:
                 else:
                     block = (xlba - self.data_lba) // SECTORS_PER_BLOCK
                     self.claim(block, 1, display + " [xattr]")
+
+    def claim_extents(self, display: str, entry: bytes, size: int,
+                      extent_block: int, count: int) -> None:
+        """An entry whose data is runs: the extent block is metadata, the runs
+        are data, and the two have to add up to what the entry says."""
+        self.claim(extent_block, 1, display + " [extents]")
+        block = self.read_lba(self.block_lba(extent_block), BLOCK_SIZE)
+        if len(block) != BLOCK_SIZE:
+            self.error(f"{display}: short read of its extent block")
+            return
+        magic, records = struct.unpack_from("<II", block, 0)
+        if magic != HBFS4_EXTENT_MAGIC:
+            self.error(f"{display}: block {extent_block} is not an extent block")
+            return
+        if records == 0 or records > HBFS4_EXTENT_MAX:
+            self.error(f"{display}: extent block names {records} runs")
+            return
+        total = 0
+        for i in range(records):
+            run_start, run_blocks = struct.unpack_from(
+                "<II", block, HBFS4_EXTENT_HDR + i * HBFS4_EXTENT_RECORD)
+            if run_blocks == 0:
+                self.error(f"{display}: run {i} is empty")
+                continue
+            total += run_blocks
+            self.claim(run_start, run_blocks, display)
+        if total != count:
+            self.error(f"{display}: runs add up to {total} blocks, the entry "
+                       f"claims {count}")
+        needed = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+        if count < needed:
+            self.error(f"{display}: {size} bytes need {needed} blocks, "
+                       f"entry claims {count}")
 
     # -- cross checks ---------------------------------------------------
     def cross_check(self) -> None:
@@ -527,7 +642,17 @@ class Fsck:
             return 1
         self.walk(root, HBFS_ROOT_DIR_BLOCKS, "/", 1)
         self.cross_check()
+        if self.v4:
+            self.check_checksums()
         return 0 if not self.errors else 1
+
+    def check_checksums(self) -> None:
+        """Every metadata region's checksum, as an error rather than a report."""
+        with open(self.image, "rb") as f:
+            for label, stored, computed in v4_checksum_report(f):
+                if stored != computed:
+                    self.error(f"{label}: checksum 0x{stored:08X}, contents "
+                               f"say 0x{computed:08X}")
 
 
 def main() -> int:

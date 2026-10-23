@@ -836,10 +836,30 @@ that to the new structures rather than inventing a second mechanism.
 
 - [ ] A write-ahead journal with a checksummed commit record: intent, commit, then the real
       blocks. A volume that is interrupted between any two of those must come back to a state
-      the fsck calls consistent.
+      the fsck calls consistent. **The format and the recovery rules are written and
+      crash-tested; the nucleus does not write through it yet.** `tools/hbfs_journal.py` is the
+      protocol as an executable specification: pre-images in the journal area with their own
+      CRCs, a commit record that carries the record count and its own CRC-32C (a torn commit
+      must not count as one), the state/pointer/epoch at 40/44/56 - the same offsets v3 uses,
+      which is why the v4 header starts at 60 - and the superblock's CRC restamped across every
+      transition, so the marker that says "dirty" is part of the checksummed format too.
+      `tests/test_hbfs_journal.py` applies a real transaction - allocate a block, link an
+      entry, decrement the free count, restamping three runs - and then crashes it at each of
+      its 22 sector writes in turn, at random points as well, and once between the
+      commit record and the clean-state flush (which must keep the new state, not roll it
+      back). Every rollback is compared byte for byte with the volume before the transaction,
+      and the checker has to agree. Two rules the tests forced, and the kernel port must
+      inherit: an entry that straddles a sector boundary means two sectors to journal, and a
+      replay that undoes the superblock must re-read it before patching the state, or it
+      writes the *modified* free count back over the undo. `make check-journal-crash` asks for
+      the roadmap's ten thousand iterations; it takes about twenty minutes.
 - [ ] The crash harness: `tools/crash_inject.py` exists for the 32-bit tree, so the 64-bit
       path gets the same treatment - power the guest off at a chosen sector write and re-mount.
       The exit gate is ten thousand iterations, so the harness has to run unattended and count.
+      **Done offline:** the crashes above are injected at the write itself, which is a stricter
+      thing than powering a guest off - it is the same event with the scheduler taken out.
+      Powering the *guest* off still needs QEMU, and is what the kernel port will be tested
+      with.
 - [ ] Online fsck: the volume reports and repairs itself while mounted, because the offline
       tool is the one that only runs when something has already gone wrong.
 

@@ -122,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash
 
 all: $(IMAGE)
 
@@ -396,7 +396,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents
+check: full check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -417,6 +417,11 @@ check-hbfs-checksum:
 # the checksum test - it builds its own images.
 check-hbfs-extents:
 	@python3 tests/test_hbfs_extents.py
+
+# The journal, crashed at every write boundary it has and then replayed. This is
+# the fast version; check-journal-crash is the exit gate.
+check-hbfs-journal:
+	@python3 tests/test_hbfs_journal.py
 
 validate-syscalls:
 	@python3 tools/validate_syscalls.py
@@ -454,6 +459,11 @@ check-launcher-catalog:
 lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
 	@echo "=== Lint checks complete ==="
+
+# The sprint gate: ten thousand crash/replay iterations, unattended. It takes
+# about twenty minutes, which is why it is not part of check.
+check-journal-crash:
+	@python3 tests/test_hbfs_journal.py --iterations 10000
 
 qa-sprint1: lint check
 	@echo "=== Sprint 1 quality gate complete ==="

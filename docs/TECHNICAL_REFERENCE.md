@@ -3030,6 +3030,22 @@ metadata region from the bytes on disk and prints the ones that disagree, and
 `tools/validate_constants.py` holds the reader's copy of the layout, the builder's
 (`populate.py`) and the checker's to the same numbers.
 
+The write-ahead journal lives in the first `HBFS_JOURNAL_BLOCKS` data blocks, which the
+builder reserves and never allocates. It is an *undo* log: before a metadata sector is
+overwritten, its old contents go to the journal as a record with the target LBA, the
+transaction epoch and a CRC-32C of the pre-image, and the new contents follow. `begin` bumps
+the epoch and sets the superblock's journal state; `commit` writes a commit record carrying
+the number of records and its own CRC-32C, then clears the state. Recovery reads the log:
+a valid commit record means the writes landed and only the state needs clearing, and no
+commit record means every pre-image is written back, newest first, before the state is
+cleared. A pre-image that fails its own CRC stops the replay, because writing a torn
+pre-image back trades a half-applied transaction for a corrupt volume. The state, pointer and
+epoch keep the offsets the 32-bit tree gave them (40, 44 and 56) - that is why the v4 header
+begins at 60 - and a superblock patch restamps its CRC, so the "dirty" marker is covered by
+the checksum too. `tools/hbfs_journal.py` is the reference implementation and
+`tests/test_hbfs_journal.py` crashes it at every sector write it performs. The nucleus does
+not write through the journal yet: v4 mounts read-only.
+
 `boot/lm_vfs.c` is the front-end: `vfs_open` / `vfs_read` over a small handle table.
 It is read-only and root-level for now - directories and the other back-ends are part of
 the rest of the syscall port. `vfs_stat` hands userland the entry's `start` and `blocks`

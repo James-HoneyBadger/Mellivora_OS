@@ -199,7 +199,7 @@ def stamp_run_checksum(run):
     return value
 
 
-def create_superblock(version=3, features=0, generation=0):
+def create_superblock(version=3, features=None, generation=0):
     """Create an HBFS superblock: v3 for the images, v4 on request.
 
     v3 writes the version field as 1 - every v3 image ever built says 1 there,
@@ -207,9 +207,15 @@ def create_superblock(version=3, features=0, generation=0):
     byte-for-byte what it has always produced. v4 writes 4, the feature and
     generation words, the high halves of the 64-bit block counters and a
     CRC-32C over the sector with the checksum field read as zero.
+
+    `features` defaults to what this builder can actually produce: extents, for
+    v4. A volume that says it has no extents while its entries name runs would be
+    lying to the checker, which is the kind of lie a feature word exists to stop.
     """
     if version not in (3, 4):
         raise ValueError("HBFS version %r is not supported" % (version,))
+    if features is None:
+        features = HBFS4_FEATURE_EXTENTS if version == 4 else 0
     sb = bytearray(SECTOR_SIZE)
     struct.pack_into('<I', sb, 0,
                      HBFS_MAGIC if version == 3 else HBFS4_MAGIC)  # Magic
