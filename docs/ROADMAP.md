@@ -793,15 +793,18 @@ that to the new structures rather than inventing a second mechanism.
       case kept for small files so nothing about the current fast path gets slower.
 - [ ] A checksum on every metadata block, and the tool that recomputes them offline
       (`tools/fsck_hbfs.py` grows a `--complain` mode that prints every block whose checksum
-      does not match its contents). **Partly done:** the superblock carries a CRC-32C from
-      offset 76 of the v4 header, `populate.py` writes one for a v4 superblock (and recomputes
-      it in `finalize()`, because the free count is part of what it covers), and
-      `--complain` recomputes it from the bytes on disk and prints every block that disagrees.
-      The bitmap and the directories still need a home for theirs - a block-level field has to
-      be subtracted from the bits and entries they use, so that is a layout decision rather
-      than a line of code - and until then `--complain` says how many blocks it checked rather
-      than claiming a clean volume. `make check-hbfs-checksum` builds a v4 image in a
-      temporary directory, passes it, flips one byte and requires the audit to fail.
+      does not match its contents). **Done at run granularity:** the superblock carries a
+      CRC-32C at 76 of the v4 header, and every metadata run - the bitmap, the root directory
+      and each subdirectory - carries one in its last four bytes, over the run with the
+      trailer read as zero. The trailers cost nothing, because the runs already had the room:
+      65466 of 65536 bitmap bytes are bits for 523727 blocks, 131040 of 131072 root-directory
+      bytes are 455 entries, and 64512 of 65536 subdirectory bytes are 224. `--complain` walks
+      the volume and prints each region that disagrees, naming it. **Not done:** a per-block
+      checksum, which cannot be added without the bitmap growing a block and entries no longer
+      straddling a block boundary - both readers scan a contiguous buffer today - so it goes
+      with the v4 writer. The kernel does not verify any of this at mount yet either.
+      `make check-hbfs-checksum` builds a v4 image with a subdirectory, passes it, then flips
+      one byte in each of the four regions and requires the audit to name that region.
 - [ ] Mount, read, and `ls` a v4 volume; the existing suite keeps passing on a v3 one.
 
 #### Sprint 2 - the journal, and the crash test that means something

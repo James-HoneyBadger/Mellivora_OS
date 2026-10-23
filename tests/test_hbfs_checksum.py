@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""test_hbfs_checksum.py - the v4 superblock's checksum, and the tool that audits it.
+"""test_hbfs_checksum.py - the v4 checksums, and the tool that audits them.
 
-Three things have to hold, and only the third is interesting on its own:
+Four things have to hold, and only the last is interesting on its own:
 
   * the CRC-32C in the builder and the one in tools/fsck_hbfs.py are the same
     function, pinned to the catalogue value for "123456789";
-  * a v3 superblock is byte-for-byte what it has always been, so adding a
-    checksum to v4 did not quietly change the volume every image actually uses;
+  * a v3 superblock is byte-for-byte what it has always been, so adding
+    checksums to v4 did not quietly change the volume every image uses;
+  * the checksum trailers fit in room the runs already had, so no allocation
+    bit and no directory entry moved to make space for them;
   * a v4 image built by populate.py passes `fsck_hbfs.py --complain`, and the
-    same image with one byte flipped does not, because a checker that has never
-    been seen to complain is not a checker.
+    same image with one byte flipped in any region does not - a checker that has
+    never been seen to complain is not a checker.
 
 The images are built into a temporary directory and thrown away.
 """
@@ -50,19 +52,30 @@ def load(path, name):
     return module
 
 
-def build_image(directory, version):
-    """A small v<version> volume with one file in it."""
+def build_image(directory, version, subdir=False):
+    """A small v<version> volume with one file in it (and a directory, if asked)."""
     sys.path.insert(0, str(ROOT))
     import populate
 
-    path = os.path.join(directory, "v%d.img" % version)
+    path = os.path.join(directory, "v%d%s.img" % (version, "-dir" if subdir else ""))
     with open(path, "wb") as f:
         f.truncate(IMAGE_BYTES)
     with redirect_stdout(io.StringIO()):
         fs = populate.FSImage(path, version=version)
         fs.add_file("hello.txt", b"hello\n", ftype=populate.FTYPE_TEXT)
+        if subdir:
+            fs.create_subdir("docs")
+            fs.add_file("readme.txt", b"read me\n", directory="docs",
+                        ftype=populate.FTYPE_TEXT)
         fs.finalize()
     return path, populate
+
+
+def poke(image, offset, value=b"\xff"):
+    """Flip one byte of the image, the way a torn write would."""
+    with open(image, "r+b") as f:
+        f.seek(offset)
+        f.write(value)
 
 
 def complain(image):
@@ -119,6 +132,22 @@ def main():
         check("a flipped byte breaks the checksum",
               populate.superblock_checksum(v4[:100] + b"\xff" + v4[101:]) != stored)
 
+        # The trailers live in room the runs already had. If that ever stops
+        # being true the checksum has taken a bit or an entry with it, and this
+        # is where that is noticed.
+        bitmap_used = (populate.TOTAL_BLOCKS + 7) // 8
+        check("the bitmap keeps a trailer's worth of spare bytes",
+              bitmap_used + populate.HBFS4_RUN_CHECKSUM_BYTES
+              <= populate.HBFS_BITMAP_SIZE)
+        check("the root directory keeps a trailer's worth of spare bytes",
+              populate.HBFS_MAX_FILES * populate.HBFS_DIR_ENTRY_SIZE
+              + populate.HBFS4_RUN_CHECKSUM_BYTES <= populate.HBFS_ROOT_DIR_SIZE)
+        check("a subdirectory keeps a trailer's worth of spare bytes",
+              populate.HBFS_SUBDIR_MAX_FILES * populate.HBFS_DIR_ENTRY_SIZE
+              + populate.HBFS4_RUN_CHECKSUM_BYTES <= populate.HBFS_SUBDIR_SIZE)
+        check("builder and checker agree on the trailer size",
+              fsck.HBFS4_RUN_CHECKSUM_BYTES == populate.HBFS4_RUN_CHECKSUM_BYTES)
+
         # The checksum has to survive finalize(), which patches the total and
         # free counts after the superblock was created.
         v3_image, _ = build_image(scratch, 3)
@@ -126,7 +155,7 @@ def main():
         check("a v3 volume is reported as carrying no checksum",
               status == 0 and "carries no checksum" in out)
 
-        v4_image, _ = build_image(scratch, 4)
+        v4_image, _ = build_image(scratch, 4, subdir=True)
         with open(v4_image, "rb") as f:
             f.seek(populate.HBFS_SUPERBLOCK_LBA * populate.SECTOR_SIZE)
             on_disk = f.read(populate.SECTOR_SIZE)
@@ -134,20 +163,45 @@ def main():
               struct.unpack_from("<I", on_disk, populate.HBFS4_OFF_CHECKSUM)[0]
               == populate.superblock_checksum(on_disk))
         status, out = complain(v4_image)
-        check("a clean v4 volume passes the audit",
-              status == 0 and "1 of 1 checksummed block matches" in out)
+        check("a clean v4 volume passes the audit", status == 0)
+        check("the audit covers the superblock, the bitmap and both directories",
+              "4 of 4 checksummed regions match" in out
+              and "superblock" in out and "bitmap" in out
+              and "/" in out and "/docs" in out)
 
-        # One byte anywhere the checksum covers, including the free count that
-        # only finalize() writes.
-        broken = os.path.join(scratch, "v4-broken.img")
-        shutil.copyfile(v4_image, broken)
-        with open(broken, "r+b") as f:
-            f.seek(populate.HBFS_SUPERBLOCK_LBA * populate.SECTOR_SIZE + 12)
-            f.write(b"\x01")
-        status, out = complain(broken)
-        check("a corrupted superblock fails the audit", status == 1)
-        check("the audit prints what it expected and what it found",
-              "checksum" in out and "contents say" in out)
+        # One byte in each kind of region, one image each. A checksum that only
+        # covers the region it was pointed at would pass three of these.
+        regions = {
+            "superblock": (populate.HBFS_SUPERBLOCK_LBA * populate.SECTOR_SIZE
+                           + 12, "superblock"),
+            "bitmap": (populate.HBFS_BITMAP_START * populate.SECTOR_SIZE + 100,
+                       "bitmap"),
+            "root": (populate.HBFS_ROOT_DIR_START * populate.SECTOR_SIZE + 1,
+                     "/"),
+            "subdir": (None, "/docs"),
+        }
+        for name, (offset, label) in regions.items():
+            broken = os.path.join(scratch, "v4-broken-%s.img" % name)
+            shutil.copyfile(v4_image, broken)
+            if offset is None:
+                # First byte of /docs' own run, found the way a reader would.
+                with open(v4_image, "rb") as f:
+                    f.seek(populate.HBFS_ROOT_DIR_START * populate.SECTOR_SIZE)
+                    root = f.read(populate.HBFS_ROOT_DIR_SIZE)
+                for i in range(populate.HBFS_MAX_FILES):
+                    off = i * populate.HBFS_DIR_ENTRY_SIZE
+                    if root[off:off + 4] == b"docs":
+                        start, = struct.unpack_from("<I", root, off + 260)
+                        offset = ((populate.HBFS_DATA_START
+                                   + start * populate.SECTORS_PER_BLOCK)
+                                  * populate.SECTOR_SIZE)
+                        break
+            poke(broken, offset)
+            status, out = complain(broken)
+            check("a corrupted %s fails the audit" % name,
+                  status == 1 and ("ERROR  %s: checksum" % label) in out)
+            check("the %s failure prints what it expected and found" % name,
+                  "contents say" in out)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

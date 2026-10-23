@@ -65,6 +65,14 @@ HBFS4_OFF_CHECKSUM = 76
 HBFS4_FEATURE_EXTENTS = 1 << 0
 HBFS4_FEATURE_JOURNAL = 1 << 1
 HBFS4_FEATURE_SNAPSHOT = 1 << 2
+# Every metadata run carries its own CRC-32C in its last four bytes, read as
+# zero while the checksum is computed. The runs have that room without moving a
+# bit or an entry: the bitmap uses 65466 of its 65536 bytes for 523727 blocks,
+# the root directory 131040 of its 131072 for 455 entries, and a subdirectory
+# 64512 of its 65536 for 224. A run-level checksum cannot say *which* block is
+# bad; per-block trailers need the bitmap to grow a block and entries to stop
+# straddling, which changes both readers, so they belong with the v4 writer.
+HBFS4_RUN_CHECKSUM_BYTES = 4
 
 # A 2048 MiB image has 523727 complete 4 KB data blocks after the metadata
 # (data starts at LBA 4481). Declaring 524288 made the last 561 blocks point
@@ -163,6 +171,20 @@ def superblock_checksum(sector):
     view = bytearray(sector)
     struct.pack_into('<I', view, HBFS4_OFF_CHECKSUM, 0)
     return crc32c(bytes(view))
+
+
+def stamp_run_checksum(run):
+    """Write a metadata run's checksum into its trailer, in place.
+
+    The trailer is read as zero while the checksum is computed, so stamping an
+    unchanged run twice gives the same value and a reader can recompute it
+    without knowing what was there before.
+    """
+    offset = len(run) - HBFS4_RUN_CHECKSUM_BYTES
+    struct.pack_into('<I', run, offset, 0)
+    value = crc32c(bytes(run))
+    struct.pack_into('<I', run, offset, value)
+    return value
 
 
 def create_superblock(version=3, features=0, generation=0):
@@ -609,6 +631,10 @@ class FSImage:
 
     def finalize(self):
         """Write all directory structures and bitmap to disk."""
+        if self.version == 4:
+            for sd in self.subdirs.values():
+                stamp_run_checksum(sd['data'])
+
         for _dirname, sd in self.subdirs.items():
             self.img.seek(lba_to_offset(sd['data_lba']))
             self.img.write(sd['data'])
@@ -620,11 +646,16 @@ class FSImage:
         struct.pack_into('<I', self.sb, 8, TOTAL_BLOCKS)
         struct.pack_into('<I', self.sb, 12, free)
         if self.version == 4:
-            # The free count is part of what the checksum covers, so it has to be
-            # recomputed after the last patch and before the sector is written.
+            # Both of these cover bytes that are only final now: the superblock
+            # its free count, the bitmap the allocation the rebuild just did. A
+            # checksum stamped before the last write is a checksum of the wrong
+            # bytes.
             struct.pack_into('<I', self.sb, HBFS4_OFF_CHECKSUM, 0)
             struct.pack_into('<I', self.sb, HBFS4_OFF_CHECKSUM,
                              superblock_checksum(self.sb))
+            stamp_run_checksum(self.bitmap)
+            stamp_run_checksum(self.root_dir)
+
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
         self.img.write(self.sb)
 

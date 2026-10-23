@@ -3001,6 +3001,14 @@ other's fields - the magic is what tells them apart:
   generation counter, the high halves of the 64-bit block count and data LBA, and at 76 a
   CRC-32C over the whole sector with that field read as zero.
 
+On a v4 volume every metadata run also ends with a CRC-32C in its last four bytes - the
+bitmap, the root directory and each subdirectory, over the run with the trailer read as
+zero. The trailers cost nothing: the bitmap uses 65466 of its 65536 bytes, the root
+directory 131040 of 131072 and a subdirectory 64512 of 65536, so no allocation bit and no
+entry moved. A run-level checksum cannot say which block inside it is bad; per-block
+trailers need the bitmap to grow a block and directory entries to stop straddling block
+boundaries, which changes both readers, so they belong with the v4 writer.
+
 `hbfs_init` prints which one it mounted (`version=3`, or `version=4 features=0x...`), and
 `tools/fsck_hbfs.py --complain` recomputes the checksum from the bytes on disk and prints
 every block that disagrees. `tools/validate_constants.py` holds the reader's copy of the

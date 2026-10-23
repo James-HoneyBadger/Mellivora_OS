@@ -48,6 +48,15 @@
 #define HBFS4_OFF_BLOCKS_HI  68
 #define HBFS4_OFF_DATA_HI    72
 #define HBFS4_OFF_CHECKSUM   76
+/*
+ * Every metadata run - the bitmap, the root directory and each subdirectory -
+ * keeps a CRC-32C in its last four bytes, over the run with the trailer read as
+ * zero. The runs already had the room: the bitmap uses 65466 of its 65536 bytes
+ * for the volume's blocks, the root directory 131040 of its 131072 for its 455
+ * entries and a subdirectory 64512 of its 65536 for 224. Nothing verifies these
+ * here yet; tools/fsck_hbfs.py --complain does.
+ */
+#define HBFS4_RUN_CHECKSUM_BYTES 4
 
 #define HBFS4_FEATURE_EXTENTS  (1U << 0)
 #define HBFS4_FEATURE_JOURNAL  (1U << 1)

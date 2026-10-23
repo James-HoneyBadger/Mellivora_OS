@@ -16,9 +16,10 @@ Checks performed:
 Exit status: 0 when no errors were found (warnings are allowed), 1 otherwise.
 --strict turns warnings into failure.
 
---complain audits metadata checksums instead: it recomputes each one from the
-bytes on disk and prints every block that disagrees. A v3 volume carries no
-checksums, and it says so rather than reporting a pass it did not earn.
+--complain audits metadata checksums instead: the superblock, the bitmap and
+every directory carry one, and it recomputes each from the bytes on disk and
+prints the ones that disagree. A v3 volume carries none, and it says so rather
+than reporting a pass it did not earn.
 
 Usage: tools/fsck_hbfs.py [image] [--strict] [--json] [--quiet] [--complain]
 """
@@ -44,6 +45,10 @@ HBFS4_OFF_GENERATION = 64
 HBFS4_OFF_BLOCKS_HI = 68
 HBFS4_OFF_DATA_HI = 72
 HBFS4_OFF_CHECKSUM = 76
+# Each metadata run keeps a CRC-32C in its last four bytes: the bitmap, the root
+# directory and every subdirectory. The runs have the room without moving a bit
+# or an entry, which is why the checksum is per run rather than per block.
+HBFS4_RUN_CHECKSUM_BYTES = 4
 HBFS_SUPERBLOCK_LBA = 4096
 HBFS_BITMAP_BLOCKS = 16
 HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
@@ -96,39 +101,96 @@ def crc32c(data: bytes) -> int:
     return crc ^ 0xFFFFFFFF
 
 
+def run_checksum(run: bytes) -> int:
+    """CRC-32C over a metadata run with its own trailer read as zero."""
+    offset = len(run) - HBFS4_RUN_CHECKSUM_BYTES
+    view = bytearray(run)
+    struct.pack_into("<I", view, offset, 0)
+    return crc32c(bytes(view))
+
+
 def complain_checksums(image: str) -> int:
     """Recompute every metadata checksum and print the ones that disagree.
 
-    Only the superblock carries one so far - the bitmap and directories get
-    theirs when their layouts can say where it lives - so this is one region and
-    a statement of what it did and did not check.
+    On a v3 volume there is nothing to check and it says so. On a v4 volume the
+    superblock, the bitmap, the root directory and every subdirectory carry one;
+    the directories are walked rather than trusted to be where the superblock
+    says, because a checksum on a directory nothing reaches protects nothing.
     """
+    bad: list[tuple[str, int, int]] = []
+    checked: list[str] = []
+
+    def take(label: str, run: bytes) -> None:
+        offset = len(run) - HBFS4_RUN_CHECKSUM_BYTES
+        stored = struct.unpack_from("<I", run, offset)[0]
+        computed = run_checksum(run)
+        checked.append(label)
+        if stored != computed:
+            bad.append((label, stored, computed))
+
     with open(image, "rb") as f:
         f.seek(HBFS_SUPERBLOCK_LBA * SECTOR_SIZE)
         sb = f.read(SECTOR_SIZE)
-    if len(sb) < SECTOR_SIZE:
-        print(f"  ERROR  cannot read the superblock at LBA {HBFS_SUPERBLOCK_LBA}")
-        return 1
+        if len(sb) < SECTOR_SIZE:
+            print(f"  ERROR  cannot read the superblock at LBA {HBFS_SUPERBLOCK_LBA}")
+            return 1
 
-    magic = struct.unpack_from("<I", sb, 0)[0]
-    if magic == HBFS_MAGIC:
-        print("  NOTE   v3 volume: the superblock carries no checksum")
-        print("  PASS   0 of 0 checksummed blocks checked (1 block unchecked)")
-        return 0
-    if magic != HBFS4_MAGIC:
-        print(f"  ERROR  bad superblock magic 0x{magic:08X}")
-        return 1
+        magic = struct.unpack_from("<I", sb, 0)[0]
+        if magic == HBFS_MAGIC:
+            print("  NOTE   v3 volume: the superblock carries no checksum")
+            print("  PASS   0 of 0 checksummed regions checked")
+            return 0
+        if magic != HBFS4_MAGIC:
+            print(f"  ERROR  bad superblock magic 0x{magic:08X}")
+            return 1
 
-    stored = struct.unpack_from("<I", sb, HBFS4_OFF_CHECKSUM)[0]
-    view = bytearray(sb)
-    struct.pack_into("<I", view, HBFS4_OFF_CHECKSUM, 0)
-    computed = crc32c(bytes(view))
-    if stored != computed:
-        print(f"  ERROR  superblock checksum 0x{stored:08X}, "
+        stored = struct.unpack_from("<I", sb, HBFS4_OFF_CHECKSUM)[0]
+        computed = crc32c(bytes(sb[:HBFS4_OFF_CHECKSUM] + bytes(4)
+                                + sb[HBFS4_OFF_CHECKSUM + 4:]))
+        checked.append("superblock")
+        if stored != computed:
+            bad.append(("superblock", stored, computed))
+
+        f.seek(HBFS_BITMAP_START * SECTOR_SIZE)
+        take("bitmap", f.read(HBFS_BITMAP_SIZE))
+
+        def walk(lba: int, blocks: int, label: str, depth: int,
+                 seen: set) -> None:
+            if depth > HBFS_MAX_DEPTH or lba in seen or blocks <= 0:
+                return
+            seen.add(lba)
+            f.seek(lba * SECTOR_SIZE)
+            run = f.read(blocks * BLOCK_SIZE)
+            if len(run) < blocks * BLOCK_SIZE:
+                print(f"  ERROR  {label}: the run is short on disk")
+                bad.append((label, 0, 0))
+                return
+            take(label, run)
+            for i in range(len(run) // HBFS_DIR_ENTRY_SIZE):
+                off = i * HBFS_DIR_ENTRY_SIZE
+                if run[off + DE_TYPE] == FTYPE_FREE or run[off] == 0:
+                    continue
+                end = run.find(b"\x00", off, off + HBFS_MAX_FILENAME + 1)
+                if end < 0:
+                    end = off + HBFS_MAX_FILENAME
+                name = run[off:end].decode("ascii", errors="replace")
+                ftype = run[off + DE_TYPE]
+                start_block, count = struct.unpack_from("<II", run,
+                                                         off + DE_BLOCK)
+                if ftype == FTYPE_DIR and count > 0:
+                    walk(HBFS_DATA_START + start_block * SECTORS_PER_BLOCK,
+                         count, label.rstrip("/") + "/" + name, depth + 1, seen)
+
+        walk(HBFS_ROOT_DIR_START, HBFS_ROOT_DIR_BLOCKS, "/", 1, set())
+
+    for label, stored, computed in bad:
+        print(f"  ERROR  {label}: checksum 0x{stored:08X}, "
               f"contents say 0x{computed:08X}")
-        print("  FAIL   1 of 1 checksummed block disagrees")
+    if bad:
+        print(f"  FAIL   {len(bad)} of {len(checked)} checksummed regions disagree")
         return 1
-    print("  PASS   1 of 1 checksummed block matches (the superblock)")
+    print(f"  PASS   {len(checked)} of {len(checked)} checksummed regions match "
+          f"({', '.join(checked)})")
     return 0
 
 
