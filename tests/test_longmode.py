@@ -510,6 +510,22 @@ def parse_pmm(text):
     return int(m.group(1)), int(m.group(2), 16)
 
 
+def check_hbfs_version(text):
+    """The mount line has to say which format it mounted.
+
+    populate.py writes v3, so the reader must report 3. Matched as a whole field
+    because `version=32` on the I/O APIC line contains `version=3` as a
+    substring, and the day a writer makes the image v4 this is the assertion
+    that notices - which is the reason the version is printed at all.
+    """
+    m = re.search(r"\[hbfs\][^\r\n]* version=(\d+)", text)
+    if not m:
+        return "the mount line does not report a version"
+    if int(m.group(1)) != 3:
+        return "the image mounts as v%s, but populate.py builds v3" % m.group(1)
+    return None
+
+
 def main():
     qemu = qd.find_qemu()
     if not qemu:
@@ -592,6 +608,14 @@ def main():
     if abs(guest_year - host_year) > 1:
         print("  FAIL  the clock says %s, this host says %d"
               % (stamp.group(0), host_year), file=sys.stderr)
+        return 1
+
+    # The mount line names the on-disk format it accepted. The image is built by
+    # populate.py, so this is also the check that the reader and the builder
+    # agree about which version the volume is.
+    problem = check_hbfs_version(text)
+    if problem:
+        print("  FAIL  HBFS mount: %s" % problem, file=sys.stderr)
         return 1
 
     # The guest wrote real HBFS structures, so the host can read them back with

@@ -44,6 +44,25 @@ HBFS_MAX_FILENAME = 252
 # The journal occupies the first HBFS_JOURNAL_BLOCKS data blocks and must never
 # be handed to a file.
 HBFS_JOURNAL_BLOCKS = 4
+
+# HBFS v4 (roadmap P4) keeps every v3 field where it is and adds its own after
+# them, inside the same 512-byte sector: a second magic so a reader can tell the
+# versions apart before trusting anything else, the feature word, the generation
+# counter, the high halves of the 64-bit block counters and a metadata checksum.
+# Nothing here writes v4 yet - that is the writer's job and it lands with the
+# checksum - but the layout is declared on this side now so that
+# tools/validate_constants.py can hold it and the 64-bit reader's copy in
+# boot/lm_hbfs.c to the same numbers instead of letting them drift.
+HBFS4_MAGIC = 0x34424653              # 'HBF4'
+HBFS4_OFF_FEATURES = 32
+HBFS4_OFF_GENERATION = 36
+HBFS4_OFF_BLOCKS_HI = 40
+HBFS4_OFF_DATA_HI = 44
+HBFS4_OFF_CHECKSUM = 48
+HBFS4_FEATURE_EXTENTS = 1 << 0
+HBFS4_FEATURE_JOURNAL = 1 << 1
+HBFS4_FEATURE_SNAPSHOT = 1 << 2
+
 # A 2048 MiB image has 523727 complete 4 KB data blocks after the metadata
 # (data starts at LBA 4481). Declaring 524288 made the last 561 blocks point
 # past the end of the image.

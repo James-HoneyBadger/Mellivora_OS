@@ -779,9 +779,16 @@ The format comes first and it comes with its validator, in the order the earlier
 `tools/validate_constants.py` pairs every constant between builder and kernel, and P4 extends
 that to the new structures rather than inventing a second mechanism.
 
-- [ ] HBFS v4 superblock: 64-bit block numbers, a generation counter for snapshots, and a
-      feature word so a v3 volume can still be mounted read-only. The validator reads the
-      builder's copy and the kernel's and fails on any disagreement.
+- [x] HBFS v4 superblock. `boot/lm_hbfs.c` declares the v4 layout beside the v3 one in the
+      same 512-byte sector - a second magic, a feature word, a generation counter, the high
+      halves of the 64-bit block counters and a metadata checksum - and says which version it
+      mounted: `[hbfs] root=4225 data=4481 files=21 free=523671 version=3`. `populate.py`
+      carries the same numbers, and `tools/validate_constants.py` pairs the two copies the way
+      it already pairs `kernel.asm` with the builder, so a changed offset on either side fails
+      `make lint`. `tests/test_validate_constants.py` is the proof that it says no: it changes
+      one number in a copy of the C source and requires the report to name it, and deletes one
+      and requires that too. The suite asserts the version, so the day the writer lands and the
+      image becomes v4, that assertion is what notices. Nothing writes v4 yet.
 - [ ] Extents: an inode's data described by runs of blocks rather than a list, with the inline
       case kept for small files so nothing about the current fast path gets slower.
 - [ ] A checksum on every metadata block, and the tool that recomputes them offline
