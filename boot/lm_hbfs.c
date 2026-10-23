@@ -31,17 +31,23 @@
 #define HBFS_MAGIC           0x48424653U      /* 'HBFS', the volume this port writes */
 /*
  * HBFS v4 keeps its superblock in the same sector and puts its own magic there,
- * so a reader can tell the two apart without knowing anything else. The fields
- * the version needs - a 64-bit block count, a generation counter and a feature
- * word - sit beyond the v3 fields, which stay where they are so that a v3 volume
- * is still readable and still the one this port writes until the writer exists.
+ * so a reader can tell the two apart without knowing anything else. Its fields
+ * start at 60, past everything v3 writes - the journal state and pointer at 40
+ * and 44, the feature word at 48, the root uid/gid at 52 and the journal epoch
+ * at 56 - so a v3 reader looking at a v4 volume still finds the geometry where
+ * it expects it, and no offset means two things.
+ *
+ * The checksum at 76 is a CRC-32C over the whole 512-byte sector with that
+ * field read as zero, the same polynomial the v3 journal uses. Nothing writes
+ * v4 yet; populate.py can build one and tools/fsck_hbfs.py --complain
+ * recomputes this value from the bytes on disk.
  */
 #define HBFS4_MAGIC          0x34424653U      /* 'HBF4' */
-#define HBFS4_OFF_FEATURES   32
-#define HBFS4_OFF_GENERATION 36
-#define HBFS4_OFF_BLOCKS_HI  40
-#define HBFS4_OFF_DATA_HI    44
-#define HBFS4_OFF_CHECKSUM   48
+#define HBFS4_OFF_FEATURES   60
+#define HBFS4_OFF_GENERATION 64
+#define HBFS4_OFF_BLOCKS_HI  68
+#define HBFS4_OFF_DATA_HI    72
+#define HBFS4_OFF_CHECKSUM   76
 
 #define HBFS4_FEATURE_EXTENTS  (1U << 0)
 #define HBFS4_FEATURE_JOURNAL  (1U << 1)

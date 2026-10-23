@@ -2,16 +2,14 @@
 """Validate shared storage/layout constants across kernel and tooling.
 
 This script prevents silent drift between:
-- kernel.asm
-- populate.py
-- tests/test_hbfs.py
-- boot/lm_hbfs.c, the 64-bit nucleus's own copy of the on-disk layout
+- kernel.asm, populate.py and tests/test_hbfs.py, the 32-bit tree's three copies
+- boot/lm_hbfs.c, populate.py and tools/fsck_hbfs.py, the 64-bit tree's
 
-The 64-bit reader does not share code with the 32-bit kernel, so its constants
-are a second copy of the format and are checked against populate.py the same way
-the 32-bit kernel's are. A test that the comparison actually fails on a changed
-number lives in tests/test_validate_constants.py - a validator only earns its
-place if it has been seen to say no.
+The 64-bit reader and the offline checker do not share code with the builder -
+that is the point of a second implementation - so each carries its own copy of
+the on-disk layout and every copy is compared here. A test that the comparison
+actually fails on a changed number lives in tests/test_validate_constants.py: a
+validator only earns its place if it has been seen to say no.
 """
 
 from __future__ import annotations
@@ -29,6 +27,7 @@ KERNEL_PATH = ROOT / "kernel.asm"
 POPULATE_PATH = ROOT / "populate.py"
 TEST_HBFS_PATH = ROOT / "tests" / "test_hbfs.py"
 LM_HBFS_PATH = ROOT / "boot" / "lm_hbfs.c"
+FSCK_PATH = ROOT / "tools" / "fsck_hbfs.py"
 
 # Kernel symbol -> (populate symbol, test_hbfs symbol)
 CONSTANT_MAP = {
@@ -43,31 +42,32 @@ CONSTANT_MAP = {
     "HBFS_SUBDIR_BLOCKS": ("HBFS_SUBDIR_BLOCKS", "HBFS_SUBDIR_BLOCKS"),
 }
 
-# boot/lm_hbfs.c symbol -> populate.py symbol. The v4 entries are the layout the
-# writer will use; they are checked from the day they are declared rather than
-# from the day they are first written, because the whole point of a paired
-# constant is that the pair cannot disagree.
+# boot/lm_hbfs.c symbol -> (populate.py symbol, tools/fsck_hbfs.py symbol).
+# None means that file does not carry the constant. The v4 entries are checked
+# from the day they are declared rather than from the day they are first
+# written, because the whole point of a paired constant is that the pair cannot
+# disagree.
 LM_CONSTANT_MAP = {
-    "HBFS_SUPERBLOCK_LBA": "HBFS_SUPERBLOCK_LBA",
-    "HBFS_ROOT_DIR_BLOCKS": "HBFS_ROOT_DIR_BLOCKS",
-    "HBFS_BLOCK_SIZE": "BLOCK_SIZE",
-    "HBFS_SECTORS_PER_BLOCK": "SECTORS_PER_BLOCK",
-    "HBFS_DATA_START": "HBFS_DATA_START",
-    "HBFS_DIR_ENTRY_SIZE": "HBFS_DIR_ENTRY_SIZE",
-    "HBFS_MAX_FILES": "HBFS_MAX_FILES",
-    "HBFS_BITMAP_BLOCKS": "HBFS_BITMAP_BLOCKS",
-    "HBFS_JOURNAL_BLOCKS": "HBFS_JOURNAL_BLOCKS",
-    "HBFS_SUBDIR_BLOCKS": "HBFS_SUBDIR_BLOCKS",
-    "HBFS_MAGIC": "HBFS_MAGIC",
-    "HBFS4_MAGIC": "HBFS4_MAGIC",
-    "HBFS4_OFF_FEATURES": "HBFS4_OFF_FEATURES",
-    "HBFS4_OFF_GENERATION": "HBFS4_OFF_GENERATION",
-    "HBFS4_OFF_BLOCKS_HI": "HBFS4_OFF_BLOCKS_HI",
-    "HBFS4_OFF_DATA_HI": "HBFS4_OFF_DATA_HI",
-    "HBFS4_OFF_CHECKSUM": "HBFS4_OFF_CHECKSUM",
-    "HBFS4_FEATURE_EXTENTS": "HBFS4_FEATURE_EXTENTS",
-    "HBFS4_FEATURE_JOURNAL": "HBFS4_FEATURE_JOURNAL",
-    "HBFS4_FEATURE_SNAPSHOT": "HBFS4_FEATURE_SNAPSHOT",
+    "HBFS_SUPERBLOCK_LBA": ("HBFS_SUPERBLOCK_LBA", "HBFS_SUPERBLOCK_LBA"),
+    "HBFS_ROOT_DIR_BLOCKS": ("HBFS_ROOT_DIR_BLOCKS", "HBFS_ROOT_DIR_BLOCKS"),
+    "HBFS_BLOCK_SIZE": ("BLOCK_SIZE", "BLOCK_SIZE"),
+    "HBFS_SECTORS_PER_BLOCK": ("SECTORS_PER_BLOCK", "SECTORS_PER_BLOCK"),
+    "HBFS_DATA_START": ("HBFS_DATA_START", "HBFS_DATA_START"),
+    "HBFS_DIR_ENTRY_SIZE": ("HBFS_DIR_ENTRY_SIZE", "HBFS_DIR_ENTRY_SIZE"),
+    "HBFS_MAX_FILES": ("HBFS_MAX_FILES", None),
+    "HBFS_BITMAP_BLOCKS": ("HBFS_BITMAP_BLOCKS", "HBFS_BITMAP_BLOCKS"),
+    "HBFS_JOURNAL_BLOCKS": ("HBFS_JOURNAL_BLOCKS", "HBFS_JOURNAL_BLOCKS"),
+    "HBFS_SUBDIR_BLOCKS": ("HBFS_SUBDIR_BLOCKS", None),
+    "HBFS_MAGIC": ("HBFS_MAGIC", "HBFS_MAGIC"),
+    "HBFS4_MAGIC": ("HBFS4_MAGIC", "HBFS4_MAGIC"),
+    "HBFS4_OFF_FEATURES": ("HBFS4_OFF_FEATURES", "HBFS4_OFF_FEATURES"),
+    "HBFS4_OFF_GENERATION": ("HBFS4_OFF_GENERATION", "HBFS4_OFF_GENERATION"),
+    "HBFS4_OFF_BLOCKS_HI": ("HBFS4_OFF_BLOCKS_HI", "HBFS4_OFF_BLOCKS_HI"),
+    "HBFS4_OFF_DATA_HI": ("HBFS4_OFF_DATA_HI", "HBFS4_OFF_DATA_HI"),
+    "HBFS4_OFF_CHECKSUM": ("HBFS4_OFF_CHECKSUM", "HBFS4_OFF_CHECKSUM"),
+    "HBFS4_FEATURE_EXTENTS": ("HBFS4_FEATURE_EXTENTS", None),
+    "HBFS4_FEATURE_JOURNAL": ("HBFS4_FEATURE_JOURNAL", None),
+    "HBFS4_FEATURE_SNAPSHOT": ("HBFS4_FEATURE_SNAPSHOT", None),
 }
 
 ALLOWED_BINOPS = {
@@ -204,60 +204,38 @@ def parse_c_defines(path: Path) -> Dict[str, int]:
     return symbols
 
 
-def check_three_way(
-    mapping: Dict[str, tuple],
-    kernel: Dict[str, int],
-    populate: Dict[str, int],
-    test_hbfs: Dict[str, int],
-) -> list:
+def check_sides(mapping: Dict[str, tuple], sides: list) -> list:
+    """Compare one constant across every side that carries it.
+
+    `mapping` maps the name the first side uses to the name each later side
+    uses; None means that side does not carry the constant at all. A side that
+    names a constant it does not define is reported, so a rename cannot pass by
+    being quietly absent, and two sides disagreeing is the drift this exists to
+    catch.
+    """
     errors = []
-    for kernel_name, (populate_name, test_name) in mapping.items():
-        kv = kernel.get(kernel_name)
-        pv = populate.get(populate_name)
-        tv = test_hbfs.get(test_name)
+    first_label = sides[0][0]
+    for first_name, others in mapping.items():
+        if len(others) != len(sides) - 1:
+            raise ValueError(
+                f"{first_name}: {len(others)} name(s) for {len(sides)} sides")
+        values = [(first_label, first_name, sides[0][1].get(first_name))]
+        for (label, symbols), name in zip(sides[1:], others):
+            if name is not None:
+                values.append((label, name, symbols.get(name)))
 
-        if kv is None:
-            errors.append(f"Missing kernel symbol: {kernel_name}")
-            continue
-        if pv is None:
-            errors.append(f"Missing populate.py symbol: {populate_name}")
-            continue
-        if tv is None:
-            errors.append(f"Missing tests/test_hbfs.py symbol: {test_name}")
+        missing = [entry for entry in values if entry[2] is None]
+        for label, name, _value in missing:
+            errors.append(f"Missing {name} in {label}")
+        if missing:
             continue
 
-        if kv != pv:
-            errors.append(
-                f"Mismatch {kernel_name} vs {populate_name}: kernel={kv}, populate={pv}"
-            )
-        if kv != tv:
-            errors.append(
-                f"Mismatch {kernel_name} vs {test_name}: kernel={kv}, test_hbfs={tv}"
-            )
-    return errors
-
-
-def check_two_way(
-    mapping: Dict[str, str],
-    c_defines: Dict[str, int],
-    populate: Dict[str, int],
-) -> list:
-    errors = []
-    for c_name, populate_name in mapping.items():
-        cv = c_defines.get(c_name)
-        pv = populate.get(populate_name)
-
-        if cv is None:
-            errors.append(f"Missing define in boot/lm_hbfs.c: {c_name}")
-            continue
-        if pv is None:
-            errors.append(f"Missing populate.py symbol: {populate_name}")
-            continue
-        if cv != pv:
-            errors.append(
-                f"Mismatch {c_name} in boot/lm_hbfs.c vs {populate_name} "
-                f"in populate.py: kernel={cv}, populate={pv}"
-            )
+        reference = values[0][2]
+        for label, name, value in values[1:]:
+            if value != reference:
+                errors.append(
+                    f"Mismatch {first_name} ({first_label}={reference}) vs "
+                    f"{name} ({label}={value})")
     return errors
 
 
@@ -266,9 +244,18 @@ def main() -> int:
     populate = parse_python_assignments(POPULATE_PATH)
     test_hbfs = parse_python_assignments(TEST_HBFS_PATH)
     lm_hbfs = parse_c_defines(LM_HBFS_PATH)
+    fsck = parse_python_assignments(FSCK_PATH)
 
-    errors = check_three_way(CONSTANT_MAP, kernel, populate, test_hbfs)
-    errors += check_two_way(LM_CONSTANT_MAP, lm_hbfs, populate)
+    groups = [
+        (CONSTANT_MAP, [("kernel.asm", kernel), ("populate.py", populate),
+                        ("tests/test_hbfs.py", test_hbfs)]),
+        (LM_CONSTANT_MAP, [("boot/lm_hbfs.c", lm_hbfs), ("populate.py", populate),
+                           ("tools/fsck_hbfs.py", fsck)]),
+    ]
+
+    errors = []
+    for mapping, sides in groups:
+        errors += check_sides(mapping, sides)
 
     if errors:
         print("[validate-constants] FAIL")
@@ -277,13 +264,15 @@ def main() -> int:
         return 1
 
     print("[validate-constants] PASS")
-    for kernel_name, (populate_name, test_name) in CONSTANT_MAP.items():
-        print(
-            f"  {kernel_name}: {kernel[kernel_name]} "
-            f"(populate:{populate_name}, test:{test_name})"
-        )
-    for c_name, populate_name in LM_CONSTANT_MAP.items():
-        print(f"  {c_name}: {lm_hbfs[c_name]} (lm_hbfs.c, populate:{populate_name})")
+    for mapping, sides in groups:
+        first_label, first = sides[0]
+        for first_name, others in mapping.items():
+            checked = ", ".join(
+                f"{label}:{name}"
+                for (label, _symbols), name in zip(sides[1:], others)
+                if name is not None)
+            print(f"  {first_name}: {first[first_name]} "
+                  f"({first_label}, {checked})")
 
     return 0
 

@@ -16,7 +16,11 @@ Checks performed:
 Exit status: 0 when no errors were found (warnings are allowed), 1 otherwise.
 --strict turns warnings into failure.
 
-Usage: tools/fsck_hbfs.py [image] [--strict] [--json] [--quiet]
+--complain audits metadata checksums instead: it recomputes each one from the
+bytes on disk and prints every block that disagrees. A v3 volume carries no
+checksums, and it says so rather than reporting a pass it did not earn.
+
+Usage: tools/fsck_hbfs.py [image] [--strict] [--json] [--quiet] [--complain]
 """
 
 from __future__ import annotations
@@ -31,6 +35,15 @@ BLOCK_SIZE = 4096
 SECTORS_PER_BLOCK = BLOCK_SIZE // SECTOR_SIZE
 
 HBFS_MAGIC = 0x48424653
+# HBFS v4 (roadmap P4): a second magic in the same superblock sector and a
+# header at 60, past every field v3 uses, so the two versions can be told apart
+# and a v3 reader still finds the geometry where it expects it.
+HBFS4_MAGIC = 0x34424653
+HBFS4_OFF_FEATURES = 60
+HBFS4_OFF_GENERATION = 64
+HBFS4_OFF_BLOCKS_HI = 68
+HBFS4_OFF_DATA_HI = 72
+HBFS4_OFF_CHECKSUM = 76
 HBFS_SUPERBLOCK_LBA = 4096
 HBFS_BITMAP_BLOCKS = 16
 HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
@@ -81,6 +94,42 @@ def crc32c(data: bytes) -> int:
         for _ in range(8):
             crc = (crc >> 1) ^ 0x82F63B78 if crc & 1 else crc >> 1
     return crc ^ 0xFFFFFFFF
+
+
+def complain_checksums(image: str) -> int:
+    """Recompute every metadata checksum and print the ones that disagree.
+
+    Only the superblock carries one so far - the bitmap and directories get
+    theirs when their layouts can say where it lives - so this is one region and
+    a statement of what it did and did not check.
+    """
+    with open(image, "rb") as f:
+        f.seek(HBFS_SUPERBLOCK_LBA * SECTOR_SIZE)
+        sb = f.read(SECTOR_SIZE)
+    if len(sb) < SECTOR_SIZE:
+        print(f"  ERROR  cannot read the superblock at LBA {HBFS_SUPERBLOCK_LBA}")
+        return 1
+
+    magic = struct.unpack_from("<I", sb, 0)[0]
+    if magic == HBFS_MAGIC:
+        print("  NOTE   v3 volume: the superblock carries no checksum")
+        print("  PASS   0 of 0 checksummed blocks checked (1 block unchecked)")
+        return 0
+    if magic != HBFS4_MAGIC:
+        print(f"  ERROR  bad superblock magic 0x{magic:08X}")
+        return 1
+
+    stored = struct.unpack_from("<I", sb, HBFS4_OFF_CHECKSUM)[0]
+    view = bytearray(sb)
+    struct.pack_into("<I", view, HBFS4_OFF_CHECKSUM, 0)
+    computed = crc32c(bytes(view))
+    if stored != computed:
+        print(f"  ERROR  superblock checksum 0x{stored:08X}, "
+              f"contents say 0x{computed:08X}")
+        print("  FAIL   1 of 1 checksummed block disagrees")
+        return 1
+    print("  PASS   1 of 1 checksummed block matches (the superblock)")
+    return 0
 
 
 class Fsck:
@@ -403,10 +452,14 @@ def main() -> int:
     quiet = "--quiet" in flags
     strict = "--strict" in flags
     as_json = "--json" in flags
+    complain = "--complain" in flags
 
     if not os.path.exists(image):
         print(f"fsck_hbfs: no such image: {image}", file=sys.stderr)
         return 1
+
+    if complain:
+        return complain_checksums(image)
 
     fs = Fsck(image)
     status = fs.run()

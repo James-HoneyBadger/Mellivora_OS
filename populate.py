@@ -46,19 +46,22 @@ HBFS_MAX_FILENAME = 252
 HBFS_JOURNAL_BLOCKS = 4
 
 # HBFS v4 (roadmap P4) keeps every v3 field where it is and adds its own after
-# them, inside the same 512-byte sector: a second magic so a reader can tell the
-# versions apart before trusting anything else, the feature word, the generation
-# counter, the high halves of the 64-bit block counters and a metadata checksum.
-# Nothing here writes v4 yet - that is the writer's job and it lands with the
-# checksum - but the layout is declared on this side now so that
-# tools/validate_constants.py can hold it and the 64-bit reader's copy in
-# boot/lm_hbfs.c to the same numbers instead of letting them drift.
+# them, inside the same 512-byte sector. "After them" is meant literally: v3
+# uses the journal state and pointer at 40 and 44, the feature word at 48, the
+# root uid/gid at 52 and the journal epoch at 56, so the v4 header starts at 60
+# and a v3 reader looking at a v4 volume still finds its geometry where it
+# expects it.
+#
+# Nothing here writes v4 by default - the image stays v3 until the writer can be
+# boot-verified - but the layout and the checksum are exercised by
+# `make check-hbfs-checksum`, and tools/fsck_hbfs.py --complain recomputes the
+# checksum from the bytes on disk.
 HBFS4_MAGIC = 0x34424653              # 'HBF4'
-HBFS4_OFF_FEATURES = 32
-HBFS4_OFF_GENERATION = 36
-HBFS4_OFF_BLOCKS_HI = 40
-HBFS4_OFF_DATA_HI = 44
-HBFS4_OFF_CHECKSUM = 48
+HBFS4_OFF_FEATURES = 60
+HBFS4_OFF_GENERATION = 64
+HBFS4_OFF_BLOCKS_HI = 68
+HBFS4_OFF_DATA_HI = 72
+HBFS4_OFF_CHECKSUM = 76
 HBFS4_FEATURE_EXTENTS = 1 << 0
 HBFS4_FEATURE_JOURNAL = 1 << 1
 HBFS4_FEATURE_SNAPSHOT = 1 << 2
@@ -140,17 +143,57 @@ def write_sectors(img, lba, data):
     img.write(padded)
 
 
-def create_superblock():
-    """Create a fresh HBFS superblock."""
+def crc32c(data):
+    """CRC-32C (Castagnoli), the same polynomial the HBFS journal uses.
+
+    Table-free on purpose: the builder runs once per image, and a table is one
+    more thing that can be transcribed wrongly. The catalogue value for
+    "123456789" is 0xE3069283 and the test pins both copies of this to it.
+    """
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x82F63B78 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFFFFFF
+
+
+def superblock_checksum(sector):
+    """CRC-32C over a superblock with its own checksum field read as zero."""
+    view = bytearray(sector)
+    struct.pack_into('<I', view, HBFS4_OFF_CHECKSUM, 0)
+    return crc32c(bytes(view))
+
+
+def create_superblock(version=3, features=0, generation=0):
+    """Create an HBFS superblock: v3 for the images, v4 on request.
+
+    v3 writes the version field as 1 - every v3 image ever built says 1 there,
+    and the magic is what actually identifies the version - so this stays
+    byte-for-byte what it has always produced. v4 writes 4, the feature and
+    generation words, the high halves of the 64-bit block counters and a
+    CRC-32C over the sector with the checksum field read as zero.
+    """
+    if version not in (3, 4):
+        raise ValueError("HBFS version %r is not supported" % (version,))
     sb = bytearray(SECTOR_SIZE)
-    struct.pack_into('<I', sb, 0, HBFS_MAGIC)  # Magic
-    struct.pack_into('<I', sb, 4, 1)  # Version
+    struct.pack_into('<I', sb, 0,
+                     HBFS_MAGIC if version == 3 else HBFS4_MAGIC)  # Magic
+    struct.pack_into('<I', sb, 4, 1 if version == 3 else 4)  # Version
     struct.pack_into('<I', sb, 8, TOTAL_BLOCKS)  # Total blocks
     struct.pack_into('<I', sb, 12, TOTAL_BLOCKS)  # Free (update)
     struct.pack_into('<I', sb, 16, HBFS_ROOT_DIR_START)
     struct.pack_into('<I', sb, 20, HBFS_BITMAP_START)
     struct.pack_into('<I', sb, 24, HBFS_DATA_START)
     struct.pack_into('<I', sb, 28, BLOCK_SIZE)
+    if version == 4:
+        struct.pack_into('<I', sb, HBFS4_OFF_FEATURES, features)
+        struct.pack_into('<I', sb, HBFS4_OFF_GENERATION, generation)
+        struct.pack_into('<I', sb, HBFS4_OFF_BLOCKS_HI, TOTAL_BLOCKS >> 32)
+        struct.pack_into('<I', sb, HBFS4_OFF_DATA_HI, HBFS_DATA_START >> 32)
+        struct.pack_into('<I', sb, HBFS4_OFF_CHECKSUM, 0)
+        struct.pack_into('<I', sb, HBFS4_OFF_CHECKSUM,
+                         superblock_checksum(sb))
     return sb
 
 
@@ -212,8 +255,9 @@ HBFS_BITMAP_SECTS = HBFS_BITMAP_BLOCKS * SECTORS_PER_BLOCK
 class FSImage:
     """Manages an HBFS filesystem image with subdirectory support."""
 
-    def __init__(self, image_path):
+    def __init__(self, image_path, version=3):
         self.image_path = image_path
+        self.version = version
         self.img = open(image_path, 'r+b')
         self.bitmap = bytearray(HBFS_BITMAP_SIZE)
         self.root_dir = bytearray(HBFS_ROOT_DIR_SIZE)
@@ -229,7 +273,7 @@ class FSImage:
         if len(existing_sb) == SECTOR_SIZE:
             magic = struct.unpack_from('<I', existing_sb, 0)[0]
             version = struct.unpack_from('<I', existing_sb, 4)[0]
-            if magic == HBFS_MAGIC and version >= 1:
+            if magic == self._magic and version >= 1:
                 self.preserve_mode = True
                 self.sb = bytearray(existing_sb)
 
@@ -245,10 +289,14 @@ class FSImage:
                 return
 
         # No filesystem yet: initialize a fresh one.
-        self.sb = create_superblock()
+        self.sb = create_superblock(self.version)
         self.next_block = HBFS_JOURNAL_BLOCKS
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
         self.img.write(self.sb)
+
+    @property
+    def _magic(self):
+        return HBFS_MAGIC if self.version == 3 else HBFS4_MAGIC
 
     @staticmethod
     def _entry_name(directory_buf, off):
@@ -571,6 +619,12 @@ class FSImage:
         # migrates an image created when TOTAL_BLOCKS overran the image size.
         struct.pack_into('<I', self.sb, 8, TOTAL_BLOCKS)
         struct.pack_into('<I', self.sb, 12, free)
+        if self.version == 4:
+            # The free count is part of what the checksum covers, so it has to be
+            # recomputed after the last patch and before the sector is written.
+            struct.pack_into('<I', self.sb, HBFS4_OFF_CHECKSUM, 0)
+            struct.pack_into('<I', self.sb, HBFS4_OFF_CHECKSUM,
+                             superblock_checksum(self.sb))
         self.img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
         self.img.write(self.sb)
 

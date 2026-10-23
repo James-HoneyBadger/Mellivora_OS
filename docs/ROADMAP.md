@@ -793,7 +793,15 @@ that to the new structures rather than inventing a second mechanism.
       case kept for small files so nothing about the current fast path gets slower.
 - [ ] A checksum on every metadata block, and the tool that recomputes them offline
       (`tools/fsck_hbfs.py` grows a `--complain` mode that prints every block whose checksum
-      does not match its contents).
+      does not match its contents). **Partly done:** the superblock carries a CRC-32C from
+      offset 76 of the v4 header, `populate.py` writes one for a v4 superblock (and recomputes
+      it in `finalize()`, because the free count is part of what it covers), and
+      `--complain` recomputes it from the bytes on disk and prints every block that disagrees.
+      The bitmap and the directories still need a home for theirs - a block-level field has to
+      be subtracted from the bits and entries they use, so that is a layout decision rather
+      than a line of code - and until then `--complain` says how many blocks it checked rather
+      than claiming a clean volume. `make check-hbfs-checksum` builds a v4 image in a
+      temporary directory, passes it, flips one byte and requires the audit to fail.
 - [ ] Mount, read, and `ls` a v4 volume; the existing suite keeps passing on a v3 one.
 
 #### Sprint 2 - the journal, and the crash test that means something

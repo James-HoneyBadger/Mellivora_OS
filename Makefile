@@ -122,7 +122,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum
 
 all: $(IMAGE)
 
@@ -396,7 +396,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-samples check-boot check-runtime check-heap check-desktop fsck
+check: full check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -407,6 +407,11 @@ validate-constants:
 # number, so its own drift test runs with the lint checks.
 check-constants:
 	@python3 tests/test_validate_constants.py
+
+# The v4 superblock's checksum and the offline audit that recomputes it. Both
+# build their own images in a temporary directory, so this needs no build.
+check-hbfs-checksum:
+	@python3 tests/test_hbfs_checksum.py
 
 validate-syscalls:
 	@python3 tools/validate_syscalls.py
@@ -441,7 +446,7 @@ launcher-catalog: docs/app-catalog.json tools/generate_launcher_catalog.py
 check-launcher-catalog:
 	@python3 tools/generate_launcher_catalog.py --check
 
-lint: validate-constants check-constants validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest
+lint: validate-constants check-constants check-hbfs-checksum validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
 	@echo "=== Lint checks complete ==="
 

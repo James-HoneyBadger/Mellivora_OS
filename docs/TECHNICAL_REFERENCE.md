@@ -2992,6 +2992,20 @@ block at 260, block count at 264. Fourteen entries fit in a 4 KB block with 64 b
 left over, so entries straddle block boundaries; the root directory is therefore read
 once into a 128 KB buffer and scanned linearly rather than block by block.
 
+The superblock sector also carries the version's own header, and neither version moves the
+other's fields - the magic is what tells them apart:
+
+- v3 uses 40 and 44 for the journal state and pointer, 48 for its feature word, 52 for the
+  root uid/gid and 56 for the journal epoch.
+- v4 starts at 60: the feature word (bit0 extents, bit1 journal, bit2 snapshots), the
+  generation counter, the high halves of the 64-bit block count and data LBA, and at 76 a
+  CRC-32C over the whole sector with that field read as zero.
+
+`hbfs_init` prints which one it mounted (`version=3`, or `version=4 features=0x...`), and
+`tools/fsck_hbfs.py --complain` recomputes the checksum from the bytes on disk and prints
+every block that disagrees. `tools/validate_constants.py` holds the reader's copy of the
+layout, the builder's (`populate.py`) and the checker's to the same numbers.
+
 `boot/lm_vfs.c` is the front-end: `vfs_open` / `vfs_read` over a small handle table.
 It is read-only and root-level for now - directories and the other back-ends are part of
 the rest of the syscall port.
