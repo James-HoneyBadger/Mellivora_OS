@@ -61,7 +61,7 @@ sudo apt install qemu-system-x86
 sudo pacman -Syu qemu-full
 ```
 
-On Arch Linux ARM, pacman may report that `qemu-system-x86` requires `seabios` or `edk2-ovmf` packages that are unavailable in the enabled repositories. A full sync does not fix dependencies absent from those repositories. Do not skip the package, force-install it with `--nodeps`, or install x86_64 host packages on ARM. The normal `make run` path is BIOS boot; it does not need OVMF. Build QEMU on the ARM host instead.
+On Arch Linux ARM, pacman may report that `qemu-system-x86` requires firmware packages that are unavailable in the enabled repositories. A full sync does not fix dependencies absent from those repositories. Do not skip the package, force-install it with `--nodeps`, or install x86_64 host packages on ARM. The normal `make run` path is BIOS boot and needs only the emulator. Build QEMU on the ARM host instead.
 
 The Makefile searches for `qemu-system-x86_64`, then `qemu-system-i386`, then `~/.local/bin/qemu-system-x86_64`; it also supports the VS Code Flatpak host launcher. On ARM, host audio defaults to `none`; on other hosts the existing PulseAudio default is retained. Set `QEMU` or `QEMU_AUDIO_BACKEND` explicitly to override these choices.
 
