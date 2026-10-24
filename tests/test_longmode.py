@@ -347,7 +347,17 @@ def check_mouse(qemu, image):
         monitor = qd.Monitor(mon_path)
 
         serial.send_line("run /mouse")
-        time.sleep(1.0)
+        # Wait for the demo's first report before moving anything: a button
+        # pressed before the program is listening is a button that was never
+        # pressed, and on a slow runner the old fixed one-second sleep was not
+        # enough - the check then failed for a reason that was not the driver.
+        started = time.time() + 20
+        while time.time() < started:
+            if re.search(r"mouse x=\d+ y=\d+", serial.text()):
+                break
+            time.sleep(0.2)
+        else:
+            return "the mouse demo never reported a position"
         monitor.send_mouse(20, 0)
         time.sleep(0.4)
         monitor.send_mouse(0, 6)
