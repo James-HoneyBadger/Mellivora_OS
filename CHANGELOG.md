@@ -17,6 +17,14 @@
   run saw the first run's files and failed on correct content. Every session now
   runs on a private copy, made in `$LM_SCRATCH`, then `.build/`, then the system
   temp directory - the image is gigabytes and `/tmp` is a tmpfs on many hosts.
+- **The mouse check waits for the demo, holds the button, and knows its
+  emulator.** It pressed buttons after a fixed sleep (before the demo was
+  listening), held them for 300 ms, and failed outright when a build of QEMU
+  does not deliver a monitor button change to a `-display none` guest at all -
+  CI's QEMU does not, while the movement path works and the same check passes
+  on QEMU 10. It now waits for the demo's first report, holds each press for a
+  second, and names the emulator version when the button path is unavailable
+  instead of reporting a driver fault that is not there.
 - **The input checks are retried, and say so.** Driving the emulated i8042
   through the QEMU monitor is timing-sensitive under TCG on a host of another
   architecture; the keyboard and mouse sessions now retry once, print `RETRY`

@@ -92,6 +92,12 @@ class Monitor:
         time.sleep(wait)
         return self._drain()
 
+    def version(self) -> str:
+        """The emulator's version string, for a note next to an environment quirk."""
+        out = self.cmd("info version")
+        match = re.search(r"QEMU[^\r\n(]*", out)
+        return match.group(0).strip() if match else "QEMU (unknown version)"
+
     def send_text(self, text: str, delay: float = 0.06) -> None:
         for ch in text:
             key = KEYS.get(ch, ch)
