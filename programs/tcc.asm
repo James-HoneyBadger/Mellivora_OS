@@ -274,7 +274,7 @@ start:
         int 0x80
 
 ;=======================================================================
-; ARGUMENT PARSING
+; ARGUMENT PAESING
 ;=======================================================================
 parse_arg:
         ; Copy word from ESI to EDI
@@ -1375,12 +1375,12 @@ compile_function:
         call compile_block
 
         ; Function epilogue (in case no explicit return): xor eax,eax; leave; ret
-        ; Note: xor eax,eax clears the full register
+        ; Note: xor eax,eax zero-extends to EAX in mode
         mov al, 0x31
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        mov al, 0xC9            ; leave
+        mov al, 0xC9            ; leave (= mov esp,ebp + pop ebp )
         call emit_byte
         mov al, 0xC3            ; ret
         call emit_byte
@@ -1791,22 +1791,19 @@ compile_for:
         je .cf2_load_rbp
         cmp dword [for_var_type], SYM_PARAM
         je .cf2_load_rbp
-        ; Global load: mov rbx, addr; mov rax, [rbx]
-        call emit_rex_w
-        mov al, 0xBB            ; mov rbx, imm32
+        ; Global load: mov ebx, addr; mov eax, [ebx]
+        mov al, 0xBB            ; mov ebx, imm32
         call emit_byte
         mov eax, [for_var_addr]
         call emit_dword
-        call emit_rex_w
-        mov al, 0x8B            ; mov rax, [rbx]
+        mov al, 0x8B            ; mov eax, [ebx]
         call emit_byte
         mov al, 0x03
         call emit_byte
         jmp .cf2_loaded
 
 .cf2_load_rbp:
-        call emit_rex_w
-        mov al, 0x8B            ; mov rax, [rbp+off8]
+        mov al, 0x8B            ; mov eax, [ebp+off8]
         call emit_byte
         mov al, 0x45
         call emit_byte
@@ -1825,8 +1822,7 @@ compile_for:
         jmp .cf2_no_inc
 
 .cf2_add_one:
-        call emit_rex_w
-        mov al, 0x83            ; add rax, 1
+        mov al, 0x83            ; add eax, 1
         call emit_byte
         mov al, 0xC0
         call emit_byte
@@ -1835,8 +1831,7 @@ compile_for:
         jmp .cf2_store
 
 .cf2_sub_one:
-        call emit_rex_w
-        mov al, 0x83            ; sub rax, 1
+        mov al, 0x83            ; sub eax, 1
         call emit_byte
         mov al, 0xE8
         call emit_byte
@@ -1845,16 +1840,14 @@ compile_for:
         jmp .cf2_store
 
 .cf2_add_imm:
-        call emit_rex_w
-        mov al, 0x05            ; add rax, imm32
+        mov al, 0x05            ; add eax, imm32
         call emit_byte
         mov eax, [for_inc_value]
         call emit_dword
         jmp .cf2_store
 
 .cf2_sub_imm:
-        call emit_rex_w
-        mov al, 0x2D            ; sub rax, imm32
+        mov al, 0x2D            ; sub eax, imm32
         call emit_byte
         mov eax, [for_inc_value]
         call emit_dword
@@ -1864,22 +1857,19 @@ compile_for:
         je .cf2_store_rbp
         cmp dword [for_var_type], SYM_PARAM
         je .cf2_store_rbp
-        ; Global store: mov rbx, addr; mov [rbx], rax
-        call emit_rex_w
-        mov al, 0xBB            ; mov rbx, imm32
+        ; Global store: mov ebx, addr; mov [ebx], eax
+        mov al, 0xBB            ; mov ebx, imm32
         call emit_byte
         mov eax, [for_var_addr]
         call emit_dword
-        call emit_rex_w
-        mov al, 0x89            ; mov [rbx], rax
+        mov al, 0x89            ; mov [ebx], eax
         call emit_byte
         mov al, 0x03
         call emit_byte
         jmp .cf2_no_inc
 
 .cf2_store_rbp:
-        call emit_rex_w
-        mov al, 0x89            ; mov [rbp+off8], rax
+        mov al, 0x89            ; mov [ebp+off8], eax
         call emit_byte
         mov al, 0x45
         call emit_byte
@@ -2086,13 +2076,13 @@ compile_switch:
         jne .csw_err
         call next_token
 
-        call compile_expression  ; switch value in RAX
+        call compile_expression  ; switch value in EAX
 
         cmp dword [tok_type], TOK_RPAREN
         jne .csw_err
         call next_token
 
-        ; Save switch value: push rax
+        ; Save switch value: push eax
         mov al, 0x50
         call emit_byte
 
@@ -2130,18 +2120,16 @@ compile_switch:
         jne .csw_err
         call next_token
 
-        ; Emit: cmp [rsp], edx; jne next_case
-        ; Load switch value: mov rax, [rsp]
-        call emit_rex_w
+        ; Emit: cmp [esp], edx; jne next_case
+        ; Load switch value: mov eax, [esp]
         mov al, 0x8B
         call emit_byte
-        mov al, 0x04             ; mov rax, [rsp]
+        mov al, 0x04             ; mov eax, [esp]
         call emit_byte
         mov al, 0x24
         call emit_byte
-        ; cmp rax, imm32
-        call emit_rex_w
-        mov al, 0x3D             ; cmp rax, imm32
+        ; cmp eax, imm32
+        mov al, 0x3D             ; cmp eax, imm32
         call emit_byte
         mov eax, edx
         call emit_dword
@@ -2200,8 +2188,7 @@ compile_switch:
         jmp .csw_patch_exit
 .csw_patch_exit_done:
 
-        ; Pop switch value: add rsp, 8
-        call emit_rex_w
+        ; Pop switch value: add esp, 8
         mov al, 0x83
         call emit_byte
         mov al, 0xC4
@@ -2384,21 +2371,19 @@ compile_expression:
         call next_token
         call compile_expression
 
-        pop eax                    ; addr / RBP offset
+        pop eax                    ; addr / EBP offset
         pop ebx                    ; type
         cmp ebx, SYM_LOCAL
         je .ce_store_rbp
         cmp ebx, SYM_PARAM
         je .ce_store_rbp
-        ; Global: mov rbx, addr; mov [rbx], rax 
+        ; Global: mov ebx, addr; mov [ebx], eax 
         push eax                   ; preserve abs addr
-        call emit_rex_w
-        mov al, 0xBB               ; mov rbx, imm32 (sign-extended in 64-bit)
+        mov al, 0xBB               ; mov ebx, imm32 
         call emit_byte
         pop eax
         call emit_dword
-        ; mov [rbx], rax (REX prefix + 89 03)
-        call emit_rex_w
+        ; mov [ebx], eax (89 03)
         mov al, 0x89
         call emit_byte
         mov al, 0x03
@@ -2406,9 +2391,8 @@ compile_expression:
         popad
         ret
 .ce_store_rbp:
-        ; Local/param: mov [rbp + off8], rax (REX prefix + 89 45 off8)
-        push eax                   ; save RBP offset
-        call emit_rex_w
+        ; Local/param: mov [ebp + off8], eax (89 45 off8)
+        push eax                   ; save EBP offset
         mov al, 0x89
         call emit_byte
         mov al, 0x45
@@ -2427,7 +2411,7 @@ compile_expression:
         je .ce_arr_err
         push dword [symbol_addr]   ; push array base address
         call next_token            ; skip '['
-        call compile_expression    ; compile index -> RAX at runtime
+        call compile_expression    ; compile index -> EAX at runtime
         cmp dword [tok_type], TOK_RBRACKET
         jne .ce_arr_err2
         call next_token            ; skip ']'
@@ -2436,21 +2420,18 @@ compile_expression:
         je .ce_arr_store
         ; Array load: EAX = arr[index]
         ; imul eax,eax,4
-        call emit_rex_w
         mov al, 0x6B
         call emit_byte
         mov al, 0xC0
         call emit_byte
         mov al, 4                  ; 4 bytes per int element
         call emit_byte
-        ; add rax, base (REX prefix + 05 imm32)
-        call emit_rex_w
+        ; add eax, base (05 imm32)
         mov al, 0x05
         call emit_byte
         pop eax                    ; base address
         call emit_dword
-        ; mov rax, [rax] (REX prefix + 8B 00)
-        call emit_rex_w
+        ; mov eax, [eax] (8B 00)
         mov al, 0x8B
         call emit_byte
         mov al, 0x00
@@ -2460,30 +2441,27 @@ compile_expression:
 .ce_arr_store:
         ; arr[i] = val: compute element address, store
         ; imul eax,eax,4
-        call emit_rex_w
         mov al, 0x6B
         call emit_byte
         mov al, 0xC0
         call emit_byte
         mov al, 4                  ; 4 bytes per int element
         call emit_byte
-        ; add rax, base (REX prefix + 05 imm32)
-        call emit_rex_w
+        ; add eax, base (05 imm32)
         mov al, 0x05
         call emit_byte
         pop eax                    ; base address
         call emit_dword
-        ; push rax (element address) (50)
+        ; push eax (element address) (50)
         mov al, 0x50
         call emit_byte
         ; compile RHS
         call next_token            ; skip '='
-        call compile_expression    ; result in RAX
-        ; pop rcx; mov [rcx], rax (REX prefix + 59 89 01)
-        mov al, 0x59               ; pop rcx
+        call compile_expression    ; result in EAX
+        ; pop ecx; mov [ecx], eax (59 89 01)
+        mov al, 0x59               ; pop ecx
         call emit_byte
-        call emit_rex_w
-        mov al, 0x89               ; mov [rcx], rax
+        mov al, 0x89               ; mov [ecx], eax
         call emit_byte
         mov al, 0x01
         call emit_byte
@@ -2520,15 +2498,14 @@ compile_or_expr:
         cmp dword [tok_type], TOK_OR
         jne .or_check_ternary
         call next_token
-        ; push rax (left)
+        ; push eax (left)
         mov al, 0x50
         call emit_byte
         call compile_and_expr
-        ; pop rbx; or rax, rbx 
-        mov al, 0x5B             ; pop rbx
+        ; pop ebx; or eax, ebx 
+        mov al, 0x5B             ; pop ebx
         call emit_byte
-        call emit_rex_w
-        mov al, 0x09             ; or rax, rbx
+        mov al, 0x09             ; or eax, ebx
         call emit_byte
         mov al, 0xD8
         call emit_byte
@@ -2539,8 +2516,7 @@ compile_or_expr:
         cmp dword [tok_type], TOK_QUESTION
         jne .or_done
         call next_token          ; skip '?'
-        ; test rax, rax; jz false_branch
-        call emit_rex_w
+        ; test eax, eax; jz false_branch
         mov al, 0x85
         call emit_byte
         mov al, 0xC0
@@ -2597,13 +2573,12 @@ compile_and_expr:
         cmp dword [tok_type], TOK_AND
         jne .and_done
         call next_token
-        ; push rax (left)
+        ; push eax (left)
         mov al, 0x50
         call emit_byte
         call compile_bitor_expr
         ; Logical AND: convert both to boolean, then AND
-        ; test rax, rax; setne al; movzx eax, al
-        call emit_rex_w
+        ; test eax, eax; setne al; movzx eax, al
         mov al, 0x85
         call emit_byte
         mov al, 0xC0
@@ -2621,10 +2596,9 @@ compile_and_expr:
         call emit_byte
         mov al, 0xC8
         call emit_byte
-        ; pop rax; test rax, rax; setne al; movzx eax, al; and eax, ecx
+        ; pop eax; test eax, eax; setne al; movzx eax, al; and eax, ecx
         mov al, 0x58
         call emit_byte
-        call emit_rex_w
         mov al, 0x85
         call emit_byte
         mov al, 0xC0
@@ -2663,10 +2637,9 @@ compile_bitor_expr:
         mov al, 0x50
         call emit_byte
         call compile_bitxor_expr
-        mov al, 0x5B             ; pop rbx
+        mov al, 0x5B             ; pop ebx
         call emit_byte
-        call emit_rex_w
-        mov al, 0x09             ; or rax, rbx
+        mov al, 0x09             ; or eax, ebx
         call emit_byte
         mov al, 0xD8
         call emit_byte
@@ -2688,10 +2661,9 @@ compile_bitxor_expr:
         mov al, 0x50
         call emit_byte
         call compile_bitand_expr
-        mov al, 0x5B             ; pop rbx
+        mov al, 0x5B             ; pop ebx
         call emit_byte
-        call emit_rex_w
-        mov al, 0x31             ; xor rax, rbx
+        mov al, 0x31             ; xor eax, ebx
         call emit_byte
         mov al, 0xD8
         call emit_byte
@@ -2713,10 +2685,9 @@ compile_bitand_expr:
         mov al, 0x50
         call emit_byte
         call compile_eq_expr
-        mov al, 0x5B             ; pop rbx
+        mov al, 0x5B             ; pop ebx
         call emit_byte
-        call emit_rex_w
-        mov al, 0x21             ; and rax, rbx
+        mov al, 0x21             ; and eax, ebx
         call emit_byte
         mov al, 0xD8
         call emit_byte
@@ -2830,30 +2801,27 @@ compile_rel_expr:
         popad
         ret
 
-; Helper: emit push rax, call next_level, pop + cmp 
+; Helper: emit push eax, call next_level, pop + cmp 
 ; Used by eq_expr and rel_expr
 cmp_emit_push_rhs_cmp:
         call next_token
-        mov al, 0x50             ; push rax
+        mov al, 0x50             ; push eax
         call emit_byte
         call compile_shift_expr
-        call emit_rex_w          ; REX prefix for mov rcx, rax
         mov al, 0x89
         call emit_byte
         mov al, 0xC1
         call emit_byte
-        mov al, 0x58             ; pop rax
+        mov al, 0x58             ; pop eax
         call emit_byte
-        call emit_rex_w          ; REX prefix for cmp rax, rcx
         mov al, 0x39
         call emit_byte
         mov al, 0xC8
         call emit_byte
         ret
 
-; Helper: emit movzx rax, al 
+; Helper: emit movzx eax, al 
 cmp_emit_movzx:
-        call emit_rex_w
         mov al, 0x0F
         call emit_byte
         mov al, 0xB6
@@ -2877,19 +2845,17 @@ compile_shift_expr:
 
 .shl_op:
         call next_token
-        mov al, 0x50             ; push rax (left)
+        mov al, 0x50             ; push eax (left)
         call emit_byte
         call compile_add_expr
-        ; mov rcx, rax; pop rax; shl rax, cl
-        call emit_rex_w
+        ; mov ecx, eax; pop eax; shl eax, cl
         mov al, 0x89
         call emit_byte
-        mov al, 0xC1             ; mov rcx, rax
+        mov al, 0xC1             ; mov ecx, eax
         call emit_byte
-        mov al, 0x58             ; pop rax
+        mov al, 0x58             ; pop eax
         call emit_byte
-        call emit_rex_w
-        mov al, 0xD3             ; shl rax, cl
+        mov al, 0xD3             ; shl eax, cl
         call emit_byte
         mov al, 0xE0
         call emit_byte
@@ -2897,19 +2863,17 @@ compile_shift_expr:
 
 .shr_op:
         call next_token
-        mov al, 0x50             ; push rax (left)
+        mov al, 0x50             ; push eax (left)
         call emit_byte
         call compile_add_expr
-        ; mov rcx, rax; pop rax; sar rax, cl (arithmetic shift)
-        call emit_rex_w
+        ; mov ecx, eax; pop eax; sar eax, cl (arithmetic shift)
         mov al, 0x89
         call emit_byte
-        mov al, 0xC1             ; mov rcx, rax
+        mov al, 0xC1             ; mov ecx, eax
         call emit_byte
-        mov al, 0x58             ; pop rax
+        mov al, 0x58             ; pop eax
         call emit_byte
-        call emit_rex_w
-        mov al, 0xD3             ; sar rax, cl
+        mov al, 0xD3             ; sar eax, cl
         call emit_byte
         mov al, 0xF8
         call emit_byte
@@ -2934,15 +2898,14 @@ compile_add_expr:
 
 .add_op:
         call next_token
-        ; push rax
+        ; push eax
         mov al, 0x50
         call emit_byte
         call compile_mul_expr
-        ; pop rbx; add rax, rbx 
-        mov al, 0x5B             ; pop rbx
+        ; pop ebx; add eax, ebx 
+        mov al, 0x5B             ; pop ebx
         call emit_byte
-        call emit_rex_w          ; REX prefix for 64-bit add
-        mov al, 0x01             ; add rax, rbx
+        mov al, 0x01             ; add eax, ebx
         call emit_byte
         mov al, 0xD8
         call emit_byte
@@ -2950,20 +2913,18 @@ compile_add_expr:
 
 .sub_op:
         call next_token
-        ; push rax (left side)
+        ; push eax (left side)
         mov al, 0x50
         call emit_byte
         call compile_mul_expr
-        ; Result in rax = right. pop rbx = left. Want left - right.
-        ; mov rcx, rax; pop rax; sub rax, rcx 
-        call emit_rex_w          ; REX prefix for mov rcx, rax
+        ; Result in eax = right. pop ebx = left. Want left - right.
+        ; mov ecx, eax; pop eax; sub eax, ecx 
         mov al, 0x89
         call emit_byte
         mov al, 0xC1
         call emit_byte
-        mov al, 0x58             ; pop rax
+        mov al, 0x58             ; pop eax
         call emit_byte
-        call emit_rex_w          ; REX prefix for sub rax, rcx
         mov al, 0x29
         call emit_byte
         mov al, 0xC8
@@ -2994,10 +2955,9 @@ compile_mul_expr:
         mov al, 0x50
         call emit_byte
         call compile_unary
-        ; pop rbx; imul rax, rbx 
+        ; pop ebx; imul eax, ebx 
         mov al, 0x5B
         call emit_byte
-        call emit_rex_w          ; REX prefix for 64-bit imul
         mov al, 0x0F
         call emit_byte
         mov al, 0xAF
@@ -3011,19 +2971,16 @@ compile_mul_expr:
         mov al, 0x50
         call emit_byte
         call compile_unary
-        ; mov rcx, rax; pop rax; cqo; idiv rcx 
-        call emit_rex_w
+        ; mov ecx, eax; pop eax; cqo; idiv ecx 
         mov al, 0x89
         call emit_byte
         mov al, 0xC1
         call emit_byte
-        mov al, 0x58             ; pop rax
+        mov al, 0x58             ; pop eax
         call emit_byte
-        call emit_rex_w          ; REX prefix for cqo 
         mov al, 0x99             ; cqo
         call emit_byte
-        call emit_rex_w          ; REX prefix for 64-bit idiv
-        mov al, 0xF7             ; idiv rcx
+        mov al, 0xF7             ; idiv ecx
         call emit_byte
         mov al, 0xF9
         call emit_byte
@@ -3034,24 +2991,20 @@ compile_mul_expr:
         mov al, 0x50
         call emit_byte
         call compile_unary
-        ; mov rcx, rax; pop rax; cqo; idiv rcx; mov rax, rdx (remainder) 
-        call emit_rex_w
+        ; mov ecx, eax; pop eax; cqo; idiv ecx; mov eax, edx (remainder) 
         mov al, 0x89
         call emit_byte
         mov al, 0xC1
         call emit_byte
-        mov al, 0x58             ; pop rax
+        mov al, 0x58             ; pop eax
         call emit_byte
-        call emit_rex_w          ; REX prefix for cqo
         mov al, 0x99             ; cqo
         call emit_byte
-        call emit_rex_w          ; REX prefix for 64-bit idiv
-        mov al, 0xF7             ; idiv rcx
+        mov al, 0xF7             ; idiv ecx
         call emit_byte
         mov al, 0xF9
         call emit_byte
-        ; mov rax, rdx (REX prefix + 89 D0)
-        call emit_rex_w
+        ; mov eax, edx (89 D0)
         mov al, 0x89
         call emit_byte
         mov al, 0xD0
@@ -3083,8 +3036,7 @@ compile_unary:
 .un_not:
         call next_token
         call compile_unary
-        ; test rax, rax; sete al; movzx rax, al 
-        call emit_rex_w
+        ; test eax, eax; sete al; movzx eax, al 
         mov al, 0x85
         call emit_byte
         mov al, 0xC0
@@ -3095,7 +3047,6 @@ compile_unary:
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call emit_rex_w          ; REX prefix for movzx rax, al
         mov al, 0x0F
         call emit_byte
         mov al, 0xB6
@@ -3108,8 +3059,7 @@ compile_unary:
 .un_neg:
         call next_token
         call compile_unary
-        ; neg rax (REX prefix + F7 D8)
-        call emit_rex_w
+        ; neg eax (F7 D8)
         mov al, 0xF7
         call emit_byte
         mov al, 0xD8
@@ -3120,8 +3070,7 @@ compile_unary:
 .un_bitnot:
         call next_token
         call compile_unary
-        ; not rax (REX prefix + F7 D0)
-        call emit_rex_w
+        ; not eax (F7 D0)
         mov al, 0xF7
         call emit_byte
         mov al, 0xD0
@@ -3146,7 +3095,7 @@ compile_primary:
         cmp dword [tok_type], TOK_ID
         je .cp_id
 
-        ; Unknown - emit 0 (mov eax, 0 zero-extends to RAX)
+        ; Unknown - emit 0 (mov eax, 0 zero-extends to EAX)
         mov al, 0xB8            ; mov eax, imm32
         call emit_byte
         mov eax, 0
@@ -3212,14 +3161,12 @@ compile_primary:
         je .cp_load_rbp
         cmp dword [symbol_type], SYM_PARAM
         je .cp_load_rbp
-        ; Global: mov rbx, addr; mov rax, [rbx] 
-        call emit_rex_w
-        mov al, 0xBB               ; mov rbx, imm32 (sign-extended)
+        ; Global: mov ebx, addr; mov eax, [ebx] 
+        mov al, 0xBB               ; mov ebx, imm32 (sign-extended)
         call emit_byte
         mov eax, [symbol_addr]
         call emit_dword
-        ; mov rax, [rbx] (REX prefix + 8B 03)
-        call emit_rex_w
+        ; mov eax, [ebx] (8B 03)
         mov al, 0x8B
         call emit_byte
         mov al, 0x03
@@ -3227,19 +3174,18 @@ compile_primary:
         popad
         ret
 .cp_load_rbp:
-        ; Local/param: mov rax, [rbp + off8] (REX prefix + 8B 45 off8)
-        call emit_rex_w
+        ; Local/param: mov eax, [ebp + off8] (8B 45 off8)
         mov al, 0x8B
         call emit_byte
         mov al, 0x45
         call emit_byte
         mov eax, [symbol_addr]
-        call emit_byte           ; low byte = signed RBP offset
+        call emit_byte           ; low byte = signed EBP offset
         popad
         ret
 
 .cp_var_not_found:
-        ; Emit mov eax, 0 as fallback (zero-extends to RAX)
+        ; Emit mov eax, 0 as fallback (zero-extends to EAX)
         mov al, 0xB8
         call emit_byte
         mov eax, 0
@@ -3263,27 +3209,24 @@ compile_primary:
         je .cp_arr_err
         push dword [symbol_addr]   ; push array base address
         call next_token            ; skip '['
-        call compile_expression    ; compile index -> RAX at runtime
+        call compile_expression    ; compile index -> EAX at runtime
         cmp dword [tok_type], TOK_RBRACKET
         jne .cp_arr_err2
         call next_token            ; skip ']'
         ; Array load: EAX = arr[index]
         ; imul eax,eax,4
-        call emit_rex_w
         mov al, 0x6B
         call emit_byte
         mov al, 0xC0
         call emit_byte
         mov al, 4                  ; 4 bytes per int element
         call emit_byte
-        ; add rax, base (REX prefix + 05 imm32)
-        call emit_rex_w
+        ; add eax, base (05 imm32)
         mov al, 0x05
         call emit_byte
         pop eax                    ; base address
         call emit_dword
-        ; mov rax, [rax] (REX prefix + 8B 00)
-        call emit_rex_w
+        ; mov eax, [eax] (8B 00)
         mov al, 0x8B
         call emit_byte
         mov al, 0x00
@@ -3359,10 +3302,10 @@ compile_func_call:
         je .cfc_err
         push ecx
         push edx
-        call compile_expression  ; compile arg, result in RAX at runtime
+        call compile_expression  ; compile arg, result in EAX at runtime
         pop edx
         pop ecx
-        mov al, 0x50             ; push rax 
+        mov al, 0x50             ; push eax (in long mode)
         call emit_byte
         inc ecx
         cmp dword [tok_type], TOK_COMMA
@@ -3558,21 +3501,18 @@ compile_func_call:
         ret
 
 .cfc_strlen:
-        ; strlen(str) -> length in rax
+        ; strlen(str) -> length in eax
         call compile_expression
-        ; Inline strlen: mov rdi, rax; xor rcx, rcx; dec rcx; xor al, al; repne scasb; not rcx; dec rcx; mov rax, rcx
-        call emit_rex_w
-        mov al, 0x89             ; mov rdi, rax
+        ; Inline strlen: mov edi, eax; xor ecx, ecx; dec ecx; xor al, al; repne scasb; not ecx; dec ecx; mov eax, ecx
+        mov al, 0x89             ; mov edi, eax
         call emit_byte
         mov al, 0xC7
         call emit_byte
-        call emit_rex_w
-        mov al, 0x31             ; xor rcx, rcx
+        mov al, 0x31             ; xor ecx, ecx
         call emit_byte
         mov al, 0xC9
         call emit_byte
-        call emit_rex_w
-        mov al, 0xFF             ; dec rcx
+        mov al, 0xFF             ; dec ecx
         call emit_byte
         mov al, 0xC9
         call emit_byte
@@ -3584,18 +3524,15 @@ compile_func_call:
         call emit_byte
         mov al, 0xAE
         call emit_byte
-        call emit_rex_w
-        mov al, 0xF7             ; not rcx
+        mov al, 0xF7             ; not ecx
         call emit_byte
         mov al, 0xD1
         call emit_byte
-        call emit_rex_w
-        mov al, 0xFF             ; dec rcx
+        mov al, 0xFF             ; dec ecx
         call emit_byte
         mov al, 0xC9
         call emit_byte
-        call emit_rex_w
-        mov al, 0x89             ; mov rax, rcx
+        mov al, 0x89             ; mov eax, ecx
         call emit_byte
         mov al, 0xC8
         call emit_byte
@@ -3606,7 +3543,7 @@ compile_func_call:
         ret
 
 .cfc_malloc:
-        ; malloc(size) -> pointer in rax
+        ; malloc(size) -> pointer in eax
         call compile_expression
         ; mov ebx, eax (size); mov eax, SYS_MALLOC; int 0x80
         mov al, 0x89
@@ -3650,11 +3587,10 @@ compile_func_call:
         ret
 
 .cfc_abs:
-        ; abs(n) -> absolute value in rax
+        ; abs(n) -> absolute value in eax
         call compile_expression
-        ; Inline abs: test rax, rax; jns .pos; neg rax; .pos:
-        call emit_rex_w
-        mov al, 0x85             ; test rax, rax
+        ; Inline abs: test eax, eax; jns .pos; neg eax; .pos:
+        mov al, 0x85             ; test eax, eax
         call emit_byte
         mov al, 0xC0
         call emit_byte
@@ -3662,8 +3598,7 @@ compile_func_call:
         call emit_byte
         mov al, 3
         call emit_byte
-        call emit_rex_w
-        mov al, 0xF7             ; neg rax
+        mov al, 0xF7             ; neg eax
         call emit_byte
         mov al, 0xD8
         call emit_byte
@@ -3674,23 +3609,20 @@ compile_func_call:
         ret
 
 .cfc_atoi:
-        ; atoi(str) -> integer in rax
+        ; atoi(str) -> integer in eax
         call compile_expression
-        ; Inline atoi: mov rsi, rax; xor rax, rax; xor rcx, rcx; .loop: movzx rdx, byte [rsi]; test dl, dl; jz .done; sub dl, '0'; js .done; cmp dl, 9; ja .done; imul rax, 10; add rax, rdx; inc rsi; jmp .loop; .done:
-        ; mov rsi, rax
-        call emit_rex_w
+        ; Inline atoi: mov esi, eax; xor eax, eax; xor ecx, ecx; .loop: movzx edx, byte [esi]; test dl, dl; jz .done; sub dl, '0'; js .done; cmp dl, 9; ja .done; imul eax, 10; add eax, edx; inc esi; jmp .loop; .done:
+        ; mov esi, eax
         mov al, 0x89
         call emit_byte
         mov al, 0xC6
         call emit_byte
-        ; xor rax, rax
-        call emit_rex_w
+        ; xor eax, eax
         mov al, 0x31
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        ; .loop (offset 0): movzx rdx, byte [rsi] (REX prefix 0F B6 16)
-        call emit_rex_w
+        ; .loop (offset 0): movzx edx, byte [esi] (0F B6 16)
         mov al, 0x0F
         call emit_byte
         mov al, 0xB6
@@ -3731,22 +3663,19 @@ compile_func_call:
         call emit_byte
         mov al, 11
         call emit_byte
-        ; imul rax, rax, 10
-        call emit_rex_w
+        ; imul eax, eax, 10
         mov al, 0x6B
         call emit_byte
         mov al, 0xC0
         call emit_byte
         mov al, 10
         call emit_byte
-        ; add rax, rdx
-        call emit_rex_w
+        ; add eax, edx
         mov al, 0x01
         call emit_byte
         mov al, 0xD0
         call emit_byte
-        ; inc rsi
-        call emit_rex_w
+        ; inc esi
         mov al, 0xFF
         call emit_byte
         mov al, 0xC6
@@ -3756,7 +3685,7 @@ compile_func_call:
         call emit_byte
         mov al, 256-35
         call emit_byte
-        ; .done: (result in rax)
+        ; .done: (result in eax)
         cmp dword [tok_type], TOK_RPAREN
         jne .cfc_err
         call next_token
@@ -3833,47 +3762,41 @@ add_param_sym:
         ret
 
 ;=======================================================================
-; Emit inline decimal print (prints RAX as decimal number) - 64-bit
+; Emit inline decimal print (prints EAX as decimal number)
 ;=======================================================================
 emit_print_dec_inline:
         pushad
-        ; Emit inline decimal print routine for 64-bit
+        ; Emit inline decimal print routine
 
-        ; xor rcx, rcx; mov rbx, 10 
-        call emit_rex_w
+        ; xor ecx, ecx; mov ebx, 10 
         mov al, 0x31
         call emit_byte
-        mov al, 0xC9            ; xor rcx, rcx
+        mov al, 0xC9            ; xor ecx, ecx
         call emit_byte
-        call emit_rex_w
-        mov al, 0xBB            ; mov rbx, 10
+        mov al, 0xBB            ; mov ebx, 10
         call emit_byte
         mov eax, 10
         call emit_dword
 
-        ; .loop: xor rdx, rdx; div rbx; push rdx; inc rcx; test rax, rax; jnz .loop
+        ; .loop: xor edx, edx; div ebx; push edx; inc ecx; test eax, eax; jnz .loop
         mov eax, [out_pos]
         push eax                ; save loop start
-        call emit_rex_w
-        mov al, 0x31            ; xor rdx, rdx
+        mov al, 0x31            ; xor edx, edx
         call emit_byte
         mov al, 0xD2
         call emit_byte
-        call emit_rex_w
-        mov al, 0xF7            ; div rbx
+        mov al, 0xF7            ; div ebx
         call emit_byte
         mov al, 0xF3
         call emit_byte
-        mov al, 0x52            ; push rdx
+        mov al, 0x52            ; push edx
         call emit_byte
-        ; inc rcx (REX prefix + FF C1) - 64-bit inc
-        call emit_rex_w
+        ; inc ecx (FF C1) inc
         mov al, 0xFF
         call emit_byte
         mov al, 0xC1
         call emit_byte
-        call emit_rex_w
-        mov al, 0x85            ; test rax, rax
+        mov al, 0x85            ; test eax, eax
         call emit_byte
         mov al, 0xC0
         call emit_byte
@@ -3886,10 +3809,10 @@ emit_print_dec_inline:
         dec eax
         call emit_byte
 
-        ; .pop: pop rbx; add ebx, '0'; mov eax, SYS_PUTCHAR; int 0x80; dec rcx; jnz .pop
+        ; .pop: pop ebx; add ebx, '0'; mov eax, SYS_PUTCHAR; int 0x80; dec ecx; jnz .pop
         mov eax, [out_pos]
         push eax                ; pop loop start
-        mov al, 0x5B            ; pop rbx
+        mov al, 0x5B            ; pop ebx
         call emit_byte
         mov al, 0x83            ; add ebx, '0' (32-bit, zero-extends)
         call emit_byte
@@ -3905,8 +3828,7 @@ emit_print_dec_inline:
         call emit_byte
         mov al, 0x80
         call emit_byte
-        ; dec rcx (REX prefix + FF C9) - 64-bit dec
-        call emit_rex_w
+        ; dec ecx (FF C9) dec
         mov al, 0xFF
         call emit_byte
         mov al, 0xC9
@@ -3950,10 +3872,6 @@ emit_qword:
         mov [out_buffer + edi + 4], edx
         add dword [out_pos], 8
         pop edi
-        ret
-
-emit_rex_w:
-        ; 32-bit target: old x86-64 prefixes must not be emitted
         ret
 
 emit_jmp_placeholder:

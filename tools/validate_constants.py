@@ -2,14 +2,15 @@
 """Validate shared storage/layout constants across kernel and tooling.
 
 This script prevents silent drift between:
-- kernel.asm, populate.py and tests/test_hbfs.py, the 32-bit tree's three copies
-- kernel64/lm_hbfs.c, populate.py and tools/fsck_hbfs.py, the 64-bit tree's
+- kernel.asm, populate.py and tests/test_hbfs.py, the kernel's three copies
+- populate.py and tools/fsck_hbfs.py, the builder and the offline checker
+- tools/fsck_hbfs.py and tools/hbfs_journal.py, the two journal readers
 
-The 64-bit reader and the offline checker do not share code with the builder -
-that is the point of a second implementation - so each carries its own copy of
-the on-disk layout and every copy is compared here. A test that the comparison
-actually fails on a changed number lives in tests/test_validate_constants.py: a
-validator only earns its place if it has been seen to say no.
+The offline tools do not share code with the kernel - that is the point of a
+second implementation - so each carries its own copy of the on-disk layout and
+every copy is compared here. A test that the comparison actually fails on a
+changed number lives in tests/test_validate_constants.py: a validator only earns
+its place if it has been seen to say no.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ ROOT = Path(__file__).resolve().parent.parent
 KERNEL_PATH = ROOT / "kernel.asm"
 POPULATE_PATH = ROOT / "populate.py"
 TEST_HBFS_PATH = ROOT / "tests" / "test_hbfs.py"
-LM_HBFS_PATH = ROOT / "kernel64" / "lm_hbfs.c"
 FSCK_PATH = ROOT / "tools" / "fsck_hbfs.py"
 JOURNAL_PATH = ROOT / "tools" / "hbfs_journal.py"
 
@@ -43,56 +43,41 @@ CONSTANT_MAP = {
     "HBFS_SUBDIR_BLOCKS": ("HBFS_SUBDIR_BLOCKS", "HBFS_SUBDIR_BLOCKS"),
 }
 
-# kernel64/lm_hbfs.c symbol -> (populate.py symbol, tools/fsck_hbfs.py symbol).
-# None means that file does not carry the constant. The v4 entries are checked
-# from the day they are declared rather than from the day they are first
-# written, because the whole point of a paired constant is that the pair cannot
-# disagree.
-LM_CONSTANT_MAP = {
-    "HBFS_SUPERBLOCK_LBA": ("HBFS_SUPERBLOCK_LBA", "HBFS_SUPERBLOCK_LBA"),
-    "HBFS_ROOT_DIR_BLOCKS": ("HBFS_ROOT_DIR_BLOCKS", "HBFS_ROOT_DIR_BLOCKS"),
-    "HBFS_BLOCK_SIZE": ("BLOCK_SIZE", "BLOCK_SIZE"),
-    "HBFS_SECTORS_PER_BLOCK": ("SECTORS_PER_BLOCK", "SECTORS_PER_BLOCK"),
-    "HBFS_DATA_START": ("HBFS_DATA_START", "HBFS_DATA_START"),
-    "HBFS_DIR_ENTRY_SIZE": ("HBFS_DIR_ENTRY_SIZE", "HBFS_DIR_ENTRY_SIZE"),
-    "HBFS_MAX_FILES": ("HBFS_MAX_FILES", None),
-    "HBFS_BITMAP_BLOCKS": ("HBFS_BITMAP_BLOCKS", "HBFS_BITMAP_BLOCKS"),
-    "HBFS_JOURNAL_BLOCKS": ("HBFS_JOURNAL_BLOCKS", "HBFS_JOURNAL_BLOCKS"),
-    "HBFS_SUBDIR_BLOCKS": ("HBFS_SUBDIR_BLOCKS", None),
-    "HBFS_MAGIC": ("HBFS_MAGIC", "HBFS_MAGIC"),
-    "HBFS4_MAGIC": ("HBFS4_MAGIC", "HBFS4_MAGIC"),
-    "HBFS4_OFF_FEATURES": ("HBFS4_OFF_FEATURES", "HBFS4_OFF_FEATURES"),
-    "HBFS4_OFF_GENERATION": ("HBFS4_OFF_GENERATION", "HBFS4_OFF_GENERATION"),
-    "HBFS4_OFF_BLOCKS_HI": ("HBFS4_OFF_BLOCKS_HI", "HBFS4_OFF_BLOCKS_HI"),
-    "HBFS4_OFF_DATA_HI": ("HBFS4_OFF_DATA_HI", "HBFS4_OFF_DATA_HI"),
-    "HBFS4_OFF_CHECKSUM": ("HBFS4_OFF_CHECKSUM", "HBFS4_OFF_CHECKSUM"),
-    "HBFS4_RUN_CHECKSUM_BYTES": ("HBFS4_RUN_CHECKSUM_BYTES",
-                                 "HBFS4_RUN_CHECKSUM_BYTES"),
-    "HBFS4_DE_EXTENTS": ("HBFS4_DE_EXTENTS", "HBFS4_DE_EXTENTS"),
-    "HBFS4_EXTENT_MAGIC": ("HBFS4_EXTENT_MAGIC", "HBFS4_EXTENT_MAGIC"),
-    "HBFS4_EXTENT_HDR": ("HBFS4_EXTENT_HDR", "HBFS4_EXTENT_HDR"),
-    "HBFS4_EXTENT_RECORD": ("HBFS4_EXTENT_RECORD", "HBFS4_EXTENT_RECORD"),
-    "HBFS4_EXTENT_MAX": ("HBFS4_EXTENT_MAX", "HBFS4_EXTENT_MAX"),
-    "HBFS4_FEATURE_EXTENTS": ("HBFS4_FEATURE_EXTENTS", None),
-    "HBFS4_FEATURE_JOURNAL": ("HBFS4_FEATURE_JOURNAL", None),
-    "HBFS4_FEATURE_SNAPSHOT": ("HBFS4_FEATURE_SNAPSHOT", None),
+# populate.py symbol -> tools/fsck_hbfs.py symbol. Only constants the offline
+# checker carries are listed; a name missing from either side is reported.
+FSCK_CONSTANT_MAP = {
+    "HBFS_SUPERBLOCK_LBA": ("HBFS_SUPERBLOCK_LBA",),
+    "HBFS_ROOT_DIR_BLOCKS": ("HBFS_ROOT_DIR_BLOCKS",),
+    "BLOCK_SIZE": ("BLOCK_SIZE",),
+    "SECTORS_PER_BLOCK": ("SECTORS_PER_BLOCK",),
+    "HBFS_DATA_START": ("HBFS_DATA_START",),
+    "HBFS_DIR_ENTRY_SIZE": ("HBFS_DIR_ENTRY_SIZE",),
+    "HBFS_BITMAP_BLOCKS": ("HBFS_BITMAP_BLOCKS",),
+    "HBFS_JOURNAL_BLOCKS": ("HBFS_JOURNAL_BLOCKS",),
+    "HBFS_MAGIC": ("HBFS_MAGIC",),
+    "HBFS4_MAGIC": ("HBFS4_MAGIC",),
+    "HBFS4_OFF_FEATURES": ("HBFS4_OFF_FEATURES",),
+    "HBFS4_OFF_GENERATION": ("HBFS4_OFF_GENERATION",),
+    "HBFS4_OFF_BLOCKS_HI": ("HBFS4_OFF_BLOCKS_HI",),
+    "HBFS4_OFF_DATA_HI": ("HBFS4_OFF_DATA_HI",),
+    "HBFS4_OFF_CHECKSUM": ("HBFS4_OFF_CHECKSUM",),
+    "HBFS4_RUN_CHECKSUM_BYTES": ("HBFS4_RUN_CHECKSUM_BYTES",),
+    "HBFS4_DE_EXTENTS": ("HBFS4_DE_EXTENTS",),
+    "HBFS4_EXTENT_MAGIC": ("HBFS4_EXTENT_MAGIC",),
+    "HBFS4_EXTENT_HDR": ("HBFS4_EXTENT_HDR",),
+    "HBFS4_EXTENT_RECORD": ("HBFS4_EXTENT_RECORD",),
+    "HBFS4_EXTENT_MAX": ("HBFS4_EXTENT_MAX",),
 }
 
-# The journal's format, in three languages: the nucleus's copy, the checker's and
-# the reference implementation's. A record whose epoch field moved would be an
-# unrecognised record at boot, which is worth a lint failure rather than a trip
-# to the emulator.
+# The journal's format, in the checker's and the reference implementation's
+# copies. A record whose epoch field moved would be an unrecognised record,
+# which is worth a lint failure rather than a trip to the emulator.
 JOURNAL_CONSTANT_MAP = {
-    "HBFS4_JRNL_MAGIC": ("HBFS_JRNL_MAGIC", "JRNL_MAGIC"),
-    "HBFS4_JRNL_T_PRE": ("HBFS_JRNL_T_PRE", "JRNL_T_PRE"),
-    "HBFS4_JRNL_T_COMMIT": ("HBFS_JRNL_T_COMMIT", "JRNL_T_COMMIT"),
-    "HBFS4_SB_JRNL_STATE": (None, "SB_JRNL_STATE"),
-    "HBFS4_SB_JRNL_PTR": (None, "SB_JRNL_PTR"),
-    "HBFS4_SB_JRNL_EPOCH": (None, "SB_JRNL_EPOCH"),
-    "HBFS4_JRNL_PRE_CRC": (None, "PRE_OFF_CRC"),
-    "HBFS4_JRNL_OFF_RECORDS": ("HBFS4_JRNL_OFF_RECORDS", "COMMIT_OFF_RECORDS"),
-    "HBFS4_JRNL_OFF_CRC": ("HBFS4_JRNL_OFF_CRC", "COMMIT_OFF_CRC"),
-    "HBFS4_JRNL_SECTS": ("HBFS_JOURNAL_SECTS", None),
+    "HBFS_JRNL_MAGIC": ("JRNL_MAGIC",),
+    "HBFS_JRNL_T_PRE": ("JRNL_T_PRE",),
+    "HBFS_JRNL_T_COMMIT": ("JRNL_T_COMMIT",),
+    "HBFS4_JRNL_OFF_RECORDS": ("COMMIT_OFF_RECORDS",),
+    "HBFS4_JRNL_OFF_CRC": ("COMMIT_OFF_CRC",),
 }
 
 ALLOWED_BINOPS = {
@@ -224,43 +209,6 @@ def parse_python_assignments(path: Path) -> Dict[str, int]:
     return symbols
 
 
-CPP_INT_SUFFIX = re.compile(r"\b(0[xX][0-9A-Fa-f]+|\d+)[uUlL]+\b")
-CPP_DEFINE = re.compile(
-    r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+(.+)$", re.MULTILINE
-)
-
-
-def strip_c_comments(text: str) -> str:
-    """Drop both comment forms and join backslash continuations.
-
-    The join has to come after the comments, or a `//` comment that ends in a
-    backslash would swallow the line after it.
-    """
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
-    text = re.sub(r"//[^\n]*", "", text)
-    return re.sub(r"\\[ \t]*\n", " ", text)
-
-
-def parse_c_defines(path: Path) -> Dict[str, int]:
-    """Read the object-like `#define NAME value` lines out of a C source file.
-
-    Only literal expressions over other defines are evaluated; anything else is
-    skipped, because LM_CONSTANT_MAP above names the constants worth comparing
-    and an unexpected one is not an error.
-    """
-    symbols: Dict[str, int] = {}
-    for m in CPP_DEFINE.finditer(strip_c_comments(path.read_text(encoding="utf-8"))):
-        name, expr = m.group(1), m.group(2).strip()
-        if name in symbols:
-            continue
-        expr = CPP_INT_SUFFIX.sub(lambda suffix: suffix.group(1), expr)
-        try:
-            symbols[name] = safe_eval_expr(expr, symbols)
-        except EvalError:
-            continue
-    return symbols
-
-
 def check_sides(mapping: Dict[str, tuple], sides: list) -> list:
     """Compare one constant across every side that carries it.
 
@@ -300,17 +248,15 @@ def main() -> int:
     kernel = parse_kernel_symbols(KERNEL_PATH)
     populate = parse_python_assignments(POPULATE_PATH)
     test_hbfs = parse_python_assignments(TEST_HBFS_PATH)
-    lm_hbfs = parse_c_defines(LM_HBFS_PATH)
     fsck = parse_python_assignments(FSCK_PATH)
     journal = parse_python_assignments(JOURNAL_PATH)
 
     groups = [
         (CONSTANT_MAP, [("kernel.asm", kernel), ("populate.py", populate),
                         ("tests/test_hbfs.py", test_hbfs)]),
-        (LM_CONSTANT_MAP, [("kernel64/lm_hbfs.c", lm_hbfs), ("populate.py", populate),
-                           ("tools/fsck_hbfs.py", fsck)]),
-        (JOURNAL_CONSTANT_MAP, [("kernel64/lm_hbfs.c", lm_hbfs),
-                                ("tools/fsck_hbfs.py", fsck),
+        (FSCK_CONSTANT_MAP, [("populate.py", populate),
+                             ("tools/fsck_hbfs.py", fsck)]),
+        (JOURNAL_CONSTANT_MAP, [("tools/fsck_hbfs.py", fsck),
                                 ("tools/hbfs_journal.py", journal)]),
     ]
 

@@ -201,7 +201,7 @@ Programs in `/bin` and `/games` are in the default PATH, so they run from any di
 ```text
 Mellivora_OS/
 ├── boot.asm               Stage 1 MBR boot sector (512 bytes, 16-bit)
-├── stage2.asm              Stage 2 loader (A20, E820, long mode switch)
+├── stage2.asm              Stage 2 loader (A20, E820, protected mode)
 ├── kernel.asm              Kernel entry + 30 modular includes in `kernel/`
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support

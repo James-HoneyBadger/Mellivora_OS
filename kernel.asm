@@ -271,9 +271,6 @@ HBFS_XATTR_VAL_LEN   equ 64
 HBFS_XATTR_ENTRY_SIZE equ (HBFS_XATTR_KEY_LEN + HBFS_XATTR_VAL_LEN)  ; 128 bytes
 HBFS_XATTR_PER_BLOCK equ (HBFS_BLOCK_SIZE / HBFS_XATTR_ENTRY_SIZE)    ; 32 entries
 
-; v10.0: UEFI boot detection (set by uefi_loader.c at 0x528)
-BOOTINFO_UEFI_MAGIC  equ 0x528
-UEFI_BOOT_MAGIC      equ 0xEF100000
 
 ; File types (stored at byte 253 of directory entry)
 FTYPE_FREE          equ 0

@@ -1535,8 +1535,6 @@ identity management, networking extensions, and terminal (termios) control.
 
 ### Boot & architecture
 
-- **`BOOTINFO_UEFI_MAGIC` / `UEFI_BOOT_MAGIC`** — kernel detects UEFI vs BIOS at runtime
-  by inspecting the boot-info magic passed from Stage 2.
 
 ### Virtual filesystem (`kernel/vfs.inc`)
 
