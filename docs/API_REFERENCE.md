@@ -16,7 +16,7 @@ All libraries live in `programs/lib/` and are included via NASM `%include` direc
 %include "lib/net.inc"          ; TCP/UDP sockets, DNS, ICMP ping
 %include "lib/gui.inc"          ; Burrows desktop GUI wrappers
 %include "lib/vbe.inc"          ; VBE pixel primitives (clear/rect/lines)
-%include "lib/font.inc"         ; 5x7 bitmap font + circle drawing
+%include "lib/font.inc"         ; 5x7 bitmap font (ASCII 0x20-0x7E) + circle drawing
 %include "lib/vbe_game.inc"     ; VBE_GAME_INIT/PRESENT/POLL_KEY macros
 %include "lib/palette.inc"      ; Shared MV_* color constants (v6.1+)
 %include "lib/vbe_ui.inc"       ; Header bar, status bar, modal, input widget (v6.1+)

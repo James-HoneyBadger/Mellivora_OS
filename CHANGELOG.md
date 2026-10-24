@@ -1,5 +1,37 @@
 # Mellivora OS - Changelog
 
+## Unreleased - an installer disc that installs
+
+### Installer
+
+- **The ISO is an installer now.** `mellivora.iso` boots a 2 KB real-mode stub
+  (`install/boot/stage1.asm`) whose only job is to read the Boot Record Volume
+  Descriptor at CD sector 17, follow the boot catalog to its own load LBA, and
+  pull the 64 KB payload (`install/boot/installer.asm`) to `0x10000`. The payload
+  walks the ISO9660 tree for `MELLIVORA.IMG`, enumerates BIOS hard disks with
+  INT 13h `AH=41h`/`AH=48h`, asks which one to use, refuses a disk smaller than
+  the image, writes it in 32 KB chunks with `AH=42h`/`AH=43h`, then reads sector
+  0 back. The installed disk boots on its own; no CD, no second disk.
+- **Why the old disc could never work.** `Experimental/` put the 2 GB raw image in
+  the El Torito boot entry and declared 3649 sectors to preload - far past the 640
+  KB of conventional memory; the kernel has no ATAPI support, so a CD-only boot
+  had no HBFS volume; and `iso-lite` truncated the image to 64 MB, which broke the
+  superblock's block count. It only booted in QEMU with the same image attached as
+  a separate hard disk, which is not what install media do.
+- **`Experimental/` is gone.** The installer lives in `install/` with its own
+  `README.md`, `tools/build_iso.sh`, `tools/run_iso.sh` and an unattended driver,
+  `tools/autoinstall.py`. `tools/packet_fuzz.py` moved to `tools/`.
+- **The disc ships a right-sized image.** `make iso` builds
+  `mellivora-install.img` at `ISO_IMAGE_MB` (default 256) and `make iso-lite`
+  builds it at 64 MB; `populate.py` derives the HBFS block count from the file it
+  populates, so both are fsck-clean. `make iso-verify` checks the El Torito record
+  and the payload, and `make test-iso` installs the disc onto a blank disk in
+  QEMU, compares the bytes and boots the result.
+- **Rock Ridge names.** `mkisofs` at ISO level 1 truncates `MELLIVORA.IMG` to
+  `MELLIVOR.IMG`, so the installer reads the `NM` entry in the SUSP system-use
+  area and falls back to the plain identifier; the disc is built at `-iso-level 3`
+  as well, so either name works.
+
 ## Unreleased - a 32-bit task beside the 64-bit ones
 
 ### Port (P2)

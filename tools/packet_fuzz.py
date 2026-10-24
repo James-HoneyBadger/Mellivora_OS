@@ -9,7 +9,7 @@ they can be replayed via QEMU's -netdev dump=file=… or fed to a future
 kernel-side replay harness.
 
 Usage:
-    python3 Experimental/tools/packet_fuzz.py [--count N] [--seed S]
+    python3 tools/packet_fuzz.py [--count N] [--seed S]
                                               [--out FILE]
 
 Output format: pcap-savefile-compatible "raw" stream, each frame

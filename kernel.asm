@@ -754,4 +754,5 @@ kernel_entry:
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
 %include "kernel/syscall.inc"
+%include "kernel/cmdtable.inc"
 %include "kernel/data.inc"

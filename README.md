@@ -5,14 +5,14 @@
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
 Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 186 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
-compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
+compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** BIOS 3-stage boot or UEFI (gnu-efi PE32+) into 32-bit protected mode; optional x86-64 long-mode path
-- **Userland:** 90+ shell commands, 235 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC)
+- **Userland:** 89 shell built-ins, 264 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC)
 - **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
 
@@ -47,8 +47,11 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 ### HB Lair Shell (v3.0)
 
 - **90+ built-in shell commands** with aliases: file management, text processing, system info, process control
+- **Discoverable help** — `help` lists built-ins grouped by category, `help <command>` gives
+  usage, `help -a` lists every name, and an unknown command suggests the nearest match
 - **Tab completion**, **command history** (128 entries), **Ctrl+C** hard-abort with proper cleanup
 - **Enhanced line editing** — Ctrl+A/E (home/end), Ctrl+U (kill line), Ctrl+W (delete word), Ctrl+L (clear+redraw)
+- **Scrollback** — PgUp/PgDn at the prompt pages through the last 100 lines
 - **Process management** — `ps`, `jobs`, `kill`, `bg`, `fg`, `nice` for task control
 - **Pipes, redirection, and chaining** — `|`, `>`, `>>`, `<`, `&&`, and `||` for shell workflows
 - **Alias system** — define custom command shortcuts
@@ -62,9 +65,9 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 ### HBFS Filesystem (v3)
 
 - **Honey Badger File System v3** — custom filesystem with 4 KB blocks and write-ahead journal
-- **455 entries** per root directory, **224 entries** per subdirectory (288-byte entries, 253-char max filename)
+- **455 entries** per root directory, **224 entries** per subdirectory (288-byte entries, 252-char max filename)
 - **File types**: text, executable, directory, batch script
-- **File permissions** — Unix-style 12-bit mode (`HBFS_DE_MODE`); owner/group/other rwx enforced by `hbfs_check_permission`
+- **File permissions** — Unix-style 12-bit mode (`HBFS_DE_MODE`) with owner/group/other rwx; `SYS_ACCESS` enforces it via `hbfs_check_access` (`open` does not check yet)
 - **Extended attributes** — per-file xattr block; `hbfs_xattr_get` / `hbfs_xattr_set` kernel API
 - **Feature flags** — superblock `HBFS_SB_FEATURES`: journal, xattr, permissions
 - **VFS integration** — accessed via the VFS layer; raw `fd_open` / `fd_read` / `fd_write` still available
@@ -90,9 +93,9 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
 - **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
 - **GDB remote stub** (v11) — RSP protocol over COM1; supports registers, memory, continue, step, breakpoints
 
-### Programs (235 assembly sources + 37 bundled samples)
+### Programs (264 assembly sources + 37 bundled samples)
 
-- **Games (31)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
+- **Games (29)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
 - **Tools**: Text editor, hex viewer, file pager (`more`/`pager`), CSV viewer, dual-pane file manager (burrow), `top` process monitor
 - **Demos**: Mandelbrot/Julia renderers, plasma effect, VBE sprite blit, rotating cube, banner, colors, Doom fire effect
@@ -122,8 +125,9 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 235 assembl
   reaps its windows, reports the fault as a desktop notification, and hands focus to the
   next window. The **Crash Resilience Demo** app (launcher → Crash Resilience Demo) shows
   it live, and `make check` asserts it
-- **Persistent theme** — theme changes are written to `burrows.cfg` and reloaded at boot;
-  the wallpaper gradient follows the theme instead of hard-coded colours
+- **Persistent theme and wallpaper** — theme and wallpaper style are written to
+  `burrows.cfg` and reloaded at boot; the wallpaper follows the theme instead of
+  hard-coded colours, and Settings switches it between a gradient and a flat fill
 - **Clean teardown** — `SYS_GUI/GUI_EXIT_DESKTOP` returns to the text shell and reclaims
   every task, so a GUI app can never outlive the desktop
 
@@ -215,7 +219,7 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (235 assembly sources total)
+│   └── ...                 (264 assembly sources total)
 ├── samples/                NASM, C, Perl, and BASIC source files
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c, hanoi.c
 │   ├── bf.c, wumpus.c, boxes.c, stars.c, echo.c
@@ -343,7 +347,7 @@ Mellivora_OS/
 | `make full` | Complete build: boot + kernel + programs + filesystem |
 | `make run` | Launch in QEMU (i486-compatible x86, 128 MB RAM) |
 | `make debug` | Launch with QEMU monitor on stdio |
-| `make iso` | Create a bootable installer/live ISO with docs included |
+| `make iso` | Build the installer disc (`ISO_IMAGE_MB`, default 256) |
 | `make check` | Run the regression suite and HBFS integrity checks |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Show component sizes |
@@ -354,9 +358,10 @@ Mellivora_OS/
 | `make check-samples` | Validate NASM, C, Perl, and BASIC sample sources |
 | `make check-qemu` | Verify that QEMU is available |
 | `make run-serial` | Boot with a diagnostic serial TCP endpoint on port 4555 |
-| `make run-iso` | Boot the ISO with the disk image attached |
-| `make iso-lite` | Build the smaller documentation/live ISO |
-| `make iso-verify` | Inspect generated ISO boot metadata |
+| `make run-iso` | Boot the installer disc in QEMU with a blank target disk |
+| `make iso-lite` | Build the installer disc with a 64 MB payload |
+| `make iso-verify` | Validate the disc's El Torito record and payload |
+| `make test-iso` | Install the disc onto a blank disk in QEMU and boot it |
 | `make sanitize` | Clean-build with bounds instrumentation and run regressions |
 | `make bench` | Measure build and validation stages |
 | `make bench-check` | Compare measurements with the benchmark baseline |
@@ -395,7 +400,7 @@ ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on A
 | Kernel source | Entry file + 30 modular include files |
 | Syscalls | 185 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 235 assembly sources built by the Makefile |
+| User programs | 264 assembly sources built by the Makefile |
 | Bundled samples | 37 (2 NASM + 18 C + 11 Perl + 6 BASIC) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |

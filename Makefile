@@ -110,19 +110,24 @@ PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS))
 TEST_PROGS = programs/sbrk_test.asm programs/hello_test.asm
 
 
-# ISO packaging
-ISO_STAGING = .build/iso-root
+# Installer disc. The ISO ships a right-sized disk image (populate.py derives
+# the HBFS block count from the file size), so it fits on a CD and installs
+# onto any disk at least that large.
 ISO_FILE = mellivora.iso
 ISO_LITE_FILE = mellivora-lite.iso
+ISO_IMAGE_MB ?= 256
 ISO_LITE_IMG_MB = 64
+ISO_DISK_IMAGE = mellivora-install.img
+ISO_LITE_DISK_IMAGE = mellivora-install-lite.img
+ISO_TOOLS = install/tools/build_iso.sh install/tools/run_iso.sh install/tools/autoinstall.py
 ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
            docs/TECHNICAL_REFERENCE.md docs/TUTORIAL.md docs/API_REFERENCE.md \
-           docs/NETWORKING_GUIDE.md Experimental/docs/ISO_README.txt
+           docs/NETWORKING_GUIDE.md install/docs/ISO_README.txt
 
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash
+.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify test-iso sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table
 
 all: $(IMAGE)
 
@@ -226,11 +231,9 @@ run-serial: check-qemu $(IMAGE)
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS) -serial tcp:127.0.0.1:4555,server=on,wait=off
 
-# Boot the ISO in QEMU: CD-ROM provides El Torito boot, IDE disk provides HBFS.
+# Boot the installer ISO in QEMU with a blank target disk.
 run-iso: check-qemu iso
-	@echo "=== Launching Mellivora from ISO (El Torito CD boot + IDE disk) ==="
-	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
-	$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_FILE) -boot d
+	@install/tools/run_iso.sh --iso $(ISO_FILE)
 
 # Run with debug output
 debug: check-qemu $(IMAGE)
@@ -288,52 +291,60 @@ kernel-only: $(KERNEL_BIN) kernel_sectors.inc $(STAGE2_BIN)
 	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
 	@echo "=== kernel-only update complete ==="
 
-# Shared helper: copy docs into staging tree
-define stage_iso_docs
-	@rm -rf "$(ISO_STAGING)"
-	@mkdir -p "$(ISO_STAGING)/boot" "$(ISO_STAGING)/docs"
-	@cp README.md LICENSE CHANGELOG.md "$(ISO_STAGING)/"
-	@cp docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
-		  docs/TECHNICAL_REFERENCE.md docs/TUTORIAL.md docs/API_REFERENCE.md \
-		  docs/NETWORKING_GUIDE.md \
-		  "$(ISO_STAGING)/docs/"
-	@cp Experimental/docs/ISO_README.txt "$(ISO_STAGING)/README.txt"
-	@chmod +x Experimental/tools/build_iso.sh
+# A disk image at a size that fits on a CD. populate.py sets the HBFS block
+# count from the file size, so the volume matches the file exactly.
+define build_iso_image
+	@echo "=== Building $(1) ($(2) MB) ==="
+	$(DD) if=/dev/zero of=$(1) bs=1M count=$(2) status=none
+	$(DD) if=$(BOOT_BIN)   of=$(1) bs=512 count=1  conv=notrunc status=none
+	$(DD) if=$(STAGE2_BIN) of=$(1) bs=512 seek=1   conv=notrunc status=none
+	$(DD) if=$(KERNEL_BIN) of=$(1) bs=512 seek=33  conv=notrunc status=none
+	$(POPULATE) $(1) $(PROG_DIR)
 endef
 
-# Build a bootable ISO that includes install docs and the user guide
-iso: full Experimental/tools/build_iso.sh $(ISO_DOCS) README.md LICENSE CHANGELOG.md
-	@echo "=== Preparing bootable ISO staging tree ==="
-	$(call stage_iso_docs)
-	@cp "$(IMAGE)" "$(ISO_STAGING)/boot/mellivora.img"
-	@ISO_BOOT_SECTORS=$$(awk '/KERNEL_SECTORS/ {print $$3 + 33}' kernel_sectors.inc) \
-		./Experimental/tools/build_iso.sh "$(ISO_STAGING)" "$(ISO_FILE)"
-	@echo "=== Bootable ISO ready: $(ISO_FILE) ==="
+ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) populate.py
 
-# Build a smaller ISO with a truncated disk image (faster downloads)
-iso-lite: full Experimental/tools/build_iso.sh $(ISO_DOCS) README.md LICENSE CHANGELOG.md
-	@echo "=== Preparing lite ISO ($(ISO_LITE_IMG_MB) MB disk image) ==="
-	$(call stage_iso_docs)
-	@$(DD) if=$(IMAGE) of="$(ISO_STAGING)/boot/mellivora.img" \
-		bs=1M count=$(ISO_LITE_IMG_MB) status=none
-	@ISO_BOOT_SECTORS=$$(awk '/KERNEL_SECTORS/ {print $$3 + 33}' kernel_sectors.inc) \
-		./Experimental/tools/build_iso.sh "$(ISO_STAGING)" "$(ISO_LITE_FILE)"
-	@echo "=== Lite ISO ready: $(ISO_LITE_FILE) ==="
+$(ISO_DISK_IMAGE): $(ISO_IMAGE_DEPS)
+	$(call build_iso_image,$(ISO_DISK_IMAGE),$(ISO_IMAGE_MB))
 
-# Verify El Torito boot record in an existing ISO
-iso-verify: $(ISO_FILE)
-	@echo "=== Verifying ISO El Torito boot record ==="
+$(ISO_LITE_DISK_IMAGE): $(ISO_IMAGE_DEPS)
+	$(call build_iso_image,$(ISO_LITE_DISK_IMAGE),$(ISO_LITE_IMG_MB))
+
+# Build the installer disc: a real-mode installer that writes the image to a
+# hard disk. See install/README.md.
+iso: $(ISO_DISK_IMAGE) $(ISO_TOOLS) $(ISO_DOCS) README.md LICENSE CHANGELOG.md
+	@install/tools/build_iso.sh --image $(ISO_DISK_IMAGE) --out $(ISO_FILE)
+	@echo "=== Installer ISO ready: $(ISO_FILE) ==="
+
+# Same disc with a 64 MB payload: quicker to download, installs a smaller disk
+iso-lite:
+	@$(MAKE) --no-print-directory iso \
+		ISO_IMAGE_MB=$(ISO_LITE_IMG_MB) \
+		ISO_DISK_IMAGE=$(ISO_LITE_DISK_IMAGE) \
+		ISO_FILE=$(ISO_LITE_FILE)
+
+# Verify El Torito boot record and payload of an existing ISO
+iso-verify:
+	@echo "=== Verifying $(ISO_FILE) ==="
 	@command -v xorriso >/dev/null 2>&1 || { echo "  error: xorriso required for verification"; exit 1; }
+	@test -f $(ISO_FILE) || { echo "  error: $(ISO_FILE) not built - run 'make iso'"; exit 1; }
 	@xorriso -indev $(ISO_FILE) -report_el_torito plain 2>&1 \
 		| grep -E 'Boot record|El Torito'
-	@EXPECTED=$$(awk '/KERNEL_SECTORS/ {print $$3 + 33}' kernel_sectors.inc); \
-	 ACTUAL=$$(xorriso -indev $(ISO_FILE) -report_el_torito plain 2>&1 \
+	@LOAD=$$(xorriso -indev $(ISO_FILE) -report_el_torito plain 2>&1 \
 		| awk '/El Torito boot img/{print $$(NF-1)}'); \
-	 if [ "$$EXPECTED" = "$$ACTUAL" ]; then \
-		echo "  PASS  boot-load-size: $$ACTUAL sectors (matches kernel_sectors + 33)"; \
+	 if [ "$$LOAD" = "4" ]; then \
+		echo "  PASS  boot-load-size: $$LOAD sectors (2048 byte installer stub)"; \
 	 else \
-		echo "  WARN  boot-load-size: expected $$EXPECTED, found $$ACTUAL"; \
+		echo "  FAIL  boot-load-size: expected 4, found $$LOAD"; exit 1; \
 	 fi
+	@IMG=$$(xorriso -indev $(ISO_FILE) -find / 2>&1 | grep -c '/MELLIVORA.IMG'); \
+	 if [ "$$IMG" = "1" ]; then echo "  PASS  /MELLIVORA.IMG is present"; \
+	 else echo "  FAIL  /MELLIVORA.IMG missing"; exit 1; fi
+
+# End-to-end: build the ISO, install it onto a blank disk in QEMU, check the
+# bytes and boot the result. Slow (a full image copy) - not part of 'check'.
+test-iso: $(ISO_DISK_IMAGE)
+	@python3 tests/test_iso.py
 
 # Headless QEMU boot smoke test: asserts the kernel reaches the shell prompt and
 # reported no CPU exceptions on COM1. BOOT_ALLOW_SKIP=1 keeps 'make check'
@@ -423,6 +434,18 @@ check-hbfs-extents:
 check-hbfs-journal:
 	@python3 tests/test_hbfs_journal.py
 
+check-docs:
+	@python3 tools/check_docs.py
+
+# The 5x7 VBE font is indexed by character offset, so a missing glyph shifts
+# every character after it. This pins the geometry and the printable range.
+check-font:
+	@python3 tools/check_font.py
+
+# The command table, the dispatcher and the help text must agree.
+check-command-table:
+	@python3 tools/check_command_table.py
+
 validate-syscalls:
 	@python3 tools/validate_syscalls.py
 
@@ -456,7 +479,7 @@ launcher-catalog: docs/app-catalog.json tools/generate_launcher_catalog.py
 check-launcher-catalog:
 	@python3 tools/generate_launcher_catalog.py --check
 
-lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest
+lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest check-docs check-font check-command-table
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
 	@echo "=== Lint checks complete ==="
 
@@ -861,10 +884,11 @@ help:
 	@echo "    make run-serial   Launch with serial on TCP port 4555"
 	@echo "    make run-iso      Boot the ISO in QEMU (CD-ROM + IDE)"
 	@echo ""
-	@echo "  ISO"
-	@echo "    make iso          Create bootable ISO (~2.1 GiB) with docs"
-	@echo "    make iso-lite     Create smaller ISO (~65 MiB) with truncated image"
-	@echo "    make iso-verify   Validate El Torito boot record in ISO"
+	@echo "  Installer disc"
+	@echo "    make iso          Build the installer ISO ($(ISO_IMAGE_MB) MB payload)"
+	@echo "    make iso-lite     Build it with a $(ISO_LITE_IMG_MB) MB payload instead"
+	@echo "    make iso-verify   Validate the El Torito record and payload of the ISO"
+	@echo "    make test-iso     Install the ISO onto a blank disk in QEMU and boot it"
 	@echo ""
 	@echo "  Test & Info"
 	@echo "    make check        Run regression suite"
@@ -889,6 +913,9 @@ help:
 	@echo "    make validate-manifest Validate app manifest examples against schema"
 	@echo "    make validate-manifest-coverage Check program sources for missing manifests"
 	@echo "    make check-samples  Syntax-check sample programs across supported languages"
+	@echo "    make check-docs   Check docs for duplicate headings, dead links and version drift"
+	@echo "    make check-font   Check the 5x7 VBE font covers printable ASCII"
+	@echo "    make check-command-table Keep help, completion and which in step with the dispatcher"
 	@echo "    make qa-sprint1   Run Sprint 1 gate (lint + check)"
 	@echo "    make sizes        Show component and ISO binary sizes"
 	@echo "    make count        Lines of code statistics by component"

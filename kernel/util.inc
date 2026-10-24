@@ -538,7 +538,7 @@ parse_hex_byte:
 ;---------------------------------------
 print_sysinfo:
         pushad
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
 
         mov esi, msg_cpu
         call vga_print
@@ -1643,12 +1643,57 @@ env_expand:
         stosb
         jmp .ee_loop
 .ee_var:
-        ; $? — last exit code
+        ; $# — number of positional parameters
+        cmp byte [esi], '#'
+        je .ee_argc
+        ; $* — all positional parameters
+        cmp byte [esi], '*'
+        je .ee_argall
+        ; $0..$9 — one positional parameter ($0 is the function name)
+        cmp byte [esi], '0'
+        jb .ee_not_digit
+        cmp byte [esi], '9'
+        ja .ee_not_digit
+        movzx eax, byte [esi]
+        sub eax, '0'
+        inc esi
+        call ee_copy_arg
+        jmp .ee_loop
+.ee_argc:
+        inc esi
+        push esi
+        mov eax, [func_argc]
+        call vga_dec_to_str
+        mov esi, dec_str_buf
+.ee_argc_cp:
+        lodsb
+        test al, al
+        jz .ee_argc_done
+        stosb
+        jmp .ee_argc_cp
+.ee_argc_done:
+        pop esi
+        jmp .ee_loop
+.ee_argall:
+        inc esi
+        push esi
+        mov esi, func_arg_buf
+.ee_argall_cp:
+        lodsb
+        test al, al
+        jz .ee_argall_done
+        stosb
+        jmp .ee_argall_cp
+.ee_argall_done:
+        pop esi
+        jmp .ee_loop
+; $? — last exit code
+.ee_not_digit:
         cmp byte [esi], '?'
         jne .ee_not_question
         inc esi
         push esi
-        mov eax, [shell_last_status]
+        mov eax, [shell_prev_status]
         call vga_dec_to_str
         mov esi, dec_str_buf
 .ee_q_cp:
@@ -1704,6 +1749,60 @@ env_expand:
         popad
         ret
 
+;-----------------------------------------------------------------------
+; ee_copy_arg - copy one positional parameter into EDI
+;   In : EAX = index (0 = $0, 1 = $1, ...), EDI = destination
+;   Out: EDI advanced past the copied text (a NUL is written)
+;   Preserves EAX, EBX, ECX, ESI. Used by env_expand for $0..$9.
+;-----------------------------------------------------------------------
+ee_copy_arg:
+        push eax
+        push ebx
+        push ecx
+        push esi
+        test eax, eax
+        jz .eca_name
+        mov esi, func_arg_buf
+        mov ebx, eax
+        dec ebx
+.eca_skip:
+        test ebx, ebx
+        jz .eca_copy
+.eca_seek_space:
+        mov al, [esi]
+        test al, al
+        jz .eca_done
+        inc esi
+        cmp al, ' '
+        jne .eca_seek_space
+.eca_seek_word:
+        mov al, [esi]
+        cmp al, ' '
+        jne .eca_skipped
+        inc esi
+        jmp .eca_seek_word
+.eca_skipped:
+        dec ebx
+        jmp .eca_skip
+.eca_name:
+        mov esi, func_name_buf
+.eca_copy:
+        mov al, [esi]
+        test al, al
+        jz .eca_done
+        cmp al, ' '
+        je .eca_done
+        stosb
+        inc esi
+        jmp .eca_copy
+.eca_done:
+        mov byte [edi], 0
+        pop esi
+        pop ecx
+        pop ebx
+        pop eax
+        ret
+
 ;=======================================================================
 ; SUBDIRECTORY SUPPORT
 ;=======================================================================
@@ -1751,7 +1850,7 @@ cmd_cd_internal:
         popad
         ret
 .cd_no_prev:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_no_prev_dir
         call vga_print
         call vga_reset_color
@@ -3001,14 +3100,14 @@ cmd_wc_file:
         popad
         ret
 .wc_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
         popad
         ret
 .wc_nf:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -3069,7 +3168,7 @@ cmd_find_file:
         jc .find_nxt
         push esi
         push edi
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov eax, ebx
         call vga_print_dec
         mov al, ':'
@@ -3105,7 +3204,7 @@ cmd_find_file:
         mov eax, 2              ; -c
         call test_flag
         jc .find_done2
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov eax, ebx
         call vga_print_dec
         mov al, ':'
@@ -3128,7 +3227,7 @@ cmd_find_file:
         popad
         ret
 .find_nf:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -3303,7 +3402,7 @@ cmd_append_file:
         popad
         ret
 .app_err:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_write_err
         call vga_print
         call vga_reset_color
@@ -3472,7 +3571,7 @@ cmd_date_set:
         call rtc_write_time
 
         ; Show confirmation
-        mov byte [vga_color], COLOR_SUCCESS
+        call vga_set_success
         mov esi, msg_date_set
         call vga_print
         call vga_reset_color
@@ -3481,7 +3580,7 @@ cmd_date_set:
         ret
 
 .ds_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_date_usage
         call vga_print
         call vga_reset_color
@@ -3519,7 +3618,7 @@ cmd_exec_batch:
         ; Guard against nested batch execution (shared buffers would corrupt)
         cmp byte [batch_running], 1
         jne .bat_not_nested
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_batch_nested
         call vga_print
         call vga_reset_color
@@ -3527,6 +3626,7 @@ cmd_exec_batch:
         ret
 .bat_not_nested:
         mov byte [batch_running], 1
+        mov byte [shell_exit_flag], 0
 
         mov edi, batch_script_buf
         call hbfs_read_file
@@ -3543,7 +3643,7 @@ cmd_exec_batch:
         ret
 .bat_nf:
         mov byte [batch_running], 0
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -3636,7 +3736,7 @@ batch_run_loop:
         push esi
         test ebx, ebx
         jnz .brl_skip_echo
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_batch_prefix
         call vga_print
         mov esi, batch_line_buf
@@ -3659,9 +3759,12 @@ batch_run_loop:
         jnz .brl_copy_loop
         call shell_parse_cmd
         pop esi
+        cmp byte [shell_exit_flag], 0
+        jne .brl_done
         jmp .brl_line
 .brl_done:
         mov byte [batch_running], 0
+        mov byte [shell_exit_flag], 0
         mov byte [batch_if_depth], 0
         mov byte [batch_skip_else], 0
         ret
@@ -4110,7 +4213,7 @@ batch_check_goto:
         jnc .bcg_found
         ; Label not found
         pop esi                         ; restore batch loop position
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         push esi
         mov esi, msg_batch_label_nf
         call vga_print
@@ -4227,6 +4330,40 @@ batch_find_label:
 ; Clobbers: EAX, EBX, ECX, EDX, EDI
 ;---------------------------------------
 batch_check_if:
+        ; `if COND; then ...; fi` is the shell's form: leave it to the
+        ; dispatcher instead of treating it as a batch conditional.
+        push esi
+        mov esi, batch_line_buf
+.bci_scan:
+        mov al, [esi]
+        test al, al
+        jz .bci_scan_plain
+        cmp al, ';'
+        jne .bci_scan_next
+        inc esi
+.bci_scan_sp:
+        cmp byte [esi], ' '
+        jne .bci_scan_kw
+        inc esi
+        jmp .bci_scan_sp
+.bci_scan_kw:
+        cmp byte [esi], 't'
+        jne .bci_scan_next
+        cmp byte [esi + 1], 'h'
+        jne .bci_scan_next
+        cmp byte [esi + 2], 'e'
+        jne .bci_scan_next
+        cmp byte [esi + 3], 'n'
+        jne .bci_scan_next
+        pop esi
+        stc                     ; not a batch conditional
+        ret
+.bci_scan_next:
+        inc esi
+        jmp .bci_scan
+.bci_scan_plain:
+        pop esi
+
         mov al, [batch_line_buf]
         or al, 0x20
         cmp al, 'i'
@@ -4603,7 +4740,7 @@ batch_check_if:
         call batch_find_label   ; EDI = label name; sets ESI if found
         jnc .bci_goto_found
         ; Label not found
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_batch_label_nf
         call vga_print
         mov esi, edi            ; label name (EDI preserved by batch_find_label)
@@ -4689,14 +4826,14 @@ cmd_mkdir:
         call hbfs_load_root_dir
         call hbfs_find_file
         jc .mk_nospace
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_already_exists
         call vga_print
         call vga_reset_color
         popad
         ret
 .mk_nospace:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_write_err
         call vga_print
         call vga_reset_color
@@ -4725,7 +4862,7 @@ cmd_cd:
         call cmd_cd_internal
         cmp eax, -1             ; cmd_cd_internal returns 0 or -1 in EAX
         jne .cd_ok
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -4952,6 +5089,10 @@ cmd_set_env:
         pushad
         cmp byte [esi], 0
         je .set_show
+        ; The value may reference variables ($NAME, $1, $#...).
+        mov edi, expand_buf
+        call env_expand
+        mov esi, expand_buf
         mov edi, env_temp_buf
 .set_cp:
         lodsb
@@ -5030,8 +5171,8 @@ shell_tab_complete:
         xor ebx, ebx           ; Match count
         xor ebp, ebp           ; Last match pointer
 
-        ; Scan built-in command table
-        mov esi, .tc_builtins
+        ; Scan the shared command table
+        mov esi, cmd_table
 .tc_cmd_scan:
         mov edx, [esi]
         test edx, edx
@@ -5053,11 +5194,11 @@ shell_tab_complete:
         pop esi
         inc ebx
         mov ebp, edx            ; Last match = command string
-        add esi, 4
+        add esi, CMD_ENTRY_SIZE
         jmp .tc_cmd_scan
 .tc_cmd_no:
         pop esi
-        add esi, 4
+        add esi, CMD_ENTRY_SIZE
         jmp .tc_cmd_scan
 .tc_cmd_scan_done:
 
@@ -5111,7 +5252,7 @@ shell_tab_complete:
         call vga_putchar
 
         ; Show built-in command matches
-        mov esi, .tc_builtins
+        mov esi, cmd_table
 .tc_show_cmd:
         mov edx, [esi]
         test edx, edx
@@ -5137,11 +5278,11 @@ shell_tab_complete:
         call vga_putchar
         call vga_putchar
         pop esi
-        add esi, 4
+        add esi, CMD_ENTRY_SIZE
         jmp .tc_show_cmd
 .tc_sc_no:
         pop esi
-        add esi, 4
+        add esi, CMD_ENTRY_SIZE
         jmp .tc_show_cmd
 
 .tc_show_files:
@@ -5379,24 +5520,6 @@ shell_tab_complete:
 .tc_count: dd 0
 .tc_word_start: dd 0
 
-; Built-in command pointer table for tab completion
-.tc_builtins:
-        dd cmd_help_str, cmd_ver_str, cmd_clear_str, cmd_dir_str
-        dd cmd_ls_str, cmd_del_str, cmd_rm_str, cmd_format_str
-        dd cmd_cat_str, cmd_write_str, cmd_hex_str, cmd_mem_str
-        dd cmd_time_str, cmd_disk_str, cmd_run_str, cmd_enter_str
-        dd cmd_copy_str, cmd_ren_str, cmd_mv_str, cmd_move_str
-        dd cmd_df_str, cmd_more_str, cmd_echo_str, cmd_wc_str
-        dd cmd_find_str, cmd_append_str, cmd_date_str, cmd_beep_str
-        dd cmd_batch_str, cmd_mkdir_str, cmd_cd_str, cmd_pwd_str
-        dd cmd_touch_str, cmd_set_str, cmd_unset_str, cmd_shutdown_str
-        dd cmd_reboot_str, cmd_cls_str, cmd_head_str, cmd_tail_str
-        dd cmd_type_str, cmd_diff_str, cmd_uniq_str, cmd_rev_str
-        dd cmd_tac_str, cmd_alias_str, cmd_history_str, cmd_which_str
-        dd cmd_sleep_str, cmd_color_str, cmd_size_str, cmd_strings_str
-        dd cmd_mouse_str, cmd_gui_str, cmd_ping_str, cmd_ifconfig_str
-        dd cmd_dhcp_str, cmd_arp_str, cmd_scrsaver_str, cmd_net_str
-        dd 0
 
 ;=======================================================================
 ; UTILITY: String copy ESI -> EDI

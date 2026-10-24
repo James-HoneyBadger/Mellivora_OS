@@ -409,7 +409,7 @@ draw_info_panel:
         jz .dip_none
         mov [dip_elem], eax
 
-        ; Element name (accent colour, uppercase)
+        ; Element name (accent colour; mixed case, the font has lowercase)
         mov eax, [dip_elem]
         dec eax
         call get_name_ptr           ; EBX = name ptr
@@ -419,7 +419,7 @@ draw_info_panel:
         mov edx, [dip_ptr_tmp]
         mov esi, COL_INFO_ACC
         mov eax, 1
-        call draw_str_uc
+        call vbe_draw_str
 
         ; Separator line
         mov ebx, INFO_X + 2
@@ -503,7 +503,7 @@ draw_info_panel:
         mov edx, [dip_ptr_tmp]
         mov esi, COL_INFO_VAL
         mov eax, 1
-        call draw_str_uc
+        call vbe_draw_str
 
         ; "CONFIG:" label
         mov ebx, INFO_X + 4
@@ -522,7 +522,7 @@ draw_info_panel:
         mov edx, [dip_ptr_tmp]
         mov esi, COL_INFO_VAL
         mov eax, 1
-        call draw_str_uc
+        call vbe_draw_str
 
         ; Separator
         mov ebx, INFO_X + 2
@@ -549,7 +549,7 @@ draw_info_panel:
         mov edx, [dip_ptr_tmp]
         mov esi, 0x0098B4BC
         mov eax, 1
-        call draw_str_uc_wrap
+        call draw_str_wrap
 
         ; Fact line 2
         mov eax, [dip_elem]
@@ -560,7 +560,7 @@ draw_info_panel:
         mov edx, [dip_ptr_tmp]
         mov esi, 0x0098B4BC
         mov eax, 1
-        call draw_str_uc_wrap
+        call draw_str_wrap
 
         ; Navigation hint at panel bottom
         mov ebx, INFO_X + 4
@@ -720,11 +720,11 @@ _dsu_col: dd 0
 _dsu_scl: dd 0
 
 ; -----------------------------------------------------------------------
-; draw_str_uc_wrap - draw_str_uc with line wrap at INFO_R - 4
+; draw_str_wrap - draw string with line wrap at INFO_R - 4
 ; EBX=x  ECX=y  EDX=str_ptr  ESI=colour  EAX=scale
 ; All registers preserved.
 ; -----------------------------------------------------------------------
-draw_str_uc_wrap:
+draw_str_wrap:
         pushad
         mov [_dsw_x],   ebx
         mov [_dsw_y],   ecx
@@ -737,12 +737,6 @@ draw_str_uc_wrap:
         test edx, edx
         jz .dsw_done
         inc dword [_dsw_ptr]
-        cmp edx, 'a'
-        jl .dsw_draw
-        cmp edx, 'z'
-        jg .dsw_draw
-        sub edx, 0x20
-.dsw_draw:
         ; Wrap check: will next char overflow?
         mov eax, [_dsw_scl]
         imul eax, FONT_W + 1

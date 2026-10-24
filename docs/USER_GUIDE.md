@@ -160,7 +160,9 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 
 | Command | Description |
 | --- | --- |
-| `help` | Display all available commands |
+| `help` | List built-ins grouped by category |
+| `help COMMAND` | Usage and description for one built-in |
+| `help -a` | Every built-in name, one per line |
 | `ver` | Show OS version, hardware info, feature list |
 | `time` | Display uptime in seconds since boot |
 | `date` | Show current date and time (YYYY-MM-DD HH:MM:SS) |
@@ -229,7 +231,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `uniq -c FILE` | Show count prefix for each line |
 | `uniq -d FILE` | Show only duplicate lines |
 | `rev FILE` | Reverse each line character-by-character |
-| `find [-name PATTERN]` | Search for files by name pattern |
+| `find [-i] [-c] PATTERN FILE` | Search file **contents** for a pattern (`-i` ignore case, `-c` count matches). To match *file names*, use `dir`/`del`/`copy` wildcards or `tree`. |
 | `wc FILE` | Count lines, words, and bytes |
 | `cut -f LIST FILE` | Extract specific fields (columns) from text |
 | `tee FILE` | Read input and duplicate to stdout and file |
@@ -338,9 +340,17 @@ Lair:/games> cat /docs/license
 
 ### Searching in Files
 
+`find` (built-in) and `grep` (program in `/bin`) both search the *contents* of a file:
+
 ```text
-Lair:/> find syscall /docs/notes    # Search for "syscall" in notes
+Lair:/> find syscall /docs/notes    # Search for "syscall" in notes (prints "line: text")
+Lair:/> find -i SNAKE /docs/notes   # Case-insensitive
+Lair:/> find -c syscall /docs/notes # Print only the number of matching lines
+Lair:/> grep syscall /docs/notes    # Same search as an external program (pipes well)
 ```
+
+Neither searches file *names*. For that, use a wildcard with `dir`, or `tree` to walk
+the tree:
 
 ### Comparing Files
 
@@ -449,7 +459,7 @@ Batch scripts can use:
 
 ## Programs
 
-Mellivora ships with 235 assembly sources and generated user-space programs organized
+Mellivora ships with 264 assembly sources and generated user-space programs organized
 in `/bin`, `/games`, and `/Burrows`. The exact generated file list can change as apps
 are added; use `dir` in each directory for the current image contents.
 
@@ -637,6 +647,30 @@ Lair:/> tcc myprogram.c
 
 ---
 
+## The Burrows Desktop
+
+`burrows` leaves the text shell for a 1024x768 graphical desktop. Every application
+runs as its own scheduler task, so a hung or faulting app is contained instead of
+taking the desktop with it.
+
+| Key | Action |
+| --- | --- |
+| `F1` | Launcher (searchable app list; also has Exit Desktop) |
+| `F2` | Terminal |
+| `Alt+Tab` | Cycle windows with a switcher overlay |
+| `Alt+Left` / `Alt+Right` | Tile the focused window left / right |
+| `Alt+Up` / `Alt+Down` | Maximize / restore |
+| `Alt+F4` | Close the focused window |
+| `Ctrl+Alt+1` … `Ctrl+Alt+4` | Switch workspace |
+| `F3` | Notification centre |
+| `Ctrl+C` | Abort back to the text shell |
+
+Settings (launcher → Settings) offers four colour themes and switches the wallpaper
+between a gradient and a flat fill; both are saved to `burrows.cfg` and reloaded on
+the next boot. Press `1`-`4` for a theme or `5` to toggle the wallpaper, or click.
+
+---
+
 ## Tips & Tricks
 
 ### Tab Completion
@@ -700,13 +734,17 @@ D=LightMagenta, E=Yellow, F=White
 
 ## Limitations
 
-- **No memory protection:** No paging; all tasks share the same flat address space.
-- **No file permissions enforcement:** chmod/chown store values but do not block access.
+- **Paging without isolation:** the 32-bit kernel enables an identity map for the
+  first 128 MB, so every task still shares one flat address space. The 64-bit
+  nucleus has per-task page tables and real user/kernel separation.
+- **Permissions are advisory:** `chmod`/`chown` store owner, group and mode, and
+  `SYS_ACCESS` honours them, but `open` does not check yet.
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
 - **448 MB RAM limit:** The physical memory manager stops handing out frames at
   `0x1C000000` so a frame can never collide with a user address. The first 128 MB are
   identity-mapped at boot; the rest is mapped on demand.
 - **Root: 455 files, Subdirs: 224 files:** Directory entry limits per HBFS layout.
 - **16-level directory nesting:** Maximum subdirectory depth.
-- **Tab completion:** Only completes filenames in the current directory (not PATH-aware).
+- **Tab completion:** completes every built-in name and files in the current
+  directory, but not programs found through PATH.
 - **Single pipe stage:** Pipelines support one `|` separator per command line.

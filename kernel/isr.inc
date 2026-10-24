@@ -37,7 +37,7 @@ isr_exception_noerr:
         mov byte [gui_desktop_active], 0
         call vbe_restore_text
 .exc_noerr_text_ok:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_exception
         call vga_print
         ; Print faulting EIP
@@ -103,7 +103,7 @@ isr_exception_err:
         mov byte [gui_desktop_active], 0
         call vbe_restore_text
 .exc_err_text_ok:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_exception
         call vga_print
         ; Print faulting EIP

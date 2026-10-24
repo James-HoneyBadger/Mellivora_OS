@@ -201,26 +201,34 @@ programs/*.bin         Compiled user programs (current assembly program set)
 *.lst                  Assembly listing files (useful for debugging)
 ```
 
-### Creating a Bootable ISO
+### Creating the Installer Disc
 
 ```bash
-make iso
+make iso                  # mellivora.iso, 256 MB payload
+make iso ISO_IMAGE_MB=64  # smaller payload, quicker to copy
+make iso-verify           # show and validate the El Torito record
 ```
 
-This creates `mellivora.iso`, which:
+`mellivora.iso` is an **installer**, not a live CD. It boots a 2 KB real-mode
+loader that reads the installer from the CD; the installer lists the BIOS hard
+disks, asks which one to use, and writes `MELLIVORA.IMG` to it sector by
+sector. The installed disk then boots Mellivora on its own.
 
-1. boots directly in BIOS/legacy-compatible VMs,
-2. includes `mellivora.img` as the El Torito hard-disk boot image,
-3. bundles the full `INSTALL.md` and `USER_GUIDE.md` documentation inside the ISO.
-
-The ISO staging tree includes:
+The disc contains:
 
 ```text
-boot/mellivora.img
-README.txt
-docs/INSTALL.md
-docs/USER_GUIDE.md
+MELLIVORA.IMG         the disk image the installer writes (ISO_IMAGE_MB)
+boot/installer.bin    El Torito boot image: stage1 stub + installer payload
+README.txt            what to expect when the disc boots
+docs/*.md             the documentation set
 ```
+
+The payload image is built by `populate.py` at exactly `ISO_IMAGE_MB`, so the
+HBFS block count always matches the file - a 64 MB disc is as valid as a
+256 MB one. Extra space on the target disk is left untouched.
+
+See [install/README.md](../install/README.md) for how the installer works and
+the known limits (BIOS only, CD/DVD boot, fixed filesystem size).
 
 ### Expected Warnings
 
@@ -244,24 +252,32 @@ that space in the output binary.
 make run
 ```
 
-### Booting the ISO in QEMU
+### Booting the Installer Disc in QEMU
 
 ```bash
-make iso
-qemu-system-i386 -m 128 -cdrom mellivora.iso -boot d -no-reboot -no-shutdown
+make run-iso                        # interactive: blank disk + the disc
+install/tools/run_iso.sh --install  # unattended install, then boot check
 ```
 
-This is the recommended way to test the distributable install media exactly as users will receive it.
+`make run-iso` attaches the ISO as a CD-ROM and a blank
+`mellivora-install-target.img` as an IDE disk, which is exactly what the
+installer expects. Pick the disk in the menu, type `YES`, and when it reports
+`Installation complete.` boot the target:
 
-This launches QEMU with:
+```bash
+qemu-system-i386 -m 128 -drive file=mellivora-install-target.img,format=raw,if=ide -boot c
+```
+
+`tests/test_iso.py --end-to-end` performs the whole cycle unattended and
+asserts that the target matches the image and boots.
 
 | Setting | Value |
 | --------- | ------- |
 | **CPU** | i486-compatible x86 emulation |
 | **RAM** | 128 MB |
-| **Disk** | `mellivora.img` as raw IDE drive |
-| **Boot** | Hard disk (drive C) |
-| **Behavior** | No auto-reboot, no auto-shutdown |
+| **CD-ROM** | `mellivora.iso` (El Torito, BIOS boot) |
+| **Disk** | blank image, at least as large as `ISO_IMAGE_MB` |
+| **Boot** | CD-ROM (drive D) |
 
 ### Debug Launch
 
@@ -342,7 +358,20 @@ The `populate.py` script creates 5 subdirectories and places the curated runtime
 - PS/2 keyboard (USB works if BIOS provides PS/2 emulation)
 - VGA-compatible display
 
-### Writing the Image
+There are two routes: install from the disc, or write the image directly.
+
+#### Route 1: install from the disc (recommended)
+
+1. Build the disc with `make iso`.
+2. Boot the machine (or VM) from the CD/DVD drive.
+3. Choose the target hard disk in the installer, type `YES`, and wait for
+   `Installation complete.`
+4. Remove the disc and boot from the hard disk.
+
+The installer copies `MELLIVORA.IMG` byte for byte, so the result is identical
+to a directly written image, and it never touches a disk you did not select.
+
+#### Route 2: write the image directly
 
 ```bash
 # Identify your target device
@@ -353,12 +382,16 @@ sudo dd if=mellivora.img of=/dev/sdX bs=1M status=progress
 sync
 ```
 
-### USB Boot
+"USB Boot" applies to route 2 only: the image written with `dd` starts with a
+plain MBR boot sector, so a USB stick written this way boots on BIOS systems.
+The installer disc itself uses 2048-byte CD sectors and should be booted as a
+CD-ROM (or through a loader such as Ventoy that emulates one), not written raw
+to a stick.
 
-1. Write `mellivora.img` to a USB drive with `dd` **or** write `mellivora.iso` with a USB imaging tool such as balenaEtcher
+1. Write `mellivora.img` to a USB drive with `dd`
 2. Enter BIOS setup (usually F2, DEL, or F12)
 3. Enable "Legacy Boot" or "CSM" mode
-4. Set USB drive or optical media as the first boot device
+4. Set the USB drive as the first boot device
 5. Save and reboot
 
 > **Note:** UEFI-only systems (no CSM) will **not** boot Mellivora — it uses a
@@ -368,9 +401,10 @@ sync
 
 1. Create a new **x86** VM in legacy BIOS mode
 2. Attach `mellivora.iso` as the VM's optical drive
-3. Give the VM at least **128 MB RAM**
-4. Boot from the ISO
-5. For a persistent install, attach a virtual disk and write `boot/mellivora.img` from the host onto that disk
+3. Attach an empty virtual hard disk **at least as large as `ISO_IMAGE_MB`**
+4. Give the VM at least **128 MB RAM**
+5. Boot from the ISO, pick the virtual disk in the installer, type `YES`
+6. Reboot from the hard disk
 
 ---
 
@@ -396,6 +430,12 @@ Mellivora_OS/
 │   ├── hello.pl            ...
 │   └── hello.bas
 │
+├── install/                Installer disc: boot stub, payload, ISO tooling
+│   ├── boot/stage1.asm     El Torito boot image (2 KB real-mode stub)
+│   ├── boot/installer.asm  Installer payload: find image, pick disk, copy
+│   ├── tools/build_iso.sh  Build and verify mellivora.iso
+│   └── tools/run_iso.sh    Run it in QEMU (optionally unattended)
+│
 └── docs/                   Full documentation suite
     ├── INSTALL.md           This file
     ├── USER_GUIDE.md        Shell command reference
@@ -412,6 +452,17 @@ Mellivora_OS/
 
 - Ensure `mellivora.img` exists and is not empty: `ls -la mellivora.img`
 - Rebuild: `make clean && make full`
+
+### The installer finds the image but no disk
+
+The disc lists BIOS hard disks only. In QEMU, attach one
+(`-drive file=disk.img,format=raw,if=ide`); with `make run-iso` that disk is
+created for you.
+
+### The installer refuses the disk as too small
+
+`MELLIVORA.IMG` is `ISO_IMAGE_MB` (256 by default). Either pick a larger disk
+or build a smaller disc: `make iso ISO_IMAGE_MB=64`.
 
 ### NASM label oscillation errors
 

@@ -12,6 +12,52 @@ vga_init:
         call vga_update_cursor
         ret
 
+;-----------------------------------------------------------------------
+; Theme-aware message colours.
+;
+; The console's background comes from the user's `theme` (and from `color`),
+; so a message colour must not paint a fixed background block over it. These
+; helpers keep the background nibble of default_color and change only the
+; foreground. All preserve every register.
+;
+;   vga_set_error    light red
+;   vga_set_success  light green
+;   vga_set_info     light cyan
+;   vga_set_warn     yellow
+;   vga_set_dim      dark grey (secondary text)
+;-----------------------------------------------------------------------
+vga_set_style:
+        push eax
+        push ebx
+        mov ah, al
+        mov al, [default_color]
+        and al, 0xF0
+        or al, ah
+        mov [vga_color], al
+        pop ebx
+        pop eax
+        ret
+
+vga_set_error:
+        mov al, 0x0C
+        jmp vga_set_style
+
+vga_set_success:
+        mov al, 0x0A
+        jmp vga_set_style
+
+vga_set_info:
+        mov al, 0x0B
+        jmp vga_set_style
+
+vga_set_warn:
+        mov al, 0x0E
+        jmp vga_set_style
+
+vga_set_dim:
+        mov al, 0x08
+        jmp vga_set_style
+
 ; Restore vga_color to user-selected default (preserves all regs)
 vga_reset_color:
         push eax

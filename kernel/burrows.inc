@@ -4,7 +4,8 @@
 ; Full windowed GUI desktop for Mellivora OS:
 ;   - Double-buffered 1024x768x32 compositor
 ;   - Draggable windows with title bar and close button
-;   - Customizable color themes (3 presets)
+;   - Customizable color themes (blue, dark, light, amber)
+;   - Gradient or solid wallpaper, persisted in burrows.cfg
 ;   - Taskbar with app launcher menu and clock
 ;   - 8x16 bitmap font for pixel text rendering
 ;   - Mouse cursor with pixel-perfect tracking
@@ -177,7 +178,7 @@ gui_desktop_main:
         call vbe_set_mode
         jmp .vbe_ok
 .no_vbe:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, .no_vbe_msg
         call vga_print
         call vga_reset_color
@@ -361,7 +362,7 @@ gui_desktop_resume:
         jmp gui_desktop_loop
 
 .no_vbe:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_vbe_no
         call vga_print
         call vga_reset_color
@@ -1575,6 +1576,17 @@ gui_draw_background:
         ; scanline is the theme colour and the bottom is 1.5x brighter, so a
         ; theme change repaints the wallpaper too.
         mov eax, [gui_theme + THEME_DESKTOP_BG]
+
+        ; The Settings applet can swap the gradient for a flat fill.
+        cmp dword [gui_wallpaper], 1
+        jne .gb_gradient
+        mov edi, GUI_BACKBUF
+        mov ecx, GUI_SCREEN_W * GUI_SCREEN_H
+        cld
+        rep stosd
+        popad
+        ret
+.gb_gradient:
 
         mov ecx, eax
         shr ecx, 16
@@ -6159,20 +6171,52 @@ gui_applet_settings:
         call gui_bb_draw_string
         pop edx
 
+        ; Wallpaper row: gradient or flat fill, toggled by click or '5'.
+        lea eax, [ecx + 20]
+        push edx
+        lea ebx, [edx + 132]
+        mov esi, gui_str_set_wall
+        mov edx, 0x00C0C0C0
+        call gui_bb_draw_string
+        pop edx
+
+        lea eax, [ecx + 130]
+        lea ebx, [edx + 126]
+        push ecx
+        push edx
+        mov ecx, 110
+        mov edx, 26
+        mov esi, [gui_theme + THEME_BUTTON_BG]
+        call gui_bb_fill_rect
+        pop edx
+        pop ecx
+
+        lea eax, [ecx + 144]
+        push edx
+        lea ebx, [edx + 134]
+        mov esi, gui_str_wall_gradient
+        cmp dword [gui_wallpaper], 0
+        je .set_wall_label
+        mov esi, gui_str_wall_solid
+.set_wall_label:
+        mov edx, 0x00E8E8E8
+        call gui_bb_draw_string
+        pop edx
+
         ; Current theme preview (color bar)
         lea eax, [ecx + 20]
-        lea ebx, [edx + 150]
+        lea ebx, [edx + 160]
         push ecx
         push edx
         mov ecx, 320
-        mov edx, 40
+        mov edx, 32
         mov esi, [gui_theme + THEME_DESKTOP_BG]
         call gui_bb_fill_rect
         pop edx
         pop ecx
 
         lea eax, [ecx + 100]
-        lea ebx, [edx + 162]
+        lea ebx, [edx + 170]
         mov esi, gui_str_set_cur
         push edx
         mov edx, 0x00FFFFFF
@@ -6181,7 +6225,7 @@ gui_applet_settings:
 
         ; Instructions
         lea eax, [ecx + 40]
-        lea ebx, [edx + 210]
+        lea ebx, [edx + 204]
         mov esi, gui_str_set_instr
         mov edx, 0x00808080
         call gui_bb_draw_string
@@ -6202,6 +6246,8 @@ gui_applet_settings:
         je .set_light
         cmp al, '4'
         je .set_amber
+        cmp al, '5'
+        je .set_wall_toggle
         cmp al, 0
         jne .set_loop
 
@@ -6246,6 +6292,16 @@ gui_applet_settings:
         mov edi, [mouse_y]
         sub edi, ecx
 
+        ; Wallpaper button: x+130..x+240, y+126..y+152
+        cmp edi, 126
+        jl .set_row01
+        cmp edi, 152
+        jg .set_row01
+        cmp edx, 130
+        jl .set_row01
+        cmp edx, 240
+        jle .set_wall_click
+.set_row01:
         ; Row 1 buttons: y+50..y+86
         cmp edi, 50
         jl .set_loop
@@ -6330,6 +6386,16 @@ gui_applet_settings:
         call burrows_config_save
         jmp .set_loop
 
+.set_wall_click:
+.set_wrel:
+        movzx eax, byte [mouse_buttons]
+        test eax, 0x01
+        jnz .set_wrel
+.set_wall_toggle:
+        xor dword [gui_wallpaper], 1
+        call burrows_config_save
+        jmp .set_loop
+
 .set_close:
 .set_crel:
         movzx eax, byte [mouse_buttons]
@@ -6343,16 +6409,17 @@ gui_applet_settings:
 .set_win: dd 0
 
 ;=======================================================================
-; DESKTOP SETTINGS - theme persisted to burrows.cfg
+; DESKTOP SETTINGS - theme and wallpaper persisted to burrows.cfg
 ;
-; Layout: "BCFG" followed by THEME_SIZE bytes of theme colours. A missing or
-; malformed file simply leaves the built-in default theme in place.
+; Layout: "BCFG", THEME_SIZE bytes of theme colours, then a wallpaper word.
+; The wallpaper word is optional so a file written by an older build (theme
+; only) still loads instead of silently reverting to the default theme.
 ;=======================================================================
 
-BURROWS_CFG_SIZE equ 4 + THEME_SIZE
+BURROWS_CFG_SIZE equ 4 + THEME_SIZE + 4
 
 ;---------------------------------------
-; burrows_config_load - apply a saved theme, if one exists
+; burrows_config_load - apply saved theme/wallpaper, if they exist
 ;---------------------------------------
 burrows_config_load:
         pushad
@@ -6360,7 +6427,8 @@ burrows_config_load:
         mov edi, burrows_cfg_buf
         call hbfs_read_file
         jc .bcl_done                      ; no settings file yet
-        cmp ecx, BURROWS_CFG_SIZE
+        mov ebx, ecx                      ; size read (ECX is consumed below)
+        cmp ebx, 4 + THEME_SIZE
         jb .bcl_done
         cmp dword [burrows_cfg_buf], 'BCFG'
         jne .bcl_done
@@ -6369,6 +6437,14 @@ burrows_config_load:
         mov edi, gui_theme
         mov ecx, THEME_SIZE / 4
         rep movsd
+        cmp ebx, BURROWS_CFG_SIZE
+        jb .bcl_done
+        mov eax, [burrows_cfg_buf + 4 + THEME_SIZE]
+        cmp eax, 1
+        jbe .bcl_store
+        xor eax, eax                      ; unknown value: keep the gradient
+.bcl_store:
+        mov [gui_wallpaper], eax
 .bcl_done:
         popad
         ret
@@ -6384,6 +6460,8 @@ burrows_config_save:
         mov edi, burrows_cfg_buf + 4
         mov ecx, THEME_SIZE / 4
         rep movsd
+        mov eax, [gui_wallpaper]
+        mov [burrows_cfg_buf + 4 + THEME_SIZE], eax
         mov esi, burrows_cfg_name
         mov ecx, BURROWS_CFG_SIZE
         mov edi, burrows_cfg_buf
@@ -7939,7 +8017,10 @@ gui_str_theme_dark: db "Dark", 0
 gui_str_theme_light: db "Light", 0
 gui_str_theme_amber: db "Amber", 0
 gui_str_set_cur:    db "Current Theme", 0
-gui_str_set_instr:  db "Click or press 1/2/3/4", 0
+gui_str_set_wall:   db "Wallpaper", 0
+gui_str_wall_gradient: db "Gradient", 0
+gui_str_wall_solid: db "Solid", 0
+gui_str_set_instr:  db "Click or press 1/2/3/4, 5 = wallpaper", 0
 
 ; Menu item strings
 gui_str_launcher_title: db "Burrows Launcher", 0
@@ -8462,6 +8543,8 @@ gui_grad_color:     dd 0
 
 ; Runtime theme (48 bytes, copied from preset at init)
 gui_theme:          times THEME_SIZE db 0
+; 0 = vertical gradient, 1 = flat desktop colour. Persisted in burrows.cfg.
+gui_wallpaper:      dd 0
 
 ; Window table (16 windows x 96 bytes = 1536 bytes)
 gui_win_table:      times MAX_WINDOWS * WIN_STRUCT_SIZE db 0

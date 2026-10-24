@@ -584,7 +584,7 @@ isr_page_fault:
         call vbe_restore_text
 .pf_text_ok:
 
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
 
         mov esi, msg_pf
         call vga_print
@@ -694,7 +694,7 @@ paging_map_phys_user:
 ;---------------------------------------
 pf_report_task_fault:
         pushad
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_pf_task
         call vga_print
         in  eax, 0x60                   ; last scancode is irrelevant; keep EAX sane

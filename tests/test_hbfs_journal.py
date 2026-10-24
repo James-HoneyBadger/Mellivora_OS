@@ -45,7 +45,9 @@ import populate  # noqa: E402
 import hbfs_journal as hj  # noqa: E402
 import fsck_hbfs  # noqa: E402
 
-IMAGE_BYTES = 4 * 1024 * 1024
+# populate.py derives TOTAL_BLOCKS from the file size, so the volume has to be
+# large enough to contain NEW_BLOCK (800) past the metadata area.
+IMAGE_BYTES = 8 * 1024 * 1024
 PASS = 0
 FAIL = 0
 

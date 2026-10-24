@@ -1088,7 +1088,7 @@ cmd_gui_demo:
         ret
 
 .gui_no_vbe:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_vbe_no
         call vga_print
         call vga_reset_color

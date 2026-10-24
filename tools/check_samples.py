@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLES = ROOT / "samples"
+TABLE = ROOT / "kernel" / "cmdtable.inc"
+DATA = ROOT / "kernel" / "data.inc"
+PROGRAMS = ROOT / "programs"
+STRUCTURAL = {"then", "else", "do", "elif", "fi", "done", "esac"}
 
 
 def run(command: list[str]) -> None:
@@ -64,6 +69,93 @@ def check_perl(paths: list[Path]) -> int:
     return 0
 
 
+def shell_vocabulary() -> set[str]:
+    """Built-in names (from cmdtable.inc) plus every program source name."""
+    names: set[str] = set()
+    if TABLE.is_file():
+        data = DATA.read_text(encoding="utf-8")
+        display = {
+            label: value
+            for label, value in re.findall(r'^(cmd_[a-z0-9_]+_str):\s*db\s+"([^"]*)"', data, re.M)
+        }
+        keyword_names = dict(re.findall(r"^(nm_[a-z0-9_]+):\s*db\s+\"([^\"]*)\"", TABLE.read_text(encoding="utf-8"), re.M))
+        for entry, _cat, _sum, _det, alias in re.findall(
+            r"^\s*CMDENT\s+([a-z0-9_]+)\s*,\s*(CAT_[A-Z]+)\s*,\s*([a-z0-9_]+)\s*,\s*([a-z0-9_]+)"
+            r"[ \t]*(?:;[ \t]*dispatches[ \t]+(cmd_[a-z0-9_]+_str))?",
+            TABLE.read_text(encoding="utf-8"),
+            re.M,
+        ):
+            if entry in display:
+                names.add(display[entry].strip())
+            elif entry in keyword_names:
+                names.add(keyword_names[entry].strip())
+    for source in PROGRAMS.glob("*.asm"):
+        names.add(source.stem)
+    return {name for name in names if name}
+
+
+def check_shell_scripts(paths: list[Path]) -> int:
+    """Every command word must exist, and block keywords must balance.
+
+    Counting only the first word of each `;`-separated clause keeps words in
+    messages ("done") from being mistaken for keywords.
+    """
+    if not paths:
+        return 0
+    vocabulary = shell_vocabulary()
+    if not vocabulary:
+        print("[samples] SKIP shell checks: no command table found")
+        return 0
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        local_names = set(re.findall(r"^\s*function\s+([A-Za-z0-9_]+)", text, re.M))
+        commands: list[str] = []
+
+        def known(word: str) -> bool:
+            return word in vocabulary or word in local_names
+
+        for number, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.upper().startswith("REM ") or stripped.startswith(":"):
+                continue
+            for clause in stripped.split(";"):
+                words = clause.replace("{", " ").replace("}", " ").split()
+                # A case arm starts with PATTERN); the command follows it.
+                while words and words[0].endswith(")"):
+                    words.pop(0)
+                if not words:
+                    continue
+                first = words[0]
+                if first in STRUCTURAL:
+                    commands.append(first)
+                    if first not in ("fi", "done", "esac") and len(words) > 1:
+                        if not known(words[1]):
+                            raise ValueError(
+                                f"{path.relative_to(ROOT)}:{number}: unknown command {words[1]!r}"
+                            )
+                        commands.append(words[1])
+                    continue
+                if not known(first):
+                    raise ValueError(
+                        f"{path.relative_to(ROOT)}:{number}: unknown command {first!r}"
+                    )
+                commands.append(first)
+
+        for opener, closer in (("do", "done"), ("if", "fi"), ("case", "esac")):
+            opened = commands.count(opener)
+            closed = commands.count(closer)
+            if opened != closed:
+                raise ValueError(
+                    f"{path.relative_to(ROOT)}: {opened} {opener!r} but {closed} {closer!r}"
+                )
+        if text.count("{") != text.count("}"):
+            raise ValueError(f"{path.relative_to(ROOT)}: unbalanced function braces")
+
+        print(f"[samples] PASS {path.relative_to(ROOT)}")
+    return 0
+
+
 def check_basic(paths: list[Path]) -> int:
     for path in paths:
         lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -84,6 +176,7 @@ def main() -> int:
         check_c(sorted(SAMPLES.glob("*.c")))
         check_perl(sorted(SAMPLES.glob("*.pl")))
         check_basic(sorted(SAMPLES.glob("*.bas")))
+        check_shell_scripts(sorted(SAMPLES.glob("*.bat")))
     except (subprocess.CalledProcessError, UnicodeDecodeError, ValueError) as exc:
         print(f"[samples] FAIL {exc}")
         return 1

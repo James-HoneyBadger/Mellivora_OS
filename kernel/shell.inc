@@ -2,6 +2,33 @@
 ; COMMAND SHELL
 ;=======================================================================
 
+;-----------------------------------------------------------------------
+; shell_print_prompt - draw "Lair:<cwd>> "
+;
+; The accent after the path is red when the previous command failed, which is
+; the only signal a script-free user gets that a command returned nonzero.
+; The prompt text itself never changes, so tests and scripts are unaffected.
+;-----------------------------------------------------------------------
+shell_print_prompt:
+        mov byte [vga_color], COLOR_PROMPT
+        mov esi, shell_prompt_pre
+        call vga_print
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, path_search_buf
+        call vga_print
+        cmp dword [shell_last_status], 0
+        je .spp_ok
+        call vga_set_error
+        jmp .spp_post
+.spp_ok:
+        mov byte [vga_color], COLOR_PROMPT
+.spp_post:
+        mov esi, shell_prompt_post
+        call vga_print
+        call vga_reset_color
+        ret
+
 shell_main:
         mov esp, KERNEL_STACK
 
@@ -76,7 +103,7 @@ shell_main:
         call vga_clear
         mov esi, banner_str
         call vga_print_color
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, motd_str
         call vga_print
 
@@ -118,18 +145,16 @@ shell_main:
 .no_motd:
 
 .prompt:
-        ; Print prompt with full current directory path
-        mov byte [vga_color], COLOR_PROMPT
-        mov esi, shell_prompt_pre
-        call vga_print
-        ; Build full CWD path
-        mov edi, path_search_buf        ; reuse temp buffer
-        call build_cwd_path
-        mov esi, path_search_buf
-        call vga_print
-        mov esi, shell_prompt_post
+        ; `exit` from the prompt has nothing to leave: say what to use instead.
+        cmp byte [shell_exit_flag], 0
+        je .prompt_ready
+        mov byte [shell_exit_flag], 0
+        call vga_set_dim
+        mov esi, msg_exit_hint
         call vga_print
         call vga_reset_color
+.prompt_ready:
+        call shell_print_prompt
 
         ; Reset history browsing position
         mov eax, [hist_count]
@@ -449,16 +474,7 @@ shell_main:
         push edi
         call vga_clear
         ; Redraw prompt
-        mov byte [vga_color], COLOR_PROMPT
-        mov esi, shell_prompt_pre
-        call vga_print
-        mov edi, path_search_buf
-        call build_cwd_path
-        mov esi, path_search_buf
-        call vga_print
-        mov esi, shell_prompt_post
-        call vga_print
-        call vga_reset_color
+        call shell_print_prompt
         ; Redraw current input
         pop edi
         pop ecx
@@ -714,15 +730,66 @@ shell_save_history:
 ; Parse and dispatch command
 ; ESI = command line
 ;---------------------------------------
+;-----------------------------------------------------------------------
+; shell_line_is_control - CF set when the line is a control-flow construct.
+;
+; Those lines own their semicolons and their expansions: a `while` body must
+; be expanded per iteration, not once when the line is read.
+;-----------------------------------------------------------------------
+shell_line_is_control:
+        push esi
+        push edi
+        mov esi, line_buffer
+        call skip_spaces
+        mov edi, cmd_if_str
+        call str_starts_with
+        jc .slc_yes
+        mov esi, line_buffer
+        call skip_spaces
+        mov edi, cmd_for_str
+        call str_starts_with
+        jc .slc_yes
+        mov esi, line_buffer
+        call skip_spaces
+        mov edi, cmd_while_str
+        call str_starts_with
+        jc .slc_yes
+        mov esi, line_buffer
+        call skip_spaces
+        mov edi, cmd_case_str
+        call str_starts_with
+        jc .slc_yes
+        mov esi, line_buffer
+        call skip_spaces
+        mov edi, cmd_function_def_str
+        call str_starts_with
+        jc .slc_yes
+        clc
+        jmp .slc_done
+.slc_yes:
+        stc
+.slc_done:
+        pop edi
+        pop esi
+        ret
+
 shell_parse_cmd:
         ; Skip leading spaces
         call skip_spaces
 
+        ; $? must report the command that ran before this line, so keep it
+        ; before the status is cleared for the command about to run.
+        mov eax, [shell_last_status]
+        mov [shell_prev_status], eax
         mov dword [shell_last_status], 0
         mov byte [bg_launch_flag], 0    ; Reset background flag
 
-        ; Expand $(...) command substitution and $((...)) arithmetic first
+        ; Expand $(...) command substitution and $((...)) arithmetic first.
+        ; Control-flow lines defer that to each body execution.
+        call shell_line_is_control
+        jc .parse_no_cmdsubst
         call shell_expand_cmdsubst
+.parse_no_cmdsubst:
 
         ; --- Check for trailing '&' (background job request) ---
         call shell_strip_bg_ampersand
@@ -767,6 +834,11 @@ shell_status_fail:
 ;---------------------------------------
 shell_execute_semicolons:
         pushad
+        ; Control-flow lines own their semicolons: `for ...; do ...; done` must
+        ; reach the construct with its separators intact, so do not split them.
+        call shell_line_is_control
+        jc .ses_none
+
         ; Scan for ';' not inside quotes, not part of &&/||
         mov esi, line_buffer
 .ses_scan:
@@ -1109,7 +1181,7 @@ shell_expand_cmdsubst:
         jne .ecs_not_question
         add esi, 2
         push esi
-        mov eax, [shell_last_status]
+        mov eax, [shell_prev_status]
         call vga_dec_to_str
         mov esi, dec_str_buf
 .ecs_q_splice:
@@ -1410,6 +1482,19 @@ shell_eval_arith:
         je .sea_paren
         cmp bl, '-'
         je .sea_unary_neg
+        ; A name resolves to its environment value, so $((N + 1)) works.
+        cmp bl, 'A'
+        jb .sea_maybe_digit
+        cmp bl, 'Z'
+        jbe .sea_varname
+.sea_maybe_digit:
+        cmp bl, 'a'
+        jb .sea_maybe_underscore
+        cmp bl, 'z'
+        jbe .sea_varname
+.sea_maybe_underscore:
+        cmp bl, '_'
+        je .sea_varname
         ; Parse decimal number
         xor eax, eax
 .sea_digits:
@@ -1426,6 +1511,63 @@ shell_eval_arith:
         jmp .sea_digits
 .sea_prim_done:
         ret
+.sea_varname:
+        push edi
+        mov edi, env_name_buf
+.sea_vn_cp:
+        mov bl, [esi]
+        cmp bl, 'A'
+        jb .sea_vn_low
+        cmp bl, 'Z'
+        jbe .sea_vn_take
+.sea_vn_low:
+        cmp bl, 'a'
+        jb .sea_vn_us
+        cmp bl, 'z'
+        jbe .sea_vn_take
+.sea_vn_us:
+        cmp bl, '_'
+        je .sea_vn_take
+        cmp bl, '0'
+        jb .sea_vn_end
+        cmp bl, '9'
+        ja .sea_vn_end
+.sea_vn_take:
+        mov [edi], bl
+        inc edi
+        inc esi
+        jmp .sea_vn_cp
+.sea_vn_end:
+        mov byte [edi], 0
+        pop edi
+        push esi
+        mov esi, env_name_buf
+        call env_get
+        test eax, eax
+        jz .sea_vn_zero
+        mov esi, eax
+        xor ecx, ecx
+.sea_vn_digits:
+        mov bl, [esi]
+        cmp bl, '0'
+        jb .sea_vn_value
+        cmp bl, '9'
+        ja .sea_vn_value
+        imul ecx, 10
+        sub bl, '0'
+        movzx edx, bl
+        add ecx, edx
+        inc esi
+        jmp .sea_vn_digits
+.sea_vn_value:
+        mov eax, ecx
+        pop esi
+        ret
+.sea_vn_zero:
+        xor eax, eax
+        pop esi
+        ret
+
 .sea_paren:
         inc esi                 ; skip '('
         call .sea_expr
@@ -2036,6 +2178,22 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_source
 
+        mov edi, cmd_printf_str
+        call str_starts_with
+        jc .cmd_printf
+
+        mov edi, cmd_read_str
+        call str_starts_with
+        jc .cmd_read
+
+        mov edi, cmd_exit_str
+        call str_starts_with
+        jc .cmd_exit
+
+        mov edi, cmd_shift_str
+        call str_starts_with
+        jc .cmd_shift
+
         ; Scripting constructs
         mov edi, cmd_if_str
         call str_starts_with
@@ -2092,8 +2250,24 @@ shell_dispatch_core:
 
 .unknown:
         call shell_status_fail
-        mov byte [vga_color], COLOR_ERROR
-        mov esi, msg_unknown_cmd
+        call vga_set_error
+        mov esi, msg_unknown_pre
+        call vga_print
+        mov esi, line_buffer
+        call vga_print
+        mov esi, msg_unknown_post
+        call vga_print
+        call vga_reset_color
+
+        ; Suggest a near built-in name, then say where to look.
+        mov esi, line_buffer
+        mov edi, help_arg_buf
+        mov ecx, 63
+        call copy_word_n
+        mov esi, help_arg_buf
+        call shell_suggest
+        call vga_set_dim
+        mov esi, msg_try_help
         call vga_print
         call vga_reset_color
         ret
@@ -2104,195 +2278,12 @@ shell_dispatch_core:
         mov esi, line_buffer
         mov edi, cmd_help_str
         call str_starts_with
-        jnc .cmd_help_full
-        cmp byte [esi], 0
-        je .cmd_help_full
-
-        mov edi, filename_buf
-        call copy_word
-
-        mov esi, filename_buf
-        mov edi, cmd_help_str
-        call str_compare
-        jz .cmd_help_help
-
-        mov edi, cmd_ver_str
-        call str_compare
-        jz .cmd_help_ver
-
-        mov edi, cmd_clear_str
-        call str_compare
-        jz .cmd_help_clear
-        mov edi, cmd_cls_str
-        call str_compare
-        jz .cmd_help_clear
-
-        mov edi, cmd_dir_str
-        call str_compare
-        jz .cmd_help_dir
-        mov edi, cmd_ls_str
-        call str_compare
-        jz .cmd_help_dir
-
-        mov edi, cmd_cat_str
-        call str_compare
-        jz .cmd_help_cat
-        mov edi, cmd_type_str
-        call str_compare
-        jz .cmd_help_cat
-
-        mov edi, cmd_write_str
-        call str_compare
-        jz .cmd_help_write
-        mov edi, cmd_append_str
-        call str_compare
-        jz .cmd_help_append
-
-        mov edi, cmd_run_str
-        call str_compare
-        jz .cmd_help_run
-
-        mov edi, cmd_echo_str
-        call str_compare
-        jz .cmd_help_echo
-
-        mov edi, cmd_cd_str
-        call str_compare
-        jz .cmd_help_cd
-        mov edi, cmd_pwd_str
-        call str_compare
-        jz .cmd_help_pwd
-        mov edi, cmd_mkdir_str
-        call str_compare
-        jz .cmd_help_mkdir
-
-        mov edi, cmd_set_str
-        call str_compare
-        jz .cmd_help_set
-        mov edi, cmd_unset_str
-        call str_compare
-        jz .cmd_help_unset
-
-        mov edi, cmd_history_str
-        call str_compare
-        jz .cmd_help_history
-        mov edi, cmd_which_str
-        call str_compare
-        jz .cmd_help_which
-
-        mov edi, cmd_color_str
-        call str_compare
-        jz .cmd_help_color
-        mov edi, cmd_size_str
-        call str_compare
-        jz .cmd_help_size
-        mov edi, cmd_strings_str
-        call str_compare
-        jz .cmd_help_strings
-
-        mov edi, cmd_mouse_str
-        call str_compare
-        jz .cmd_help_mouse
-
-        mov edi, cmd_gui_str
-        call str_compare
-        jz .cmd_help_gui
-
-        mov esi, msg_help_no_detail
-        call vga_print
-
-.cmd_help_full:
-        mov esi, help_text
-        call vga_print
-        ret
-
-.cmd_help_help:
-        mov esi, help_help_help
-        call vga_print
-        ret
-.cmd_help_ver:
-        mov esi, help_help_ver
-        call vga_print
-        ret
-.cmd_help_clear:
-        mov esi, help_help_clear
-        call vga_print
-        ret
-.cmd_help_dir:
-        mov esi, help_help_dir
-        call vga_print
-        ret
-.cmd_help_cat:
-        mov esi, help_help_cat
-        call vga_print
-        ret
-.cmd_help_write:
-        mov esi, help_help_write
-        call vga_print
-        ret
-.cmd_help_append:
-        mov esi, help_help_append
-        call vga_print
-        ret
-.cmd_help_run:
-        mov esi, help_help_run
-        call vga_print
-        ret
-.cmd_help_echo:
-        mov esi, help_help_echo
-        call vga_print
-        ret
-.cmd_help_cd:
-        mov esi, help_help_cd
-        call vga_print
-        ret
-.cmd_help_pwd:
-        mov esi, help_help_pwd
-        call vga_print
-        ret
-.cmd_help_mkdir:
-        mov esi, help_help_mkdir
-        call vga_print
-        ret
-.cmd_help_set:
-        mov esi, help_help_set
-        call vga_print
-        ret
-.cmd_help_unset:
-        mov esi, help_help_unset
-        call vga_print
-        ret
-.cmd_help_history:
-        mov esi, help_help_history
-        call vga_print
-        ret
-.cmd_help_which:
-        mov esi, help_help_which
-        call vga_print
-        ret
-.cmd_help_color:
-        mov esi, help_help_color
-        call vga_print
-        ret
-.cmd_help_size:
-        mov esi, help_help_size
-        call vga_print
-        ret
-.cmd_help_strings:
-        mov esi, help_help_strings
-        call vga_print
-        ret
-.cmd_help_mouse:
-        mov esi, help_help_mouse
-        call vga_print
-        ret
-.cmd_help_gui:
-        mov esi, help_help_gui
-        call vga_print
+        jnc help_command_usage
+        call help_command
         ret
 
 .cmd_ver:
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, version_text
         call vga_print
         call vga_reset_color
@@ -2817,12 +2808,32 @@ shell_dispatch_core:
         call cmd_exec_batch
         ret
 .source_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, .source_usage_str
         call vga_print
         call vga_reset_color
         ret
 .source_usage_str: db "Usage: source <script>", 0x0A, 0
+
+.cmd_printf:
+        call skip_spaces
+        call cmd_printf
+        ret
+
+.cmd_read:
+        call skip_spaces
+        call cmd_read
+        ret
+
+.cmd_exit:
+        call skip_spaces
+        call cmd_exit
+        ret
+
+.cmd_shift:
+        call skip_spaces
+        call cmd_shift
+        ret
 
 ;=========================================================
 ; SCRIPTING BUILTINS
@@ -3012,7 +3023,7 @@ cmd_diff_files:
         mov byte [edi], 0
 
         ; Print headers
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_diff_header1
         call vga_print
         mov esi, filename_buf
@@ -3050,14 +3061,14 @@ cmd_diff_files:
 
         ; Lines differ
         inc dword [.diff_diffs]
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_diff_line
         call vga_print
         mov eax, [.diff_line]
         call vga_print_dec
         call vga_newline
         ; Print file1 line
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         pop edi
         pop esi
         push esi
@@ -3079,7 +3090,7 @@ cmd_diff_files:
 .diff_p1e:
         call vga_newline
         ; Print file2 line
-        mov byte [vga_color], COLOR_SUCCESS
+        call vga_set_success
         pop edi
         pop esi
         push esi
@@ -3131,7 +3142,7 @@ cmd_diff_files:
 
 .diff_f1_extra:
         inc dword [.diff_diffs]
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
 .diff_f1e_loop:
         mov al, [esi]
         cmp al, 0
@@ -3142,7 +3153,7 @@ cmd_diff_files:
 
 .diff_f2_extra:
         inc dword [.diff_diffs]
-        mov byte [vga_color], COLOR_SUCCESS
+        call vga_set_success
 .diff_f2e_loop:
         mov al, [edi]
         cmp al, 0
@@ -3167,7 +3178,7 @@ cmd_diff_files:
 
 .diff_usage:
         call shell_status_fail
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_2files
         call vga_print
         call vga_reset_color
@@ -3175,7 +3186,7 @@ cmd_diff_files:
         ret
 .diff_not_found1:
         call shell_status_fail
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, filename_buf
         call vga_print
         mov esi, msg_not_found_w
@@ -3185,7 +3196,7 @@ cmd_diff_files:
         ret
 .diff_not_found2:
         call shell_status_fail
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, filename_buf2
         call vga_print
         mov esi, msg_not_found_w
@@ -3328,7 +3339,7 @@ cmd_uniq_file:
         mov eax, 2
         call test_flag
         jnc .uniq_no_c
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov eax, [.uniq_count]
         call vga_print_dec
         mov al, ' '
@@ -3352,14 +3363,14 @@ cmd_uniq_file:
         ret
 
 .uniq_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
         popad
         ret
 .uniq_nf:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_file_not_found
         call vga_print
         call vga_reset_color
@@ -3430,14 +3441,14 @@ cmd_rev_file:
         popad
         ret
 .rev_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
         popad
         ret
 .rev_nf:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_file_not_found
         call vga_print
         call vga_reset_color
@@ -3516,14 +3527,14 @@ cmd_tac_file:
         popad
         ret
 .tac_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
         popad
         ret
 .tac_nf:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_file_not_found
         call vga_print
         call vga_reset_color
@@ -3613,7 +3624,7 @@ cmd_alias:
 .alias_ll:
         cmp ebx, ecx
         jge .alias_ld
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, edx
         call vga_print
         call vga_reset_color
@@ -3666,7 +3677,7 @@ cmd_alias:
         ret
 
 .alias_full:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_table_full
         call vga_print
         call vga_reset_color
@@ -3685,7 +3696,7 @@ cmd_history:
 .hist_loop:
         cmp ebx, ecx
         jge .hist_done
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov eax, ebx
         inc eax
         call vga_print_dec
@@ -3713,27 +3724,27 @@ cmd_history:
 ;---------------------------------------
 cmd_which:
         pushad
-        mov edi, filename_buf
+        mov edi, which_name_buf
         call copy_word
-        cmp byte [filename_buf], 0
+        cmp byte [which_name_buf], 0
         je .which_usage
 
-        ; Check against a table of built-in command names
-        mov ebx, .which_builtins
+        ; The command table is the only list of built-in names.
+        mov ebx, cmd_table
 .which_check:
         mov edi, [ebx]
-        cmp edi, 0
-        je .which_try_fs
-        mov esi, filename_buf
+        test edi, edi
+        jz .which_try_fs
+        mov esi, which_name_buf
         call str_compare
-        je .which_builtin
-        add ebx, 4
+        jz .which_builtin
+        add ebx, CMD_ENTRY_SIZE
         jmp .which_check
 
 .which_try_fs:
         ; First check current directory
         call hbfs_load_root_dir
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call hbfs_find_file
         jnc .which_found_cwd
 
@@ -3770,7 +3781,7 @@ cmd_which:
         jnz .which_pskip
 
         call hbfs_load_root_dir
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call hbfs_find_file
         jc .which_pskip
 
@@ -3778,7 +3789,7 @@ cmd_which:
         call path_restore_cwd
         pop esi
         ; Print: "name is /dir/name (external)"
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call vga_print
         mov esi, msg_is_str
         call vga_print
@@ -3786,7 +3797,7 @@ cmd_which:
         call vga_print
         mov al, '/'
         call vga_putchar
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call vga_print
         mov esi, msg_external
         call vga_print
@@ -3800,7 +3811,7 @@ cmd_which:
 .which_path_done:
         call path_restore_cwd
         ; Not found anywhere
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call vga_print
         mov esi, msg_not_found_w
         call vga_print
@@ -3809,7 +3820,7 @@ cmd_which:
 
 .which_found_cwd:
         ; Show as ./name (external)
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call vga_print
         mov esi, msg_is_str
         call vga_print
@@ -3820,7 +3831,7 @@ cmd_which:
         call vga_print
         mov al, '/'
         call vga_putchar
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call vga_print
         mov esi, msg_external
         call vga_print
@@ -3828,7 +3839,7 @@ cmd_which:
         ret
 
 .which_builtin:
-        mov esi, filename_buf
+        mov esi, which_name_buf
         call vga_print
         mov esi, msg_builtin
         call vga_print
@@ -3836,40 +3847,13 @@ cmd_which:
         ret
 
 .which_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
         popad
         ret
 
-; Table of built-in command name pointers (null-terminated)
-.which_builtins:
-        dd cmd_help_str, cmd_ver_str, cmd_clear_str, cmd_dir_str
-        dd cmd_ls_str, cmd_del_str, cmd_rm_str, cmd_format_str
-        dd cmd_cat_str, cmd_write_str, cmd_hex_str, cmd_mem_str
-        dd cmd_time_str, cmd_disk_str, cmd_run_str, cmd_enter_str
-        dd cmd_copy_str, cmd_ren_str, cmd_mv_str, cmd_move_str
-        dd cmd_df_str, cmd_more_str, cmd_echo_str, cmd_wc_str
-        dd cmd_find_str, cmd_append_str, cmd_date_str, cmd_beep_str
-        dd cmd_batch_str, cmd_mkdir_str, cmd_cd_str, cmd_pwd_str
-        dd cmd_pushd_str, cmd_popd_str, cmd_dirs_str
-        dd cmd_touch_str, cmd_set_str, cmd_unset_str, cmd_shutdown_str
-        dd cmd_reboot_str
-        dd cmd_cls_str, cmd_head_str, cmd_tail_str, cmd_type_str
-        dd cmd_diff_str, cmd_uniq_str, cmd_rev_str, cmd_tac_str
-        dd cmd_alias_str, cmd_history_str, cmd_which_str
-        dd cmd_sleep_str, cmd_color_str, cmd_size_str, cmd_strings_str
-        dd cmd_mouse_str
-        dd cmd_gui_str
-        dd cmd_scrsaver_str
-        dd cmd_whoami_str
-        dd cmd_stat_str
-        dd cmd_fsck_str
-        dd cmd_ln_str
-        dd cmd_chmod_str
-        dd cmd_chown_str
-        dd 0
 
 ;---------------------------------------
 ; Command: sleep - Sleep for N seconds
@@ -3919,7 +3903,7 @@ cmd_sleep:
         ret
 
 .sleep_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_sleep_usage
         call vga_print
         call vga_reset_color
@@ -4020,7 +4004,7 @@ cmd_watch:
         ret
 
 .watch_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_watch_usage
         call vga_print
         call vga_reset_color
@@ -4100,7 +4084,7 @@ cmd_size_file:
         call hbfs_find_file_global
         jc .size_nf
 
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, filename_buf
         call vga_print
         mov esi, msg_file_colon
@@ -4150,14 +4134,14 @@ cmd_size_file:
         ret
 
 .size_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
         popad
         ret
 .size_nf:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_file_not_found
         call vga_print
         call vga_reset_color
@@ -4254,14 +4238,14 @@ cmd_strings_file:
         ret
 
 .strings_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
         popad
         ret
 .strings_nf:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_file_not_found
         call vga_print
         call vga_reset_color
@@ -4278,7 +4262,7 @@ cmd_mouse_status:
         cmp byte [mouse_present], 0
         je .mouse_not_present
 
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_mouse_hdr
         call vga_print
 
@@ -4326,7 +4310,7 @@ cmd_mouse_status:
         ret
 
 .mouse_not_present:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_mouse_absent
         call vga_print
         call vga_reset_color
@@ -4382,7 +4366,7 @@ cmd_list_dir:
         call vga_reset_color
         jmp .sc_print
 .sc_dir:
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         jmp .sc_print
 .sc_exec:
         mov byte [vga_color], COLOR_EXEC
@@ -4391,7 +4375,7 @@ cmd_list_dir:
         mov byte [vga_color], COLOR_BATCH
         jmp .sc_print
 .sc_link:
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
 .sc_print:
         ; Print filename padded to 16 chars
         push esi
@@ -4477,12 +4461,12 @@ cmd_list_dir:
         call vga_print
         jmp .print_size
 .type_link:
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, type_link
         call vga_print
         jmp .print_size
 .type_dir:
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, type_dir
         call vga_print
         jmp .print_size
@@ -4497,7 +4481,8 @@ cmd_list_dir:
         call vga_print
 
 .print_size:
-        call vga_reset_color
+        ; Size and timestamp are secondary: dim, so names stay dominant.
+        call vga_set_dim
         mov al, ' '
         call vga_putchar
 
@@ -4580,6 +4565,7 @@ cmd_list_dir:
         call vga_putchar
 
         ; Print filename
+        call vga_reset_color
         push esi
         mov esi, edi
         call vga_print
@@ -4696,7 +4682,7 @@ cmd_list_dir:
         pop esi
         jmp .sf_psize
 .sf_ptype_dir:
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         push esi
         mov esi, type_dir
         call vga_print
@@ -4717,7 +4703,7 @@ cmd_list_dir:
         pop esi
         jmp .sf_psize
 .sf_ptype_link:
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         push esi
         mov esi, type_link
         call vga_print
@@ -4857,7 +4843,7 @@ cmd_list_dir:
         call vga_reset_color
         jmp  .cld_vfs_print
 .cld_vfs_dir:
-        mov  byte [vga_color], COLOR_INFO
+        call vga_set_info
         jmp  .cld_vfs_print
 .cld_vfs_exec:
         mov  byte [vga_color], COLOR_EXEC
@@ -5008,7 +4994,7 @@ cmd_delete_file:
         ret
 
 .not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -5025,7 +5011,7 @@ cmd_shutdown:
         mov byte [vga_color], COLOR_HEADER
         mov esi, msg_shutdown_bar
         call vga_print
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_shutdown
         call vga_print
         call vga_reset_color
@@ -5092,7 +5078,7 @@ cmd_reboot:
         mov byte [vga_color], COLOR_HEADER
         mov esi, msg_shutdown_bar
         call vga_print
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_reboot
         call vga_print
         call vga_reset_color
@@ -5226,7 +5212,7 @@ cmd_head_file:
         popad
         ret
 .head_not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -5338,7 +5324,7 @@ cmd_tail_file:
         popad
         ret
 .tail_not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -5398,7 +5384,7 @@ cmd_cat_file:
         inc ebx
         ; Print line number right-aligned in 4-char field
         push esi
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov eax, ebx
         mov edx, 4
         call vga_print_dec_width
@@ -5422,7 +5408,7 @@ cmd_cat_file:
         ret
 
 .cat_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_need_filename
         call vga_print
         call vga_reset_color
@@ -5430,7 +5416,7 @@ cmd_cat_file:
         ret
 
 .not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -5487,7 +5473,7 @@ cmd_more_file:
 
         ; Show pager prompt
         push esi
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_more_prompt
         call vga_print
         call vga_reset_color
@@ -5520,7 +5506,7 @@ cmd_more_file:
         ret
 
 .more_not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -5622,7 +5608,7 @@ cmd_write_file:
         ret
 
 .write_error:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_write_err
         call vga_print
         call vga_reset_color
@@ -5780,7 +5766,7 @@ cmd_hexdump_file:
         ret
 
 .not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -5792,7 +5778,7 @@ cmd_hexdump_file:
 ;---------------------------------------
 cmd_show_memory:
         pushad
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_mem_header
         call vga_print
         call vga_reset_color
@@ -5834,7 +5820,7 @@ cmd_show_disk:
         cmp byte [ata_present], 0
         je .no_disk
 
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_disk_header
         call vga_print
         call vga_reset_color
@@ -5871,7 +5857,7 @@ cmd_df_info:
         cmp byte [ata_present], 0
         je .df_no_disk
 
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_df_header
         call vga_print
         call vga_reset_color
@@ -6498,7 +6484,7 @@ cmd_exec_program:
 
         ; 8. Print "[1] <pid>" to confirm bg launch
         mov byte [bg_launch_flag], 0
-        mov byte [vga_color], COLOR_INFO
+        call vga_set_info
         mov esi, msg_bg_launched
         call vga_print
         push eax
@@ -7014,7 +7000,7 @@ cmd_enter_hex:
         ret
 
 .save_fail:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_write_err
         call vga_print
         call vga_reset_color
@@ -7088,7 +7074,7 @@ cmd_copy_file:
         ret
 
 .usage_error:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_copy_usage
         call vga_print
         call vga_reset_color
@@ -7135,7 +7121,7 @@ cmd_copy_file:
         mov esi, filename_buf2
         call str_has_asterisk
         jc .cw_copy_begin
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_wild_needs_star
         call vga_print
         call vga_reset_color
@@ -7226,7 +7212,7 @@ cmd_copy_file:
         ret
 
 .wild_not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -7235,7 +7221,7 @@ cmd_copy_file:
 
 .src_not_found:
         pop esi
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -7244,7 +7230,7 @@ cmd_copy_file:
 
 .copy_fail:
         pop esi
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_write_err
         call vga_print
         call vga_reset_color
@@ -7318,7 +7304,7 @@ cmd_rename_file:
         ret
 
 .ren_usage:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_ren_usage
         call vga_print
         call vga_reset_color
@@ -7365,7 +7351,7 @@ cmd_rename_file:
         mov esi, filename_buf2
         call str_has_asterisk
         jc .rw_do
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_wild_needs_star
         call vga_print
         call vga_reset_color
@@ -7454,7 +7440,7 @@ cmd_rename_file:
         ret
 
 .ren_not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -7692,7 +7678,7 @@ cmd_stat:
         ret
 
 .stat_not_found:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, msg_not_found
         call vga_print
         call vga_reset_color
@@ -7911,7 +7897,7 @@ cmd_fsck:
         ; Size mismatch
         push esi
         push ebx
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, .fsck_warn_size
         call vga_print
         mov esi, edi
@@ -7980,7 +7966,7 @@ cmd_fsck:
         call vga_print
         jmp .fsck_end
 .fsck_clean:
-        mov byte [vga_color], COLOR_SUCCESS
+        call vga_set_success
         mov esi, .fsck_sum_clean
         call vga_print
         call vga_reset_color
@@ -8088,7 +8074,7 @@ cmd_ln:
         ret
 
 .ln_fail:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, .ln_err
         call vga_print
         call vga_reset_color
@@ -8145,14 +8131,14 @@ cmd_chmod:
         test eax, eax
         jnz .chmod_fail
 
-        mov byte [vga_color], COLOR_SUCCESS
+        call vga_set_success
         mov esi, .chmod_done
         call vga_print
         call vga_reset_color
         popad
         ret
 .chmod_fail:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, .chmod_err
         call vga_print
         call vga_reset_color
@@ -8203,14 +8189,14 @@ cmd_chown:
         test eax, eax
         jnz .chown_fail
 
-        mov byte [vga_color], COLOR_SUCCESS
+        call vga_set_success
         mov esi, .chown_done
         call vga_print
         call vga_reset_color
         popad
         ret
 .chown_fail:
-        mov byte [vga_color], COLOR_ERROR
+        call vga_set_error
         mov esi, .chown_err
         call vga_print
         call vga_reset_color
@@ -8377,6 +8363,10 @@ SH_FLOW_RETURN   equ 3
 ;-----------------------------------------------------------------------
 cmd_test_builtin:
         pushad
+        ; Operands may be variables or positional parameters: expand them.
+        mov edi, expand_buf
+        call env_expand
+        mov esi, expand_buf
         call skip_spaces
         cmp byte [esi], 0
         je .test_false
@@ -8682,8 +8672,7 @@ cmd_if_builtin:
         pop eax
         mov edi, if_body_buf
         call .if_extract_to_keyword
-        cmp edx, 2
-        je .if_done
+        ; The extracted text is the else body whether it ended at 'fi' or not.
         mov esi, if_body_buf
         call .if_run_segment
         jmp .if_done
@@ -8747,6 +8736,7 @@ cmd_if_builtin:
         jc .iek_kw_elif
         pop edi
         pop esi
+        mov al, [esi]           ; the keyword probes clobber AL
         stosb
         inc esi
         jmp .iek_loop
@@ -8872,6 +8862,8 @@ cmd_if_builtin:
         mov esi, line_buffer
         call shell_parse_cmd
         pop esi
+        cmp byte [shell_exit_flag], 0
+        jne .irs_done
         cmp byte [sh_flow_flag], SH_FLOW_NONE
         jne .irs_done
         jmp .irs_loop
@@ -8965,8 +8957,9 @@ cmd_while_builtin:
         mov edi, .wh_kw_do
         call str_starts_with
         jnc .wetd_no_do
+        ; Keep the ESI that str_starts_with advanced past "do".
         pop edi
-        pop esi
+        add esp, 4
         call skip_spaces
         jmp .wetd_done
 .wetd_no_do:
@@ -8999,6 +8992,7 @@ cmd_while_builtin:
 .wetdn_no_done:
         pop edi
         pop esi
+        mov al, [esi]           ; the keyword probe clobbers AL
         stosb
         inc esi
         jmp .wetdn_lp
@@ -9051,6 +9045,16 @@ cmd_for_builtin:
         jmp .for_list
 .for_list_done:
         mov byte [edi], 0
+        push eax
+        push esi
+        mov esi, for_list_buf
+        mov edi, expand_buf
+        call env_expand
+        mov esi, expand_buf
+        mov edi, for_list_buf
+        call str_copy
+        pop esi
+        pop eax
         cmp al, ';'
         jne .for_find_do
         inc esi
@@ -9139,6 +9143,15 @@ cmd_case_builtin:
         jmp .ccase_word
 .ccase_word_done:
         mov byte [edi], 0
+        ; Expand the matched word only: the arms run later.
+        push esi
+        mov esi, case_word_buf
+        mov edi, expand_buf
+        call env_expand
+        mov esi, expand_buf
+        mov edi, case_word_buf
+        call str_copy
+        pop esi
         call skip_spaces
 
         mov edi, .case_kw_in
@@ -9317,6 +9330,138 @@ cmd_func_define:
 ; shell_func_call — look up first word of line_buffer as a function name
 ; CF=0 if found and executed, CF=1 if not found
 ;-----------------------------------------------------------------------
+ARG_FRAME_SIZE equ (256 + 64 + 4)
+
+;-----------------------------------------------------------------------
+; shell_save_args - remember the current positional state (four levels)
+;-----------------------------------------------------------------------
+shell_save_args:
+        pushad
+        mov eax, [arg_save_depth]
+        cmp eax, 4
+        jge .ssa_full
+        imul eax, ARG_FRAME_SIZE
+        lea edi, [arg_save_buf + eax]
+        mov esi, func_arg_buf
+        mov ecx, 256
+        rep movsb
+        mov esi, func_name_buf
+        mov ecx, 64
+        rep movsb
+        mov esi, func_argc
+        mov ecx, 4
+        rep movsb
+        inc dword [arg_save_depth]
+.ssa_full:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; shell_restore_args - undo shell_save_args
+;-----------------------------------------------------------------------
+shell_restore_args:
+        pushad
+        mov eax, [arg_save_depth]
+        test eax, eax
+        jz .sra_none
+        dec eax
+        mov [arg_save_depth], eax
+        imul eax, ARG_FRAME_SIZE
+        lea esi, [arg_save_buf + eax]
+        mov edi, func_arg_buf
+        mov ecx, 256
+        rep movsb
+        mov edi, func_name_buf
+        mov ecx, 64
+        rep movsb
+        mov edi, func_argc
+        mov ecx, 4
+        rep movsb
+.sra_none:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; shell_count_args - recount func_argc from func_arg_buf
+;-----------------------------------------------------------------------
+shell_count_args:
+        push eax
+        push esi
+        mov dword [func_argc], 0
+        mov esi, func_arg_buf
+.sca_loop:
+        mov al, [esi]
+        test al, al
+        jz .sca_done
+        cmp al, ' '
+        je .sca_skip
+        inc dword [func_argc]
+.sca_word:
+        mov al, [esi]
+        test al, al
+        jz .sca_done
+        cmp al, ' '
+        je .sca_skip
+        inc esi
+        jmp .sca_word
+.sca_skip:
+        inc esi
+        jmp .sca_loop
+.sca_done:
+        pop esi
+        pop eax
+        ret
+
+;-----------------------------------------------------------------------
+; shell_bind_args - bind $0..$9, $# and $* for a function call
+;   ESI = argument text after the function name (spaces allowed)
+;       func_call_name holds the name being called
+;-----------------------------------------------------------------------
+shell_bind_args:
+        push eax
+        push ecx
+        push esi
+        push edi
+        ; $0
+        mov esi, func_call_name
+        mov edi, func_name_buf
+        mov ecx, 63
+.sba_name:
+        mov al, [esi]
+        test al, al
+        jz .sba_name_done
+        stosb
+        inc esi
+        dec ecx
+        jnz .sba_name
+.sba_name_done:
+        mov byte [edi], 0
+
+        ; $1..$n
+        pop edi
+        pop esi
+        push esi
+        push edi
+        call skip_spaces
+        mov edi, func_arg_buf
+        mov ecx, 255
+.sba_copy:
+        lodsb
+        stosb
+        test al, al
+        jz .sba_copied
+        dec ecx
+        jnz .sba_copy
+        mov byte [edi], 0
+.sba_copied:
+        call shell_count_args
+.sba_done:
+        pop edi
+        pop esi
+        pop ecx
+        pop eax
+        ret
+
 shell_func_call:
         pushad
         mov esi, line_buffer
@@ -9363,8 +9508,11 @@ shell_func_call:
 .sfc_found:
         add edi, SHELL_FUNC_NAME_LEN
         push edi
+        call shell_save_args
+        call shell_bind_args
         mov esi, edi
         call cmd_if_builtin.if_run_segment
+        call shell_restore_args
         pop edi
         popad
         clc
@@ -9399,5 +9547,708 @@ env_set_kv:
         jnz .eskv_val
         mov esi, env_kv_buf
         call env_set_str
+        popad
+        ret
+
+;=======================================================================
+; COMMAND DISCOVERY
+;
+; cmd_table (kernel/cmdtable.inc) is the single list of built-ins: `help`,
+; tab completion and `which` all read it, so they cannot drift apart.
+;=======================================================================
+
+HELP_NAME_COL equ 14
+
+;-----------------------------------------------------------------------
+; cmd_lookup_exact - ESI = command name. Out: EAX = table entry, or 0.
+;-----------------------------------------------------------------------
+cmd_lookup_exact:
+        push ebx
+        push esi
+        push edi
+        mov ebx, cmd_table
+.cle_loop:
+        mov eax, [ebx]
+        test eax, eax
+        jz .cle_none
+        mov edi, eax
+        call str_compare
+        jz .cle_found
+        add ebx, CMD_ENTRY_SIZE
+        jmp .cle_loop
+.cle_none:
+        xor eax, eax
+        jmp .cle_ret
+.cle_found:
+        mov eax, ebx
+.cle_ret:
+        pop edi
+        pop esi
+        pop ebx
+        ret
+
+;-----------------------------------------------------------------------
+; help_command - ESI = argument after "help"
+;   (empty)        grouped listing, one line per command
+;   -a | all       every name on its own line
+;   NAME           usage for NAME, else where NAME lives on PATH
+;-----------------------------------------------------------------------
+help_command:
+        pushad
+        mov edi, help_arg_buf
+        mov ecx, 63
+        call copy_word_n
+        cmp byte [help_arg_buf], 0
+        je .hc_all
+
+        mov esi, help_arg_buf
+        mov edi, help_all_word
+        call str_compare
+        jz .hc_flat
+        cmp byte [help_arg_buf], '-'
+        jne .hc_one
+        cmp byte [help_arg_buf + 1], 'a'
+        je .hc_flat
+.hc_one:
+        mov esi, help_arg_buf
+        call cmd_lookup_exact
+        test eax, eax
+        jz .hc_unknown
+        call help_print_one
+        popad
+        ret
+.hc_all:
+        call help_print_all
+        popad
+        ret
+.hc_flat:
+        call help_print_flat
+        popad
+        ret
+.hc_unknown:
+        mov esi, help_arg_buf
+        call help_print_unknown
+        popad
+        ret
+
+help_command_usage:
+        pushad
+        mov esi, msg_help_usage
+        call vga_print
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; help_print_one - EAX = table entry. Prints the name and its detail block.
+;-----------------------------------------------------------------------
+help_print_one:
+        pushad
+        mov ebx, eax
+        call vga_set_info
+        mov esi, [ebx]
+        call vga_print
+        call vga_reset_color
+        mov al, 0x0A
+        call vga_putchar
+        mov esi, [ebx + 8]
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; help_print_all - grouped listing: category header, then name + summary.
+;-----------------------------------------------------------------------
+help_print_all:
+        pushad
+        call vga_set_info
+        mov esi, help_title
+        call vga_print
+        call vga_reset_color
+        mov ebx, cmd_table
+        mov ebp, -1
+.hpa_loop:
+        mov eax, [ebx]
+        test eax, eax
+        jz .hpa_done
+        movzx edx, byte [ebx + 12]
+        cmp edx, ebp
+        je .hpa_entry
+        mov ebp, edx
+        mov al, 0x0A
+        call vga_putchar
+        call vga_set_info
+        mov esi, [cmd_category_names + edx*4]
+        call vga_print
+        call vga_reset_color
+        mov al, 0x0A
+        call vga_putchar
+.hpa_entry:
+        mov al, ' '
+        call vga_putchar
+        call vga_putchar
+        mov esi, [ebx]
+        call help_print_name
+        mov esi, [ebx + 4]
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        add ebx, CMD_ENTRY_SIZE
+        jmp .hpa_loop
+.hpa_done:
+        mov al, 0x0A
+        call vga_putchar
+        call vga_set_dim
+        mov esi, msg_help_hint
+        call vga_print
+        call vga_reset_color
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; help_print_flat - every built-in name, one per line.
+;-----------------------------------------------------------------------
+help_print_flat:
+        pushad
+        mov ebx, cmd_table
+.hpf_loop:
+        mov eax, [ebx]
+        test eax, eax
+        jz .hpf_done
+        mov esi, eax
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        add ebx, CMD_ENTRY_SIZE
+        jmp .hpf_loop
+.hpf_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; help_print_name - print ESI padded to HELP_NAME_COL columns.
+;-----------------------------------------------------------------------
+help_print_name:
+        pushad
+        xor ebx, ebx
+.hpn_loop:
+        mov al, [esi]
+        test al, al
+        jz .hpn_pad
+        call vga_putchar
+        inc esi
+        inc ebx
+        jmp .hpn_loop
+.hpn_pad:
+        cmp ebx, HELP_NAME_COL
+        jge .hpn_done
+        mov al, ' '
+        call vga_putchar
+        inc ebx
+        jmp .hpn_pad
+.hpn_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; help_print_unknown - ESI = name that is not a built-in. Says so, suggests
+; a near match, then reports where the name lives on PATH (if anywhere).
+;-----------------------------------------------------------------------
+help_print_unknown:
+        pushad
+        call vga_set_warn
+        mov esi, msg_help_unknown_pre
+        call vga_print
+        mov esi, help_arg_buf
+        call vga_print
+        mov esi, msg_help_unknown_post
+        call vga_print
+        call vga_reset_color
+        mov esi, help_arg_buf
+        call shell_suggest
+        mov esi, help_arg_buf
+        call cmd_which
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; shell_suggest - ESI = a word the shell did not recognise.
+;
+; Prints "  Did you mean 'X'?" when a close built-in exists, and prints
+; nothing otherwise. Two cheap passes rather than a full edit distance:
+;   1. the longest built-in name that prefixes the word (dirr -> dir);
+;   2. a name with the same first letter and the same length (grpe -> grep).
+;-----------------------------------------------------------------------
+shell_suggest:
+        pushad
+        mov [.ss_word], esi
+        xor ebp, ebp                    ; best prefix length
+        xor ecx, ecx                    ; best entry
+        mov ebx, cmd_table
+.ss_p1:
+        mov eax, [ebx]
+        test eax, eax
+        jz .ss_p1_done
+        mov esi, [.ss_word]
+        mov edi, eax
+.ss_p1_cmp:
+        mov dl, [edi]
+        test dl, dl
+        jz .ss_p1_match
+        cmp dl, [esi]
+        jne .ss_p1_next
+        inc esi
+        inc edi
+        jmp .ss_p1_cmp
+.ss_p1_match:
+        mov esi, [ebx]
+        xor edx, edx
+.ss_p1_len:
+        cmp byte [esi + edx], 0
+        je .ss_p1_len_done
+        inc edx
+        jmp .ss_p1_len
+.ss_p1_len_done:
+        cmp edx, 2
+        jb .ss_p1_next
+        cmp edx, ebp
+        jbe .ss_p1_next
+        mov ebp, edx
+        mov ecx, ebx
+.ss_p1_next:
+        add ebx, CMD_ENTRY_SIZE
+        jmp .ss_p1
+.ss_p1_done:
+        test ecx, ecx
+        jnz .ss_print
+
+        ; Pass 2: same first letter, same length.
+        mov esi, [.ss_word]
+        xor ebp, ebp
+.ss_wlen:
+        cmp byte [esi + ebp], 0
+        je .ss_wlen_done
+        inc ebp
+        jmp .ss_wlen
+.ss_wlen_done:
+        cmp ebp, 2
+        jb .ss_none
+        mov ebx, cmd_table
+.ss_p2:
+        mov eax, [ebx]
+        test eax, eax
+        jz .ss_none
+        mov esi, [.ss_word]
+        mov dl, [esi]
+        cmp dl, [eax]
+        jne .ss_p2_next
+        xor edx, edx
+.ss_p2_len:
+        cmp byte [eax + edx], 0
+        je .ss_p2_len_done
+        inc edx
+        jmp .ss_p2_len
+.ss_p2_len_done:
+        cmp edx, ebp
+        jne .ss_p2_next
+        mov ecx, ebx
+        jmp .ss_print
+.ss_p2_next:
+        add ebx, CMD_ENTRY_SIZE
+        jmp .ss_p2
+
+.ss_print:
+        call vga_set_info
+        mov esi, msg_did_you_mean
+        call vga_print
+        mov esi, [ecx]
+        call vga_print
+        mov esi, msg_quote_end
+        call vga_print
+        call vga_reset_color
+.ss_none:
+        popad
+        ret
+.ss_word: dd 0
+
+;=======================================================================
+; printf, read, exit, shift
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; printf - print a formatted string
+;   printf FORMAT [ARG...]      or      printf "FORMAT WITH SPACES" [ARG...]
+;   Conversions: %s %d %u %x %c %%    Escapes: \n \t \\ \r
+;
+; The argument text is variable-expanded first, so printf "%s\n" "$1"
+; works in a function and $? is available too. A leading double quote
+; delimits a format that contains spaces; the shell has no general quote
+; handling, so this is the one place it matters.
+;-----------------------------------------------------------------------
+cmd_printf:
+        pushad
+        mov edi, printf_buf
+        call env_expand
+        mov esi, printf_buf
+
+        cmp byte [esi], '"'
+        jne .pf_word_fmt
+        ; Quoted format: everything up to the closing quote.
+        inc esi
+        mov edi, printf_fmt
+.pf_qcopy:
+        mov al, [esi]
+        test al, al
+        jz .pf_qdone
+        cmp al, '"'
+        je .pf_qend
+        stosb
+        inc esi
+        jmp .pf_qcopy
+.pf_qend:
+        inc esi
+.pf_qdone:
+        mov byte [edi], 0
+        jmp .pf_have_fmt
+.pf_word_fmt:
+        ; One word is the format; the rest are arguments.
+        mov edi, printf_fmt
+.pf_wcopy:
+        mov al, [esi]
+        test al, al
+        jz .pf_wdone
+        cmp al, ' '
+        je .pf_wend
+        stosb
+        inc esi
+        jmp .pf_wcopy
+.pf_wend:
+        mov byte [edi], 0
+        inc esi
+        jmp .pf_have_fmt
+.pf_wdone:
+        mov byte [edi], 0
+
+.pf_have_fmt:
+        mov edi, printf_args
+.pf_acopy:
+        mov al, [esi]
+        mov [edi], al
+        test al, al
+        jz .pf_args_done
+        inc esi
+        inc edi
+        jmp .pf_acopy
+.pf_args_done:
+        mov dword [printf_argp], printf_args
+        mov ebx, printf_fmt             ; EBX walks the format, ESI the args
+.pf_loop:
+        mov al, [ebx]
+        test al, al
+        jz .pf_done
+        inc ebx
+        cmp al, 0x5C
+        je .pf_escape
+        cmp al, '%'
+        jne .pf_literal
+        mov al, [ebx]
+        test al, al
+        jz .pf_done
+        inc ebx
+        cmp al, '%'
+        je .pf_literal
+        cmp al, 's'
+        je .pf_string
+        cmp al, 'd'
+        je .pf_decimal
+        cmp al, 'u'
+        je .pf_decimal
+        cmp al, 'x'
+        je .pf_hex
+        cmp al, 'c'
+        je .pf_char
+        push eax
+        mov al, '%'
+        call vga_putchar
+        pop eax
+        call vga_putchar
+        jmp .pf_loop
+.pf_literal:
+        call vga_putchar
+        jmp .pf_loop
+.pf_escape:
+        mov al, [ebx]
+        test al, al
+        jz .pf_done
+        inc ebx
+        cmp al, 'n'
+        jne .pf_esc_t
+        mov al, 0x0A
+        jmp .pf_literal
+.pf_esc_t:
+        cmp al, 't'
+        jne .pf_esc_r
+        mov al, 9
+        jmp .pf_literal
+.pf_esc_r:
+        cmp al, 'r'
+        jne .pf_literal
+        mov al, 0x0D
+        jmp .pf_literal
+
+.pf_string:
+        call printf_next_arg
+        jz .pf_loop
+.pf_str_cp:
+        mov al, [esi]
+        test al, al
+        jz .pf_str_end
+        cmp al, ' '
+        je .pf_str_end
+        call vga_putchar
+        inc esi
+        jmp .pf_str_cp
+.pf_str_end:
+        mov [printf_argp], esi
+        jmp .pf_loop
+
+.pf_decimal:
+        call printf_next_arg
+        jz .pf_loop
+        call parse_decimal
+        mov [printf_argp], esi
+        call vga_print_dec
+        jmp .pf_loop
+
+.pf_hex:
+        call printf_next_arg
+        jz .pf_loop
+        call parse_decimal
+        mov [printf_argp], esi
+        call printf_hex
+        jmp .pf_loop
+
+.pf_char:
+        call printf_next_arg
+        jz .pf_loop
+        mov al, [esi]
+        test al, al
+        jz .pf_loop
+        cmp al, ' '
+        je .pf_char_adv
+        call vga_putchar
+.pf_char_adv:
+        inc esi
+        mov [printf_argp], esi
+        jmp .pf_loop
+.pf_done:
+        popad
+        ret
+
+; Move to the next argument. Out: ESI = argument start, ZF set when there is
+; none (the cursor then points at the terminating NUL).
+printf_next_arg:
+        mov esi, [printf_argp]
+.pna_skip:
+        cmp byte [esi], ' '
+        jne .pna_check
+        inc esi
+        jmp .pna_skip
+.pna_check:
+        mov [printf_argp], esi
+        cmp byte [esi], 0
+        ret
+
+;-----------------------------------------------------------------------
+; printf_hex - print EAX in hex without leading zeros
+;-----------------------------------------------------------------------
+printf_hex:
+        pushad
+        mov ebx, eax
+        test ebx, ebx
+        jnz .ph_find
+        mov al, '0'
+        call vga_putchar
+        jmp .ph_done
+.ph_find:
+        mov ecx, 8
+.ph_skip:
+        mov eax, ebx
+        push ecx
+        dec ecx
+        shl ecx, 2
+        shr eax, cl
+        pop ecx
+        and eax, 0x0F
+        jnz .ph_print
+        dec ecx
+        jnz .ph_skip
+.ph_print:
+        mov eax, ebx
+        push ecx
+        dec ecx
+        shl ecx, 2
+        shr eax, cl
+        pop ecx
+        and eax, 0x0F
+        cmp al, 10
+        jb .ph_digit
+        add al, 'A' - 10
+        jmp .ph_put
+.ph_digit:
+        add al, '0'
+.ph_put:
+        call vga_putchar
+        loop .ph_print
+.ph_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; read - read one line from the keyboard into an environment variable
+;   read [VAR]        (VAR defaults to REPLY)
+;
+; Keyboard input only: piped standard input remains the business of
+; programs, which receive it through SYS_STDIN_READ.
+;-----------------------------------------------------------------------
+cmd_read:
+        pushad
+        call skip_spaces
+        mov edi, read_name_buf
+        mov ecx, 63
+        call copy_word_n
+        cmp byte [read_name_buf], 0
+        jne .rd_have_name
+        mov esi, read_default_name
+        mov edi, read_name_buf
+.rd_name_cp:
+        mov al, [esi]
+        mov [edi], al
+        test al, al
+        jz .rd_have_name
+        inc esi
+        inc edi
+        jmp .rd_name_cp
+.rd_have_name:
+        ; Read with a small line editor (backspace and Ctrl+C).
+        mov edi, read_buf
+        xor ecx, ecx
+.rd_key:
+        call kb_getchar
+        cmp al, 0x0D
+        je .rd_end
+        cmp al, 0x0A
+        je .rd_end
+        cmp al, 0x08
+        je .rd_back
+        cmp al, 0x7F
+        je .rd_back
+        cmp al, CTRL_C_CODE
+        je .rd_abort
+        cmp ecx, 254
+        jge .rd_key
+        stosb
+        inc ecx
+        call vga_putchar
+        jmp .rd_key
+.rd_back:
+        test ecx, ecx
+        jz .rd_key
+        dec ecx
+        dec edi
+        mov al, 0x08
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        mov al, 0x08
+        call vga_putchar
+        jmp .rd_key
+.rd_end:
+        mov byte [edi], 0
+        mov al, 0x0A
+        call vga_putchar
+        mov esi, read_name_buf
+        mov edi, read_buf
+        call env_set_kv
+        mov dword [shell_last_status], 0
+        popad
+        ret
+.rd_abort:
+        mov al, 0x0A
+        call vga_putchar
+        mov dword [shell_last_status], 1
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; exit - leave the current script or function
+;   exit [STATUS]
+; At the prompt there is nothing to leave, so the shell just reports how
+; to shut the system down.
+;-----------------------------------------------------------------------
+cmd_exit:
+        pushad
+        call skip_spaces
+        mov eax, [shell_last_status]
+        cmp byte [esi], 0
+        je .ex_store
+        call parse_decimal
+.ex_store:
+        mov [shell_last_status], eax
+        mov byte [shell_exit_flag], 1
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; shift - drop the first N positional parameters (default 1)
+;   shift [N]
+;-----------------------------------------------------------------------
+cmd_shift:
+        pushad
+        call skip_spaces
+        mov eax, 1
+        cmp byte [esi], 0
+        je .sh_have
+        call parse_decimal
+        cmp eax, 0
+        jne .sh_have
+        mov eax, 1
+.sh_have:
+        mov ecx, eax
+        mov esi, func_arg_buf
+.sh_one:
+        test ecx, ecx
+        jz .sh_trim
+.sh_sp:
+        cmp byte [esi], ' '
+        jne .sh_word
+        inc esi
+        jmp .sh_sp
+.sh_word:
+        cmp byte [esi], 0
+        je .sh_trim
+        inc esi
+        cmp byte [esi], ' '
+        jne .sh_word
+        dec ecx
+        jmp .sh_one
+.sh_trim:
+        cmp byte [esi], ' '
+        jne .sh_store
+        inc esi
+        jmp .sh_trim
+.sh_store:
+        mov edi, func_arg_buf
+.sh_cp:
+        mov al, [esi]
+        mov [edi], al
+        test al, al
+        jz .sh_fin
+        inc esi
+        inc edi
+        jmp .sh_cp
+.sh_fin:
+        call shell_count_args
         popad
         ret

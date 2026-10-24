@@ -109,13 +109,14 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, "  HBFS v3  ", 0xF9, "  186 Syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  UEFI Boot  ", 0xF9, "  Burrows Desktop    ", 0xBA
+        db 0xBA, "  HBFS v3  ", 0xF9, "  186 syscalls  ", 0xF9, "  VFS + UEFI  ", 0xF9, "  264 programs  ", 0xF9, "  Ring 3         ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
 
 motd_str:
-        db "  Type 'help' for commands  |  'ver' for system info  |  'burrows' for the GUI", 0x0A, 0
+        db "  help <command>  |  burrows for the desktop  |  theme <name> for colours", 0x0A
+        db "  Programs live in /bin, /games and /Burrows; 'dir /bin' lists them", 0x0A, 0
 
 msg_boot_time:  db "  Boot complete in ", 0
 msg_boot_suf:   db "s", 0x0A, 0
@@ -251,19 +252,23 @@ cmd_fg_str:     db "fg", 0
 cmd_nice_str:   db "nice", 0
 cmd_export_str: db "export", 0
 cmd_source_str: db "source", 0
+cmd_printf_str: db "printf", 0
+cmd_read_str:   db "read", 0
+cmd_exit_str:   db "exit", 0
+cmd_shift_str:  db "shift", 0
 cmd_dotcmd_str: db ".", 0
 
 ; Phase 1 scripting command strings
-cmd_if_str:           db "if ", 0
-cmd_while_str:        db "while ", 0
-cmd_for_str:          db "for ", 0
-cmd_test_str:         db "test ", 0
-cmd_lbracket_str:     db "[ ", 0
-cmd_function_def_str: db "function ", 0
+cmd_if_str:           db "if", 0
+cmd_while_str:        db "while", 0
+cmd_for_str:          db "for", 0
+cmd_test_str:         db "test", 0
+cmd_lbracket_str:     db "[", 0
+cmd_function_def_str: db "function", 0
 cmd_break_str:        db "break", 0
 cmd_continue_str:     db "continue", 0
 cmd_return_str:       db "return", 0
-cmd_case_str:         db "case ", 0
+cmd_case_str:         db "case", 0
 
 ; v4.0 process/signal messages
 msg_no_jobs:    db "  No background jobs.", 0x0A, 0
@@ -307,152 +312,6 @@ scr_mode_2: db "Pipes", 0
 scr_mode_3: db "Bouncing logo", 0
 scr_mode_4: db "Plasma", 0
 
-; Help text
-msg_help_no_detail:
-        db "No specific help for that command. Showing full help:", 0x0A, 0
-
-help_help_help:
-        db "help [command]", 0x0A
-        db "Show full command list, or detailed help for one command.", 0x0A, 0
-help_help_ver:
-        db "ver", 0x0A
-        db "Show Mellivora OS version and memory summary.", 0x0A, 0
-help_help_clear:
-        db "clear | cls", 0x0A
-        db "Clear the screen and reset cursor position.", 0x0A, 0
-help_help_dir:
-        db "dir | ls [-l]", 0x0A
-        db "List files in current directory. Use -l for long format.", 0x0A, 0
-help_help_cat:
-        db "cat | type [-n] [FILE]", 0x0A
-        db "Display FILE or redirected stdin. Use -n for line numbers.", 0x0A, 0
-help_help_write:
-        db "write FILE", 0x0A
-        db "Create/overwrite FILE with typed lines (empty line ends).", 0x0A, 0
-help_help_append:
-        db "append FILE", 0x0A
-        db "Append typed lines to an existing file.", 0x0A, 0
-help_help_run:
-        db "run FILE", 0x0A
-        db "Load and execute a binary program.", 0x0A, 0
-help_help_echo:
-        db "echo [-n] TEXT", 0x0A
-        db "Print text. Works with >, >>, and | piping.", 0x0A, 0
-help_help_cd:
-        db "cd DIR", 0x0A
-        db "Change current working directory.", 0x0A, 0
-help_help_pwd:
-        db "pwd", 0x0A
-        db "Print current working directory.", 0x0A, 0
-help_help_mkdir:
-        db "mkdir DIR", 0x0A
-        db "Create a new directory.", 0x0A, 0
-help_help_set:
-        db "set NAME VALUE", 0x0A
-        db "Set an environment variable.", 0x0A, 0
-help_help_unset:
-        db "unset NAME", 0x0A
-        db "Remove an environment variable.", 0x0A, 0
-help_help_history:
-        db "history", 0x0A
-        db "Show recent command history.", 0x0A, 0
-help_help_which:
-        db "which NAME", 0x0A
-        db "Show whether NAME is built-in or found as a program.", 0x0A, 0
-help_help_color:
-        db "color FG [BG]", 0x0A
-        db "Set VGA text colors using hex digits 0-F.", 0x0A, 0
-help_help_size:
-        db "size FILE", 0x0A
-        db "Show file size and type information.", 0x0A, 0
-help_help_strings:
-        db "strings FILE", 0x0A
-        db "Extract printable strings from a file.", 0x0A, 0
-help_help_mouse:
-        db "mouse", 0x0A
-        db "Show PS/2 mouse status (position and buttons).", 0x0A, 0
-help_help_gui:
-        db "burrows", 0x0A
-        db "Enter Burrows desktop (640x480 graphical mode). Press any key to exit.", 0x0A, 0
-
-help_text:
-        db "HB Lair v9.0 Commands:", 0x0A
-        db "  help       - Show this help (help <cmd> for details)", 0x0A
-        db "  ver        - System information", 0x0A
-        db "  clear/cls  - Clear screen", 0x0A
-        db "  dir/ls [-l]- List files (-l for long format)", 0x0A
-        db "  cat [-n] [F] - Display file or stdin", 0x0A
-        db "  type [FILE] - Alias for cat", 0x0A
-        db "  head [-n N] [F] - Show first N lines (default 10)", 0x0A
-        db "  tail [-n N] [F] - Show last N lines (default 10)", 0x0A
-        db "  more [-n N] F   - Page through file (-n N page size)", 0x0A
-        db "  wc [-lwc] [F]   - Line/word/byte count", 0x0A
-        db "  find [-ic] P F - Search pattern P in file F", 0x0A
-        db "  write F    - Write text to file (end with empty line)", 0x0A
-        db "  append F   - Append text to existing file", 0x0A
-        db "  touch F    - Create empty file", 0x0A
-        db "  hex [-n N] F   - Hexdump a file (-n N byte limit)", 0x0A
-        db "  del/rm [-v] F  - Delete a file (-v verbose)", 0x0A
-        db "  copy [-v] S D  - Copy file (-v verbose)", 0x0A
-        db "  ren O N    - Rename file O to N", 0x0A
-        db "  mv/move    - Alias for ren", 0x0A
-        db "  run FILE   - Execute a program", 0x0A
-        db "  enter      - Enter hex bytes as program", 0x0A
-        db "  echo [-n] T    - Print text (-n no newline, $VAR)", 0x0A
-        db "  date       - Show current date and time", 0x0A
-        db "  beep       - Play a beep", 0x0A
-        db "  batch F    - Execute script file", 0x0A
-        db "  source/. F - Execute script in current shell", 0x0A
-        db "  mkdir D    - Create directory", 0x0A
-        db "  cd DIR     - Change directory (cd - for previous)", 0x0A
-        db "  pwd        - Print working directory", 0x0A
-        db "  pushd DIR  - Push directory and cd to DIR", 0x0A
-        db "  popd       - Pop directory and restore it", 0x0A
-        db "  dirs       - Show directory stack", 0x0A
-        db "  set N V    - Set environment variable", 0x0A
-        db "  unset N    - Remove environment variable", 0x0A
-        db "  export N=V - Export environment variable", 0x0A
-        db "  shutdown   - Shut down the system", 0x0A
-        db "  format     - Format filesystem (WARNING: erases all)", 0x0A
-        db "  mem        - Memory information", 0x0A
-        db "  disk       - Disk information", 0x0A
-        db "  df         - Filesystem usage", 0x0A
-        db "  time [CMD] - Uptime / measure command duration", 0x0A
-        db "  net        - Show network interface status", 0x0A
-        db "  diff F1 F2 - Compare two files line by line", 0x0A
-        db "  uniq [-cd] [F] - Remove adjacent duplicates", 0x0A
-        db "  rev [F]    - Reverse each line", 0x0A
-        db "  tac [F]    - Print file in reverse line order", 0x0A
-        db "  alias [N C]- Define alias N for command C", 0x0A
-        db "  history    - Show command history (128 entries)", 0x0A
-        db "  which N    - Show if N is built-in or program", 0x0A
-        db "  sleep N    - Sleep N seconds", 0x0A
-        db "  color FG [BG] - Set text color (hex 0-F)", 0x0A
-        db "  size F     - Show file size and type", 0x0A
-        db "  strings F  - Extract printable strings from file", 0x0A
-        db "  mouse      - Show PS/2 mouse status", 0x0A
-        db "  burrows    - Enter Burrows desktop (640x480)", 0x0A
-        db " Process Management (v4.0):", 0x0A
-        db "  ps         - List all running tasks", 0x0A
-        db "  jobs       - List background jobs", 0x0A
-        db "  kill PID [SIG] - Send signal to task", 0x0A
-        db "  bg PID     - Resume stopped task in background", 0x0A
-        db "  fg PID     - Resume stopped task in foreground", 0x0A
-        db "  nice P CMD - Run command at priority (0-3)", 0x0A
-        db " Shortcuts:", 0x0A
-        db "  Tab        - Auto-complete filename", 0x0A
-        db "  Arrows     - Move cursor; Ctrl+D deletes forward", 0x0A
-        db "  Ctrl+C     - Cancel current input", 0x0A
-        db "  Ctrl+A/E   - Move cursor to start/end", 0x0A
-        db "  Ctrl+U     - Kill line (clear input)", 0x0A
-        db "  Ctrl+W     - Delete previous word", 0x0A
-        db "  Ctrl+L     - Clear screen, redraw prompt", 0x0A
-        db "  >, >>, <   - Redirect output/input to files", 0x0A
-        db "  cmd1 | cmd2- Pipe commands", 0x0A
-        db "  cmd1 && cmd2 - Run cmd2 if cmd1 succeeds", 0x0A
-        db "  cmd1 || cmd2 - Run cmd2 if cmd1 fails", 0x0A
-        db 0x0A
-        db "PATH: set PATH /bin:/games to search directories.", 0x0A, 0
 
 ; Messages
 msg_exception:  db "*** CPU EXCEPTION ***", 0x0A, 0
@@ -551,7 +410,6 @@ msg_ren_usage:  db "Usage: ren|mv OLD NEW", 0x0A, 0
 msg_wild_needs_star: db "For multiple wildcard matches, destination must include '*'.", 0x0A, 0
 msg_write_prompt: db "Type content (empty line to end):", 0x0A, 0
 msg_write_err:  db "Write error!", 0x0A, 0
-msg_unknown_cmd: db "Unknown command. Type 'help'.", 0x0A, 0
 msg_bg_launched: db "[bg] PID ", 0
 msg_bg_stopped: db 0x0A, "[bg] Stopped PID ", 0
 msg_bg_noproc:  db "Ctrl+Z: no background task to stop.", 0x0A, 0
@@ -1204,6 +1062,30 @@ for_iter_buf:    resb 256
 case_word_buf:   resb 256
 case_pat_buf:    resb 256
 case_body_buf:   resb LINE_BUFFER_SIZE
+
+; cmd_which keeps the requested name here: PATH lookup uses other scratch buffers
+which_name_buf:  resb 64
+
+; Positional parameters for functions and scripts ($0..$9, $#, $*)
+func_arg_buf:    resb 256
+func_name_buf:   resb 64
+func_argc:       resd 1
+arg_save_buf:    resb 4 * (256 + 64 + 4)   ; four nesting levels
+arg_save_depth:  resd 1
+shell_exit_flag: resb 1                    ; set by `exit`, cleared by the prompt
+shell_prev_status: resd 1                  ; $? as seen by the next command line
+
+; `read` and `printf` scratch
+printf_buf:      resb 256
+printf_fmt:      resb 256
+printf_args:     resb 256
+printf_argp:     resd 1
+read_buf:        resb 256
+read_name_buf:   resb 64
+read_prompt:     resb 96
+
+; Shell help / suggestion scratch
+help_arg_buf:    resb 64
 
 ; env_set_kv scratch
 env_kv_buf:      resb 512

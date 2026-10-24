@@ -89,6 +89,7 @@ HBFS4_EXTENT_MAX = ((BLOCK_SIZE - HBFS4_EXTENT_HDR
 # A 2048 MiB image has 523727 complete 4 KB data blocks after the metadata
 # (data starts at LBA 4481). Declaring 524288 made the last 561 blocks point
 # past the end of the image.
+MIN_BLOCKS = 64
 TOTAL_BLOCKS = 523727
 
 # File types
@@ -301,6 +302,17 @@ class FSImage:
     def __init__(self, image_path, version=3):
         self.image_path = image_path
         self.version = version
+        # The volume may only claim the blocks the image can actually hold, so
+        # a smaller image stays consistent instead of pointing past its end.
+        global TOTAL_BLOCKS
+        image_bytes = os.path.getsize(image_path)
+        usable = image_bytes - HBFS_DATA_START * SECTOR_SIZE
+        if usable < BLOCK_SIZE * MIN_BLOCKS:
+            raise SystemExit(
+                f"Error: image '{image_path}' is too small for HBFS "
+                f"(need at least {HBFS_DATA_START * SECTOR_SIZE + BLOCK_SIZE * MIN_BLOCKS} bytes)"
+            )
+        TOTAL_BLOCKS = usable // BLOCK_SIZE
         self.img = open(image_path, 'r+b')
         self.bitmap = bytearray(HBFS_BITMAP_SIZE)
         self.root_dir = bytearray(HBFS_ROOT_DIR_SIZE)
@@ -1186,30 +1198,23 @@ def main():
         fs.cleanup_stale_subdir_entries(
             "Burrows", managed_names, expected_programs["Burrows"])
 
-    # Add C sample source files
+    # Sample sources: everything else in samples/ is a text file, except
+    # .bat scripts, which the shell types as batch so they are easy to find.
     samples_dir = "samples"
+    sample_types = {
+        '.c': FTYPE_TEXT, '.bas': FTYPE_TEXT, '.pl': FTYPE_TEXT,
+        '.asm': FTYPE_TEXT, '.bat': FTYPE_BATCH,
+    }
     if os.path.isdir(samples_dir):
         for fname in sorted(os.listdir(samples_dir)):
-            if fname.endswith('.c'):
-                fpath = os.path.join(samples_dir, fname)
-                with open(fpath, 'r', encoding='ascii') as f:
-                    data = f.read()
-                fs.add_file(fname, data.encode('ascii'),
-                            directory="samples")
-        for fname in sorted(os.listdir(samples_dir)):
-            if fname.endswith('.bas'):
-                fpath = os.path.join(samples_dir, fname)
-                with open(fpath, 'r', encoding='ascii') as f:
-                    data = f.read()
-                fs.add_file(fname, data.encode('ascii'),
-                            directory="samples")
-        for fname in sorted(os.listdir(samples_dir)):
-            if fname.endswith('.pl'):
-                fpath = os.path.join(samples_dir, fname)
-                with open(fpath, 'r', encoding='ascii') as f:
-                    data = f.read()
-                fs.add_file(fname, data.encode('ascii'),
-                            directory="samples")
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in sample_types:
+                continue
+            fpath = os.path.join(samples_dir, fname)
+            with open(fpath, 'r', encoding='ascii') as f:
+                data = f.read()
+            fs.add_file(fname, data.encode('ascii'),
+                        directory="samples", ftype=sample_types[ext])
 
     # Remove any root-level entries that have since moved to subdirectories.
     fs.cleanup_stale_root_entries()

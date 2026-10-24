@@ -1,6 +1,7 @@
 ; grep.asm - Text pattern search utility [HBU]
-; Usage: grep <pattern> [filename]
-; Searches for lines containing the pattern and displays them
+; Usage: grep [-i] [-n] [-v] [-c] <pattern> [filename]
+; Searches for lines containing the pattern. Flags follow POSIX grep:
+;   -i ignore case  -n line numbers  -v invert  -c count only
 ;
 %include "syscalls.inc"
 
@@ -14,8 +15,47 @@ start:
         cmp eax, 0
         jle .usage
 
-        ; Parse: pattern [filename]
+        ; Options: -i ignore case, -n line numbers, -v invert, -c count only
         mov esi, args_buf
+.flags:
+        call skip_spaces
+        cmp byte [esi], '-'
+        jne .flags_done
+        cmp byte [esi + 1], 0
+        je .flags_done
+        inc esi
+.flags_char:
+        mov al, [esi]
+        cmp al, 0
+        je .flags_done
+        cmp al, ' '
+        je .flags_next
+        cmp al, 'i'
+        jne .fl_n
+        mov dword [opt_i], 1
+        jmp .fl_step
+.fl_n:
+        cmp al, 'n'
+        jne .fl_v
+        mov dword [opt_n], 1
+        jmp .fl_step
+.fl_v:
+        cmp al, 'v'
+        jne .fl_c
+        mov dword [opt_v], 1
+        jmp .fl_step
+.fl_c:
+        cmp al, 'c'
+        jne .fl_step
+        mov dword [opt_c], 1
+.fl_step:
+        inc esi
+        jmp .flags_char
+.flags_next:
+        inc esi
+        jmp .flags
+.flags_done:
+        ; Parse: pattern [filename]
         mov edi, pattern
         call parse_arg
         call skip_spaces
@@ -95,26 +135,45 @@ start:
         cmp eax, 0
         je .search_loop
 
-        ; Match found!
+        ; -v inverts the test.
+        cmp dword [opt_v], 0
+        je .matched
+        xor eax, 1
+.matched:
+        cmp eax, 0
+        je .search_loop
         inc dword [match_count]
 
-        ; Print line number
+        ; -c prints only the total, after the last line.
+        cmp dword [opt_c], 0
+        jne .search_loop
+
+        cmp dword [opt_n], 0
+        je .no_line_no
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0A           ; green
         int 0x80
         mov eax, [line_num]
         call print_dec
-
         mov eax, SYS_SETCOLOR
         mov ebx, 0x08           ; dark gray
         int 0x80
         mov eax, SYS_PUTCHAR
         mov ebx, ':'
         int 0x80
-
-        ; Print matching line with highlight
+.no_line_no:
+        cmp dword [opt_v], 0
+        jne .plain_line
         call print_highlighted_line
-
+        jmp .line_printed
+.plain_line:
+        mov eax, SYS_SETCOLOR
+        mov ebx, 0x07
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, line_buf
+        int 0x80
+.line_printed:
         mov eax, SYS_PUTCHAR
         mov ebx, 0x0A
         int 0x80
@@ -122,22 +181,22 @@ start:
         jmp .search_loop
 
 .done:
-        ; Print summary
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x08
-        int 0x80
-        mov eax, SYS_PRINT
-        mov ebx, msg_matches
-        int 0x80
+        ; -c prints only the count.
+        cmp dword [opt_c], 0
+        je .exit_status
         mov eax, [match_count]
         call print_dec
-        mov eax, SYS_PRINT
-        mov ebx, msg_matches2
-        int 0x80
-        mov eax, SYS_SETCOLOR
-        mov ebx, 0x07
+        mov eax, SYS_PUTCHAR
+        mov ebx, 0x0A
         int 0x80
 
+.exit_status:
+        ; Like grep: 0 if something matched, 1 otherwise.
+        mov ebx, 1
+        cmp dword [match_count], 0
+        je .exit_now
+        xor ebx, ebx
+.exit_now:
         mov eax, SYS_EXIT
         int 0x80
 
@@ -184,13 +243,18 @@ search_pattern:
         cmp dl, 0
         je .sp_not_found
 
-        ; Case-insensitive compare
+        cmp dword [opt_i], 0
+        jne .sp_ci
+        cmp al, dl
+        jne .sp_next
+        jmp .sp_advance
+.sp_ci:
         call to_lower_al
         xchg eax, edx
         call to_lower_al
         cmp eax, edx
         jne .sp_next
-
+.sp_advance:
         inc edi
         inc ecx
         jmp .sp_match
@@ -307,10 +371,8 @@ skip_spaces:
         ret
 
 ; Data
-msg_usage:      db "Usage: grep <pattern> [filename]", 0x0A, 0
+msg_usage:      db "Usage: grep [-i] [-n] [-v] [-c] <pattern> [filename]", 0x0A, 0
 msg_file_err:   db "Error: Cannot open file", 0x0A, 0
-msg_matches:    db "-- ", 0
-msg_matches2:   db " match(es) found --", 0x0A, 0
 
 args_buf:       times 256 db 0
 pattern:        times 64 db 0
@@ -319,6 +381,10 @@ file_size:      dd 0
 line_num:       dd 0
 line_len:       dd 0
 match_count:    dd 0
+opt_i:          dd 0
+opt_n:          dd 0
+opt_v:          dd 0
+opt_c:          dd 0
 match_pos:      dd 0
 line_buf:       times MAX_LINE_LEN db 0
 file_buffer:    times 32768 db 0
