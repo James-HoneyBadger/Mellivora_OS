@@ -27,9 +27,6 @@ This guide covers everything you need to build, run, and test the OS.
 ```bash
 sudo apt update
 sudo apt install nasm qemu-system-x86 make python3
-# The 64-bit nucleus (the default target) is C: it needs an x86-64 compiler
-# even on an ARM or 32-bit host.
-sudo apt install gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
 ```
 
 ### Installing on Fedora/RHEL

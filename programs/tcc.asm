@@ -3305,7 +3305,7 @@ compile_func_call:
         call compile_expression  ; compile arg, result in EAX at runtime
         pop edx
         pop ecx
-        mov al, 0x50             ; push eax (in long mode)
+        mov al, 0x50             ; push eax
         call emit_byte
         inc ecx
         cmp dword [tok_type], TOK_COMMA

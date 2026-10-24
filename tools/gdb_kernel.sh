@@ -59,7 +59,7 @@ trap 'kill "$QPID" 2>/dev/null || true' EXIT
 # Give QEMU a moment to open the gdbstub.
 sleep 0.5
 
-# QEMU x86_64 reports an x86-64 target even for a 32-bit guest. Do not force
+# The host QEMU reports its own machine target even for a 32-bit guest. Do not force
 # `set architecture i386` (GDB rejects the target description); connect in the
 # native mode and use $rip/$rax/$rbx. For correct 32-bit disassembly install
 # gdb-multiarch (or a qemu-system-i386 build) and select i386 there.
