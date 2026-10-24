@@ -51,7 +51,8 @@ person does, not an API that exists.
 | 13 | Administer remotely | Remote console, remote service and configuration management | No |
 | 14 | Play media | Mixed audio from several programs, video playback, a media framework | Partial — one audio stream per open, AC'97 and SB16 |
 
-Starting position: **2 yes, 6 partial, 6 no.**
+Starting position: **1 pass, 7 partial, 6 fail**, reported by `make check-parity`
+from the tree rather than written down by hand.
 
 ## Gates
 
@@ -66,6 +67,7 @@ A wave does not close until these are measured and reported by `make check`:
 | Latency | syscall < 1 µs, context switch < 5 µs, fork+exec < 5 ms (i486-era target) |
 | Footprint | < 16 MB RAM idle; < 5 s to the desktop under QEMU |
 | Admin | Every setting in the machine is reachable from the management console and the store |
+| Parity | `make check-parity` reports at least the baseline, and no row ever moves backwards |
 
 ## Where the tree stands
 
@@ -93,16 +95,20 @@ What the plan builds on, and must not regress:
 
 ### M0 · Measurement, contract and the C foundation (3–5 weeks)
 
-- The parity scorecard as an executable harness: fourteen named checks that
-  report pass, partial or fail, run by `make check` and by CI. Every later wave
-  moves a row and nothing else may claim progress.
+- The parity scorecard as an executable harness: `tools/parity_scorecard.py`
+  computes the fourteen rows below from evidence in the tree and compares them
+  with `docs/parity-baseline.json`. `make check-parity` runs it, `make check` and
+  CI both fail when a row regresses, and `make check-parity-update` is the only
+  way a row improves — reviewed with the change that earns it.
 - Freeze the syscall ABI behind a versioned table. New calls get numbers from the
   table; old numbers keep working. `docs/syscalls.json` stays generated.
 - **C toolchain bootstrap.** `tools/find_c_toolchain.sh` probes `i686-elf-gcc`,
-  `gcc -m32`, `clang -m32` and `clang --target=i386-elf`, and proves each by
-  compiling a probe and checking the object is 32-bit ELF — the same pattern the
-  retired cross-toolchain probe used. Build integration, a linker script for
-  C-built subsystems, and a freestanding runtime (`memcpy`, `memset`, `strlen`,
+  `i386-elf-gcc`, `gcc -m32` and `clang --target=i386-elf`, and proves each by
+  compiling a probe and checking the object is 32-bit ELF and links with
+  `ld -m elf_i386`. On a non-x86 host only a cross compiler will pass, so
+  `make check-toolchain` reports what is available instead of failing a build
+  that does not need C yet. Build integration, a linker script for C-built
+  subsystems, and a freestanding runtime (`memcpy`, `memset`, `strlen`,
   `memmove`) land here.
 - **Per-task FPU and SSE state.** The kernel initialises the FPU once at boot and
   saves nothing across a switch, so two tasks using floating point corrupt each
@@ -112,7 +118,8 @@ What the plan builds on, and must not regress:
   (calling convention and structure layout at the asm/C boundary),
   `docs/spec/OBJECTS.md`, `docs/spec/DRIVERS.md`, `docs/spec/CONFIG.md`.
 
-**Exit:** the scorecard runs in CI and reports the true 2/6/6 baseline; a
+**Exit:** the scorecard runs in CI and reports the true 1/7/6 baseline, and a
+row is proven to move only by adding evidence; a
 C-built kernel module and a C-built user program both run; a floating-point
 workload across a context switch is correct under `make check`.
 

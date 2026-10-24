@@ -26,6 +26,12 @@ jobs:
       - name: Run lint and contract checks
         run: make lint
 
+      # The fourteen user jobs docs/ROADMAP.md defines parity by. A row can only
+      # improve with the change that adds its evidence, and a regression fails
+      # here the same way a broken build does.
+      - name: Parity scorecard
+        run: make check-parity
+
       # The baseline in benchmark/baseline.txt was recorded on a warm developer
       # machine; a cold shared runner is 5-8x slower on the first compile and on
       # the up-to-date scan, so this gate failed on every push regardless of the

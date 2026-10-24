@@ -1,5 +1,33 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the parity scorecard, and what "comparable to Windows 2000" means
+
+### Planning and gates
+
+- **A roadmap measured in user jobs.** `docs/ROADMAP.md` now defines the target
+  as fourteen things a person does on a 2000-era workstation - log on, run
+  services, install software, share a folder, print - each with a pass criterion
+  and a wave that delivers it. Server-only features are out of scope, and so is
+  compatibility with Microsoft's formats: parity is functional, through
+  protocols of our own.
+- **`tools/parity_scorecard.py` computes the baseline from the tree.**
+  `make check-parity` reports the fourteen rows and fails when one regresses, so
+  a capability cannot be lost quietly; `--json` emits the table for CI, and the
+  baseline in `docs/parity-baseline.json` is reviewed with the change that moves
+  a row. Today: 1 pass (multitasking), 7 partial, 6 fail (logon, services, the
+  configuration store, printing, hardware detection, remote administration).
+- **`tests/test_parity_scorecard.py` proves the gate is not decorative.** It
+  requires the baseline to agree with the tree, and requires a baseline that
+  overstates the tree - or omits a row, or is missing - to fail the check.
+- **`tools/find_c_toolchain.sh`** proves a compiler can build 32-bit freestanding
+  C and link it with `ld -m elf_i386` before new subsystems depend on it; on a
+  non-x86 host only a cross compiler passes, so `make check-toolchain` reports
+  that instead of failing a build that does not need C yet.
+- **`docs/spec/ABI.md`** states the NASM/C contract the coming waves rely on:
+  cdecl, fixed-width structure layout with compile-time size and offset
+  assertions, the unchanged `int 0x80` register contract, and the reason kernel
+  C is compiled `-mno-sse -msoft-float` until per-task FPU state exists.
+
 ## Unreleased - a bad pointer is an error, not a restart
 
 ### Kernel

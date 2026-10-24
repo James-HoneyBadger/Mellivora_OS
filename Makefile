@@ -111,7 +111,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table FORCE
 
 all: $(IMAGE)
 
@@ -430,9 +430,25 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
+
+# The fourteen user jobs docs/ROADMAP.md defines parity by. A row moves only when
+# its named evidence exists in the tree, and --check fails when one regresses, so
+# a capability cannot be lost quietly. The baseline is reviewed with the change
+# that earns it: `make check-parity-update`.
+check-parity:
+	@python3 tools/parity_scorecard.py --check
+	@python3 tests/test_parity_scorecard.py
+
+check-parity-update:
+	@python3 tools/parity_scorecard.py --update-baseline
+
+# Prove the toolchain for new C subsystems exists and targets 32-bit ELF.
+# Informational: no compiler is required to build the kernel, which is NASM.
+check-toolchain:
+	@sh tools/find_c_toolchain.sh
 
 validate-constants:
 	@python3 tools/validate_constants.py

@@ -1,0 +1,75 @@
+{
+  "generated_by": "tools/parity_scorecard.py --update-baseline",
+  "rows": [
+    {
+      "number": 1,
+      "job": "Log on",
+      "status": "fail"
+    },
+    {
+      "number": 2,
+      "job": "Manage users",
+      "status": "partial"
+    },
+    {
+      "number": 3,
+      "job": "Run services",
+      "status": "fail"
+    },
+    {
+      "number": 4,
+      "job": "Configure the machine",
+      "status": "fail"
+    },
+    {
+      "number": 5,
+      "job": "Install software",
+      "status": "partial"
+    },
+    {
+      "number": 6,
+      "job": "Use the desktop",
+      "status": "partial"
+    },
+    {
+      "number": 7,
+      "job": "Multitask hard",
+      "status": "pass"
+    },
+    {
+      "number": 8,
+      "job": "Network",
+      "status": "partial"
+    },
+    {
+      "number": 9,
+      "job": "Print",
+      "status": "fail"
+    },
+    {
+      "number": 10,
+      "job": "Detect hardware",
+      "status": "fail"
+    },
+    {
+      "number": 11,
+      "job": "Survive failure",
+      "status": "partial"
+    },
+    {
+      "number": 12,
+      "job": "Develop for it",
+      "status": "partial"
+    },
+    {
+      "number": 13,
+      "job": "Administer remotely",
+      "status": "fail"
+    },
+    {
+      "number": 14,
+      "job": "Play media",
+      "status": "partial"
+    }
+  ]
+}
