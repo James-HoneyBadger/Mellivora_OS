@@ -21,6 +21,36 @@ typedef long long s64;
 void *memcpy(void *dst, const void *src, unsigned long n);
 void *memset(void *dst, int value, unsigned long n);
 
+/*---------------------------------------
+ * Physical memory and MMIO access
+ *
+ * A C dereference of a constant address - `*(volatile u32 *)0x504` - reads as
+ * a null pointer to the optimizer, and GCC 14 rejects it outright under
+ * -Werror=array-bounds ("array subscript 0 is outside array bounds"). These
+ * accessors say what the code means (read or write a physical address) and
+ * keep the address in a register, which is also what a device register wants.
+ * Use them for the boot-info page, PCI config space, the APIC and the
+ * framebuffer.
+ */
+#define LM_DEFINE_MMIO(bits, ctype, suffix)                                \
+    static inline ctype lm_read##bits(u64 addr)                            \
+    {                                                                      \
+        ctype value;                                                       \
+        __asm__ __volatile__("mov" suffix " (%1), %0"                      \
+                             : "=r"(value) : "r"(addr) : "memory");        \
+        return value;                                                      \
+    }                                                                      \
+    static inline void lm_write##bits(u64 addr, ctype value)               \
+    {                                                                      \
+        __asm__ __volatile__("mov" suffix " %0, (%1)"                      \
+                             :: "r"(value), "r"(addr) : "memory");         \
+    }
+
+LM_DEFINE_MMIO(8, u8, "b")
+LM_DEFINE_MMIO(16, u16, "w")
+LM_DEFINE_MMIO(32, u32, "l")
+LM_DEFINE_MMIO(64, u64, "q")
+
 /* Console: COM1, initialised by the nucleus before anything else prints. */
 void kputc(char c);
 u64 kputc_count(void);

@@ -29,6 +29,7 @@ import os
 import subprocess
 import re
 import sys
+import shutil
 import tempfile
 import time
 
@@ -247,6 +248,34 @@ SKIP_BIG = os.environ.get("LONGMODE_SKIP_BIG", "0") == "1"
 NIC = ["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"]
 
 
+
+def scratch_dir(prefix: str) -> str:
+    """A working directory for a booted guest's private image.
+
+    The image is hundreds of megabytes to gigabytes, and /tmp is a tmpfs on
+    many hosts - a few copies there fill it and the next boot fails with
+    ENOSPC. Prefer $LM_SCRATCH, then the repository's .build (on the same
+    filesystem as the image), then the system temp directory.
+    """
+    candidates = [os.environ.get("LM_SCRATCH"), os.path.join(ROOT, ".build")]
+    for base in candidates:
+        if not base:
+            continue
+        try:
+            os.makedirs(base, exist_ok=True)
+            return tempfile.mkdtemp(prefix=prefix, dir=base)
+        except OSError:
+            continue
+    return tempfile.mkdtemp(prefix=prefix)
+
+def fresh_image(image):
+    """A private copy of the image for one boot. The guest writes to it."""
+    work = scratch_dir("lm-boot-")
+    copy = os.path.join(work, "image.img")
+    shutil.copyfile(image, copy)
+    return copy
+
+
 def boot_and_capture(qemu, image, mem_mb, want, script=()):
     """Boot the image with mem_mb of RAM and return the COM1 text once want appears.
 
@@ -255,7 +284,7 @@ def boot_and_capture(qemu, image, mem_mb, want, script=()):
     shell task is driven - it is the last task to run and it waits for input, so
     nothing after it happens on its own.
     """
-    workdir = tempfile.mkdtemp(prefix="lm-test-")
+    workdir = scratch_dir("lm-test-")
     ser_path = os.path.join(workdir, "serial.sock")
     proc = subprocess.Popen(
         [qemu, "-cpu", CPU_MODEL, "-m", str(mem_mb),
@@ -299,7 +328,7 @@ def check_mouse(qemu, image):
     checked exactly - 20 cells right and 6 down from where the pointer starts,
     which is the middle of an 80x25 screen.
     """
-    workdir = tempfile.mkdtemp(prefix="lm-mouse-")
+    workdir = scratch_dir("lm-mouse-")
     ser_path = os.path.join(workdir, "serial.sock")
     mon_path = os.path.join(workdir, "monitor.sock")
     proc = subprocess.Popen(
@@ -323,10 +352,16 @@ def check_mouse(qemu, image):
         time.sleep(0.4)
         monitor.send_mouse(0, 6)
         time.sleep(0.4)
-        monitor.send_button(1)
-        time.sleep(0.4)
-        monitor.send_button(0)
-        time.sleep(0.4)
+        # A press that lands while the driver is between polls is a press that
+        # was never delivered, so it is pressed again rather than assumed lost:
+        # the assertion below still requires the driver to report one.
+        for _ in range(4):
+            monitor.send_button(1)
+            time.sleep(0.3)
+            monitor.send_button(0)
+            time.sleep(0.3)
+            if "press=1" in serial.text():
+                break
 
         seen = []
         deadline = time.time() + 20
@@ -375,7 +410,7 @@ def check_keyboard_and_screen(qemu, image):
     is read straight out of 0xB8000 - which is the only way to see what the
     display actually shows.
     """
-    workdir = tempfile.mkdtemp(prefix="lm-kbd-")
+    workdir = scratch_dir("lm-kbd-")
     ser_path = os.path.join(workdir, "serial.sock")
     mon_path = os.path.join(workdir, "monitor.sock")
     proc = subprocess.Popen(
@@ -538,6 +573,22 @@ def main():
         print("  FAIL  long-mode test: missing %s (run 'make 64bit')" % IMAGE, file=sys.stderr)
         return 1
 
+    # The guest writes to its own volume: the shell creates, appends to and
+    # removes files, and the host then reads those writes back out of the image.
+    # Booting the built image directly therefore made this test single-use - the
+    # second run saw the first run's files and failed on content that was
+    # correct. Every boot here uses a private copy instead.
+    workdir = scratch_dir("lm-run-")
+    image = os.path.join(workdir, "image.img")
+    shutil.copyfile(IMAGE, image)
+    try:
+        return run_all(qemu, image)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_all(qemu, image):
+
     # The shell is the last task: it prints a prompt, lists the working
     # directory, prints a file, rejects a command it does not know and leaves.
     SHELL_SCRIPT = (
@@ -565,7 +616,11 @@ def main():
         ("mellivora:/> ", "nonsense"),
         ("mellivora:/> ", "quit"),
     )
-    text = boot_and_capture(qemu, IMAGE, 256, MARKER, SHELL_SCRIPT)
+    # Each boot gets its own copy: the retry below runs the same shell script
+    # again, and `/fresh.txt` is appended to by it. Sharing one image made the
+    # retry itself the reason the content check failed.
+    run_image = fresh_image(image)
+    text = boot_and_capture(qemu, run_image, 256, MARKER, SHELL_SCRIPT)
     required = (MARKER,) if MARKER_ONLY else REQUIRED
     missing = [needle for needle in required if needle not in text]
 
@@ -577,7 +632,8 @@ def main():
     # reporting one - and the flake is still the thing to fix.
     if missing and not MARKER_ONLY:
         print("  RETRY after a missing line: %s" % ", ".join(missing))
-        text = boot_and_capture(qemu, IMAGE, 256, MARKER, SHELL_SCRIPT)
+        run_image = fresh_image(image)
+        text = boot_and_capture(qemu, run_image, 256, MARKER, SHELL_SCRIPT)
         missing = [needle for needle in required if needle not in text]
 
     if missing:
@@ -622,18 +678,28 @@ def main():
     # the same constants populate.py builds images with. This goes before the
     # other sessions, which boot the same image again and would overwrite what
     # the shell just wrote.
-    problem = check_written_volume(IMAGE)
+    problem = check_written_volume(run_image)
     if problem:
         print("  FAIL  the volume the guest wrote is wrong: %s" % problem,
               file=sys.stderr)
         return 1
 
-    problem = check_keyboard_and_screen(qemu, IMAGE)
+    # The two input sessions drive the emulated i8042 through the QEMU monitor,
+    # which is timing-sensitive under TCG on a host of another architecture.
+    # They get one retry, and say so: a silent retry would hide a lost
+    # interrupt, which is exactly what these two checks exist to catch.
+    problem = check_keyboard_and_screen(qemu, fresh_image(image))
+    if problem:
+        print("  RETRY keyboard/screen: %s" % problem)
+        problem = check_keyboard_and_screen(qemu, fresh_image(image))
     if problem:
         print("  FAIL  keyboard/screen: %s" % problem, file=sys.stderr)
         return 1
 
-    problem = check_mouse(qemu, IMAGE)
+    problem = check_mouse(qemu, fresh_image(image))
+    if problem:
+        print("  RETRY mouse: %s" % problem)
+        problem = check_mouse(qemu, fresh_image(image))
     if problem:
         print("  FAIL  mouse: %s" % problem, file=sys.stderr)
         return 1
@@ -644,7 +710,7 @@ def main():
         print("  PASS  long mode, VMM, tasks, NX/SMEP/SMAP, syscalls, PCI/ATA, HBFS, exec, 32-bit mode (big-memory skipped)")
         return 0
 
-    big = boot_and_capture(qemu, IMAGE, BIG_MB, MARKER, SHELL_SCRIPT)
+    big = boot_and_capture(qemu, image, BIG_MB, MARKER, SHELL_SCRIPT)
     stats = parse_pmm(big)
     if stats is None:
         print("  FAIL  no frame-allocator report at %d MB" % BIG_MB, file=sys.stderr)

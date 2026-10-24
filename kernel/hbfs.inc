@@ -1474,16 +1474,26 @@ sys_chown:
 ; data content is the target path string.
 ;---------------------------------------
 sys_symlink:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .symlink_bad
+        mov eax, ecx
+        call validate_user_ptr
+        jc .symlink_bad
         pushad
-        ; Calculate target path length
+        ; Calculate target path length, capped at the longest name HBFS stores:
+        ; an unbounded scan of a caller's string can walk out of user space.
         mov esi, ecx
         xor edx, edx
 .sym_len:
         lodsb
         inc edx
         test al, al
-        jnz .sym_len
-        ; EDX = length including null terminator
+        jz .sym_measured
+        cmp edx, HBFS_MAX_FILENAME
+        jb .sym_len
+        jmp .symlink_fail              ; no terminator within the cap
+.sym_measured:
 
         ; Create file with FTYPE_LINK
         mov esi, ebx            ; link name
@@ -1502,6 +1512,9 @@ sys_symlink:
         mov dword [esp + 28], -1
         popad
         iretd
+.symlink_bad:
+        mov eax, -1
+        iretd
 
 ;---------------------------------------
 ; sys_readlink - Read symbolic link target
@@ -1510,6 +1523,12 @@ sys_symlink:
 ; Returns: EAX = target path length, -1 on failure
 ;---------------------------------------
 sys_readlink:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .readlink_bad
+        mov eax, ecx
+        call validate_user_ptr
+        jc .readlink_bad
         pushad
         mov esi, ebx
         call hbfs_load_root_dir
@@ -1531,7 +1550,18 @@ sys_readlink:
         pop edx                 ; EDX = size
         pop edi                 ; EDI = output buffer
         jc .readlink_fail
-        ; Copy target path to output buffer
+        ; Copy target path to output buffer. The size comes from the directory
+        ; entry, so it cannot be trusted: clamp it to what a link target can be
+        ; (the copy source holds one block, and a link is a path), then check
+        ; the caller's buffer covers that many bytes.
+        cmp edx, HBFS_MAX_FILENAME
+        jbe .rl_size_ok
+        mov edx, HBFS_MAX_FILENAME
+.rl_size_ok:
+        mov eax, edi
+        mov ecx, edx
+        call user_range_ok
+        jc .readlink_fail
         mov esi, hbfs_block_buf
         mov ecx, edx
         rep movsb
@@ -1542,6 +1572,9 @@ sys_readlink:
         mov dword [esp + 28], -1
         popad
         iretd
+.readlink_bad:
+        mov eax, -1
+        iretd
 
 ;---------------------------------------
 ; sys_rename - Rename a file or directory (same directory)
@@ -1550,6 +1583,12 @@ sys_readlink:
 ; Returns: EAX = 0 on success, -1 on failure
 ;---------------------------------------
 sys_rename:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .sr_bad_ptr
+        mov eax, ecx
+        call validate_user_ptr
+        jc .sr_bad_ptr
         pushad
         mov [.sr_old], ebx
         mov [.sr_new], ecx
@@ -1591,6 +1630,9 @@ sys_rename:
         mov dword [esp + 28], -1
         popad
         iretd
+.sr_bad_ptr:
+        mov eax, -1
+        iretd
 .sr_old: dd 0
 .sr_new: dd 0
 .sr_edi: dd 0
@@ -1601,6 +1643,9 @@ sys_rename:
 ; Returns: EAX = 0 on success, -1 on failure
 ;---------------------------------------
 sys_rmdir:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .srd_bad_ptr
         pushad
         mov esi, ebx
         call hbfs_load_root_dir
@@ -1660,6 +1705,9 @@ sys_rmdir:
         mov dword [esp + 28], -1
         popad
         iretd
+.srd_bad_ptr:
+        mov eax, -1
+        iretd
 .srd_edi: dd 0
 
 ;---------------------------------------
@@ -1669,6 +1717,9 @@ sys_rmdir:
 ; Returns: EAX = 0 on success, -1 on failure
 ;---------------------------------------
 sys_truncate:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .st_bad_ptr
         pushad
         mov [.st_new_size], ecx
         mov esi, ebx
@@ -1719,6 +1770,9 @@ sys_truncate:
         mov dword [esp + 28], -1
         popad
         iretd
+.st_bad_ptr:
+        mov eax, -1
+        iretd
 .st_new_size: dd 0
 
 ;---------------------------------------
@@ -1729,6 +1783,9 @@ sys_truncate:
 ; Also returns ECX = created timestamp
 ;---------------------------------------
 sys_getmtime:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .sgmt_bad_ptr
         pushad
         mov esi, ebx
         call hbfs_load_root_dir
@@ -1745,6 +1802,10 @@ sys_getmtime:
         mov dword [esp + 24], 0
         popad
         iretd
+.sgmt_bad_ptr:
+        mov eax, 0
+        mov ecx, 0
+        iretd
 
 ;---------------------------------------
 ; sys_setmtime - Set last-modified timestamp of a file
@@ -1753,6 +1814,9 @@ sys_getmtime:
 ; Returns: EAX = 0 on success, -1 on failure
 ;---------------------------------------
 sys_setmtime:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .ssmt_bad_ptr
         pushad
         mov esi, ebx
         call hbfs_load_root_dir
@@ -1772,6 +1836,9 @@ sys_setmtime:
 .ssmt_fail:
         mov dword [esp + 28], -1
         popad
+        iretd
+.ssmt_bad_ptr:
+        mov eax, -1
         iretd
 
 ;=======================================================================
@@ -2173,6 +2240,13 @@ sys_chmod_v3:
         call validate_user_ptr
         jc .schmod_fail
 
+        ; Load the directory before searching it. hbfs_find_entry reads
+        ; hbfs_dir_buf as it stands, and nothing had loaded the directory for
+        ; this path: chmod searched whatever an earlier command left behind, so
+        ; it reported "file not found" for files that were right there.
+        call hbfs_load_root_dir
+        jc .schmod_fail
+
         ; Find the file in HBFS directory
         call hbfs_find_entry     ; EBX=name -> EDI=entry ptr or 0; EAX=entry#
         test eax, eax
@@ -2220,6 +2294,9 @@ sys_chown_v3:
         call hbfs_journal_begin
         mov eax, ebx
         call validate_user_ptr
+        jc .schown_fail
+
+        call hbfs_load_root_dir
         jc .schown_fail
 
         call hbfs_find_entry

@@ -1737,6 +1737,25 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 - **EBX, ECX, EDX, ESI, EDI** = arguments
 - **EAX** = return value
 
+#### Pointer arguments
+
+Every argument documented as a pointer is checked before the kernel dereferences
+it, with `validate_user_ptr` (one address) or `user_range_ok` (an address and a
+length, which also rejects a range that wraps past 2^32):
+
+- A ring-3 caller must keep the range inside `[PROGRAM_BASE, USER_PTR_MAX)` -
+  `0x00300000` to `0x20000000`. A rejected pointer returns the syscall's failure
+  value (`-1`, or `0` for `SYS_GETMTIME`/`SYS_FREAD`) instead of faulting.
+- The shell is ring-0 kernel code and passes pointers to its own buffers, which
+  sit in the kernel image *below* `PROGRAM_BASE`. `syscall_ring`, recorded from
+  the caller's CS at the single `INT 0x80` entry point, relaxes the check for
+  those callers and leaves it strict for user programs.
+- The check is a range check, not a page-table walk: an address inside the
+  window that belongs to no VMA of the current task is still a supervisor fault,
+  because the kernel has no exception-table fix-up. Keeping every pointer check
+  at the syscall boundary is what makes the common failure - a program passing
+  `0xD0000000` or a stale pointer - an error return instead of a shell restart.
+
 ### Complete Syscall Table
 
 | # | Name | Args | Returns |
@@ -1925,7 +1944,7 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 | 181 | `SYS_GETERRNO` | — | EAX=per-task errno |
 | 186 | `SYS_FAULTINJECT` | EBX=op, ECX=count | EAX=0/-1; see [Fault Injection](#fault-injection-p10) |
 
-**Total: 186 syscalls defined (0–185, no gaps).**
+**Total: 187 syscalls defined (0–186, no gaps).**
 
 ---
 

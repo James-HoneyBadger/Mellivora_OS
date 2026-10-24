@@ -1,0 +1,59 @@
+name: Release Installer Discs
+
+# A release with no artefacts is only a tag: publish the disc people actually
+# install from, its small variant, and the checksums that go with them.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the discs to
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  discs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nasm make python3 xorriso qemu-system-x86
+
+      # SOURCE_DATE_EPOCH makes the disc reproducible: rebuilding the same tag
+      # gives the same bytes, so the published checksum stays meaningful.
+      - name: Build the discs
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "$TAG")"
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> "$GITHUB_ENV"
+          make iso
+          make iso-verify
+          make iso-lite
+          gzip -9 -n -k mellivora.iso mellivora-lite.iso
+          sha256sum mellivora.iso mellivora-lite.iso \
+            mellivora.iso.gz mellivora-lite.iso.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Install the disc onto a blank disk and boot it
+        run: python3 tests/test_iso.py --end-to-end
+
+      - name: Attach the discs to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$TAG" \
+            mellivora.iso mellivora-lite.iso \
+            mellivora.iso.gz mellivora-lite.iso.gz \
+            SHA256SUMS --clobber

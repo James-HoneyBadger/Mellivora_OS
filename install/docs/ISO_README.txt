@@ -25,8 +25,10 @@ The installer is a small text screen:
   3. Press the number of the disk to install to.  Esc quits.
   4. It asks you to type YES.  This is the point of no return: everything on
      the chosen disk is overwritten, starting at sector 0.
-  5. It writes MELLIVORA.IMG to the disk (one dot per MiB) and then reads the
-     first sector back to confirm the disk is writable.
+  5. It writes MELLIVORA.IMG to the disk in 32 KB chunks (one dot per MiB) and
+     reads each chunk straight back.  A chunk that does not match is written
+     again once; if it still does not match, the install stops there rather
+     than leaving a disk that looks finished.
   6. "Installation complete." - remove the disc and boot from the disk.
 
 The disk must be at least as large as MELLIVORA.IMG.  A larger disk works:
@@ -39,8 +41,9 @@ MELLIVORA.IMG is a complete Mellivora disk image, byte for byte:
 
   sector 0        boot sector
   sectors 1-32    stage 2 loader
-  sector 33       kernel
-  sector 4481     HBFS filesystem (kernel, programs, /samples, /docs)
+  sector 33       kernel (as many sectors as the kernel needs)
+  sector 4096     HBFS superblock, bitmap and root directory
+  sector 4481     first HBFS data block
 
 Because the copy is exact, the installed disk behaves exactly like the image
 it came from: same kernel, same programs, same files.
@@ -63,7 +66,9 @@ Troubleshooting
 "Write failed, BIOS status 0x.."
     The BIOS refused a write.  The disk may be read-only, write-protected, or
     failing.  The hex value is the BIOS status from INT 13h AH=43h; 0x03 is
-    write-protected, 0x0C is a media error.
+    write-protected, 0x0C is a media error.  A status of 0xFF is not a BIOS
+    status: it means a 32 KB chunk did not read back as written, even after
+    one rewrite - the disk or its cable is failing.
 
 Booting the installed disk shows nothing
     Check the boot order in the BIOS/firmware setup.  Mellivora boots with

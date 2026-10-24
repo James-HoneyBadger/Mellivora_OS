@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, "  HBFS v3  ", 0xF9, "  186 syscalls  ", 0xF9, "  VFS + UEFI  ", 0xF9, "  264 programs  ", 0xF9, "  Ring 3         ", 0xBA
+        db 0xBA, "  HBFS v3  ", 0xF9, "  187 syscalls  ", 0xF9, "  VFS + UEFI  ", 0xF9, "  264 programs  ", 0xF9, "  Ring 3         ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -127,7 +127,7 @@ msg_boot_suf:   db "s", 0x0A, 0
 msg_boot_ok:    db "MELLIVORA_BOOT_OK", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v13.0.0 - HBFS v3, 186 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
+        db "Mellivora OS v13.0.0 - HBFS v3, 187 Syscalls, VFS, Paging, Fork, UEFI, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair v13.0 (Honey Badger Lair)", 0x0A
@@ -151,7 +151,7 @@ version_text:
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (186 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (187 syscalls)", 0x0A
         db "  UEFI Boot:     Tianocore EDK2 UEFI loader (boot/uefi_loader.c)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
@@ -595,6 +595,7 @@ redir_in_buf:   resb BATCH_BUFFER_SIZE
 exc_eip:        resd 1          ; Saved EIP from exception
 exc_errcode:    resd 1          ; Saved error code from exception
 exc_cs:         resd 1          ; Saved CS: ring 3 faults can be recovered
+syscall_ring:   db 0             ; Caller's CPL at the last INT 0x80 (3 = user)
 
 hist_buf:       resb HIST_MAX * HIST_ENTRY_SIZE  ; Command history buffer (64 * 256 = 16KB)
 hist_count:     resd 1          ; Number of entries in history

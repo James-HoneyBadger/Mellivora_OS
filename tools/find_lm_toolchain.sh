@@ -7,8 +7,10 @@
 #
 #   1. $LM_CC / $LM_LD, when the caller set them
 #   2. x86_64-elf-gcc + x86_64-elf-ld   (the canonical cross toolchain)
-#   3. clang --target=x86_64-elf + ld.lld (one binary, cross-compiles anywhere)
-#   4. the host gcc + ld, when the host is already x86-64
+#   3. x86_64-linux-gnu-gcc / -ld, x86_64-linux-musl-gcc / -ld
+#      (the distro cross packages: `apt install gcc-x86-64-linux-gnu`)
+#   4. clang --target=x86_64-elf + ld.lld (one binary, cross-compiles anywhere)
+#   5. the host gcc + ld, when the host is already x86-64
 #
 # Each candidate is *probed* - a one-line object is compiled and its ELF header
 # is checked for e_machine 62 (EM_X86_64) - because a native gcc on an ARM host
@@ -47,16 +49,25 @@ probe_cc() {
     is_x86_64_object "$tmp/probe.o"
 }
 
+# The canonical cross toolchain (x86_64-elf) is the first choice; the distro
+# cross packages ship under the GNU target triple and are what a Debian,
+# Ubuntu, Fedora or Arch host installs with one apt/dnf/pacman command, so they
+# are probed too - a host that is not x86-64 cannot use its own gcc.
+LM_CC_CANDIDATES="x86_64-elf-gcc x86_64-linux-gnu-gcc x86_64-linux-musl-gcc"
+LM_LD_CANDIDATES="x86_64-elf-ld x86_64-linux-gnu-ld x86_64-linux-musl-ld"
+
 case "$what" in
 cc)
     if [ -n "${LM_CC:-}" ] && probe_cc "$LM_CC"; then
         printf '%s' "$LM_CC"
         exit 0
     fi
-    if command -v x86_64-elf-gcc >/dev/null 2>&1 && probe_cc x86_64-elf-gcc; then
-        printf 'x86_64-elf-gcc'
-        exit 0
-    fi
+    for candidate in $LM_CC_CANDIDATES; do
+        if command -v "$candidate" >/dev/null 2>&1 && probe_cc "$candidate"; then
+            printf '%s' "$candidate"
+            exit 0
+        fi
+    done
     if command -v clang >/dev/null 2>&1 && probe_cc "clang --target=x86_64-elf"; then
         printf 'clang --target=x86_64-elf'
         exit 0
@@ -71,10 +82,12 @@ ld)
         printf '%s' "$LM_LD"
         exit 0
     fi
-    if command -v x86_64-elf-ld >/dev/null 2>&1; then
-        printf 'x86_64-elf-ld'
-        exit 0
-    fi
+    for candidate in $LM_LD_CANDIDATES; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            printf '%s' "$candidate"
+            exit 0
+        fi
+    done
     if command -v ld.lld >/dev/null 2>&1; then
         printf 'ld.lld -m elf_x86_64'
         exit 0

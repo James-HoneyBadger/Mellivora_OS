@@ -7,19 +7,27 @@ that copies a complete disk image onto the hard disk you choose.
 ```
 make iso                  # mellivora.iso, ships a 256 MiB image
 make iso ISO_IMAGE_MB=64  # smaller payload, quicker to copy
+make iso-lite             # the same, as mellivora-lite.iso (64 MiB image)
 make iso-verify           # report the El Torito record of the built ISO
+make iso-check            # structure check of the ISO, no QEMU
+make test-iso             # install it in QEMU, then boot the installed disk
+make check-installer-verify  # prove a mis-addressed write is caught
 install/tools/run_iso.sh --install
 ```
+
+Set `SOURCE_DATE_EPOCH` to make the disc byte-for-byte reproducible; without
+it xorriso stamps the volume with the current time.
 
 ## How it works
 
 | File | Role |
 |------|------|
 | `boot/stage1.asm` | 2 KB El Torito boot image. The BIOS loads it at `0x7C00`. It reads the Boot Record Volume Descriptor (CD sector 17) to find the boot catalog, takes the load LBA of this same file from the catalog, and pulls the next 64 KB - the payload - to `0x1000:0000`. |
-| `boot/installer.asm` | The payload at physical `0x10000`. Walks the ISO9660 tree for `MELLIVORA.IMG`, enumerates BIOS hard disks with INT 13h AH=41h/48h, asks which one to use, copies the image in 32 KB chunks with AH=42h/43h, then reads sector 0 back. |
+| `boot/installer.asm` | The payload at physical `0x10000`. Walks the ISO9660 tree for `MELLIVORA.IMG`, enumerates BIOS hard disks with INT 13h AH=41h/48h, asks which one to use, then copies the image in 32 KB chunks with AH=42h/43h - reading every chunk back with AH=42h, comparing it with the bytes that came off the CD, and rewriting it once if they differ. |
 | `tools/build_iso.sh` | Assembles both, stages the image plus a few documents, runs `xorriso -as mkisofs`, and verifies the result (El Torito record, boot image path, image size inside the ISO). |
 | `tools/run_iso.sh` | QEMU launcher. Creates a blank target disk, then either hands you a keyboard or (`--install`) drives the installer unattended. |
-| `tools/autoinstall.py` | Unattended driver + verifier: boots the ISO, answers the prompts, checks the first bytes of the target and (with `--boot-check`) boots the result. |
+| `tools/autoinstall.py` | Unattended driver + verifier: boots the ISO, answers the prompts, compares the whole written image with the one inside the ISO and (with `--boot-check`) boots the result. |
+| `../tests/test_installer_verify.py` | Builds the same disc with `write_chunk` moved one sector late and requires the installer to stop on the first chunk (`make check-installer-verify`). |
 
 The disc needs no filesystem driver in the kernel: the installer reads the CD
 with BIOS calls, so the kernel never has to understand ISO9660 or ATAPI.

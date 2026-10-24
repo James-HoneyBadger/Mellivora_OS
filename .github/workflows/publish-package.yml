@@ -18,16 +18,22 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build OS disk image
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nasm make python3 fdisk dosfstools
-          make full
+          sudo apt-get install -y nasm make python3
+          # The image is the container's payload. Build it at the size the
+          # installer disc uses (256 MiB) rather than the 2 GB development
+          # default: the filesystem uses ~9 MiB either way, so the default was
+          # a 2 GB layer of zeros.
+          make ISO_IMAGE_MB=256 mellivora-install.img
+          cp mellivora-install.img mellivora.img
+          ls -l mellivora.img
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -35,7 +41,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -44,7 +50,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push OCI image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Containerfile

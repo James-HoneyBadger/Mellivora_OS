@@ -4,7 +4,7 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 186 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 187 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
 compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
@@ -25,7 +25,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembl
 - **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`) that boots a 64-bit nucleus in the higher half, with a VMM, a slab heap, preemptive round-robin tasks that own their page tables and kernel stacks, NX/SMEP/SMAP where the CPU offers them, an LP64 syscall table (`write`/`brk`/`exec`/`open`/`read`), a PCI/ATA block driver, an HBFS volume with `/init` loaded from it and a directory layer behind `seek`/`stat`/`readdir`/`chdir`/`getcwd`, a writable HBFS (`create`/`mkdir`/`unlink`, and writes through an open handle, which is what appending is), console input over COM1 with a line-based shell (`ls`/`cat`/`append`/`date`/`mkdir`/`rm` typed at it), a CMOS clock, a user-space heap and pipes (`malloc`/`free`/`sbrk`/`pipe`), `exec` with a command line, a VGA text console, a PS/2 keyboard and pointer, fork/exec/waitpid with faulting children retired, kill and background spawn, an e1000 network driver (polled rings, cache-disabled register window) with ARP and ICMP echo on top of it, so a ring-3 program can ping, the PC speaker behind `BEEP`, ACPI discovery (RSDP/RSDT/MADT) and a local APIC whose timer is calibrated against the PIT and carries the 100 Hz tick, an I/O APIC that routes the keyboard and pointer (input is interrupt-driven now), atomics plus a spinlock under the scheduler's critical section, threads (`clone` into a shared address space) with a blocking futex, a shared heap and thread-local storage, high-resolution timers that turn `sleep` into a deadline on the HPET delivered by the APIC's one-shot timer, lock-order validation that finds a deadlock before two CPUs have to meet, a `waitpid` that parks the parent until the child stops, an idle loop that runs when every task is waiting, IPI delivery with an interrupt-free boot clock, and the HPET with the TSC calibrated against it, as the first steps of P3, a 32-bit task running in compatibility mode through `INT 0x80` alongside one of the tree's own flat 32-bit programs loaded unchanged at its `0x00300000` base; it reports `MELLIVORA64_OK` on COM1 (`make check-longmode`)
 - **UEFI boot** — `boot/uefi_loader.efi` (gnu-efi PE32+) for UEFI firmware; `make uefi` / `make run-uefi`
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
-- **186 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
+- **187 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
 - **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 128 concurrent ring-3 tasks; blocking `waitpid`
 - **Per-task fd isolation** (v12.1) — each task has a private 4 KB fd table page; no cross-task aliasing
@@ -345,7 +345,10 @@ Mellivora_OS/
 | Command | Description |
 | --------- | ------------- |
 | `make full` | Complete build: boot + kernel + programs + filesystem |
-| `make run` | Launch in QEMU (i486-compatible x86, 128 MB RAM) |
+| `make 64bit` | Build the 64-bit long-mode image and its volume |
+| `make check-64` | Boot the 64-bit image and drive its shell (64-bit gate) |
+| `make run` | Launch the 64-bit image in QEMU (default tree) |
+| `make run-32` | Launch the 32-bit image (Burrows desktop) |
 | `make debug` | Launch with QEMU monitor on stdio |
 | `make iso` | Build the installer disc (`ISO_IMAGE_MB`, default 256) |
 | `make check` | Run the regression suite and HBFS integrity checks |
@@ -361,6 +364,7 @@ Mellivora_OS/
 | `make run-iso` | Boot the installer disc in QEMU with a blank target disk |
 | `make iso-lite` | Build the installer disc with a 64 MB payload |
 | `make iso-verify` | Validate the disc's El Torito record and payload |
+| `make iso-check` | Check the disc's structure without booting it |
 | `make test-iso` | Install the disc onto a blank disk in QEMU and boot it |
 | `make sanitize` | Clean-build with bounds instrumentation and run regressions |
 | `make bench` | Measure build and validation stages |

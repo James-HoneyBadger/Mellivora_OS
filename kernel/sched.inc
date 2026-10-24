@@ -2682,6 +2682,9 @@ sys_sigmask:
 ; Returns: EAX = 0
 ;---------------------------------------
 sys_taskname:
+        mov eax, ebx
+        call validate_user_ptr
+        jc .stn_bad_ptr
         pushad
         ; Find RUNNING task
         mov edi, task_table
@@ -2712,6 +2715,9 @@ sys_taskname:
 .stn_done:
         mov dword [esp + 28], 0
         popad
+        iretd
+.stn_bad_ptr:
+        mov eax, 0
         iretd
 
 ;---------------------------------------

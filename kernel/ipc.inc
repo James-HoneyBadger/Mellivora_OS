@@ -86,6 +86,16 @@ sys_pipe_create:
 ; v3.0: Wakes any tasks waiting on this pipe after writing.
 ;---------------------------------------
 sys_pipe_write:
+        ; The source buffer is a caller pointer; check the whole range the
+        ; caller claims before copying anything out of it.
+        push ecx
+        push edx
+        mov eax, ecx
+        mov ecx, edx
+        call user_range_ok
+        pop edx
+        pop ecx
+        jc .spw_bad
         pushad
         ; Validate pipe_id
         cmp ebx, IPC_MAX_PIPES
@@ -136,6 +146,9 @@ sys_pipe_write:
         mov [esp + 28], edi     ; return bytes written in EAX
         popad
         iretd
+.spw_bad:
+        mov eax, -1
+        iretd
 .spw_fail:
         popad
         mov eax, -1
@@ -157,6 +170,15 @@ sys_pipe_write:
 PIPE_READ_RETRIES equ 200       ; ~200 yields before giving up
 
 sys_pipe_read:
+        ; The destination buffer is a caller pointer; check the range first.
+        push ecx
+        push edx
+        mov eax, ecx
+        mov ecx, edx
+        call user_range_ok
+        pop edx
+        pop ecx
+        jc .spr_bad
         pushad
         ; Validate pipe_id
         cmp ebx, IPC_MAX_PIPES
@@ -233,6 +255,9 @@ sys_pipe_read:
 .spr_done:
         mov [esp + 28], esi     ; return bytes read in EAX
         popad
+        iretd
+.spr_bad:
+        mov eax, -1
         iretd
 .spr_fail:
         popad

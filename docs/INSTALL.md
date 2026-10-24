@@ -27,23 +27,52 @@ This guide covers everything you need to build, run, and test the OS.
 ```bash
 sudo apt update
 sudo apt install nasm qemu-system-x86 make python3
+# The 64-bit nucleus (the default target) is C: it needs an x86-64 compiler
+# even on an ARM or 32-bit host.
+sudo apt install gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
 ```
 
 ### Installing on Fedora/RHEL
 
 ```bash
 sudo dnf install nasm qemu-system-x86 make python3
+sudo dnf install gcc-x86_64-linux-gnu binutils-x86_64-linux-gnu
 ```
 
 ### Installing on Arch Linux
 
 ```bash
 sudo pacman -S nasm qemu-full make python
+# Either an x86_64-elf cross toolchain from the AUR, or clang + lld:
+sudo pacman -S clang lld
 ```
 
 ### Linux Host Architectures
 
-Mellivora is a 32-bit x86 guest. On an x86_64 Linux host, run it with QEMU or boot it on compatible x86 hardware. On an ARM64/aarch64 Linux host, run it under QEMU's x86 system emulator; QEMU translates the guest instructions in software, so performance is typically slower. ARM hardware cannot boot Mellivora natively.
+Mellivora is an x86 guest: the 32-bit tree is BIOS/i486, the 64-bit tree (the
+default) is long mode. On an x86_64 Linux host, run it with QEMU or boot it on
+compatible hardware. On an ARM64/aarch64 Linux host, run it under QEMU's x86
+system emulator; QEMU translates the guest instructions in software, so
+performance is typically slower. ARM hardware cannot boot Mellivora natively.
+
+#### Building the 64-bit nucleus on a non-x86 host
+
+`tools/find_lm_toolchain.sh` probes, in order:
+
+1. `$LM_CC` / `$LM_LD`, when you set them
+2. `x86_64-elf-gcc` / `x86_64-elf-ld` (the canonical cross toolchain)
+3. `x86_64-linux-gnu-gcc` / `-ld`, `x86_64-linux-musl-gcc` / `-ld` (the distro
+   cross packages installed above)
+4. `clang --target=x86_64-elf` with `ld.lld`
+5. the host `gcc`/`ld`, when the host is already x86-64
+
+Each candidate is proved by compiling a probe and checking `e_machine` is 62
+(`EM_X86_64`), because a native `gcc` on an ARM host compiles happily and
+produces the wrong architecture. Override explicitly when needed:
+
+```bash
+make 64bit LM_CC=x86_64-linux-gnu-gcc LM_LD=x86_64-linux-gnu-ld
+```
 
 #### Install a packaged emulator
 
@@ -177,23 +206,31 @@ This single command:
 
 | Target | Command | Description |
 | -------- | --------- | ------------- |
-| **OS image** | `make` or `make all` | Build boot + Stage 2 + kernel, create disk image |
+| **OS image (32-bit)** | `make` or `make all` | Build boot + Stage 2 + kernel, create disk image |
+| **OS image (64-bit)** | `make 64bit` | Build the long-mode nucleus and its disk image |
+| **64-bit gate** | `make check-64` | Boot the 64-bit image and drive its shell |
 | **Programs** | `make programs` | Assemble all programs in `programs/` |
 | **Populate** | `make populate` | Write files and programs into the disk image |
 | **Full build** | `make full` | All of the above in order |
 | **Bootable ISO** | `make iso` | Create `mellivora.iso` with install docs and user guide included |
 | **Clean** | `make clean` | Remove all generated files (`.bin`, `.lst`, `.img`, `.iso`) |
 | **Sizes** | `make sizes` | Show component sizes |
-| **Run** | `make run` | Launch in QEMU |
+| **Run** | `make run` | Launch the 64-bit image in QEMU (the default tree) |
+| **Run (32-bit)** | `make run-32` | Launch the 32-bit image, with the Burrows desktop |
 | **Debug** | `make debug` | Launch in QEMU with monitor + debug logging |
+
+The installer disc installs the 64-bit tree by default
+(`ISO_ARCH=64`); `make iso ISO_ARCH=32` builds the 32-bit disc instead.
 
 ### Build Outputs
 
 After a successful build:
 
 ```text
-mellivora.img          2 GB bootable raw disk image
+mellivora64.img        2 GB bootable 64-bit raw disk image (make run)
+mellivora.img          2 GB bootable 32-bit raw disk image (make run-32)
 mellivora.iso          Bootable ISO media with docs and install guide
+kernel64.bin           64-bit nucleus (freestanding C11, linked in the higher half)
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
 kernel.bin             32-bit protected-mode kernel
@@ -207,7 +244,12 @@ programs/*.bin         Compiled user programs (current assembly program set)
 make iso                  # mellivora.iso, 256 MB payload
 make iso ISO_IMAGE_MB=64  # smaller payload, quicker to copy
 make iso-verify           # show and validate the El Torito record
+make iso-check            # structure check of the ISO (no QEMU)
 ```
+
+Changing `ISO_IMAGE_MB` rebuilds the payload image: `populate.py` derives the
+HBFS block count from the file's size, so a 64 MB disc is a different volume,
+not a truncated 256 MB one.
 
 `mellivora.iso` is an **installer**, not a live CD. It boots a 2 KB real-mode
 loader that reads the installer from the CD; the installer lists the BIOS hard
@@ -229,6 +271,16 @@ HBFS block count always matches the file - a 64 MB disc is as valid as a
 
 See [install/README.md](../install/README.md) for how the installer works and
 the known limits (BIOS only, CD/DVD boot, fixed filesystem size).
+
+To build a disc whose bytes are reproducible (the same sources always produce
+the same sha256), set the standard `SOURCE_DATE_EPOCH`:
+
+```bash
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) make iso
+```
+
+Without it, `build_iso.sh` lets xorriso stamp the volume with the current
+time, so two builds differ even when their contents do not.
 
 ### Expected Warnings
 

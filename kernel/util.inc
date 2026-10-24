@@ -2205,6 +2205,10 @@ sys_date:
 ;---------------------------------------
 sys_setdate:
         push esi
+        mov eax, ebx
+        mov ecx, 6
+        call user_range_ok
+        jc .ssd_bad
         mov al, [ebx]
         mov [rtc_sec], al
         mov al, [ebx + 1]
@@ -2222,6 +2226,10 @@ sys_setdate:
         xor eax, eax
         pop esi
         iretd
+.ssd_bad:
+        mov eax, -1
+        pop esi
+        iretd
 
 ;---------------------------------------
 ; sys_clipboard_copy - Copy data to clipboard
@@ -2230,18 +2238,27 @@ sys_setdate:
 ; Returns: EAX = 0
 ;---------------------------------------
 sys_clipboard_copy:
-        pushad
-        ; Clamp length to the clipboard buffer size
+        ; Clamp length to the clipboard buffer size, then validate the source
+        ; range before reading it.
         cmp ecx, 16384
         jbe .cc_ok
         mov ecx, 16384
 .cc_ok:
+        mov eax, ebx
+        push ecx
+        call user_range_ok
+        pop ecx
+        jc .cc_bad
+        pushad
         mov [clipboard_len], ecx
         mov esi, ebx
         mov edi, clipboard_buf
         rep movsb
         popad
         xor eax, eax
+        iretd
+.cc_bad:
+        mov eax, -1
         iretd
 
 ;---------------------------------------
@@ -2251,6 +2268,16 @@ sys_clipboard_copy:
 ; Returns: EAX = bytes copied
 ;---------------------------------------
 sys_clipboard_paste:
+        ; The destination is a caller buffer: validate what will be written.
+        mov eax, ecx
+        cmp eax, [clipboard_len]
+        jbe .cp_len_ok
+        mov eax, [clipboard_len]
+.cp_len_ok:
+        mov ecx, eax
+        mov eax, ebx
+        call user_range_ok
+        jc .cp_bad
         pushad
         mov ecx, [clipboard_len]
         test ecx, ecx
@@ -2273,6 +2300,9 @@ sys_clipboard_paste:
 .cp_done:
         mov dword [esp + 28], 0
         popad
+        iretd
+.cp_bad:
+        mov eax, 0
         iretd
 
 ;---------------------------------------
@@ -2316,10 +2346,18 @@ sys_file_save_dlg:
 sys_chdir:
         push esi
         push edi
+        mov eax, ebx
+        call validate_user_ptr
+        jc .scd_bad
         mov esi, ebx
         call cmd_cd_internal
         pop edi
         pop esi
+        iretd
+.scd_bad:
+        pop edi
+        pop esi
+        mov eax, -1
         iretd
 
 sys_getcwd:
@@ -2632,6 +2670,14 @@ sys_fread:
         push edi
         push edx
 
+        ; Validate the path and the destination before either is touched.
+        mov eax, ebx
+        call validate_user_ptr
+        jc .vfr_bad_ptr
+        mov eax, ecx
+        call validate_user_ptr
+        jc .vfr_bad_ptr
+
         ; Check which mount the path belongs to
         push ebx
         push ecx
@@ -2679,6 +2725,7 @@ sys_fread:
         pop  esi
         iretd
 
+.vfr_bad_ptr:
 .vfr_fail:
         pop  edx
         pop  edi
@@ -2783,9 +2830,17 @@ sys_open_fd:
         ; SYS_OPEN  (5): EBX=path, ECX=flags → EAX=vfd or -1
         push esi
         push edi
+        mov eax, ebx
+        call validate_user_ptr
+        jc .sof_bad
         call vfs_open
         pop edi
         pop esi
+        iretd
+.sof_bad:
+        pop edi
+        pop esi
+        mov eax, -1
         iretd
 
 sys_read_fd:
@@ -2849,7 +2904,14 @@ sys_seek_fd:
 sys_mkdir:
         push esi
         push edi
+        mov eax, ebx
+        call validate_user_ptr
+        jc .smk_bad
         call vfs_mkdir          ; EBX=path -> EAX=0 or -1
+        jmp .smk_done
+.smk_bad:
+        mov eax, -1
+.smk_done:
         pop edi
         pop esi
         iretd

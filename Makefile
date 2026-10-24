@@ -97,6 +97,14 @@ endif
 
 QEMU_FLAGS = -cpu 486 -m 128 -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_AUDIO_FLAGS) $(QEMU_RESET_FLAGS) -netdev user,id=net0 -device rtl8139,netdev=net0
 
+# The 64-bit guest needs a 64-bit CPU model, SMEP/SMAP to exercise those paths,
+# and the e1000 the nucleus has a driver for (an rtl8139 leaves the network
+# initialisation waiting).
+QEMU64_FLAGS = -cpu qemu64,+smep,+smap -m 256 \
+	-drive file=$(IMAGE_64),format=raw,if=ide,cache=writethrough -boot c \
+	-no-shutdown $(QEMU_AUDIO_FLAGS) $(QEMU_RESET_FLAGS) \
+	-netdev user,id=n0 -device e1000,netdev=n0
+
 # For debugging
 QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
                    -monitor stdio \
@@ -116,7 +124,7 @@ TEST_PROGS = programs/sbrk_test.asm programs/hello_test.asm
 ISO_FILE = mellivora.iso
 ISO_LITE_FILE = mellivora-lite.iso
 ISO_IMAGE_MB ?= 256
-ISO_LITE_IMG_MB = 64
+ISO_LITE_IMG_MB ?= 64
 ISO_DISK_IMAGE = mellivora-install.img
 ISO_LITE_DISK_IMAGE = mellivora-install-lite.img
 ISO_TOOLS = install/tools/build_iso.sh install/tools/run_iso.sh install/tools/autoinstall.py
@@ -127,7 +135,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 sanitize iso iso-lite iso-verify test-iso sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 check-64 sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table FORCE
 
 all: $(IMAGE)
 
@@ -219,8 +227,17 @@ check-qemu:
 			exit 1; \
 		fi
 
-run: check-qemu $(IMAGE)
-	@echo "=== Launching Mellivora in QEMU (i486 CPU, 128MB RAM) ==="
+# `make run` boots the 64-bit nucleus (roadmap D1: it is the primary target).
+# The 32-bit tree stays a first-class target - it has the mature shell and GUI -
+# so it keeps its own run target rather than being reachable only by overriding
+# a variable.
+run: check-qemu $(IMAGE_64)
+	@echo "=== Launching Mellivora in QEMU (64-bit, 256MB RAM) ==="
+	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
+	$(QEMU) $(QEMU64_FLAGS)
+
+run-32: check-qemu $(IMAGE)
+	@echo "=== Launching Mellivora in QEMU (32-bit, i486, 128MB RAM) ==="
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS)
 
@@ -291,23 +308,65 @@ kernel-only: $(KERNEL_BIN) kernel_sectors.inc $(STAGE2_BIN)
 	$(DD) if=$(KERNEL_BIN) of=$(IMAGE) bs=512 seek=33 conv=notrunc status=none
 	@echo "=== kernel-only update complete ==="
 
-# A disk image at a size that fits on a CD. populate.py sets the HBFS block
+# A disk image at a size that fits on a CD. Both builders derive the HBFS block
 # count from the file size, so the volume matches the file exactly.
+#
+# ISO_ARCH selects the tree the disc installs: 64 (the default, roadmap D1) is
+# the long-mode nucleus with its own HBFS volume; 32 is the mature tree with the
+# Burrows desktop and the full program set, kept for compatibility.
+ISO_ARCH ?= 64
+
 define build_iso_image
-	@echo "=== Building $(1) ($(2) MB) ==="
+	@echo "=== Building $(1) ($(2) MB, $(ISO_ARCH)-bit) ==="
 	$(DD) if=/dev/zero of=$(1) bs=1M count=$(2) status=none
-	$(DD) if=$(BOOT_BIN)   of=$(1) bs=512 count=1  conv=notrunc status=none
-	$(DD) if=$(STAGE2_BIN) of=$(1) bs=512 seek=1   conv=notrunc status=none
-	$(DD) if=$(KERNEL_BIN) of=$(1) bs=512 seek=33  conv=notrunc status=none
-	$(POPULATE) $(1) $(PROG_DIR)
+	$(DD) if=$(BOOT_BIN)        of=$(1) bs=512 count=1 conv=notrunc status=none
+	$(DD) if=$(ISO_STAGE2_BIN)  of=$(1) bs=512 seek=1  conv=notrunc status=none
+	$(DD) if=$(ISO_KERNEL_BIN)  of=$(1) bs=512 seek=33 conv=notrunc status=none
+	$(ISO_POPULATE_LINE)
 endef
 
+ifeq ($(ISO_ARCH),64)
+ISO_STAGE2_BIN = $(STAGE2_64BIN)
+ISO_KERNEL_BIN = $(KERNEL_64BIN)
+# mk_hbfs64.py takes name=path pairs; it is the one file list the 64-bit images
+# already use, so the disc installs exactly what `make 64bit` produces.
+# Recursive, so $(1) - the image path - is still in scope where the recipe is
+# expanded inside build_iso_image. mk_hbfs64.py takes the image first, then the
+# name=path pairs; populate.py takes the image and the program directory.
+ISO_POPULATE_LINE = python3 tools/mk_hbfs64.py $(1) $(HBFS64_FILES)
+ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) \
+                 boot/motd.txt tools/mk_hbfs64.py
+else
+ISO_STAGE2_BIN = $(STAGE2_BIN)
+ISO_KERNEL_BIN = $(KERNEL_BIN)
+ISO_POPULATE_LINE = $(POPULATE) $(1) $(PROG_DIR)
 ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) populate.py
+endif
 
-$(ISO_DISK_IMAGE): $(ISO_IMAGE_DEPS)
+# populate.py derives the HBFS block count from the size of the file it writes,
+# so an image is only correct for the size it was built at. These stamps record
+# that size: when ISO_IMAGE_MB (or ISO_LITE_IMG_MB) changes, the stamp changes
+# and the image is rebuilt. Without them 'make iso ISO_IMAGE_MB=64' silently
+# reused an existing 256 MB image.
+ISO_SIZE_STAMP = .build/iso-image-size
+ISO_LITE_SIZE_STAMP = .build/iso-lite-image-size
+
+# Always out of date, so the stamp recipes run on every build and touch the
+# file only when its value really changed.
+FORCE:
+
+$(ISO_SIZE_STAMP): FORCE
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(ISO_IMAGE_MB)' | cmp -s - $@ || printf '%s\n' '$(ISO_IMAGE_MB)' > $@
+
+$(ISO_LITE_SIZE_STAMP): FORCE
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(ISO_LITE_IMG_MB)' | cmp -s - $@ || printf '%s\n' '$(ISO_LITE_IMG_MB)' > $@
+
+$(ISO_DISK_IMAGE): $(ISO_IMAGE_DEPS) $(ISO_SIZE_STAMP)
 	$(call build_iso_image,$(ISO_DISK_IMAGE),$(ISO_IMAGE_MB))
 
-$(ISO_LITE_DISK_IMAGE): $(ISO_IMAGE_DEPS)
+$(ISO_LITE_DISK_IMAGE): $(ISO_IMAGE_DEPS) $(ISO_LITE_SIZE_STAMP)
 	$(call build_iso_image,$(ISO_LITE_DISK_IMAGE),$(ISO_LITE_IMG_MB))
 
 # Build the installer disc: a real-mode installer that writes the image to a
@@ -341,10 +400,20 @@ iso-verify:
 	 if [ "$$IMG" = "1" ]; then echo "  PASS  /MELLIVORA.IMG is present"; \
 	 else echo "  FAIL  /MELLIVORA.IMG missing"; exit 1; fi
 
+# Structure-only check: builds the disc, then reads it back without booting it.
+iso-check: iso
+	@python3 tests/test_iso.py
+
+# The installer reads every chunk back after writing it. This builds a disc
+# whose writes land one sector late and requires the installer to stop there
+# instead of reporting success.
+check-installer-verify: $(ISO_DISK_IMAGE)
+	@python3 tests/test_installer_verify.py
+
 # End-to-end: build the ISO, install it onto a blank disk in QEMU, check the
 # bytes and boot the result. Slow (a full image copy) - not part of 'check'.
-test-iso: $(ISO_DISK_IMAGE)
-	@python3 tests/test_iso.py
+test-iso: iso
+	@python3 tests/test_iso.py --end-to-end
 
 # Headless QEMU boot smoke test: asserts the kernel reaches the shell prompt and
 # reported no CPU exceptions on COM1. BOOT_ALLOW_SKIP=1 keeps 'make check'
@@ -480,7 +549,8 @@ check-launcher-catalog:
 	@python3 tools/generate_launcher_catalog.py --check
 
 lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest check-docs check-font check-command-table
-	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm
+	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm \
+		install/boot/stage1.asm install/boot/installer.asm
 	@echo "=== Lint checks complete ==="
 
 # The sprint gate: ten thousand crash/replay iterations, unattended. It takes
@@ -660,17 +730,17 @@ LM_CFLAGS = -std=c11 -m64 -O2 -Wall -Wextra -Werror \
             -fno-pic -fno-pie -mno-red-zone -mcmodel=kernel \
             -mgeneral-regs-only -fno-asynchronous-unwind-tables \
             -fno-unwind-tables
-LM_LDFLAGS = -T boot/lm64.ld --oformat binary
+LM_LDFLAGS = -T kernel64/lm64.ld --oformat binary
 
-KERNEL_64_OBJS = boot/lm_nucleus.o boot/lm_atomic.o boot/lm_pmm.o boot/lm_cpu.o \
-                  boot/lm_user.o \
-                  boot/lm_idt.o boot/lm_vmm.o boot/lm_kmem.o boot/lm_irq.o \
-                  boot/lm_sched.o boot/lm_syscall.o boot/lm_pci.o boot/lm_ata.o \
-                  boot/lm_hbfs.o boot/lm_vfs.o boot/lm_rtc.o \
-		  boot/lm_pipe.o boot/lm_vga.o boot/lm_kbd.o boot/lm_mouse.o \
-		  boot/lm_e1000.o boot/lm_net.o boot/lm_spk.o boot/lm_acpi.o \
-		  boot/lm_lapic.o boot/lm_ioapic.o boot/lm_hpet.o boot/lm_timer.o \
-		  boot/lm_lockdep.o
+KERNEL_64_OBJS = kernel64/lm_nucleus.o kernel64/lm_atomic.o kernel64/lm_pmm.o kernel64/lm_cpu.o \
+                  kernel64/lm_user.o \
+                  kernel64/lm_idt.o kernel64/lm_vmm.o kernel64/lm_kmem.o kernel64/lm_irq.o \
+                  kernel64/lm_sched.o kernel64/lm_syscall.o kernel64/lm_pci.o kernel64/lm_ata.o \
+                  kernel64/lm_hbfs.o kernel64/lm_vfs.o kernel64/lm_rtc.o \
+		  kernel64/lm_pipe.o kernel64/lm_vga.o kernel64/lm_kbd.o kernel64/lm_mouse.o \
+		  kernel64/lm_e1000.o kernel64/lm_net.o kernel64/lm_spk.o kernel64/lm_acpi.o \
+		  kernel64/lm_lapic.o kernel64/lm_ioapic.o kernel64/lm_hpet.o kernel64/lm_timer.o \
+		  kernel64/lm_lockdep.o
 
 # The user programs are files in the image now, not part of the nucleus.
 INIT_BIN = initprog.bin
@@ -681,13 +751,13 @@ USERPROGS = $(INIT_BIN) $(HELLO_BIN) $(HELLO32_BIN) $(HELLO_TREE_BIN) \
 	    $(NET_BIN) $(BEEP_BIN) $(THREADS_BIN) $(FUTEX_BIN) $(TLS_BIN) \
 	    $(HRT_BIN)
 
-$(INIT_BIN): boot/lm_initprog.asm
+$(INIT_BIN): kernel64/lm_initprog.asm
 	$(NASM) -f bin -o $@ $<
 
-$(HELLO_BIN): boot/lm_hello.asm
+$(HELLO_BIN): kernel64/lm_hello.asm
 	$(NASM) -f bin -o $@ $<
 
-$(HELLO32_BIN): boot/lm_hello32.asm
+$(HELLO32_BIN): kernel64/lm_hello32.asm
 	$(NASM) -f bin -o $@ $<
 
 # One of the 32-bit tree's own programs, built by the same NASM invocation the
@@ -695,82 +765,82 @@ $(HELLO32_BIN): boot/lm_hello32.asm
 HELLO_TREE_BIN = hello_tree.bin
 LS_BIN = ls.bin
 
-$(LS_BIN): boot/lm_ls.asm
+$(LS_BIN): kernel64/lm_ls.asm
 	$(NASM) -f bin -o $@ $<
 
 WR_BIN = wr.bin
 
-$(WR_BIN): boot/lm_wr.asm
+$(WR_BIN): kernel64/lm_wr.asm
 	$(NASM) -f bin -o $@ $<
 
 SPIN_BIN = spin.bin
 
-$(SPIN_BIN): boot/lm_spin.asm
+$(SPIN_BIN): kernel64/lm_spin.asm
 	$(NASM) -f bin -o $@ $<
 
 MOUSE_BIN = mouse.bin
 
-$(MOUSE_BIN): boot/lm_mouse.asm
+$(MOUSE_BIN): kernel64/lm_mouse.asm
 	$(NASM) -f bin -o $@ $<
 
 NET_BIN = net.bin
 
-$(NET_BIN): boot/lm_net.asm
+$(NET_BIN): kernel64/lm_net.asm
 	$(NASM) -f bin -o $@ $<
 
 TLS_BIN = tls.bin
 
-$(TLS_BIN): boot/lm_tls.asm
+$(TLS_BIN): kernel64/lm_tls.asm
 	$(NASM) -f bin -o $@ $<
 
 HRT_BIN = hrt.bin
 
-$(HRT_BIN): boot/lm_hrt.asm
+$(HRT_BIN): kernel64/lm_hrt.asm
 	$(NASM) -f bin -o $@ $<
 
 FUTEX_BIN = futex.bin
 
-$(FUTEX_BIN): boot/lm_futex.asm
+$(FUTEX_BIN): kernel64/lm_futex.asm
 	$(NASM) -f bin -o $@ $<
 
 THREADS_BIN = threads.bin
 
-$(THREADS_BIN): boot/lm_threads.asm
+$(THREADS_BIN): kernel64/lm_threads.asm
 	$(NASM) -f bin -o $@ $<
 
 BEEP_BIN = beep.bin
 
-$(BEEP_BIN): boot/lm_beep.asm
+$(BEEP_BIN): kernel64/lm_beep.asm
 	$(NASM) -f bin -o $@ $<
 
 API_BIN = api.bin
 
-$(API_BIN): boot/lm_api.asm
+$(API_BIN): kernel64/lm_api.asm
 	$(NASM) -f bin -o $@ $<
 
 SH_BIN = sh.bin
 
-$(SH_BIN): boot/lm_sh.asm
+$(SH_BIN): kernel64/lm_sh.asm
 	$(NASM) -f bin -o $@ $<
 
 $(HELLO_TREE_BIN): programs/hello.asm programs/syscalls.inc
 	$(NASM) -f bin -I programs/ -o $@ $<
 
-boot/%.o: boot/%.c boot/lm.h
+kernel64/%.o: kernel64/%.c kernel64/lm.h
 	@[ -n "$(LM_CC)" ] || { \
 	    echo "  ERROR: no x86-64 C compiler found."; \
 	    echo "  Install x86_64-elf-gcc, or clang + ld.lld, or set LM_CC/LM_LD."; \
 	    exit 1; }
 	$(LM_CC) $(LM_CFLAGS) -c $< -o $@
 
-$(KERNEL_64BIN): $(KERNEL_64_OBJS) boot/lm64.ld
+$(KERNEL_64BIN): $(KERNEL_64_OBJS) kernel64/lm64.ld
 	@[ -n "$(LM_LD)" ] || { echo "  ERROR: no x86-64 linker found (set LM_LD)."; exit 1; }
 	$(LM_LD) $(LM_LDFLAGS) -o $@ $(KERNEL_64_OBJS)
 	@echo "  64-bit nucleus: $$(wc -c < $@) bytes, linked at 0xFFFFFFFF80100000"
 
 # The original hand-written nucleus, kept as a second target so the boot path
 # can still be exercised without a C toolchain (make 64bit-asm).
-$(KERNEL_64ASM): boot/lm_nucleus.asm
+$(KERNEL_64ASM): kernel64/lm_nucleus.asm
 	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<
 
 # stage2 only needs one sector count, so the 64-bit file defines the same name.
@@ -805,6 +875,14 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.
 # generation words, and a checksum on the superblock and on every metadata run.
 # It mounts read-only, which is why it is a second image rather than the first:
 # the boot suite writes to its volume and that stays a v3 image's job.
+# The installer disc's payload is the file list above, which is built from these
+# programs. The ISO rules are declared earlier in this file, before the list
+# exists, so their prerequisites are added here.
+ifeq ($(ISO_ARCH),64)
+$(ISO_DISK_IMAGE): $(USERPROGS)
+$(ISO_LITE_DISK_IMAGE): $(USERPROGS)
+endif
+
 $(IMAGE_64_V4): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.txt
 	@echo "=== Building the v4 64-bit image ==="
 	$(DD) if=/dev/zero of=$(IMAGE_64_V4) bs=1M count=$(IMAGE_SIZE_MB) status=none
@@ -816,7 +894,12 @@ $(IMAGE_64_V4): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/mo
 	@echo "=== $(IMAGE_64_V4) ready ==="
 
 64bit: $(IMAGE_64)
-	@echo "=== Run with: make run IMAGE=$(IMAGE_64) ==="
+	@echo "=== Run with: make run   (the 64-bit image is the default) ==="
+
+# The 64-bit gate: build, boot, drive the shell, and read the guest's own writes
+# back out of the image. `make check` remains the 32-bit gate.
+check-64: $(IMAGE_64)
+	@python3 tests/test_longmode.py
 
 64bit-v4: $(IMAGE_64_V4)
 	@echo "=== Run with: make run IMAGE=$(IMAGE_64_V4) ==="
@@ -861,12 +944,17 @@ hbpkg: $(HBPKG_BIN)
 help:
 	@echo "Mellivora OS — Build Targets"
 	@echo ""
-	@echo "  Build (32-bit BIOS, default)"
+	@echo "  Build (32-bit tree)"
 	@echo "    make all          Build disk image (boot + stage2 + kernel)"
 	@echo "    make full         Full build: boot + kernel + programs + filesystem"
 	@echo "    make programs     Build all user-space programs (parallel)"
 	@echo "    make kernel-only  Rebuild kernel only and patch into image (fast)"
 	@echo "    make populate     Populate filesystem (requires programs)"
+	@echo ""
+	@echo "  Build (64-bit, the default tree)"
+	@echo "    make 64bit        Build the long-mode nucleus image (mellivora64.img)"
+	@echo "    make check-64     Boot the 64-bit image and drive its shell"
+	@echo "    make run-32       Build and run the 32-bit tree instead"
 	@echo ""
 	@echo "  Build (v10.0 new targets)"
 	@echo "    make uefi         Build UEFI PE32+ EFI application (boot/uefi_loader.efi)"
@@ -888,6 +976,7 @@ help:
 	@echo "    make iso          Build the installer ISO ($(ISO_IMAGE_MB) MB payload)"
 	@echo "    make iso-lite     Build it with a $(ISO_LITE_IMG_MB) MB payload instead"
 	@echo "    make iso-verify   Validate the El Torito record and payload of the ISO"
+	@echo "    make iso-check    Check the ISO's structure without booting it"
 	@echo "    make test-iso     Install the ISO onto a blank disk in QEMU and boot it"
 	@echo ""
 	@echo "  Test & Info"
@@ -950,12 +1039,15 @@ count:
 		"$$(cat boot.asm stage2.asm kernel.asm kernel/*.inc $(PROG_DIR)/*.asm $(PROG_DIR)/syscalls.inc Makefile populate.py boot/uefi_loader.c tools/hbpkg.c 2>/dev/null | wc -l)"
 
 clean:
-	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(KERNEL_ELF) $(IMAGE) $(ISO_FILE) $(ISO_LITE_FILE) kernel_sectors.inc
+	# kernel_sectors.inc and kernel64_sectors.inc are tracked files, not build
+	# output: removing them here left the tree dirty after every clean.
+	rm -f $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(KERNEL_ELF) $(IMAGE) $(ISO_FILE) $(ISO_LITE_FILE)
+	rm -f $(ISO_DISK_IMAGE) $(ISO_LITE_DISK_IMAGE) mellivora-install-target.img
 	rm -f *.lst
 	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
 	rm -rf .build
 	rm -f $(KERNEL_64BIN) $(KERNEL_64ASM) $(STAGE2_64BIN) $(IMAGE_64) \
-	      $(IMAGE_64_ASM) $(KERNEL_64_OBJS) kernel64_sectors.inc \
+	      $(IMAGE_64_ASM) $(KERNEL_64_OBJS) \
 	      stage2-64.lst kernel64-asm.lst
 	# v10.0 additions
 	rm -f $(UEFI_EFI) $(UEFI_SO) $(HBPKG_BIN) $(UEFI_IMAGE)

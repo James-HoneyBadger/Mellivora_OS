@@ -49,9 +49,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$ISO" ]] || die "ISO not found: $ISO (run 'make iso')"
-command -v qemu-system-x86_64 >/dev/null 2>&1 \
-  || command -v qemu-system-i386 >/dev/null 2>&1 \
-  || die "QEMU not found (install qemu-system-x86)"
+
+QEMU=""
+for candidate in qemu-system-x86_64 qemu-system-i386; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    QEMU="$candidate"
+    break
+  fi
+done
+[[ -n "$QEMU" ]] || die "QEMU not found (install qemu-system-x86)"
 
 if [[ ! -f "$DISK" ]]; then
   info "Creating a blank ${SIZE_MB} MiB target disk: $DISK"
@@ -70,7 +76,7 @@ if [[ "$INSTALL" -eq 1 ]]; then
 fi
 
 info "Booting $ISO - pick the disk in the installer, then boot $DISK with:"
-info "  qemu-system-i386 -m 128 -drive file=$DISK,format=raw,if=ide -boot c"
+info "  $QEMU -m 128 -drive file=$DISK,format=raw,if=ide -boot c"
 echo
 QEMU_ARGS=(
   -cpu 486 -m 128
@@ -83,4 +89,4 @@ if [[ -n "$DISPLAY" ]]; then
   QEMU_ARGS+=(-display "$DISPLAY")
 fi
 # shellcheck disable=SC2086
-exec qemu-system-i386 "${QEMU_ARGS[@]}" ${QEMU_EXTRA_ARGS:-}
+exec "$QEMU" "${QEMU_ARGS[@]}" ${QEMU_EXTRA_ARGS:-}

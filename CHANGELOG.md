@@ -1,5 +1,183 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the 64-bit tree becomes the default, and its filesystem works
+
+### 64-bit nucleus (M1)
+
+- **HBFS never mounted.** `hbfs_init()` stopped setting `ready = 1` when the
+  extent cache was added to it, so a volume that had just been read, counted and
+  reported as healthy answered "not found" to every lookup and refused every
+  create - `HBFS_WRITABLE` is `ready && !read_only`. Nothing downstream could
+  work: `/init` was never found, so the ring-3 demo, the shell and every program
+  in the 64-bit image failed to start. The mount line still printed, which is
+  why it looked like a boot that had worked. Restored, and the boot test now
+  fails if it returns.
+- **The 64-bit tests are repeatable.** `tests/test_longmode.py` booted the built
+  image directly and then read the guest's writes back out of it, so the second
+  run saw the first run's files and failed on correct content. Every session now
+  runs on a private copy, made in `$LM_SCRATCH`, then `.build/`, then the system
+  temp directory - the image is gigabytes and `/tmp` is a tmpfs on many hosts.
+- **The input checks are retried, and say so.** Driving the emulated i8042
+  through the QEMU monitor is timing-sensitive under TCG on a host of another
+  architecture; the keyboard and mouse sessions now retry once, print `RETRY`
+  when they do, and a button press is repeated until the driver reports it
+  rather than assumed delivered. The assertions themselves are unchanged.
+- **`make check-64`** is the 64-bit gate: build, boot, drive the shell, and read
+  the guest's own writes back out of the volume.
+- **`make run` boots the 64-bit tree**, which is what roadmap D1 says the
+  primary target is; `make run-32` keeps the 32-bit image and the Burrows
+  desktop one command away. The 64-bit guest gets a CPU model with SMEP/SMAP and
+  the e1000 the nucleus has a driver for.
+- **The installer disc installs the 64-bit tree** (`ISO_ARCH=64`, the default):
+  `mk_hbfs64.py` builds its volume from the same file list `make 64bit` uses, so
+  the disc and the development image contain the same system.
+  `make iso ISO_ARCH=32` builds the 32-bit disc. The installed-disk check boots
+  with a 64-bit-capable CPU and accepts either tree's shell prompt, because
+  both are installable.
+- **The 64-bit sources live in `kernel64/`.** A move, not a change: the same 47
+  files, the same build, every test passing identically afterwards. The
+  milestones that follow add object, security, I/O, registry, graphics and
+  network subsystems, and they need a home that is not `boot/`.
+- **`tools/find_lm_toolchain.sh` finds the distro cross compiler.** It probes
+  `x86_64-linux-gnu-gcc`/`-ld` and `x86_64-linux-musl-gcc`/`-ld` after the
+  canonical `x86_64-elf` names, so `apt install gcc-x86-64-linux-gnu` is enough
+  on a Debian or Ubuntu host - including the ARM hosts this tree is developed
+  on. The `e_machine` probe still decides.
+- **Constant-address access had to go.** GCC 14 rejects
+  `*(volatile u32 *)0x504` under `-Werror=array-bounds`, which broke the build
+  on any recent compiler. `lm.h` now has `lm_read8/16/32/64` and
+  `lm_write*` accessors that keep the address in a register; they are what the
+  framebuffer, PCI config space and the APIC will use.
+- CI gains a `sixtyfour` job: toolchain probe, build, `make check-64`, a strict
+  `fsck_hbfs.py` on the image, and the hand-written asm nucleus boot test.
+
+## Unreleased - a bad pointer is an error, not a restart
+
+### Kernel
+
+- **Every syscall that takes a caller pointer now checks it first.** A ring-3
+  program calling `rename(0xD0000000, name)` made the kernel dereference the
+  argument itself: the fault arrived in ring 0 with `[supervisor]` in the error
+  code, the fault handler treated it as unrecoverable, and the shell restarted -
+  taking every task in the system with it. One instruction from any program was
+  enough. `sys_rename`, `sys_rmdir`, `sys_truncate`, `sys_symlink`,
+  `sys_readlink`, `sys_getmtime`, `sys_setmtime`, `sys_mkdir`, `sys_fread`,
+  `sys_taskname`, `sys_setdate`, `sys_clipboard_copy`/`paste`, `sys_pipe_read`/
+  `write`, `sys_audio_rec_read` and the VFS path entry points `open`, `delete`,
+  `stat` and `chdir` now validate the pointer (and the range, when a length is
+  involved) and return their failure value instead.
+- **`select`, `getsockopt` and `getsockname` check their buffers too.**
+  `select` read the fd_set through a caller pointer before any check; it now
+  validates all four buffers (the fd_set is one dword for `FD_MAX` = 8).
+- **`getsockopt` corrupted the socket it was asked about.** It computed the
+  socket pointer into `EDI` and then wrote the returned length through `EDI`,
+  so `getsockopt(fd, SOL_SOCKET, SO_TYPE, ...)` set `SOCK_TYPE` to 4 and broke
+  the socket. The length pointer is saved before `EDI` is reused, and both
+  output pointers are validated.
+- **`sys_readlink` no longer copies an on-disk length into a caller buffer.**
+  The size came from the directory entry and was passed straight to `rep movsb`
+  as the count, so a link whose size field exceeded one block read past the
+  kernel's block buffer and wrote that many bytes into the destination. The copy
+  is clamped to a link target's maximum and the destination range is checked.
+- **`sys_symlink` measures the target with a cap**, so a string without a NUL
+  cannot walk out of user space.
+- **Ring-0 callers are exempt, deliberately.** The shell is kernel code and
+  passes pointers to its own buffers, which live below `PROGRAM_BASE`, so
+  `validate_user_ptr`/`user_range_ok` consult `syscall_ring` - recorded from the
+  caller's CS at the one `INT 0x80` entry - and skip the window check for ring 0.
+- **`badptr_test` proves it.** It calls every one of those syscalls with an
+  unmapped address, requires each to return its documented failure, and then
+  does a clipboard round trip through valid pointers to show the checks are a
+  guard rather than a wall. It is a `make check` runtime case and rejects
+  `PAGE FAULT`.
+
+### Filesystem
+
+- **`chmod` and `chown` never worked.** Both searched `hbfs_dir_buf` for the
+  name without loading the directory first, so they examined whatever an earlier
+  command had left in the buffer and answered "file not found" for files that
+  were right there - from the shell and from a program alike. Both now load the
+  directory before searching it. Verified end to end: `chmod 777 script.bat`
+  prints "Permissions updated." and a program calling `SYS_CHMOD` gets 0.
+- The boot banner, `sysinfo` line and version string said 186 syscalls;
+  `programs/syscalls.inc` declares 187 (0-186). `validate_syscalls.py` now also
+  checks `kernel/data.inc`, so the text on screen cannot drift again.
+
+## Unreleased - the disc proves itself, and the build stops lying
+
+### Installer disc
+
+- **`make iso ISO_IMAGE_MB=64` did nothing.** The payload image was rebuilt only
+  when its sources changed, so with an existing `mellivora-install.img` the
+  variable was ignored and a 256 MB image went onto the disc that asked for 64.
+  A stamp in `.build/` now records the size the image was built at, and the
+  image is rebuilt when it differs. Both advertised spellings work, and the
+  disc's own size is what `build_iso.sh` verifies.
+- **The installer can now find a file in a directory larger than one sector.**
+  A zero record length means "no more records in this sector", not "no more
+  records in this directory", but `find_entry` treated it as the end and read
+  only the first 2048 bytes. The disc's root directory is exactly 2048 bytes
+  today, with the last record ending at byte 1194, so the bug was invisible:
+  three sectors of root directory and `MELLIVORA.IMG` in the second one was
+  enough to make the installer report that the image was not on the CD. The
+  walker now follows the sector chain up to `dir_size`.
+- **The read-back covers the whole image, chunk by chunk.** `verify_first`
+  printed "Verifying the first sector" and compared 256 of its 512 bytes. Now
+  every 32 KB chunk is read back from the target as it is written and compared
+  with the bytes that came off the CD; a mismatch is rewritten once, and if it
+  still differs the install stops with `BIOS status 0xFF` instead of declaring
+  success on a disk that is already wrong. `tests/test_installer_verify.py`
+  builds a disc whose writes land one sector late and requires the installer to
+  reject it; with the verification stubbed out, the same disc reports
+  "Installation complete." over a corrupt target, so the test is not vacuous.
+- **The disc is reproducible.** With `SOURCE_DATE_EPOCH` set, `build_iso.sh`
+  passes `--modification-date` and `--set_all_file_dates` to xorriso, so the
+  same sources produce the same bytes and a published checksum means something.
+  Without it the volume keeps the current time, as before.
+- **The verifier compares the whole image.** `autoinstall.py` used to compare
+  the first 4 MB of the target with the ISO; a truncated copy in the middle
+  passed. It now streams the image and compares all of it, and reports
+  `image_matches` instead of `first_bytes_match`.
+- **`make test-iso` does what its description says.** It ran the structure-only
+  check; the end-to-end install now lives there, and `make iso-check` is the
+  fast structure check. `tests/test_iso.py` reads the ISO extent by extent
+  instead of loading 258 MB into memory.
+- **`make clean` removes the discs' payloads** (`mellivora-install.img`,
+  `mellivora-install-lite.img`, the QEMU target disk), not just the ISOs.
+- **`run_iso.sh` runs the emulator it found.** It accepted
+  `qemu-system-x86_64` or `qemu-system-i386` and then always executed the
+  latter.
+- `install/boot/*.asm` join the NASM lint. The build and install docs name
+  `make iso` where they meant it, and the disc's `README.txt` names the HBFS
+  superblock at sector 4096 instead of calling the first data block the
+  filesystem.
+
+### CI and releases
+
+- **A CI job builds, verifies and installs the disc** (`installer-iso`), which
+  nothing did before: `make iso`, `make iso-verify`, the structure checks, the
+  unattended install, the boot of the installed disk and the 64 MB variant.
+- **Releases carry the disc.** `release-iso.yml` rebuilds both discs from the
+  tag with `SOURCE_DATE_EPOCH` set to the tag's commit, gzips them (the 258 MB
+  disc is 99.7% zeros and compresses to under a megabyte), writes
+  `SHA256SUMS` and attaches all five files. `v13.0.0` shipped no assets at all.
+- The workflows move to `actions/checkout@v7` and
+  `actions/upload-artifact@v7`, and the Docker actions to their current majors;
+  `ci.yml` and the nightly run with `permissions: contents: read`.
+- **The container ships a right-sized image.** The publish job built `make full`
+  and copied the 2 GB development image into a layer; it now builds the same
+  256 MiB volume the installer disc writes, which holds the identical
+  filesystem. The `fdisk`/`dosfstools` it never used are gone from that job.
+
+### Documentation
+
+- **The syscall count in prose was one behind.** `README.md`,
+  `docs/TECHNICAL_REFERENCE.md` and `docs/PROGRAMMING_GUIDE.md` said 186;
+  `programs/syscalls.inc` declares numbers 0-186, and the generated
+  `docs/syscalls.md` already said 187. `validate_syscalls.py` now checks every
+  "N syscalls" and the "(0-N, no gaps)" range in those files against the header,
+  so the next syscall cannot leave the prose behind.
+
 ## Unreleased - an installer disc that installs
 
 ### Installer

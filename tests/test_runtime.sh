@@ -132,6 +132,10 @@ echo "  runtime tests: $(basename "$IMAGE"), ${CASE_TIMEOUT}s per case"
 run_case "flat binary runs"          "hello"                 "Hello, World!"
 run_case "time syscalls"             "time_test"             "TIME_OK"
 run_case "syscall validation suite"  "syscall_test arg"      "SYSCALL_OK"
+# Every syscall that takes a caller pointer must reject an address no task
+# maps instead of dereferencing it in ring 0: a supervisor fault restarts the
+# shell and takes every task with it.
+run_case "syscalls reject bad pointers" "badptr_test"         "BADPTR_OK"          "" "CPU EXCEPTION|PAGE FAULT|BADPTR_FAIL"
 run_case "fork + exec + waitpid"     "timeout 2 hello"       "Hello, World!"
 run_case "execve argv passing"       "argv_test alpha"       "EXECVE_OK"          "" "CPU EXCEPTION|EXECVE_FAIL"
 run_case "VFS files + procfs"        "vfstest"               "All tests PASSED"   "" "CPU EXCEPTION|PAGE FAULT"

@@ -33,6 +33,12 @@ USER_PTR_MAX    equ 0x20000000
 ;   In : EAX = pointer
 ;   Out: CF=0 valid, CF=1 invalid; all GPRs preserved (only EFLAGS changes).
 validate_user_ptr:
+        ; A ring-0 caller (the shell) legitimately passes pointers to its own
+        ; buffers, which live in the kernel image below PROGRAM_BASE. Only a
+        ; ring-3 caller has to stay inside the user window. syscall_ring is set
+        ; from the caller's CS at the single INT 0x80 entry point.
+        cmp byte [syscall_ring], 0
+        je  .vup_ok
         cmp eax, PROGRAM_BASE
         jb  .vup_bad
         cmp eax, USER_PTR_MAX
@@ -41,6 +47,9 @@ validate_user_ptr:
         ret
 .vup_bad:
         stc
+        ret
+.vup_ok:
+        clc
         ret
 
 ; user_range_ok - validate a whole user buffer, not just its base.
@@ -51,6 +60,8 @@ validate_user_ptr:
 ; end of the user area or wrap around 2^32 — which is how a length-checked copy
 ; ends up touching kernel memory. A zero-length range is valid.
 user_range_ok:
+        cmp byte [syscall_ring], 0
+        je  .uro_ok
         push edx
         test ecx, ecx
         jz   .uro_ok                    ; nothing to copy
@@ -146,6 +157,15 @@ errno_set:
 ; Dispatches to the correct syscall handler based on EAX.
 ;---------------------------------------
 syscall_handler:
+        ; Record which ring called: [esp] = EIP, [esp+4] = CS. A ring-3 caller
+        ; must keep its pointers inside the user window; the shell, which is
+        ; ring-0 kernel code, passes kernel buffers and must not be rejected.
+        push eax
+        mov  eax, [esp + 8]             ; caller's CS (EIP sits at +4)
+        and  eax, 3
+        mov  [syscall_ring], al
+        pop  eax
+
         ; Reject out-of-range syscall numbers. The compare must be UNSIGNED: a
         ; negative EAX (0x80000000..0xFFFFFFFF) would otherwise index
         ; syscall_table far below its base. It must also reject exactly
@@ -2045,6 +2065,7 @@ SO_TYPE         equ 3
 
 sys_getsockopt:
         pushad
+        mov [.gsopt_len], edi           ; optlen_ptr, before EDI becomes the socket
         call vfd_to_sock
         jc .gsopt_fail
         mov ebx, eax
@@ -2060,10 +2081,22 @@ sys_getsockopt:
         ; Return socket type (SOCK_STREAM=1 for TCP, SOCK_DGRAM=2 for UDP)
         test esi, esi
         jz  .gsopt_ok
+        mov eax, esi
+        mov ecx, 4
+        call user_range_ok
+        jc  .gsopt_fail
         mov eax, [edi + SOCK_TYPE]
         mov [esi], eax
+        ; The length goes to the caller's optlen pointer. It used to be written
+        ; through EDI, which by then pointed at the socket: the call set
+        ; SOCK_TYPE to 4 and broke the socket it was asked about.
+        mov edi, [.gsopt_len]
         test edi, edi
         jz  .gsopt_ok
+        mov eax, edi
+        mov ecx, 4
+        call user_range_ok
+        jc  .gsopt_fail
         mov dword [edi], 4      ; optlen = 4 bytes
 .gsopt_ok:
         mov dword [esp + 28], 0
@@ -2073,6 +2106,7 @@ sys_getsockopt:
         mov dword [esp + 28], -1
         popad
         iretd
+.gsopt_len: dd 0
 
 ;-----------------------------------------------------------------------
 ; sys_getsockname (174) — get local socket address
@@ -2102,6 +2136,10 @@ sys_getsockname:
         mov dword [ecx + 4], 0  ; local IP = any
         test edx, edx
         jz  .gsname_ok
+        mov eax, edx
+        mov ecx, 4
+        call user_range_ok
+        jc  .gsname_fail
         mov dword [edx], 16     ; sizeof sockaddr_in
 .gsname_ok:
         mov dword [esp + 28], 0
@@ -2565,7 +2603,48 @@ sys_ioctl:
 ; v10: minimal implementation — polls each set FD once (no sleep)
 ;-----------------------------------------------------------------------
 sys_select:
+        ; All four pointers are caller buffers; validate them before the first
+        ; bit test reads one.
         pushad
+        mov [.sel_rfds], ecx
+        mov [.sel_wfds], edx
+        mov [.sel_efds], esi
+        mov [.sel_tv], edi
+        test ecx, ecx
+        jz .sel_chk_w
+        mov eax, ecx
+        mov ecx, 4                  ; one dword covers FD_MAX (8) fds
+        call user_range_ok
+        jc .sel_bad
+.sel_chk_w:
+        mov ecx, [.sel_wfds]
+        test ecx, ecx
+        jz .sel_chk_e
+        mov eax, ecx
+        mov ecx, 4                  ; one dword covers FD_MAX (8) fds
+        call user_range_ok
+        jc .sel_bad
+.sel_chk_e:
+        mov ecx, [.sel_efds]
+        test ecx, ecx
+        jz .sel_chk_tv
+        mov eax, ecx
+        mov ecx, 4                  ; one dword covers FD_MAX (8) fds
+        call user_range_ok
+        jc .sel_bad
+.sel_chk_tv:
+        mov ecx, [.sel_tv]
+        test ecx, ecx
+        jz .sel_chk_done
+        mov eax, ecx
+        mov ecx, 8                  ; struct timeval
+        call user_range_ok
+        jc .sel_bad
+.sel_chk_done:
+        mov ecx, [.sel_rfds]
+        mov edx, [.sel_wfds]
+        mov esi, [.sel_efds]
+        mov edi, [.sel_tv]
         xor eax, eax            ; ready count
         ; Iterate over read fd_set (64-bit mask for up to 64 fds)
         test ecx, ecx
@@ -2604,6 +2683,14 @@ sys_select:
         mov [esp + 28], eax
         popad
         iretd
+.sel_bad:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+.sel_rfds: dd 0
+.sel_wfds: dd 0
+.sel_efds: dd 0
+.sel_tv:   dd 0
 
 ;-----------------------------------------------------------------------
 ; sys_clock_gettime (124) — POSIX clock_gettime
@@ -3299,10 +3386,18 @@ sys_execve:
 sys_delete:
         push esi
         push edi
+        mov eax, ebx
+        call validate_user_ptr
+        jc .sdel_bad
         ; Route through VFS: lets /tmp/* hit tmpfs, / hits HBFS, etc.
         call vfs_unlink         ; EBX=path -> EAX=0 or -1
         pop edi
         pop esi
+        iretd
+.sdel_bad:
+        pop edi
+        pop esi
+        mov eax, -1
         iretd
 
 ;---------------------------------------
@@ -3313,6 +3408,11 @@ sys_delete:
 sys_stat:
         push esi
         push edi
+
+        ; The path is dereferenced by the VFS, so check it first.
+        mov eax, ebx
+        call validate_user_ptr
+        jc  .stat_not_found
 
         ; A non-NULL stat buffer is written by the backend; validate its
         ; 12-byte layout (size, type, mtime) before calling into it.

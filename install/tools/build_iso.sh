@@ -55,7 +55,7 @@ done
 command -v nasm    >/dev/null 2>&1 || die "nasm not found"
 command -v xorriso >/dev/null 2>&1 || die "xorriso not found (install libisoburn or cdrtools)"
 
-[[ -f "$IMAGE" ]] || die "disk image not found: $IMAGE (run 'make iso-image' first)"
+[[ -f "$IMAGE" ]] || die "disk image not found: $IMAGE (run 'make iso' first)"
 
 IMAGE_BYTES=$(wc -c < "$IMAGE")
 [[ "$IMAGE_BYTES" -ge $((8 * 1024 * 1024)) ]] \
@@ -106,6 +106,21 @@ fi
 # ── Build the ISO -----------------------------------------------------
 info "Building $OUTPUT"
 rm -f "$OUTPUT"
+
+# Reproducible discs: xorriso stamps the volume and every file with the current
+# time, so two builds of the same sources produce different bytes. With
+# SOURCE_DATE_EPOCH set (the usual convention, e.g. the commit's timestamp) the
+# same sources produce the same ISO, and a published checksum stays meaningful.
+REPRO_ARGS=()
+if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+  if MOD_DATE=$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y%m%d%H%M%S 2>/dev/null); then
+    MOD_DATE="${MOD_DATE}00"
+    REPRO_ARGS+=("--modification-date=$MOD_DATE" "--set_all_file_dates" "$MOD_DATE")
+  else
+    warn "cannot convert SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; the disc will not be reproducible"
+  fi
+fi
+
 # -iso-level 3 keeps full file names in the ISO9660 identifiers; the installer
 # also understands Rock Ridge names, so the image is found either way.
 xorriso -as mkisofs \
@@ -113,6 +128,7 @@ xorriso -as mkisofs \
   -V MELLIVORA \
   -A "Mellivora OS installer" \
   -b boot/installer.bin -no-emul-boot -boot-load-size 4 \
+  "${REPRO_ARGS[@]+"${REPRO_ARGS[@]}"}" \
   -o "$OUTPUT" "$WORK/tree" >/dev/null 2>&1
 
 [[ -f "$OUTPUT" ]] || die "xorriso did not produce $OUTPUT"

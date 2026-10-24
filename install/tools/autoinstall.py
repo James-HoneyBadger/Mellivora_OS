@@ -34,7 +34,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
 
-from qemu_drive import Monitor, find_qemu  # noqa: E402
+from qemu_drive import Monitor, SerialConsole, find_qemu  # noqa: E402
 
 MARKER_OK = "Installation complete."
 MARKER_DONE = "Press any key."
@@ -158,31 +158,71 @@ def run_install(iso: str, target: str, display: str = "none",
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# The two trees have different prompts, and the disc can install either: the
+# 32-bit shell prints "Lair:/>" and the 64-bit one "mellivora:/>". Requiring a
+# particular one would fail a correct install of the other.
+SHELL_PROMPTS = ("Lair:/>", "mellivora:/>")
+
+
 def boot_check(target: str, timeout: float = 120.0) -> bool:
-    """Boot the installed disk and look for the shell prompt."""
+    """Boot the installed disk and look for either tree's shell prompt."""
     qemu = find_qemu()
     tmp = tempfile.mkdtemp(prefix="mellivora-verify-")
     mon_path = os.path.join(tmp, "mon.sock")
+    ser_path = os.path.join(tmp, "serial.sock")
+    # A 64-bit-capable CPU model and the e1000 the 64-bit nucleus has a driver
+    # for: with "-cpu 486" a correctly installed 64-bit disk cannot enter long
+    # mode, so the check would report a good install as unbootable.
     proc = subprocess.Popen(
-        [qemu, "-cpu", "486", "-m", "128",
+        [qemu, "-cpu", "qemu64,+smep,+smap", "-m", "256",
          "-drive", f"file={target},format=raw,if=ide,cache=writethrough",
          "-boot", "c", "-display", "none", "-no-reboot",
          "-monitor", f"unix:{mon_path},server,nowait",
-         "-serial", "null",
-         "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off"],
+         # wait=on so the guest does not start before this process is reading:
+         # with no client attached the early boot output is lost and the console
+         # never recovers, which looked exactly like a disk that would not boot.
+         "-serial", f"unix:{ser_path},server=on,wait=on",
+         "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off",
+         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
+        serial = SerialConsole(ser_path)
         mon = Monitor(mon_path)
+        # The two trees put the prompt in different places: the 32-bit shell
+        # writes it to the VGA text buffer, the 64-bit one to the serial
+        # console. Watching only the screen reported a good 64-bit install as
+        # unbootable.
         deadline = time.time() + timeout
         while time.time() < deadline:
             time.sleep(1.0)
-            if "Lair:/>" in mon.screen():
+            if any(prompt in mon.screen() for prompt in SHELL_PROMPTS):
+                return True
+            if any(prompt in serial.text() for prompt in SHELL_PROMPTS):
                 return True
         return False
     finally:
         proc.kill()
         proc.wait()
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def image_written(iso: str, lba: int, size: int, target: str) -> bool:
+    """True when the target disk holds the ISO's image, byte for byte.
+
+    The BIOS read-back only proves the first sector; a truncated copy, a lost
+    write in the middle, or an installer that stopped early all look fine from
+    there. This compares the whole image.
+    """
+    window = 1 << 20
+    with open(iso, "rb") as src, open(target, "rb") as dst:
+        src.seek(lba * 2048)
+        left = size
+        while left:
+            want = min(left, window)
+            if src.read(want) != dst.read(want):
+                return False
+            left -= want
+    return True
 
 
 def main() -> int:
@@ -212,13 +252,8 @@ def main() -> int:
     result = {"ok": ok, "iso": iso, "target": target, "image_size": want_size}
 
     if ok:
-        with open(iso, "rb") as f:
-            f.seek(want_lba * 2048)
-            head = f.read(min(want_size, 4 * 1024 * 1024))
-        with open(target, "rb") as f:
-            disk_head = f.read(len(head))
-        result["first_bytes_match"] = head == disk_head
-        if not result["first_bytes_match"]:
+        result["image_matches"] = image_written(iso, want_lba, want_size, target)
+        if not result["image_matches"]:
             ok = False
             result["ok"] = False
 
@@ -231,8 +266,8 @@ def main() -> int:
         print(json.dumps(result, indent=2))
     else:
         print("install " + ("completed" if result.get("ok") else "FAILED"))
-        if "first_bytes_match" in result:
-            print("target starts with the image: " + ("yes" if result["first_bytes_match"] else "no"))
+        if "image_matches" in result:
+            print("target disk matches the image: " + ("yes" if result["image_matches"] else "no"))
         if "boots" in result:
             print("installed disk boots: " + ("yes" if result["boots"] else "no"))
     return 0 if ok else 1

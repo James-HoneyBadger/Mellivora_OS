@@ -55,6 +55,19 @@ FILLER_RE = re.compile(
     r"^\s*times\s*\(\s*SYSCALL_MAX\s*-\s*([0-9]+)\s*\)\s*dd\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$"
 )
 
+# Hand-written prose that quotes the size of the ABI. docs/syscalls.md and
+# docs/syscalls.json are generated from programs/syscalls.inc and cannot drift;
+# these can, so the number is checked against the same source of truth.
+DOC_COUNT_FILES = (
+    "README.md",
+    "docs/TECHNICAL_REFERENCE.md",
+    "docs/PROGRAMMING_GUIDE.md",
+    "kernel/data.inc",          # the boot banner and `sysinfo` text
+)
+PROSE_COUNT_RE = re.compile(r"\b([0-9]+)\s+syscalls\b")
+#   **Total: 186 syscalls defined (0–185, no gaps).**
+PROSE_RANGE_RE = re.compile(r"\(0\s*[\u2013-]\s*([0-9]+),\s*no gaps\)")
+
 SYSCALL_MAX_RE = re.compile(r"^\s*SYSCALL_MAX\s+equ\s+([0-9]+)\b", re.MULTILINE)
 
 #   ENOENT equ 2
@@ -266,6 +279,27 @@ def main() -> int:
                 errors.append(
                     f"errno mismatch for {name}: kernel.asm={kernel_errno[name]} "
                     f"programs/syscalls.inc={user_errno[name]}"
+                )
+
+    # --- I. prose counts ---------------------------------------------
+    # The generated docs cannot drift; the hand-written ones had, by one.
+    expected_count = len(user_sys)
+    expected_highest = max(user_sys.values())
+    for rel in DOC_COUNT_FILES:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for quoted in PROSE_COUNT_RE.findall(line):
+                if int(quoted) != expected_count:
+                    errors.append(
+                        f"{rel}:{line_no}: says {quoted} syscalls; "
+                        f"programs/syscalls.inc declares {expected_count} "
+                        f"(0..{expected_highest})"
+                    )
+            m = PROSE_RANGE_RE.search(line)
+            if m and int(m.group(1)) != expected_highest:
+                errors.append(
+                    f"{rel}:{line_no}: range ends at {m.group(1)}; the highest "
+                    f"syscall number is {expected_highest}"
                 )
 
     # --- report ------------------------------------------------------

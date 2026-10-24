@@ -97,8 +97,8 @@ static void frames_release(u32 first, u32 end)
 
 int pmm_init(void)
 {
-    u32 count = *(volatile u32 *)BOOTINFO_MMAP_CNT;
-    u32 ptr = *(volatile u32 *)BOOTINFO_MMAP_PTR;
+    u32 count = lm_read32(BOOTINFO_MMAP_CNT);
+    u32 ptr = lm_read32(BOOTINFO_MMAP_PTR);
     const struct e820_entry *map = (const struct e820_entry *)(u64)ptr;
 
     stats.usable_bytes = 0;

@@ -739,6 +739,14 @@ sys_audio_rec_start:
 ; Returns: EAX = bytes available, 0 if still recording, -1 on error
 ;-----------------------------------------------------------------------
 sys_audio_rec_read:
+        ; The destination is a caller buffer: validate it before the copy.
+        push eax
+        push ecx
+        mov eax, ebx
+        call user_range_ok
+        pop ecx
+        pop eax
+        jc .sarr_bad
         pushad
         cmp dword [ac97_rec_state], 1
         jne .sarr_fail
@@ -771,6 +779,9 @@ sys_audio_rec_read:
 .sarr_busy:
         mov dword [esp + 28], 0
         popad
+        iretd
+.sarr_bad:
+        mov eax, -1
         iretd
 .sarr_fail:
         mov dword [esp + 28], -1

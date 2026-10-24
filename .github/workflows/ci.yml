@@ -7,13 +7,16 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -55,7 +58,7 @@ jobs:
 
       - name: Upload benchmark artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-${{ github.run_id }}
           path: |
@@ -105,7 +108,7 @@ jobs:
 
       - name: Upload disk image artifact
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mellivora-img-${{ github.sha }}
           path: mellivora.img
@@ -116,7 +119,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -136,3 +139,85 @@ jobs:
 
       - name: Long-mode boot test
         run: make check-longmode
+
+  sixtyfour:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          # The nucleus is freestanding C11: it needs an x86-64 compiler even
+          # though the runner's own gcc would produce the right architecture,
+          # because the probe accepts the distro cross package first.
+          sudo apt-get install -y nasm make python3 qemu-system-x86 \
+            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+
+      - name: Show the toolchain the build will use
+        run: |
+          echo "cc: $(sh tools/find_lm_toolchain.sh cc)"
+          echo "ld: $(sh tools/find_lm_toolchain.sh ld)"
+
+      - name: Build the 64-bit image
+        run: make 64bit
+
+      - name: 64-bit gate (boot, shell, guest writes)
+        run: make check-64
+
+      - name: 64-bit HBFS integrity
+        run: python3 tools/fsck_hbfs.py mellivora64.img --strict
+
+      - name: Build and boot the asm nucleus too
+        run: |
+          make 64bit-asm
+          python3 tests/test_longmode.py mellivora64-asm.img --marker-only
+
+  installer-iso:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nasm make python3 xorriso qemu-system-x86 \
+            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+
+      # The disc is the primary way to install the system, so it is built,
+      # verified and installed here rather than only on a developer's machine.
+      - name: Build and verify the installer disc
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) make iso
+          make iso-verify
+
+      - name: Check the disc's structure
+        run: python3 tests/test_iso.py
+
+      - name: Install the disc onto a blank disk and boot it
+        run: python3 tests/test_iso.py --end-to-end
+
+      - name: Prove a mis-addressed write is rejected
+        run: python3 tests/test_installer_verify.py
+
+      - name: Build and check the lite disc
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) make iso-lite
+          python3 tests/test_iso.py --iso mellivora-lite.iso \
+            --image mellivora-install-lite.img
+
+      - name: Record the disc checksums
+        run: |
+          sha256sum mellivora.iso mellivora-lite.iso | tee SHA256SUMS
+
+      - name: Upload the checksums
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mellivora-iso-checksums-${{ github.sha }}
+          path: SHA256SUMS
+          retention-days: 7

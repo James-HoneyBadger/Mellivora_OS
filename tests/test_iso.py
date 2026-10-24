@@ -47,14 +47,23 @@ def _opt(args: list[str], name: str, default: str | None = None) -> str | None:
     return args[args.index(name) + 1] if name in args else default
 
 
-def iso9660_find(data: bytes, want: str) -> tuple[int, int] | None:
-    """Return (lba, size) of `want` anywhere in the ISO9660 tree."""
-    pvd = data[16 * 2048:17 * 2048]
+def read_extent(f, lba: int, size: int) -> bytes:
+    f.seek(lba * 2048)
+    return f.read(size)
+
+
+def iso9660_find(f, want: str) -> tuple[int, int] | None:
+    """Return (lba, size) of `want` anywhere in the ISO9660 tree.
+
+    Reads one extent at a time: the disc is mostly the disk image, and loading
+    all of it just to walk a few directory records was 258 MB of RSS.
+    """
+    pvd = read_extent(f, 16, 2048)
     if pvd[1:4] != b"CD0":
         return None
 
     def walk(lba: int, size: int, depth: int) -> tuple[int, int] | None:
-        directory = data[lba * 2048:lba * 2048 + size]
+        directory = read_extent(f, lba, size)
         offset = 0
         while offset < len(directory):
             length = directory[offset]
@@ -90,27 +99,28 @@ def check_structure(iso: Path, image: Path) -> None:
         return
 
     image_size = image.stat().st_size
-    data = iso.read_bytes()
 
-    check("ISO9660 primary volume descriptor", data[16 * 2048 + 1:16 * 2048 + 6] == b"CD001")
+    with iso.open("rb") as f:
+        pvd = read_extent(f, 16, 2048)
+        check("ISO9660 primary volume descriptor", pvd[1:6] == b"CD001")
 
-    boot = iso9660_find(data, "installer.bin")
-    check("boot image is in the ISO", boot is not None)
-    if boot:
-        lba, size = boot
-        payload = data[lba * 2048:lba * 2048 + size]
-        check("boot image is at least the 2 KB stub + payload", size >= 66 * 1024, f"{size} bytes")
-        check("boot image carries the installer payload", b"Mellivora OS installer" in payload)
-        check("boot image carries the image name", b"MELLIVORA.IMG" in payload)
+        boot = iso9660_find(f, "installer.bin")
+        check("boot image is in the ISO", boot is not None)
+        if boot:
+            lba, size = boot
+            payload = read_extent(f, lba, size)
+            check("boot image is at least the 2 KB stub + payload", size >= 66 * 1024, f"{size} bytes")
+            check("boot image carries the installer payload", b"Mellivora OS installer" in payload)
+            check("boot image carries the image name", b"MELLIVORA.IMG" in payload)
 
-    found = iso9660_find(data, "MELLIVORA.IMG")
-    check("MELLIVORA.IMG is in the ISO", found is not None)
-    if found:
-        lba, size = found
-        check("MELLIVORA.IMG size matches the disk image", size == image_size,
-              f"ISO has {size}, image is {image_size}")
-        head = data[lba * 2048:lba * 2048 + 512]
-        check("MELLIVORA.IMG starts with a bootable MBR", head[510:512] == b"\x55\xaa")
+        found = iso9660_find(f, "MELLIVORA.IMG")
+        check("MELLIVORA.IMG is in the ISO", found is not None)
+        if found:
+            lba, size = found
+            check("MELLIVORA.IMG size matches the disk image", size == image_size,
+                  f"ISO has {size}, image is {image_size}")
+            head = read_extent(f, lba, 512)
+            check("MELLIVORA.IMG starts with a bootable MBR", head[510:512] == b"\x55\xaa")
 
     xorriso = shutil.which("xorriso")
     if xorriso:
@@ -137,7 +147,7 @@ def run_end_to_end(iso: Path, workdir: Path) -> None:
         capture_output=True, text=True)
     print(proc.stdout.strip() or proc.stderr.strip())
     check("unattended install reported success", proc.returncode == 0, proc.stderr.strip()[:300])
-    check("target disk matches the start of the image", '"first_bytes_match": true' in proc.stdout)
+    check("target disk matches the image", '"image_matches": true' in proc.stdout)
     check("installed disk boots to the shell", '"boots": true' in proc.stdout)
 
 

@@ -624,6 +624,13 @@ int hbfs_init(void)
 
     cwd_ready = 0;      /* every task starts at the root */
 
+    /* From here the volume is usable: every read, lookup and write guards on
+     * `ready`. The assignment was lost when the extent cache was added to this
+     * function, which left a mounted volume that answered "not found" to every
+     * name and refused to create anything - while still printing a healthy
+     * mount line, so the boot looked fine and the userland never started. */
+    ready = 1;
+
     kputs("[hbfs] root=");
     kput_dec(root_lba);
     kputs(" data=");

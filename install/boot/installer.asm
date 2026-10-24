@@ -7,7 +7,8 @@
 ;
 ; Memory:
 ;   0x1000:0000  this code, its data and a 2 KB sector buffer
-;   0x2000:0000  32 KB transfer buffer
+;   0x2000:0000  32 KB transfer buffer (one chunk, read from the CD)
+;   0x2800:0000  32 KB read-back buffer, compared against the transfer buffer
 ;   0x1000:F000  stack
 ;=======================================================================
 [BITS 16]
@@ -17,6 +18,7 @@ CHUNK_BYTES     equ 32768               ; 16 CD sectors = 64 disk sectors
 CD_SECTS        equ CHUNK_BYTES / 2048
 HD_SECTS        equ CHUNK_BYTES / 512
 BUF_SEG         equ 0x2000
+VERIFY_SEG      equ 0x2800
 MAX_DISKS       equ 8
 
 start:
@@ -120,18 +122,12 @@ start:
         jnc .halt
         call newline
 
-        ; ---- Copy ------------------------------------------------------
+        ; ---- Copy, verifying every chunk -------------------------------
         mov si, msg_copy
         call print
         call copy_image
         jc .copy_failed
-
-        ; ---- Verify ----------------------------------------------------
-        mov si, msg_verify
-        call print
-        call verify_first
-        jc .verify_failed
-        mov si, msg_ok
+        mov si, msg_verified
         call print
         jmp .done
 
@@ -141,9 +137,9 @@ start:
         mov al, [last_err]
         call print_hex_byte
         call newline
-        jmp .halt
-.verify_failed:
-        mov si, msg_err_verify
+        cmp byte [last_err], 0xFF
+        jne .halt
+        mov si, msg_err_mismatch
         call print
         jmp .halt
 .no_image:
@@ -239,19 +235,36 @@ find_image:
 ;-----------------------------------------------------------------------
 ; find_entry - search the directory at [dir_lba] for the name at DS:SI
 ; Out: [entry_lba], [entry_size], [entry_flags]; CF set if not found
+;
+; A directory is a byte stream split into 2048-byte sectors, and each sector
+; starts a fresh chain of records: a zero record length means "no more records
+; in this sector", not "no more records in this directory". The old loop read
+; only the first sector, so an entry that landed in the second sector of a
+; directory was invisible.
 ;-----------------------------------------------------------------------
 find_entry:
-        push si                           ; cd_read_sector clobbers SI
         mov eax, [dir_lba]
+        mov [fe_lba], eax
+        mov eax, [dir_size]
+        add eax, 2047
+        shr eax, 11                       ; dir_size -> whole 2048-byte sectors
+        jz .fe_fail                       ; an empty directory holds nothing
+        mov [fe_left], eax
+
+.fe_sector:
+        mov eax, [fe_lba]
         mov di, sector_buf
+        push si                           ; cd_read_sector clobbers SI
         call cd_read_sector
         pop si
         jc .fe_fail
         mov bx, sector_buf
 .fe_next:
         movzx eax, byte [bx]              ; record length
+        test al, al
+        jz .fe_sector_end                 ; rest of this sector is padding
         cmp al, 34                        ; shortest possible record
-        jb .fe_fail                       ; 0 = end of records, less = corrupt
+        jb .fe_fail                       ; shorter than that is corrupt
         movzx ecx, byte [bx + 32]         ; identifier length
         test ecx, ecx
         jz .fe_skip
@@ -273,6 +286,14 @@ find_entry:
         movzx eax, byte [bx]
         add bx, ax
         jmp .fe_next
+
+.fe_sector_end:
+        inc dword [fe_lba]
+        dec dword [fe_left]
+        jnz .fe_sector
+.fe_fail:
+        stc
+        ret
 .fe_hit:
         mov eax, [bx + 2]
         mov [entry_lba], eax
@@ -281,9 +302,6 @@ find_entry:
         mov al, [bx + 25]
         mov [entry_flags], al
         clc
-        ret
-.fe_fail:
-        stc
         ret
 
 ;-----------------------------------------------------------------------
@@ -532,24 +550,13 @@ copy_image:
         ret
 .ci_read_ok:
 
-        ; Disk write
-        mov eax, [chunk]
-        shr eax, 9                         ; bytes -> 512-byte sectors
-        mov [wdap_count], ax
-        mov eax, [dst_lba]
-        mov [wdap_lba], eax
-        mov dword [wdap_lba + 4], 0
-        mov word [wdap_off], 0
-        mov word [wdap_seg], BUF_SEG
-        mov si, wdap
-        mov dl, [target_drive]
-        mov ah, 0x43
-        int 0x13
-        jnc .ci_write_ok
-        mov [last_err], ah
-        stc
-        ret
-.ci_write_ok:
+        ; Disk write, then read the same sectors back and compare them with the
+        ; bytes that came off the CD. A drive that drops or corrupts a write is
+        ; caught at the chunk where it happened, not 256 MiB later.
+        call write_chunk
+        jc .ci_failed
+        call verify_chunk
+        jc .ci_failed
 
         ; Advance
         mov eax, [chunk]
@@ -576,44 +583,118 @@ copy_image:
         call newline
         clc
         ret
+.ci_failed:
+        ret                                ; CF is already set
 
 ;=======================================================================
-; verify_first - read sector 0 back from the target and compare
+; write_chunk - write [chunk] bytes from BUF_SEG at [dst_lba]
+; Out: CF set on error, [last_err] = BIOS status
 ;=======================================================================
-verify_first:
-        mov word [wdap_count], 1
-        mov dword [wdap_lba], 0
+write_chunk:
+        mov eax, [chunk]
+        shr eax, 9                         ; bytes -> 512-byte sectors
+        mov [wdap_count], ax
+        mov eax, [dst_lba]
+        mov [wdap_lba], eax
         mov dword [wdap_lba + 4], 0
         mov word [wdap_off], 0
         mov word [wdap_seg], BUF_SEG
+        push si
         mov si, wdap
+        mov dl, [target_drive]
+        mov ah, 0x43
+        int 0x13
+        pop si
+        jnc .wc_ok
+        mov [last_err], ah
+        stc
+        ret
+.wc_ok:
+        clc
+        ret
+
+;=======================================================================
+; read_chunk_back - read the chunk at [dst_lba] into VERIFY_SEG
+; Out: CF set on error, [last_err] = BIOS status
+;=======================================================================
+read_chunk_back:
+        mov eax, [chunk]
+        shr eax, 9
+        mov [rdap_count], ax
+        mov eax, [dst_lba]
+        mov [rdap_lba], eax
+        mov dword [rdap_lba + 4], 0
+        mov word [rdap_off], 0
+        mov word [rdap_seg], VERIFY_SEG
+        push si
+        mov si, rdap
         mov dl, [target_drive]
         mov ah, 0x42
         int 0x13
-        jc .vf_fail
-
-        ; Compare with the CD's sector 0 of the image
-        mov eax, [image_lba]
-        mov di, sector_buf
-        call cd_read_sector
-        jc .vf_fail
-        mov si, sector_buf
-        mov ax, BUF_SEG
-        mov es, ax
-        xor di, di
-        mov cx, 256
-        push ds
-        push cs
-        pop ds
-        repe cmpsb
-        pop ds
-        mov ax, cs
-        mov es, ax
-        jne .vf_fail
+        pop si
+        jnc .rc_ok
+        mov [last_err], ah
+        stc
+        ret
+.rc_ok:
         clc
         ret
-.vf_fail:
+
+;=======================================================================
+; compare_chunk - compare VERIFY_SEG with BUF_SEG, [chunk] bytes each
+; Out: CF clear when they are identical
+;=======================================================================
+compare_chunk:
+        push ds
+        push es
+        push si
+        push di
+        mov ecx, [chunk]                  ; read before DS stops being ours
+        shr ecx, 2                        ; a chunk is a multiple of 512 bytes
+        mov ax, BUF_SEG
+        mov ds, ax
+        mov ax, VERIFY_SEG
+        mov es, ax
+        xor si, si
+        xor di, di
+        repe cmpsd
+        pop di
+        pop si
+        pop es
+        pop ds
+        jne .cc_different
+        clc
+        ret
+.cc_different:
         stc
+        ret
+
+;=======================================================================
+; verify_chunk - read the chunk just written back and compare it with the
+; copy that came from the CD. One rewrite is attempted before a mismatch is
+; reported, because a freshly selected drive can drop the first command.
+; Out: CF set on failure, [last_err] = BIOS status or 0xFF for a mismatch
+;=======================================================================
+verify_chunk:
+        mov byte [vc_retried], 0
+.vc_again:
+        call read_chunk_back
+        jc .vc_fail
+        call compare_chunk
+        jnc .vc_ok
+        cmp byte [vc_retried], 0
+        jne .vc_mismatch
+        mov byte [vc_retried], 1
+        call write_chunk
+        jc .vc_fail
+        jmp .vc_again
+.vc_mismatch:
+        mov byte [last_err], 0xFF         ; not a BIOS status: the data differs
+.vc_fail:
+        stc
+        ret
+.vc_ok:
+        clc
         ret
 
 ;=======================================================================
@@ -822,8 +903,7 @@ msg_mib_erase: db " MiB. EVERYTHING ON IT WILL BE ERASED.", 10, 0
 msg_confirm:  db "Type YES to continue: ", 0
 msg_yes:      db "YES", 0
 msg_copy:     db 10, "Writing the image (one dot per MiB, this takes a few minutes):", 10, 0
-msg_verify:   db "Verifying the first sector... ", 0
-msg_ok:       db "OK", 10, 0
+msg_verified: db "Every 32 KiB chunk was read back from the disk and matched.", 10, 0
 msg_used:     db "Installed ", 0
 msg_onto:     db " MiB onto a ", 0
 msg_onto2:    db " MiB disk; the rest is left untouched.", 10
@@ -833,7 +913,8 @@ msg_done:     db 10, "Installation complete.", 10
 msg_halt:     db 10, "Installer stopped.", 10, 0
 msg_err_image:  db "MELLIVORA.IMG was not found on this CD.", 10, 0
 msg_err_copy:   db "Write failed, BIOS status 0x", 0
-msg_err_verify: db "The first sector did not read back correctly.", 10, 0
+msg_err_mismatch: db "The chunk did not read back as written, even after a rewrite.", 10
+                  db "The disk or its cable is failing.", 10, 0
 
 name_boot:    db "BOOT", 0
 name_image:   db "MELLIVORA.IMG", 0
@@ -852,6 +933,8 @@ image_lba:    dd 0
 image_size:   dd 0
 dir_lba:      dd 0
 dir_size:     dd 0
+fe_lba:       dd 0
+fe_left:      dd 0
 entry_lba:    dd 0
 entry_size:   dd 0
 entry_flags:  db 0
@@ -879,6 +962,16 @@ wdap_count: dw 1
 wdap_off:   dw 0
 wdap_seg:   dw 0
 wdap_lba:   dq 0
+
+rdap:
+        db 0x10
+        db 0
+rdap_count: dw 1
+rdap_off:   dw 0
+rdap_seg:   dw 0
+rdap_lba:   dq 0
+
+vc_retried: db 0
 
 disk_dap:
         dw 0x1A

@@ -3,7 +3,7 @@
 
 This script prevents silent drift between:
 - kernel.asm, populate.py and tests/test_hbfs.py, the 32-bit tree's three copies
-- boot/lm_hbfs.c, populate.py and tools/fsck_hbfs.py, the 64-bit tree's
+- kernel64/lm_hbfs.c, populate.py and tools/fsck_hbfs.py, the 64-bit tree's
 
 The 64-bit reader and the offline checker do not share code with the builder -
 that is the point of a second implementation - so each carries its own copy of
@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 KERNEL_PATH = ROOT / "kernel.asm"
 POPULATE_PATH = ROOT / "populate.py"
 TEST_HBFS_PATH = ROOT / "tests" / "test_hbfs.py"
-LM_HBFS_PATH = ROOT / "boot" / "lm_hbfs.c"
+LM_HBFS_PATH = ROOT / "kernel64" / "lm_hbfs.c"
 FSCK_PATH = ROOT / "tools" / "fsck_hbfs.py"
 JOURNAL_PATH = ROOT / "tools" / "hbfs_journal.py"
 
@@ -43,7 +43,7 @@ CONSTANT_MAP = {
     "HBFS_SUBDIR_BLOCKS": ("HBFS_SUBDIR_BLOCKS", "HBFS_SUBDIR_BLOCKS"),
 }
 
-# boot/lm_hbfs.c symbol -> (populate.py symbol, tools/fsck_hbfs.py symbol).
+# kernel64/lm_hbfs.c symbol -> (populate.py symbol, tools/fsck_hbfs.py symbol).
 # None means that file does not carry the constant. The v4 entries are checked
 # from the day they are declared rather than from the day they are first
 # written, because the whole point of a paired constant is that the pair cannot
@@ -307,9 +307,9 @@ def main() -> int:
     groups = [
         (CONSTANT_MAP, [("kernel.asm", kernel), ("populate.py", populate),
                         ("tests/test_hbfs.py", test_hbfs)]),
-        (LM_CONSTANT_MAP, [("boot/lm_hbfs.c", lm_hbfs), ("populate.py", populate),
+        (LM_CONSTANT_MAP, [("kernel64/lm_hbfs.c", lm_hbfs), ("populate.py", populate),
                            ("tools/fsck_hbfs.py", fsck)]),
-        (JOURNAL_CONSTANT_MAP, [("boot/lm_hbfs.c", lm_hbfs),
+        (JOURNAL_CONSTANT_MAP, [("kernel64/lm_hbfs.c", lm_hbfs),
                                 ("tools/fsck_hbfs.py", fsck),
                                 ("tools/hbfs_journal.py", journal)]),
     ]
