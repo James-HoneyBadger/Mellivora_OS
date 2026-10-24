@@ -6090,7 +6090,20 @@ cmd_exec_program:
         mov byte [edi], 0       ; Force null terminate
 .cpa_done:
 
-        ; Load file using parsed program name
+        ; Load file using parsed program name. A directory is not a program:
+        ; the loader would read its (empty) data and execute it. Remember it
+        ; as a candidate and search PATH first, so a program of the same name
+        ; still wins and a bare directory name enters the directory below.
+        mov dword [.dir_candidate], 0
+        call hbfs_load_root_dir
+        mov esi, prog_name_buf
+        call hbfs_find_file
+        jc .exec_read_file
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne .exec_read_file
+        mov dword [.dir_candidate], 1
+        jmp .try_path_search
+.exec_read_file:
         mov esi, prog_name_buf
         mov edi, PROGRAM_BASE
         call hbfs_read_file
@@ -6150,6 +6163,8 @@ cmd_exec_program:
         mov esi, prog_name_buf
         call hbfs_find_file
         jc .path_cd_fail
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        je .path_cd_fail
 
         ; Found it! Read the file data
         movzx ebx, byte [edi + 253]
@@ -6193,7 +6208,21 @@ cmd_exec_program:
 .path_not_found:
         ; Restore user's cwd
         call path_restore_cwd
-        jmp .not_found
+
+        ; Not a program: a bare directory name is entered instead, the way a
+        ; program name runs. Arguments mean the line was meant as a command, so
+        ; the fallback only applies without them.
+        cmp dword [.dir_candidate], 1
+        jne .not_found
+        cmp byte [program_args_buf], 0
+        jne .not_found
+        mov esi, prog_name_buf
+        call cmd_cd_internal
+        test eax, eax
+        jnz .not_found
+        popad
+        clc
+        ret
 
 .found_program:
 
@@ -6523,6 +6552,7 @@ cmd_exec_program:
 .exec_task:      dd 0           ; the task running at exec time, or 0
 
 .path_fsize: dd 0               ; Temp storage for file size during PATH search
+.dir_candidate: dd 0            ; 1 when the typed name is a directory here
 
 .not_found:
         call shell_status_fail

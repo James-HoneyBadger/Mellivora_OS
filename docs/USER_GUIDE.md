@@ -186,6 +186,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `dir` / `ls` | List files in current directory |
 | `dir -l` | Long format with types and sizes |
 | `cd DIR` | Change directory (`cd /`, `cd ..`, `cd bin`, `cd /docs/sub`) |
+| `DIR` | Typing a directory's name enters it, the way typing a program's name runs it |
 | `pwd` | Print current working directory path |
 | `mkdir NAME` | Create a new subdirectory |
 

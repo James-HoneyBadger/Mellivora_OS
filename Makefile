@@ -268,11 +268,42 @@ $(POPULATE_STAMP): $(POPULATE_DEPS)
 # Populate disk image with files and programs
 populate: $(POPULATE_STAMP)
 
-# Full build of the 32-bit tree: OS + programs + populated filesystem + debug
-# symbols. This is the tree `make check` exercises.
-# It keeps the name it has
-# always had.
-full: $(POPULATE_STAMP) symbols
+# Run one build stage and print what it did, without make's own "is up to
+# date" chatter. A stage that fails prints its whole log before stopping.
+define run_stage
+	@log=$$(mktemp); \
+	if $(MAKE) --no-print-directory $(1) >"$$log" 2>&1; then \
+		grep -v -e "is up to date" -e "Nothing to be done for" "$$log" || true; \
+	else \
+		cat "$$log"; rm -f "$$log"; exit 1; \
+	fi; \
+	rm -f "$$log"
+endef
+
+# Full build: every stage that produces a bootable system, in order and each
+# one announced, so the log says what the image is made of.
+full:
+	@echo "=== Mellivora OS - full build ==="
+	@echo ""
+	@echo "  [1/6] Boot sector (real mode, A20, E820, protected mode)"
+	$(call run_stage,$(BOOT_BIN))
+	@echo ""
+	@echo "  [2/6] Kernel (kernel.bin, kernel_sectors.inc) and symbol table"
+	$(call run_stage,$(KERNEL_BIN) kernel_sectors.inc $(KERNEL_ELF))
+	@echo ""
+	@echo "  [3/6] Stage 2 loader (loads the kernel, enters protected mode)"
+	$(call run_stage,$(STAGE2_BIN))
+	@echo ""
+	@echo "  [4/6] User programs ($(words $(PROG_BINS)) sources)"
+	@$(MAKE) --no-print-directory -s programs
+	@echo "        $(words $(PROG_BINS)) programs ready"
+	@echo ""
+	@echo "  [5/6] Disk image ($(IMAGE_SIZE_MB) MB)"
+	$(call run_stage,$(IMAGE))
+	@echo ""
+	@echo "  [6/6] Filesystem (HBFS)"
+	$(call run_stage,populate)
+	@echo ""
 	@echo "=== Full build complete (32-bit: make run) ==="
 
 # Rebuild kernel only and write it into the existing disk image.

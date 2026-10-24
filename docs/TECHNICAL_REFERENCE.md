@@ -2009,6 +2009,12 @@ The shell reads input into `line_buffer` (256 bytes) and processes it through:
 3. **Built-in command matching** — linear scan of `command_table` (38 entries + 6 aliases)
 4. **External program loading** — current directory, then PATH search
 
+A name that is a directory is not loaded as a program: `cmd_exec_program` checks
+the entry type first, remembers that the name is a directory, and still searches
+PATH so a program of that name wins. When nothing executable is found, the
+directory is entered with `cmd_cd_internal`, so typing `docs` behaves like
+`cd docs` while `docs foo` still reports an unknown command.
+
 ### Built-in Commands (44 dispatched names)
 
 The 38 unique commands with 6 aliases (`ls`→`dir`, `rm`→`del`, `mv`→`ren`,

@@ -1,5 +1,21 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a directory name is a directory, not a program
+
+### Shell
+
+- **Typing a directory's name enters it.** `docs` at the prompt is now `cd docs`,
+  the way `hello` runs the program. The rule is the same one the shell already
+  used for programs: a built-in wins first, then a program in the current
+  directory, then one on PATH, and only then the directory. A name with
+  arguments is treated as a command that does not exist, so `docs foo` still
+  reports an unknown command rather than changing directory.
+- **A directory named like a program was executed as one.** `cmd_exec_program`
+  read whatever `hbfs_read_file` returned without checking the entry type, so a
+  directory loaded as an empty image and jumped to `0x00300000`, faulting with
+  `addr=0x00000000`. The entry type is checked before loading now, both in the
+  current directory and in each PATH component.
+
 ## Unreleased - floating point survives a context switch
 
 ### Kernel
