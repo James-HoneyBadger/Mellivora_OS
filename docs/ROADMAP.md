@@ -1,240 +1,342 @@
-# Mellivora OS — Roadmap to a general-purpose OS
+# Mellivora OS — Roadmap to a Windows 2000-class system
 
-This is the working plan for turning Mellivora from a strong hobby OS into a system
-whose *core* is comparable to a 2000-era commercial OS (Windows 2000 / NT 5), and in
-several respects better: capability-secured, crash-containing, instant to boot
-and tiny in memory.
+This is the working plan for turning Mellivora into a system that a 2000-era user
+or administrator could sit down at and do the same jobs with it that they did with
+Windows 2000 — without noticing that the lineage is different.
 
-The plan is deliberately measured. Every phase closes against numbers produced by
-`make check` and the benchmark suite, not against opinion.
+The target is **functional equivalence, not protocol compatibility**. Mellivora's
+share protocol is not SMB, its installer is not MSI, its configuration store is not
+the registry, and its filesystem is not NTFS. Nothing has to be Microsoft's format
+to pass the scorecard below, and that is what keeps a plan of this size tractable.
+
+The target edition is **Workstation**. Server-only features — domain controllers,
+directory services, Terminal Services — are out of scope. Administering a
+workstation remotely is in scope.
+
+The plan is deliberately measured. Every wave closes against a test that fails
+today, not against a list of finished features.
 
 ## Architectural decisions
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | One 32-bit x86 target | The kernel, its drivers and the syscall ABI are 32-bit protected mode; there is one build and one image |
-| D2 | Kernel code in hand-written NASM | The kernel is NASM throughout; new code follows its existing layout and style |
-| D3 | Hard user/kernel isolation: no kernel RAM reachable from ring 3 | Today the identity map marks 0–128 MB `PG_USER`, so any app can write the kernel |
-| D4 | POSIX-shaped ABI plus native extensions | Ports, libc and muscle memory transfer; GUI/package/manifest extensions stay Mellivora-specific |
-| D5 | Monolithic kernel with a real driver interface | Best performance per effort; a clean driver boundary keeps user-mode drivers possible later |
-| D6 | Object manager + capability security | Devices, config, files and services become named objects with ACLs; manifest permissions become enforced |
-| D7 | Compositor stays in-kernel for v1, gains damage tracking and a font stack | A user-space display server is a later, separately gated decision |
+| D1 | One 32-bit x86 target | The kernel, drivers and syscall ABI are 32-bit protected mode. There is one build and one image; PAE is the ceiling-raise if more than 4 GB is ever needed. |
+| D2 | NASM for the core, freestanding 32-bit C for new subsystems | The boot path, entry stubs, context switch and the existing modules are assembly and stay assembly. The executive, driver model, networking services and shell facilities in M1–M9 are too large to write by hand in asm at a maintainable rate. One calling convention (cdecl, packed structs, documented in `docs/spec/ABI.md`) is fixed at the boundary between the two. |
+| D3 | Everything is an object reachable through a handle | Resource access today is by raw number. Named, reference-counted, typeless objects with per-handle rights are what make sharing, waiting on, securing and remotely managing a resource possible at all. |
+| D4 | Security is enforced, not advisory | `chmod`/`chown` store an owner and a mode, but `open` does not check them. A 2000-class system denies access, audits the denial, and lets an administrator explain why. |
+| D5 | Parity through our own protocols | SMB, MSI, NTFS and the registry are each a multi-year compatibility project. A working equivalent that is *ours* satisfies the user story; a half-finished compatible one satisfies nobody. |
+| D6 | Monolithic kernel with a loadable driver model | Best performance per unit of effort, and the existing drivers already live in the kernel. Loadable modules give PnP and third-party drivers without moving to a microkernel. |
+| D7 | The compositor stays in the kernel for this plan | The surface IPC and damage-rect compositor already work. A user-space display server is a later, separately gated decision. |
+| D8 | ACPI-first hardware model, QEMU-first testing | Every hardware path in this plan is one QEMU can emulate, so the test suite stays honest. Real-hardware coverage is a separate, later campaign. |
+
+## The parity scorecard
+
+The scorecard is the definition of done for the whole plan. Each row is a job a
+person does, not an API that exists.
+
+| # | User job | Pass criteria | Today |
+|---|---|---|---|
+| 1 | Log on | Logon screen, per-user profile and desktop, switch user without reboot | No |
+| 2 | Manage users | Accounts, groups, passwords, quotas, permissions edited from a GUI | Partial — `uid`/`gid` and `chmod`/`chown` only |
+| 3 | Run services | Services start before logon, have dependencies, restart on failure | No |
+| 4 | Configure the machine | One hierarchical transactional store for kernel, service and user settings | No — env vars and compiled-in constants |
+| 5 | Install software | Install/uninstall with dependencies, registration and clean removal | Partial — `hbpkg` archives, no registration or removal |
+| 6 | Use the desktop | Multi-app shell, taskbar, file manager, drag-drop, clipboard, associations | Partial — Burrows multi-app desktop, no shell namespace |
+| 7 | Multitask hard | Preemptive, protected, per-process memory; a hung app cannot take the machine down | Yes |
+| 8 | Network | TCP/IP, DHCP, DNS, a shared folder another machine mounts | Partial — TCP/IP and clients, no file sharing |
+| 9 | Print | Spooler with queued, cancellable jobs | No |
+| 10 | Detect hardware | ACPI, PnP enumeration, power states, sleep and soft-off | No — PIC/PIT only |
+| 11 | Survive failure | Crash dump, safe mode, recovery console, filesystem repair, restore points | Partial — journal, `fsck`, fault injection |
+| 12 | Develop for it | Documented driver model and SDK, shared libraries, a C runtime, samples | Partial — flat and ELF32 programs, `tcc`, no shared libraries |
+| 13 | Administer remotely | Remote console, remote service and configuration management | No |
+| 14 | Play media | Mixed audio from several programs, video playback, a media framework | Partial — one audio stream per open, AC'97 and SB16 |
+
+Starting position: **2 yes, 6 partial, 6 no.**
 
 ## Gates
 
-A phase does not close until these are measured:
+A wave does not close until these are measured and reported by `make check`:
 
 | Gate | Target |
 |---|---|
-| Isolation | A hostile app cannot read or write a byte outside its own mappings |
-| Scale | 4 vCPUs, 4 GB RAM, 1 TB disk, 4 096 concurrent tasks |
-| Latency | syscall < 200 ns · context switch < 1 µs · fork+exec < 2 ms · 1080p frame < 8 ms |
-| Storage | > 100 MB/s sequential; crash-consistent across 10 000 random power-cuts |
-| Network | 1 000 concurrent sockets; survives 5% loss and reordering |
-| Reliability | 24 h soak with zero panics; every user fault is contained |
-| Footprint | < 8 MB RAM idle; < 2 s boot to desktop under QEMU |
-| Security | Unprivileged code cannot open a device, peer memory or a forbidden file; fuzz-clean |
+| Isolation | A hostile program cannot read, write, signal or open anything it was not granted |
+| Containment | A faulting user program is retired; the machine survives 24 hours of it |
+| Concurrency | 4 vCPUs under mixed load for 24 hours with no panic and no lost wakeup |
+| Durability | 10 000 power-cut iterations on a written volume, every one recoverable |
+| Latency | syscall < 1 µs, context switch < 5 µs, fork+exec < 5 ms (i486-era target) |
+| Footprint | < 16 MB RAM idle; < 5 s to the desktop under QEMU |
+| Admin | Every setting in the machine is reachable from the management console and the store |
 
-## Progress
+## Where the tree stands
 
-| Phase | State | Landed so far |
-|---|---|---|
-| P1 | in progress | `vm_area` table, demand-zero `mmap`, file-backed `mmap_file`, partial `munmap`/`mprotect`, fork COW of mmap areas, exit/exec reclaim, randomised placement, W^X, ring-3/kernel isolation, fail-closed demand faults, supervisor demand faults on the task's own areas, console-mode fault containment, guarded demand-grown user stacks, kernel identity demand above 128 MB, unified block cache, user heap on the VMM (`malloc`/`free`/`realloc`), coherent shared file mappings through a page cache, a kernel slab allocator for per-task tables, `vmtest`/`vmtest2`/`vmtest3`/`vmtest4`/`vmtest5`/`heaptest`/`memprot_test`/`sbrk_test`/`stack_test` conformance fixtures |
+What the plan builds on, and must not regress:
 
-## Phases
+- Preemptive four-level priority scheduler, `fork`/`exec`/`waitpid`, signals, pipes,
+  shared memory, message queues, semaphores, `mmap`/`mprotect`, copy-on-write fork
+  and per-task file descriptors — see [sched.inc](../kernel/sched.inc).
+- Demand paging with file-backed mappings, a page cache with writeback and
+  guarded demand-grown stacks — see [vm.inc](../kernel/vm.inc) and
+  [paging.inc](../kernel/paging.inc).
+- HBFS with a directory tree, extended attributes, permissions and a
+  crash-consistent journal, behind a VFS with a block cache and page cache — see
+  [hbfs.inc](../kernel/hbfs.inc), [vfs.inc](../kernel/vfs.inc) and
+  [blkcache.inc](../kernel/blkcache.inc).
+- TCP with a full state machine, ARP, ICMP, DHCP and DNS, sockets, `poll` and
+  non-blocking connect — see [net.inc](../kernel/net.inc).
+- ATA PIO and bus-master DMA, AHCI, virtio-blk, e1000 and rtl8139, AC'97 and SB16,
+  PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
+- The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
+  file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
+- 187 syscalls, 93 shell built-ins, 264 programs, an in-OS C compiler and `hbpkg`.
 
-### P0 · Guardrails and measurement (2 sprints)
+## Waves
 
-- CI on every push: lint, unit tests, boot, runtime, desktop, fsck, benchmarks (see
-  `.github/workflows/ci.yml`). Add: spec presence check and a CI time budget.
-- Benchmarks: boot time, syscall round-trip, context switch, fork+exec, file create/read
-  /write, TCP throughput, compositor frame time. Trend-tracked (`tools/bench_trend.py`).
-- Fuzzers: syscall argument fuzzer, HBFS image fuzzer, GUI event fuzzer.
-- Fault injection: random task kills, OOM, disk full, network drop.
-- Normative specs under `docs/spec/` (see below).
+### M0 · Measurement, contract and the C foundation (3–5 weeks)
 
-**Exit:** every later claim is reproducible in CI; specs reviewed.
+- The parity scorecard as an executable harness: fourteen named checks that
+  report pass, partial or fail, run by `make check` and by CI. Every later wave
+  moves a row and nothing else may claim progress.
+- Freeze the syscall ABI behind a versioned table. New calls get numbers from the
+  table; old numbers keep working. `docs/syscalls.json` stays generated.
+- **C toolchain bootstrap.** `tools/find_c_toolchain.sh` probes `i686-elf-gcc`,
+  `gcc -m32`, `clang -m32` and `clang --target=i386-elf`, and proves each by
+  compiling a probe and checking the object is 32-bit ELF — the same pattern the
+  retired cross-toolchain probe used. Build integration, a linker script for
+  C-built subsystems, and a freestanding runtime (`memcpy`, `memset`, `strlen`,
+  `memmove`) land here.
+- **Per-task FPU and SSE state.** The kernel initialises the FPU once at boot and
+  saves nothing across a switch, so two tasks using floating point corrupt each
+  other. A 512-byte `fxsave`/`fxrstor` area in the task control block is a
+  prerequisite for C subsystems and for any floating-point program.
+- Normative specs written before the code that needs them: `docs/spec/ABI.md`
+  (calling convention and structure layout at the asm/C boundary),
+  `docs/spec/OBJECTS.md`, `docs/spec/DRIVERS.md`, `docs/spec/CONFIG.md`.
 
-### P1 · Memory and isolation (4 sprints)
+**Exit:** the scorecard runs in CI and reports the true 2/6/6 baseline; a
+C-built kernel module and a C-built user program both run; a floating-point
+workload across a context switch is correct under `make check`.
 
-- [x] `vm_area` model; `mmap/munmap/mprotect` with randomised placement and W^X.
-- [x] Guard pages and on-demand stack growth for the user stack.
-- [x] Demand-zero anonymous mappings; partial `munmap`/`mprotect`; fork COW and
-  exit/exec reclaim of `mmap` areas.
-- [x] File-backed (private, demand-paged) mappings via `SYS_MMAP_FILE`.
-- [x] Shared write-back file mappings (`MF_SHARED`): dirty pages go back to the file
-  when the mapping is released.
-- [x] **Remove user access to kernel RAM**; map only what a process needs (program
-  window, stack, framebuffer, IPC surfaces). See `docs/spec/VMM.md`.
-- [x] Unified block cache in front of the disk data path (read-through, flushed on
-  every write).
-- [x] User heap on top of the VMM: `SYS_MALLOC`/`SYS_FREE`/`SYS_REALLOC` are
-  anonymous demand-zero areas, and the SB16 path stages demand-zone buffers because
-  ISA DMA needs a physical address.
-- [x] Page cache in front of shared file mappings (`kernel/pagecache.inc`): one frame
-  per HBFS block, shared by every `MF_SHARED` mapping of it, so two mappings of one
-  file - in the same task or in different tasks - are coherent with each other, and a
-  fork keeps sharing them instead of copying on write. `vmtest5` covers it.
-- [x] Kernel slab allocator (`kernel/kmem.inc`): fixed-size objects carved out of
-  4 KB pages taken on demand, with intrusive free lists and zeroed allocations. Its
-  first two users are every task's mmap area table and argv snapshot, which were static
-  arrays sized for `MAX_TASKS`: the kernel image lost 175 KB (2.02 MB → 1.84 MB of the
-  2 MB limit) and now pays only for the tasks that exist.
-- [x] ASLR for stack/heap. The `mmap` base was already randomised; the user stack now
-  starts at a page-granular offset below the top of its region on every launch (4 bits
-  of entropy - the 1 MB window leaves only 16 pages of slack before the stack could no
-  longer grow - so it defeats a fixed-address assumption, not a patient attacker), the
-  trampoline and the mapped window move with it, exec in place keeps its top (it has no
-  mapping left outside its existing window), and the randomiser is seeded from the RTC
-  and the PIT instead of `tick_count`, which was 0 at boot. NX and a wider stack region
-  belong with P2.
-- [x] Allocations above 128 MB (pre-existing). Three faults, all only reachable on a
-  guest with more RAM than the boot identity map covers: the page-fault handler saved
-  three registers while its helpers clobbered EBX/ESI/EDI/EBP, so the buddy allocator's
-  free-list cursor was silently replaced by the faulting page number (the "next of 0"
-  that walked to page 0); the handler's `pf_*` scratch was not re-entrant, and it
-  re-enters itself whenever it zeroes a frame above the identity map, which mapped the
-  page at the frame's address instead of the program's; and `cow_ref` stopped at 128 MB,
-  so a forked share above it was freed twice. `make check-runtime` now runs `vmtest`,
-  `vmtest2`, `cow_test` and `heaptest` on a 192 MB and a 384 MB guest.
-- [x] Console-mode fault containment: a crashing task dies, the shell survives.
-- [x] No stale bytes between processes. A task's window is a copy of the shell's, and
-  nothing cleared it between launches: the next program could read the previous one's
-  heap, `mmap` scratch and whole user stack. The launcher now clears
-  `[image end, PROGRAM_END_ADDR)` before it writes the trampoline and creates the task,
-  and `stale_write`/`stale_probe` prove it (`STALE_LEAK 00340000` on the old kernel).
-- [x] `waitpid` after a signal-killed task. The kill path freed the target's slot
-  instead of leaving a `TASK_ZOMBIE`, so `waitpid` never found it and blocked the parent
-  forever. Both death paths now end in `sched_publish_death`: status stored, zombie kept,
-  waiters woken, `SIGCHLD` queued, and a shell-launched task reaped at once. A killed
-  task reports `0x80000000 | signal`; `kill_leak_test` waits for a child it killed and
-  checks both the status and that nothing leaked.
+### M1 · The executive: objects, handles, security (8–12 weeks)
 
-**Exit:** the isolation conformance test passes, 100 MB heap workload passes
-(`make check-heap`), no stale-data leaks between processes.
+The highest-leverage change in the plan. Everything after it is cheaper.
 
-### P3 · Concurrency and scale (4 sprints)
+- **The Warren** — the object namespace. Typed objects (file, section, process,
+  thread, socket, event, key, device), a per-process handle table with access
+  rights, reference counting, name lookup, and wait-on-multiple-objects.
+- Existing resources re-expressed over handles with the current syscall numbers as
+  compatibility aliases, so all 2 197 existing assertions keep passing.
+- **Tokens and access control**: users, groups, an access-control list per object,
+  access checks on every open, privileges, and audit hooks that feed the event log
+  in M4.
+- A deferred-work interrupt model (a DPC analogue), which the SMP work in M2 needs.
+- Optional: `poll` on handles rather than sockets only — the waiting primitive
+  belongs in the executive, not in the network stack.
 
-Planned for the 32-bit kernel:
+**Exit:** a hostile-program conformance suite where a deliberately misbehaving
+program fails to read, write, signal or open anything it was not granted, and
+cannot take the machine down trying.
 
-- [ ] ACPI discovery (RSDP/RSDT/XSDT/MADT) and an I/O APIC, so input is
-      interrupt-driven and the timer no longer depends on the PIC alone.
-- [ ] A local APIC timer calibrated against the PIT, and an HPET that turns
-      `sleep` into a deadline rather than a count of ticks.
-- [ ] Threads (`clone` into a shared address space), a blocking futex, a shared
-      heap and thread-local storage.
-- [ ] Application-processor start-up, IPI delivery and per-CPU state.
-- [ ] Lock-order validation that reports a deadlock before two CPUs meet.
+### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks)
 
-**Exit:** near-linear scaling on a parallel workload; 24 h SMP stress with no lost
-wakeups.
+Where Mellivora trails a 2000 machine most visibly: it cannot use a second CPU,
+sleep, or switch itself off.
 
-### P4 · Storage (3 sprints)
+- ACPI: RSDP/RSDT/XSDT discovery, MADT, FADT, the SCI interrupt, the power button,
+  sleep states and soft-off, thermal and battery where present.
+- Local APIC timer taking over the tick from the PIT; I/O APIC routing input;
+  inter-processor interrupts.
+- **SMP bring-up**: application-processor start, per-CPU state behind a segment
+  base, scheduler and allocator locking, and lock-order validation that finds a
+  deadlock before two CPUs do.
+- **Loadable driver model**: modules with an export table, probe/attach/detach,
+  a device tree, resource arbitration (I/O ports, MMIO, IRQ, DMA), and power
+  callbacks. Every existing driver is converted with no behaviour change.
+- Structured boot logging, so a machine that fails to enumerate says why.
 
-HBFS v4: extents, a checksummed journal, online fsck, COW snapshots, quotas and
-ACLs. VFS page cache with writeback and readahead. NVMe, AHCI NCQ and GPT.
+**Exit:** four vCPUs under 24 hours of mixed load with no panic; sleep and soft-off
+work from the shell and from the desktop; every driver loads as a module.
 
-The offline format work already exists: `populate.py`, `tools/fsck_hbfs.py` and
-`tools/hbfs_journal.py` carry the v4 superblock, the extent records, the run
-checksums and the journal as an executable specification, and
-`tests/test_hbfs_checksum.py`, `tests/test_hbfs_extents.py` and
-`tests/test_hbfs_journal.py` exercise them without booting. The kernel-side
-mount and writer are the work.
+### M3 · Storage: HBFS v5 (12–18 weeks)
 
-**Exit:** 1 TB image, > 100 MB/s, 10 000 crash-injection iterations clean.
+- On-disk v5: per-file access control lists, alternate streams, per-user quotas,
+  transparent compression, encryption at rest, sparse files, hard links, and
+  snapshots that back the restore points in M9.
+- Volume manager: MBR and GPT, multiple volumes, mount points rather than drive
+  letters, removable media with safe ejection, volume labels and health.
+- Online repair plus an offline checker at parity with the current `fsck`, and a
+  recovery path for a volume whose journal cannot be replayed.
+- The redirector seam in the VFS that network shares plug into in M7.
 
-### P5 · Networking (3 sprints)
+**Exit:** 10 000 power-cut iterations clean; a quota and an access-control
+conformance suite; a deliberately corrupted volume repaired from the recovery
+console; an encrypted volume round-trips with its key held in the store.
 
-Socket layer with non-blocking I/O, `select/poll/epoll`, `SO_*` options and
-`getsockopt`; TCP window scaling, SACK, RTT/RTO estimation, TIME_WAIT; UNIX sockets;
-netdevice abstraction; IPv6 basics; stateful packet filter; TLS 1.3 port; service
-supervisor (DHCP renew, DNS cache, NTP).
+### M4 · Configuration and services (9–13 weeks)
 
-**Exit:** line-rate virtio throughput, 1 000 sockets, chaos-tested under loss.
+- **The Sett** — the hierarchical, transactional configuration store. Typed values,
+  per-machine and per-user hives, atomic commit riding on the HBFS journal, import
+  and export, rollback, and change notification. Kernel tunables, driver settings,
+  service records and user preferences all live here; the environment-variable
+  system becomes a view onto it.
+- **The Watch** — the service manager. Service records in the Sett, start types,
+  dependencies, failure and restart policy, control messages, and a service running
+  as a named account.
+- **Sessions and logon**: local accounts in the Sett, password hashing, per-user
+  profiles, session 0 for services, and fast user switching.
+- **Chronicle** — structured event log with sources, levels and retention, plus a
+  viewer that filters by source and severity.
+- A task scheduler with calendar triggers and missed-run policy.
 
-### P6 · Security and multi-user (4 sprints)
+**Exit:** a service starts before logon and survives a crash-loop policy; two users
+are logged on at once with separate desktops; every kernel log line is a Chronicle
+record, and the boot log is readable from the log viewer.
 
-Accounts with shadow password hashes, login and sessions, `su`/`sudo` equivalent, groups;
-**enforced capabilities** from app manifests; object manager for hierarchical config with
-ACLs; audit log; kernel KASLR; hardened allocator; stack canaries; secure RNG.
+### M5 · Runtime and binaries (16–22 weeks)
 
-**Exit:** unprivileged code cannot reach a device, peer memory or a forbidden file;
-permission suite and fuzzers clean.
+The largest single lift, and the one that makes "an operating system you develop
+for" true.
 
-### P7 · Devices, PnP and power (3 sprints)
+- **PE/COFF loader** and shared libraries with a stable ABI: relocations, export
+  and import tables, per-process module lists, load-time and run-time binding.
+  The existing flat and ELF32 loaders stay, so all 264 programs keep working.
+- **Unicode end to end**: UTF-16 at the ABI boundary, UTF-8 internally, locale and
+  time-zone data, collation, and a scalable font stack for the desktop rather than
+  the 5×7 VBE font.
+- A C runtime: string, memory, formatted I/O, allocation, and the start-up code a
+  normal C program expects.
+- An interface-over-objects model — a COM-flavoured typed dispatch layer on top of
+  the Warren — so applications call interfaces instead of raw syscall numbers.
+- The POSIX personality stays as a compatibility layer for existing programs and
+  future ports.
 
-PCI BAR assignment, MSI/MSI-X, driver registry with probe/attach and refcounts; ACPI
-shutdown/reboot/sleep/battery/thermal; USB (UHCI/EHCI) + HID; virtio-gpu; HDA audio.
+**Exit:** a multi-source application using shared libraries, a Unicode interface,
+the Sett for configuration and Chronicle for logging is built with the SDK and
+the in-OS toolchain, and runs.
 
-**Exit:** clean shutdown, USB input, audio, no hard-coded IRQs or addresses.
+### M6 · Shell and user experience (12–16 weeks)
 
-### P8 · UI and UX (4 sprints)
+- Burrows grows into an Explorer-class shell: a file manager with copy, move,
+  rename and delete over the access-controlled filesystem; a shell namespace
+  (This Machine, Network, Control Panel); a start-menu analogue; a taskbar with a
+  window list and a tray; shortcuts and file associations; drag and drop between
+  applications; multi-selection; property sheets.
+- **Control Panel**: device manager, users and groups, services, display, sound,
+  network, date and time, add/remove programs.
+- **Den** — the management console host, with snap-in-style tools (services, event
+  viewer, disk management, users, performance, device manager) in one window.
+- **`hbpkg` grows up** into an installer with dependency resolution, install
+  scripts, file and association registration, repair, rollback, digital
+  signatures, and per-machine versus per-user installs.
+- **Printing**: a spooler service, queue management, cancellation, and a page
+  description abstraction with at least one real output path.
 
-Damage-tracked compositing, vsync-aware flip, hardware cursor, shadows and rounded
-corners, window animations, 1080p/4K, multi-monitor; TrueType rasterizer and a system
-font; widget toolkit and design system; taskbar grouping with live thumbnails,
-start-menu search and favourites, notification centre with actions, drag and drop,
-multi-format clipboard, shortcut editor, settings with live preview, onboarding,
-accessibility (keyboard navigation, focus rings, high contrast, scalable UI).
+**Exit:** install an application from a package, see it in the start menu with an
+icon and an association, print a document to a cancellable queue, then uninstall
+it leaving no files and no settings behind.
 
-**Exit:** 60 FPS at 1080p with 30 windows, UI latency < 50 ms, drag and drop between
-editor and file manager, one visual language.
+### M7 · Networking, the 2000 kind (13–18 weeks)
 
-### P9 · Applications and utilities (continuous from P1)
+- **File and printer sharing** over a protocol of our own on TCP: share permissions
+  layered on file access control, browsing, and mapped shares in the shell
+  namespace.
+- Network logon against another Mellivora machine, in a workgroup model.
+- A remote procedure call mechanism for remote service and configuration control —
+  the foundation of remote administration.
+- A firewall with a rules interface, connection sharing, and dial-up or VPN.
+- Remote console and remote management: service control, configuration, event log
+  and file transfer against a workstation, without a graphical session.
 
-Productivity (BEdit+ with multi-document and undo tree, BSheet, BWriter, BSlides,
-BDraw, BMail, BCal, BContacts, BTasks), system tools (BTerm+ tabs/splits/256 colours,
-BForager+ tabs/previews/archives, task manager, package manager GUI, backup, disk
-tools), internet (BBrowser with an HTML 4 / CSS1 subset, feed reader), development
-(BDev IDE, debugger front-end, disassembler, `bscript`), media (image viewer, player,
-screen capture), and a shell grown to ~200 commands with consistent flags and man pages.
+**Exit:** two virtual machines — share a folder, mount it on the other, log on
+across the network, print to a shared printer, and restart a service on the other
+machine from Den.
 
-### P10 · Reliability and performance (continuous)
+### M8 · Devices and media (16–22 weeks)
 
-Panic screen with symbolised stacks and recovery, crash dumps over serial, 24 h soak
-and reboot loops, OOM/disk-full/network-chaos injection, performance gates that fail a
-pull request on regression.
+- **USB**: host controller stack (UHCI and OHCI, then EHCI), hub enumeration, HID
+  keyboard, pointer and gamepad, mass storage, and audio class. This is what makes
+  `-device usb-*` real and puts the platform in the right decade.
+- Audio mixing so several programs play at once, with per-application volume.
+- A media framework: container and stream abstraction, decoders, synchronised
+  playback, and capture.
+- Two-dimensional acceleration behind an abstraction the compositor can use, and
+  enough three-dimensional support for the era's screensavers and demos.
+- Multiple monitors, display mode management and DPI.
 
-- [x] OOM / disk-full / dropped-frame injection (`kernel/faultinject.inc`,
-  `SYS_FAULTINJECT`): arm a counter and the next page allocations, disk writes or
-  outgoing frames fail. `fault_inject_test` walks every failure depth of the fork path
-  and requires the free-page count to come back each time, a file create whose writes
-  all fail to report an error and still work afterwards, and a dropped frame to be
-  retried past. `make check-faults` repeats it; `check-runtime` runs it once.
-- [ ] Crash dumps over serial, 24 h soak, performance gates.
+**Exit:** plug in a USB stick and copy a file, unplug it safely; three programs
+play audio simultaneously; a video plays in a window at 30 frames per second.
 
-### P11 · Ecosystem and release engineering (continuous)
+### M9 · Reliability and management (9–13 weeks)
 
-SDK container with cross toolchain, libc, headers and samples; `hbpkg` v2 with signatures
-and dependencies; reproducible builds, SBOM, signed ISOs; generated API reference;
-porting guide.
+- Crash dumps for kernel and user faults, with a tool that can read them, and a
+  boot menu with safe mode and last-known-good.
+- A recovery console that can repair a filesystem, restore a snapshot and reset a
+  service or driver configuration.
+- The fault-injection framework generalised into a driver verifier.
+- **Pulse** — performance counters with a sysmon-class viewer, feeding `top` and
+  `sysmon`, and exportable for scripts.
+- Backup and restore, restore points on top of HBFS snapshots, and disk health.
+- Instrumentation for scripting, so administration can be automated.
+
+**Exit:** a forced kernel fault writes a dump that the analysis tool explains;
+last-known-good rolls back a bad driver; a restore point returns the machine to an
+earlier state including its settings.
+
+### M10 · Ecosystem and release (7–11 weeks)
+
+- An SDK: headers, import libraries, samples, a driver kit, and a getting-started
+  path that does not require reading the kernel.
+- The documentation set completed and kept honest by `make check-docs`.
+- A package repository with signing, mirrors and metadata.
+- Release engineering: reproducible installers, checksums, release notes.
+- QEMU and KVM guest integration: virtio throughout, clipboard sharing, display
+  resize, shared folders.
+
+**Exit:** a new developer builds and installs a working application from the SDK
+alone, and a release ISO is reproducible from a clean checkout.
 
 ## Out of scope
 
-Printing, domains/Active Directory, COM/DCOM, Terminal Services, and binary compatibility
-with Win32 applications. These would consume the effort the kernel needs and cannot be
-reached credibly.
+Named explicitly so the plan does not drift into them:
 
-## Specs
-
-Normative documents live in `docs/spec/`:
-
-| Document | Covers |
-|---|---|
-| `VMM.md` | Address spaces, isolation rules, `mmap` semantics, fault handling |
-| `ABI.md` | Syscall conventions and structure layouts |
-| `SCHED.md` | Task model, priorities, preemption, SMP affinity, signals |
-| `FS_V4.md` | On-disk format, journal, snapshots, quotas, ACLs |
-| `DRIVER_MODEL.md` | Driver registry, probe/attach, IRQ/MSI, DMA rules |
-| `SECURITY.md` | Identities, capabilities, ACLs, audit, sandboxing |
-| `COMPOSITOR.md` | Surface model, damage, present path, input routing |
+- Win32 binary compatibility, and the SMB, MSI, NTFS and registry wire formats.
+- Domain controllers, directory services, Terminal Services.
+- DirectX parity, Internet Explorer, Microsoft Office.
+- x86-64 support.
+- Real-hardware certification beyond QEMU-emulated devices.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Driver work stalls | The existing tree stays green; each driver lands behind a HAL, one subsystem at a time |
-| C in the kernel erodes style | Freestanding subset only, MISRA-lite rules in `STYLE_GUIDE.md`, enforced by `make lint` |
-| Scope explosion | Fixed sprint exit criteria and the explicit out-of-scope list above |
-| Emulator-only confidence | QEMU first, then real hardware; KVM in CI |
-| CI time balloons | Snapshot-based QEMU tests, parallel jobs, hard 10-minute budget |
+| The C boundary becomes two systems in one tree | One calling convention, one ABI document, one build entry point per module, and a lint gate that rejects a module mixing the two without an entry stub |
+| Objects and security are retrofitted too late | They are wave M1, before any feature that would have to be reworked for them |
+| SMP destabilises the tree | AP start-up is a separate gate; the machine stays bootable single-CPU, and the 24-hour soak is the entry condition for M3 |
+| Driver breadth exceeds the budget | QEMU-first hardware list; a driver is only in scope if a test can exercise it |
+| The scorecard is gamed by partial credit | Rows move only when their named test passes in CI |
+| Printing and USB are larger than they look | Both are scoped to one working path first, breadth afterwards |
+
+## First 90 days
+
+1. **Weeks 1–3** — the scorecard harness and the true baseline; the ABI
+   versioning table; `docs/spec/OBJECTS.md` and `docs/spec/ABI.md` reviewed.
+2. **Weeks 4–6** — the C toolchain probe, the freestanding runtime, a C-built
+   kernel module and a C-built user program in the build.
+3. **Weeks 7–9** — per-task FPU and SSE state, with a floating-point workload
+   across a context switch added to `make check`.
+4. **Weeks 10–13** — the Warren, part 1: object types, handle tables and name
+   lookup, with the current syscalls re-expressed over them.
+
+## Specs
+
+The normative documents this plan depends on. Existing ones are linked; the rest
+are written before the wave that needs them.
+
+| Document | Covers | Needed by |
+|---|---|---|
+| [SECURITY.md](spec/SECURITY.md) | Threat model, privilege boundaries, exception justifications | M1 |
+| [VMM.md](spec/VMM.md) | Address-space layout and mapping rules | M1 |
+| `spec/ABI.md` | Calling convention, structure layout, syscall numbering at the asm/C boundary | M0 |
+| `spec/OBJECTS.md` | Object types, handle rights, lifetime and waiting | M1 |
+| `spec/DRIVERS.md` | Driver interface, device tree, power and PnP contracts | M2 |
+| `spec/CONFIG.md` | The Sett's key space, typing, transaction rules and migration | M4 |
+| `spec/STORAGE.md` | HBFS v5 on-disk format, access control and recovery | M3 |
