@@ -84,7 +84,7 @@ pmm_init:
         ; The kernel addresses physical memory 1:1, and user virtual space
         ; starts just above RAM, so frames must stay below USER_DEMAND_BASE_MAX:
         ; a frame above it could not be told apart from a user mapping. RAM
-        ; beyond that ceiling is left alone until the 64-bit port.
+        ; beyond that ceiling is left alone.
         cmp  eax, USER_DEMAND_BASE_MAX
         jae  .e820_next
         mov  edx, USER_DEMAND_BASE_MAX

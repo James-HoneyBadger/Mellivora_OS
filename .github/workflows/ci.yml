@@ -120,67 +120,6 @@ jobs:
           path: mellivora.img
           retention-days: 7
 
-  longmode:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update -qq
-          # gcc is the x86-64 C compiler for the nucleus on this x86-64 host;
-          # tools/find_lm_toolchain.sh also accepts x86_64-elf-gcc or clang.
-          sudo apt-get install -y nasm make python3 gcc binutils qemu-system-x86
-
-      - name: Build 64-bit image
-        run: make 64bit
-
-      - name: Build 64-bit image with the asm nucleus
-        run: make 64bit-asm
-
-      - name: Asm-nucleus boot test
-        run: python3 tests/test_longmode.py mellivora64-asm.img --marker-only
-
-      - name: Long-mode boot test
-        run: make check-longmode
-
-  sixtyfour:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update -qq
-          # The nucleus is freestanding C11: it needs an x86-64 compiler even
-          # though the runner's own gcc would produce the right architecture,
-          # because the probe accepts the distro cross package first.
-          sudo apt-get install -y nasm make python3 qemu-system-x86 \
-            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
-
-      - name: Show the toolchain the build will use
-        run: |
-          echo "cc: $(sh tools/find_lm_toolchain.sh cc)"
-          echo "ld: $(sh tools/find_lm_toolchain.sh ld)"
-
-      - name: Build the 64-bit image
-        run: make 64bit
-
-      - name: 64-bit gate (boot, shell, guest writes)
-        run: make check-64
-
-      - name: 64-bit HBFS integrity
-        run: python3 tools/fsck_hbfs.py mellivora64.img --strict
-
-      - name: Build and boot the asm nucleus too
-        run: |
-          make 64bit-asm
-          python3 tests/test_longmode.py mellivora64-asm.img --marker-only
-
   installer-iso:
     runs-on: ubuntu-latest
 
@@ -191,8 +130,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nasm make python3 xorriso qemu-system-x86 \
-            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+          sudo apt-get install -y nasm make python3 xorriso qemu-system-x86
 
       # The disc is the primary way to install the system, so it is built,
       # verified and installed here rather than only on a developer's machine.

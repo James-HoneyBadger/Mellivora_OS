@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """hbfs_journal.py - the v4 write-ahead journal, as a reference implementation.
 
-The protocol is the 32-bit tree's, which the 64-bit nucleus will port, with one
-addition the roadmap asks for: the commit record carries a checksum, so a commit
-that was torn by a power cut cannot be mistaken for one that completed.
+The protocol is the kernel tree's, with one addition the roadmap asks for: the
+commit record carries a checksum, so a commit that was torn by a power cut
+cannot be mistaken for one that completed.
 
     sector 0..            journal area, HBFS_JOURNAL_BLOCKS blocks at the first
                           data block (reserved by the builder, never allocated)

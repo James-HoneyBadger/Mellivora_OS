@@ -158,23 +158,19 @@ def run_install(iso: str, target: str, display: str = "none",
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-# The two trees have different prompts, and the disc can install either: the
-# 32-bit shell prints "Lair:/>" and the 64-bit one "mellivora:/>". Requiring a
-# particular one would fail a correct install of the other.
-SHELL_PROMPTS = ("Lair:/>", "mellivora:/>")
+# The shell prompt the installed tree prints. The check requires it, so an
+# install that produced a disk the firmware cannot boot fails here.
+SHELL_PROMPT = "Lair:/>"
 
 
 def boot_check(target: str, timeout: float = 120.0) -> bool:
-    """Boot the installed disk and look for either tree's shell prompt."""
+    """Boot the installed disk and look for the shell prompt."""
     qemu = find_qemu()
     tmp = tempfile.mkdtemp(prefix="mellivora-verify-")
     mon_path = os.path.join(tmp, "mon.sock")
     ser_path = os.path.join(tmp, "serial.sock")
-    # A 64-bit-capable CPU model and the e1000 the 64-bit nucleus has a driver
-    # for: with "-cpu 486" a correctly installed 64-bit disk cannot enter long
-    # mode, so the check would report a good install as unbootable.
     proc = subprocess.Popen(
-        [qemu, "-cpu", "qemu64,+smep,+smap", "-m", "256",
+        [qemu, "-cpu", "486", "-m", "128",
          "-drive", f"file={target},format=raw,if=ide,cache=writethrough",
          "-boot", "c", "-display", "none", "-no-reboot",
          "-monitor", f"unix:{mon_path},server,nowait",
@@ -188,16 +184,14 @@ def boot_check(target: str, timeout: float = 120.0) -> bool:
     try:
         serial = SerialConsole(ser_path)
         mon = Monitor(mon_path)
-        # The two trees put the prompt in different places: the 32-bit shell
-        # writes it to the VGA text buffer, the 64-bit one to the serial
-        # console. Watching only the screen reported a good 64-bit install as
-        # unbootable.
+        # The shell writes its prompt to the VGA text buffer; the serial
+        # console is watched as well because a diagnostic build may put it there.
         deadline = time.time() + timeout
         while time.time() < deadline:
             time.sleep(1.0)
-            if any(prompt in mon.screen() for prompt in SHELL_PROMPTS):
+            if SHELL_PROMPT in mon.screen():
                 return True
-            if any(prompt in serial.text() for prompt in SHELL_PROMPTS):
+            if SHELL_PROMPT in serial.text():
                 return True
         return False
     finally:

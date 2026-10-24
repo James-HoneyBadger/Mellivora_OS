@@ -734,9 +734,8 @@ D=LightMagenta, E=Yellow, F=White
 
 ## Limitations
 
-- **Paging without isolation:** the 32-bit kernel enables an identity map for the
-  first 128 MB, so every task still shares one flat address space. The 64-bit
-  nucleus has per-task page tables and real user/kernel separation.
+- **Paging without isolation:** the kernel enables an identity map for the
+  first 128 MB, so every task still shares one flat address space.
 - **Permissions are advisory:** `chmod`/`chown` store owner, group and mode, and
   `SYS_ACCESS` honours them, but `open` does not check yet.
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.

@@ -36,43 +36,20 @@ sudo apt install gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
 
 ```bash
 sudo dnf install nasm qemu-system-x86 make python3
-sudo dnf install gcc-x86_64-linux-gnu binutils-x86_64-linux-gnu
 ```
 
 ### Installing on Arch Linux
 
 ```bash
 sudo pacman -S nasm qemu-full make python
-# Either an x86_64-elf cross toolchain from the AUR, or clang + lld:
-sudo pacman -S clang lld
 ```
 
 ### Linux Host Architectures
 
-Mellivora is an x86 guest: the 32-bit tree is BIOS/i486, the 64-bit tree (the
-default) is long mode. On an x86_64 Linux host, run it with QEMU or boot it on
-compatible hardware. On an ARM64/aarch64 Linux host, run it under QEMU's x86
-system emulator; QEMU translates the guest instructions in software, so
-performance is typically slower. ARM hardware cannot boot Mellivora natively.
-
-#### Building the 64-bit nucleus on a non-x86 host
-
-`tools/find_lm_toolchain.sh` probes, in order:
-
-1. `$LM_CC` / `$LM_LD`, when you set them
-2. `x86_64-elf-gcc` / `x86_64-elf-ld` (the canonical cross toolchain)
-3. `x86_64-linux-gnu-gcc` / `-ld`, `x86_64-linux-musl-gcc` / `-ld` (the distro
-   cross packages installed above)
-4. `clang --target=x86_64-elf` with `ld.lld`
-5. the host `gcc`/`ld`, when the host is already x86-64
-
-Each candidate is proved by compiling a probe and checking `e_machine` is 62
-(`EM_X86_64`), because a native `gcc` on an ARM host compiles happily and
-produces the wrong architecture. Override explicitly when needed:
-
-```bash
-make 64bit LM_CC=x86_64-linux-gnu-gcc LM_LD=x86_64-linux-gnu-ld
-```
+Mellivora is a BIOS-booted i486 guest. On an x86_64 Linux host, run it with QEMU
+or boot it on compatible hardware. On an ARM64/aarch64 Linux host, run it under
+QEMU's x86 system emulator; QEMU translates the guest instructions in software,
+so performance is typically slower. ARM hardware cannot boot Mellivora natively.
 
 #### Install a packaged emulator
 
@@ -137,20 +114,6 @@ make run QEMU="$HOME/.local/bin/qemu-system-x86_64" QEMU_AUDIO_BACKEND=none
 
 `x86_64-softmmu` supports this 32-bit x86 guest. The host QEMU binary is still ARM-native; only the guest is x86-emulated.
 
-#### Optional UEFI boot
-
-`make run-uefi` is separate from the BIOS `make run` path. It needs an x86_64 UEFI loader toolchain and **x86_64 OVMF firmware**. On ARM, do not use AArch64 OVMF files: QEMU is emulating an x86 machine, so its firmware must also be x86. Firmware package names and paths vary by distro. Locate both code and vars files, then pass their paths:
-
-On an ARM build host, `make uefi` also needs an x86_64 cross-compiler, x86_64 binutils, and GNU-EFI headers/libraries. Set `CC_EFI`, `LD_EFI`, `OBJCOPY`, `EFI_INCLUDE`, and `EFI_LIB` to the corresponding cross-toolchain paths if their names or locations differ. This is only for the optional UEFI loader; the regular BIOS build does not need a C cross-compiler.
-
-```bash
-find /usr/share -type f \( -iname 'OVMF_CODE*.fd' -o -iname 'OVMF_VARS*.fd' \)
-make run-uefi OVMF_CODE=/path/to/x86_64/OVMF_CODE.fd \
-  OVMF_VARS=/path/to/x86_64/OVMF_VARS.fd
-```
-
-If the ARM distro does not package x86_64 OVMF, use BIOS mode (`make run`) or obtain compatible x86_64 OVMF firmware separately. `make run-uefi` reports which firmware file is missing.
-
 ### Installing on macOS (Homebrew)
 
 ```bash
@@ -207,30 +170,24 @@ This single command:
 | Target | Command | Description |
 | -------- | --------- | ------------- |
 | **OS image (32-bit)** | `make` or `make all` | Build boot + Stage 2 + kernel, create disk image |
-| **OS image (64-bit)** | `make 64bit` | Build the long-mode nucleus and its disk image |
-| **64-bit gate** | `make check-64` | Boot the 64-bit image and drive its shell |
 | **Programs** | `make programs` | Assemble all programs in `programs/` |
 | **Populate** | `make populate` | Write files and programs into the disk image |
 | **Full build** | `make full` | All of the above in order |
 | **Bootable ISO** | `make iso` | Create `mellivora.iso` with install docs and user guide included |
 | **Clean** | `make clean` | Remove all generated files (`.bin`, `.lst`, `.img`, `.iso`) |
 | **Sizes** | `make sizes` | Show component sizes |
-| **Run** | `make run` | Launch the 64-bit image in QEMU (the default tree) |
-| **Run (32-bit)** | `make run-32` | Launch the 32-bit image, with the Burrows desktop |
+| **Run** | `make run` | Launch the 32-bit image in QEMU (the default tree) |
+| **Run (32-bit)** | `make run-32` | Alias for `make run` |
 | **Debug** | `make debug` | Launch in QEMU with monitor + debug logging |
 
-The installer disc installs the 64-bit tree by default
-(`ISO_ARCH=64`); `make iso ISO_ARCH=32` builds the 32-bit disc instead.
 
 ### Build Outputs
 
 After a successful build:
 
 ```text
-mellivora64.img        2 GB bootable 64-bit raw disk image (make run)
-mellivora.img          2 GB bootable 32-bit raw disk image (make run-32)
+mellivora.img          2 GB bootable 32-bit raw disk image (make run)
 mellivora.iso          Bootable ISO media with docs and install guide
-kernel64.bin           64-bit nucleus (freestanding C11, linked in the higher half)
 boot.bin               512-byte MBR boot sector
 stage2.bin             Stage 2 loader (≤16 KB)
 kernel.bin             32-bit protected-mode kernel

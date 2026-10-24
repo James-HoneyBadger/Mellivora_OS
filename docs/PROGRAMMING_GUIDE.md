@@ -1455,7 +1455,7 @@ Hello from C!
 
 ### Supported C Features
 
-- **Types:** `int` (64-bit), `char`, pointers
+- **Types:** `int` (32-bit), `char`, pointers
 - **Variables:** Global and local, including arrays
 - **Control flow:** `if`/`else`, `while`, `for`, `do`/`while`
 - **Functions:** Declaration, parameters, return values, recursion

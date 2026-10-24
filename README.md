@@ -11,7 +11,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembl
 
 ## 🦡 At a Glance
 
-- **Boot path:** BIOS 3-stage boot or UEFI (gnu-efi PE32+) into 32-bit protected mode; optional x86-64 long-mode path
+- **Boot path:** BIOS 3-stage boot into 32-bit protected mode
 - **Userland:** 89 shell built-ins, 264 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC)
 - **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
@@ -22,8 +22,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembl
 
 ### Kernel & Architecture
 
-- **32-bit protected mode** with flat memory model; optional **x86-64 long-mode** path (`make 64bit`) that boots a 64-bit nucleus in the higher half, with a VMM, a slab heap, preemptive round-robin tasks that own their page tables and kernel stacks, NX/SMEP/SMAP where the CPU offers them, an LP64 syscall table (`write`/`brk`/`exec`/`open`/`read`), a PCI/ATA block driver, an HBFS volume with `/init` loaded from it and a directory layer behind `seek`/`stat`/`readdir`/`chdir`/`getcwd`, a writable HBFS (`create`/`mkdir`/`unlink`, and writes through an open handle, which is what appending is), console input over COM1 with a line-based shell (`ls`/`cat`/`append`/`date`/`mkdir`/`rm` typed at it), a CMOS clock, a user-space heap and pipes (`malloc`/`free`/`sbrk`/`pipe`), `exec` with a command line, a VGA text console, a PS/2 keyboard and pointer, fork/exec/waitpid with faulting children retired, kill and background spawn, an e1000 network driver (polled rings, cache-disabled register window) with ARP and ICMP echo on top of it, so a ring-3 program can ping, the PC speaker behind `BEEP`, ACPI discovery (RSDP/RSDT/MADT) and a local APIC whose timer is calibrated against the PIT and carries the 100 Hz tick, an I/O APIC that routes the keyboard and pointer (input is interrupt-driven now), atomics plus a spinlock under the scheduler's critical section, threads (`clone` into a shared address space) with a blocking futex, a shared heap and thread-local storage, high-resolution timers that turn `sleep` into a deadline on the HPET delivered by the APIC's one-shot timer, lock-order validation that finds a deadlock before two CPUs have to meet, a `waitpid` that parks the parent until the child stops, an idle loop that runs when every task is waiting, IPI delivery with an interrupt-free boot clock, and the HPET with the TSC calibrated against it, as the first steps of P3, a 32-bit task running in compatibility mode through `INT 0x80` alongside one of the tree's own flat 32-bit programs loaded unchanged at its `0x00300000` base; it reports `MELLIVORA64_OK` on COM1 (`make check-longmode`)
-- **UEFI boot** — `boot/uefi_loader.efi` (gnu-efi PE32+) for UEFI firmware; `make uefi` / `make run-uefi`
+- **32-bit protected mode** with a flat memory model, ring 0 / ring 3 separation, and one address space shared by every task
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
 - **187 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
 - **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
@@ -250,7 +249,7 @@ Mellivora_OS/
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, memory map, HBFS, drivers |
 | [Tutorial](docs/TUTORIAL.md) | Step-by-step beginner walkthrough |
 | [API Reference](docs/API_REFERENCE.md) | Library functions and calling conventions |
-| [Roadmap](docs/ROADMAP.md) | Phased plan to a general-purpose 64-bit OS |
+| [Roadmap](docs/ROADMAP.md) | Phased plan to a general-purpose OS |
 | [Address-space spec](docs/spec/VMM.md) | Isolation rules and `mmap` semantics |
 | [Security model](docs/spec/SECURITY.md) | Threat model, capabilities, test obligations |
 | [Sample Catalog](docs/SAMPLES.md) | Guided examples across NASM, C, Perl, and BASIC |
@@ -345,11 +344,8 @@ Mellivora_OS/
 | Command | Description |
 | --------- | ------------- |
 | `make full` | Complete build: boot + kernel + programs + filesystem |
-| `make full-64` | Build the 64-bit system: nucleus, loader, programs, volume |
-| `make 64bit` | Build only the 64-bit long-mode image |
-| `make check-64` | Boot the 64-bit image and drive its shell (64-bit gate) |
-| `make run` | Launch the 64-bit image in QEMU (default tree) |
-| `make run-32` | Launch the 32-bit image (Burrows desktop) |
+| `make run` | Launch the 32-bit image in QEMU (default tree) |
+| `make run-32` | Alias for `make run` |
 | `make debug` | Launch with QEMU monitor on stdio |
 | `make iso` | Build the installer disc (`ISO_IMAGE_MB`, default 256) |
 | `make check` | Run the regression suite and HBFS integrity checks |
@@ -370,10 +366,6 @@ Mellivora_OS/
 | `make sanitize` | Clean-build with bounds instrumentation and run regressions |
 | `make bench` | Measure build and validation stages |
 | `make bench-check` | Compare measurements with the benchmark baseline |
-| `make uefi` | Build the optional UEFI loader |
-| `make run-uefi` | Boot the optional UEFI image |
-| `make 64bit` | Build the x86-64 image (stage2 long-mode bootstrap + 64-bit nucleus) |
-| `make check-longmode` | Boot the x86-64 image and assert the 64-bit nucleus reports over COM1 |
 | `make hbpkg` | Build the host package-manager utility |
 
 ---

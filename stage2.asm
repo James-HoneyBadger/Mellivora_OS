@@ -42,18 +42,10 @@
         mov [(24 * 80 + %1) * 2], ax   ; DS is the flat data selector here
         popad
 %endmacro
-%macro mark64 2
-        push rax
-        mov ax, 0x4F00 | %2
-        mov [(24 * 80 + %1) * 2], ax   ; flat DS, low 4 GB
-        pop rax
-%endmacro
 %else
 %macro mark16 2
 %endmacro
 %macro mark32 2
-%endmacro
-%macro mark64 2
 %endmacro
 %endif
 
@@ -268,215 +260,6 @@ halt16:
         hlt
         jmp halt16
 
-;=======================================================
-; LONG MODE TRANSITION  (32-bit pmode -> x86-64)
-;
-; Only compiled when KERNEL_64BIT is defined at assemble time:
-;   nasm -DKERNEL_64BIT ...
-;
-; Steps:
-;   1. Verify CPUID supports long mode (leaf 0x80000001, bit 29 of EDX).
-;   2. Build minimal page tables at LM_PT_BASE:
-;        PML4[0]   -> PDPT  (identity map of the first 1 GB)
-;        PML4[511] -> PDPT  (higher half, -2 GB downwards)
-;        PDPT[0]   -> PDT   (identity, covers 0..1 GB)
-;        PDPT[510] -> PDH   (0xFFFFFFFF80000000, the same physical range)
-;        PDT/PDH[0..511] -> 512 x 2-MB large pages covering 0..1 GB
-;
-;      The two maps describe the same physical memory: the kernel is *linked*
-;      in the higher half (boot/lm64.ld) and stage2 jumps to the link address,
-;      while low scratch memory and the VGA text buffer stay reachable through
-;      the identity map. Covering the whole 1 GB a single PD page can describe
-;      costs the same memory and gives the VMM a direct map for every frame the
-;      frame allocator hands out until RAM passes 1 GB - a 4 KB mapping is then
-;      a table walk away instead of a new mapping scheme.
-;   3. Load 64-bit GDT.
-;   4. CR4.PAE = 1, CR3 = PML4, EFER.LME = 1, CR0.PG = 1.
-;   5. Far-jump into the 64-bit code selector.
-;   6. Set up 64-bit segment registers, jump to KERNEL_LOAD_ADDR (0x100000).
-;=======================================================
-%ifdef KERNEL_64BIT
-[BITS 32]
-
-; Physical page-table area: 4 pages × 4 KB = 16 KB at 0x70000.
-; This range is below the conventional-memory top (0x9FC00) and above
-; the real-mode IVT/BDA, so it is safe to write here.
-LM_PT_BASE       equ 0x00070000
-LM_PML4          equ LM_PT_BASE          ; PML4  (4 KB)
-LM_PDPT          equ LM_PT_BASE + 0x1000 ; PDPT  (4 KB)
-LM_PDT           equ LM_PT_BASE + 0x2000 ; PDT   (4 KB) identity map
-LM_PDH           equ LM_PT_BASE + 0x3000 ; PDH   (4 KB) higher half
-KERNEL_LOAD_ADDR equ 0x00100000
-; Link address of the 64-bit nucleus: boot/lm64.ld puts it at the base of the
-; top 2 GB, so -mcmodel=kernel code can reach every symbol with a 32-bit
-; displacement. Keep this in sync with the linker script.
-KERNEL_LINK_ADDR equ 0xFFFFFFFF80100000
-
-enter_longmode:
-        mark32 5, 'F'          ; entered long-mode setup
-        ; --- Step 1: Confirm long-mode support via CPUID ---
-        mov eax, 0x80000000
-        cpuid
-        cmp eax, 0x80000001         ; Must support extended leaves
-        jb .lm_no_64bit
-
-        mov eax, 0x80000001
-        cpuid
-        bt edx, 29                  ; LM bit
-        jnc .lm_no_64bit
-
-        ; --- Step 2: Zero all page-table pages ---
-        mov edi, LM_PT_BASE
-        xor eax, eax
-        mov ecx, (4 * 4096) / 4     ; 4 pages: PML4, PDPT, PDT, PDH
-        rep stosd
-
-        ; PML4[0] = PDPT | Present | Writable     (identity map)
-        mov dword [LM_PML4 + 0],  (LM_PDPT | 0x03)
-        mov dword [LM_PML4 + 4],  0
-
-        ; PML4[511] = PDPT | Present | Writable   (higher half: -2 GB upwards)
-        mov dword [LM_PML4 + 511 * 8], (LM_PDPT | 0x03)
-        mov dword [LM_PML4 + 511 * 8 + 4], 0
-
-        ; PDPT[0] = PDT | Present | Writable  (covers 0..1 GB identity)
-        mov dword [LM_PDPT + 0],  (LM_PDT | 0x03)
-        mov dword [LM_PDPT + 4],  0
-
-        ; PDPT[510] = PDH | Present | Writable  (0xFFFFFFFF80000000)
-        mov dword [LM_PDPT + 510 * 8], (LM_PDH | 0x03)
-        mov dword [LM_PDPT + 510 * 8 + 4], 0
-
-        ; PDT and PDH entries: 2 MB large pages 0..1 GB (512 entries each, the
-        ; whole page). Each 2-MB large page PDE: base | PS(bit7) | P | W.
-        xor ebx, ebx               ; page index 0..511
-.lm_fill_pdt:
-        mov eax, ebx
-        shl eax, 21                ; base = page_idx * 2 MB
-        or  eax, 0x83              ; Present | Writable | PS
-        mov [LM_PDT + ebx * 8],     eax
-        mov dword [LM_PDT + ebx * 8 + 4], 0
-        mov [LM_PDH + ebx * 8],     eax
-        mov dword [LM_PDH + ebx * 8 + 4], 0
-        inc ebx
-        cmp ebx, 512
-        jl  .lm_fill_pdt
-        mark32 6, 'G'          ; page tables built
-
-        ; --- Step 3: Load 64-bit GDT ---
-        lgdt [gdt64_descriptor]
-
-        ; --- Step 4: Switch to long mode ---
-        ; CR4: set PAE (bit 5)
-        mov eax, cr4
-        or  eax, (1 << 5)
-        mov cr4, eax
-
-        ; CR3: load PML4 base
-        mov eax, LM_PML4
-        mov cr3, eax
-
-        ; EFER: set LME (bit 8) via MSR 0xC0000080
-        mov ecx, 0xC0000080
-        rdmsr
-        or  eax, (1 << 8)
-        wrmsr
-
-        ; CR0: set PG (bit 31) — EFER.LMA activates automatically
-        mov eax, cr0
-        or  eax, (1 << 31)
-        mov cr0, eax
-
-        ; Far jump into 64-bit code selector (0x08 from gdt64)
-        ; This flushes the pipeline and activates 64-bit mode.
-        jmp 0x08:.lm_64bit
-
-        ; --- Step 5: 64-bit entry point ---
-[BITS 64]
-.lm_64bit:
-        mark64 7, 'H'          ; running as 64-bit code
-        ; Set all data segments to the 64-bit data selector (0x10)
-        mov ax, 0x10
-        mov ds, ax
-        mov es, ax
-        mov fs, ax
-        mov gs, ax
-        mov ss, ax
-
-        ; Restore a sane stack in the low 1 MB (kernel will set its own)
-        mov rsp, 0x9FC00
-
-        ; Jump to the 64-bit nucleus at its LINK address. The image itself was
-        ; loaded at physical 1 MB; the higher-half mapping makes the link
-        ; address resolve there, so position-dependent code runs where it was
-        ; linked and low memory stays reachable through the identity map.
-        mov rax, KERNEL_LINK_ADDR
-        jmp rax
-
-[BITS 32]
-.lm_no_64bit:
-        ; CPU does not support long mode; print error and halt
-        mov esi, msg_no_longmode
-        call print32
-        cli
-        hlt
-
-; 32-bit print helper (we may still be in 32-bit pmode here)
-print32:
-        lodsb
-        test al, al
-        jz .done32
-        push eax
-        push ebx
-        push edx
-        ; Write directly to VGA text buffer at 0xB8000, row 24
-        ; (simple fallback — does not scroll)
-        mov ebx, 0xB8000 + (24 * 80 * 2)
-        mov ah, 0x4F           ; red background, white text
-        mov [ebx], ax
-        add ebx, 2
-        pop edx
-        pop ebx
-        pop eax
-        jmp print32
-.done32:
-        ret
-
-msg_no_longmode: db "ERROR: CPU does not support x86-64 long mode.", 0
-
-;---------------------------------------
-; 64-bit GDT (3 entries: null, code64, data64)
-;---------------------------------------
-gdt64_start:
-        ; Entry 0: null descriptor
-        dq 0
-
-        ; Entry 1: 64-bit code segment (selector 0x08)
-        ; Base=0, Limit ignored, L=1 (64-bit), P=1, DPL=0, Code, R/X
-        dw 0x0000               ; Limit[0:15]  (ignored in 64-bit)
-        dw 0x0000               ; Base[0:15]
-        db 0x00                 ; Base[16:23]
-        db 10011010b            ; Access: Present | DPL=0 | Code | Exec/Read
-        db 00100000b            ; Flags: L=1 (64-bit), D=0; Limit[16:19]=0
-        db 0x00                 ; Base[24:31]
-
-        ; Entry 2: 64-bit data segment (selector 0x10)
-        dw 0xFFFF               ; Limit[0:15]
-        dw 0x0000               ; Base[0:15]
-        db 0x00                 ; Base[16:23]
-        db 10010010b            ; Access: Present | DPL=0 | Data | R/W
-        db 00000000b            ; Flags: G=0, D=0 (data in 64-bit mode)
-        db 0x00                 ; Base[24:31]
-
-gdt64_descriptor:
-        dw (gdt64_start - $ + 5)  ; Limit = size - 1 (computed at assemble)
-        dd gdt64_start            ; Base
-
-%endif  ; KERNEL_64BIT
-
-; The long-mode block above switches BITS twice; restore the real-mode
-; context that the rest of the loader (print16, read_kernel_chunk, ...)
-; depends on.
 [BITS 16]
 
 ;---------------------------------------
@@ -692,15 +475,7 @@ pmode_entry:
         mov dword [0x508], memory_map
 
         ; Kernel already at 0x100000.
-        ; When KERNEL_64BIT is defined the build target requires a 64-bit
-        ; kernel image.  We transition from 32-bit pmode to x86-64 long mode
-        ; before handing off, so the kernel entry point runs in 64-bit mode.
-        ; Without KERNEL_64BIT (default legacy build) we jump directly.
-%ifdef KERNEL_64BIT
-        jmp enter_longmode
-%else
         jmp 0x08:0x00100000
-%endif
 
 ;=======================================================
 ; DATA (16-bit context)
@@ -717,12 +492,7 @@ BOUNCE_LIN      equ 0xC000
 ; KERNEL_SECTORS is generated by the build system in kernel_sectors.inc
 ; It equals ceil(kernel.bin size / 512), ensuring we always load the
 ; exact kernel binary without hard-coding a stale value.
-%ifdef KERNEL_64BIT
-; The 64-bit nucleus is a separate, much smaller image with its own size.
-%include "kernel64_sectors.inc"
-%else
 %include "kernel_sectors.inc"
-%endif
 
 boot_drive:     db 0
 chs_spt:        db 0

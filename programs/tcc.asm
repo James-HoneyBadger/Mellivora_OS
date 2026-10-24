@@ -1375,12 +1375,12 @@ compile_function:
         call compile_block
 
         ; Function epilogue (in case no explicit return): xor eax,eax; leave; ret
-        ; Note: xor eax,eax zero-extends to RAX in 64-bit mode
+        ; Note: xor eax,eax clears the full register
         mov al, 0x31
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        mov al, 0xC9            ; leave (= mov rsp,rbp + pop rbp in 64-bit)
+        mov al, 0xC9            ; leave
         call emit_byte
         mov al, 0xC3            ; ret
         call emit_byte
@@ -2390,14 +2390,14 @@ compile_expression:
         je .ce_store_rbp
         cmp ebx, SYM_PARAM
         je .ce_store_rbp
-        ; Global: mov rbx, addr; mov [rbx], rax (64-bit)
+        ; Global: mov rbx, addr; mov [rbx], rax 
         push eax                   ; preserve abs addr
         call emit_rex_w
         mov al, 0xBB               ; mov rbx, imm32 (sign-extended in 64-bit)
         call emit_byte
         pop eax
         call emit_dword
-        ; mov [rbx], rax (REX.W + 89 03)
+        ; mov [rbx], rax (REX prefix + 89 03)
         call emit_rex_w
         mov al, 0x89
         call emit_byte
@@ -2406,7 +2406,7 @@ compile_expression:
         popad
         ret
 .ce_store_rbp:
-        ; Local/param: mov [rbp + off8], rax (REX.W + 89 45 off8)
+        ; Local/param: mov [rbp + off8], rax (REX prefix + 89 45 off8)
         push eax                   ; save RBP offset
         call emit_rex_w
         mov al, 0x89
@@ -2443,13 +2443,13 @@ compile_expression:
         call emit_byte
         mov al, 4                  ; 4 bytes per int element
         call emit_byte
-        ; add rax, base (REX.W + 05 imm32)
+        ; add rax, base (REX prefix + 05 imm32)
         call emit_rex_w
         mov al, 0x05
         call emit_byte
         pop eax                    ; base address
         call emit_dword
-        ; mov rax, [rax] (REX.W + 8B 00)
+        ; mov rax, [rax] (REX prefix + 8B 00)
         call emit_rex_w
         mov al, 0x8B
         call emit_byte
@@ -2467,7 +2467,7 @@ compile_expression:
         call emit_byte
         mov al, 4                  ; 4 bytes per int element
         call emit_byte
-        ; add rax, base (REX.W + 05 imm32)
+        ; add rax, base (REX prefix + 05 imm32)
         call emit_rex_w
         mov al, 0x05
         call emit_byte
@@ -2479,7 +2479,7 @@ compile_expression:
         ; compile RHS
         call next_token            ; skip '='
         call compile_expression    ; result in RAX
-        ; pop rcx; mov [rcx], rax (REX.W + 59 89 01)
+        ; pop rcx; mov [rcx], rax (REX prefix + 59 89 01)
         mov al, 0x59               ; pop rcx
         call emit_byte
         call emit_rex_w
@@ -2524,7 +2524,7 @@ compile_or_expr:
         mov al, 0x50
         call emit_byte
         call compile_and_expr
-        ; pop rbx; or rax, rbx (64-bit)
+        ; pop rbx; or rax, rbx 
         mov al, 0x5B             ; pop rbx
         call emit_byte
         call emit_rex_w
@@ -2830,28 +2830,28 @@ compile_rel_expr:
         popad
         ret
 
-; Helper: emit push rax, call next_level, pop + cmp (64-bit)
+; Helper: emit push rax, call next_level, pop + cmp 
 ; Used by eq_expr and rel_expr
 cmp_emit_push_rhs_cmp:
         call next_token
         mov al, 0x50             ; push rax
         call emit_byte
         call compile_shift_expr
-        call emit_rex_w          ; REX.W for mov rcx, rax
+        call emit_rex_w          ; REX prefix for mov rcx, rax
         mov al, 0x89
         call emit_byte
         mov al, 0xC1
         call emit_byte
         mov al, 0x58             ; pop rax
         call emit_byte
-        call emit_rex_w          ; REX.W for cmp rax, rcx
+        call emit_rex_w          ; REX prefix for cmp rax, rcx
         mov al, 0x39
         call emit_byte
         mov al, 0xC8
         call emit_byte
         ret
 
-; Helper: emit movzx rax, al (64-bit)
+; Helper: emit movzx rax, al 
 cmp_emit_movzx:
         call emit_rex_w
         mov al, 0x0F
@@ -2938,10 +2938,10 @@ compile_add_expr:
         mov al, 0x50
         call emit_byte
         call compile_mul_expr
-        ; pop rbx; add rax, rbx (64-bit)
+        ; pop rbx; add rax, rbx 
         mov al, 0x5B             ; pop rbx
         call emit_byte
-        call emit_rex_w          ; REX.W for 64-bit add
+        call emit_rex_w          ; REX prefix for 64-bit add
         mov al, 0x01             ; add rax, rbx
         call emit_byte
         mov al, 0xD8
@@ -2955,15 +2955,15 @@ compile_add_expr:
         call emit_byte
         call compile_mul_expr
         ; Result in rax = right. pop rbx = left. Want left - right.
-        ; mov rcx, rax; pop rax; sub rax, rcx (64-bit)
-        call emit_rex_w          ; REX.W for mov rcx, rax
+        ; mov rcx, rax; pop rax; sub rax, rcx 
+        call emit_rex_w          ; REX prefix for mov rcx, rax
         mov al, 0x89
         call emit_byte
         mov al, 0xC1
         call emit_byte
         mov al, 0x58             ; pop rax
         call emit_byte
-        call emit_rex_w          ; REX.W for sub rax, rcx
+        call emit_rex_w          ; REX prefix for sub rax, rcx
         mov al, 0x29
         call emit_byte
         mov al, 0xC8
@@ -2994,10 +2994,10 @@ compile_mul_expr:
         mov al, 0x50
         call emit_byte
         call compile_unary
-        ; pop rbx; imul rax, rbx (64-bit)
+        ; pop rbx; imul rax, rbx 
         mov al, 0x5B
         call emit_byte
-        call emit_rex_w          ; REX.W for 64-bit imul
+        call emit_rex_w          ; REX prefix for 64-bit imul
         mov al, 0x0F
         call emit_byte
         mov al, 0xAF
@@ -3011,7 +3011,7 @@ compile_mul_expr:
         mov al, 0x50
         call emit_byte
         call compile_unary
-        ; mov rcx, rax; pop rax; cqo; idiv rcx (64-bit)
+        ; mov rcx, rax; pop rax; cqo; idiv rcx 
         call emit_rex_w
         mov al, 0x89
         call emit_byte
@@ -3019,10 +3019,10 @@ compile_mul_expr:
         call emit_byte
         mov al, 0x58             ; pop rax
         call emit_byte
-        call emit_rex_w          ; REX.W for cqo (64-bit sign extend)
+        call emit_rex_w          ; REX prefix for cqo 
         mov al, 0x99             ; cqo
         call emit_byte
-        call emit_rex_w          ; REX.W for 64-bit idiv
+        call emit_rex_w          ; REX prefix for 64-bit idiv
         mov al, 0xF7             ; idiv rcx
         call emit_byte
         mov al, 0xF9
@@ -3034,7 +3034,7 @@ compile_mul_expr:
         mov al, 0x50
         call emit_byte
         call compile_unary
-        ; mov rcx, rax; pop rax; cqo; idiv rcx; mov rax, rdx (remainder) (64-bit)
+        ; mov rcx, rax; pop rax; cqo; idiv rcx; mov rax, rdx (remainder) 
         call emit_rex_w
         mov al, 0x89
         call emit_byte
@@ -3042,15 +3042,15 @@ compile_mul_expr:
         call emit_byte
         mov al, 0x58             ; pop rax
         call emit_byte
-        call emit_rex_w          ; REX.W for cqo
+        call emit_rex_w          ; REX prefix for cqo
         mov al, 0x99             ; cqo
         call emit_byte
-        call emit_rex_w          ; REX.W for 64-bit idiv
+        call emit_rex_w          ; REX prefix for 64-bit idiv
         mov al, 0xF7             ; idiv rcx
         call emit_byte
         mov al, 0xF9
         call emit_byte
-        ; mov rax, rdx (REX.W + 89 D0)
+        ; mov rax, rdx (REX prefix + 89 D0)
         call emit_rex_w
         mov al, 0x89
         call emit_byte
@@ -3083,7 +3083,7 @@ compile_unary:
 .un_not:
         call next_token
         call compile_unary
-        ; test rax, rax; sete al; movzx rax, al (64-bit)
+        ; test rax, rax; sete al; movzx rax, al 
         call emit_rex_w
         mov al, 0x85
         call emit_byte
@@ -3095,7 +3095,7 @@ compile_unary:
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        call emit_rex_w          ; REX.W for movzx rax, al
+        call emit_rex_w          ; REX prefix for movzx rax, al
         mov al, 0x0F
         call emit_byte
         mov al, 0xB6
@@ -3108,7 +3108,7 @@ compile_unary:
 .un_neg:
         call next_token
         call compile_unary
-        ; neg rax (REX.W + F7 D8)
+        ; neg rax (REX prefix + F7 D8)
         call emit_rex_w
         mov al, 0xF7
         call emit_byte
@@ -3120,7 +3120,7 @@ compile_unary:
 .un_bitnot:
         call next_token
         call compile_unary
-        ; not rax (REX.W + F7 D0)
+        ; not rax (REX prefix + F7 D0)
         call emit_rex_w
         mov al, 0xF7
         call emit_byte
@@ -3212,13 +3212,13 @@ compile_primary:
         je .cp_load_rbp
         cmp dword [symbol_type], SYM_PARAM
         je .cp_load_rbp
-        ; Global: mov rbx, addr; mov rax, [rbx] (64-bit)
+        ; Global: mov rbx, addr; mov rax, [rbx] 
         call emit_rex_w
         mov al, 0xBB               ; mov rbx, imm32 (sign-extended)
         call emit_byte
         mov eax, [symbol_addr]
         call emit_dword
-        ; mov rax, [rbx] (REX.W + 8B 03)
+        ; mov rax, [rbx] (REX prefix + 8B 03)
         call emit_rex_w
         mov al, 0x8B
         call emit_byte
@@ -3227,7 +3227,7 @@ compile_primary:
         popad
         ret
 .cp_load_rbp:
-        ; Local/param: mov rax, [rbp + off8] (REX.W + 8B 45 off8)
+        ; Local/param: mov rax, [rbp + off8] (REX prefix + 8B 45 off8)
         call emit_rex_w
         mov al, 0x8B
         call emit_byte
@@ -3276,13 +3276,13 @@ compile_primary:
         call emit_byte
         mov al, 4                  ; 4 bytes per int element
         call emit_byte
-        ; add rax, base (REX.W + 05 imm32)
+        ; add rax, base (REX prefix + 05 imm32)
         call emit_rex_w
         mov al, 0x05
         call emit_byte
         pop eax                    ; base address
         call emit_dword
-        ; mov rax, [rax] (REX.W + 8B 00)
+        ; mov rax, [rax] (REX prefix + 8B 00)
         call emit_rex_w
         mov al, 0x8B
         call emit_byte
@@ -3362,7 +3362,7 @@ compile_func_call:
         call compile_expression  ; compile arg, result in RAX at runtime
         pop edx
         pop ecx
-        mov al, 0x50             ; push rax (64-bit in long mode)
+        mov al, 0x50             ; push rax 
         call emit_byte
         inc ecx
         cmp dword [tok_type], TOK_COMMA
@@ -3689,7 +3689,7 @@ compile_func_call:
         call emit_byte
         mov al, 0xC0
         call emit_byte
-        ; .loop (offset 0): movzx rdx, byte [rsi] (REX.W 0F B6 16)
+        ; .loop (offset 0): movzx rdx, byte [rsi] (REX prefix 0F B6 16)
         call emit_rex_w
         mov al, 0x0F
         call emit_byte
@@ -3839,7 +3839,7 @@ emit_print_dec_inline:
         pushad
         ; Emit inline decimal print routine for 64-bit
 
-        ; xor rcx, rcx; mov rbx, 10 (64-bit)
+        ; xor rcx, rcx; mov rbx, 10 
         call emit_rex_w
         mov al, 0x31
         call emit_byte
@@ -3866,7 +3866,7 @@ emit_print_dec_inline:
         call emit_byte
         mov al, 0x52            ; push rdx
         call emit_byte
-        ; inc rcx (REX.W + FF C1) - 64-bit inc
+        ; inc rcx (REX prefix + FF C1) - 64-bit inc
         call emit_rex_w
         mov al, 0xFF
         call emit_byte
@@ -3905,7 +3905,7 @@ emit_print_dec_inline:
         call emit_byte
         mov al, 0x80
         call emit_byte
-        ; dec rcx (REX.W + FF C9) - 64-bit dec
+        ; dec rcx (REX prefix + FF C9) - 64-bit dec
         call emit_rex_w
         mov al, 0xFF
         call emit_byte
@@ -4010,7 +4010,7 @@ add_global_var:
         popad
         ret
 
-; Add global array symbol, allocate N qwords at end (64-bit)
+; Add global array symbol, allocate N qwords at end 
 ; In: EAX = element count, name in temp_name
 add_global_array:
         pushad

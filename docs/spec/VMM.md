@@ -39,7 +39,7 @@ holding an area there would have that frame mapped as user scratch. The base is 
 first 4 MB boundary at or above the top of RAM, never below `0x08000000` (so a 128 MB
 machine keeps the historical layout) and never above `0x1C000000` (which keeps 64 MB
 of user space below `0x20000000`). For the same reason the allocator only hands out
-frames below `0x1C000000`; RAM above that is not used until the 64-bit port.
+frames below `0x1C000000`; RAM above that is not used.
 
 ## 3. Objects
 
@@ -316,10 +316,3 @@ These exist for documented features and are bounded:
 
 Each exception is listed in `SECURITY.md` with its justification and is covered by a test
 that proves nothing else in the same 4 MB region is reachable.
-
-## 7. 64-bit notes
-
-The 64-bit layout replaces this with: kernel in the higher half (`0xFFFF8000_00000000`
-direct map), user space `0x00000000_00000000`–`0x00007FFF_FFFFFFFF`, non-canonical holes
-guarded, `NX` for data, `SMEP`/`SMAP` enabled. The `vm_area` model carries over unchanged;
-only the constants differ.
