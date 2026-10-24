@@ -24,6 +24,10 @@
   rather than assumed delivered. The assertions themselves are unchanged.
 - **`make check-64`** is the 64-bit gate: build, boot, drive the shell, and read
   the guest's own writes back out of the volume.
+- **`make full-64` builds the default system.** `make full` still means the
+  32-bit tree, because that is what `make check` exercises, but the default
+  tree needs one obvious command too: this builds the nucleus, its loader, the
+  user programs and the volume they live on.
 - **`make run` boots the 64-bit tree**, which is what roadmap D1 says the
   primary target is; `make run-32` keeps the 32-bit image and the Burrows
   desktop one command away. The 64-bit guest gets a CPU model with SMEP/SMAP and

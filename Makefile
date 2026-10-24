@@ -135,7 +135,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate full check check-boot check-desktop check-longmode check-longmode-v4 check-64 sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate full full-64 check check-boot check-desktop check-longmode check-longmode-v4 check-64 sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count uefi run-uefi 64bit 64bit-asm 64bit-v4 hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table FORCE
 
 all: $(IMAGE)
 
@@ -295,9 +295,11 @@ $(POPULATE_STAMP): $(POPULATE_DEPS)
 # Populate disk image with files and programs
 populate: $(POPULATE_STAMP)
 
-# Full build: OS + programs + populated filesystem + debug symbols
+# Full build of the 32-bit tree: OS + programs + populated filesystem + debug
+# symbols. This is the tree `make check` exercises, so it keeps the name it has
+# always had; the 64-bit tree - what `make run` boots - is `make full-64`.
 full: $(POPULATE_STAMP) symbols
-	@echo "=== Full build complete ==="
+	@echo "=== Full build complete (32-bit: make run-32) ==="
 
 # Rebuild kernel only and write it into the existing disk image.
 # Skips program compilation and filesystem population — fastest
@@ -896,6 +898,13 @@ $(IMAGE_64_V4): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/mo
 
 64bit: $(IMAGE_64)
 	@echo "=== Run with: make run   (the 64-bit image is the default) ==="
+# Full build of the 64-bit tree: the nucleus, its loader, the user programs and
+# the volume they live on. `make run` builds this on demand; naming it makes the
+# default system buildable without booting it, and gives a clean tree one
+# command that produces something to run.
+full-64: $(IMAGE_64)
+	@echo "=== Full build complete (64-bit: make run) ==="
+
 
 # The 64-bit gate: build, boot, drive the shell, and read the guest's own writes
 # back out of the image. `make check` remains the 32-bit gate.
@@ -953,7 +962,8 @@ help:
 	@echo "    make populate     Populate filesystem (requires programs)"
 	@echo ""
 	@echo "  Build (64-bit, the default tree)"
-	@echo "    make 64bit        Build the long-mode nucleus image (mellivora64.img)"
+	@echo "    make full-64      Build the 64-bit system (nucleus, loader, programs, volume)"
+	@echo "    make 64bit        Build only the long-mode nucleus image"
 	@echo "    make check-64     Boot the 64-bit image and drive its shell"
 	@echo "    make run-32       Build and run the 32-bit tree instead"
 	@echo ""

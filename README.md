@@ -345,7 +345,8 @@ Mellivora_OS/
 | Command | Description |
 | --------- | ------------- |
 | `make full` | Complete build: boot + kernel + programs + filesystem |
-| `make 64bit` | Build the 64-bit long-mode image and its volume |
+| `make full-64` | Build the 64-bit system: nucleus, loader, programs, volume |
+| `make 64bit` | Build only the 64-bit long-mode image |
 | `make check-64` | Boot the 64-bit image and drive its shell (64-bit gate) |
 | `make run` | Launch the 64-bit image in QEMU (default tree) |
 | `make run-32` | Launch the 32-bit image (Burrows desktop) |
