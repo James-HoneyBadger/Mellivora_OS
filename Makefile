@@ -334,8 +334,9 @@ ISO_KERNEL_BIN = $(KERNEL_64BIN)
 # expanded inside build_iso_image. mk_hbfs64.py takes the image first, then the
 # name=path pairs; populate.py takes the image and the program directory.
 ISO_POPULATE_LINE = python3 tools/mk_hbfs64.py $(1) $(HBFS64_FILES)
-ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) \
-                 boot/motd.txt tools/mk_hbfs64.py
+# Only the pieces defined this early; the nucleus, its loader and the user
+# programs are added as prerequisites further down, once those variables exist.
+ISO_IMAGE_DEPS = $(BOOT_BIN) boot/motd.txt tools/mk_hbfs64.py
 else
 ISO_STAGE2_BIN = $(STAGE2_BIN)
 ISO_KERNEL_BIN = $(KERNEL_BIN)
@@ -879,8 +880,8 @@ $(IMAGE_64): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.
 # programs. The ISO rules are declared earlier in this file, before the list
 # exists, so their prerequisites are added here.
 ifeq ($(ISO_ARCH),64)
-$(ISO_DISK_IMAGE): $(USERPROGS)
-$(ISO_LITE_DISK_IMAGE): $(USERPROGS)
+$(ISO_DISK_IMAGE): $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS)
+$(ISO_LITE_DISK_IMAGE): $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS)
 endif
 
 $(IMAGE_64_V4): $(BOOT_BIN) $(STAGE2_64BIN) $(KERNEL_64BIN) $(USERPROGS) boot/motd.txt
