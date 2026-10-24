@@ -110,10 +110,12 @@ What the plan builds on, and must not regress:
   that does not need C yet. Build integration, a linker script for C-built
   subsystems, and a freestanding runtime (`memcpy`, `memset`, `strlen`,
   `memmove`) land here.
-- **Per-task FPU and SSE state.** The kernel initialises the FPU once at boot and
-  saves nothing across a switch, so two tasks using floating point corrupt each
-  other. A 512-byte `fxsave`/`fxrstor` area in the task control block is a
-  prerequisite for C subsystems and for any floating-point program.
+- **Per-task FPU and SSE state.** *Done for x87:* each TCB carries an image and
+  every switch path saves and restores it with `fnsave`/`frstor`, proved by
+  `programs/fpu_test.asm` in `make check-runtime`. SSE state is not saved yet,
+  which is why kernel C is still compiled `-mno-sse`; the area is 16-byte
+  aligned so `fxsave`/`fxrstor` can replace it when a CPU with FXSR is the
+  baseline.
 - Normative specs written before the code that needs them: `docs/spec/ABI.md`
   (calling convention and structure layout at the asm/C boundary),
   `docs/spec/OBJECTS.md`, `docs/spec/DRIVERS.md`, `docs/spec/CONFIG.md`.

@@ -400,6 +400,7 @@ irq_timer:
         ; EBX = new task's TCB, EDI = outgoing task's TCB
         ; Swap per-task fd tables (save outgoing's view, load incoming's)
         call sched_swap_fd_tables
+        call sched_swap_fpu
 
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
@@ -579,6 +580,7 @@ irq_keyboard:
         mov ebx, 0
         mov edi, [sched_kbd_tcb]
         call sched_swap_fd_tables
+        call sched_swap_fpu
         ; Release the foreground task only if it is still running. A stopped job
         ; keeps its TCB so fg/bg can resume it, and a killed one is already
         ; gone — tearing down whatever task happens to be RUNNING instead would

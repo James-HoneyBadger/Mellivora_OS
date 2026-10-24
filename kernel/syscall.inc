@@ -1080,6 +1080,7 @@ sys_pause:
 .pause_switch:
         ; EDI = outgoing task TCB, EBX = incoming task TCB
         call sched_swap_fd_tables
+        call sched_swap_fpu
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
         mov eax, ebx
@@ -1220,6 +1221,7 @@ sys_sigsuspend:
 .ssusp_switch:
         ; EDI = outgoing task TCB, EBX = incoming task TCB
         call sched_swap_fd_tables
+        call sched_swap_fpu
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
         mov eax, ebx

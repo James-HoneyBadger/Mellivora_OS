@@ -1,5 +1,29 @@
 # Mellivora OS - Changelog
 
+## Unreleased - floating point survives a context switch
+
+### Kernel
+
+- **Two tasks using the FPU no longer corrupt each other.** The x87 register
+  stack belongs to the CPU, not to a task, and the scheduler saved nothing
+  across a switch: a program that did floating-point work, yielded, and read its
+  value back got whatever the task that ran in between had left there. Nothing
+  reported it - the arithmetic simply produced the wrong number, and the more
+  tasks ran, the more often. Every TCB now carries a 128-byte image at
+  `TCB_FPU_AREA` and every switch path calls `sched_swap_fpu` with the same
+  `EDI`/`EBX` convention as the fd-table swap, including the timer preemption,
+  the waitpid/`pause`/`sigsuspend`/`sleep`/yield paths, the fault teardown and
+  every return to the shell, which owns an image of its own.
+- **`fnsave`/`frstor`, not `fxsave`/`fxrstor`.** The target is i486-and-up and
+  QEMU's 486 model has no FXSR; the area is 16-byte aligned so the wider
+  instruction can replace it when a CPU with FXSR becomes the baseline. New
+  tasks start from an image captured once after `fninit`, so a task that never
+  touches the FPU still has a valid control word.
+- **`programs/fpu_test.asm` proves it.** It forks, has both tasks push their own
+  value on the x87 stack, yield 64 times and require the exact value back, and
+  is a case in `make check-runtime`. Against the previous kernel it printed
+  `FPU_FAIL`; with the save in place, `FPU_OK`.
+
 ## Unreleased - the parity scorecard, and what "comparable to Windows 2000" means
 
 ### Planning and gates

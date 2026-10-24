@@ -145,6 +145,10 @@ run_case "signal delivery + pgid"    "sigterm_test"          "SIGTERM_OK"       
 run_case "handler returns + resumes" "sigret_test"           "SIGRET_OK"          "" "CPU EXCEPTION|SIGRET_FAIL"
 run_case "foreground pgroup + tty"   "pgrp_test"             "PGRP_OK"            "" "CPU EXCEPTION|PGRP_FAIL"
 run_case "copy-on-write fork"        "cow_test"              "COW_OK"             "" "CPU EXCEPTION|COW_FAIL|PAGE FAULT"
+# The x87 stack is per-CPU, so two tasks doing floating point only agree on
+# their own values if the scheduler saves and restores it. Both tasks check
+# that the number they pushed is the number they pop back after 64 switches.
+run_case "x87 state per task"         "fpu_test"              "FPU_OK"             "" "CPU EXCEPTION|FPU_FAIL"
 run_case "HBFS metadata writes"      "fs_meta_test"          "FS_META_OK"         "" "CPU EXCEPTION|FS_META_FAIL"
 run_case "HBFS metadata churn"       "fs_mkdir_test"         "CRASH_LOOP_OK"      "" "CPU EXCEPTION|CRASH_LOOP_FAIL"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"

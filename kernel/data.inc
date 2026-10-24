@@ -829,7 +829,12 @@ fork_child_kstop: resd 1
 fork_child_kesp:  resd 1
 fork_child_ubase: resd 1
 fork_child_pid_slot: resd 1  ; slot index that becomes child PID
-task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 128 = 16384 bytes v12.0)
+align 16
+task_table:       resb MAX_TASKS * TCB_SIZE           ; TCB array (128 * 272 bytes)
+align 16
+fpu_shell_area:   resb FPU_AREA_SIZE                  ; the shell's x87 image
+align 16
+fpu_init_image:   resb FPU_AREA_SIZE                  ; fninit image new tasks start from
 
 ; Networking state (RTL8139 NIC)
 net_nic_type:     resb 1          ; 0=none 1=RTL8139 2=e1000

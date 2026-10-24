@@ -1279,6 +1279,27 @@ Each task occupies **136 bytes** in the static `task_table` array
 | 128 | 4 | `TCB_CR3` | Physical address of this task's page directory (0 = master) |
 | **136** | — | `TCB_SIZE` | Total TCB size |
 
+
+### Per-task x87 state
+
+The x87 register stack belongs to the CPU, not to a task, so a program that does
+floating point keeps its values across a switch only if the scheduler swaps them
+with the task. Every TCB carries a 128-byte image at `TCB_FPU_AREA` (offset 144,
+16-byte aligned relative to a 16-aligned TCB), and every switch path calls
+`sched_swap_fpu` with the same convention as `sched_swap_fd_tables`: outgoing in
+`EDI`, incoming in `EBX`, and 0 meaning the shell, which has its own image.
+
+`fnsave`/`frstor` are used rather than `fxsave`/`fxrstor` because the target is
+i486-and-up and QEMU's 486 model offers no FXSR. `fnsave` re-initialises the FPU
+after saving, which is harmless because `frstor` follows immediately. New tasks
+start from an image captured once by `sched_init` after `fninit`, so a task that
+never touches the FPU still has a valid control word when it is first switched
+to.
+
+Without this, two programs using floating point silently corrupt each other:
+`programs/fpu_test.asm` forks, has both tasks push their own value, yield 64
+times and require the exact value back, and is a case in `make check-runtime`.
+
 ### Per-task File Descriptor Isolation (v12.1, extended v14)
 
 Each task owns a private 4 KB page holding **both** fd views:

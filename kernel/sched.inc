@@ -81,9 +81,14 @@ TCB_WAIT_PID    equ 116     ; v12: PID being waited on (0 = not waiting); for sy
 TCB_FD_TABLE_PTR equ 120    ; v12: Physical/virtual address of per-task fd table page (0 = not alloc)
 TCB_ERRNO       equ 124     ; v12: Per-task errno value
 TCB_CR3         equ 128     ; v13: Physical address of this task's page directory
+; Bytes 132..143 are spare. The x87 save image starts at 144 so it is 16-byte
+; aligned relative to a 16-aligned TCB, which is what fxsave would need if the
+; save path is ever upgraded from fnsave.
+TCB_FPU_AREA    equ 144     ; v14: fnsave image of this task's x87 state
                             ;      (0 = not allocated; the kernel/shell uses the
                             ;       master directory at PAGE_DIR_ADDR)
-TCB_SIZE        equ 136     ; Bytes per TCB (TCB_CR3 occupies 128..131)
+FPU_AREA_SIZE   equ 128     ; Room for fnsave's 108-byte image
+TCB_SIZE        equ 272     ; Bytes per TCB (TCB_CR3 at 128, FPU area at 144)
 
 MAX_TASKS    equ 128         ; v5.0: Doubled from 64
 
@@ -167,6 +172,53 @@ sched_swap_fd_tables:
         popad
         ret
 
+;-----------------------------------------------------------------------
+; Per-task x87 state
+;
+; The x87 register stack belongs to the CPU, not to a task: two programs doing
+; floating point corrupt each other unless every switch swaps the state with
+; the task. Each TCB therefore carries an image, and every switch path calls
+; sched_swap_fpu with the same (outgoing, incoming) convention as
+; sched_swap_fd_tables. TCB pointer 0 means the shell, which owns the console
+; between jobs and gets its own image for the same reason.
+;
+; fnsave/frstor rather than fxsave/fxrstor: the target is i486-and-up and
+; QEMU's 486 model has no FXSR. fnsave re-initialises the FPU after saving,
+; which is harmless because frstor follows immediately.
+;-----------------------------------------------------------------------
+sched_fpu_save:                 ; In: EDI = TCB, or 0 for the shell
+        push eax
+        cmp edi, 0
+        je .save_shell
+        lea eax, [edi + TCB_FPU_AREA]
+        jmp .save
+.save_shell:
+        mov eax, fpu_shell_area
+.save:
+        fnsave [eax]
+        pop eax
+        ret
+
+sched_fpu_load:                 ; In: EBX = TCB, or 0 for the shell
+        push eax
+        cmp ebx, 0
+        je .load_shell
+        lea eax, [ebx + TCB_FPU_AREA]
+        jmp .load
+.load_shell:
+        mov eax, fpu_shell_area
+.load:
+        frstor [eax]
+        pop eax
+        ret
+
+sched_swap_fpu:                 ; In: EDI = outgoing, EBX = incoming (0 = shell)
+        pushad
+        call sched_fpu_save
+        call sched_fpu_load
+        popad
+        ret
+
 ;---------------------------------------
 ; sched_init - Initialize the scheduler
 ; Clears the task table. No tasks are
@@ -187,6 +239,23 @@ sched_init:
         mov dword [tty_fg_pgid], -1
         mov dword [sched_kbd_tcb], 0
         mov dword [sched_sig_self], 0
+
+        ; Capture the initialised x87 image once. Every task starts from it and
+        ; so does the shell, so a task that never touches the FPU still has a
+        ; valid control word the first time it is switched to.
+        fninit
+        fnsave [fpu_init_image]
+        push edi
+        push esi
+        push ecx
+        mov esi, fpu_init_image
+        mov edi, fpu_shell_area
+        mov ecx, FPU_AREA_SIZE / 4
+        cld
+        rep movsd
+        pop ecx
+        pop esi
+        pop edi
         popad
         ret
 
@@ -363,6 +432,19 @@ sched_create_task:
         mov [edi + TCB_FD_TABLE_PTR], dword 0
 .fd_page_done:
 
+        ; Start the task from the initialised x87 image (see sched_init).
+        push edi
+        push esi
+        push ecx
+        lea edi, [edi + TCB_FPU_AREA]
+        mov esi, fpu_init_image
+        mov ecx, FPU_AREA_SIZE / 4
+        cld
+        rep movsd
+        pop ecx
+        pop esi
+        pop edi
+
         ; Copy task name from task_create_name (set by caller, or default)
         push edi
         push esi
@@ -492,6 +574,7 @@ fault_kill_current_task:
         mov edi, eax
         xor ebx, ebx
         call sched_swap_fd_tables
+        call sched_swap_fpu
         call sched_exit_task
 .fkct_done:
         call sched_restore_shell_fds
@@ -931,6 +1014,7 @@ sys_waitpid:
 
         ; Swap fd tables: outgoing=EDI, incoming=EBX
         call sched_swap_fd_tables
+        call sched_swap_fpu
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], edx
         mov eax, [ebx + TCB_KSTACK]
@@ -945,6 +1029,7 @@ sys_waitpid:
         ; EDI=our TCB (outgoing), EBX=0 (incoming=shell)
         xor ebx, ebx
         call sched_swap_fd_tables
+        call sched_swap_fpu
         xor eax, eax
         call sched_apply_cr3          ; back to the master directory
         mov esp, KERNEL_STACK
@@ -1052,6 +1137,8 @@ task_args_free:
 ;---------------------------------------
 sched_restore_shell_fds:
         pushad
+        xor ebx, ebx
+        call sched_fpu_load
         mov esi, shell_fd_table
         mov edi, fd_table
         mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
@@ -1122,6 +1209,7 @@ sched_switch_to_tcb:
         mov ebx, edi            ; incoming TCB
         xor edi, edi            ; outgoing = shell
         call sched_swap_fd_tables
+        call sched_swap_fpu
         pop edx
         pop edi
 
@@ -1212,6 +1300,7 @@ sched_try_yield_frame:
 
         ; sched_swap_fd_tables wants EDI=outgoing, EBX=incoming.
         call sched_swap_fd_tables
+        call sched_swap_fpu
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], edx
         mov eax, [ebx + TCB_KSTACK]
@@ -1270,6 +1359,8 @@ sched_force_switch:
         pop edi
         pop esi
 .sfs_switch:
+        mov ebx, edi
+        call sched_fpu_load
         mov esp, [edi + TCB_ESP]  ; Switch to new task's kernel stack
         popad                      ; Restore its GP registers
         iretd                      ; Resume the ring-3 task
@@ -1426,6 +1517,7 @@ sys_yield:
 
         ; Swap fd tables before switching
         call sched_swap_fd_tables
+        call sched_swap_fpu
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
 
@@ -1487,6 +1579,7 @@ sched_self_leave:
         mov edi, ebx
         xor ebx, ebx
         call sched_swap_fd_tables
+        call sched_swap_fpu
         call sched_restore_shell_fds
         xor eax, eax
         call sched_apply_cr3
@@ -2078,6 +2171,7 @@ sys_sleep:
 .sleep_switch:
         ; EDI = outgoing task TCB, EBX = incoming task TCB
         call sched_swap_fd_tables
+        call sched_swap_fpu
         mov dword [ebx + TCB_STATE], TASK_RUNNING
         mov [task_current], esi
         mov eax, ebx
