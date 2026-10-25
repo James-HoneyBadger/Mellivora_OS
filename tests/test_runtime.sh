@@ -205,6 +205,9 @@ run_case "APIC is used when the CPU has one" "acpi"           "ACPI: interrupts:
 # ...and that is what makes an SMP machine usable: before this, a machine with
 # two CPUs received no interrupts at all, so nothing typed was ever read.
 run_case "SMP machine takes input"    "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL" "" 2 pentium
+# All of them, not just the second: every processor the firmware describes is
+# woken with INIT-SIPI-SIPI and must check in.
+run_case "every described CPU comes online" "acpi"             "processors online: 4 of 4" "" "CPU EXCEPTION|online: 3 of|online: 2 of" "" 4 pentium
 # Line routing, not just the tick: the network stack's interrupts arrive
 # through an I/O APIC entry programmed level-triggered active-low.
 run_case "SMP machine serves network" "dhcp"                  "ANSWER SECTION"     "dig example.com" "CPU EXCEPTION" "" 2 pentium

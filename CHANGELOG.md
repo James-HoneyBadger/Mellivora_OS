@@ -1,5 +1,31 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the other processors wake up
+
+### Kernel
+
+- **Application processors are started** (`kernel/smp.inc`). Every processor the
+  MADT describes except this one gets INIT-SIPI-SIPI, addressed to the APIC ID
+  the table gave it. A processor starts in real mode knowing nothing about the
+  kernel, so a small 16-bit blob waits at 0x8000: it loads a flat GDT, enters
+  protected mode, loads the page directory, and calls into the kernel proper.
+  Everything absolute inside the blob is expressed as its run address plus an
+  offset, because it was assembled in the kernel image and executes elsewhere -
+  a relative `call` there once sent an AP into the middle of low memory.
+- **They park.** An AP takes a stack of its own (chosen by APIC ID), counts
+  itself in, and halts with interrupts off. Joining the scheduler needs per-CPU
+  state, locking on everything shared, and a lock-order gate to prove the
+  locking - each a separate increment. A parked AP proves the hard part
+  (delivery, the mode change, the shared address space) without putting a
+  second thread through code written assuming it is alone.
+- **Bounded**: the wait for arrivals is a timeout, so a processor that never
+  answers cannot hang the boot. `acpi` reports `processors online: N of M`, and
+  the `ACPI_BOOT` line on COM1 carries `online=N`.
+
+### Tests
+
+- `every described CPU comes online`: four vCPUs, all four must check in.
+
 ## Unreleased - the tick moves to the APIC timer
 
 ### Kernel

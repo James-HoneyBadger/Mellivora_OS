@@ -201,6 +201,13 @@ sleep, or switch itself off.
   no tick to wake a halt, no keyboard - so the machine was unusable. Two CPUs
   on a Pentium now boot, take input, run programs and serve the network;
   `make check-runtime` holds all four cases.
+- **Application processors start and park (landed).** INIT-SIPI-SIPI to every
+  APIC ID the MADT lists, a 16-bit trampoline at 0x8000 that changes mode and
+  loads the page directory, and a per-processor stack. They halt with interrupts
+  off: a parked AP proves delivery and the shared address space without putting
+  a second thread through kernel code that assumes it is alone. What remains of
+  SMP - per-CPU state, scheduler and allocator locking, lock-order validation,
+  and letting an AP do work - is the next increment, and it lands behind a gate.
 - **The tick belongs to the local APIC timer (landed)** where there is one, and
   to the PIT everywhere else. The APIC timer's rate is measured against the PIT
   and sanity-checked before it is trusted; a bad measurement keeps the PIT. The

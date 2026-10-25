@@ -748,6 +748,7 @@ kernel_entry:
 %include "kernel/paging.inc"
 %include "kernel/acpi.inc"
 %include "kernel/apic.inc"
+%include "kernel/smp.inc"
 %include "kernel/vm.inc"
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"

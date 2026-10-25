@@ -64,6 +64,8 @@ irq_wanted:         dd 0
 ; Ticks per second the local APIC timer was measured to run at, or 0 when the
 ; PIT still owns the tick.
 lapic_timer_hz:     dd 0
+; Processors that answered, counting this one. 1 until smp_start_aps runs.
+smp_cpus_online:    dd 1
 lapic_timer_count:  dd 0
 
 ;-----------------------------------------------------------------------
@@ -554,6 +556,10 @@ apic_init:
         ; Take the tick from the PIT now that a CPU clock is available.
         call lapic_timer_start
 
+        ; Then wake the other processors, with interrupts still off.
+        call smp_start_aps
+        mov [smp_cpus_online], eax
+
         mov dword [esp + 28], 0
         popad
         ret
@@ -567,6 +573,7 @@ apic_init:
 .ai_pic:
         ; No usable APIC: the 8259 stays in charge and nothing changes.
         mov byte [irq_mode_apic], 0
+        mov dword [smp_cpus_online], 1
         mov dword [esp + 28], -1
         popad
         ret

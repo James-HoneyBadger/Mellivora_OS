@@ -79,6 +79,10 @@ acpi_ioapic_addr:   dd 0               ; the first one, for a readable summary
 acpi_irq_gsi:   db 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 acpi_irq_flags: times 16 dw 0
 
+; APIC ID of each processor the MADT described, in the order it listed them.
+; The IDs are what an INIT-SIPI is addressed to, so they are worth keeping.
+acpi_cpu_apic_ids: times 16 db 0
+
 ;-----------------------------------------------------------------------
 ; acpi_map - make a physical address readable
 ;   In : EAX = address (clobbered)
@@ -320,6 +324,12 @@ acpi_scan_madt:
 
         cmp eax, MADT_TYPE_CPU
         jne .asm_not_cpu
+        mov edx, [acpi_cpu_count]
+        cmp edx, 16
+        jae .asm_cpu_counted
+        mov al, [esi + 3]               ; this processor's APIC ID
+        mov [acpi_cpu_apic_ids + edx], al
+.asm_cpu_counted:
         inc dword [acpi_cpu_count]
         jmp .asm_next
 .asm_not_cpu:
@@ -590,6 +600,17 @@ acpi_dump:
 .ad_irq_named:
         call vga_print
 
+        mov esi, msg_acpi_online
+        call vga_print
+        mov eax, [smp_cpus_online]
+        call vga_print_dec
+        mov esi, msg_acpi_of
+        call vga_print
+        mov eax, [acpi_cpu_count]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
         mov esi, msg_acpi_clock
         call vga_print
         mov esi, msg_acpi_clock_pit
@@ -747,6 +768,10 @@ acpi_print_serial:
         call .aps_append
         mov eax, [acpi_ioapic_count]
         call acpi_dec_str
+        mov esi, acpi_ser_online
+        call .aps_append
+        mov eax, [smp_cpus_online]
+        call acpi_dec_str
         mov esi, acpi_ser_tick
         call .aps_append
         mov esi, acpi_ser_tick_pit
@@ -811,6 +836,7 @@ acpi_serial_line:  times 96 db 0
 acpi_ser_cpus:     db "ACPI_BOOT cpus=", 0
 acpi_ser_lapic:    db " lapic=0x", 0
 acpi_ser_io:       db " ioapics=", 0
+acpi_ser_online:   db " online=", 0
 acpi_ser_tick:     db " tick=", 0
 acpi_ser_tick_pit: db "pit", 0
 acpi_ser_tick_lapic: db "lapic", 0
@@ -838,6 +864,8 @@ msg_acpi_madt:    db "ACPI: MADT at 0x", 0
 msg_acpi_cpus:    db "ACPI: CPUs: ", 0
 msg_acpi_lapic:   db "  local APIC at 0x", 0
 msg_acpi_ioapic:  db "ACPI: IOAPICs: ", 0
+msg_acpi_online: db "ACPI: processors online: ", 0
+msg_acpi_of: db " of ", 0
 msg_acpi_clock: db "ACPI: tick clock: ", 0
 msg_acpi_clock_lapic: db "local APIC timer, ", 0
 msg_acpi_clock_pit: db "PIT", 10, 0
