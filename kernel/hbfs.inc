@@ -1165,6 +1165,11 @@ hbfs_free_block:
 ; Returns: CF set on error
 hbfs_create_file:
         pushad
+        ; Adding an entry is a write to the directory, so check that first and
+        ; before the transaction opens: a refusal must not journal anything.
+        call hbfs_cwd_access_current
+        test eax, eax
+        jnz .hcf_denied
         ; One transaction spans the block allocation (bitmap + superblock) and
         ; the directory entry, so a crash can never leave allocated-but-orphan
         ; blocks or an entry pointing at unallocated space.
@@ -1195,6 +1200,11 @@ hbfs_create_file:
         loop .find_free
 
         ; Directory full
+        popad
+        stc
+        ret
+
+.hcf_denied:
         popad
         stc
         ret
@@ -1317,6 +1327,10 @@ hbfs_delete_file_entry:
 ; Returns: CF=0 success, CF=1 error
 hbfs_mkdir:
         pushad
+        ; A subdirectory is an entry too: the parent's write bit governs it.
+        call hbfs_cwd_access_current
+        test eax, eax
+        jnz .hm_denied
         call hbfs_journal_begin
         mov [.hm_name], esi
 
@@ -1400,6 +1414,10 @@ hbfs_mkdir:
 
 .hm_fail:
         call hbfs_journal_abort
+        popad
+        stc
+        ret
+.hm_denied:
         popad
         stc
         ret
@@ -1603,6 +1621,20 @@ sys_rename:
         mov esi, ebx
         call hbfs_find_file
         jc .sr_fail             ; source not found
+        ; Renaming rewrites the entry's name, so it is a write to the file and
+        ; to the directory that holds it.
+        mov ebx, HBFS_ACC_WRITE
+        call hbfs_access_current
+        test eax, eax
+        jnz .sr_fail
+        call hbfs_cwd_access_current
+        test eax, eax
+        jnz .sr_fail
+        ; Reload: the directory check borrows the buffer for its parent scan
+        call hbfs_load_root_dir
+        mov esi, [.sr_old]
+        call hbfs_find_file
+        jc .sr_fail
         ; Save entry pointer
         mov [.sr_edi], edi
         ; Check new name does not already exist
@@ -1660,6 +1692,11 @@ sys_rmdir:
         ; Must be a directory
         cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
         jne .srd_fail
+        ; Removing it rewrites its entry, so hold the caller to the write bit
+        mov ebx, HBFS_ACC_WRITE
+        call hbfs_access_current
+        test eax, eax
+        jnz .srd_fail
         ; Save entry info
         mov [.srd_edi], edi
         mov ebp, [edi + DIRENT_START_BLOCK]
@@ -1737,6 +1774,11 @@ sys_truncate:
         je .st_fail
         cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
         je .st_fail
+        ; Discarding content is a write to the file
+        mov ebx, HBFS_ACC_WRITE
+        call hbfs_access_current
+        test eax, eax
+        jnz .st_fail
         ; New size must be <= current size
         mov eax, [.st_new_size]
         cmp eax, [edi + DIRENT_SIZE]
@@ -2285,6 +2327,94 @@ require_root:
         pop ecx
         pop edi
         ret
+
+;-----------------------------------------------------------------------
+; hbfs_cwd_access_current — may the caller add entries to the cwd?
+;   Out: EAX = 0 allowed, -1 denied. Every other register is preserved.
+;
+; Creating a file writes its name into the directory, so the directory's own
+; write bit governs it - the file's mode does not exist yet. The cwd is tracked
+; as an LBA, so the bits that govern it are the ones in the entry that names it
+; in its parent, and the directory stack records that parent. The root
+; directory has no such entry, so it uses the stand-in below: root-owned and
+; 0755, which is what a directory is created with and what an ordinary user
+; may not write to.
+;
+; The directory buffer is borrowed for the parent scan, so the cache is
+; invalidated afterwards and the next load re-reads the cwd. Callers reach here
+; before they load the directory, when the buffer holds nothing unsaved.
+;-----------------------------------------------------------------------
+hbfs_cwd_access_current:
+        pushad
+        cmp dword [current_dir_lba], 0xFFFFFFFF
+        je  .hcc_allowed                ; a virtual mount: not HBFS's to judge
+        cmp dword [dir_depth], 0
+        je  .hcc_root
+
+        mov eax, [dir_depth]
+        dec eax
+        imul eax, DIR_STACK_ENTRY_SIZE
+        mov ebx, [dir_stack + eax]          ; parent LBA
+        mov ecx, [dir_stack + eax + 4]      ; parent sector count
+        test ebx, ebx
+        jz .hcc_deny
+        mov [.hcc_sects], ecx
+
+        mov dword [dir_cache_lba], 0xFFFFFFFF
+        mov edi, hbfs_dir_buf
+        mov eax, ebx
+        call ata_read_sectors
+        jc .hcc_deny                        ; cannot read it: refuse
+
+        mov eax, [.hcc_sects]
+        shl eax, 9
+        xor edx, edx
+        mov ecx, HBFS_DIR_ENTRY_SIZE
+        div ecx
+        mov ecx, eax                        ; entries in the parent
+        mov edx, hbfs_dir_buf
+.hcc_scan:
+        test ecx, ecx
+        jz .hcc_deny                        ; not found: refuse
+        cmp byte [edx + DIRENT_TYPE], FTYPE_FREE
+        je .hcc_next
+        mov eax, [edx + DIRENT_START_BLOCK]
+        shl eax, 3
+        add eax, HBFS_DATA_START            ; first sector of this entry
+        cmp eax, [current_dir_lba]
+        je .hcc_found
+.hcc_next:
+        add edx, HBFS_DIR_ENTRY_SIZE
+        dec ecx
+        jmp .hcc_scan
+.hcc_found:
+        mov edi, edx
+        jmp .hcc_check
+.hcc_root:
+        mov edi, hbfs_root_dir_mode_entry
+.hcc_check:
+        mov ebx, HBFS_ACC_WRITE
+        call hbfs_access_current
+        test eax, eax
+        jz .hcc_allowed
+.hcc_deny:
+        mov dword [esp + 28], -1
+        popad
+        ret
+.hcc_allowed:
+        mov dword [esp + 28], 0
+        popad
+        ret
+.hcc_sects: dd 0
+
+; Stand-in dirent for "/", in the field positions hbfs_check_access reads.
+align 4
+hbfs_root_dir_mode_entry:
+        times DIRENT_PERMS db 0
+        dw HBFS_MODE_DIR_DEF            ; 276 mode: rwxr-xr-x
+        dw 0                            ; 278 owner: root
+        dw 0                            ; 280 group: root
+        times 4 db 0
 
 ;-----------------------------------------------------------------------
 ; require_owner_or_root — may the running task change this file's mode?

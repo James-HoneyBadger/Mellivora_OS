@@ -13,6 +13,10 @@ uid/gid per directory entry. The mode is enforced, not advisory:
 | `open` for write | owner/group/world write bit |
 | `SYS_FWRITE` over an existing file | write bit on the file |
 | `unlink` | write bit on the file |
+| create a file or subdirectory | write bit on the **directory** |
+| `rename` | write bit on the file and on the directory |
+| `truncate` | write bit on the file |
+| `rmdir` | write bit on the directory |
 | `chmod` | root, or the file's owner |
 | `chown` | root only |
 | anything, as uid 0 | allowed |
@@ -25,9 +29,17 @@ contexts have no task control block and are treated as root.
 checks read the effective ID; a process that dropped privileges used to keep
 passing them as root.
 
-**Not yet enforced:** directory write permission on create (a new file may be
-made in a directory whose write bit is clear), `truncate`, and `rename`. A mode
-of 0 is treated as a legacy entry: readable by its owner, not writable.
+A name is part of the directory that holds it, so adding one is a write to the
+directory: `hbfs_create_file` and `hbfs_mkdir` check the directory's write bit
+before the transaction opens, and a refusal journals nothing. The directory's
+own mode and owner are found in the entry that names it in its parent, which
+the directory stack records; the root directory has no such entry and uses a
+stand-in - root-owned, `0755`. A mode of 0 is treated as a legacy entry:
+readable by its owner, not writable.
+
+**Not yet enforced:** directory *execute* (search) permission, and the sticky
+bit on shared directories. Ownership of a directory is not required to rename
+within it beyond the write bits above.
 
 ## Handle rights
 
@@ -83,8 +95,13 @@ when every one holds, and it is a `make check-runtime` case.
 The gate has been seen to say no: with the access check in `fd_open` temporarily
 forced to succeed, the program fails on its first attempt.
 
-`programs/handle_test.asm` is the gate for the section above, and is also a
-`make check-runtime` case.
+`programs/handle_test.asm` is the gate for the handle-rights section, and
+`programs/dirperm_test.asm` for the directory rules: as uid 2000, owning both
+directories, it must be refused a create in one whose write bit is clear, and
+allowed the same call in the other, and it must be refused renaming and
+truncating a file of uid 1000's that sits in its own writable directory. Forcing
+`hbfs_cwd_access_current` to allow makes it print `DIRPERM_FAIL`. Both are
+`make check-runtime` cases.
 
 
 ## 1. Threat model

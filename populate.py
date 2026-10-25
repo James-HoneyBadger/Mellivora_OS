@@ -1050,7 +1050,7 @@ echo Done.
 # Programs installed at the root of the volume rather than in /bin.
 # /bin is at the 227-entry limit of an HBFS subdirectory (roadmap M3
 # grows it); root holds 455 entries and is searched before PATH.
-ROOT_PROGRAMS = {'perm_test', 'hostile_test', 'handle_test'}
+ROOT_PROGRAMS = {'perm_test', 'hostile_test', 'handle_test', 'dirperm_test'}
 
 BURROWS_PROGRAMS = {
     'bcalc', 'bedit', 'bforager', 'bhive', 'bnotes', 'bpaint',

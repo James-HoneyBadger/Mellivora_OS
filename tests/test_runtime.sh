@@ -160,6 +160,10 @@ run_case "hostile program is refused" "hostile_test"          "HOSTILE_OK"      
 # A handle carries its own rights: a read-only handle cannot write back, a
 # write-only one cannot be read, even as root where the mode allows both.
 run_case "handle rights are enforced" "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL"
+# Adding a name is a write to the directory: a user who owns a directory may
+# not add to it once its write bit is clear, and may not rename or truncate a
+# file of somebody else's that sits inside it.
+run_case "directory rights are enforced" "dirperm_test"        "DIRPERM_OK"         "" "CPU EXCEPTION|DIRPERM_FAIL"
 # A bare name that is a program runs it; one that is a directory enters it.
 # The trailing space matters: the tool anchors its expectation after the echoed
 # command, and the prompt repeats the directory name.

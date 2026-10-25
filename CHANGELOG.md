@@ -1,5 +1,27 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a name belongs to the directory that holds it
+
+### Security
+
+- **Creating in a directory is a write to the directory.** `hbfs_create_file`
+  and `hbfs_mkdir` now require the directory's write bit, checked before the
+  transaction opens so a refusal journals nothing. Owning a directory is not
+  enough when its write bit is clear; root still bypasses, as everywhere else.
+  The directory's own mode and owner are read from the entry that names it in
+  its parent - the directory stack records the parent - and the root directory
+  uses a root-owned `0755` stand-in, since nothing names it.
+- **`rename`, `truncate` and `rmdir` had no permission check at all.** Any task
+  could rename or empty another user's file, and delete another user's
+  directory. `rename` now requires write on the file and on the directory,
+  `truncate` write on the file, `rmdir` write on the directory.
+- **`programs/dirperm_test.asm`** is the gate. As uid 2000 it owns both test
+  directories, so the refusal it demands cannot be a permission accident: a
+  create is refused in the `0555` one and accepted in the `0755` one, and a
+  file of uid 1000's sitting in its own writable directory cannot be renamed or
+  truncated. Forcing the directory check to allow makes it print
+  `DIRPERM_FAIL`.
+
 ## Unreleased - a handle is not a number, it is a right
 
 ### Security
