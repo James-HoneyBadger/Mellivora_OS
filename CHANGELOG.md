@@ -1,5 +1,25 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a hostile program, and the gate that refuses it
+
+### Security
+
+- **M1's conformance gate.** `programs/hostile_test.asm` runs as uid 1000 and
+  attempts everything it is not entitled to: reading, writing, `access`-ing,
+  removing and replacing a file owned by somebody else; changing that file's
+  mode; taking ownership of it; and passing a kernel address where a user
+  pointer belongs. It requires all eleven checks to fail and two controls to
+  succeed, so the gate cannot pass by refusing everything. It is a
+  `make check-runtime` case, and the machine must still reach the next prompt.
+- **The gate has been seen to say no.** With the access check in `fd_open`
+  forced to succeed, the program fails on its first attempt; that sabotage was
+  reverted and the run repeated. A gate that has never failed is a decoration.
+- **Fault containment is the other half, and already existed:**
+  `stack_overflow` writes through a guard page and the task dies while the shell
+  runs the next command. Signalling across users is the one part of the exit
+  gate still unimplemented - `kill` has no uid policy yet - and is recorded as
+  open rather than claimed.
+
 ## Unreleased - the permission bits deny
 
 ### Security

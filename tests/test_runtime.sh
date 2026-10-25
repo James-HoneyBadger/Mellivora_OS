@@ -152,6 +152,11 @@ run_case "x87 state per task"         "fpu_test"              "FPU_OK"          
 # The stored mode has to deny, not decorate: root passes, the owner is held
 # to the owner bits, and a stranger to the world bits.
 run_case "permissions deny"           "perm_test"             "PERM_OK"            "" "CPU EXCEPTION|PERM_FAIL"
+# M1's gate: an unprivileged program tries to read, write, remove, chmod and
+# chown what is not its own, and passes a kernel address where a user pointer
+# belongs. Every attempt must be refused, and two things it may do must still
+# work - the shell runs the next case, so the machine also has to survive.
+run_case "hostile program is refused" "hostile_test"          "HOSTILE_OK"         "" "CPU EXCEPTION|HOSTILE_FAIL"
 # A bare name that is a program runs it; one that is a directory enters it.
 # The trailing space matters: the tool anchors its expectation after the echoed
 # command, and the prompt repeats the directory name.

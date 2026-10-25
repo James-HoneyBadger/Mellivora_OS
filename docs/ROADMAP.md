@@ -149,6 +149,13 @@ The highest-leverage change in the plan. Everything after it is cheaper.
   the owner case and the stranger case in `make check-runtime`. Directory write
   permission on create, `truncate` and `rename` are still open.
 
+- **The conformance gate (landed).** `programs/hostile_test.asm` runs as an
+  ordinary user and requires eleven refusals and two controls, and it has been
+  seen to fail when an enforcement is disabled. Fault containment is the other
+  half and already existed: `stack_overflow` must kill the offending task while
+  the shell runs the next command. What remains for the full gate is signalling
+  (no cross-user signal policy exists yet) and the object layer.
+
 **Exit:** a hostile-program conformance suite where a deliberately misbehaving
 program fails to read, write, signal or open anything it was not granted, and
 cannot take the machine down trying.

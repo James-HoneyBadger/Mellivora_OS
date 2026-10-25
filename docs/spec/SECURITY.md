@@ -29,6 +29,20 @@ passing them as root.
 made in a directory whose write bit is clear), `truncate`, and `rename`. A mode
 of 0 is treated as a legacy entry: readable by its owner, not writable.
 
+## Conformance gate
+
+`programs/hostile_test.asm` is the executable form of this document's claims.
+It runs as uid 1000 and requires eleven outcomes: five refusals on a file owned
+by somebody else (read, write, `access`, remove, replace-by-write), two on its
+metadata (`chmod`, `chown`), two on kernel addresses passed where user pointers
+belong (`open`, `write`), and two controls that must still succeed (reading a
+world-readable file, and being refused its write). It prints `HOSTILE_OK` only
+when every one holds, and it is a `make check-runtime` case.
+
+The gate has been seen to say no: with the access check in `fd_open` temporarily
+forced to succeed, the program fails on its first attempt.
+
+
 ## 1. Threat model
 
 In scope:
