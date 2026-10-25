@@ -1977,6 +1977,11 @@ sched_kbd_signal:
 ; Group signalling (-pgid) is what a job-control shell needs to stop a whole
 ; pipeline. The old ABI only took EBX (pid) and destroyed the task outright;
 ; callers that leave ECX unset still get SIGTERM and the same visible result.
+;
+; A signal reaches only a task the sender may touch: itself, another task of
+; the same effective user, or anything when the sender is root. Every match is
+; checked before anything is delivered, so a group signal is refused whole
+; rather than half-delivered.
 ;---------------------------------------
 sys_kill:
         pushad
@@ -1988,36 +1993,75 @@ sys_kill:
         mov [.sk_sig], ecx
 .sk_sig_ready:
         mov dword [.sk_found], 0
+        mov dword [.sk_sender_uid], 0     ; kernel context (shell) is root
+        mov dword [.sk_sender_pid], 0
+        call sched_get_current_task
+        test eax, eax
+        jz .sk_scan
+        mov edx, [eax + TCB_PID]
+        mov [.sk_sender_pid], edx
+        mov edx, [eax + TCB_EUID]
+        mov [.sk_sender_uid], edx
 
+        ; Pass one: find the targets and confirm every one is reachable.
+.sk_scan:
         mov edi, task_table
         xor edx, edx
-.sk_scan:
+.sk_check:
         cmp edx, MAX_TASKS
-        jge .sk_scan_done
+        jge .sk_check_done
         cmp dword [edi + TCB_STATE], TASK_FREE
-        je  .sk_next
+        je  .sk_check_next
         test ebx, ebx
-        js  .sk_match_group
+        js  .sk_check_group
         cmp [edi + TCB_PID], ebx
-        jne .sk_next
-        jmp .sk_hit
-.sk_match_group:
+        jne .sk_check_next
+        jmp .sk_check_hit
+.sk_check_group:
         mov eax, ebx
         neg eax                       ; EBX = -pgid -> EAX = pgid
         cmp [edi + TCB_PGID], eax
-        jne .sk_next
-.sk_hit:
+        jne .sk_check_next
+.sk_check_hit:
         inc dword [.sk_found]
-        mov eax, [.sk_sig]
-        call sched_signal_task
-.sk_next:
+        call sched_may_signal
+        jc .sk_fail
+.sk_check_next:
         add edi, TCB_SIZE
         inc edx
-        jmp .sk_scan
+        jmp .sk_check
 
-.sk_scan_done:
+.sk_check_done:
         cmp dword [.sk_found], 0
         je .sk_fail
+
+        ; Pass two: deliver. Nothing is signalled unless pass one allowed all.
+        mov edi, task_table
+        xor edx, edx
+.sk_deliver:
+        cmp edx, MAX_TASKS
+        jge .sk_delivered
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je  .sk_deliver_next
+        test ebx, ebx
+        js  .sk_deliver_group
+        cmp [edi + TCB_PID], ebx
+        jne .sk_deliver_next
+        jmp .sk_deliver_hit
+.sk_deliver_group:
+        mov eax, ebx
+        neg eax
+        cmp [edi + TCB_PGID], eax
+        jne .sk_deliver_next
+.sk_deliver_hit:
+        mov eax, [.sk_sig]
+        call sched_signal_task
+.sk_deliver_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .sk_deliver
+
+.sk_delivered:
         mov dword [esp + 28], 0    ; Return EAX=0
         popad
         iretd
@@ -2027,8 +2071,33 @@ sys_kill:
         popad
         iretd
 
-.sk_sig:   dd 0
-.sk_found: dd 0
+.sk_sig:        dd 0
+.sk_found:      dd 0
+.sk_sender_uid: dd 0
+.sk_sender_pid: dd 0
+
+;---------------------------------------
+; sched_may_signal - may the current sender signal this task?
+;   In : EDI = target TCB
+;   Out: CF clear if allowed, CF set if not. Uses EAX only.
+;
+; A task may signal itself, another task of the same effective user, or - when
+; it is root - anything.
+;---------------------------------------
+sched_may_signal:
+        mov eax, [sys_kill.sk_sender_uid]
+        test eax, eax
+        jz .sms_ok
+        cmp eax, [edi + TCB_EUID]
+        je .sms_ok
+        mov eax, [sys_kill.sk_sender_pid]
+        cmp eax, [edi + TCB_PID]
+        je .sms_ok
+        stc
+        ret
+.sms_ok:
+        clc
+        ret
 
 ;---------------------------------------
 ; sys_proclist - Get task info for a scheduler slot
@@ -2120,6 +2189,10 @@ sys_proclist:
 ; still work correctly even without a scheduler task.
 ;---------------------------------------
 sys_sleep:
+        ; The tick count is kept here, not in EBX: the scan below uses EBX to
+        ; walk the task table, so the fallback path used to wait for
+        ; "now + a TCB pointer" ticks - effectively forever.
+        mov [.sl_ticks], ebx
         cmp dword [task_count], 0
         je .sleep_hlt_fallback
 
@@ -2186,12 +2259,13 @@ sys_sleep:
         popad
         ; HLT fallback: shell/single-program context, no tasks to switch to
 .sleep_hlt_fallback:
-        ; EBX = ticks to sleep; sleep via HLT loop (timer fires every 10 ms)
-        test ebx, ebx
+        ; Sleep via HLT loop (the timer fires every 10 ms).
+        mov eax, [.sl_ticks]
+        test eax, eax
         jz .sleep_hlt_done
         push ecx
         mov ecx, [tick_count]
-        add ecx, ebx            ; wakeup tick = now + EBX
+        add ecx, eax            ; wakeup tick = now + ticks
 .sleep_hlt_loop:
         hlt
         cmp [tick_count], ecx
@@ -2200,6 +2274,8 @@ sys_sleep:
 .sleep_hlt_done:
         xor eax, eax
         iretd
+
+.sl_ticks: dd 0
 
 ;---------------------------------------
 ; sched_wake_sleepers - Check all BLOCKED

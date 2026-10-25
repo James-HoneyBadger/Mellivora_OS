@@ -29,6 +29,17 @@ passing them as root.
 made in a directory whose write bit is clear), `truncate`, and `rename`. A mode
 of 0 is treated as a legacy entry: readable by its owner, not writable.
 
+## Signals
+
+`kill` reaches only a task the sender may touch: itself, another task of the
+same effective user, or anything at all when the sender is root. Every match is
+checked before anything is delivered, so a process-group signal that includes a
+task the sender does not own is refused whole rather than half-delivered. The
+shell and other kernel contexts have no task control block and are root.
+
+The rule is exercised by `programs/hostile_test.asm`: as uid 1000 it must fail
+to kill a uid-2000 task, and must succeed killing a child of its own.
+
 ## Conformance gate
 
 `programs/hostile_test.asm` is the executable form of this document's claims.

@@ -1,5 +1,27 @@
 # Mellivora OS - Changelog
 
+## Unreleased - signals follow the user, and sleep stops hanging
+
+### Security
+
+- **`kill` has a uid policy.** It delivered to any pid, so a program running as
+  one user could terminate another user's task - the one part of M1's exit gate
+  that was still missing. A sender may now signal itself, a task of the same
+  effective user, or anything when it is root. Every match is checked before
+  anything is delivered, so a process-group signal that includes a task the
+  sender does not own is refused whole rather than half-delivered.
+- **The hostile gate covers both directions:** as uid 1000 it must fail to
+  signal a uid-2000 task and must succeed signalling its own child. Sabotaging
+  the check makes it print `HOSTILE_FAIL`.
+
+### Kernel
+
+- **`SYS_SLEEP` could hang.** When no other task was ready, the fallback waited
+  for `tick_count + EBX` ticks - but the scan that looks for a ready task had
+  overwritten `EBX` with a task-control-block pointer, so a parent sleeping
+  while its children were blocked waited for millions of ticks. The count is
+  kept in the routine's own word now.
+
 ## Unreleased - a hostile program, and the gate that refuses it
 
 ### Security

@@ -51,6 +51,32 @@ start:
         cmp eax, 0
         jne .fail
 
+        ; A stranger's task: forked as root, drops to uid 2000 and goes away on
+        ; its own after a second, so it cannot outlive the test.
+        mov eax, SYS_FORK
+        int 0x80
+        cmp eax, -1
+        je .fail
+        test eax, eax
+        jz .stranger_child
+        mov [stranger_pid], eax
+        jmp .parent_continues
+.stranger_child:
+        mov eax, SYS_SETUID
+        mov ebx, 2000
+        int 0x80
+        mov eax, SYS_SLEEP
+        mov ebx, 100
+        int 0x80
+        xor ebx, ebx
+        mov eax, SYS_EXIT
+        int 0x80
+.parent_continues:
+        ; Give the child a moment to become somebody else.
+        mov eax, SYS_SLEEP
+        mov ebx, 5
+        int 0x80
+
         ; --- become an ordinary user ---
         mov eax, SYS_SETGID
         mov ebx, 1000
@@ -67,7 +93,46 @@ start:
         cmp eax, 1000
         jne .fail
 
-        ; 1: a private file cannot be read
+        ; 1: another user's task cannot be signalled
+        mov eax, SYS_KILL
+        mov ebx, [stranger_pid]
+        mov ecx, SIGKILL
+        int 0x80
+        cmp eax, -1
+        jne .fail
+        call dot
+
+        ; 12: our own child can be, as a control
+        mov eax, SYS_FORK
+        int 0x80
+        cmp eax, -1
+        je .fail
+        test eax, eax
+        jz .own_child
+        mov [own_pid], eax
+        ; Sleeping while the children are blocked is the case that used to
+        ; hang: the fallback waited on a clobbered register.
+        mov eax, SYS_SLEEP
+        mov ebx, 2
+        int 0x80
+        mov eax, SYS_KILL
+        mov ebx, [own_pid]
+        mov ecx, SIGTERM
+        int 0x80
+        cmp eax, 0
+        jne .fail
+        call dot
+        jmp .signal_done
+.own_child:
+        mov eax, SYS_SLEEP
+        mov ebx, 50
+        int 0x80
+        xor ebx, ebx
+        mov eax, SYS_EXIT
+        int 0x80
+.signal_done:
+
+        ; 13: a private file cannot be read
         mov eax, SYS_OPEN
         mov ebx, victim_file
         mov ecx, O_RDONLY
@@ -76,7 +141,7 @@ start:
         jne .fail
         call dot
 
-        ; 2: ...nor written
+        ; 12: ...nor written
         mov eax, SYS_OPEN
         mov ebx, victim_file
         mov ecx, O_WRONLY
@@ -85,7 +150,7 @@ start:
         jne .fail
         call dot
 
-        ; 3: ...nor asked about
+        ; 13: ...nor asked about
         mov eax, SYS_ACCESS
         mov ebx, victim_file
         mov ecx, R_OK | W_OK
@@ -94,7 +159,7 @@ start:
         jne .fail
         call dot
 
-        ; 4: ...nor removed
+        ; 12: ...nor removed
         mov eax, SYS_DELETE
         mov ebx, victim_file
         int 0x80
@@ -102,7 +167,7 @@ start:
         jne .fail
         call dot
 
-        ; 5: ...nor replaced by writing over it
+        ; 13: ...nor replaced by writing over it
         mov eax, SYS_FWRITE
         mov ebx, victim_file
         mov ecx, payload
@@ -113,7 +178,7 @@ start:
         jne .fail
         call dot
 
-        ; 6: its mode is not ours to change
+        ; 12: its mode is not ours to change
         mov eax, SYS_CHMOD
         mov ebx, victim_file
         mov ecx, 0o777
@@ -122,7 +187,7 @@ start:
         jne .fail
         call dot
 
-        ; 7: and ownership is not ours to take
+        ; 13: and ownership is not ours to take
         mov eax, SYS_CHOWN
         mov ebx, victim_file
         mov ecx, 1000
@@ -132,7 +197,7 @@ start:
         jne .fail
         call dot
 
-        ; 8: a kernel address is not a path
+        ; 12: a kernel address is not a path
         mov eax, SYS_OPEN
         mov ebx, 0x00100000
         mov ecx, O_RDONLY
@@ -141,7 +206,7 @@ start:
         jne .fail
         call dot
 
-        ; 9: a kernel buffer is not a message
+        ; 13: a kernel buffer is not a message
         mov eax, SYS_WRITE
         mov ebx, 1
         mov ecx, 0x00100000
@@ -152,7 +217,7 @@ start:
         call dot
 
         ; --- controls: what it *is* entitled to still works ---
-        ; 10: a world-readable file can be read
+        ; 12: a world-readable file can be read
         mov eax, SYS_OPEN
         mov ebx, public_file
         mov ecx, O_RDONLY
@@ -164,7 +229,7 @@ start:
         int 0x80
         call dot
 
-        ; 11: ...and cannot be written
+        ; 13: ...and cannot be written
         mov eax, SYS_OPEN
         mov ebx, public_file
         mov ecx, O_WRONLY
@@ -172,6 +237,15 @@ start:
         cmp eax, -1
         jne .fail
         call dot
+
+        ; Reap the children: the stranger exits on its own, the other was
+        ; signalled. Leaving either would make the next case's `ps` check lie.
+        mov eax, SYS_WAITPID
+        mov ebx, [own_pid]
+        int 0x80
+        mov eax, SYS_WAITPID
+        mov ebx, [stranger_pid]
+        int 0x80
 
         mov eax, SYS_PRINT
         mov ebx, msg_ok
@@ -232,3 +306,5 @@ payload:     db "hostile fixture", 10
 payload_len  equ $ - payload
 msg_ok:      db 10, "HOSTILE_OK", 10, 0
 msg_fail:    db 10, "HOSTILE_FAIL", 10, 0
+stranger_pid: dd 0
+own_pid:     dd 0

@@ -153,8 +153,15 @@ The highest-leverage change in the plan. Everything after it is cheaper.
   ordinary user and requires eleven refusals and two controls, and it has been
   seen to fail when an enforcement is disabled. Fault containment is the other
   half and already existed: `stack_overflow` must kill the offending task while
-  the shell runs the next command. What remains for the full gate is signalling
-  (no cross-user signal policy exists yet) and the object layer.
+  the shell runs the next command.
+- **Signals have a uid policy (landed).** `kill` reaches only the sender, a task
+  of the same effective user, or anything when the sender is root; a group
+  signal is refused whole rather than half-delivered. `setuid`/`setgid` move the
+  effective ID the check reads. The hostile gate covers both directions - a
+  stranger's task must be unreachable, the caller's own child must not be.
+- **`SYS_SLEEP` no longer hangs.** The fallback that runs when no other task is
+  ready waited on a tick count held in a register the scan had overwritten, so a
+  parent sleeping while its children were blocked waited for millions of ticks.
 
 **Exit:** a hostile-program conformance suite where a deliberately misbehaving
 program fails to read, write, signal or open anything it was not granted, and
