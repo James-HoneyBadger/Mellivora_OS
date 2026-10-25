@@ -13,6 +13,13 @@
 
 %include "syscalls.inc"
 
+; SYS_OPEN takes the POSIX O_* numbers (0 read, 1 write, 2 read-write), not
+; the kernel's internal FD_FLAG_* bits. They are not the same: the old
+; FD_FLAG_READ value of 1 means O_WRONLY to open(), so this test used to ask
+; for a write-only handle and then read from it.
+O_RDONLY equ 0
+O_WRONLY equ 1
+
 start:
         mov eax, SYS_PRINT
         mov ebx, msg_banner
@@ -60,7 +67,7 @@ start:
 
         mov eax, SYS_OPEN
         mov ebx, path_proc_meminfo
-        mov ecx, 1              ; FD_FLAG_READ
+        mov ecx, O_RDONLY
         int 0x80
 
         cmp eax, -1
@@ -181,7 +188,7 @@ start:
 
         mov eax, SYS_OPEN
         mov ebx, path_dev_zero
-        mov ecx, 1              ; FD_FLAG_READ
+        mov ecx, O_RDONLY
         int 0x80
 
         cmp eax, -1
@@ -330,7 +337,7 @@ start:
 
         mov eax, SYS_OPEN
         mov ebx, path_dev_full
-        mov ecx, 2              ; FD_FLAG_WRITE
+        mov ecx, O_WRONLY
         int 0x80
 
         cmp eax, -1

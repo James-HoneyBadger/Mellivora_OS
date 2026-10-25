@@ -157,6 +157,9 @@ run_case "permissions deny"           "perm_test"             "PERM_OK"         
 # belongs. Every attempt must be refused, and two things it may do must still
 # work - the shell runs the next case, so the machine also has to survive.
 run_case "hostile program is refused" "hostile_test"          "HOSTILE_OK"         "" "CPU EXCEPTION|HOSTILE_FAIL"
+# A handle carries its own rights: a read-only handle cannot write back, a
+# write-only one cannot be read, even as root where the mode allows both.
+run_case "handle rights are enforced" "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL"
 # A bare name that is a program runs it; one that is a directory enters it.
 # The trailing space matters: the tool anchors its expectation after the echoed
 # command, and the prompt repeats the directory name.

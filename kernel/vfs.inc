@@ -75,7 +75,19 @@ VFD_FS_TYPE     equ 4    ; dword: which FS backend owns this fd
 VFD_REAL_FD     equ 8    ; dword: underlying fd in the concrete FS (or index)
 VFD_POS         equ 12   ; dword: current position / byte offset
 VFD_FLAGS       equ 16   ; dword: open flags
+VFD_RIGHTS      equ 20   ; dword: rights granted *by this handle*
 VFD_SIZE        equ 32
+
+; Handle rights. A handle carries the rights it was opened with, and the
+; read/write paths check them before the backend ever runs: a file opened
+; write-only cannot be read back, even by the owner, and a read-only handle
+; cannot write even where the file's mode would allow it. File permissions
+; decide whether an open succeeds; these decide what the resulting handle may
+; do. The bit values match FD_FLAG_READ / FD_FLAG_WRITE, so the mapping at
+; open time is the identity.
+RIGHT_READ      equ 1
+RIGHT_WRITE     equ 2
+RIGHT_ALL       equ (RIGHT_READ | RIGHT_WRITE)
 
 ; procfs special file sub-types (stored in VFD_REAL_FD)
 PROC_FD_STATUS  equ 0    ; /proc/<pid>/status
@@ -359,6 +371,7 @@ vfd_alloc_sock:
         mov [edi + VFD_REAL_FD], edx
         mov dword [edi + VFD_POS], 0
         mov dword [edi + VFD_FLAGS], FD_FLAG_READ | FD_FLAG_WRITE
+        mov dword [edi + VFD_RIGHTS], RIGHT_ALL
 .vas_done:
         mov [esp + 28], eax
         popad
@@ -1931,14 +1944,37 @@ vfs_tmp_close:
 ;=======================================================================
 vfs_open:
         push edi
+        push ecx                ; keep the flags: they become the handle rights
         call vfs_route          ; EAX = mount table entry pointer
         test eax, eax
         jz  .vo_fail
         mov  edi, eax
         call [edi + VFS_MT_OPEN]        ; EBX=path, ECX=flags → EAX=vfd
+        cmp  eax, -1
+        je  .vo_done
+
+        ; Stamp the new handle with the rights it was opened for. 0 means
+        ; O_RDONLY (the O_* flags were already mapped to FD_FLAG_* at the
+        ; syscall boundary), so default it to read rather than to nothing.
+        pop  ecx
+        push ecx
+        and  ecx, RIGHT_ALL
+        jnz  .vo_have_rights
+        mov  ecx, RIGHT_READ
+.vo_have_rights:
+        push eax                ; the vfd we are going to return
+        push ebx
+        mov  ebx, eax
+        call vfs_fd_ptr         ; EDI → VFD entry
+        mov  [edi + VFD_RIGHTS], ecx
+        pop  ebx
+        pop  eax
+.vo_done:
+        pop  ecx
         pop  edi
         ret
 .vo_fail:
+        pop  ecx
         pop  edi
         mov  eax, -1
         ret
@@ -1957,6 +1993,8 @@ vfs_read:
         call vfs_fd_ptr                 ; EDI → VFD  (EAX clobbered)
         cmp  dword [edi + VFD_STATE], VFD_OPEN
         jne  .vrd_fail
+        test dword [edi + VFD_RIGHTS], RIGHT_READ
+        jz  .vrd_fail                   ; handle was not opened for reading
 
         mov  eax, [edi + VFD_FS_TYPE]
         pop  ebx                        ; restore vfd index
@@ -2007,6 +2045,8 @@ vfs_write:
         call vfs_fd_ptr
         cmp  dword [edi + VFD_STATE], VFD_OPEN
         jne  .vwr_fail
+        test dword [edi + VFD_RIGHTS], RIGHT_WRITE
+        jz  .vwr_fail                   ; handle was not opened for writing
 
         mov  eax, [edi + VFD_FS_TYPE]
         pop  ebx
@@ -2108,27 +2148,22 @@ vfs_seek:
         jne  .vsk_fail
 
         mov  eax, [edi + VFD_FS_TYPE]
-        pop  ebx
-
         cmp  eax, VFS_FS_SOCK
         je   .vsk_fail          ; sockets are not seekable (ESPIPE)
         cmp  eax, VFS_FS_HBFS
-        jne  .vsk_vfd           ; proc/dev/tmp: update VFD_POS directly
+        jne  .vsk_vfd
 
-        ; HBFS: delegate to legacy fd_seek (EBX=real_fd, ECX=offset, EDX=whence)        push ebx
-        call vfs_fd_ptr         ; EDI → VFD
+        ; HBFS: the legacy fd owns the real position, so delegate to it.
+        ; (The push/pop here used to sit on the tail of a comment, which left
+        ; the stack one slot short and made ret jump into whatever was above
+        ; the return address — a seek on a file killed the machine.)
         mov  ebx, [edi + VFD_REAL_FD]
-        pop  eax                ; discard saved vfd (ebx is now real_fd)
-        call fd_seek            ; EAX = new pos
-        pop  edi
-        ret
+        call fd_seek            ; EBX=real fd, ECX=offset, EDX=whence → EAX
+        jmp  .vsk_done
 
 .vsk_vfd:
-        ; For proc/dev/tmp track position directly in VFD_POS
-        ; Re-get VFD pointer (vfs_fd_ptr needs EBX=vfd which is still correct)
-        push ebx
-        call vfs_fd_ptr
-        pop  ebx
+        ; proc / dev / tmp keep the position in the VFD itself, since there is
+        ; no legacy fd to hold it.
         mov  eax, [edi + VFD_POS]
 
         cmp  edx, 0             ; SEEK_SET
@@ -2146,18 +2181,23 @@ vfs_seek:
         add  eax, ecx
 .vsk_store:
         mov  [edi + VFD_POS], eax
+
+.vsk_done:
+        pop  ebx
         pop  edi
         ret
 
 .vsk_fail:
+        mov  eax, -1
         pop  ebx
         pop  edi
-        mov  eax, -1
         ret
 
 .vsk_badf:
+        mov  eax, -1
         pop  ebx
-        jmp  .vsk_fail
+        pop  edi
+        ret
 
 ;=======================================================================
 ; vfs_readdir — enumerate a directory by virtual path

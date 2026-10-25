@@ -1289,8 +1289,10 @@ fd_write:
         jge .fwr_err
         mov eax, ebx
         imul eax, FD_ENTRY_SIZE
-        cmp dword [fd_table + eax], FD_FLAG_WRITE
-        jne .fwr_err
+        ; Bit test, not equality: a handle opened read-write has both bits and
+        ; must still be writable.
+        test dword [fd_table + eax], FD_FLAG_WRITE
+        jz  .fwr_err
 
         ; Save fd offset and parameters
         mov [.fw_fdoff], eax
@@ -1380,9 +1382,11 @@ fd_close:
         mov eax, ebx
         imul eax, FD_ENTRY_SIZE
 
-        ; If opened for writing, persist updated file size to directory
-        cmp dword [fd_table + eax], FD_FLAG_WRITE
-        jne .fcl_mark_closed
+        ; If opened for writing, persist updated file size to directory.
+        ; A read-write handle counts: testing for equality with FD_FLAG_WRITE
+        ; silently dropped the size update for O_RDWR opens.
+        test dword [fd_table + eax], FD_FLAG_WRITE
+        jz   .fcl_mark_closed
 
         ; Save start_block and file_size from FD entry
         mov ebp, [fd_table + eax + 8]    ; start_block

@@ -2975,6 +2975,7 @@ sys_pipe2:
         or  eax, 0x80000000     ; flag as pipe (high bit)
         mov [edi + VFD_REAL_FD], eax
         mov dword [edi + VFD_FLAGS], O_WRONLY
+        mov dword [edi + VFD_RIGHTS], RIGHT_WRITE
 
         pop eax                 ; read_fd
         push eax
@@ -2989,6 +2990,7 @@ sys_pipe2:
         or  ecx, 0x80000000
         mov [edi + VFD_REAL_FD], ecx
         mov dword [edi + VFD_FLAGS], O_RDONLY
+        mov dword [edi + VFD_RIGHTS], RIGHT_READ
 
         ; Store fds into caller's pipefd[2]
         pop ecx                 ; pipe_id (discard)

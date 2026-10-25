@@ -1,5 +1,38 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a handle is not a number, it is a right
+
+### Security
+
+- **Handles carry their rights.** A descriptor opened read-only can no longer be
+  written back, and one opened write-only can no longer be read - not even by
+  root, for whom the file's mode would allow either. Each VFD entry stores the
+  rights its open asked for (`O_RDONLY`/`O_WRONLY`/`O_RDWR`), stamped once in
+  `vfs_open`, and `vfs_read`/`vfs_write` check them before any backend runs.
+  Sockets get both rights; a pipe's ends get the right that matches the end.
+  This is the first piece of the Warren's object model.
+- **`programs/handle_test.asm`** is the gate for it. It runs as root on purpose:
+  every operation it makes is permitted by the file's mode, so a refusal can
+  only come from the handle. Seven checks, `HANDLE_OK` only when each holds.
+
+### Kernel
+
+- **`SYS_SEEK` on a file killed the machine.** The HBFS branch of `vfs_seek`
+  ended a comment line with `push ebx`, so the push never assembled: the routine
+  popped one slot too many and `ret` jumped into whatever sat above the return
+  address (the report read `EIP: 0x00000003`). Nothing had ever seeked a file
+  over the VFS before, so the branch had never run. Rewritten with every path
+  popping exactly what it pushed, and `.vsk_fail` no longer over-pops when the
+  socket check sends it there.
+- **`fd_write` and `fd_close` tested the open mode for equality.** A descriptor
+  opened `O_RDWR` holds both flag bits, so `cmp ... FD_FLAG_WRITE` refused it:
+  a read-write handle could not write, and its size update was skipped on close.
+  Both are bit tests now.
+- **`vfstest` asked for the wrong flags.** It passed the internal `FD_FLAG_*`
+  numbers to `SYS_OPEN`, which speaks the POSIX `O_*` ones; `1` therefore meant
+  write-only and its `/dev/zero` and `/proc/meminfo` reads had been refused.
+  The test uses `O_RDONLY`/`O_WRONLY` now, and passes.
+
 ## Unreleased - signals follow the user, and sleep stops hanging
 
 ### Security

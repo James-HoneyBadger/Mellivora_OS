@@ -29,6 +29,36 @@ passing them as root.
 made in a directory whose write bit is clear), `truncate`, and `rename`. A mode
 of 0 is treated as a legacy entry: readable by its owner, not writable.
 
+## Handle rights
+
+File permissions decide whether an open succeeds. They do not decide what the
+resulting handle may do. Every virtual descriptor carries a right word, stamped
+at open time from the flags the open asked for, and the read and write paths
+check it before any backend runs:
+
+| Opened with | May read | May write |
+|---|---|---|
+| `O_RDONLY` (0) | yes | no — even as root, even if the mode allows it |
+| `O_WRONLY` (1) | no | yes |
+| `O_RDWR` (2) | yes | yes |
+
+The bits are the same numbers as the kernel's internal `FD_FLAG_READ` and
+`FD_FLAG_WRITE`, which is exactly why the mapping happens once, at the `SYS_OPEN`
+boundary: `O_RDONLY` is 0 and `O_WRONLY` is 1, so a program that passes the
+internal bits is asking for the wrong thing. Passing `1` ("read", if you are
+thinking in `FD_FLAG_*`) opens write-only.
+
+Sockets are created with both rights, and the ends of a pipe get the right that
+matches their end. Closing a handle takes its rights with it.
+
+This is the first piece of the object model in `docs/ROADMAP.md`: a handle is
+not a bare number, it is a number bound to a right. Generically typed objects,
+per-object reference counts and wait-on-object arrive in the Warren.
+
+The rule is exercised by `programs/handle_test.asm`, which runs as root: every
+file operation it makes is permitted by the file's mode, so a refusal can only
+come from the handle.
+
 ## Signals
 
 `kill` reaches only a task the sender may touch: itself, another task of the
@@ -52,6 +82,9 @@ when every one holds, and it is a `make check-runtime` case.
 
 The gate has been seen to say no: with the access check in `fd_open` temporarily
 forced to succeed, the program fails on its first attempt.
+
+`programs/handle_test.asm` is the gate for the section above, and is also a
+`make check-runtime` case.
 
 
 ## 1. Threat model
