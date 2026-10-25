@@ -1450,7 +1450,13 @@ sys_chown:
         call hbfs_load_root_dir
         call hbfs_find_file
         jc .chown_fail
-        ; EDI = directory entry pointer
+        ; EDI = directory entry pointer. Only an administrator may reassign
+        ; ownership (see sys_chown_v3).
+        push edi
+        call require_root
+        pop edi
+        test eax, eax
+        jnz .chown_fail
         mov [edi + DIRENT_OWNER], cx
         ; Update modified timestamp
         call rtc_get_timestamp
@@ -2228,6 +2234,89 @@ hbfs_check_access:
         ret
 
 ;-----------------------------------------------------------------------
+; hbfs_access_current — access check against the running task's credentials
+;   In : EDI = directory entry, EBX = HBFS_ACC_* bits
+;   Out: EAX = 0 allowed, -1 denied. EDI, EBX, ECX and EDX are preserved.
+;
+; The shell and other kernel contexts have no TCB and are treated as root,
+; which is what the prompt has always been.
+;-----------------------------------------------------------------------
+hbfs_access_current:
+        push edi
+        push ebx
+        push ecx
+        push edx
+        call sched_get_current_task
+        xor ecx, ecx
+        xor edx, edx
+        test eax, eax
+        jz .hac_check
+        mov ecx, [eax + TCB_EUID]
+        mov edx, [eax + TCB_EGID]
+.hac_check:
+        call hbfs_check_access
+        pop edx
+        pop ecx
+        pop ebx
+        pop edi
+        ret
+
+;-----------------------------------------------------------------------
+; require_root — is the running task privileged?
+;   Out: EAX = 0 when the caller is root (or the kernel/shell context), -1
+;        otherwise. Preserves every other register.
+;-----------------------------------------------------------------------
+require_root:
+        push edi
+        push ecx
+        push edx
+        call sched_get_current_task
+        test eax, eax
+        jz .rr_ok                       ; shell / kernel context is root
+        cmp dword [eax + TCB_EUID], 0
+        jne .rr_denied
+.rr_ok:
+        xor eax, eax
+        jmp .rr_done
+.rr_denied:
+        mov eax, -1
+.rr_done:
+        pop edx
+        pop ecx
+        pop edi
+        ret
+
+;-----------------------------------------------------------------------
+; require_owner_or_root — may the running task change this file's mode?
+;   In : EDI = directory entry
+;   Out: EAX = 0 allowed, -1 denied. Preserves every other register.
+;-----------------------------------------------------------------------
+require_owner_or_root:
+        push edi
+        push ecx
+        push edx
+        movzx edx, word [edi + HBFS_DE_UID]
+        call sched_get_current_task
+        test eax, eax
+        jz .ror_ok                      ; shell / kernel context is root
+        mov ecx, [eax + TCB_EUID]
+        test ecx, ecx
+        jz .ror_ok                      ; root
+        cmp ecx, edx
+        jne .ror_denied
+.ror_ok:
+        xor eax, eax
+        jmp .ror_done
+.ror_denied:
+        mov eax, -1
+.ror_done:
+        pop edx
+        pop ecx
+        pop edi
+        ret
+
+
+;-----------------------------------------------------------------------
 ; sys_chmod — SYS_CHMOD implementation (v3: actual on-disk write)
 ;   In (from syscall frame): EBX = filename_ptr, ECX = mode_word
 ;   Out: EAX = 0 success, -1 fail
@@ -2251,6 +2340,13 @@ sys_chmod_v3:
         call hbfs_find_entry     ; EBX=name -> EDI=entry ptr or 0; EAX=entry#
         test eax, eax
         js .schmod_fail
+
+        ; The mode is the owner's to change; anyone else is refused.
+        push ecx
+        call require_owner_or_root
+        pop ecx
+        test eax, eax
+        jnz .schmod_fail
 
         ; Update mode field in the loaded directory entry buffer
         mov [edi + HBFS_DE_MODE], cx
@@ -2302,6 +2398,12 @@ sys_chown_v3:
         call hbfs_find_entry
         test eax, eax
         js .schown_fail
+
+        ; Changing an owner is an administrative act: without this, any
+        ; process could chown a root-owned file to itself and then write it.
+        call require_root
+        test eax, eax
+        jnz .schown_fail
 
         ; Update UID and GID in loaded entry buffer
         mov [edi + HBFS_DE_UID], cx

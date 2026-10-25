@@ -444,8 +444,12 @@ vfs_hbfs_open:
         push esi
 
         ; fd_open(ESI=filename, ECX=mode) → EAX=legacy_fd or -1
+        ; ECX is already FD_FLAG_* : SYS_OPEN maps its O_* flags at the
+        ; boundary, and the kernel's own callers speak the fd bits. It used to
+        ; be overwritten with FD_FLAG_READ here, so every file was recorded
+        ; read-only whatever had been asked for - and the permission check in
+        ; fd_open never saw a write.
         mov  esi, ebx
-        mov  ecx, FD_FLAG_READ
         call fd_open            ; EAX = legacy fd index, or -1
         cmp  eax, -1
         je  .vho_fail_nofd
@@ -738,6 +742,11 @@ vfs_hbfs_unlink:
         mov esi, ebx
         call hbfs_find_file_global  ; CF on fail, EDI=dir_entry_ptr on success
         jc .vhu_fail
+        ; Removing a file is a write to it: the stored write bit decides.
+        mov ebx, HBFS_ACC_WRITE
+        call hbfs_access_current
+        test eax, eax
+        jnz .vhu_fail
         call hbfs_delete_file_entry ; EDI=dir_entry_ptr
         ; Restore CWD if global search changed directories
         cmp dword [hbfs_find_file_global.gff_moved], 1

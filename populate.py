@@ -1047,6 +1047,11 @@ echo Done.
 }
 
 # Burrows GUI applications — go into /Burrows subdirectory
+# Programs installed at the root of the volume rather than in /bin.
+# /bin is at the 227-entry limit of an HBFS subdirectory (roadmap M3
+# grows it); root holds 455 entries and is searched before PATH.
+ROOT_PROGRAMS = {'perm_test'}
+
 BURROWS_PROGRAMS = {
     'bcalc', 'bedit', 'bforager', 'bhive', 'bnotes', 'bpaint',
     'bplayer', 'bsettings', 'bsheet', 'bsysmon', 'bterm', 'bview',
@@ -1103,6 +1108,12 @@ def main():
         fname[:-4] for fname in cache
         if fname.endswith('.bin')
     }
+    for prog_name in sorted(ROOT_PROGRAMS):
+        root_bin = os.path.join(programs_dir, prog_name + '.bin')
+        if os.path.isfile(root_bin):
+            with open(root_bin, 'rb') as f:
+                fs.add_file(prog_name, f.read())
+
     expected_programs = {
         'bin': set(),
         'games': set(),
@@ -1135,6 +1146,8 @@ def main():
                 new_cache[fname] = mtime
 
                 prog_name = fname[:-4]
+                if prog_name in ROOT_PROGRAMS:
+                    continue            # installed at the root above
                 # Determine target directory (used for skip check below)
                 if prog_name in BURROWS_PROGRAMS:
                     target_dir = "Burrows"

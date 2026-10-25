@@ -1167,6 +1167,25 @@ fd_open:
         call hbfs_find_file_global
         pop ebx
         jc .no_fd
+
+        ; Permissions are enforced here because every open funnels through
+        ; this point: the legacy syscall, the VFS backends and the loader.
+        ; The stored mode says who may read and write, the caller's effective
+        ; uid/gid decides which triplet applies, and root is not held to it.
+        ; EDI is the directory entry from the search, and hbfs_check_access
+        ; overwrites it, so it is preserved around the check.
+        push ebx                        ; EBX is the free fd slot: keep it
+        mov ebx, HBFS_ACC_READ
+        mov eax, [.fd_mode]
+        test eax, FD_FLAG_WRITE
+        jz .fd_acc_check
+        or ebx, HBFS_ACC_WRITE
+.fd_acc_check:
+        call hbfs_access_current        ; EDI = entry, EBX = bits
+        pop ebx
+        test eax, eax
+        jnz .no_fd
+
         mov eax, ebx
         imul eax, FD_ENTRY_SIZE
         mov ecx, [.fd_mode]
@@ -2799,8 +2818,19 @@ sys_fwrite:
         call hbfs_load_root_dir
         call hbfs_find_file
         jc .fwrite_new
-        ; EDI = dir entry pointer from hbfs_find_file
+        ; EDI = dir entry pointer from hbfs_find_file. Replacing a file is a
+        ; write to it, so the caller is held to its write bit before the old
+        ; entry is deleted.
+        mov ebx, HBFS_ACC_WRITE
+        call hbfs_access_current
+        test eax, eax
+        jnz .fwrite_denied
         call hbfs_delete_file_entry
+        jmp .fwrite_new
+.fwrite_denied:
+        mov dword [esp + 28], -1
+        popad
+        iretd
 .fwrite_new:
         ; Create new file with specified type
         mov esi, [.fw_name]     ; filename
@@ -2827,7 +2857,22 @@ sys_fwrite:
 .fw_type: dd 0
 
 sys_open_fd:
-        ; SYS_OPEN  (5): EBX=path, ECX=flags → EAX=vfd or -1
+        ; SYS_OPEN  (5): EBX=path, ECX=O_* flags → EAX=vfd or -1
+        ; The fd layer speaks FD_FLAG_* bits, and they do not line up with the
+        ; POSIX numbers (O_WRONLY is 1, FD_FLAG_READ is 1), so the mapping
+        ; happens here, once, and everything below sees the same convention.
+        test ecx, 2                     ; O_RDWR
+        jnz .sof_map_rw
+        test ecx, 1                     ; O_WRONLY
+        jnz .sof_map_w
+        mov ecx, FD_FLAG_READ           ; O_RDONLY (and 0)
+        jmp .sof_mapped
+.sof_map_w:
+        mov ecx, FD_FLAG_WRITE
+        jmp .sof_mapped
+.sof_map_rw:
+        mov ecx, FD_FLAG_READ | FD_FLAG_WRITE
+.sof_mapped:
         push esi
         push edi
         mov eax, ebx

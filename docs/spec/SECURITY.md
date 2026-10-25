@@ -2,6 +2,33 @@
 
 Status: **draft**. P1 defines isolation; P6 defines identity, capabilities and audit.
 
+## File permissions
+
+HBFS stores a mode word (owner/group/world read, write, execute) and an owner
+uid/gid per directory entry. The mode is enforced, not advisory:
+
+| Operation | Rule |
+|---|---|
+| `open` for read | owner/group/world read bit, by the caller's effective uid/gid |
+| `open` for write | owner/group/world write bit |
+| `SYS_FWRITE` over an existing file | write bit on the file |
+| `unlink` | write bit on the file |
+| `chmod` | root, or the file's owner |
+| `chown` | root only |
+| anything, as uid 0 | allowed |
+
+Access is checked in `fd_open`, which every open funnels through, and in the
+write paths that do not open a descriptor first. The shell and other kernel
+contexts have no task control block and are treated as root.
+
+`setuid`/`setgid` move the effective ID as well as the real one, because the
+checks read the effective ID; a process that dropped privileges used to keep
+passing them as root.
+
+**Not yet enforced:** directory write permission on create (a new file may be
+made in a directory whose write bit is clear), `truncate`, and `rename`. A mode
+of 0 is treated as a legacy entry: readable by its owner, not writable.
+
 ## 1. Threat model
 
 In scope:

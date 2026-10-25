@@ -2849,7 +2849,11 @@ sys_setuid:
         cmp ebx, [eax + TCB_UID]
         jne .suid_eperm
 .suid_apply:
+        ; POSIX setuid() moves the effective ID too, and every access check
+        ; reads TCB_EUID: setting only the real ID left a process that had
+        ; dropped its privileges still passing permission checks as root.
         mov [eax + TCB_UID], ebx
+        mov [eax + TCB_EUID], ebx
 .suid_ok:
         mov dword [esp + 28], 0
         popad
@@ -2870,6 +2874,8 @@ sys_setgid:
         jne .sgid_eperm
 .sgid_apply:
         mov [eax + TCB_GID], ebx
+        mov [eax + TCB_EGID], ebx      ; see sys_setuid: access checks use the
+                                       ; effective ID
 .sgid_ok:
         mov dword [esp + 28], 0
         popad
@@ -2917,7 +2923,7 @@ sys_access:
         mov edx, [eax + TCB_GID]
 .access_chk:
         pop edi                 ; restore entry pointer
-        call hbfs_check_access  ; EDI=entry, EBX=acc, ECX=uid, EDX=gid -> EAX=0/−1
+        call hbfs_check_access  ; EDI=entry, EBX=acc, ECX=uid, EDX=gid -> EAX=0/-1
         test eax, eax
         jnz .access_fail
 .access_ok:

@@ -141,6 +141,14 @@ The highest-leverage change in the plan. Everything after it is cheaper.
 - Optional: `poll` on handles rather than sockets only — the waiting primitive
   belongs in the executive, not in the network stack.
 
+- **Permissions enforced (landed).** The mode word and owner stored per entry
+  are checked, not advisory: `open` for read and for write, `SYS_FWRITE` over an
+  existing file, and `unlink` are refused when the caller lacks the bit; `chmod`
+  is the owner's to make and `chown` is root's; `setuid`/`setgid` move the
+  effective ID the checks read. `programs/perm_test.asm` proves root bypass,
+  the owner case and the stranger case in `make check-runtime`. Directory write
+  permission on create, `truncate` and `rename` are still open.
+
 **Exit:** a hostile-program conformance suite where a deliberately misbehaving
 program fails to read, write, signal or open anything it was not granted, and
 cannot take the machine down trying.

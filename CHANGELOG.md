@@ -1,5 +1,41 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the permission bits deny
+
+### Security
+
+- **`open` enforces the mode.** HBFS has stored an owner and an rwx mode since
+  v3, but `open` never looked at them: a 0444 file could be written by anyone.
+  `fd_open` now checks the caller's effective uid/gid against the owner, group
+  and world triplets; `SYS_FWRITE` over an existing file checks the write bit
+  before replacing it and `unlink` checks it before removing it.
+  `programs/perm_test.asm` covers root bypass, the owner and a stranger, and is
+  a `make check-runtime` case.
+- **`setuid`/`setgid` move the effective ID.** They wrote only the real ID, so a
+  program that dropped to uid 1000 kept passing every check as root - the
+  enforcement above would have been decorative for exactly the case it exists
+  for.
+- **`chown` is root's, `chmod` is the owner's.** Any process could chown a
+  root-owned file to itself and then write it.
+- **The VFS dropped every open flag.** `vfs_hbfs_open` recorded every file as
+  `FD_FLAG_READ` whatever was asked for, so a write open looked like a read one
+  to the fd layer. `SYS_OPEN` now maps `O_RDONLY`/`O_WRONLY`/`O_RDWR` to the fd
+  bits once, at the syscall boundary.
+
+### Build
+
+- **`make full` shows its stages.** Boot sector, kernel and symbols, stage 2,
+  user programs, disk image and filesystem are announced in order; a stage with
+  work prints its commands, one with nothing to do is silent, and a failure
+  prints that stage's whole log. It used to print only the final banner when the
+  tree was current.
+
+### Known limits
+
+- `/bin` holds 227 programs and is full, so a new program added for a test is
+  installed at the volume root (`ROOT_PROGRAMS` in `populate.py`) until the HBFS
+  subdirectory grows in M3.
+
 ## Unreleased - a directory name is a directory, not a program
 
 ### Shell

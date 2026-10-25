@@ -149,6 +149,9 @@ run_case "copy-on-write fork"        "cow_test"              "COW_OK"           
 # their own values if the scheduler saves and restores it. Both tasks check
 # that the number they pushed is the number they pop back after 64 switches.
 run_case "x87 state per task"         "fpu_test"              "FPU_OK"             "" "CPU EXCEPTION|FPU_FAIL"
+# The stored mode has to deny, not decorate: root passes, the owner is held
+# to the owner bits, and a stranger to the world bits.
+run_case "permissions deny"           "perm_test"             "PERM_OK"            "" "CPU EXCEPTION|PERM_FAIL"
 # A bare name that is a program runs it; one that is a directory enters it.
 # The trailing space matters: the tool anchors its expectation after the echoed
 # command, and the prompt repeats the directory name.

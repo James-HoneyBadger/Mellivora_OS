@@ -737,8 +737,11 @@ D=LightMagenta, E=Yellow, F=White
 
 - **Paging without isolation:** the kernel enables an identity map for the
   first 128 MB, so every task still shares one flat address space.
-- **Permissions are advisory:** `chmod`/`chown` store owner, group and mode, and
-  `SYS_ACCESS` honours them, but `open` does not check yet.
+- **Permissions are enforced, but not everywhere yet:** `open`, `SYS_FWRITE` over
+  an existing file and `unlink` check the mode against your effective uid/gid;
+  creating a file in a directory whose write bit is clear is not checked yet,
+  and neither is `truncate` or `rename`.
+- **`chmod` is the owner's to make, `chown` is root's.**
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
 - **448 MB RAM limit:** The physical memory manager stops handing out frames at
   `0x1C000000` so a frame can never collide with a user address. The first 128 MB are
