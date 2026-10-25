@@ -107,6 +107,12 @@ shell_main:
         mov esi, motd_str
         call vga_print
 
+        ; What the firmware says this machine is. Printed here, before the
+        ; first prompt, because a machine with more than one CPU interrupts
+        ; nowhere this kernel can hear yet.
+        call acpi_print_banner
+        call acpi_print_serial
+
         ; Print boot time
         mov esi, msg_boot_time
         call vga_print
@@ -1865,6 +1871,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_help
 
+        mov edi, cmd_acpi_str
+        call str_starts_with
+        jc .cmd_acpi
+
         mov edi, cmd_ver_str
         call str_starts_with
         jc .cmd_ver
@@ -2280,6 +2290,10 @@ shell_dispatch_core:
         call str_starts_with
         jnc help_command_usage
         call help_command
+        ret
+
+.cmd_acpi:
+        call acpi_dump
         ret
 
 .cmd_ver:

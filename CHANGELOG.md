@@ -1,5 +1,43 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the machine describes itself
+
+### Kernel
+
+- **ACPI table discovery** (`kernel/acpi.inc`). The RSDP is found in the first
+  kilobyte of the EBDA or in the BIOS area, on a 16-byte boundary, with its
+  checksum verified; the RSDT is walked, or the XSDT when the RSDP reports
+  revision 2 (64-bit entries, low half used - everything below 4 GB). Tables
+  above the identity map are mapped supervisor-only as they are read.
+- **MADT parsed** for the processor count, the local APIC address (including a
+  local-APIC-address-override entry) and the I/O APICs. Nothing is programmed
+  yet: this is the inventory the LAPIC, IOAPIC and PnP work builds on.
+- **`acpi` command**: RSDP and root-table addresses, revision, the table of
+  contents, and the CPU/APIC line.
+- **Boot line and `ACPI_BOOT` on COM1** report the same facts. The serial line
+  exists because the capability banner fills the screen, and because a machine
+  with more than one CPU cannot be typed at yet.
+
+### Found
+
+- **An SMP machine takes no input.** With `-smp 2` or more, the firmware routes
+  interrupts through the I/O APIC while this kernel still listens on the 8259,
+  so the timer and keyboard go quiet. Confirmed by booting the same image with
+  `--smp 1/2/4`: the reported count follows the machine (1, 2, 4) while the
+  shell stops echoing. This makes LAPIC-timer and IOAPIC work the prerequisite
+  for using an SMP machine at all, not an optimisation.
+- Two bugs found by the same work before it ever shipped: the table lookup
+  compared the root table's *entry* (a pointer) against a signature instead of
+  following it, and the MADT walk started at the 36-byte table header instead of
+  the 44-byte MADT header, reading the local APIC address as a zero-length
+  entry.
+
+### Tests
+
+- `tools/qemu_drive.py --smp N`, so a test can boot a different machine.
+- `ACPI tables are read` and `ACPI counts the CPUs` (2 vCPUs, asserted on the
+  serial line) in `make check-runtime`.
+
 ## Unreleased - a name belongs to the directory that holds it
 
 ### Security

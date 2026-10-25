@@ -146,8 +146,17 @@ The highest-leverage change in the plan. Everything after it is cheaper.
   existing file, and `unlink` are refused when the caller lacks the bit; `chmod`
   is the owner's to make and `chown` is root's; `setuid`/`setgid` move the
   effective ID the checks read. `programs/perm_test.asm` proves root bypass,
-  the owner case and the stranger case in `make check-runtime`. Directory write
-  permission on create, `truncate` and `rename` are still open.
+  the owner case and the stranger case in `make check-runtime`.
+- **Directories have rights too (landed).** Adding a name is a write to the
+  directory, so `create` and `mkdir` need its write bit; `rename` needs write on
+  the file and the directory, `truncate` on the file, `rmdir` on the directory.
+  The directory's own mode and owner come from the entry that names it in its
+  parent. `programs/dirperm_test.asm` proves it as a user who owns both test
+  directories, so a refusal cannot be a permission accident.
+- **A handle carries its rights (landed).** A read-only descriptor cannot be
+  written back and a write-only one cannot be read, even as root;
+  `programs/handle_test.asm` is the gate. This is the seam the Warren's object
+  model plugs into.
 
 - **The conformance gate (landed).** `programs/hostile_test.asm` runs as an
   ordinary user and requires eleven refusals and two controls, and it has been
@@ -171,6 +180,20 @@ cannot take the machine down trying.
 
 Where Mellivora trails a 2000 machine most visibly: it cannot use a second CPU,
 sleep, or switch itself off.
+
+- **Tables read (landed).** `kernel/acpi.inc` finds the RSDP in the EBDA or the
+  BIOS area, validates its checksum, follows the RSDT - or the XSDT from
+  revision 2, taking the low half of each 64-bit entry - and reads the MADT for
+  the processor count, the local APIC address and the I/O APICs. The boot line
+  and `ACPI_BOOT` on COM1 report it; `acpi` prints the table of contents.
+  Nothing is programmed yet, so this is inventory, not a change of behaviour.
+- **A finding worth recording:** with more than one vCPU the machine stops
+  taking input. The firmware hands the machine an IOAPIC and routes interrupts
+  through it, while this kernel still listens on the 8259 alone - so the timer
+  and the keyboard fall silent. Bringing up the LAPIC timer and IOAPIC routing
+  is therefore not a performance item but the thing that makes an SMP machine
+  usable at all, and the runtime suite asserts on the serial line rather than
+  the keyboard for those cases.
 
 - ACPI: RSDP/RSDT/XSDT discovery, MADT, FADT, the SCI interrupt, the power button,
   sleep states and soft-off, thermal and battery where present.

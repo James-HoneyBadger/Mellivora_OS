@@ -51,6 +51,7 @@ cmd_table:
         CMDENT cmd_shutdown_str, CAT_SYSTEM, sum_shutdown, det_shutdown
         CMDENT cmd_sleep_str, CAT_SYSTEM, sum_sleep, det_sleep
         CMDENT cmd_time_str, CAT_SYSTEM, sum_time, det_time
+        CMDENT cmd_acpi_str, CAT_SYSTEM, sum_acpi, det_acpi
         CMDENT cmd_ver_str, CAT_SYSTEM, sum_ver, det_ver
         CMDENT cmd_watch_str, CAT_SYSTEM, sum_watch, det_watch
         CMDENT cmd_which_str, CAT_SYSTEM, sum_which, det_which
@@ -228,6 +229,12 @@ sum_whoami: db "Current user and uid", 0
 det_whoami:
         db "whoami", 0x0A
         db "  Print the name and uid the shell is running as.", 0x0A, 0
+sum_acpi: db "The machine's own description: CPUs, APICs, table of contents", 0
+det_acpi:
+        db "acpi", 0x0A
+        db "  Find the RSDP, walk the RSDT/XSDT and read the MADT, then report how", 0x0A
+        db "  many processors the firmware describes, where the local APIC is and", 0x0A
+        db "  which I/O APICs exist. Read-only: nothing is programmed.", 0x0A, 0
 sum_append: db "Append text to a file", 0
 det_append:
         db "append FILE TEXT", 0x0A

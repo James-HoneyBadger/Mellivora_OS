@@ -21,6 +21,8 @@ Options:
   --json              emit a machine-readable result object
   --out FILE          write the combined serial+screen output to FILE
   --mem MB            guest RAM in MB (default 128)
+  --smp N             give the guest N CPUs (default: QEMU's, i.e. 1); used to
+                      prove a reported CPU count is read, not assumed
 
 Exit: 0 on success, 1 if a CPU exception occurred, an --expect text was missing,
       an --reject text appeared, or the boot marker never showed up.
@@ -268,6 +270,7 @@ def main() -> int:
     out_file = _opt(args, "--out")
     screendump = _opt(args, "--screendump")
     mem_mb = _opt(args, "--mem", "128")
+    smp = _opt(args, "--smp")
     want_json = "--json" in args
 
     qemu = find_qemu()
@@ -285,7 +288,8 @@ def main() -> int:
          "-monitor", f"unix:{mon_path},server,nowait",
          "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off",
          "-device", "sb16,audiodev=snd0",
-         "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"],
+         "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"]
+        + (["-smp", smp] if smp else []),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     ser = None

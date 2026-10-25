@@ -49,7 +49,7 @@
     {
       "number": 10,
       "job": "Detect hardware",
-      "status": "fail"
+      "status": "partial"
     },
     {
       "number": 11,

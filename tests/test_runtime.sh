@@ -71,12 +71,15 @@ fi
 
 failures=0
 
-# run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB]
+# run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB] [SMP]
 # An empty EXPECT means "only check that nothing faulted" (useful for a
-# graphics program that owns the screen and prints nothing).
+# graphics program that owns the screen and prints nothing). SMP gives the
+# guest more than one CPU, which is how a reported CPU count is proved to be
+# read rather than assumed - such a machine cannot be typed at yet, so those
+# cases assert on the serial line the boot emits.
 run_case() {
     local name="$1" cmd="$2" expect="$3" then="${4:-}" reject="${5:-CPU EXCEPTION}"
-    local mem="${6:-}"
+    local mem="${6:-}" smp="${7:-}"
     local args=("$IMAGE" "$cmd" --reject "$reject")
     if [ -n "$expect" ]; then
         args+=(--expect "$expect")
@@ -86,6 +89,9 @@ run_case() {
     fi
     if [ -n "$mem" ]; then
         args+=(--mem "$mem")
+    fi
+    if [ -n "$smp" ]; then
+        args+=(--smp "$smp")
     fi
     printf '  %-34s ' "$name"
     if timeout "$CASE_TIMEOUT" python3 "$DRIVE" "${args[@]}" >/dev/null 2>&1; then
@@ -170,6 +176,14 @@ run_case "directory rights are enforced" "dirperm_test"        "DIRPERM_OK"     
 run_case "folder name enters it"      "docs "                 "Lair:/docs>"        "" "Unknown command|CPU EXCEPTION|fault"
 run_case "folder name enters it (module)" "Burrows "          "Lair:/Burrows>"     "" "Unknown command|CPU EXCEPTION|fault"
 run_case "unknown name still errors"  "nosuchthing"           "Type 'help'"        "" "CPU EXCEPTION"
+# M2 starts with the machine describing itself: the RSDP is found, the
+# RSDT/XSDT walked, and the MADT read for the CPU and APIC inventory.
+run_case "ACPI tables are read"       "acpi"                  "ACPI: MADT at 0x"   "" "CPU EXCEPTION|no RSDP"
+# ...and the count is the firmware's: the same image on a 2-CPU machine must
+# report 2. A machine with more than one CPU cannot be typed at yet (its
+# interrupts go through an IOAPIC nothing programmes), so this asserts on the
+# line the boot emits on COM1.
+run_case "ACPI counts the CPUs"       "ver"                   "ACPI_BOOT cpus=2 "  "" "CPU EXCEPTION" "" 2
 run_case "HBFS metadata writes"      "fs_meta_test"          "FS_META_OK"         "" "CPU EXCEPTION|FS_META_FAIL"
 run_case "HBFS metadata churn"       "fs_mkdir_test"         "CRASH_LOOP_OK"      "" "CPU EXCEPTION|CRASH_LOOP_FAIL"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"

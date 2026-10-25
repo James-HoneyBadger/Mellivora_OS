@@ -735,6 +735,7 @@ kernel_entry:
 %include "kernel/ipc.inc"
 %include "kernel/net.inc"
 %include "kernel/paging.inc"
+%include "kernel/acpi.inc"
 %include "kernel/vm.inc"
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"
