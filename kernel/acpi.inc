@@ -590,6 +590,22 @@ acpi_dump:
 .ad_irq_named:
         call vga_print
 
+        mov esi, msg_acpi_clock
+        call vga_print
+        mov esi, msg_acpi_clock_pit
+        cmp dword [lapic_timer_hz], 0
+        je .ad_clock_named
+        mov esi, msg_acpi_clock_lapic
+.ad_clock_named:
+        call vga_print
+        cmp dword [lapic_timer_hz], 0
+        je .ad_clock_done
+        mov eax, [lapic_timer_hz]
+        call vga_print_dec
+        mov esi, msg_acpi_hz
+        call vga_print
+.ad_clock_done:
+
         mov esi, msg_acpi_ioapic
         call vga_print
         mov eax, [acpi_ioapic_count]
@@ -731,6 +747,14 @@ acpi_print_serial:
         call .aps_append
         mov eax, [acpi_ioapic_count]
         call acpi_dec_str
+        mov esi, acpi_ser_tick
+        call .aps_append
+        mov esi, acpi_ser_tick_pit
+        cmp dword [lapic_timer_hz], 0
+        je .aps_tick_named
+        mov esi, acpi_ser_tick_lapic
+.aps_tick_named:
+        call .aps_append
         mov esi, acpi_ser_irq
         call .aps_append
         mov esi, acpi_ser_pic
@@ -787,6 +811,9 @@ acpi_serial_line:  times 96 db 0
 acpi_ser_cpus:     db "ACPI_BOOT cpus=", 0
 acpi_ser_lapic:    db " lapic=0x", 0
 acpi_ser_io:       db " ioapics=", 0
+acpi_ser_tick:     db " tick=", 0
+acpi_ser_tick_pit: db "pit", 0
+acpi_ser_tick_lapic: db "lapic", 0
 acpi_ser_irq:      db " irq=", 0
 acpi_ser_apic:     db "apic", 0
 acpi_ser_pic:      db "pic", 0
@@ -811,6 +838,10 @@ msg_acpi_madt:    db "ACPI: MADT at 0x", 0
 msg_acpi_cpus:    db "ACPI: CPUs: ", 0
 msg_acpi_lapic:   db "  local APIC at 0x", 0
 msg_acpi_ioapic:  db "ACPI: IOAPICs: ", 0
+msg_acpi_clock: db "ACPI: tick clock: ", 0
+msg_acpi_clock_lapic: db "local APIC timer, ", 0
+msg_acpi_clock_pit: db "PIT", 10, 0
+msg_acpi_hz: db " Hz", 10, 0
 msg_acpi_irq_mode: db "ACPI: interrupts: ", 0
 msg_acpi_irq_apic: db "I/O APIC (8259 masked)", 10, 0
 msg_acpi_irq_pic:  db "8259 (no usable local APIC)", 10, 0

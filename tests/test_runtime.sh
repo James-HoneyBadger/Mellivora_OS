@@ -189,9 +189,16 @@ run_case "ACPI tables are read"       "acpi"                  "ACPI: MADT at 0x"
 # is on the command's output rather than the boot line: an expectation is
 # matched after the echoed command, and the boot line is printed before it.
 run_case "ACPI counts the CPUs"       "acpi"                  "ACPI: CPUs: 2"      "" "CPU EXCEPTION|ACPI: CPUs: 1" "" 2
-# One 486 has no local APIC at all, so the 8259 stays in charge: the firmware
-# described an APIC the CPU does not have, and the probe is what decides.
+# One 486 has no local APIC at all, so the 8259 stays in charge and the PIT
+# keeps the tick: the firmware described an APIC the CPU does not have, and the
+# probe is what decides.
 run_case "no APIC means the 8259"     "acpi"                  "8259 (no usable local APIC)" "" "CPU EXCEPTION|I/O APIC\\|no RSDP"
+# With a local APIC the tick moves to its timer, measured against the PIT
+# because nothing states the APIC timer's frequency.
+run_case "tick moves to the APIC timer" "acpi"                "tick clock: local APIC timer" "" "CPU EXCEPTION|tick clock: PIT" "" 2 pentium
+# ...and it really ticks: this program sleeps on tick counts and waits for
+# children, so a clock that does not fire would hang here.
+run_case "SMP machine sleeps on its timer" "hostile_test"      "HOSTILE_OK"         "" "CPU EXCEPTION|HOSTILE_FAIL" "" 2 pentium
 # The interrupt controller follows the hardware, not the table: a Pentium has
 # a local APIC, so the 8259s are masked and the I/O APIC routes every line.
 run_case "APIC is used when the CPU has one" "acpi"           "ACPI: interrupts: I/O APIC" "" "CPU EXCEPTION|8259 (no" "" 2 pentium

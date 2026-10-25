@@ -201,6 +201,11 @@ sleep, or switch itself off.
   no tick to wake a halt, no keyboard - so the machine was unusable. Two CPUs
   on a Pentium now boot, take input, run programs and serve the network;
   `make check-runtime` holds all four cases.
+- **The tick belongs to the local APIC timer (landed)** where there is one, and
+  to the PIT everywhere else. The APIC timer's rate is measured against the PIT
+  and sanity-checked before it is trusted; a bad measurement keeps the PIT. The
+  PIT's line is masked afterwards so the clock is not counted twice. This is
+  also the prerequisite for per-CPU timers when application processors start.
 
 - ACPI: RSDP/RSDT/XSDT discovery, MADT, FADT, the SCI interrupt, the power button,
   sleep states and soft-off, thermal and battery where present.

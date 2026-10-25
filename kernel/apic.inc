@@ -28,6 +28,13 @@
 ;=======================================================================
 
 LAPIC_ID        equ 0x020               ; local APIC ID register
+LAPIC_TIMER_LVT equ 0x320               ; timer local vector table
+LAPIC_TIMER_INIT equ 0x380              ; timer initial count
+LAPIC_TIMER_CUR equ 0x390               ; timer current count
+LAPIC_TIMER_DIV equ 0x3E0               ; timer divide configuration
+
+LAPIC_TIMER_PERIODIC equ (1 << 17)
+LAPIC_TIMER_MASKED   equ (1 << 16)
 LAPIC_TPR       equ 0x080               ; task priority
 LAPIC_EOI       equ 0x0B0               ; end of interrupt
 LAPIC_SVR       equ 0x0F0               ; spurious-interrupt vector / enable
@@ -54,6 +61,10 @@ irq_mode_apic:      db 0
 ; Which IRQs drivers have asked for. Drivers run before paging is up, so they
 ; cannot touch MMIO yet: they set a bit here and apic_init applies them.
 irq_wanted:         dd 0
+; Ticks per second the local APIC timer was measured to run at, or 0 when the
+; PIT still owns the tick.
+lapic_timer_hz:     dd 0
+lapic_timer_count:  dd 0
 
 ;-----------------------------------------------------------------------
 ; lapic_write / lapic_read - one local APIC register
@@ -331,6 +342,127 @@ irq_eoi:
         ret
 
 ;-----------------------------------------------------------------------
+; pit_counter - read the PIT's channel-0 countdown (it counts at 1.193 MHz)
+;   Out: EAX = current count
+;
+; Used once, to time the local APIC timer against a clock of known frequency.
+;-----------------------------------------------------------------------
+pit_counter:
+        push edx
+        mov al, 0x00                    ; latch channel 0
+        out PIT_CMD, al
+        in  al, PIT_CH0
+        mov dl, al
+        in  al, PIT_CH0
+        mov dh, al
+        movzx eax, dx
+        pop edx
+        ret
+
+;-----------------------------------------------------------------------
+; lapic_timer_start - measure the local APIC timer and take over the tick
+;   Out: EAX = 0 when the APIC timer now drives vector 0x20, -1 when the PIT
+;        keeps it
+;
+; The APIC timer's frequency is not discoverable: it is derived from the
+; processor's bus clock, which no table states. So it is measured against the
+; PIT, whose 1.193 MHz is a constant of the machine: start the timer at its
+; largest count, let ten milliseconds of PIT elapse, and see how far it fell.
+;
+; The measurement is checked before it is trusted. A machine whose timer
+; reports something absurd - a broken emulation, a CPU without one - keeps the
+; PIT rather than running a clock nobody can trust.
+;
+; Interrupts are off here: the tick is about to change hands, and a PIT
+; interrupt arriving mid-measurement would be counted by nobody.
+;-----------------------------------------------------------------------
+lapic_timer_start:
+        pushad
+        cmp byte [irq_mode_apic], 1
+        jne .lts_no
+
+        pushf
+        cli
+
+        mov ecx, LAPIC_TIMER_DIV
+        mov eax, 3                      ; divide by 16
+        call lapic_write
+
+        ; One shot, masked, at the largest count it has.
+        mov ecx, LAPIC_TIMER_LVT
+        mov eax, IRQ_VECTOR_BASE | LAPIC_TIMER_MASKED
+        call lapic_write
+        mov ecx, LAPIC_TIMER_INIT
+        mov eax, 0xFFFFFFFF
+        call lapic_write
+
+        call pit_counter
+        mov [.lts_pit_start], eax
+
+        ; Ten milliseconds of PIT ticks: 1.193 MHz / 100.
+        mov ebx, PIT_FREQ / 100
+.lts_wait:
+        call pit_counter
+        mov edx, [.lts_pit_start]
+        sub edx, eax
+        and edx, 0xFFFF
+        cmp edx, ebx
+        jb .lts_wait
+
+        ; How far did the APIC timer fall in that time?
+        mov ecx, LAPIC_TIMER_CUR
+        call lapic_read
+        mov ebx, 0xFFFFFFFF
+        sub ebx, eax                    ; counts in ten milliseconds
+
+        ; Ticks per second is a hundred times that; the periodic reload is one
+        ; hundredth of it.
+        mov eax, ebx
+        mov ebx, 100
+        mul ebx
+        test eax, eax
+        jz .lts_unusable
+        mov ecx, eax                    ; ECX = ticks per second
+        div ebx                         ; EAX = ticks per tick period
+        test eax, eax
+        jz .lts_unusable
+
+        ; Sanity: a PC's local APIC timer runs at tens of MHz to a few hundred,
+        ; so a tenth of a second's worth of counts must be plausible. Anything
+        ; wildly outside means the measurement, not the clock, is broken.
+        cmp ecx, 100000
+        jb .lts_unusable
+        mov [lapic_timer_hz], ecx
+        mov [lapic_timer_count], eax
+
+        ; Periodic from here on, on the vector the tick already uses.
+        mov ecx, LAPIC_TIMER_LVT
+        mov eax, IRQ_VECTOR_BASE | LAPIC_TIMER_PERIODIC
+        call lapic_write
+        mov ecx, LAPIC_TIMER_INIT
+        mov eax, [lapic_timer_count]
+        call lapic_write
+
+        ; One clock, not two: the PIT's line is masked, or every tick would be
+        ; counted twice.
+        xor al, al
+        call irq_disable
+
+        popf
+        mov dword [esp + 28], 0
+        popad
+        ret
+
+.lts_unusable:
+        popf
+.lts_no:
+        mov dword [lapic_timer_hz], 0
+        mov dword [esp + 28], -1
+        popad
+        ret
+.lts_pit_start: dd 0
+
+;-----------------------------------------------------------------------
 ; apic_init - choose the interrupt controller and program it
 ;   Out: EAX = 0 in APIC mode, -1 when the machine has no usable APIC
 ;
@@ -419,6 +551,9 @@ apic_init:
         inc ecx
         cmp ecx, 16
         jb .ai_apply
+        ; Take the tick from the PIT now that a CPU clock is available.
+        call lapic_timer_start
+
         mov dword [esp + 28], 0
         popad
         ret

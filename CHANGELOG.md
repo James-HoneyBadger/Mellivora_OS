@@ -1,5 +1,32 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the tick moves to the APIC timer
+
+### Kernel
+
+- **The local APIC timer drives the tick** on machines that have one, and the
+  PIT keeps it everywhere else. Its frequency is not discoverable - it derives
+  from the processor's bus clock, which no table states - so it is measured
+  against the PIT, whose 1.193 MHz is a constant of the machine: start the timer
+  at its largest count, let ten milliseconds of PIT elapse, and see how far it
+  fell. QEMU's Pentium measures 8.4 MHz.
+- **The measurement is checked before it is trusted.** A rate below 100 kHz, or
+  a timer that does not move at all, keeps the PIT rather than running a clock
+  nobody can vouch for. Interrupts are off across the measurement, because the
+  tick is changing hands and a PIT interrupt arriving mid-way would be counted
+  by nobody.
+- The PIT's line is masked once the APIC timer takes over, so one tick is one
+  tick: two clocks would double every delay in the system.
+- `acpi` and the `ACPI_BOOT` serial line now name the clock (`tick=lapic` or
+  `tick=pit`), and `acpi` prints the measured rate.
+
+### Tests
+
+- Two more `make check-runtime` cases on a two-CPU Pentium: the tick clock is
+  reported as the local APIC timer, and a program that sleeps on tick counts
+  and waits for its children still finishes - a clock that never fires would
+  hang there rather than fail.
+
 ## Unreleased - interrupts follow the hardware
 
 ### Kernel
