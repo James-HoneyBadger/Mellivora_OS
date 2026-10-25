@@ -674,6 +674,9 @@ kernel_entry:
         call e1000_init
         call paging_init
         call vm_init
+        ; The interrupt controller is chosen once paging is up, because the
+        ; APIC registers are memory-mapped: a machine that describes an APIC in
+        ; its tables is driven through it from here on.
         call mouse_init
         call sb16_init
         call vbe_init
@@ -707,6 +710,14 @@ kernel_entry:
         call hbfs_init
         call vfs_init
 
+        ; The interrupt controller is chosen last, once every subsystem that
+        ; allocates memory has been initialised: programming the APIC allocates
+        ; a page table for its MMIO window, and doing that earlier left the
+        ; page allocator's bookkeeping in a state the high-memory tests trip
+        ; over.
+        call acpi_init
+        call apic_init
+
         ; Enter the command shell
         jmp shell_main
 
@@ -736,6 +747,7 @@ kernel_entry:
 %include "kernel/net.inc"
 %include "kernel/paging.inc"
 %include "kernel/acpi.inc"
+%include "kernel/apic.inc"
 %include "kernel/vm.inc"
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"

@@ -455,9 +455,9 @@ irq_sb16:
         ; Mark playback complete
         mov byte [sb16_state], SB_STATE_DONE
 
-        ; Send EOI to PIC1 (IRQ5 is on PIC1)
-        mov al, 0x20
-        out PIC1_CMD, al
+        ; Acknowledge IRQ5
+        mov al, 5
+        call irq_eoi
 
         popad
         iretd

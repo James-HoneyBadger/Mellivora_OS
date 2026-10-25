@@ -21,6 +21,8 @@ Options:
   --json              emit a machine-readable result object
   --out FILE          write the combined serial+screen output to FILE
   --mem MB            guest RAM in MB (default 128)
+  --cpu MODEL         CPU model (default 486); a model with a local APIC is
+                      needed to exercise the APIC interrupt path
   --smp N             give the guest N CPUs (default: QEMU's, i.e. 1); used to
                       prove a reported CPU count is read, not assumed
 
@@ -271,6 +273,7 @@ def main() -> int:
     screendump = _opt(args, "--screendump")
     mem_mb = _opt(args, "--mem", "128")
     smp = _opt(args, "--smp")
+    cpu = _opt(args, "--cpu")
     want_json = "--json" in args
 
     qemu = find_qemu()
@@ -279,7 +282,7 @@ def main() -> int:
     ser_path = os.path.join(tmp, "serial.sock")
 
     proc = subprocess.Popen(
-        [qemu, "-cpu", "486", "-m", str(mem_mb),
+        [qemu, "-cpu", cpu or "486", "-m", str(mem_mb),
          "-drive", f"file={image},format=raw,if=ide,cache=writethrough",
          "-boot", "c", "-display", "none", "-no-reboot",
          # wait=on keeps the VM paused until this process connects, so the boot

@@ -273,18 +273,16 @@ serial_exc_dump:
 
 irq_stub:
         pushad
-        ; Send EOI to PIC1 only (for IRQs 2-7)
-        mov al, 0x20
-        out PIC1_CMD, al
+        xor al, al              ; master-only line
+        call irq_eoi
         popad
         iretd
 
-; IRQ stub for PIC2 IRQs (8-15) - send EOI to both PICs
+; IRQ stub for the lines a slave controller used to serve (8-15)
 irq_stub_pic2:
         pushad
-        mov al, 0x20
-        out PIC2_CMD, al
-        out PIC1_CMD, al
+        mov al, 8
+        call irq_eoi
         popad
         iretd
 
@@ -295,9 +293,9 @@ irq_timer:
         pushad
         inc dword [tick_count]
 
-        ; Send EOI first (so PIC isn't held up during context switch)
-        mov al, 0x20
-        out PIC1_CMD, al
+        ; Send EOI first (so the controller isn't held up during the switch)
+        xor al, al
+        call irq_eoi
 
         ; v3.0: Wake any sleeping/blocked tasks whose timer expired
         call sched_wake_sleepers
@@ -567,9 +565,9 @@ irq_keyboard:
         mov byte [program_running], 0
         mov dword [program_exit_code], 0xFFFFFFFF
         mov byte [ctrl_c_flag], 1
-        ; Send EOI to PIC
-        mov al, 0x20
-        out PIC1_CMD, al
+        ; Send EOI (the keyboard line)
+        mov al, 1
+        call irq_eoi
         ; Release the foreground task from the shared kernel stack before its
         ; own kernel stack is freed. This mirrors the sys_exit cleanup path.
         mov esp, KERNEL_STACK
@@ -731,7 +729,7 @@ irq_keyboard:
         jmp .eoi
 
 .eoi:
-        mov al, 0x20
-        out PIC1_CMD, al
+        mov al, 1               ; the keyboard line
+        call irq_eoi
         popad
         iretd

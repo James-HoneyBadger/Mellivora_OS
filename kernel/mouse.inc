@@ -66,15 +66,10 @@ mouse_init:
         mov eax, irq_mouse
         call idt_set_gate
 
-        ; Unmask IRQ12 on PIC2 (bit 4 of PIC2 data port)
-        in al, PIC2_DATA
-        and al, ~(1 << 4)       ; Clear bit 4 to unmask IRQ12
-        out PIC2_DATA, al
-
-        ; Unmask IRQ2 on PIC1 (cascade from PIC2) so PIC2 interrupts reach the CPU
-        in al, PIC1_DATA
-        and al, ~(1 << 2)       ; Clear bit 2 to unmask cascade
-        out PIC1_DATA, al
+        ; Let IRQ12 through (and the cascade in 8259 mode) whichever
+        ; interrupt controller this machine ended up with.
+        mov al, 12
+        call irq_enable
 
         popad
         ret
@@ -190,9 +185,8 @@ irq_mouse:
 
 .mouse_eoi:
         ; Send EOI to PIC2 and PIC1
-        mov al, 0x20
-        out PIC2_CMD, al
-        out PIC1_CMD, al
+        mov al, 12
+        call irq_eoi
 
         popad
         iretd

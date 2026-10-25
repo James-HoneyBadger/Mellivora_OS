@@ -484,20 +484,8 @@ net_install_irq:
         call idt_set_gate
         pop eax
 
-        ; Unmask on PIC2
-        sub eax, 8
-        mov cl, al
-        mov ah, 1
-        shl ah, cl
-        not ah
-        in al, PIC2_DATA
-        and al, ah
-        out PIC2_DATA, al
-
-        ; Ensure cascade (IRQ2) unmasked on PIC1
-        in al, PIC1_DATA
-        and al, ~(1 << 2)
-        out PIC1_DATA, al
+        ; Let the line through (the cascade too, in 8259 mode)
+        call irq_enable
         jmp .irq_installed
 
 .irq_pic1:
@@ -508,14 +496,8 @@ net_install_irq:
         call idt_set_gate
         pop eax
 
-        ; Unmask on PIC1
-        mov cl, al
-        mov ah, 1
-        shl ah, cl
-        not ah
-        in al, PIC1_DATA
-        and al, ah
-        out PIC1_DATA, al
+        ; Let the line through
+        call irq_enable
 
 .irq_installed:
         popad
@@ -616,15 +598,8 @@ irq_net:
 .irq_net_check_tok:
 
 .irq_net_eoi:
-        ; Send EOI
         movzx eax, byte [net_irq]
-        cmp eax, 8
-        jb .eoi_pic1_only
-        mov al, 0x20
-        out PIC2_CMD, al
-.eoi_pic1_only:
-        mov al, 0x20
-        out PIC1_CMD, al
+        call irq_eoi
 
         popad
         iretd

@@ -48,6 +48,7 @@ MADT_FLAGS          equ 40
 MADT_ENTRIES        equ 44
 MADT_TYPE_CPU       equ 0              ; processor local APIC
 MADT_TYPE_IOAPIC    equ 1
+MADT_TYPE_IRQ_OVR   equ 2                ; interrupt source override
 MADT_TYPE_LAPIC_OVR equ 5              ; 64-bit local APIC address
 MADT_TYPE_X2APIC    equ 9
 
@@ -72,6 +73,12 @@ acpi_lapic_addr:    dd 0
 acpi_ioapic_count:  dd 0
 acpi_ioapic_addr:   dd 0               ; the first one, for a readable summary
 
+; ISA IRQ -> global system interrupt, from the MADT's interrupt source
+; overrides. Identity until an override says otherwise, which is why the PIT
+; (IRQ 0, wired to IOAPIC pin 2 on a PC) needs the table to be read at all.
+acpi_irq_gsi:   db 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+acpi_irq_flags: times 16 dw 0
+
 ;-----------------------------------------------------------------------
 ; acpi_map - make a physical address readable
 ;   In : EAX = address (clobbered)
@@ -87,6 +94,14 @@ acpi_map:
         push ebx
         push ecx
         cmp eax, PAGING_MAP_MB * 0x100000
+        jb .amap_done                   ; inside the boot identity map
+        ; Only memory that is NOT RAM needs a mapping. A frame below the top of
+        ; usable RAM already belongs to the page allocator, and mapping it here
+        ; would pin a permanent translation in the master directory for a frame
+        ; a task may later own - which is how a table read turned into a fault
+        ; in the copy-on-write path. Kernel faults inside RAM are handled by
+        ; the identity-demand path when they happen.
+        cmp eax, [pmm_mem_top]
         jb .amap_done
         and eax, 0xFFFFF000
         mov ebx, eax
@@ -322,6 +337,21 @@ acpi_scan_madt:
         mov [acpi_ioapic_addr], eax
         jmp .asm_next
 .asm_not_ioapic:
+        cmp eax, MADT_TYPE_IRQ_OVR
+        jne .asm_not_override
+        ; bus(1), source IRQ(1), GSI(4), flags(2). Source 0xFF means "any line",
+        ; which no single redirection entry can stand for.
+        movzx eax, byte [esi + 3]       ; source ISA IRQ
+        cmp eax, 16
+        jae .asm_next
+        mov edx, [esi + 4]              ; global system interrupt
+        cmp edx, 255
+        ja .asm_next
+        mov [acpi_irq_gsi + eax], dl
+        mov dx, [esi + 8]               ; polarity/trigger flags
+        mov [acpi_irq_flags + eax*2], dx
+        jmp .asm_next
+.asm_not_override:
         cmp eax, MADT_TYPE_LAPIC_OVR    ; a 64-bit local APIC address wins
         jne .asm_next
         mov eax, [esi + 4]
@@ -551,6 +581,15 @@ acpi_dump:
         mov al, 0x0A
         call vga_putchar
 
+        mov esi, msg_acpi_irq_mode
+        call vga_print
+        mov esi, msg_acpi_irq_pic
+        cmp byte [irq_mode_apic], 1
+        jne .ad_irq_named
+        mov esi, msg_acpi_irq_apic
+.ad_irq_named:
+        call vga_print
+
         mov esi, msg_acpi_ioapic
         call vga_print
         mov eax, [acpi_ioapic_count]
@@ -692,6 +731,14 @@ acpi_print_serial:
         call .aps_append
         mov eax, [acpi_ioapic_count]
         call acpi_dec_str
+        mov esi, acpi_ser_irq
+        call .aps_append
+        mov esi, acpi_ser_pic
+        cmp byte [irq_mode_apic], 1
+        jne .aps_irq_named
+        mov esi, acpi_ser_apic
+.aps_irq_named:
+        call .aps_append
         mov al, 0x0A
         stosb
         mov byte [edi], 0
@@ -740,6 +787,9 @@ acpi_serial_line:  times 96 db 0
 acpi_ser_cpus:     db "ACPI_BOOT cpus=", 0
 acpi_ser_lapic:    db " lapic=0x", 0
 acpi_ser_io:       db " ioapics=", 0
+acpi_ser_irq:      db " irq=", 0
+acpi_ser_apic:     db "apic", 0
+acpi_ser_pic:      db "pic", 0
 acpi_ser_none:     db "ACPI_BOOT none", 10, 0
 
 msg_acpi_banner:      db "  ACPI: ", 0
@@ -761,5 +811,8 @@ msg_acpi_madt:    db "ACPI: MADT at 0x", 0
 msg_acpi_cpus:    db "ACPI: CPUs: ", 0
 msg_acpi_lapic:   db "  local APIC at 0x", 0
 msg_acpi_ioapic:  db "ACPI: IOAPICs: ", 0
+msg_acpi_irq_mode: db "ACPI: interrupts: ", 0
+msg_acpi_irq_apic: db "I/O APIC (8259 masked)", 10, 0
+msg_acpi_irq_pic:  db "8259 (no usable local APIC)", 10, 0
 msg_acpi_none:    db "ACPI: MADT: none", 10, 0
 msg_acpi_no_rsdp: db "ACPI: no RSDP found - this machine describes nothing", 10, 0

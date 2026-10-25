@@ -1,5 +1,46 @@
 # Mellivora OS - Changelog
 
+## Unreleased - interrupts follow the hardware
+
+### Kernel
+
+- **`kernel/apic.inc`**: the local APIC and the I/O APIC now carry the
+  interrupts on machines that have them. The controller is chosen by probe, not
+  by table: the local APIC is enabled and read back, and only when the write
+  sticks are the 8259s masked and the redirection entries programmed - a MADT
+  describes a machine, it does not guarantee one, and QEMU's 486 advertises a
+  local APIC it does not have. A machine without a usable APIC stays on the
+  8259, unchanged.
+- **Routing comes from the MADT's interrupt source overrides**, which is why the
+  PIT arrives on I/O APIC pin 2 rather than pin 0. Lines the table does not
+  describe are ISA edge/active-high, except the chipset's PCI link lines (GSI
+  10/11), taken as level/active-low until _PRT parsing replaces that rule.
+- **`irq_enable` / `irq_disable` / `irq_eoi`** are now the only interrupt-control
+  calls in the kernel; the 8259 mask pokes in `pic.inc`, `mouse.inc`, `net.inc`
+  and `sb16.inc` all went through them, so both modes agree on which lines are
+  live. Drivers run before paging is up, so they record a request and
+  `apic_init` applies it.
+- **An SMP machine is usable.** With more than one vCPU the firmware routes
+  interrupts through the I/O APIC; the kernel listened on the 8259 alone, so
+  nothing woke the shell's halt and no key was ever read. Two CPUs on a Pentium
+  now boot, take input, run a program and serve DHCP/DNS.
+- The boot line and `ACPI_BOOT` on COM1 now say which controller is in charge
+  (`irq=apic` or `irq=pic`), and `acpi` prints it as a sentence.
+- The APIC's two MMIO windows are mapped through a page table that lives in the
+  kernel image. Mapping them the ordinary way - letting `paging_map_page`
+  allocate the table - made the high-memory tests fault in data with 192 MB of
+  RAM, because the allocated table's frame then travelled through the identity
+  mapping the copy-on-write path walks. It is a latent paging bug, recorded in
+  `docs/ROADMAP.md`; the APIC window sidesteps it rather than depending on it.
+
+### Tests
+
+- `tools/qemu_drive.py --cpu MODEL`, so a test can choose a machine with a
+  local APIC.
+- Four cases in `make check-runtime`: the CPU count read from the firmware, the
+  APIC path taken on a Pentium, an SMP machine accepting input, and an SMP
+  machine serving the network through an I/O APIC entry.
+
 ## Unreleased - the machine describes itself
 
 ### Kernel

@@ -27,10 +27,15 @@ pic_init:
         out PIC1_DATA, al
         out PIC2_DATA, al
 
-        ; Mask all IRQs except IRQ0 (timer) and IRQ1 (keyboard)
-        mov al, 0xFC            ; Enable IRQ0, IRQ1
+        ; Start with everything masked and let irq_enable decide, so the 8259
+        ; and the I/O APIC agree on which lines are live: an SMP machine moves
+        ; to the APIC later and replays the same requests.
+        mov al, 0xFF
         out PIC1_DATA, al
-        mov al, 0xFF            ; Mask all on PIC2
         out PIC2_DATA, al
+        xor al, al              ; IRQ0 - the timer tick
+        call irq_enable
+        mov al, 1               ; IRQ1 - the keyboard
+        call irq_enable
 
         ret

@@ -187,13 +187,20 @@ sleep, or switch itself off.
   the processor count, the local APIC address and the I/O APICs. The boot line
   and `ACPI_BOOT` on COM1 report it; `acpi` prints the table of contents.
   Nothing is programmed yet, so this is inventory, not a change of behaviour.
-- **A finding worth recording:** with more than one vCPU the machine stops
-  taking input. The firmware hands the machine an IOAPIC and routes interrupts
-  through it, while this kernel still listens on the 8259 alone - so the timer
-  and the keyboard fall silent. Bringing up the LAPIC timer and IOAPIC routing
-  is therefore not a performance item but the thing that makes an SMP machine
-  usable at all, and the runtime suite asserts on the serial line rather than
-  the keyboard for those cases.
+- **Interrupts follow the hardware (landed).** The interrupt controller is
+  chosen by probing, not by trusting the table: the local APIC is enabled and
+  read back, and only if the write sticks are the 8259s masked and the I/O APIC
+  programmed. QEMU's 486 reports a local APIC in its MADT and has none - a
+  table describes a machine, it does not guarantee one - so a machine without
+  one stays on the 8259 exactly as before. Redirection entries come from the
+  MADT's interrupt source overrides, which is how the PIT lands on pin 2 rather
+  than pin 0; lines the table does not describe are taken as ISA edge/high,
+  except the chipset's two PCI link lines (GSI 10/11), which are level/low
+  until _PRT parsing replaces the rule.
+- **An SMP machine works.** Before this, two vCPUs meant no interrupts at all -
+  no tick to wake a halt, no keyboard - so the machine was unusable. Two CPUs
+  on a Pentium now boot, take input, run programs and serve the network;
+  `make check-runtime` holds all four cases.
 
 - ACPI: RSDP/RSDT/XSDT discovery, MADT, FADT, the SCI interrupt, the power button,
   sleep states and soft-off, thermal and battery where present.
@@ -365,6 +372,7 @@ Named explicitly so the plan does not drift into them:
 | The C boundary becomes two systems in one tree | One calling convention, one ABI document, one build entry point per module, and a lint gate that rejects a module mixing the two without an entry stub |
 | Objects and security are retrofitted too late | They are wave M1, before any feature that would have to be reworked for them |
 | SMP destabilises the tree | AP start-up is a separate gate; the machine stays bootable single-CPU, and the 24-hour soak is the entry condition for M3 |
+| `paging_map_page` allocates a page table from the frame allocator, and above 128 MB of RAM a mapping taken at boot can leave the paging tests faulting in data (found while mapping the APIC windows; worked around there with a static table) | M2 owns the fix: one allocator-visible page-table pool, and a test that maps a page in a fresh 4 MB region with 192 MB and 384 MB of RAM |
 | Driver breadth exceeds the budget | QEMU-first hardware list; a driver is only in scope if a test can exercise it |
 | The scorecard is gamed by partial credit | Rows move only when their named test passes in CI |
 | Printing and USB are larger than they look | Both are scoped to one working path first, breadth afterwards |
