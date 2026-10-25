@@ -520,9 +520,11 @@ vfs_hbfs_read:
         jne  .vhr_fail
         mov  ebx, [edi + VFD_REAL_FD]  ; EBX = legacy fd index
 
-        ; fd_read(EBX=fd, ECX=buf, EDX=len) → EAX=bytes
-        mov  esi, ecx           ; buf
-        mov  ecx, edx           ; len
+        ; fd_read takes EBX=fd, ECX=buf, EDX=len — the same registers the VFS
+        ; backend was called with. This used to move the buffer into ESI and
+        ; the length into ECX, which sent every read to address `len` in low
+        ; memory and returned it as success while the caller's buffer stayed
+        ; empty. The registers are already right; the shuffle was the bug.
         call fd_read            ; EAX = bytes read
 
         pop  ebx
@@ -548,8 +550,7 @@ vfs_hbfs_write:
         jne  .vhw_fail
         mov  ebx, [edi + VFD_REAL_FD]
 
-        mov  esi, ecx
-        mov  ecx, edx
+        ; fd_write takes EBX=fd, ECX=source, EDX=count, as the backend was called.
         call fd_write
 
         pop  ebx

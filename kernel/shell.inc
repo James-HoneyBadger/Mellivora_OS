@@ -6193,6 +6193,10 @@ cmd_exec_program:
         mov [last_file_type], bl
         mov ebx, [edi + 256]    ; file size
         mov [.path_fsize], ebx
+        ; A v4 extent entry names runs, not data; read it block by block
+        ; through the run list. The inline case stays one contiguous read.
+        test word [edi + 254], HBFS4_DE_EXTENTS
+        jnz .path_extent
         mov eax, [edi + 260]    ; start block
         mov ecx, [edi + 264]    ; block count
         cmp ecx, HBFS_READ_MAX_BLOCKS
@@ -6203,7 +6207,35 @@ cmd_exec_program:
         mov edi, PROGRAM_BASE
         call ata_read_sectors
         jc .path_cd_fail
+        jmp .path_loaded
 
+.path_extent:
+        mov ecx, [edi + 264]    ; data blocks
+        cmp ecx, HBFS_READ_MAX_BLOCKS
+        ja  .path_too_big
+        mov [.path_ext_blocks], ecx
+        mov dword [.path_ext_index], 0
+        mov dword [.path_ext_entry], edi
+        mov dword [.path_ext_dest], PROGRAM_BASE
+.path_ext_loop:
+        cmp dword [.path_ext_blocks], 0
+        je  .path_loaded
+        mov edi, [.path_ext_entry]
+        mov ebx, [.path_ext_index]
+        call hbfs_map_block
+        jc  .path_cd_fail
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov edi, [.path_ext_dest]
+        call ata_read_sectors
+        jc  .path_cd_fail
+        add dword [.path_ext_dest], HBFS_BLOCK_SIZE
+        inc dword [.path_ext_index]
+        dec dword [.path_ext_blocks]
+        jmp .path_ext_loop
+
+.path_loaded:
         ; Restore user's cwd before execution
         call path_restore_cwd
         pop esi                 ; clean up PATH string pointer
@@ -6574,6 +6606,10 @@ cmd_exec_program:
 .exec_task:      dd 0           ; the task running at exec time, or 0
 
 .path_fsize: dd 0               ; Temp storage for file size during PATH search
+.path_ext_blocks: dd 0         ; Remaining data blocks of a v4 extent program
+.path_ext_index: dd 0          ; Logical block being loaded
+.path_ext_entry: dd 0          ; Directory entry describing the runs
+.path_ext_dest:  dd 0          ; Where the next block lands in the program window
 .dir_candidate: dd 0            ; 1 when the typed name is a directory here
 
 .not_found:

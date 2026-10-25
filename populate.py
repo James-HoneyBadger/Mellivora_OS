@@ -1073,11 +1073,28 @@ GAME_PROGRAMS = {
 def main():
     """Parse arguments and populate disk image with files."""
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <disk_image> [programs_dir]")
+        print(f"Usage: {sys.argv[0]} <disk_image> [programs_dir] [--version 3|4]")
         sys.exit(1)
 
-    image_path = sys.argv[1]
-    programs_dir = sys.argv[2] if len(sys.argv) > 2 else "programs"
+    args = list(sys.argv[1:])
+    version = 3
+    if '--version' in args:
+        i = args.index('--version')
+        try:
+            version = int(args[i + 1])
+        except (IndexError, ValueError):
+            print("Error: --version needs a number (3 or 4)")
+            sys.exit(1)
+        if version not in (3, 4):
+            print(f"Error: unsupported HBFS version {version}")
+            sys.exit(1)
+        del args[i:i + 2]
+
+    if not args:
+        print(f"Usage: {sys.argv[0]} <disk_image> [programs_dir] [--version 3|4]")
+        sys.exit(1)
+    image_path = args[0]
+    programs_dir = args[1] if len(args) > 1 else "programs"
 
     if not os.path.exists(image_path):
         print(f"Error: Image file '{image_path}' not found.")
@@ -1085,7 +1102,7 @@ def main():
 
     print(f"Populating {image_path} with organized directory structure...")
 
-    fs = FSImage(image_path)
+    fs = FSImage(image_path, version=version)
 
     # Load mtime cache + tombstone set. Tombstones are program names the user
     # `del`'d inside the OS; we must NOT re-add them on `make full` unless the

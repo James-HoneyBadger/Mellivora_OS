@@ -300,8 +300,8 @@ dot:
         int 0x80
         ret
 
-victim_file: db "/hostile_victim.txt", 0
-public_file: db "/hostile_public.txt", 0
+victim_file: db "hostile_victim.txt", 0
+public_file: db "hostile_public.txt", 0
 payload:     db "hostile fixture", 10
 payload_len  equ $ - payload
 msg_ok:      db 10, "HOSTILE_OK", 10, 0

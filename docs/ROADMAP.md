@@ -83,6 +83,13 @@ What the plan builds on, and must not regress:
   crash-consistent journal, behind a VFS with a block cache and page cache — see
   [hbfs.inc](../kernel/hbfs.inc), [vfs.inc](../kernel/vfs.inc) and
   [blkcache.inc](../kernel/blkcache.inc).
+- HBFS v4 volumes are **verifiable and writable**: the superblock, bitmap and every
+  directory run are checked against their CRC-32C, the writer restamps each run it
+  changes (including partial bitmap writes and new subdirectories), and extent files
+  read through the run list. A volume without the journal feature mounts read-only.
+  `make check-hbfs-v4` proves the mount, fragmented reads through `cat` and `fd_read`,
+  a fragmented program load, a written file and directory that still pass the checksum
+  audit, the read-only case, and rejection of corrupted metadata.
 - TCP with a full state machine, ARP, ICMP, DHCP and DNS, sockets, `poll` and
   non-blocking connect — see [net.inc](../kernel/net.inc).
 - ATA PIO and bus-master DMA, AHCI, virtio-blk, e1000 and rtl8139, AC'97 and SB16,
@@ -238,6 +245,15 @@ sleep, or switch itself off.
 work from the shell and from the desktop; every driver loads as a module.
 
 ### M3 · Storage: HBFS v5 (12–18 weeks)
+
+**HBFS v4 in the tree today** (the bridge to the list below): a verified, journalled,
+writable v4 format with CRC-32C on the superblock and every metadata run; extent files
+read through all three readers; the writer restamps partial bitmap writes, directory
+runs and new subdirectories. Extent files can be deleted (each run and the extent block
+is freed), and `format` now creates a checksummed v4 volume instead of the legacy v2 one.
+Extent files are created when no contiguous run fits, truncated by rewriting their
+run list, and deleted by freeing each run. The remaining v4 work is v5 material: ACLs,
+quotas, snapshots, compression.
 
 - On-disk v5: per-file access control lists, alternate streams, per-user quotas,
   transparent compression, encryption at rest, sparse files, hard links, and

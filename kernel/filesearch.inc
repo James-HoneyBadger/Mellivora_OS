@@ -177,6 +177,10 @@ hbfs_read_file:
         mov [last_file_type], bl
         mov ebx, [edi + 256]    ; file size
         mov [.save_fsize], ebx
+        ; A v4 entry whose flags name runs is read block by block; an inline
+        ; entry keeps the one contiguous read it has always done.
+        test word [edi + 254], HBFS4_DE_EXTENTS
+        jnz .path_read_extent
         mov eax, [edi + 260]    ; start block
         mov ecx, [edi + 264]    ; block count
         cmp ecx, HBFS_READ_MAX_BLOCKS
@@ -187,7 +191,49 @@ hbfs_read_file:
         mov edi, [.save_dest]
         call ata_read_sectors
         jc .path_read_fail
+        jmp .path_read_ok
 
+.path_read_extent:
+        mov [.save_entry], edi
+        mov ecx, [edi + 264]    ; data blocks (not the extent block)
+        cmp ecx, HBFS_READ_MAX_BLOCKS
+        ja  .path_read_fail
+        mov [.save_blocks], ecx
+        mov dword [.save_index], 0
+        mov eax, [.save_fsize]
+        mov [.save_remain], eax ; .save_fsize is the value the caller gets back
+        mov edi, [.save_dest]
+        mov [.save_out], edi
+.path_ext_block:
+        cmp dword [.save_blocks], 0
+        je  .path_read_ok
+        mov edi, [.save_entry]
+        mov ebx, [.save_index]
+        call hbfs_map_block
+        jc  .path_read_fail
+        shl eax, 3
+        add eax, HBFS_DATA_START
+        mov ecx, HBFS_SECTORS_PER_BLK
+        mov edi, hbfs_block_buf
+        call ata_read_sectors
+        jc  .path_read_fail
+        mov ecx, HBFS_BLOCK_SIZE
+        cmp ecx, [.save_remain]
+        jbe .path_ext_len
+        mov ecx, [.save_remain]
+.path_ext_len:
+        jecxz .path_ext_next
+        sub [.save_remain], ecx
+        mov esi, hbfs_block_buf
+        mov edi, [.save_out]
+        rep movsb
+        mov [.save_out], edi
+.path_ext_next:
+        inc dword [.save_index]
+        dec dword [.save_blocks]
+        jmp .path_ext_block
+
+.path_read_ok:
         ; Restore CWD
         call file_restore_cwd
 
@@ -227,25 +273,40 @@ hbfs_read_file:
         ; overruns it by up to one block (the padding of the last block). Each
         ; block therefore lands in the bounce buffer and only the bytes the
         ; file actually contains are copied out.
-        mov eax, [edi + 260]    ; Start block
+        mov eax, [edi + 260]    ; Start block (inline) / extent block
         mov [.save_start], eax
+        mov [.save_entry], edi
+        mov dword [.save_index], 0
+        mov dword [.save_extent], 0
+        test word [edi + 254], HBFS4_DE_EXTENTS
+        jz  .read_inline_blocks
+        mov dword [.save_extent], 1
+.read_inline_blocks:
         mov ecx, [edi + 264]    ; Block count
         cmp ecx, HBFS_READ_MAX_BLOCKS
         ja  .read_error         ; file is larger than the caller's buffer
         mov [.save_blocks], ecx
         mov edi, [.save_dest]
+        mov [.save_out], edi
 
 .read_block:
         cmp dword [.save_blocks], 0
         je .read_done
+        cmp dword [.save_extent], 0
+        jne .read_block_extent
         mov eax, [.save_start]
+        jmp .read_have_block
+.read_block_extent:
+        mov edi, [.save_entry]
+        mov ebx, [.save_index]
+        call hbfs_map_block
+        jc .read_error
+.read_have_block:
         shl eax, 3              ; * 8 = sector offset within data area
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
-        push edi
         mov edi, hbfs_block_buf
         call blk_cache_read
-        pop edi
         jc .read_error
 
         ; Copy min(remaining file bytes, one block)
@@ -256,12 +317,13 @@ hbfs_read_file:
 .have_copy_len:
         jecxz .next_block
         sub [.save_fsize], ecx
-        push esi
         mov esi, hbfs_block_buf
+        mov edi, [.save_out]
         rep movsb               ; EDI advances past the copied bytes
-        pop esi
+        mov [.save_out], edi
 .next_block:
         inc dword [.save_start]
+        inc dword [.save_index]
         dec dword [.save_blocks]
         jmp .read_block
 
@@ -291,4 +353,9 @@ hbfs_read_file:
 .save_fsize:  dd 0
 .save_fsize_orig: dd 0
 .save_start:  dd 0
+.save_entry:  dd 0
+.save_index:  dd 0
+.save_extent: dd 0
+.save_out:    dd 0
+.save_remain: dd 0
 .save_blocks: dd 0

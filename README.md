@@ -4,15 +4,15 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 187 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
-compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3/v4 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 187 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
+compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 273 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** BIOS 3-stage boot into 32-bit protected mode
-- **Userland:** 89 shell built-ins, 264 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC)
+- **Userland:** 95 shell built-ins, 273 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC)
 - **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
 
@@ -40,7 +40,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembl
 ### Ratel Init System
 
 - **Sequential hardware initialization** — VGA, PIC, IDT, PIT, keyboard, PMM, ATA, serial, TSS, scheduler, IPC, networking, e1000 NIC, paging, mouse, SB16, VBE, PCI, AC'97, ATA DMA, VirtIO, AHCI SATA, GDB stub
-- **Filesystem mount** — HBFS detection, validation, and auto-format
+- **Filesystem mount** — HBFS detection and validation; a volume that fails the checks is refused and never reformatted (`format` creates one explicitly)
 - **Shell handoff** — drops into HB Lair interactive prompt after init completes
 
 ### HB Lair Shell (v3.0)
@@ -72,6 +72,13 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembl
 - **VFS integration** — accessed via the VFS layer; raw `fd_open` / `fd_read` / `fd_write` still available
 - **File descriptors**: open/read/write/close/seek (8 legacy FDs; 64 VFS FDs)
 - **Wildcards**: `*` and `?` pattern matching in `del` and `copy`
+- **HBFS v4** — recognises the `HBF4` superblock and verifies the CRC-32C on the
+  superblock, the bitmap and every directory run before trusting them. A volume
+  that declares the journal feature is writable: every metadata run is restamped
+  as it is written, including partial bitmap updates and new subdirectories.
+  Without that feature it mounts read-only. Files stored as several runs
+  (extents) read back correctly through `cat`, the descriptor layer and as
+  programs. Build one with `python3 populate.py <image> programs --version 4`.
 
 ### Drivers
 
@@ -92,7 +99,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembl
 - **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
 - **GDB remote stub** (v11) — RSP protocol over COM1; supports registers, memory, continue, step, breakpoints
 
-### Programs (264 assembly sources + 37 bundled samples)
+### Programs (273 assembly sources + 37 bundled samples)
 
 - **Games (29)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
@@ -106,6 +113,13 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 264 assembl
 
 ### Burrows Desktop (3.0)
 
+- **Windows 2000-class shell** — teal desktop, grey 3-D chrome, horizontal blue
+  gradient title bars, a Start menu with **Programs**, **Documents** and
+  **Settings** fly-outs plus **Run...**, **Help** and **Shut Down...**, and a
+  notification tray with a 12-hour clock. The default theme is `Win2000`.
+- **Window manager** — title-bar drag, all-edge and corner resize, double-click
+  the title bar to maximize/restore, minimize/maximize/close buttons, and window
+  stacking that puts windows above the desktop icons
 - **Multi-app desktop** — any number of GUI applications run at once, each as its own
   scheduler task, without blocking the desktop
 - **Per-window backing buffers** — every window draws into its own buffer in
@@ -218,7 +232,7 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (264 assembly sources total)
+│   └── ...                 (273 assembly sources total)
 ├── samples/                NASM, C, Perl, and BASIC source files
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c, hanoi.c
 │   ├── bf.c, wumpus.c, boxes.c, stars.c, echo.c
@@ -353,6 +367,7 @@ Mellivora_OS/
 | `make sizes` | Show component sizes |
 | `make programs` | Assemble all user programs |
 | `make populate` | Populate the existing image filesystem |
+| `make image-rebuild` | Discard the image and populate cache, then rebuild every file |
 | `make kernel-only` | Rebuild and patch the kernel and stage 2 |
 | `make lint` | Run repository consistency and NASM checks |
 | `make check-samples` | Validate NASM, C, Perl, and BASIC sample sources |
@@ -397,7 +412,7 @@ ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on A
 | Kernel source | Entry file + 30 modular include files |
 | Syscalls | 185 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 264 assembly sources built by the Makefile |
+| User programs | 273 assembly sources built by the Makefile |
 | Bundled samples | 37 (2 NASM + 18 C + 11 Perl + 6 BASIC) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |

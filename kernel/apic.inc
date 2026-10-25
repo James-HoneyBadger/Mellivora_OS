@@ -540,6 +540,13 @@ apic_init:
 
         mov byte [irq_mode_apic], 1
 
+        ; This processor is slot 0, claimed before any other can ask.
+        mov ecx, LAPIC_ID
+        call lapic_read
+        shr eax, 24
+        and eax, 255
+        mov byte [cpu_slot_by_apic + eax], 0
+
         xor ecx, ecx
 .ai_apply:
         bt dword [irq_wanted], ecx

@@ -52,8 +52,51 @@ HBFS_SB_FEATURES     equ 48          ; dword: feature flags
 HBFS_SB_ROOT_UID     equ 52          ; word: root UID
 HBFS_SB_ROOT_GID     equ 54          ; word: root GID
 
+;-----------------------------------------------------------------------
+; HBFS v4 — verified, read-only in this build.
+;
+; v4 keeps every v3 field where it is and adds its own after them in the same
+; sector, so a v3 reader still finds the geometry it expects. It adds a second
+; magic, a feature word, 64-bit counter high halves and a CRC-32C over the
+; superblock and every metadata run. The record layouts below must match
+; populate.py and tools/fsck_hbfs.py.
+;-----------------------------------------------------------------------
+HBFS4_MAGIC            equ 0x34424653   ; 'HBF4' on disk
+HBFS4_VERSION          equ 4
+HBFS4_OFF_FEATURES     equ 60           ; dword
+HBFS4_OFF_GENERATION   equ 64           ; dword
+HBFS4_OFF_BLOCKS_HI    equ 68           ; dword: high half of total blocks
+HBFS4_OFF_DATA_HI      equ 72           ; dword: high half of data start
+HBFS4_OFF_CHECKSUM     equ 76           ; dword: CRC-32C of this sector
+HBFS4_FEATURE_EXTENTS  equ (1 << 0)
+HBFS4_FEATURE_JOURNAL  equ (1 << 1)
+HBFS4_FEATURE_SNAPSHOT equ (1 << 2)     ; not honoured here; refuses the mount
+HBFS4_DE_EXTENTS       equ (1 << 0)     ; directory entry flags: data is a run list
+HBFS4_RUN_CHECKSUM_BYTES equ 4          ; trailer at the end of each metadata run
+
+; An extent entry's `start` names a metadata block of {block, count} runs.
+HBFS4_EXTENT_MAGIC     equ 0x34584248   ; 'H','B','X','4' on disk
+HBFS4_EXTENT_HDR       equ 8            ; magic, run count
+HBFS4_EXTENT_RECORD    equ 8            ; run start block, run block count
+HBFS4_EXTENT_MAX       equ ((HBFS_BLOCK_SIZE - HBFS4_EXTENT_HDR - \
+                             HBFS4_RUN_CHECKSUM_BYTES) / HBFS4_EXTENT_RECORD)
+
+; A freshly created subdirectory is HBFS_SUBDIR_BLOCKS zero blocks, so its run
+; checksum is always the CRC-32C of 65 536 zero bytes. Stamping the last block
+; with this value is cheaper than zeroing and checksumming 64 KB per mkdir, and
+; tests/test_v4_mount.py fails the fsck if the constant is ever wrong.
+HBFS4_EMPTY_DIR_CRC     equ 0x72C0C4A4
+
 hbfs_init:
         pushad
+
+        ; Nothing is mounted until a volume passes every check below. Every
+        ; mutation path refuses to write while this is clear, and a volume
+        ; this build cannot address is never formatted to make it fit: the
+        ; previous behaviour destroyed a v4 or damaged volume on first boot.
+        mov dword [hbfs_mounted], 0
+        mov dword [hbfs_read_only], 0
+        mov dword [hbfs_total_blocks], 0
 
         cmp byte [ata_present], 0
         je .no_disk
@@ -63,11 +106,58 @@ hbfs_init:
         mov ecx, 1
         mov edi, hbfs_super_buf
         call ata_read_sectors
-        jc .format_new
+        jc .read_error
 
-        ; Check magic
+        ; Check magic. v4 uses a second magic in the same sector and is
+        ; mounted read-only; everything older is the v3 path below.
+        cmp dword [hbfs_super_buf], HBFS4_MAGIC
+        je  .mount_v4
         cmp dword [hbfs_super_buf], HBFS_MAGIC
-        jne .format_new
+        jne .no_volume
+
+        ; Only the versions this kernel implements may be mounted: v1 (no
+        ; journal), v2 and v3. A newer or nonsensical version has rules this
+        ; code does not know, so it is refused rather than mounted.
+        mov eax, [hbfs_super_buf + 4]
+        test eax, eax
+        jz .bad_version
+        cmp eax, HBFS_VERSION_V3
+        ja .bad_version
+
+        ; The block size and the three starts must be the ones this build
+        ; addresses. Mounting a volume with a different layout would read and
+        ; write the wrong LBAs.
+        cmp dword [hbfs_super_buf + 28], HBFS_BLOCK_SIZE
+        jne .bad_layout
+        mov eax, [hbfs_super_buf + 16]
+        cmp eax, HBFS_ROOT_DIR_START
+        jne .bad_layout
+        mov eax, [hbfs_super_buf + 20]
+        cmp eax, HBFS_BITMAP_START
+        jne .bad_layout
+        mov eax, [hbfs_super_buf + 24]
+        cmp eax, HBFS_DATA_START
+        jne .bad_layout
+
+        ; The bitmap can only address HBFS_BITMAP_SIZE * 8 blocks, and the
+        ; volume must be larger than its reserved journal area.
+        mov eax, [hbfs_super_buf + 8]
+        cmp eax, HBFS_JOURNAL_BLOCKS
+        jbe .bad_layout
+        cmp eax, HBFS_BITMAP_SIZE * 8
+        ja .bad_layout
+        mov [hbfs_total_blocks], eax
+
+        ; A free count larger than the volume itself is corrupt.
+        mov ecx, [hbfs_super_buf + 12]
+        cmp ecx, eax
+        ja .bad_layout
+
+        ; A feature bit this kernel does not implement changes how the volume
+        ; must be read and written; mounting it read-write would corrupt it.
+        mov eax, [hbfs_super_buf + HBFS_SB_FEATURES]
+        test eax, ~(HBFS_FEAT_PERMS | HBFS_FEAT_XATTR)
+        jnz .bad_features
 
         ; Filesystem exists
         mov esi, msg_hbfs_found
@@ -89,16 +179,153 @@ hbfs_init:
 .hbfs_journal_clean:
         mov  dword [hbfs_journal_dirty], 0
 .hbfs_v1_mount:
-        ; Load root directory
+        ; Load root directory. The mount is marked first so that the loader —
+        ; which is itself guarded — is allowed to read; a failed load clears it
+        ; again and the volume stays refused.
+        mov dword [hbfs_mounted], 1
         call hbfs_load_root_dir
+        jc .root_error
 
         popad
         ret
 
-.format_new:
-        mov esi, msg_hbfs_format
+;-----------------------------------------------------------------------
+; HBFS v4 mount — verified and read-only.
+;
+; Every field is checked before the volume is trusted, and the superblock,
+; bitmap and each directory run are verified against their CRC-32C. Writes
+; stay refused (hbfs_require_writable) until a v4 writer exists: a write
+; would have to restamp runs this build does not stamp.
+;-----------------------------------------------------------------------
+.mount_v4:
+        cmp dword [hbfs_super_buf + 4], HBFS4_VERSION
+        jne .bad_version
+
+        ; Only features this reader implements may be present. A snapshot
+        ; volume (or anything newer) is read by rules this code does not know.
+        mov eax, [hbfs_super_buf + HBFS4_OFF_FEATURES]
+        test eax, ~(HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL)
+        jnz .bad_features
+
+        ; The layout is v3's, and this build addresses blocks in 32 bits.
+        cmp dword [hbfs_super_buf + 28], HBFS_BLOCK_SIZE
+        jne .bad_layout
+        mov eax, [hbfs_super_buf + 16]
+        cmp eax, HBFS_ROOT_DIR_START
+        jne .bad_layout
+        mov eax, [hbfs_super_buf + 20]
+        cmp eax, HBFS_BITMAP_START
+        jne .bad_layout
+        mov eax, [hbfs_super_buf + 24]
+        cmp eax, HBFS_DATA_START
+        jne .bad_layout
+        cmp dword [hbfs_super_buf + HBFS4_OFF_BLOCKS_HI], 0
+        jne .bad_layout
+        cmp dword [hbfs_super_buf + HBFS4_OFF_DATA_HI], 0
+        jne .bad_layout
+
+        mov eax, [hbfs_super_buf + 8]
+        cmp eax, HBFS_JOURNAL_BLOCKS
+        jbe .bad_layout
+        cmp eax, HBFS_BITMAP_SIZE * 8
+        ja .bad_layout
+        mov [hbfs_total_blocks], eax
+
+        mov ecx, [hbfs_super_buf + 12]
+        cmp ecx, eax
+        ja .bad_layout
+
+        ; The superblock's CRC is what says the geometry above is real.
+        call hbfs_verify_superblock
+        jc  .bad_checksum
+
+        ; Journal state. A dirty log is replayed with the same undo pass the
+        ; v3 path uses: its records carry their own CRC, and the pre-images
+        ; they restore are checksum-valid for the run they belong to.
+        mov  eax, [hbfs_super_buf + HBFS_SB_JRNL_PTR]
+        mov  [hbfs_journal_ptr], eax
+        mov  eax, [hbfs_super_buf + HBFS_SB_JRNL_EPOCH]
+        mov  [hbfs_journal_epoch], eax
+        cmp  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 0
+        je   .v4_journal_clean
+        mov  eax, [hbfs_super_buf + HBFS4_OFF_FEATURES]
+        test eax, HBFS4_FEATURE_JOURNAL
+        jz   .v4_dirty              ; cannot replay a log it does not claim
+        call hbfs_journal_recover
+.v4_journal_clean:
+        mov  dword [hbfs_journal_dirty], 0
+
+        ; Read and verify the bitmap run before anything could trust it.
+        mov eax, HBFS_BITMAP_START
+        mov ecx, HBFS_BITMAP_SECTS
+        mov edi, hbfs_bitmap_buf
+        call ata_read_sectors
+        jc  .read_error
+        mov eax, hbfs_bitmap_buf
+        mov ecx, HBFS_BITMAP_SIZE
+        call hbfs_verify_run
+        jc  .bad_checksum
+        mov dword [hbfs_bitmap_valid], 1
+
+        ; A v4 volume is writable when it declares the journal feature: every
+        ; metadata run is restamped as it is written, so the checksums stay
+        ; true. Without that feature it stays read-only, as before.
+        mov  dword [hbfs_read_only], 1
+        mov  eax, [hbfs_super_buf + HBFS4_OFF_FEATURES]
+        test eax, HBFS4_FEATURE_JOURNAL
+        jz   .v4_ro
+        mov  dword [hbfs_read_only], 0
+.v4_ro:
+        mov  dword [hbfs_mounted], 1
+        call hbfs_load_root_dir
+        jc  .v4_root_bad
+
+        cmp  dword [hbfs_read_only], 0
+        jne  .v4_report_ro
+        mov  esi, msg_hbfs_v4_rw
+        jmp  .v4_report
+.v4_report_ro:
+        mov  esi, msg_hbfs_v4_ro
+.v4_report:
         call vga_print
-        call hbfs_format
+        popad
+        ret
+
+.v4_dirty:
+        mov esi, msg_hbfs_v4_journal
+        jmp .refuse
+.bad_checksum:
+        mov esi, msg_hbfs_bad_checksum
+        jmp .refuse
+.v4_root_bad:
+        mov esi, msg_hbfs_root_err
+        jmp .refuse
+
+.read_error:
+        mov esi, msg_hbfs_read_err
+        jmp .refuse
+.no_volume:
+        mov esi, msg_hbfs_no_format
+        jmp .refuse
+.bad_version:
+        mov esi, msg_hbfs_bad_version
+        jmp .refuse
+.bad_layout:
+        mov esi, msg_hbfs_bad_layout
+        jmp .refuse
+.bad_features:
+        mov esi, msg_hbfs_bad_features
+        jmp .refuse
+.root_error:
+        ; hbfs_load_root_dir has already said the read failed.
+        mov dword [hbfs_mounted], 0
+        mov esi, msg_hbfs_root_err
+.refuse:
+        ; Nothing may allocate against, or write to, a volume that was refused.
+        mov dword [hbfs_mounted], 0
+        mov dword [hbfs_read_only], 0
+        mov dword [hbfs_total_blocks], 0
+        call vga_print
         popad
         ret
 
@@ -108,118 +335,178 @@ hbfs_init:
         popad
         ret
 
+;-----------------------------------------------------------------------
+; hbfs_require_mounted - refuse a write when no volume was mounted.
+; Returns: CF clear when a volume is mounted, CF set (nothing written) when not.
+;-----------------------------------------------------------------------
+hbfs_require_mounted:
+        cmp dword [hbfs_mounted], 0
+        je  .hrm_refuse
+        clc
+        ret
+.hrm_refuse:
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_require_writable - refuse a mutation unless the mounted volume may be
+; written. A v4 volume mounts read-only in this build, so every writer goes
+; through here: the volume is intact, but nothing may stamp it yet.
+; Returns: CF clear when writable, CF set (nothing written) when not.
+;-----------------------------------------------------------------------
+hbfs_require_writable:
+        cmp dword [hbfs_mounted], 0
+        je  .hrw_refuse
+        cmp dword [hbfs_read_only], 0
+        jne .hrw_refuse
+        clc
+        ret
+.hrw_refuse:
+        stc
+        ret
+
 ; Format: create fresh filesystem
 hbfs_format:
         pushad
 
-        ; Build superblock in buffer
+        ; A formatted volume is v4. This used to write version 2 with no
+        ; feature word: the volume a user created in the OS was older than the
+        ; one the builder ships, carried no checksums, and had to be upgraded
+        ; before permissions or xattrs worked.
         mov edi, hbfs_super_buf
         mov ecx, 512 / 4
         xor eax, eax
-        rep stosd               ; Zero buffer
+        rep stosd
 
         mov edi, hbfs_super_buf
-        mov dword [edi + 0], HBFS_MAGIC
-        mov dword [edi + 4], HBFS_VERSION_V2        ; v9.0: version 2
-        mov dword [edi + 8], HBFS_TOTAL_BLOCKS  ; Total blocks
-        mov dword [edi + 12], HBFS_TOTAL_BLOCKS ; Free blocks
-        mov dword [edi + 16], HBFS_ROOT_DIR_START; Root dir LBA
-        mov dword [edi + 20], HBFS_BITMAP_START  ; Bitmap start LBA
-        mov dword [edi + 24], HBFS_DATA_START    ; Data start LBA
+        mov dword [edi + 0], HBFS4_MAGIC
+        mov dword [edi + 4], HBFS4_VERSION
+        mov dword [edi + 8], HBFS_TOTAL_BLOCKS
+        ; The journal area is marked allocated below, so it is not free.
+        mov dword [edi + 12], HBFS_TOTAL_BLOCKS - HBFS_JOURNAL_BLOCKS
+        mov dword [edi + 16], HBFS_ROOT_DIR_START
+        mov dword [edi + 20], HBFS_BITMAP_START
+        mov dword [edi + 24], HBFS_DATA_START
         mov dword [edi + 28], HBFS_BLOCK_SIZE
-        ; v9.0 journal fields
-        mov dword [edi + HBFS_SB_JRNL_STATE], 0 ; journal state = clean
-        mov dword [edi + HBFS_SB_JRNL_PTR],   0 ; write pointer = 0
+        mov dword [edi + HBFS_SB_JRNL_STATE], 0
+        mov dword [edi + HBFS_SB_JRNL_PTR],   0
+        mov dword [edi + HBFS_SB_JRNL_EPOCH], 0
+        mov dword [edi + HBFS4_OFF_FEATURES], HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL
+        mov dword [edi + HBFS4_OFF_GENERATION], 0
+        mov dword [edi + HBFS4_OFF_BLOCKS_HI], 0
+        mov dword [edi + HBFS4_OFF_DATA_HI],   0
+        call hbfs_write_superblock          ; stamp the CRC, then write
+        jc .fmt_fail
 
-        ; Write superblock
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov esi, hbfs_super_buf
-        call ata_write_sectors
+        ; Bitmap: everything free, the journal area reserved, then the run's
+        ; CRC into its trailer.
+        mov edi, hbfs_bitmap_buf
+        mov ecx, HBFS_BITMAP_SIZE / 4
+        xor eax, eax
+        rep stosd
+        mov ecx, HBFS_JOURNAL_BLOCKS
+        xor edx, edx
+.fmt_mark_journal:
+        bts dword [hbfs_bitmap_buf], edx
+        inc edx
+        loop .fmt_mark_journal
+        mov eax, hbfs_bitmap_buf
+        mov ecx, HBFS_BITMAP_SIZE
+        call hbfs_stamp_run
+        mov dword [.fmt_lba], HBFS_BITMAP_START
+        mov dword [.fmt_ptr], hbfs_bitmap_buf
+        mov dword [.fmt_left], HBFS_BITMAP_BLOCKS
+        call .fmt_write_run
 
-        ; Zero out bitmap (HBFS_BITMAP_BLOCKS blocks)
+        ; Journal area: zero it, so a stale record cannot be replayed.
         mov edi, hbfs_block_buf
         mov ecx, HBFS_BLOCK_SIZE / 4
         xor eax, eax
         rep stosd
+        mov dword [.fmt_lba], HBFS_JOURNAL_LBA
+        mov dword [.fmt_ptr], hbfs_block_buf
+        mov dword [.fmt_left], HBFS_JOURNAL_BLOCKS
+        call .fmt_write_run
+        mov dword [hbfs_journal_ptr], 0
+        mov dword [hbfs_journal_dirty], 0
+        mov dword [hbfs_journal_epoch], 0
+        mov dword [hbfs_bitmap_valid], 0
 
-        mov eax, HBFS_BITMAP_START
-        mov ebx, HBFS_BITMAP_BLOCKS
-.fmt_bmp_loop:
-        cmp ebx, 0
-        je .fmt_bmp_done
-        mov ecx, HBFS_SECTORS_PER_BLK
-        mov esi, hbfs_block_buf
+        ; Root directory: 128 KB of zeros, checksummed as one run.
+        mov edi, hbfs_dir_buf
+        mov ecx, HBFS_ROOT_DIR_SIZE / 4
+        xor eax, eax
+        rep stosd
+        mov eax, hbfs_dir_buf
+        mov ecx, HBFS_ROOT_DIR_SIZE
+        call hbfs_stamp_run
+        mov dword [.fmt_lba], HBFS_ROOT_DIR_START
+        mov dword [.fmt_ptr], hbfs_dir_buf
+        mov dword [.fmt_left], HBFS_ROOT_DIR_BLOCKS
+        call .fmt_write_run
+        jmp  .fmt_written
+.fmt_dir_done:
+
+        ; Write one block per iteration from .fmt_ptr at .fmt_lba, .fmt_left
+        ; times. The counters live in memory because the disk routine does not
+        ; promise to preserve every register.
+.fmt_write_run:
+        cmp  dword [.fmt_left], 0
+        je   .fmt_run_done
+        mov  eax, [.fmt_lba]
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  esi, [.fmt_ptr]
         call ata_write_sectors
-        add eax, HBFS_SECTORS_PER_BLK
-        dec ebx
-        jmp .fmt_bmp_loop
-.fmt_bmp_done:
-        ; v9.0: Mark first HBFS_JOURNAL_BLOCKS blocks as used (journal reserved area).
-        ; Read the first bitmap sector, set bits 0..HBFS_JOURNAL_BLOCKS-1, write back.
-        push eax
-        push ecx
-        push esi
-        push edi
-        mov  eax, HBFS_BITMAP_START
+        jc   .fmt_fail
+        add  dword [.fmt_lba], HBFS_SECTORS_PER_BLK
+        add  dword [.fmt_ptr], HBFS_BLOCK_SIZE
+        dec  dword [.fmt_left]
+        jmp  .fmt_write_run
+.fmt_run_done:
+        ret
+
+.fmt_lba:  dd 0
+.fmt_ptr:  dd 0
+.fmt_left: dd 0
+.fmt_written:
+
+
+        ; Read the superblock back before declaring the volume mounted: a
+        ; format whose writes never reached the disk (a missing or failing
+        ; drive) must not be remembered as a mounted filesystem.
+        mov  eax, HBFS_SUPERBLOCK_LBA
         mov  ecx, 1
         mov  edi, hbfs_block_buf
         call ata_read_sectors
-        ; Set first HBFS_JOURNAL_BLOCKS bits in bitmap
-        mov  ecx, HBFS_JOURNAL_BLOCKS
-        xor  edx, edx
-.fmt_jrnl_mark:
-        bts  dword [hbfs_block_buf], edx
-        inc  edx
-        loop .fmt_jrnl_mark
-        ; Write back updated bitmap sector
-        mov  eax, HBFS_BITMAP_START
-        mov  ecx, 1
-        mov  esi, hbfs_block_buf
-        call ata_write_sectors
-        ; Zero the journal area itself (HBFS_JOURNAL_SECTS sectors at HBFS_JOURNAL_LBA)
-        mov  edi, hbfs_block_buf
-        xor  eax, eax
-        mov  ecx, HBFS_BLOCK_SIZE / 4
-        rep  stosd
-        mov  eax, HBFS_JOURNAL_LBA
-        mov  ebx, HBFS_JOURNAL_BLOCKS
-.fmt_jrnl_zero:
-        test ebx, ebx
-        jz   .fmt_jrnl_done
-        mov  ecx, HBFS_SECTORS_PER_BLK
-        mov  esi, hbfs_block_buf
-        call ata_write_sectors
-        add  eax, HBFS_SECTORS_PER_BLK
-        dec  ebx
-        jmp  .fmt_jrnl_zero
-.fmt_jrnl_done:
-        ; Init journal runtime state
-        mov  dword [hbfs_journal_ptr],   0
-        mov  dword [hbfs_journal_dirty],  0
-        ; The bitmap on disk was just rewritten from scratch
-        mov  dword [hbfs_bitmap_valid],   0
-        pop  edi
-        pop  esi
-        pop  ecx
-        pop  eax
+        jc   .fmt_fail
+        cmp  dword [hbfs_block_buf], HBFS4_MAGIC
+        jne  .fmt_fail
 
-        ; Zero out root directory (256 sectors = 32 blocks)
-        ; Use a loop to write all blocks
-        mov eax, HBFS_ROOT_DIR_START
-        mov ebx, HBFS_ROOT_DIR_BLOCKS
-.fmt_dir_loop:
-        cmp ebx, 0
-        je .fmt_dir_done
-        mov ecx, HBFS_SECTORS_PER_BLK
-        mov esi, hbfs_block_buf
-        call ata_write_sectors
-        add eax, HBFS_SECTORS_PER_BLK
-        dec ebx
-        jmp .fmt_dir_loop
-.fmt_dir_done:
+        ; A fresh volume has an empty root: any working directory, cached
+        ; directory and cached bitmap from the old volume point at blocks that
+        ; no longer exist.
+        mov  dword [current_dir_lba],   HBFS_ROOT_DIR_START
+        mov  dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
+        mov  dword [dir_depth],         0
+        mov  byte  [current_dir_name],  '/'
+        mov  byte  [current_dir_name + 1], 0
+        mov  dword [dir_cache_lba],     0xFFFFFFFF
+        mov  dword [hbfs_extent_lba],   0
+        mov  dword [hbfs_total_blocks], HBFS_TOTAL_BLOCKS
+        mov  dword [hbfs_read_only],    0
+        mov  dword [hbfs_mounted],      1
 
         mov esi, msg_hbfs_formatted
+        call vga_print
+
+        popad
+        ret
+
+.fmt_fail:
+        mov  dword [hbfs_mounted],      0
+        mov  dword [hbfs_read_only],    0
+        mov  dword [hbfs_total_blocks], 0
+        mov  esi, msg_hbfs_format_err
         call vga_print
 
         popad
@@ -301,6 +588,184 @@ crc32c:
         ret
 
 ;-----------------------------------------------------------------------
+; hbfs_verify_run — verify a v4 metadata run's trailing CRC-32C.
+;   In : EAX = buffer, ECX = run length in bytes
+;   Out: CF clear when the stored trailer matches this run's contents
+;
+; The trailer is read as zero while the checksum is computed, which is how
+; populate.py and tools/fsck_hbfs.py stamp it. crc32c preserves EBX and EDX,
+; so the trailer pointer and stored value survive the call.
+;-----------------------------------------------------------------------
+hbfs_verify_run:
+        mov  ebx, eax
+        add  ebx, ecx
+        sub  ebx, HBFS4_RUN_CHECKSUM_BYTES
+        mov  edx, [ebx]
+        mov  dword [ebx], 0
+        call crc32c
+        mov  [ebx], edx
+        cmp  eax, edx
+        jne  .hvr_bad
+        clc
+        ret
+.hvr_bad:
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_verify_superblock — verify the v4 superblock's CRC-32C at offset 76.
+;   In : superblock already read into hbfs_super_buf
+;   Out: CF clear when valid
+;-----------------------------------------------------------------------
+hbfs_verify_superblock:
+        mov  edx, [hbfs_super_buf + HBFS4_OFF_CHECKSUM]
+        mov  dword [hbfs_super_buf + HBFS4_OFF_CHECKSUM], 0
+        mov  eax, hbfs_super_buf
+        mov  ecx, 512
+        call crc32c
+        mov  [hbfs_super_buf + HBFS4_OFF_CHECKSUM], edx
+        cmp  eax, edx
+        jne  .hvs_bad
+        clc
+        ret
+.hvs_bad:
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_stamp_run - write a metadata run's CRC-32C into its trailer
+;   In : EAX = buffer, ECX = run length in bytes
+; The trailer is read as zero while the checksum is computed, matching
+; populate.py, tools/fsck_hbfs.py and hbfs_verify_run.
+;-----------------------------------------------------------------------
+hbfs_stamp_run:
+        mov  ebx, eax
+        add  ebx, ecx
+        sub  ebx, HBFS4_RUN_CHECKSUM_BYTES
+        mov  dword [ebx], 0
+        call crc32c
+        mov  [ebx], eax
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_stamp_superblock - refresh the v4 superblock CRC at offset 76
+;-----------------------------------------------------------------------
+hbfs_stamp_superblock:
+        mov  dword [hbfs_super_buf + HBFS4_OFF_CHECKSUM], 0
+        mov  eax, hbfs_super_buf
+        mov  ecx, 512
+        call crc32c
+        mov  [hbfs_super_buf + HBFS4_OFF_CHECKSUM], eax
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_write_superblock - stamp a v4 superblock, then write it
+;   Out: CF as ata_write_sectors
+; Every superblock write goes through here so a v4 volume never carries a
+; stale checksum: the journal state itself is inside the checksummed sector.
+;-----------------------------------------------------------------------
+hbfs_write_superblock:
+        cmp  dword [hbfs_super_buf], HBFS4_MAGIC
+        jne  .hws_write
+        call hbfs_stamp_superblock
+.hws_write:
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        jmp  ata_write_sectors
+
+;-----------------------------------------------------------------------
+; hbfs_map_block - translate a file's logical block to a physical block
+;   In : EDI = directory entry, EBX = logical block index (0-based)
+;   Out: EAX = physical data block, CF set if the block does not exist
+;
+; An inline entry (the v3 form, and every one-run v4 file) stores `start` as
+; its first data block, so the map is an addition. A v4 extent entry stores
+; `start` as a metadata block of {start, count} runs, and the logical block is
+; found by walking them. The extent block is cached because a sequential read
+; would otherwise re-read it for every 4 KB. Block 0 is the journal area and
+; can never be an extent block, so it is a safe "nothing cached" value.
+;-----------------------------------------------------------------------
+hbfs_map_block:
+        test word [edi + 254], HBFS4_DE_EXTENTS
+        jnz  .hmb_extent
+        mov  eax, [edi + 260]
+        add  eax, ebx
+        clc
+        ret
+.hmb_extent:
+        mov  eax, [edi + 260]                ; extent block number
+        jmp  hbfs_map_extent
+
+;-----------------------------------------------------------------------
+; hbfs_map_extent - map a logical block through a v4 extent block
+;   In : EAX = extent block number, EBX = logical block index
+;   Out: EAX = physical data block, CF set if the list is invalid or too
+;        short; ECX, EDX, ESI preserved; EBX is the input, not a result
+;
+; This is the half of the map that does not need a directory entry, so the
+; fd layer - which remembers only the block number - can use it too.
+;-----------------------------------------------------------------------
+hbfs_map_extent:
+        push ecx
+        push edx
+        push esi
+        mov  [.hmw_want], ebx
+
+        mov  esi, eax                        ; extent block number
+        cmp  esi, [hbfs_extent_lba]
+        je   .hmw_cached
+        mov  eax, esi
+        imul eax, HBFS_SECTORS_PER_BLK
+        add  eax, HBFS_DATA_START
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  edi, hbfs_extent_buf
+        call ata_read_sectors
+        jc   .hmw_fail
+        mov  eax, hbfs_extent_buf
+        mov  ecx, HBFS_BLOCK_SIZE
+        call hbfs_verify_run                ; it is a metadata run like any other
+        jc   .hmw_fail
+        mov  [hbfs_extent_lba], esi
+
+.hmw_cached:
+        cmp  dword [hbfs_extent_buf], HBFS4_EXTENT_MAGIC
+        jne  .hmw_fail
+        mov  ecx, [hbfs_extent_buf + 4]     ; number of runs
+        test ecx, ecx
+        jz   .hmw_fail
+        cmp  ecx, HBFS4_EXTENT_MAX
+        ja   .hmw_fail
+        lea  esi, [hbfs_extent_buf + HBFS4_EXTENT_HDR]
+        mov  edx, [.hmw_want]
+.hmw_walk:
+        mov  eax, [esi + 4]                 ; blocks in this run
+        test eax, eax
+        jz   .hmw_fail
+        cmp  edx, eax
+        jb   .hmw_found
+        sub  edx, eax
+        add  esi, HBFS4_EXTENT_RECORD
+        dec  ecx
+        jnz  .hmw_walk
+        jmp  .hmw_fail                      ; past the last run
+.hmw_found:
+        mov  eax, [esi]
+        add  eax, edx
+        pop  esi
+        pop  edx
+        pop  ecx
+        clc
+        ret
+.hmw_fail:
+        pop  esi
+        pop  edx
+        pop  ecx
+        stc
+        ret
+.hmw_want: dd 0
+
+;-----------------------------------------------------------------------
 ; hbfs_journal_begin — start (or nest into) a metadata transaction
 ;   Every begin must be paired with exactly one commit or abort.
 ;   Nested calls only bump a depth counter: the outermost transaction owns
@@ -309,6 +774,10 @@ crc32c:
 ; All registers preserved.
 ;-----------------------------------------------------------------------
 hbfs_journal_begin:
+        ; A transaction must never open on an unmounted volume: its first act
+        ; is to write JRNL_STATE=1 into whatever superblock is in memory.
+        call hbfs_require_writable
+        jc   .hjb_done
         ; Skip if not a journalled filesystem (v2 or v3)
         cmp  dword [hbfs_super_buf + 4], HBFS_VERSION_V2
         jb   .hjb_done
@@ -330,10 +799,7 @@ hbfs_journal_begin:
         push eax
         push ecx
         push esi
-        mov  eax, HBFS_SUPERBLOCK_LBA
-        mov  ecx, 1
-        mov  esi, hbfs_super_buf
-        call ata_write_sectors
+        call hbfs_write_superblock
         pop  esi
         pop  ecx
         pop  eax
@@ -522,10 +988,7 @@ hbfs_journal_commit:
         mov  dword [hbfs_journal_n_logged], 0
         mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 0
         mov  dword [hbfs_super_buf + HBFS_SB_JRNL_PTR],   0
-        mov  eax, HBFS_SUPERBLOCK_LBA
-        mov  ecx, 1
-        mov  esi, hbfs_super_buf
-        call ata_write_sectors
+        call hbfs_write_superblock
 
         popad
 .hjc_ret:
@@ -671,16 +1134,17 @@ hbfs_journal_recover:
         mov  dword [hbfs_journal_ptr],     0
         ; Anything replayed came from disk, so the cached directory is stale.
         mov  dword [dir_cache_lba], -1
-        mov  eax, HBFS_SUPERBLOCK_LBA
-        mov  ecx, 1
-        mov  esi, hbfs_super_buf
-        call ata_write_sectors
+        call hbfs_write_superblock
 
         popad
         ret
 .hjr_target: dd 0
 ; Returns: CF set on read error
 hbfs_load_root_dir:
+        ; A refused volume must not be read back through the shell either: the
+        ; directory would be parsed with rules the mount check just rejected.
+        call hbfs_require_mounted
+        jc .hlrd_refuse
         pushad
         ; Check if the directory buffer already has this directory cached
         mov eax, [current_dir_lba]
@@ -706,6 +1170,19 @@ hbfs_load_root_dir:
         mov edi, hbfs_dir_buf
         call ata_read_sectors
         jc .hlrd_err
+        ; A v4 volume carries a CRC-32C in the last four bytes of every
+        ; metadata run. Verify this directory's before anything trusts it —
+        ; a torn directory would otherwise be parsed as entries. This is keyed
+        ; on the format, not on read-only: a journalled v4 volume is writable
+        ; and still has to be checked on every load.
+        cmp dword [hbfs_super_buf], HBFS4_MAGIC
+        jne .hlrd_verified
+        mov eax, hbfs_dir_buf
+        mov ecx, [current_dir_sects]
+        shl ecx, 9                      ; sectors -> bytes
+        call hbfs_verify_run
+        jc  .hlrd_crc_bad
+.hlrd_verified:
         ; The shadow must match what is on disk before anyone mutates the
         ; buffer: hbfs_save_root_dir diffs the two to decide what to write.
         push esi
@@ -730,6 +1207,24 @@ hbfs_load_root_dir:
         mov esi, msg_hbfs_dir_read_err
         call vga_print
         popad
+        stc
+        ret
+.hlrd_crc_bad:
+        ; The read already filled the buffer before the checksum said no. Drop
+        ; it: a caller that ignores CF must not see entries from a run this
+        ; mount refused, or the refusal would be cosmetic.
+        pushad
+        mov  edi, hbfs_dir_buf
+        mov  ecx, HBFS_ROOT_DIR_SIZE / 4
+        xor  eax, eax
+        rep  stosd
+        popad
+        mov esi, msg_hbfs_dir_crc_err
+        call vga_print
+        popad
+        stc
+        ret
+.hlrd_refuse:
         stc
         ret
 
@@ -771,10 +1266,42 @@ hbfs_load_bitmap:
 ; All registers preserved.
 ;-----------------------------------------------------------------------
 hbfs_meta_write:
+        call hbfs_require_writable
+        jc  .hmw_refuse
         pushad
         mov [.hmw_lba], eax
         mov [.hmw_buf], esi
         mov [.hmw_cnt], ecx
+        mov dword [.hmw_extra], 0
+
+        ; A v4 volume carries a CRC-32C at the end of every metadata run. The
+        ; caller writes a range of sectors, so restamp the run here and, when
+        ; the range does not reach the end of the run, write the trailer's
+        ; sector too — otherwise the volume would be left with a stale
+        ; checksum that the next mount would (rightly) refuse.
+        cmp  dword [hbfs_super_buf], HBFS4_MAGIC
+        jne  .mhw_stamped
+        cmp  eax, HBFS_SUPERBLOCK_LBA
+        jne  .mhw_bitmap?
+        call hbfs_stamp_superblock
+        jmp  .mhw_stamped
+.mhw_bitmap?:
+        mov  edx, eax
+        sub  edx, HBFS_BITMAP_START
+        cmp  edx, HBFS_BITMAP_SECTS
+        jae  .mhw_stamped
+        mov  eax, hbfs_bitmap_buf
+        mov  ecx, HBFS_BITMAP_SIZE
+        call hbfs_stamp_run
+        mov  edx, [.hmw_lba]
+        add  edx, [.hmw_cnt]
+        cmp  edx, HBFS_BITMAP_START + HBFS_BITMAP_SECTS
+        jae  .mhw_stamped
+        mov  dword [.hmw_extra], 1
+.mhw_stamped:
+        mov  eax, [.hmw_lba]
+        mov  ecx, [.hmw_cnt]
+        mov  esi, [.hmw_buf]
 .mhw_loop:
         cmp dword [.hmw_cnt], 0
         je  .mhw_ok
@@ -791,6 +1318,19 @@ hbfs_meta_write:
         dec dword [.hmw_cnt]
         jmp .mhw_loop
 .mhw_ok:
+        ; A partial bitmap write still has to publish the run's new trailer.
+        cmp  dword [.hmw_extra], 0
+        je   .mhw_done
+        mov  dword [.hmw_extra], 0
+        mov  eax, HBFS_BITMAP_START + HBFS_BITMAP_SECTS - 1
+        call hbfs_journal_log_sector
+        jc   .mhw_fail
+        mov  eax, HBFS_BITMAP_START + HBFS_BITMAP_SECTS - 1
+        mov  ecx, 1
+        mov  esi, hbfs_bitmap_buf + HBFS_BITMAP_SIZE - 512
+        call ata_write_sectors
+        jc   .mhw_fail
+.mhw_done:
         popad
         clc
         ret
@@ -799,9 +1339,13 @@ hbfs_meta_write:
         popad
         stc
         ret
+.hmw_refuse:
+        stc
+        ret
 .hmw_lba: dd 0
 .hmw_buf: dd 0
 .hmw_cnt: dd 0
+.hmw_extra: dd 0
 
 ; Save current directory to disk
 ; Only the sectors whose content differs from the on-disk shadow are written,
@@ -810,8 +1354,19 @@ hbfs_meta_write:
 ; impossible to journal with a 16 KB undo log.
 ; Returns: CF set on write error
 hbfs_save_root_dir:
+        call hbfs_require_writable
+        jc  .hsrd_refuse
         pushad
         call hbfs_journal_begin
+        ; Stamp first: the trailer is part of the run, so the diff below then
+        ; writes the sector that carries it along with the changed entries.
+        cmp  dword [hbfs_super_buf], HBFS4_MAGIC
+        jne  .hsrd_stamped
+        mov  eax, hbfs_dir_buf
+        mov  ecx, [current_dir_sects]
+        shl  ecx, 9
+        call hbfs_stamp_run
+.hsrd_stamped:
         mov eax, [current_dir_lba]
         mov [.hsrd_lba], eax
         mov eax, [current_dir_sects]
@@ -859,6 +1414,9 @@ hbfs_save_root_dir:
         mov esi, msg_hbfs_dir_write_err
         call vga_print
         popad
+        stc
+        ret
+.hsrd_refuse:
         stc
         ret
 .hsrd_lba: dd 0
@@ -943,9 +1501,11 @@ hbfs_alloc_blocks:
         call hbfs_load_bitmap
 
         ; Scan for N contiguous free bits
-        ; v9.0: start from HBFS_JOURNAL_BLOCKS to skip journal reserved area
+        ; v9.0: start from HBFS_JOURNAL_BLOCKS to skip journal reserved area.
+        ; The limit comes from the mounted volume, not this build's default
+        ; size: a smaller image has no blocks past its own count to allocate.
         mov edx, HBFS_JOURNAL_BLOCKS   ; Start block (skip journal)
-        mov ecx, HBFS_TOTAL_BLOCKS
+        mov ecx, [hbfs_total_blocks]
 
 .scan_start:
         cmp edx, ecx
@@ -1165,6 +1725,8 @@ hbfs_free_block:
 ; Returns: CF set on error
 hbfs_create_file:
         pushad
+        call hbfs_require_writable
+        jc .hcf_denied
         ; Adding an entry is a write to the directory, so check that first and
         ; before the transaction opens: a refusal must not journal anything.
         call hbfs_cwd_access_current
@@ -1241,14 +1803,21 @@ hbfs_create_file:
 .has_data:
         mov [.save_blocks], ecx
 
-        ; Allocate contiguous blocks
+        ; Allocate contiguous blocks. If the volume has no run that big, a v4
+        ; volume stores the file as a run list instead of failing.
+        mov ecx, [.save_blocks]
         push edi
         call hbfs_alloc_blocks
         pop edi
+        jnc .hcf_start_ready
+        cmp dword [hbfs_super_buf], HBFS4_MAGIC
+        jne .alloc_fail
+        mov ecx, [.save_blocks]
+        call hbfs_extent_alloc
         jc .alloc_fail
-
-        ; EAX = first allocated block number
-        mov [edi + 260], eax            ; Start block
+        mov word [edi + 254], HBFS4_DE_EXTENTS
+.hcf_start_ready:
+        mov [edi + 260], eax            ; Start block / extent block
         mov ecx, [.save_size]
         mov [edi + 256], ecx            ; File size
         mov ecx, [.save_blocks]
@@ -1264,7 +1833,15 @@ hbfs_create_file:
         ; Save directory
         call hbfs_save_root_dir
 
-        ; Write file data to disk
+        ; Write file data to disk. An extent file's data lives in the runs
+        ; just allocated, so it is written run by run.
+        cmp word [edi + 254], HBFS4_DE_EXTENTS
+        jne .hcf_write_inline
+        mov esi, [.save_data]
+        call hbfs_extent_write
+        jc .write_fail
+        jmp .hcf_write_done
+.hcf_write_inline:
         ; LBA = HBFS_DATA_START + block_number * HBFS_SECTORS_PER_BLK
         mov eax, [edi + 260]    ; Reload first block from dir entry
         mov ecx, [.save_blocks]
@@ -1274,6 +1851,7 @@ hbfs_create_file:
         mov esi, [.save_data]
         call ata_write_sectors
         jc .write_fail
+.hcf_write_done:
 
         call hbfs_journal_commit
         popad
@@ -1298,16 +1876,358 @@ hbfs_create_file:
 .save_blocks: dd 0
 .save_type:   dd 0
 
+;-----------------------------------------------------------------------
+; hbfs_extent_alloc - allocate blocks as one or more runs, for a v4 file
+;   In : ECX = data blocks needed
+;   Out: EAX = extent block number, CF set if the volume cannot hold it
+; Fills hbfs_run_buf/hbfs_run_count with the runs it allocated, and writes
+; the extent block (journaled, checksummed). The caller opens the transaction,
+; so an abort undoes every allocation made here.
+;-----------------------------------------------------------------------
+hbfs_extent_alloc:
+        pushad
+        mov  [.hea_remain], ecx
+        mov  dword [hbfs_run_count], 0
+        cmp  ecx, HBFS4_EXTENT_MAX
+        ja   .hea_fail
+
+.hea_more:
+        cmp  dword [.hea_remain], 0
+        je   .hea_runs_done
+        mov  eax, [.hea_remain]
+        mov  [.hea_try], eax
+.hea_try_more:
+        mov  ecx, [.hea_try]
+        call hbfs_alloc_blocks
+        jnc  .hea_got
+        dec  dword [.hea_try]
+        jnz  .hea_try_more
+        jmp  .hea_fail                  ; not one free block left
+.hea_got:
+        mov  ecx, [.hea_try]
+        mov  edx, [hbfs_run_count]
+        imul edx, HBFS4_EXTENT_RECORD
+        add  edx, hbfs_run_buf
+        mov  [edx], eax                 ; run start
+        mov  [edx + 4], ecx             ; run length
+        inc  dword [hbfs_run_count]
+        sub  [.hea_remain], ecx
+        jmp  .hea_more
+
+.hea_runs_done:
+        mov  ecx, 1
+        call hbfs_alloc_blocks          ; the extent block itself
+        jc   .hea_fail
+        mov  [.hea_block], eax
+
+        ; Build the block: magic, count, records, checksum.
+        mov  edi, hbfs_extent_buf
+        mov  ecx, HBFS_BLOCK_SIZE / 4
+        xor  eax, eax
+        rep  stosd
+        mov  dword [hbfs_extent_buf], HBFS4_EXTENT_MAGIC
+        mov  eax, [hbfs_run_count]
+        mov  [hbfs_extent_buf + 4], eax
+        mov  esi, hbfs_run_buf
+        mov  edi, hbfs_extent_buf + HBFS4_EXTENT_HDR
+        mov  ecx, eax
+        shl  ecx, 1                     ; records are two dwords each
+        rep  movsd
+        mov  eax, hbfs_extent_buf
+        mov  ecx, HBFS_BLOCK_SIZE
+        call hbfs_stamp_run
+
+        mov  eax, [.hea_block]
+        shl  eax, 3
+        add  eax, HBFS_DATA_START
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  esi, hbfs_extent_buf
+        call hbfs_meta_write            ; journaled, so an abort undoes it too
+        jc   .hea_fail
+        mov  eax, [.hea_block]
+        mov  [hbfs_extent_lba], eax
+        mov  [esp + 28], eax            ; return value through pushad
+        popad
+        clc
+        ret
+.hea_fail:
+        popad
+        stc
+        ret
+.hea_remain: dd 0
+.hea_try:    dd 0
+.hea_block:  dd 0
+
+;-----------------------------------------------------------------------
+; hbfs_extent_write - write a file's data across the runs just allocated
+;   In : ESI = data source; hbfs_run_buf/hbfs_run_count hold the runs
+;   Out: CF set on an I/O error
+;-----------------------------------------------------------------------
+hbfs_extent_write:
+        pushad
+        mov  [.hew_src], esi
+        mov  dword [.hew_idx], 0
+.hew_run:
+        mov  eax, [.hew_idx]
+        cmp  eax, [hbfs_run_count]
+        jae  .hew_ok
+        imul eax, HBFS4_EXTENT_RECORD
+        add  eax, hbfs_run_buf
+        mov  edx, [eax]                 ; run start
+        mov  ecx, [eax + 4]             ; run length in blocks
+        mov  eax, edx
+        shl  eax, 3
+        add  eax, HBFS_DATA_START
+        shl  ecx, 3                     ; sectors
+        mov  esi, [.hew_src]
+        call ata_write_sectors
+        jc   .hew_fail
+        mov  eax, [.hew_idx]
+        imul eax, HBFS4_EXTENT_RECORD
+        add  eax, hbfs_run_buf
+        mov  ecx, [eax + 4]
+        shl  ecx, 12                    ; bytes in this run
+        add  [.hew_src], ecx
+        inc  dword [.hew_idx]
+        jmp  .hew_run
+.hew_ok:
+        popad
+        clc
+        ret
+.hew_fail:
+        popad
+        stc
+        ret
+.hew_src: dd 0
+.hew_idx: dd 0
+
+;-----------------------------------------------------------------------
+; hbfs_truncate_extent - shrink an extent file's run list
+;   In : EDI = directory entry, ECX = new size in bytes (<= current size)
+;   Out: CF set on a read/verify/write error; the entry is not modified
+;
+; Runs that are dropped entirely are freed; a run that is kept in part has its
+; tail freed. The list is rebuilt in place (the write cursor never overtakes
+; the read cursor), restamped and written through the journal.
+;-----------------------------------------------------------------------
+hbfs_truncate_extent:
+        pushad
+        mov  [.hte_entry], edi
+
+        mov  eax, ecx
+        add  eax, HBFS_BLOCK_SIZE - 1
+        shr  eax, 12
+        cmp  eax, 0
+        jg   .hte_keep_ok
+        mov  eax, 1
+.hte_keep_ok:
+        mov  [.hte_remain], eax         ; blocks still to keep
+
+        mov  eax, [edi + 260]
+        mov  [.hte_block], eax
+        imul eax, HBFS_SECTORS_PER_BLK
+        add  eax, HBFS_DATA_START
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  edi, hbfs_extent_buf
+        call ata_read_sectors
+        jc   .hte_fail
+        mov  eax, hbfs_extent_buf
+        mov  ecx, HBFS_BLOCK_SIZE
+        call hbfs_verify_run
+        jc   .hte_fail
+        mov  eax, [.hte_block]
+        mov  [hbfs_extent_lba], eax
+
+        cmp  dword [hbfs_extent_buf], HBFS4_EXTENT_MAGIC
+        jne  .hte_fail
+        mov  ecx, [hbfs_extent_buf + 4]
+        test ecx, ecx
+        jz   .hte_fail
+        cmp  ecx, HBFS4_EXTENT_MAX
+        ja   .hte_fail
+        mov  [.hte_count], ecx
+        mov  dword [.hte_off], HBFS4_EXTENT_HDR
+        mov  dword [.hte_new], 0
+
+.hte_walk:
+        cmp  dword [.hte_count], 0
+        je   .hte_done
+        mov  esi, hbfs_extent_buf
+        add  esi, [.hte_off]
+        mov  eax, [esi]                 ; run start
+        mov  ecx, [esi + 4]             ; run length
+        test ecx, ecx
+        jz   .hte_fail
+        cmp  [.hte_remain], ecx
+        jb   .hte_partial
+        ; Keep the whole run.
+        mov  edx, [.hte_new]
+        imul edx, HBFS4_EXTENT_RECORD
+        add  edx, hbfs_extent_buf + HBFS4_EXTENT_HDR
+        mov  [edx], eax
+        mov  [edx + 4], ecx
+        inc  dword [.hte_new]
+        sub  [.hte_remain], ecx
+        add  dword [.hte_off], HBFS4_EXTENT_RECORD
+        dec  dword [.hte_count]
+        jmp  .hte_walk
+
+.hte_partial:
+        mov  ecx, [.hte_remain]
+        jecxz .hte_free_rest
+        ; Free the tail of this run: start+keep .. start+len-1
+        mov  eax, [esi]
+        mov  edx, [esi + 4]
+        sub  edx, ecx
+        add  eax, ecx
+        mov  ecx, edx
+        call hbfs_free_blocks
+        ; Keep the head of this run.
+        mov  eax, [esi]
+        mov  ecx, [.hte_remain]
+        mov  edx, [.hte_new]
+        imul edx, HBFS4_EXTENT_RECORD
+        add  edx, hbfs_extent_buf + HBFS4_EXTENT_HDR
+        mov  [edx], eax
+        mov  [edx + 4], ecx
+        inc  dword [.hte_new]
+        mov  dword [.hte_remain], 0
+
+.hte_free_rest:
+        add  dword [.hte_off], HBFS4_EXTENT_RECORD
+        dec  dword [.hte_count]
+.hte_free_loop:
+        cmp  dword [.hte_count], 0
+        je   .hte_done
+        mov  esi, hbfs_extent_buf
+        add  esi, [.hte_off]
+        mov  eax, [esi]
+        mov  ecx, [esi + 4]
+        test ecx, ecx
+        jz   .hte_fail
+        call hbfs_free_blocks
+        add  dword [.hte_off], HBFS4_EXTENT_RECORD
+        dec  dword [.hte_count]
+        jmp  .hte_free_loop
+
+.hte_done:
+        mov  eax, [.hte_new]
+        test eax, eax
+        jz   .hte_fail
+        mov  [hbfs_extent_buf + 4], eax
+        mov  eax, hbfs_extent_buf
+        mov  ecx, HBFS_BLOCK_SIZE
+        call hbfs_stamp_run
+        mov  eax, [.hte_block]
+        shl  eax, 3
+        add  eax, HBFS_DATA_START
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  esi, hbfs_extent_buf
+        call hbfs_meta_write
+        jc   .hte_fail
+        mov  eax, [.hte_block]
+        mov  [hbfs_extent_lba], eax
+        popad
+        clc
+        ret
+.hte_fail:
+        popad
+        stc
+        ret
+.hte_entry:  dd 0
+.hte_block:  dd 0
+.hte_count:  dd 0
+.hte_off:    dd 0
+.hte_new:    dd 0
+.hte_remain: dd 0
+
+;-----------------------------------------------------------------------
+; hbfs_free_extent - free every run of an extent file, then its extent block
+;   In : EDI = directory entry with HBFS4_DE_EXTENTS set
+;   Out: CF set if the run list cannot be read or verified (nothing freed)
+;
+; Freeing `start` as one contiguous range would free the extent block and
+; whatever sits after the first run, so the list is walked instead. The
+; extent block itself is metadata and is freed after the runs it names.
+;-----------------------------------------------------------------------
+hbfs_free_extent:
+        pushad
+        mov  [.hfe_entry], edi
+
+        mov  eax, [edi + 260]
+        mov  [.hfe_block], eax
+        imul eax, HBFS_SECTORS_PER_BLK
+        add  eax, HBFS_DATA_START
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  edi, hbfs_extent_buf
+        call ata_read_sectors
+        jc   .hfe_fail
+        mov  eax, hbfs_extent_buf
+        mov  ecx, HBFS_BLOCK_SIZE
+        call hbfs_verify_run
+        jc   .hfe_fail
+        mov  eax, [.hfe_block]
+        mov  [hbfs_extent_lba], eax
+
+        cmp  dword [hbfs_extent_buf], HBFS4_EXTENT_MAGIC
+        jne  .hfe_fail
+        mov  ecx, [hbfs_extent_buf + 4]
+        test ecx, ecx
+        jz   .hfe_fail
+        cmp  ecx, HBFS4_EXTENT_MAX
+        ja   .hfe_fail
+        mov  [.hfe_count], ecx
+        mov  dword [.hfe_off], HBFS4_EXTENT_HDR
+
+.hfe_run:
+        cmp  dword [.hfe_count], 0
+        je   .hfe_runs_done
+        mov  esi, hbfs_extent_buf
+        add  esi, [.hfe_off]
+        mov  eax, [esi]                 ; run start block
+        mov  ecx, [esi + 4]             ; run length
+        test ecx, ecx
+        jz   .hfe_fail
+        call hbfs_free_blocks
+        add  dword [.hfe_off], HBFS4_EXTENT_RECORD
+        dec  dword [.hfe_count]
+        jmp  .hfe_run
+
+.hfe_runs_done:
+        mov  eax, [.hfe_block]
+        mov  ecx, 1
+        call hbfs_free_blocks
+        mov  dword [hbfs_extent_lba], 0
+        popad
+        clc
+        ret
+.hfe_fail:
+        popad
+        stc
+        ret
+.hfe_entry: dd 0
+.hfe_block: dd 0
+.hfe_count: dd 0
+.hfe_off:   dd 0
+
 ; Delete file entry (EDI already points to entry in hbfs_dir_buf)
 hbfs_delete_file_entry:
         pushad
+        call hbfs_require_writable
+        jc .hdfe_refuse
         call hbfs_journal_begin
-        ; Free ALL data blocks (contiguous)
+        ; An extent entry names runs, not one range: walk its list. A v3 (or
+        ; one-run) entry frees `start` .. `start+count-1` as before.
+        test word [edi + 254], HBFS4_DE_EXTENTS
+        jnz .hdfe_extent
         mov eax, [edi + 260]    ; Start block
         mov ecx, [edi + 264]    ; Block count
         cmp ecx, 0
         jle .skip_free
         call hbfs_free_blocks
+        jmp .skip_free
+.hdfe_extent:
+        call hbfs_free_extent
 .skip_free:
 
         ; Zero the directory entry
@@ -1322,11 +2242,18 @@ hbfs_delete_file_entry:
         popad
         ret
 
+.hdfe_refuse:
+        popad
+        stc
+        ret
+
 ; Create a subdirectory in the current directory
 ; ESI = directory name (null-terminated)
 ; Returns: CF=0 success, CF=1 error
 hbfs_mkdir:
         pushad
+        call hbfs_require_writable
+        jc .hm_denied
         ; A subdirectory is an entry too: the parent's write bit governs it.
         call hbfs_cwd_access_current
         test eax, eax
@@ -1357,6 +2284,14 @@ hbfs_mkdir:
         rep stosd
         pop ebx
         pop eax
+        ; v4: the subdirectory is one checksummed run. The last block carries
+        ; the CRC of the whole (still zero) 64 KB.
+        cmp  dword [hbfs_super_buf], HBFS4_MAGIC
+        jne  .hm_zero_write
+        cmp  ebx, 1
+        jne  .hm_zero_write
+        mov  dword [hbfs_block_buf + HBFS_BLOCK_SIZE - HBFS4_RUN_CHECKSUM_BYTES], HBFS4_EMPTY_DIR_CRC
+.hm_zero_write:
         push eax
         push ebx
         shl eax, 3
@@ -1685,6 +2620,8 @@ sys_rmdir:
         call validate_user_ptr
         jc .srd_bad_ptr
         pushad
+        call hbfs_require_writable
+        jc .srd_fail
         mov esi, ebx
         call hbfs_load_root_dir
         call hbfs_find_file
@@ -1764,6 +2701,8 @@ sys_truncate:
         call validate_user_ptr
         jc .st_bad_ptr
         pushad
+        call hbfs_require_writable
+        jc .st_fail
         mov [.st_new_size], ecx
         mov esi, ebx
         call hbfs_load_root_dir
@@ -1783,8 +2722,6 @@ sys_truncate:
         mov eax, [.st_new_size]
         cmp eax, [edi + DIRENT_SIZE]
         ja .st_fail
-        ; Update size in directory entry
-        mov [edi + DIRENT_SIZE], eax
         ; Calculate new block count needed
         mov ecx, eax
         add ecx, HBFS_BLOCK_SIZE - 1
@@ -1793,6 +2730,11 @@ sys_truncate:
         jg .st_has_blocks
         mov ecx, 1
 .st_has_blocks:
+        test word [edi + 254], HBFS4_DE_EXTENTS
+        jnz .st_extent
+        ; Update size in directory entry
+        mov eax, [.st_new_size]
+        mov [edi + DIRENT_SIZE], eax
         ; Free excess blocks if block count shrank
         mov eax, [edi + DIRENT_BLOCK_COUNT]
         cmp eax, ecx
@@ -1807,6 +2749,23 @@ sys_truncate:
         call hbfs_free_blocks
         pop ecx                 ; new block count
         mov [edi + DIRENT_BLOCK_COUNT], ecx
+.st_extent:
+        ; Shrink the run list; the helper restamps and writes the extent block.
+        mov  ecx, [.st_new_size]
+        call hbfs_truncate_extent
+        jc   .st_fail
+        mov  eax, [.st_new_size]
+        mov  [edi + DIRENT_SIZE], eax
+        mov  ecx, eax
+        add  ecx, HBFS_BLOCK_SIZE - 1
+        shr  ecx, 12
+        cmp  ecx, 0
+        jg   .st_ext_blocks
+        mov  ecx, 1
+.st_ext_blocks:
+        mov  [edi + DIRENT_BLOCK_COUNT], ecx
+        jmp  .st_no_free
+
 .st_no_free:
         call rtc_get_timestamp
         mov [edi + DIRENT_MODIFIED], eax
@@ -1902,6 +2861,8 @@ sys_setmtime:
 ;=======================================================================
 sys_defrag:
         pushad
+        call hbfs_require_writable
+        jc .sdf_fail
 
         call hbfs_load_bitmap
         jc   .sdf_fail
@@ -1914,7 +2875,7 @@ sys_defrag:
         xor  ebx, ebx           ; block index
         xor  esi, esi           ; prev-was-free flag
 .sdf_scan:
-        cmp  ebx, HBFS_TOTAL_BLOCKS
+        cmp  ebx, [hbfs_total_blocks]
         jl   .sdf_scan_body
         jmp  .sdf_scan_done
 .sdf_scan_body:
@@ -2652,6 +3613,8 @@ hbfs_xattr_get:
 ;-----------------------------------------------------------------------
 hbfs_xattr_set:
         pushad
+        call hbfs_require_writable
+        jc .hxs_fail
         mov [.hxs_key_ptr], ecx        ; save before registers change
         mov [.hxs_val_ptr], edx
 

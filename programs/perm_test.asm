@@ -178,8 +178,8 @@ progress:
         int 0x80
         ret
 
-own_file:    db "/perm_own.txt", 0
-other_file:  db "/perm_other.txt", 0
+own_file:    db "perm_own.txt", 0
+other_file:  db "perm_other.txt", 0
 payload:     db "permission fixture", 10
 payload_len  equ $ - payload
 msg_ok:      db 10, "PERM_OK", 10, 0

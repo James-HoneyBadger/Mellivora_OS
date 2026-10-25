@@ -489,14 +489,14 @@ with other mappings of that block until the cache has room.
 | `HBFS_BITMAP_START` | 4097 |
 | `HBFS_ROOT_DIR_START` | 4225 |
 | `HBFS_DATA_START` | 4481 |
-| `TOTAL_BLOCKS` | 524,288 (≈ 2 GB) |
+| `TOTAL_BLOCKS` | 523,727 (a 2048 MiB image; 523,728 would run past its end) |
 
 ### Superblock Structure (512 bytes at LBA 4096)
 
 | Offset | Size | Field | Default |
 | --- | --- | --- | --- |
 | 0 | 4 | Magic (`'HBFS'`) | `0x48424653` |
-| 4 | 4 | Version | 1 |
+| 4 | 4 | Version | 4 for a formatted volume and for `--version 4`; 3 for a populated image |
 | 8 | 4 | Total blocks | 524,288 |
 | 12 | 4 | Free blocks | (updated at populate time) |
 | 16 | 4 | Root directory LBA | 4225 |
@@ -518,11 +518,116 @@ with other mappings of that block until the cache has room.
 | 272 | 4 | Modified timestamp (ticks) |
 | 276 | 12 | Reserved |
 
+### Mount checks and refusal
+
+`hbfs_init` mounts only a volume it can address and interpret. A mount is refused, and
+nothing is written, when:
+
+| Check | Refusal reason |
+| --- | --- |
+| Superblock read fails | I/O error — the disk may be failing, the data is still the user's |
+| Magic is not `'HBFS'` | Unknown format (this includes an HBFS v4 `'HBF4'` volume) |
+| Version is 0 or greater than 3 | Version rules this kernel does not implement |
+| Block size or root/bitmap/data start differs from this build | A different on-disk layout would be read and written at the wrong LBAs |
+| Total blocks ≤ the journal area, or > `HBFS_BITMAP_SIZE × 8` | Unaddressable geometry |
+| Free count exceeds the total | Corrupt counters |
+| Any feature bit other than `HBFS_FEAT_PERMS` / `HBFS_FEAT_XATTR` | Features this kernel cannot honour |
+| Root directory read fails | The volume is not readable after the superblock |
+
+A refused volume is **not reformatted**: the old code formatted on a read error or a bad
+magic, which turned a bad cable or a newer filesystem into data loss. `format` remains an
+explicit, confirmed shell command and is the only way to create a filesystem; it reads the
+new superblock back before reporting success, so a write that never reached the disk is a
+failed format rather than a mounted volume.
+
+### HBFS v4 (read-only)
+
+v4 keeps the v3 layout and adds, in the same superblock sector, a second magic
+(`'HBF4'`), a feature word at 60, a generation counter, the high halves of the block
+counters and a CRC-32C at 76. Every metadata run also ends with a 4-byte CRC-32C over
+the run, read as zero while the checksum is computed.
+
+This build mounts a v4 volume **read-only**, after:
+
+| Check | Detail |
+| --- | --- |
+| Version | must be 4 |
+| Features | only `EXTENTS` and `JOURNAL`; a snapshot flag or any unknown bit refuses the mount |
+| High halves | both must be zero — this kernel addresses blocks in 32 bits |
+| Geometry | the same block size and root/bitmap/data starts as v3 |
+| Superblock CRC | recomputed with offset 76 read as zero |
+| Journal | `JRNL_STATE` must be 0: a replay is a write, so a dirty v4 volume is refused, not half-applied |
+| Bitmap CRC | the 64 KB bitmap run is verified before anything could allocate |
+| Directory CRC | every loaded directory run — root and each subdirectory — is verified; a failure discards the buffer, so a caller cannot read entries the mount rejected |
+
+Writes are refused through `hbfs_require_writable`, which a v4 mount always fails.
+
+A directory entry whose flags set `HBFS4_DE_EXTENTS` stores `start` as a metadata block
+of `{start, count}` runs rather than as data. `hbfs_map_block` translates a logical block
+to a physical one: an addition for an inline entry (the v3 form, and every one-run v4
+file), or a walk of the run list for an extent entry. The extent block is read once,
+verified against its CRC-32C and cached in `hbfs_extent_buf`, so a sequential read does
+not re-read it for every 4 KB. `hbfs_read_file` uses it for both the path and the plain
+name form, so `cat` reads a fragmented file correctly.
+
+The **fd layer and the program loader walk the same list**. `fd_open` records the extent
+block in the spare fd-table slot, `fd_read` maps the position's logical block through
+`hbfs_map_extent`, and the PATH program loader copies an extent executable block by block
+into the program window, so a fragmented program runs.
+
+One bug this work uncovered: `vfs_hbfs_read` and `vfs_hbfs_write` moved the buffer into
+`ESI` and the length into `ECX` before calling `fd_read`/`fd_write`, which take
+`ECX=buffer, EDX=length`. Every descriptor read of an HBFS file therefore copied to the
+address equal to the length (low memory) and reported success, and every write copied from
+there. Both backends now pass the registers straight through; the fd test reads an 18 KB
+file back and would fail on the old behaviour.
+
+### Writing a v4 volume
+
+A v4 volume is writable when its feature word sets `HBFS4_FEATURE_JOURNAL`; without that
+bit it mounts read-only, exactly as before. A dirty journal is replayed at mount through
+the same undo pass v3 uses (its records carry their own CRC), and the superblock is
+restamped as part of clearing the state.
+
+Every metadata write restamps the run it touches before the sectors go out:
+
+| Run | Restamped by | Notes |
+| --- | --- | --- |
+| Superblock | `hbfs_write_superblock` | All superblock writes funnel through it, so the journal state word is inside the checksum |
+| Bitmap | `hbfs_meta_write` | A partial write also journals and writes the sector holding the 4-byte trailer |
+| Directory | `hbfs_save_root_dir` | The run is stamped before the diff, so the trailer's sector is written with the entries that changed |
+| New subdirectory | `hbfs_mkdir` | A fresh subdirectory is 64 KB of zeros, so its CRC is the constant `HBFS4_EMPTY_DIR_CRC` (CRC-32C of 65 536 zero bytes), stamped into the last block |
+
+An extent file is created when a v4 volume cannot supply one run large enough:
+`hbfs_extent_alloc` allocates the largest run it can repeatedly (down to one block),
+records each in `hbfs_run_buf`, allocates and stamps an extent block, and `hbfs_extent_write`
+writes the data run by run. The directory entry then carries `HBFS4_DE_EXTENTS`, the
+extent block in `start` and the data-block total in `blocks`.
+
+Deleting one walks its run list: `hbfs_free_extent` reads and verifies the extent block,
+frees each run, then the extent block itself. Truncating one calls `hbfs_truncate_extent`,
+which keeps whole runs, frees the tail of the run it stops in and every later run, rebuilds
+the list in place, restamps it and writes it through the journal.
+`tests/test_v4_mount.py` writes through the kernel (a file and a subdirectory), reads the
+file back, and then requires the host checker to find every checksum still valid.
+
+`python3 populate.py <image> programs --version 4` builds a volume the test suite boots,
+and `tests/test_v4_mount.py` adds a three-run file to it and requires the exact contents
+back.
+
+Until a mount succeeds, `hbfs_mounted` is clear and every HBFS entry point refuses: the
+allocator, journal, metadata writer, directory save/load, create, mkdir, delete, rmdir,
+truncate, xattr set and defrag all return an error instead of reading or writing the
+unverified volume. Allocation limits come from the mounted superblock
+(`hbfs_total_blocks`), not the build's default image size, so a smaller volume cannot be
+handed blocks past its end.
+
 ### Block Allocation Bitmap
 
 - 16 blocks = 128 sectors = 65,536 bytes
 - Each bit represents one 4 KB data block
-- 524,288 blocks × 4 KB = **2 GB** maximum filesystem size
+- The bitmap addresses up to 524,288 blocks; a 2048 MiB image has 523,727
+  complete 4 KB blocks after the metadata, which is what the kernel and builder use
 - Bit = 1 means allocated, bit = 0 means free
 
 ### File Types
@@ -539,7 +644,7 @@ with other mappings of that block until the cache has room.
 
 | Routine | Description |
 | --- | --- |
-| `hbfs_init` | Reads superblock, validates magic, replays the journal if dirty, loads the bitmap and root directory |
+| `hbfs_init` | Reads the superblock, validates its magic, version, layout and feature bits, replays the journal if dirty, then loads the root directory. A volume that fails a check is refused — never formatted — and no read or write touches it afterwards |
 | `hbfs_find_file` | Scans loaded directory for filename match |
 | `hbfs_create_file` | Allocates blocks, writes data, creates directory entry — one transaction |
 | `hbfs_delete_file` | Frees blocks, clears directory entry — one transaction |

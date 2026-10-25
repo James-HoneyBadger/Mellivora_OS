@@ -624,8 +624,10 @@ TCP/UDP clients and servers using the `lib/net.inc` library.
 
 ## The Burrows Desktop
 
-Mellivora includes a graphical desktop environment called Burrows, with windows, a
-mouse cursor, taskbar and application menu.
+Mellivora includes a graphical desktop environment called Burrows. It follows the
+Windows 2000 visual language: a teal desktop, grey 3-D chrome, a gradient title bar,
+a Start menu with fly-out submenus, a taskbar with a notification tray, and
+desktop icons that behave like shortcuts.
 
 ### Launching the Desktop
 
@@ -633,17 +635,39 @@ mouse cursor, taskbar and application menu.
 Lair:/> burrows
 ```
 
-The screen switches to 640×480 graphical mode. You'll see a desktop background, a
-taskbar at the bottom, and a "Menu" button.
+The screen switches to 1024×768 graphical mode. You'll see the desktop icons, a
+taskbar at the bottom, and the **Start** button.
 
 ### Using the Desktop
 
-- **Click "Menu"** to open the application menu
-- **Click an app** to launch it in a window
-- **Click a window's title bar** to focus it
-- **Drag a window's title bar** to move it
-- **Click ×** in the title bar to close a window
-- **Click a window button in the taskbar** to bring it to front
+- **Click Start** to open the Start menu. **Programs**, **Documents** and
+  **Settings** open fly-out submenus; **Run...** opens the launcher, **Help**
+  shows About, and **Shut Down...** returns to the text shell.
+- **Double-click a desktop icon** to launch it. A single click selects it.
+- **Click a window's title bar** to focus it and **drag** it to move it.
+- **Double-click the title bar** to maximize or restore the window.
+- **Drag any window edge or corner** to resize it.
+- **Minimize**, **maximize/restore** and **close** buttons sit at the right of
+  every title bar.
+- **Click a taskbar button** to bring its window to front, or click it again to
+  minimize.
+- **Click the tray clock** to open the Date/Time dialog.
+- **Right-click the desktop** for Open, Refresh, Properties and Exit commands.
+
+### Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| `F1` | Open the launcher |
+| `F2` | Open a terminal |
+| `F3` | Notification centre |
+| `Alt+Tab` | Cycle windows |
+| `Alt+Up` / `Alt+Down` | Maximize / restore the focused window |
+| `Alt+Left` / `Alt+Right` | Tile the focused window |
+| `Alt+F4` | Close the focused window |
+| `Ctrl+Alt+1..4` | Switch virtual desktop |
+| `Up` / `Down` / `Left` / `Right` | Navigate the Start menu |
+| `ESC` | Close a menu, then leave Burrows |
 
 ### Built-in Desktop Applications
 
@@ -662,17 +686,21 @@ taskbar at the bottom, and a "Menu" button.
 
 ### Changing Themes
 
-Open **Settings** from the menu (or run `bsysmon` and use its theme button) to switch
-between four themes:
+Open **Start → Settings → Control Panel** (or run `bsysmon` and use its theme
+button) to switch between four themes:
 
-- **Blue** — Default, professional look
+- **Win2000** — Default: teal desktop, grey chrome, navy gradient title bars
 - **Dark** — Dark mode with green accents
 - **Light** — Light background theme
 - **Amber** — Retro CRT amber-on-brown
 
+The same dialog switches the wallpaper between the theme gradient and a flat
+fill. The choice is written to `burrows.cfg` and survives a reboot.
+
 ### Exiting the Desktop
 
-Press **ESC** or close all windows to return to the text-mode shell.
+Choose **Start → Shut Down...**, press **ESC** with no menu open, or close every
+window to return to the text-mode shell.
 
 ---
 

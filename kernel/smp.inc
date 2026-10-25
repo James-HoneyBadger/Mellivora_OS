@@ -36,11 +36,15 @@ ICR_MODE_SIPI        equ (6 << 8)
 ; APs that reached protected mode and parked. Written with a locked increment
 ; by each processor, read by the bootstrap processor.
 smp_ap_online:      dd 0
+smp_work_done:      dd 0
+smp_stress_frames:  dd 0
+smp_stress_errors:  dd 0
+smp_worker_mask:    dd 0
 smp_ap_expected:    dd 0
 smp_bsp_apic_id:    db 0
 
-; One stack per application processor, chosen by APIC ID so that a processor
-; that arrives twice by accident cannot share a stack with itself.
+; One stack per processor slot, claimed atomically by the processor itself so
+; that a processor which arrives twice cannot share a stack with another.
 align 16
 ap_stacks: times SMP_MAX_CPUS * 4096 db 0
 
@@ -56,26 +60,29 @@ smp_delay_ms:
         push ebx
         push ecx
         push edx
+        push esi
         mov ebx, PIT_FREQ / 1000
         imul ebx, ecx                   ; counts to wait
         call pit_counter
-        mov [.sdm_prev], eax
+        mov esi, eax                    ; previous reading, in a register: a
+                                        ; static here would be shared by every
+                                        ; processor waiting at the same time
         xor edx, edx                    ; elapsed
 .sdm_loop:
         call pit_counter
-        mov ecx, [.sdm_prev]
+        mov ecx, esi
         sub ecx, eax
         and ecx, 0xFFFF                 ; the counter wraps every 65536 counts
         add edx, ecx
-        mov [.sdm_prev], eax
+        mov esi, eax
         cmp edx, ebx
         jb .sdm_loop
+        pop esi
         pop edx
         pop ecx
         pop ebx
         pop eax
         ret
-.sdm_prev: dd 0
 
 ;-----------------------------------------------------------------------
 ; smp_icr_send - put one command in the interrupt command register
@@ -116,23 +123,152 @@ smp_icr_send:
 
 ;-----------------------------------------------------------------------
 ; smp_ap_main - first kernel code an application processor runs
-;   Never returns: it takes a stack, says hello, and parks.
+;   Never returns: it says hello, hammers the allocator alongside every other
+;   processor, and parks.
 ;-----------------------------------------------------------------------
 smp_ap_main:
-        mov ecx, LAPIC_ID
-        call lapic_read
-        shr eax, 24                     ; this processor's APIC ID
-        and eax, SMP_MAX_CPUS - 1
-        shl eax, 12
-        add eax, ap_stacks
-        add eax, 4096 - 16
-        mov esp, eax
+        ; The stack is already this processor's own - the trampoline claimed a
+        ; slot and switched to it before calling here.
         xor ebp, ebp
         lock inc dword [smp_ap_online]
+
+        ; A processor that only parks proves delivery. This proves the kernel
+        ; survives it: both the allocator and this processor's own writes run
+        ; against the bootstrap processor at the same time.
+        call smp_stress_round
+        lock inc dword [smp_work_done]
+
 .sam_park:
         cli
         hlt
         jmp .sam_park
+
+;-----------------------------------------------------------------------
+; smp_stress_round - hammer the frame allocator from this processor
+;
+; Each worker takes a batch of frames, stamps a pattern into every one that is
+; unique to (worker, index), reads it back, and frees the batch. If two
+; processors are ever handed the same frame, one stamp overwrites the other and
+; the read-back disagrees - which is exactly how a missing lock shows itself.
+;
+; Frames are written through the identity map, so the test stays inside the
+; first PAGING_MAP_MB and never asks the fault handler to map anything: this is
+; a test of the allocator, not of paging.
+;-----------------------------------------------------------------------
+SMP_STRESS_FRAMES equ 16
+SMP_STRESS_ROUNDS equ 24
+
+smp_stress_round:
+        pushad
+        ; Everything this round needs lives on the processor's own stack. Static
+        ; locals here would be shared by every worker at once - which is the
+        ; very mistake this test exists to catch, and it caught it.
+        mov  ebp, esp
+        sub  esp, SMP_STRESS_FRAMES * 4 + 8
+        call lock_self_ipi
+        mov  [ebp - SMP_STRESS_FRAMES * 4 - 4], eax     ; this worker's slot
+        mov  dword [ebp - SMP_STRESS_FRAMES * 4 - 8], 0 ; round counter
+        ; Record which slot this worker believes it is: two workers sharing one
+        ; looks exactly like a lock bug, so it is worth being able to see.
+        mov  ecx, eax
+        mov  eax, 1
+        shl  eax, cl
+        lock or dword [smp_worker_mask], eax
+
+.ssr_round:
+        ; --- take the batch ---
+        xor  ebx, ebx
+.ssr_alloc:
+        cmp  ebx, SMP_STRESS_FRAMES
+        jae  .ssr_hold
+        call pmm_alloc_page
+        test eax, eax
+        jz   .ssr_oom
+        lea  ecx, [ebp - SMP_STRESS_FRAMES * 4]
+        mov  [ecx + ebx*4], eax
+        inc  ebx
+        jmp  .ssr_alloc
+
+.ssr_hold:
+        ; Hold the batch across a millisecond, so the other processors are
+        ; allocating and freeing inside the same window. Without this the
+        ; workers tend to run one after another and a missing lock can pass
+        ; unnoticed - which is what a single short round did here.
+        mov  ecx, 1
+        call smp_delay_ms
+
+        ; --- stamp: every frame gets (worker<<16)|index, which names its owner
+        xor  ebx, ebx
+.ssr_stamp:
+        cmp  ebx, SMP_STRESS_FRAMES
+        jae  .ssr_verify
+        lea  ecx, [ebp - SMP_STRESS_FRAMES * 4]
+        mov  edi, [ecx + ebx*4]
+        cmp  edi, PAGING_MAP_MB * 0x100000
+        jae  .ssr_stamp_next           ; outside the identity map: do not touch
+        mov  eax, [ebp - SMP_STRESS_FRAMES * 4 - 4]
+        shl  eax, 16
+        mov  ecx, ebx
+        inc  ecx
+        or   eax, ecx
+        mov  ecx, 1024
+        cld
+        rep  stosd
+.ssr_stamp_next:
+        inc  ebx
+        jmp  .ssr_stamp
+
+.ssr_verify:
+        xor  ebx, ebx
+.ssr_verify_loop:
+        cmp  ebx, SMP_STRESS_FRAMES
+        jae  .ssr_free
+        lea  ecx, [ebp - SMP_STRESS_FRAMES * 4]
+        mov  esi, [ecx + ebx*4]
+        cmp  esi, PAGING_MAP_MB * 0x100000
+        jae  .ssr_verify_next
+        mov  eax, [ebp - SMP_STRESS_FRAMES * 4 - 4]
+        shl  eax, 16
+        mov  ecx, ebx
+        inc  ecx
+        or   eax, ecx
+        mov  ecx, 1024
+.ssr_verify_word:
+        cmp  [esi], eax
+        je   .ssr_verify_ok
+        lock inc dword [smp_stress_errors]
+        jmp  .ssr_verify_next
+.ssr_verify_ok:
+        add  esi, 4
+        loop .ssr_verify_word
+.ssr_verify_next:
+        inc  ebx
+        jmp  .ssr_verify_loop
+
+.ssr_free:
+        xor  ebx, ebx
+.ssr_free_loop:
+        cmp  ebx, SMP_STRESS_FRAMES
+        jae  .ssr_next_round
+        lea  ecx, [ebp - SMP_STRESS_FRAMES * 4]
+        mov  eax, [ecx + ebx*4]
+        call pmm_free_page
+        lock inc dword [smp_stress_frames]
+        inc  ebx
+        jmp  .ssr_free_loop
+
+.ssr_next_round:
+        inc  dword [ebp - SMP_STRESS_FRAMES * 4 - 8]
+        cmp  dword [ebp - SMP_STRESS_FRAMES * 4 - 8], SMP_STRESS_ROUNDS
+        jb   .ssr_round
+
+.ssr_done:
+        mov  esp, ebp
+        popad
+        ret
+.ssr_oom:
+        lock inc dword [smp_stress_errors]
+        jmp  .ssr_done
 
 ;-----------------------------------------------------------------------
 ; smp_start_aps - send INIT-SIPI-SIPI to every other processor described
@@ -169,6 +305,11 @@ smp_start_aps:
 .ssa_loop:
         cmp ebx, [acpi_cpu_count]
         jae .ssa_wait
+        ; Never wake more processors than there are slots for: each one claims
+        ; a lock stack and an AP stack by slot, and a slot past the table would
+        ; be shared.
+        cmp dword [smp_ap_expected], SMP_MAX_CPUS - 1
+        jae .ssa_wait
         movzx eax, byte [acpi_cpu_apic_ids + ebx]
         cmp al, [smp_bsp_apic_id]
         je .ssa_next                    ; that one is us
@@ -198,10 +339,14 @@ smp_start_aps:
         jmp .ssa_loop
 
 .ssa_wait:
+        ; The bootstrap processor takes its own round now, while the others are
+        ; running theirs: contention is the point, so it must be simultaneous.
+        call smp_stress_round
+
         ; Bounded: a processor that never arrives must not hang the boot.
         mov ecx, SMP_AP_TIMEOUT_MS
 .ssa_wait_loop:
-        mov eax, [smp_ap_online]
+        mov eax, [smp_work_done]
         cmp eax, [smp_ap_expected]
         jae .ssa_report
         push ecx
@@ -256,7 +401,38 @@ smp_pm_entry:
         mov fs, ax
         mov gs, ax
         mov ss, ax
-        mov esp, SMP_AP_STACK_TEMP
+
+        ; A stack of this processor's own, claimed before anything is called:
+        ; every AP arrives through this same page, so a shared temporary stack
+        ; here means two processors overwriting each other's return address -
+        ; which is a triple fault, not a warning. The claim is therefore made
+        ; in registers only: no call and no push until ESP is this processor's
+        ; own. (lock_self_ipi would do the same work, but reaching it means
+        ; calling through the stack that is not yet safe to use.)
+        mov ecx, LAPIC_ID
+        mov edx, [acpi_lapic_addr]
+        add edx, ecx
+        mov eax, [edx]                  ; local APIC ID register
+        shr eax, 24
+        and eax, 255
+        mov esi, eax
+        movzx edx, byte [cpu_slot_by_apic + esi]
+        cmp edx, 0xFF
+        jne .pm_slot_ready
+        mov edx, 1
+        lock xadd dword [cpu_slot_next], edx    ; EDX = the slot claimed
+        cmp edx, SMP_MAX_CPUS
+        jb .pm_slot_bounded
+        mov edx, SMP_MAX_CPUS - 1       ; cannot happen: smp_start_aps caps APs
+.pm_slot_bounded:
+        mov eax, edx
+        mov [cpu_slot_by_apic + esi], al
+.pm_slot_ready:
+        shl edx, 12
+        mov eax, edx
+        add eax, ap_stacks
+        add eax, 4096 - 64
+        mov esp, eax
 
         ; The kernel's address space, so that already-parked code and data are
         ; the same memory this processor now sees.

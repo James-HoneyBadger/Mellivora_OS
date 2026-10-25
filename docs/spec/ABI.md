@@ -86,18 +86,21 @@ stub is the only place that knows both languages.
 
 ## 5. Floating point
 
-The kernel initialises the x87 once at boot and does not save FPU or SSE state
-across a context switch, so two tasks using floating point corrupt each other.
-Until roadmap M0 adds a 512-byte `fxsave`/`fxrstor` area to the task control
-block:
+The task control block carries a per-task x87 image, saved and restored across a
+context switch, so two tasks doing floating point keep their own values. What is
+still missing is SSE state: the kernel does not enable `CR4.OSFXSR`, so a task
+that runs SSE instructions is not saved per task.
 
-- kernel C is compiled `-mno-sse -mno-mmx -msoft-float`;
+Until the SSE half lands:
+
+- kernel C is compiled `-mno-sse -mno-mmx -msoft-float` — the soft-float flags
+  keep the compiler from emitting vector state nothing saves;
 - no kernel path uses `float` or `double` for anything that must be exact;
-- user programs that need floating point remain a documented hazard.
+- user programs that use x87 are safe; user programs that execute SSE are a
+  documented hazard.
 
-After that change, SSE2 is permitted (the kernel sets `CR4.OSFXSR`), x87 is
-discouraged, and the compiler flags are revisited in the same commit that adds
-the state save.
+After that change, SSE2 is permitted (the kernel sets `CR4.OSFXSR`) and the
+compiler flags are revisited in the same commit that adds the SSE save.
 
 ## 6. Versioning
 

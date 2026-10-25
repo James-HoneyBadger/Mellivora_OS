@@ -664,11 +664,25 @@ taking the desktop with it.
 | `Alt+F4` | Close the focused window |
 | `Ctrl+Alt+1` … `Ctrl+Alt+4` | Switch workspace |
 | `F3` | Notification centre |
+| `Up` / `Down` / `Left` / `Right` | Navigate the Start menu |
 | `Ctrl+C` | Abort back to the text shell |
 
-Settings (launcher → Settings) offers four colour themes and switches the wallpaper
-between a gradient and a flat fill; both are saved to `burrows.cfg` and reloaded on
-the next boot. Press `1`-`4` for a theme or `5` to toggle the wallpaper, or click.
+The shell follows the Windows 2000 layout. **Start → Programs** lists every GUI
+application; **Start → Documents** and **Start → Settings → Control Panel /
+Date/Time** open fly-out submenus. Clicking the tray clock opens the Date/Time
+dialog, and right-clicking the desktop offers Open, Refresh, Properties and Exit.
+
+Mouse operations:
+
+- Double-click a desktop icon to launch it.
+- Drag a title bar to move a window; double-click it to maximize or restore.
+- Drag any window edge or corner to resize.
+- Click a taskbar button to raise its window, or again to minimize it.
+
+Settings (Start → Settings → Control Panel, or launcher → Settings) offers four
+colour themes and switches the wallpaper between a gradient and a flat fill; both
+are saved to `burrows.cfg` and reloaded on the next boot. Press `1`-`4` for a theme
+or `5` to toggle the wallpaper, or click.
 
 ---
 

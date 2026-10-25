@@ -600,6 +600,43 @@ acpi_dump:
 .ad_irq_named:
         call vga_print
 
+        mov esi, msg_acpi_stress
+        call vga_print
+        mov eax, [smp_stress_frames]
+        call vga_print_dec
+        mov esi, msg_acpi_stress_err
+        call vga_print
+        mov eax, [smp_stress_errors]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
+        mov esi, msg_acpi_ids
+        call vga_print
+        movzx eax, byte [acpi_cpu_apic_ids + 0]
+        call vga_print_dec
+        mov al, ','
+        call vga_putchar
+        movzx eax, byte [acpi_cpu_apic_ids + 1]
+        call vga_print_dec
+        mov al, ','
+        call vga_putchar
+        movzx eax, byte [acpi_cpu_apic_ids + 2]
+        call vga_print_dec
+        mov al, ','
+        call vga_putchar
+        movzx eax, byte [acpi_cpu_apic_ids + 3]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
+        mov esi, msg_acpi_mask
+        call vga_print
+        mov eax, [smp_worker_mask]
+        call vga_print_hex
+        mov al, 0x0A
+        call vga_putchar
+
         mov esi, msg_acpi_online
         call vga_print
         mov eax, [smp_cpus_online]
@@ -864,6 +901,10 @@ msg_acpi_madt:    db "ACPI: MADT at 0x", 0
 msg_acpi_cpus:    db "ACPI: CPUs: ", 0
 msg_acpi_lapic:   db "  local APIC at 0x", 0
 msg_acpi_ioapic:  db "ACPI: IOAPICs: ", 0
+msg_acpi_stress: db "ACPI: allocator stress: ", 0
+msg_acpi_stress_err: db " frames, errors ", 0
+msg_acpi_ids: db "ACPI: APIC ids: ", 0
+msg_acpi_mask: db "ACPI: worker mask: 0x", 0
 msg_acpi_online: db "ACPI: processors online: ", 0
 msg_acpi_of: db " of ", 0
 msg_acpi_clock: db "ACPI: tick clock: ", 0

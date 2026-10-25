@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, "  HBFS v3  ", 0xF9, "  187 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  264 programs  ", 0xF9, "  Ring 3         ", 0xBA
+        db 0xBA, " HBFS v3/4 ", 0xF9, "  187 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  273 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -127,14 +127,14 @@ msg_boot_suf:   db "s", 0x0A, 0
 msg_boot_ok:    db "MELLIVORA_BOOT_OK", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v13.0.0 - HBFS v3, 187 Syscalls, VFS, Paging, Fork, IPv6", 0x0A
+        db "Mellivora OS v13.0.0 - HBFS v3/v4, 187 Syscalls, VFS, Paging, Fork, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
         db "  Shell:         HB Lair v13.0 (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
         db "  Disk:          ATA PIO + Bus Master DMA + AHCI SATA, LBA48 (up to 128 PB)", 0x0A
-        db "  Filesystem:    HBFS v3 (Honey Badger File System, version 3)", 0x0A
+        db "  Filesystem:    HBFS v3/v4 (Honey Badger File System)", 0x0A
         db "    Block size:  4096 bytes", 0x0A
         db "    Max files:   455 root / 224 per subdirectory", 0x0A
         db "    Max name:    252 characters", 0x0A
@@ -381,9 +381,22 @@ msg_disk_header: db "=== Disk Information ===", 0x0A, 0
 msg_disk_sectors: db "  Total sectors: ", 0
 msg_disk_size:  db "  Disk size:     ", 0
 msg_hbfs_found:  db "  Filesystem:    HBFS detected", 0x0A, 0
-msg_hbfs_format: db "  Filesystem:    Formatting new HBFS...", 0x0A, 0
 msg_hbfs_formatted: db "  Filesystem formatted.", 0x0A, 0
 msg_hbfs_nodisk: db "  Filesystem:    No disk available", 0x0A, 0
+; A volume that cannot be verified is refused, never reformatted: a bad read
+; can be a cable or a controller, and the data behind it is still the user's.
+msg_hbfs_read_err:   db "  Filesystem:    Superblock unreadable; not mounted", 0x0A, 0
+msg_hbfs_no_format:  db "  Filesystem:    No HBFS volume; not mounted (run 'format')", 0x0A, 0
+msg_hbfs_bad_version: db "  Filesystem:    Unsupported HBFS version; not mounted", 0x0A, 0
+msg_hbfs_bad_layout: db "  Filesystem:    Unsupported HBFS layout; not mounted", 0x0A, 0
+msg_hbfs_bad_features: db "  Filesystem:    Unsupported HBFS features; not mounted", 0x0A, 0
+msg_hbfs_root_err:   db "  Filesystem:    Root directory unreadable; not mounted", 0x0A, 0
+msg_hbfs_format_err: db "  Filesystem:    Format failed; not mounted", 0x0A, 0
+msg_hbfs_v4_ro:      db "  Filesystem:    HBFS v4 detected (read-only)", 0x0A, 0
+msg_hbfs_v4_rw:      db "  Filesystem:    HBFS v4 detected (journalled)", 0x0A, 0
+msg_hbfs_bad_checksum: db "  Filesystem:    Metadata checksum failed; not mounted", 0x0A, 0
+msg_hbfs_v4_journal: db "  Filesystem:    HBFS v4 journal needs recovery; not mounted", 0x0A, 0
+msg_hbfs_dir_crc_err: db "HBFS: directory checksum failed", 0x0A, 0
 msg_hbfs_dir_read_err:  db "HBFS: directory read failed", 0x0A, 0
 msg_hbfs_dir_write_err: db "HBFS: directory write failed", 0x0A, 0
 msg_hbfs_bitmap_err:    db "HBFS: bitmap read failed", 0x0A, 0
@@ -560,8 +573,15 @@ hbfs_dir_buf:    resb HBFS_ROOT_DIR_SIZE  ; Directory buffer (64KB)
 ; one-entry metadata edit costs 512 bytes instead of the whole 128 KB.
 hbfs_dir_shadow: resb HBFS_ROOT_DIR_SIZE
 hbfs_block_buf:  resb HBFS_BLOCK_SIZE     ; General block buffer (4KB)
+hbfs_extent_buf: resb HBFS_BLOCK_SIZE     ; One v4 extent block, cached
+hbfs_extent_lba: resd 1                    ; Extent block cached in hbfs_extent_buf (0 = none)
+hbfs_run_buf:    resb 512                   ; Runs being built for a new extent file
+hbfs_run_count:  resd 1                     ; Records in hbfs_run_buf
 hbfs_bitmap_buf: resb HBFS_BITMAP_SIZE     ; Bitmap buffer (64KB)
 hbfs_bitmap_valid: resd 1                   ; 1 = hbfs_bitmap_buf matches the disk
+hbfs_mounted:    resd 1                     ; 1 = a volume passed mount checks (or was formatted)
+hbfs_read_only:  resd 1                     ; 1 = mounted volume must not be written (HBFS v4)
+hbfs_total_blocks: resd 1                   ; data blocks the mounted volume declares
 dir_cache_lba:   resd 1                     ; LBA of cached directory (0 = invalid)
 dir_cache_sects: resd 1                     ; Sector count of cached directory
 ; v9.0 HBFS v2 journal runtime state

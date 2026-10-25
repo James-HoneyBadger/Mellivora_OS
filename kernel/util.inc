@@ -1197,6 +1197,14 @@ fd_open:
         mov dword [fd_table + eax + 12], 0
         mov ecx, [edi + DIRENT_BLOCK_COUNT]
         mov [fd_table + eax + 16], ecx
+        ; A v4 extent entry's `start` names a run list, not data. Remember that
+        ; block so fd_read can map positions through it; 0 means one run.
+        mov ecx, 0
+        test word [edi + 254], HBFS4_DE_EXTENTS
+        jz  .fd_no_extent
+        mov ecx, [edi + DIRENT_START_BLOCK]
+.fd_no_extent:
+        mov [fd_table + eax + 28], ecx
         ; Record which directory this file lives in (for fd_close)
         mov ecx, [current_dir_lba]
         mov [fd_table + eax + 20], ecx
@@ -1236,12 +1244,22 @@ fd_read:
         push ecx
         push edx
         push eax
-        ; Calculate which block the current offset is in
+        ; Which logical block is the position in?
         mov esi, [fd_table + eax + 12]  ; current position
-        mov ecx, esi
-        shr ecx, 12             ; position / 4096 = block offset within file
+        mov ebx, esi
+        shr ebx, 12                     ; position / 4096 = logical block
+        ; An extent file maps it through the run list; an inline one adds.
+        mov ecx, [fd_table + eax + 28]  ; extent block (0 = inline)
+        test ecx, ecx
+        jz  .frd_inline_block
+        mov eax, ecx
+        call hbfs_map_extent            ; EAX = physical block
+        jc  .frd_block_fail
+        jmp .frd_block_ready
+.frd_inline_block:
         mov eax, [fd_table + eax + 8]   ; start block
-        add eax, ecx            ; + block offset = actual block
+        add eax, ebx                    ; + logical block = actual block
+.frd_block_ready:
         shl eax, 3              ; * 8 = sector
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK   ; read exactly 1 block (8 sectors)
@@ -1251,6 +1269,13 @@ fd_read:
         pop edx
         pop ecx
         jc .frd_err
+        jmp .frd_have_block
+.frd_block_fail:
+        pop eax
+        pop edx
+        pop ecx
+        jmp .frd_err
+.frd_have_block:
         ; Calculate offset within the block
         mov esi, [fd_table + eax + 12]
         and esi, (HBFS_BLOCK_SIZE - 1)  ; position mod 4096

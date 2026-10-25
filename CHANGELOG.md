@@ -1,5 +1,141 @@
 # Mellivora OS - Changelog
 
+## Unreleased - a volume is verified before it is trusted
+
+### Filesystem
+
+- **HBFS refuses a volume instead of formatting it.** `hbfs_init` used to format on a
+  failed superblock read or an unknown magic, so a failing disk, a cable, or a newer
+  filesystem (HBFS v4 uses the `'HBF4'` magic) was destroyed on the next boot. It now
+  validates the magic, version (1–3), block size and layout starts, block and free
+  counts, and the feature word, then loads the root directory. Any failure prints the
+  reason and leaves the volume untouched; `format` is the only way to create one.
+- **Nothing reads or writes an unmounted volume.** A new `hbfs_mounted` gate covers the
+  journal, metadata writer, directory load/save, allocator, create, mkdir, delete,
+  rmdir, truncate, xattr set and defrag, so a refused volume cannot be parsed by `dir`
+  or modified by a later command. The explicit, confirmed `format` command is the only
+  writer outside that gate, and it reads its new superblock back before reporting the
+  volume mounted.
+- **Allocation follows the mounted volume.** `hbfs_alloc_blocks` and defrag use
+  `hbfs_total_blocks` from the superblock rather than the build's 2 GB default, so a
+  smaller image no longer hands out blocks past its end. `format` resets the working
+  directory, directory cache and allocation limit along with the new superblock.
+- **HBFS v4 is recognised and verified.** The kernel validates the `'HBF4'` superblock's
+  version, feature word, geometry and 64-bit counter high halves, and verifies the
+  superblock's CRC-32C plus the checksum on the bitmap and on every loaded directory run.
+  It mounts writable when the volume declares the journal feature (replaying a dirty log
+  first) and read-only when it does not. `populate.py` takes `--version 4`, and
+  `make check-hbfs-v4` builds a v4 volume, verifies it offline and boots it.
+- **A checksum failure discards the directory buffer.** The read happens before the
+  checksum is checked, so a rejected run used to stay in `hbfs_dir_buf` and `dir` would
+  still list it. The buffer is cleared on the refusal path.
+- **v4 extent files read back.** A file whose v4 entry sets `HBFS4_DE_EXTENTS` stores
+  `start` as a block of `{start, count}` runs. `hbfs_map_block` translates a logical
+  block through that list, reading the extent block once, verifying its CRC-32C and
+  caching it, and `hbfs_read_file` uses it for both path forms — so `cat` returns a
+  fragmented file byte for byte. `tests/test_v4_mount.py` adds a three-run file and reads
+  it back.
+- **The fd layer and the program loader walk extent runs.** `hbfs_map_extent` takes the
+  extent block and a logical block and needs no directory entry, so `fd_open` records the
+  extent block in the spare fd-table slot and `fd_read` maps each position through it.
+  The PATH program loader copies an extent executable block by block into the program
+  window, so a fragmented program runs. The new `fd_frag_test` program opens the 18 KB
+  three-run file, reads it through `SYS_READ` and checks the trailing marker;
+  `tests/test_v4_mount.py` runs it both inline and as an extent-loaded copy.
+- **Fixed: descriptor reads and writes of HBFS files used the wrong registers.**
+  `vfs_hbfs_read` and `vfs_hbfs_write` moved the buffer into `ESI` and the length into
+  `ECX` before calling `fd_read`/`fd_write`, which take `ECX=buffer` and `EDX=length`.
+  Every `SYS_READ` of an HBFS file therefore copied `len` bytes to the address `len` in
+  low memory and returned success while the caller's buffer stayed empty, and every
+  `SYS_WRITE` copied from there into the file. The backends now pass the registers
+  straight through; the fd test fails on the old behaviour and passes on the new one.
+- **`fd_frag_test`** is a new program; `make image-rebuild` is needed to add it to an
+  existing image.
+- **HBFS v4 is writable when it declares the journal feature.** Every superblock write
+  now goes through `hbfs_write_superblock`, which restamps the CRC first — so the journal
+  state word is inside the checksum. `hbfs_meta_write` restamps the bitmap and, when the
+  caller's range stops short of it, journals and writes the sector holding the trailer;
+  `hbfs_save_root_dir` stamps the directory run before diffing, so the trailer's sector
+  is written with the entries that changed. A new subdirectory is 64 KB of zeros, so its
+  trailer is the constant `HBFS4_EMPTY_DIR_CRC` (CRC-32C of 65 536 zero bytes) stamped
+  into the last block. A dirty v4 journal is replayed at mount like v3. A volume without
+  the journal feature still mounts read-only.
+- **Directory checksums are verified on every load, not just read-only mounts.** The
+  verification was keyed on `hbfs_read_only`, so making v4 writable had silently stopped
+  checking the root — the corrupted-root test caught it.
+- **Extent files are created, truncated and deleted by the kernel.** When no contiguous
+  run fits, `hbfs_extent_alloc` allocates the largest run it can repeatedly, records the
+  list, allocates and stamps an extent block, and `hbfs_extent_write` writes the data run
+  by run. `hbfs_truncate_extent` keeps whole runs, frees the tail of the run it stops in
+  and everything after it, rebuilds the list in place and restamps it. Deleting walks the
+  list and frees the extent block. `fragmake` fills a small volume with one-block files,
+  deletes every other one and forces the extent path; `v4trunc_test` truncates the
+  three-run file to 5000 bytes. The suite checks the extent block, the run list and the
+  checksum audit each time.
+- **`format` writes a v4 volume.** It used to write version 2 with no feature word, so a
+  volume created inside the OS was older than the shipped image, carried no checksums and
+  had to be upgraded before permissions worked. It now writes the v4 superblock (extents
+  and journal features), a checksummed bitmap with the journal area reserved, a zeroed
+  journal and a checksummed empty root, then reads the magic back before reporting
+  success. `tests/test_v4_mount.py` reformats a volume, verifies its checksums and creates
+  a directory on it.
+- **Deleting an extent file walks its run list.** `hbfs_free_extent` reads and verifies
+  the extent block, frees every run, then frees the extent block itself, inside the
+  caller's transaction; freeing `start` as one contiguous range would have freed the
+  extent block and unrelated blocks. Truncating an extent file is still refused until the
+  run list can be rewritten and restamped. `v4del_test` deletes the three-run file and the
+  suite requires the checksum audit to pass afterwards.
+- **`v4write_test`** is a new program that creates a file and a directory on a v4 volume
+  and reads the file back; the suite requires the host checker to find every checksum
+  valid afterwards.
+
+### Tests
+
+- **Test programs no longer create malformed names.** `perm_test`, `handle_test` and
+  `hostile_test` wrote fixtures named `/perm_own.txt`, `/handle_test.txt` and friends; the
+  filesystem stored the leading slash, and `fsck` reported every one as a malformed
+  entry. They now use bare names, and a filesystem checked after the full suite is clean.
+- **`make image-rebuild`** discards the image and the populate cache and builds every file
+  again. `make full` preserves an existing volume by design, which is how a damaged image
+  survived rebuild after rebuild.
+
+## Unreleased - Burrows wears Windows 2000
+
+### Desktop
+
+- **Windows 2000 shell chrome.** The default `Win2000` theme now drives a teal
+  desktop, grey 3-D window frames and controls, and title bars that use the
+  Windows 2000 horizontal gradient (dark navy at the left edge to pale blue at
+  the right). Inactive titles pick black or light text from the title colour's
+  brightness, so the Dark theme stays readable.
+- **Start menu hierarchy.** The flat app list is replaced by the Windows 2000
+  menu: **Programs** (all GUI applications), **Documents**, and **Settings**
+  (Control Panel, Date/Time) open fly-out submenus; **Search** and **Run...**
+  open the launcher; **Help** shows About; **Shut Down...** leaves the desktop.
+  The vertical `Windows 2000` banner is now drawn rotated 90°, bottom-to-top.
+  The menu is keyboard-navigable with the arrow keys, Enter and ESC.
+- **Taskbar.** Task buttons stretch to fill the space (up to 160 px) and shrink
+  as windows are added; they only show windows on the active workspace. The
+  notification tray has a gripper, a workspace box and a 12-hour clock; clicking
+  the clock opens Date/Time. The Start flag is the waving four-colour flag.
+- **Desktop commands.** Right-clicking the desktop opens a 3-D menu with Open
+  BTerm, Open BHive, Refresh, Properties... and Exit Desktop. Desktop icons are
+  now hit-tested only when no window covers them.
+- **Window manager.** Double-clicking the title bar maximizes/restores a window;
+  dragging any edge or corner resizes it (left and top were previously fixed).
+  Title-bar drags and edge resizes keep running while a focused application owns
+  the frame loop, so windows resize smoothly with an app in front.
+- **Dialogs.** Settings is a Windows 2000-style Display Properties view with 3-D
+  theme buttons and desktop-colour swatches; About has a separator and an OK
+  button; the Clock's Set/Apply/Cancel buttons and the notification toast use
+  classic 3-D/balloon styling.
+
+### Tests
+
+- The desktop regression test still covers launch, crash containment, Alt+Tab,
+  workspaces and teardown; window geometry (drag, all-edge resize,
+  maximize/restore) was verified through the QEMU GDB stub during development.
+
 ## Unreleased - locks, and a gate that refuses to deadlock
 
 ### Kernel

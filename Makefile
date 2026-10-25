@@ -111,7 +111,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-journal-crash check-docs check-font check-command-table FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table FORCE
 
 all: $(IMAGE)
 
@@ -267,6 +267,14 @@ $(POPULATE_STAMP): $(POPULATE_DEPS)
 
 # Populate disk image with files and programs
 populate: $(POPULATE_STAMP)
+
+# Rebuild the disk image from scratch. populate.py preserves an existing volume
+# and skips files its cache already knows, which is what a normal build wants —
+# and precisely why a damaged image survives `make full` forever. This discards
+# the image and the cache so every directory entry is written again.
+image-rebuild:
+	@rm -f $(IMAGE) $(POPULATE_STAMP) .populate_cache
+	@$(MAKE) --no-print-directory full
 
 # Run one build stage and print what it did, without make's own "is up to
 # date" chatter. A stage that fails prints its whole log before stopping.
@@ -504,6 +512,12 @@ check-hbfs-extents:
 check-hbfs-journal:
 	@python3 tests/test_hbfs_journal.py
 
+# HBFS v4 read-only mount: build a v4 volume, verify its checksums offline, then
+# boot it and prove reads work, writes are refused and a bad checksum is refused.
+# Slower than the other HBFS checks because it populates an image.
+check-hbfs-v4:
+	@python3 tests/test_v4_mount.py
+
 check-docs:
 	@python3 tools/check_docs.py
 
@@ -652,6 +666,7 @@ help:
 	@echo "    make programs     Build all user-space programs (parallel)"
 	@echo "    make kernel-only  Rebuild kernel only and patch into image (fast)"
 	@echo "    make populate     Populate filesystem (requires programs)"
+	@echo "    make image-rebuild Discard the image and cache, then build every file again"
 	@echo ""
 	@echo "  Build (tools)"
 	@echo "    make hbpkg        Build package manager (tools/hbpkg)"
@@ -693,6 +708,7 @@ help:
 	@echo "    make validate-manifest Validate app manifest examples against schema"
 	@echo "    make validate-manifest-coverage Check program sources for missing manifests"
 	@echo "    make check-samples  Syntax-check sample programs across supported languages"
+	@echo "    make check-hbfs-v4  Build an HBFS v4 volume, verify it and mount it read-only"
 	@echo "    make check-docs   Check docs for duplicate headings, dead links and version drift"
 	@echo "    make check-font   Check the 5x7 VBE font covers printable ASCII"
 	@echo "    make check-command-table Keep help, completion and which in step with the dispatcher"

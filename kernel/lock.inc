@@ -28,11 +28,13 @@ LK_SIZE         equ 16
 MAX_HELD_LOCKS  equ 8                  ; nesting depth per processor
 
 ; Ranks in use. Higher runs later. Gaps are deliberate: a new lock can be
-; placed between two existing ones without renumbering either.
-RANK_PMM        equ 100                ; frame allocator
-RANK_BLOCKCACHE equ 200                ; block cache and its device
-RANK_VFS        equ 300                ; virtual filesystem tables
-RANK_SCHED      equ 400                ; run queue and task table
+; placed between two existing ones without renumbering either. The frame
+; allocator sits at the top because almost every subsystem may need a frame
+; while holding its own; nothing it does takes a lock, so it can be last.
+RANK_BLOCKCACHE equ 100                ; block cache and its device
+RANK_VFS        equ 200                ; virtual filesystem tables
+RANK_SCHED      equ 300                ; run queue and task table
+RANK_PMM        equ 400                ; frame allocator
 ; Test locks live above everything, so the self-test cannot deadlock against
 ; a real lock by accident.
 RANK_SELFTEST_LOW   equ 900
@@ -46,15 +48,23 @@ lock_violations:    dd 0               ; inversions refused, for the report
 cpu_held_count:     times SMP_MAX_CPUS dd 0
 cpu_held_rank:      times SMP_MAX_CPUS * MAX_HELD_LOCKS dd 0
 cpu_held_lock:      times SMP_MAX_CPUS * MAX_HELD_LOCKS dd 0
+cpu_held_flags:     times SMP_MAX_CPUS * MAX_HELD_LOCKS dd 0
 
 ;-----------------------------------------------------------------------
 ; lock_self_ipi - which processor is asking?
-;   Out: EAX = processor index, 0 for the bootstrap processor
+;   Out: EAX = this processor's slot, 0 for the bootstrap processor
 ;
-; The index is a position in the MADT's list, found by matching this
-; processor's APIC ID, so it is stable across a boot and needs no per-CPU
-; register the hardware does not have.
+; The slot is claimed once, atomically, the first time a processor asks, and
+; remembered against its APIC ID. Deriving it from the firmware's list instead
+; looked simpler and was wrong: anything that makes two processors resolve to
+; the same slot - a table that was not what it claimed, an ID it did not list -
+; gives them one lock stack and one lock stack is a corruption, not a warning.
+; A claim cannot collide: slots run out only past SMP_MAX_CPUS processors, and
+; smp_start_aps never wakes that many.
 ;-----------------------------------------------------------------------
+cpu_slot_next:      dd 1                      ; 0 belongs to the first caller
+cpu_slot_by_apic:   times 256 db 0xFF         ; 0xFF = not yet claimed
+
 lock_self_ipi:
         push ecx
         push edx
@@ -64,16 +74,25 @@ lock_self_ipi:
         mov ecx, LAPIC_ID
         call lapic_read
         shr eax, 24                     ; this processor's APIC ID
-        xor edx, edx
-        mov esi, acpi_cpu_apic_ids
-.lsi_find:
-        cmp edx, [acpi_cpu_count]
-        jae .lsi_done                   ; not listed: treat as the first
-        cmp al, [esi + edx]
-        je .lsi_done
-        inc edx
-        jmp .lsi_find
-.lsi_done:
+        and eax, 255
+        mov esi, eax
+        movzx edx, byte [cpu_slot_by_apic + esi]
+        cmp edx, 0xFF
+        jne .lsi_have
+
+        ; First time this processor has asked: take the next slot. Slots run
+        ; 0..SMP_MAX_CPUS-1 and smp_start_aps wakes at most SMP_MAX_CPUS-1
+        ; processors, so the claim never runs out; if it ever did, clamping is
+        ; safer than wrapping onto a slot another processor already owns.
+        mov edx, 1
+        lock xadd dword [cpu_slot_next], edx    ; EDX = the slot claimed
+        cmp edx, SMP_MAX_CPUS
+        jb .lsi_bounded
+        mov edx, SMP_MAX_CPUS - 1
+.lsi_bounded:
+        mov eax, edx
+        mov [cpu_slot_by_apic + esi], al
+.lsi_have:
         mov eax, edx
         pop esi
         pop edx
@@ -98,10 +117,15 @@ lock_self_ipi:
 ;-----------------------------------------------------------------------
 spin_lock:
         pushad
+        ; The slot lives in a register, not in a variable: a static "local"
+        ; here would be shared by every processor at once, and two processors
+        ; exchanging slots corrupt exactly the bookkeeping that is meant to
+        ; catch corruption. pushad has saved EBP, so it is free to hold.
         call lock_self_ipi
-        mov [.sl_cpu], eax
+        mov ebp, eax
 
         ; Depth limit: a lock taken deeper than the record allows is a bug too.
+        mov eax, ebp
         mov ecx, [cpu_held_count + eax*4]
         cmp ecx, MAX_HELD_LOCKS
         jae .sl_refuse
@@ -112,7 +136,7 @@ spin_lock:
         test ecx, ecx
         jz .sl_order_ok
 .sl_scan:
-        mov eax, [.sl_cpu]
+        mov eax, ebp
         imul eax, MAX_HELD_LOCKS
         add eax, ebx
         mov esi, [cpu_held_rank + eax*4]
@@ -123,6 +147,14 @@ spin_lock:
         jb .sl_scan
 .sl_order_ok:
 
+        ; From here until the release this processor takes no interrupts. A
+        ; lock the kernel takes can also be wanted by an interrupt handler on
+        ; the same processor - the timer handler walks scheduler lists - and a
+        ; processor that interrupts itself while holding a lock deadlocks on
+        ; itself with no second processor involved.
+        pushfd
+        cli
+
         ; Acquire. Compare-and-swap from free to held; a held lock is retried.
         mov ecx, 1
 .sl_try:
@@ -131,7 +163,7 @@ spin_lock:
         jz .sl_got
         jmp .sl_try
 .sl_got:
-        mov eax, [.sl_cpu]
+        mov eax, ebp
         mov [edi + LK_OWNER], eax
 
         ; Record it on this processor's stack of held locks.
@@ -142,9 +174,12 @@ spin_lock:
         mov esi, [edi + LK_RANK]
         mov [cpu_held_rank + ebx*4], esi
         mov [cpu_held_lock + ebx*4], edi
+        mov esi, [esp]                  ; the flags saved a few lines above
+        mov [cpu_held_flags + ebx*4], esi
         inc ecx
         mov [cpu_held_count + eax*4], ecx
 
+        add esp, 4                      ; drop the saved flags: they are recorded
         mov dword [esp + 28], 0
         popad
         ret
@@ -161,7 +196,6 @@ spin_lock:
         mov dword [esp + 28], -1
         popad
         ret
-.sl_cpu: dd 0
 
 ;-----------------------------------------------------------------------
 ; spin_unlock - release a lock this processor holds
@@ -173,7 +207,7 @@ spin_lock:
 spin_unlock:
         pushad
         call lock_self_ipi
-        mov [.su_cpu], eax
+        mov ebp, eax
 
         cmp dword [edi + LK_LOCKED], 0
         je .su_imbalance
@@ -193,14 +227,29 @@ spin_unlock:
         mov [cpu_held_count + eax*4], ecx
         mov dword [cpu_held_lock + ebx*4], 0
         mov dword [cpu_held_rank + ebx*4], 0
+        mov esi, [cpu_held_flags + ebx*4]
+        mov dword [cpu_held_flags + ebx*4], 0
 
-        mov dword [edi + LK_LOCKED], 0
+        ; Drop the owner first, then the held flag. A processor that wins the
+        ; lock in between writes its own owner over the cleared one; clearing
+        ; the flag first would let it take the lock and then have its ownership
+        ; erased here, which its own release would report as an imbalance.
         mov dword [edi + LK_OWNER], 0
+        mov dword [edi + LK_LOCKED], 0
+        push esi
+        popfd                           ; interrupts back to what the caller had
         mov dword [esp + 28], 0
         popad
         ret
 
 .su_imbalance:
+        mov [dbg_slot], eax
+        mov ebx, [edi + LK_OWNER]
+        mov [dbg_owner], ebx
+        mov ebx, [edi + LK_LOCKED]
+        mov [dbg_locked], ebx
+        mov ebx, [cpu_held_count + eax*4]
+        mov [dbg_count], ebx
         inc dword [lock_violations]
         cmp byte [lock_gate_armed], 1
         jne .su_return_error
@@ -211,7 +260,6 @@ spin_unlock:
         mov dword [esp + 28], -1
         popad
         ret
-.su_cpu: dd 0
 
 ;-----------------------------------------------------------------------
 ; lock_report_inversion - say which pair of locks inverted, and stop
@@ -243,8 +291,33 @@ lock_report_inversion:
         hlt
         jmp .halt_forever
 
+dbg_slot:   dd 0
+dbg_owner:  dd 0
+dbg_locked: dd 0
+dbg_count:  dd 0
+
 lock_report_imbalance:
         push esi
+        ; Facts first: which slot, who owns the lock, and how deep this
+        ; processor's own record is.
+        mov esi, msg_dbg_slot
+        call serial_print
+        mov eax, [dbg_slot]
+        call serial_print_hex
+        mov esi, msg_dbg_owner
+        call serial_print
+        mov eax, [dbg_owner]
+        call serial_print_hex
+        mov esi, msg_dbg_locked
+        call serial_print
+        mov eax, [dbg_locked]
+        call serial_print_hex
+        mov esi, msg_dbg_count
+        call serial_print
+        mov eax, [dbg_count]
+        call serial_print_hex
+        mov esi, msg_newline
+        call serial_print
         mov esi, msg_lock_imbalance
         call serial_print
         mov esi, [esp + 8]
@@ -345,3 +418,9 @@ lock_selftest:
         call vga_print
         popad
         ret
+
+msg_dbg_slot:   db "LOCKDBG slot=0x", 0
+msg_dbg_owner:  db " owner=0x", 0
+msg_dbg_locked: db " locked=0x", 0
+msg_dbg_count:  db " held=0x", 0
+msg_newline:    db 10, 0

@@ -161,7 +161,7 @@ dot:
         int 0x80
         ret
 
-path:        db "/handle_test.txt", 0
+path:        db "handle_test.txt", 0
 payload:     db "handle rights fixture", 10
 payload_len  equ $ - payload
 read_buf:    times 64 db 0

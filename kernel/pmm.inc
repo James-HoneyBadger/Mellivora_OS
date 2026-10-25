@@ -272,11 +272,60 @@ pmm_alloc_buddy_order:
 ;   Returns: EAX = physical address (0 = OOM)
 ;   All other registers preserved.
 ;-----------------------------------------------------------------------
+; The allocator's lock. Rank RANK_PMM, above every other kernel lock: almost
+; everything else may need a frame while holding its own, and nothing the
+; allocator does takes a lock, so a frame request is always the last step.
+align 16
+pmm_lock:
+        dd 0
+        dd RANK_PMM
+        dd 0
+        dd pmm_lock_name
+pmm_lock_name: db "pmm", 0
+pmm_bad_frees: dd 0            ; frees refused as outside the arena
+
 pmm_alloc_page:
-        push ecx
+        ; The free lists are shared the moment two processors run, so every
+        ; entry point takes the allocator's lock. EDI is the lock register and
+        ; callers rely on "all other registers preserved", so it is saved here.
+        push edi
+        mov  edi, pmm_lock
+        call spin_lock
         xor  ecx, ecx               ; order 0
         call pmm_alloc_buddy_order
-        pop  ecx
+        push eax
+        mov  edi, pmm_lock
+        call spin_unlock
+        pop  eax
+        pop  edi
+        ret
+
+;-----------------------------------------------------------------------
+; pmm_check_free — may this address be handed back to the allocator?
+;   In : EAX = physical address the caller wants to free
+;   Out: CF = 1 refused, CF = 0 accepted; EAX preserved
+;
+; The allocator owns only the pages between KERNEL_RESERVED_END and
+; pmm_mem_top. Below the reserve live the kernel image, the program window, the
+; page tables and this allocator's own bitmap; above it is memory that does not
+; exist. A free outside that range is a caller bug, and accepting one puts a
+; page that is not memory on a free list — the next allocation then reads a
+; link out of it and takes the machine down.
+;-----------------------------------------------------------------------
+pmm_check_free:
+        push eax
+        test eax, 0xFFF
+        jnz .pcf_no
+        cmp  eax, KERNEL_RESERVED_END
+        jb   .pcf_no
+        cmp  eax, [pmm_mem_top]
+        jae  .pcf_no
+        pop  eax
+        clc
+        ret
+.pcf_no:
+        pop  eax
+        stc
         ret
 
 ;-----------------------------------------------------------------------
@@ -286,10 +335,23 @@ pmm_alloc_page:
 ;-----------------------------------------------------------------------
 pmm_free_page:
         pushad
+        mov  edi, pmm_lock
+        call spin_lock
+        mov  eax, [esp + 28]        ; the address the caller passed
+        call pmm_check_free         ; is it the allocator's to take back?
+        jc   .pfp_refuse
         shr  eax, 12                ; page number
         mov  edx, eax
         xor  ecx, ecx               ; order 0
         call pmm_free_coalesce      ; merge with buddy if available
+        mov  edi, pmm_lock
+        call spin_unlock
+        popad
+        ret
+.pfp_refuse:
+        inc  dword [pmm_bad_frees]
+        mov  edi, pmm_lock
+        call spin_unlock
         popad
         ret
 
@@ -385,6 +447,9 @@ pmm_free_coalesce:
 pmm_alloc_pages:
         push ecx
         push edx
+        push edi
+        mov  edi, pmm_lock
+        call spin_lock
 
         ; Compute minimum order s.t. (1 << order) >= ECX
         xor  edx, edx               ; EDX = order
@@ -404,6 +469,11 @@ pmm_alloc_pages:
         mov  ecx, edx               ; order
         call pmm_alloc_buddy_order  ; EAX = phys addr or 0
 
+        push eax
+        mov  edi, pmm_lock
+        call spin_unlock
+        pop  eax
+        pop  edi
         pop  edx
         pop  ecx
         ret
@@ -411,6 +481,11 @@ pmm_alloc_pages:
 .ap_fail_pop:
         pop  ecx                    ; discard saved count
         xor  eax, eax
+        push eax
+        mov  edi, pmm_lock
+        call spin_unlock
+        pop  eax
+        pop  edi
         pop  edx
         pop  ecx
         ret
@@ -428,6 +503,18 @@ pmm_free_pages:
         push edx
         push ebx
         push esi
+        push edi
+        mov  edi, pmm_lock
+        call spin_lock
+
+        ; Refuse a range that is not the allocator's (see pmm_check_free).
+        mov  eax, [esp + 20]        ; saved base address
+        call pmm_check_free
+        jc   .fp_refuse
+        mov  ecx, [esp + 16]        ; saved page count
+        test ecx, ecx
+        jz   .fp_refuse
+        mov  eax, [esp + 20]
 
         ; Compute smallest order N s.t. (1 << N) >= ECX
         xor  ebx, ebx           ; EBX = order
@@ -447,6 +534,21 @@ pmm_free_pages:
         mov  ecx, ebx           ; ECX = order
         call pmm_free_coalesce  ; coalesce with buddy if available
 
+        mov  edi, pmm_lock
+        call spin_unlock
+        pop  edi
+        pop  esi
+        pop  ebx
+        pop  edx
+        pop  ecx
+        pop  eax
+        ret
+
+.fp_refuse:
+        inc  dword [pmm_bad_frees]
+        mov  edi, pmm_lock
+        call spin_unlock
+        pop  edi
         pop  esi
         pop  ebx
         pop  edx

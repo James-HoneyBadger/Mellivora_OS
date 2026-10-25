@@ -103,6 +103,9 @@ jobs:
           python3 populate.py .build/fresh.img programs
           python3 tools/fsck_hbfs.py .build/fresh.img --strict
 
+      - name: HBFS v4 checksums, mount, writer and refusal (strict)
+        run: python3 tests/test_v4_mount.py
+
       - name: Runtime assertions over serial console
         run: |
           python3 tools/qemu_drive.py mellivora.img "time_test" \
