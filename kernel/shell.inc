@@ -1871,6 +1871,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_help
 
+        mov edi, cmd_locks_str
+        call str_starts_with
+        jc .cmd_locks
+
         mov edi, cmd_acpi_str
         call str_starts_with
         jc .cmd_acpi
@@ -2290,6 +2294,10 @@ shell_dispatch_core:
         call str_starts_with
         jnc help_command_usage
         call help_command
+        ret
+
+.cmd_locks:
+        call lock_selftest
         ret
 
 .cmd_acpi:

@@ -52,6 +52,7 @@ cmd_table:
         CMDENT cmd_sleep_str, CAT_SYSTEM, sum_sleep, det_sleep
         CMDENT cmd_time_str, CAT_SYSTEM, sum_time, det_time
         CMDENT cmd_acpi_str, CAT_SYSTEM, sum_acpi, det_acpi
+        CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
         CMDENT cmd_ver_str, CAT_SYSTEM, sum_ver, det_ver
         CMDENT cmd_watch_str, CAT_SYSTEM, sum_watch, det_watch
         CMDENT cmd_which_str, CAT_SYSTEM, sum_which, det_which
@@ -229,6 +230,12 @@ sum_whoami: db "Current user and uid", 0
 det_whoami:
         db "whoami", 0x0A
         db "  Print the name and uid the shell is running as.", 0x0A, 0
+sum_locks: db "Exercise the lock-order gate", 0
+det_locks:
+        db "locks", 0x0A
+        db "  Run the spinlock self-test: take two locks in the wrong order and", 0x0A
+        db "  require the gate to refuse, then in the right order and require it", 0x0A
+        db "  to grant. Prints LOCK_SELFTEST_OK or LOCK_SELFTEST_FAIL.", 0x0A, 0
 sum_acpi: db "The machine's own description: CPUs, APICs, table of contents", 0
 det_acpi:
         db "acpi", 0x0A

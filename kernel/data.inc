@@ -175,6 +175,7 @@ path_env_name:     db "PATH", 0
 cmd_help_str:   db "help", 0
 cmd_ver_str:    db "ver", 0
 cmd_acpi_str:   db "acpi", 0
+cmd_locks_str:  db "locks", 0
 cmd_clear_str:  db "clear", 0
 cmd_dir_str:    db "dir", 0
 cmd_ls_str:     db "ls", 0

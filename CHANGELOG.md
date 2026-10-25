@@ -1,5 +1,33 @@
 # Mellivora OS - Changelog
 
+## Unreleased - locks, and a gate that refuses to deadlock
+
+### Kernel
+
+- **`kernel/lock.inc`**: spinlocks, built on `lock cmpxchg`, with a record of
+  which processor holds what. Two processors taking the same pair of locks in
+  opposite orders is the classic deadlock, so every lock carries a **rank** and
+  a processor may only take a lock of strictly higher rank than any it already
+  holds: the inversion becomes impossible to express rather than unlikely to
+  happen. Taking a lock of equal rank is refused too - that is a processor
+  waiting for itself under another name.
+- **The gate is armed, not advisory.** An out-of-order acquisition names both
+  locks and stops the machine, because a deadlock found at the point of the
+  mistake has a stack trace and one found later has none. Depth limits and
+  unbalanced releases are reported the same way.
+- **`locks`** runs the self-test on demand, and it also runs once at boot:
+  two test locks, taken in the wrong order and refused, then in the right order
+  and granted, then a self-acquisition refused, then a release that matches
+  nothing refused. It prints `LOCK_SELFTEST_OK` only when every case holds.
+  With the order check temporarily bypassed it prints `LOCK_SELFTEST_FAIL`.
+- The processor index a lock records comes from the MADT's list matched against
+  the local APIC ID, and is 0 on a machine with no APIC - one processor, and the
+  local APIC's page is not even mapped there.
+
+### Tests
+
+- `lock order is enforced` in `make check-runtime`.
+
 ## Unreleased - the other processors wake up
 
 ### Kernel

@@ -208,6 +208,14 @@ sleep, or switch itself off.
   a second thread through kernel code that assumes it is alone. What remains of
   SMP - per-CPU state, scheduler and allocator locking, lock-order validation,
   and letting an AP do work - is the next increment, and it lands behind a gate.
+- **Spinlocks with a rank order (landed).** Every lock carries a rank and a
+  processor may only take one of strictly higher rank than any it holds, so an
+  inversion cannot be expressed; a violation names both locks and stops the
+  machine rather than deadlocking later. A self-test - at boot and on demand via
+  `locks` - requires the gate to refuse the wrong order and grant the right one,
+  and has been seen to fail when the check is bypassed. Nothing takes a lock
+  yet: the lock users (frame allocator, block cache, run queue) come with
+  per-CPU state, which is the next step.
 - **The tick belongs to the local APIC timer (landed)** where there is one, and
   to the PIT everywhere else. The APIC timer's rate is measured against the PIT
   and sanity-checked before it is trusted; a bad measurement keeps the PIT. The

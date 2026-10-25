@@ -205,6 +205,9 @@ run_case "APIC is used when the CPU has one" "acpi"           "ACPI: interrupts:
 # ...and that is what makes an SMP machine usable: before this, a machine with
 # two CPUs received no interrupts at all, so nothing typed was ever read.
 run_case "SMP machine takes input"    "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL" "" 2 pentium
+# The lock-order gate refuses an inversion. It runs at boot, and again here on
+# demand, so the gate itself is a thing that can be tested rather than trusted.
+run_case "lock order is enforced"     "locks"                 "LOCK_SELFTEST_OK"   "" "CPU EXCEPTION|LOCK_SELFTEST_FAIL" "" 2 pentium
 # All of them, not just the second: every processor the firmware describes is
 # woken with INIT-SIPI-SIPI and must check in.
 run_case "every described CPU comes online" "acpi"             "processors online: 4 of 4" "" "CPU EXCEPTION|online: 3 of|online: 2 of" "" 4 pentium

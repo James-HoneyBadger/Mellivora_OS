@@ -718,6 +718,11 @@ kernel_entry:
         call acpi_init
         call apic_init
 
+        ; The lock gate is exercised before anything depends on it: a
+        ; deadlock found at boot names its two locks, one found in the field
+        ; names nothing.
+        call lock_selftest
+
         ; Enter the command shell
         jmp shell_main
 
@@ -749,6 +754,7 @@ kernel_entry:
 %include "kernel/acpi.inc"
 %include "kernel/apic.inc"
 %include "kernel/smp.inc"
+%include "kernel/lock.inc"
 %include "kernel/vm.inc"
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"
