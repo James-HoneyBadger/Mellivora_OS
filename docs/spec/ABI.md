@@ -128,14 +128,18 @@ mapping did not drift.
 A handle is a 32-bit value that is only meaningful in the process that owns it:
 
 ```text
-31            16 15                        2 1  0
-+---------------+---------------------------+-----+
-|  generation   |        table index        | 00  |
-+---------------+---------------------------+-----+
+31              18 17                    2 1  0
++-----------------+-----------------------+-----+
+|   generation    |      table index      | 00  |
++-----------------+-----------------------+-----+
 ```
 
 - The low two bits are zero, so a handle can never be mistaken for a small
   integer or a tagged pointer.
+- The index is 16 bits, which is what the 65 536-handle ceiling needs, and the
+  generation is the remaining 14. `c/include/mv/objects.h` provides
+  `MV_HANDLE_MAKE`, `MV_HANDLE_INDEX` and `MV_HANDLE_GEN`, and the kernel uses
+  the same shifts in `kernel/object.inc`.
 - The **generation** advances every time the slot is reused. A handle that was
   closed and whose slot was handed out again names nothing: the kernel compares
   the generation and returns `MV_INVALID_HANDLE` rather than acting on the new

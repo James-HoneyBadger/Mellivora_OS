@@ -183,6 +183,16 @@ run_case "permissions deny"           "perm_test"             "PERM_OK"         
 # belongs. Every attempt must be refused, and two things it may do must still
 # work - the shell runs the next case, so the machine also has to survive.
 run_case "hostile program is refused" "hostile_test"          "HOSTILE_OK"         "" "CPU EXCEPTION|HOSTILE_FAIL"
+# M1's object manager, first contact: a named event is created, reopened by
+# name, signalled through one handle and waited on through the other.
+run_case "object manager responds"  "osmoke"    "OSMOKE_OK"  "" "CPU EXCEPTION|OSMOKE_FAIL"
+# M1's object conformance: rights never amplify, a stale handle and a forged
+# handle are refused, the counters come back, and another session's namespace
+# and a SYSTEM-integrity directory refuse a write from an ordinary user.
+run_case "object model conformance" "object_test" "OBJECT_OK" "" "CPU EXCEPTION|OBJECT_FAIL"
+# M1's waiting primitive: poll versus block, WaitAny by index, WaitAll, an
+# auto-reset signal consumed by one waiter, and the 64-handle limit.
+run_case "wait sets"                "wait_test"   "WAIT_OK"  "" "CPU EXCEPTION|WAIT_FAIL"
 # A handle carries its own rights: a read-only handle cannot write back, a
 # write-only one cannot be read, even as root where the mode allows both.
 run_case "handle rights are enforced" "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL"

@@ -1,5 +1,75 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the executive: objects, handles, waits and security
+
+### Kernel (roadmap M1)
+
+- **A resource is now a typed object with a header.** `kernel/object.inc` gives
+  every object the 64-byte header and 512-byte body [OBJECTS.md](docs/spec/OBJECTS.md)
+  fixes, and a type is a record in a table - name, rights mask, flags, close
+  routine - so naming, securing, counting and closing read data rather than
+  branching. Eight types exist: directory, event, mutant, semaphore, timer,
+  token, process and symlink. `c/include/mv/objects.h` asserts every offset, so
+  a field inserted in the middle of the header is a compile error in the C
+  module rather than a kernel reading one field as another.
+- **A handle carries rights and a generation.** A handle is
+  `(generation << 18) | (index << 2)`; the low two bits are zero so a handle is
+  never a small integer, the index is 16 bits for the 65 536 ceiling, and a
+  closed slot remembers its generation so its old number is refused instead of
+  reaching whatever took the slot next. Rights are enforced at the operation,
+  not only at open, and a duplicate may only narrow.
+- **One namespace.** `\`, `\KernelObjects`, `\Devices`, `\RpcControl` and
+  `\Sessions\{0,1}\BaseNamedObjects`, looked up one segment at a time with
+  case folding, traverse required on every directory crossed, and a session
+  boundary at `\Sessions\<n>` that `SE_SESSION_CROSS` crosses.
+- **Wait sets.** `WaitOne`, `WaitAny` and `WaitAll` over up to 64 handles, with
+  a timeout of nought meaning poll and a longer one blocking, FIFO queueing per
+  object, and an auto-reset signal consumed by exactly one waiter. A timeout is
+  delivered as a *result* by the timer's sweep, so a woken task never returns
+  the value it blocked with.
+- **Tokens, descriptors and one access check.** `obj_access` walks a DACL in
+  canonical order with deny before allow, evaluates the mandatory no-write-up
+  rule before the DACL, maps `MV_RIGHTS_ALL` per type, and consults the bypass
+  privilege. Identity comes from the TCB that `setuid` already maintains, so
+  there is no second copy to disagree with the frozen syscalls.
+- **A deferred-work queue.** `kernel/dpc.inc` is a FIFO of routines drained at
+  the point where running kernel code is safe; the timer's wait sweep is its
+  first user, and a boot self-test proves the order and the empty drain.
+- **Fourteen new syscalls (187-200).** Object create/open/close/dup/query, the
+  three waits, the operations that signal a waitable object, and the two
+  read-only views a test needs. A failure returns -1 in EAX and an `mv_status`
+  in EDX, which is the one place a new caller learns *why*.
+
+### Tests
+
+- `osmoke` - the object manager answers: create by name, reopen by name, signal
+  through one handle and wait through the other.
+- `object_test` - rights never amplify, a stale handle and a forged handle are
+  refused, the type counters come back to where they started, another session's
+  namespace is refused, and a write into a SYSTEM-integrity directory is
+  refused *even though its DACL allows it* - which is how the mandatory rule is
+  shown to be the rule that refused.
+- `wait_test` - poll versus block, `WaitAny` by index, `WaitAll`, an auto-reset
+  signal consumed by one waiter, and the 64-handle limit.
+
+### Found and fixed while building it
+
+Four bugs in the new code, all of the same two shapes, and worth recording
+because they are what a hand-written assembly ABI makes easy:
+
+- `xor eax, eax` after `stc` clears the carry flag, so `ht_entry`'s failure path
+  reported *success* with a null entry, and the caller read address zero.
+- A result computed inside a `pushad` frame is thrown away by `popad`. Both the
+  handle from `ht_open` and the index from `obj_wait_eval` were returned that
+  way, and both callers got their own argument back instead.
+- `HE_GEN` is a word at offset 6 of an 8-byte entry; comparing it as a dword
+  made every handle look stale, because the high half was the next entry's
+  object pointer.
+- Initialised data placed below `bss_start` is zeroed at boot. The namespace's
+  strings and type table landed there and read as empty strings, so the first
+  named object could not be created - a boot-time failure with no message
+  because the message was in the same region.
+
 ## Unreleased - the kernel carries a module written in C
 
 ### Kernel (roadmap M0)

@@ -297,6 +297,18 @@ irq_timer:
         xor al, al
         call irq_eoi
 
+        ; Waits first: a task blocked on an object set with a deadline has to
+        ; be given a *result* when it expires, and sched_wake_sleepers would
+        ; otherwise resume it with whatever EAX it blocked with. This is the
+        ; first user of the deferred-work queue: the sweep may wake several
+        ; tasks, which is more work than an interrupt handler should do inline.
+        mov eax, obj_wait_timeouts
+        call dpc_queue
+        ; The queue is drained before the sleeper scan and not after it: a task
+        ; whose wait expired must be given its result here, or the scan below
+        ; would resume it as if it had been sleeping and it would return
+        ; whatever EAX it blocked with.
+        call dpc_drain
         ; v3.0: Wake any sleeping/blocked tasks whose timer expired
         call sched_wake_sleepers
         ; v10: Deliver SIGALRM to tasks whose alarm() deadline has passed

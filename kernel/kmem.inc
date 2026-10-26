@@ -26,7 +26,7 @@
 ; kmem_alloc and kmem_free preserve every other register.
 ;=======================================================================
 
-KMEM_CACHES     equ 4
+KMEM_CACHES     equ 8
 KMEM_PAGE_SIZE  equ 4096
 KMEM_FREE_END   equ 0xFFFFFFFF      ; empty free list
 KMEM_ARGS_SIZE  equ 512             ; one task's argv snapshot
@@ -57,6 +57,24 @@ kmem_init:
         mov eax, KMEM_ARGS_SIZE
         call kmem_cache
         mov [cache_task_args], eax
+
+        ; M1: the executive's objects. An object body is one 512-byte record
+        ; (OBJ_SIZE), a security descriptor 64, a waiter record 16 and a wait
+        ; set 528 - all sizes that come from the layouts in object.inc, and
+        ; the sizes are passed rather than assumed so a layout change shows up
+        ; as a different slab rather than as silent corruption.
+        mov eax, OBJ_SIZE
+        call kmem_cache
+        mov [cache_object], eax
+        mov eax, SD_SIZE
+        call kmem_cache
+        mov [cache_security], eax
+        mov eax, WT_ENTRY
+        call kmem_cache
+        mov [cache_waiter], eax
+        mov eax, WS_SIZE
+        call kmem_cache
+        mov [cache_waitset], eax
         ret
 
 ;-----------------------------------------------------------------------

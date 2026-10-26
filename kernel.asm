@@ -745,6 +745,26 @@ kernel_entry:
         ; reported here; a successful load is silent and `cmod` proves it.
         call cmod_boot
 
+        ; The deferred-work queue, before anything queues to it. A queue that
+        ; silently drops work is worse than no queue, so it is proved at boot.
+        call dpc_init
+        call dpc_selftest
+        test eax, eax
+        jnz .dpc_ready
+        mov esi, msg_dpc_failed
+        call serial_print
+.dpc_ready:
+
+        ; The object manager's namespace exists before the first task does,
+        ; because a task's process object is named inside it. A boot that
+        ; cannot build the skeleton is a boot with nothing to name.
+        call obj_init
+        test eax, eax
+        jnz .obj_ready
+        mov esi, msg_obj_init_failed
+        call serial_print
+.obj_ready:
+
         ; Enter the command shell
         jmp shell_main
 
@@ -762,6 +782,8 @@ kernel_entry:
 %include "kernel/idt.inc"
 %include "kernel/pit.inc"
 %include "kernel/pmm.inc"
+%include "kernel/object.inc"
+%include "kernel/dpc.inc"
 %include "kernel/faultinject.inc"
 %include "kernel/kmem.inc"
 %include "kernel/ata.inc"

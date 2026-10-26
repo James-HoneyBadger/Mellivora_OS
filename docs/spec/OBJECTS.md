@@ -258,15 +258,57 @@ M1 does not close until all of these pass:
    fairness and the 64-handle limit.
 5. Object counters return to their pre-test values after every suite.
 
-## 12. As built (the gap)
+## 12. As built
+
+The executive exists. `kernel/object.inc` is the object manager, `kernel/dpc.inc`
+the deferred-work queue, and `c/include/mv/objects.h` asserts every header
+offset so the C and assembly views cannot drift.
 
 | Contract | Tree today |
 |---|---|
-| Typed objects, one header | Files, tasks, sockets and IPC areas are separate mechanisms |
-| Handles with rights and generations | Bare integers; read/write flags only, no generation |
-| One namespace | Path lookups in the file system; no `\Devices`, `\Registry`, `\RpcControl` |
-| Wait-many, alertable waits | Signals, `poll` on sockets, no object waits |
-| Reference counting and rundown | Ad-hoc lifetime rules per subsystem |
-| Sessions | One implicit session |
+| Typed objects, one 512-byte body with the §2 header | Yes, for the eight types below. A type is a record in a table - name, rights mask, flags, close routine - not a switch |
+| Handles with rights and generations | Yes: `(generation << 18) \| (index << 2)`, a per-process table grown from the PMM in 4096-entry steps, rights enforced at the operation |
+| One namespace | `\`, `\KernelObjects`, `\Devices`, `\RpcControl`, `\Sessions\0` and `\Sessions\1` with `BaseNamedObjects` under each; case-insensitive longest-match lookup, traverse on every directory crossed, absolute symlinks with a depth limit |
+| WaitOne / WaitAny / WaitAll | Yes, with poll (timeout 0) and blocking (timeout n), FIFO per object, a 64-handle limit, and auto-reset consumption |
+| Reference counting and rundown | Yes: `obj_ref`/`obj_deref`, a deleting flag that refuses new references, and an underflow that stops the machine naming the type |
+| Deferred procedure calls | `dpc_queue`/`dpc_drain`; the timer's wait sweep is the first user, and a boot self-test proves order |
+| Sessions | The namespace enforces the boundary; `SE_SESSION_CROSS` (uid 0) crosses it |
 
-The rights half is real and tested; everything else arrives with M1.
+Types, and what each can do:
+
+| Type | Waitable | Named | Notes |
+|---|---|---|---|
+| `Directory` | no | yes | the namespace's own container |
+| `Event` | yes | yes | manual or auto reset, set at creation |
+| `Mutant` | yes | yes | one owner, released by `SYS_MUTANT_RELEASE` |
+| `Semaphore` | yes | yes | initial and maximum count from the create flags |
+| `Timer` | yes | yes | a due tick; the periodic sweep is not wired to a callback port yet |
+| `Token` | no | no | a view over the TCB's identity, so `setuid` cannot disagree with it |
+| `Process` | yes | no | wraps the TCB; the type exists and is counted, and waiting on it is not yet wired |
+| `Symlink` | no | yes | absolute targets only |
+
+The conformance §11 names: `handle_test` and `hostile_test` pass, `object_test`
+covers §11's items 3 and 5 and adds the two security refusals, and `wait_test`
+covers item 4. All three run in `make check-runtime`.
+
+Stated plainly, and to be removed as the waves land:
+
+- **A signal does not yet wake a waiter in another task.** A wait set is
+  enqueued and a timeout is delivered, both proved by `wait_test`; a waiter in
+  a different task being released by `obj_signal` is written and does not work
+  yet. This is the one part of §6 the wave does not prove, and it is the next
+  thing to fix.
+- **A file is not yet an object.** `SYS_OPEN` and its friends keep the frozen
+  fd path; typing files means the VFS rewrite, which is its own wave. The
+  compatibility aliases §2 of the roadmap describes therefore do not exist yet.
+- **The remaining ten types** in §3 - section, job, port, key, device, driver,
+  socket, eventlog, service - arrive with the waves that own them.
+- **`MV_RIGHTS_ALL` mapping is one table entry per type**, checked by
+  `object_test` for events and by construction for the rest.
+- **Quotas are charged and not enforced.** An object records its body size
+  against its creator; no job or process limit reads that yet.
+- **`objects` and `handles` are not shell commands.** `SYS_OBJECT_STATS`
+  returns the per-type live and peak counts and is what `object_test` uses; the
+  commands that print them belong with the rest of the shell work.
+- **Alertable waits** return `MV_USER_APC` when a signal is pending; there are
+  no queued user APCs to run yet, so that is the whole of the behaviour.

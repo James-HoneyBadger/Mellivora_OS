@@ -219,6 +219,65 @@ SYS_TCSETPGRP       equ 183 ; tcsetpgrp(pgid) -> 0/-1 (-1 = no foreground job)
 SYS_TCGETPGRP       equ 184 ; tcgetpgrp() -> EAX=foreground pgid
 SYS_MMAP_FILE       equ 185 ; mmap_file(path,len,prot,off) -> EAX=addr/-1 (prot may include MF_SHARED)
 SYS_FAULTINJECT  equ 186        ; Fault injection: EBX=op ECX=count -> EAX=0/-1 (P10 tests)
+
+; --- M1: the executive (objects, handles, waits, tokens) ------------------
+; A handle is (generation << 18) | (index << 2), so it is never a small
+; integer. A failure is -1 in EAX and an mv_status in EDX.
+SYS_OBJECT_CREATE   equ 187     ; create(name, type, rights, disposition) -> handle
+SYS_OBJECT_OPEN     equ 188     ; open(name, rights) -> handle
+SYS_OBJECT_CLOSE    equ 189     ; close(handle) -> 0/-1
+SYS_OBJECT_DUP      equ 190     ; dup(handle, narrower rights) -> handle
+SYS_OBJECT_QUERY    equ 191     ; query(handle, buf, len) -> bytes/-1
+SYS_WAIT_ONE        equ 192     ; wait_one(handle, ticks) -> 0/WAIT_TIMEOUT
+SYS_WAIT_ANY        equ 193     ; wait_any(handles, count, ticks) -> index
+SYS_WAIT_ALL        equ 194     ; wait_all(handles, count, ticks) -> 0
+SYS_EVENT_SET       equ 195     ; event_set(handle) -> 0/-1
+SYS_EVENT_RESET     equ 196     ; event_reset(handle) -> 0/-1
+SYS_MUTANT_RELEASE  equ 197     ; mutant_release(handle) -> 0/-1
+SYS_SEMAPHORE_RELEASE equ 198   ; semaphore_release(handle, count) -> 0/-1
+SYS_OBJECT_STATS    equ 199     ; object_stats(buf, len) -> bytes/-1
+SYS_TOKEN_QUERY     equ 200     ; token_query(buf) -> 0/-1
+
+; Object types
+OBJ_TYPE_DIRECTORY  equ 0
+OBJ_TYPE_EVENT      equ 1
+OBJ_TYPE_MUTANT     equ 2
+OBJ_TYPE_SEMAPHORE  equ 3
+OBJ_TYPE_TIMER      equ 4
+OBJ_TYPE_TOKEN      equ 5
+OBJ_TYPE_PROCESS    equ 6
+OBJ_TYPE_SYMLINK    equ 7
+OBJ_TYPE_COUNT      equ 8
+
+; Generic rights. MV_RIGHTS_ALL is a flag on the desired-rights argument, not
+; a mask: the type maps it to the rights it actually defines.
+R_QUERY_STATE       equ 0x0001
+R_SET_STATE         equ 0x0002
+R_READ_DATA         equ 0x0004
+R_WRITE_DATA        equ 0x0008
+R_EXECUTE           equ 0x0010
+R_DELETE            equ 0x0020
+R_READ_ATTR         equ 0x0040
+R_WRITE_ATTR        equ 0x0080
+R_SYNCHRONIZE       equ 0x0100
+R_ALL               equ 0x00010000
+
+; Create flags, in EDI
+OCF_EVENT_MANUAL    equ 0x0001
+OCF_EVENT_SIGNALLED equ 0x0002
+
+; Create dispositions
+OD_OPEN             equ 1
+OD_CREATE           equ 2
+OD_OPEN_IF          equ 3
+OD_SUPERSEDE        equ 4
+OD_OVERWRITE_IF     equ 5
+
+; Wait results
+WAIT_TIMEOUT        equ -1
+WAIT_USER_APC       equ -2
+WAIT_FAILED         equ -3
+
 ; sysconf name constants
 _SC_ARG_MAX         equ 0
 _SC_CHILD_MAX       equ 1

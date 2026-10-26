@@ -100,7 +100,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 187 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
+- 201 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
   in-OS C compiler, `hbpkg`, and a C-built kernel module with a freestanding C
   runtime behind it.
 
@@ -212,6 +212,18 @@ The highest-leverage change in the plan. Everything after it is cheaper.
 **Exit:** a hostile-program conformance suite where a deliberately misbehaving
 program fails to read, write, signal or open anything it was not granted, and
 cannot take the machine down trying.
+
+That suite exists and passes - `hostile_test` for the file and signal rules,
+`object_test` for the object model's refusals - and the machine runs the next
+case afterwards, which is the other half of the claim.
+
+The Warren is built: typed objects with one 512-byte body, a per-process handle
+table with generations and rights, one namespace, wait sets, tokens and an
+access check, and a deferred-work queue. What M1 did not finish is written
+down in [OBJECTS.md](spec/OBJECTS.md#12-as-built) rather than left implied; the
+one that matters most is that a signal does not yet wake a waiter in another
+task, so `object_test` and `wait_test` prove the model inside one task and the
+cross-task wake is the next change.
 
 ### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks)
 

@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 187,
-  "highest_syscall_number": 186,
+  "syscall_count": 201,
+  "highest_syscall_number": 200,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -937,6 +937,76 @@
       "name": "SYS_FAULTINJECT",
       "number": 186,
       "summary": "Fault injection: EBX=op ECX=count -> EAX=0/-1 (P10 tests)"
+    },
+    {
+      "name": "SYS_OBJECT_CREATE",
+      "number": 187,
+      "summary": "create(name, type, rights, disposition) -> handle"
+    },
+    {
+      "name": "SYS_OBJECT_OPEN",
+      "number": 188,
+      "summary": "open(name, rights) -> handle"
+    },
+    {
+      "name": "SYS_OBJECT_CLOSE",
+      "number": 189,
+      "summary": "close(handle) -> 0/-1"
+    },
+    {
+      "name": "SYS_OBJECT_DUP",
+      "number": 190,
+      "summary": "dup(handle, narrower rights) -> handle"
+    },
+    {
+      "name": "SYS_OBJECT_QUERY",
+      "number": 191,
+      "summary": "query(handle, buf, len) -> bytes/-1"
+    },
+    {
+      "name": "SYS_WAIT_ONE",
+      "number": 192,
+      "summary": "wait_one(handle, ticks) -> 0/WAIT_TIMEOUT"
+    },
+    {
+      "name": "SYS_WAIT_ANY",
+      "number": 193,
+      "summary": "wait_any(handles, count, ticks) -> index"
+    },
+    {
+      "name": "SYS_WAIT_ALL",
+      "number": 194,
+      "summary": "wait_all(handles, count, ticks) -> 0"
+    },
+    {
+      "name": "SYS_EVENT_SET",
+      "number": 195,
+      "summary": "event_set(handle) -> 0/-1"
+    },
+    {
+      "name": "SYS_EVENT_RESET",
+      "number": 196,
+      "summary": "event_reset(handle) -> 0/-1"
+    },
+    {
+      "name": "SYS_MUTANT_RELEASE",
+      "number": 197,
+      "summary": "mutant_release(handle) -> 0/-1"
+    },
+    {
+      "name": "SYS_SEMAPHORE_RELEASE",
+      "number": 198,
+      "summary": "semaphore_release(handle, count) -> 0/-1"
+    },
+    {
+      "name": "SYS_OBJECT_STATS",
+      "number": 199,
+      "summary": "object_stats(buf, len) -> bytes/-1"
+    },
+    {
+      "name": "SYS_TOKEN_QUERY",
+      "number": 200,
+      "summary": "token_query(buf) -> 0/-1"
     }
   ]
 }

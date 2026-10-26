@@ -4,7 +4,7 @@ This file is generated from programs/syscalls.inc.
 Do not edit manually; run: python3 tools/generate_syscalls_json.py
 
 - Source: programs/syscalls.inc
-- Syscall count: 187
+- Syscall count: 201
 
 | Number | Name | Summary |
 | ---: | --- | --- |
@@ -195,3 +195,17 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 184 | SYS_TCGETPGRP | tcgetpgrp() -> EAX=foreground pgid |
 | 185 | SYS_MMAP_FILE | mmap_file(path,len,prot,off) -> EAX=addr/-1 (prot may include MF_SHARED) |
 | 186 | SYS_FAULTINJECT | Fault injection: EBX=op ECX=count -> EAX=0/-1 (P10 tests) |
+| 187 | SYS_OBJECT_CREATE | create(name, type, rights, disposition) -> handle |
+| 188 | SYS_OBJECT_OPEN | open(name, rights) -> handle |
+| 189 | SYS_OBJECT_CLOSE | close(handle) -> 0/-1 |
+| 190 | SYS_OBJECT_DUP | dup(handle, narrower rights) -> handle |
+| 191 | SYS_OBJECT_QUERY | query(handle, buf, len) -> bytes/-1 |
+| 192 | SYS_WAIT_ONE | wait_one(handle, ticks) -> 0/WAIT_TIMEOUT |
+| 193 | SYS_WAIT_ANY | wait_any(handles, count, ticks) -> index |
+| 194 | SYS_WAIT_ALL | wait_all(handles, count, ticks) -> 0 |
+| 195 | SYS_EVENT_SET | event_set(handle) -> 0/-1 |
+| 196 | SYS_EVENT_RESET | event_reset(handle) -> 0/-1 |
+| 197 | SYS_MUTANT_RELEASE | mutant_release(handle) -> 0/-1 |
+| 198 | SYS_SEMAPHORE_RELEASE | semaphore_release(handle, count) -> 0/-1 |
+| 199 | SYS_OBJECT_STATS | object_stats(buf, len) -> bytes/-1 |
+| 200 | SYS_TOKEN_QUERY | token_query(buf) -> 0/-1 |

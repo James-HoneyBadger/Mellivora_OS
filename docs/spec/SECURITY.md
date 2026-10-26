@@ -300,15 +300,36 @@ Enforced and tested today:
 | A handle carries its rights; a read-only handle cannot write back, even as root | `handle_test` |
 | Eleven refusals and two controls from an unprivileged program, machine survives | `hostile_test` |
 | `kill` follows the uid policy, whole-or-nothing per group | `hostile_test` |
+| A security descriptor with a DACL of ACEs, walked canonically, deny before allow | `object_test` |
+| `mv_access_check` runs on every path that turns a name into a handle | `object_test`, `osmoke` |
+| Traverse is required on each directory crossed, and a type's `MV_RIGHTS_ALL` is mapped by the type | `object_test` |
+| A duplicate may only narrow the rights of the handle it came from | `object_test` |
+| Mandatory no-write-up: a medium-integrity process cannot write into a SYSTEM-integrity object whose DACL allows it | `object_test` |
+| A crossed-session name is refused without `SE_SESSION_CROSS` | `object_test` |
+
+What M1 added, concretely: `kernel/object.inc` holds one access check
+(`obj_access`), one identity source (`obj_identity`, which reads the TCB the
+frozen syscalls already check), a fixed-layout descriptor with a fixed-format
+ACE array, and the privilege test that bypasses a check. Since the identity is
+the TCB's, `setuid`/`setgid` changed what the object manager sees at the same
+moment it changed what the frozen syscalls see - there is no second copy to
+disagree.
 
 Stated plainly, and to be removed from this section as the waves land:
 
-- Access is decided by 12-bit modes; there are no ACLs, no tokens, no
-  privileges, no integrity levels.
-- "Root" is uid 0; there is no distinction between an administrator and the
-  kernel.
-- Identity is a `uid`/`gid` pair; there are no SIDs, no groups beyond one, and no
-  logon.
-- There is no audit trail beyond a text ring buffer.
-- Directory search permission and the sticky bit are not enforced.
+- SIDs are not variable-length structures yet. Identity is a 32-bit uid read
+  from the TCB; the well-known SID set and group lists arrive with logon.
+- Privileges are held by "uid 0 and nothing else" rather than by a token's
+  privilege list. `SE_SESSION_CROSS`, `SE_DEBUG` and `SE_TCB` therefore behave
+  as uid 0 holds them; the other privileges are defined and not yet granted.
+- A descriptor is a fixed-size record with up to six fixed-format ACEs. There
+  are no object ACEs, no SACL, and no inheritance: a new object gets its type's
+  default descriptor and nothing is propagated from its parent.
+- Integrity is derived from identity (uid 0 is SYSTEM, everyone else MEDIUM)
+  rather than carried in a token, so there is no way for a program to be
+  *marked* untrusted yet.
+- There is no audit trail beyond the reason word the check leaves in
+  `obj_audit_last`; the ring buffer and the event log are M4.
+- Directory search permission and the sticky bit are not enforced by the file
+  system; the object namespace enforces traverse on its own directories.
 - Mount options (`noexec`, `nosuid`) do not exist ([STORAGE.md](STORAGE.md)).

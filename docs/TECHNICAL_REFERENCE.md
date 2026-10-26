@@ -392,6 +392,38 @@ with `pushad` rather than a hand-written list, because a hand-written list is
 what dropped `ECX` once: a forked address space was then built from a page table
 copied out of physical address 0 and every multi-task case triple-faulted.
 
+### The object manager (`kernel/object.inc`)
+
+Every resource a program can name, hold, share, wait on or secure has the same
+64-byte header, a 512-byte body, and a handle carrying rights. The contract is
+[OBJECTS.md](spec/OBJECTS.md); this is the map of the code.
+
+| Routine | Does |
+|---|---|
+| `obj_init` | builds the namespace skeleton at boot: `\`, `\KernelObjects`, `\Devices`, `\RpcControl`, `\Sessions\{0,1}\BaseNamedObjects`, and `\KernelObjects\Lobby`, whose DACL allows everybody everything while sitting at SYSTEM integrity |
+| `obj_alloc` / `obj_deref` | take a body from the `cache_object` slab and give it the creation reference; release a reference and destroy at zero, running the type's close routine first |
+| `obj_type_desc` | type id to type record. A type is data - name, rights mask, flags, close routine - so naming, securing, counting and closing are not switch statements |
+| `ht_open` / `ht_entry` / `ht_use` / `ht_close` | the handle table: open, resolve, resolve-and-check-rights, close. A handle is `(generation << 18) \| (index << 2)` and a slot remembers its generation, so a stale number is refused rather than rebound |
+| `obj_ns_walk` / `obj_ns_find_child` / `obj_ns_link` / `obj_ns_unlink` | the namespace: one segment at a time, case folded, traverse required on every directory crossed, a session boundary at `\Sessions\<n>` |
+| `obj_access` | the one access check: NULL descriptor grants all, generic-all is mapped by the type, mandatory no-write-up before the DACL, deny before allow, then the bypass privilege |
+| `obj_wait_eval` / `obj_wait_consume` / `obj_wait_enqueue` / `obj_wait_dequeue` | wait sets: decide without side effects, commit once satisfied, FIFO queueing per object |
+| `obj_satisfy_waiters` | offer a signal to an object's waiters in order, completing those whose whole set is now satisfied |
+| `obj_wait_timeouts` | the timer's sweep, queued as a deferred procedure call: give a blocked wait its result when the deadline passes |
+
+Two register conventions in this file are not cosmetic, because both cost a
+day of debugging when they were wrong:
+
+- **A routine that returns a flag sets it last.** `xor eax, eax` clears the
+  carry flag, so a failure path that cleared EAX after `stc` reported success
+  with a null result. The failure paths here zero EAX *then* set the flag.
+- **`popad` restores EDX and EAX.** A routine that computes a result inside a
+  `pushad` frame has to write it into the saved slot - `[esp + 28]` for EAX,
+  `[esp + 20]` for EDX - or the `popad` throws it away and the caller gets
+  whatever it passed in.
+
+A word field needs a word access: `HE_GEN` sits at offset 6 of an 8-byte entry,
+so a dword compare against it reads the *next entry's* object pointer as well.
+
 ### Kernel slab allocator (`kernel/kmem.inc`)
 
 Kernel objects that exist once per task - its mmap area table (896 bytes) and its argv
@@ -2096,7 +2128,7 @@ length, which also rejects a range that wraps past 2^32):
 | 181 | `SYS_GETERRNO` | — | EAX=per-task errno |
 | 186 | `SYS_FAULTINJECT` | EBX=op, ECX=count | EAX=0/-1; see [Fault Injection](#fault-injection-p10) |
 
-**Total: 187 syscalls defined (0–186, no gaps).**
+**Total: 201 syscalls defined (0–200, no gaps).**
 
 ---
 

@@ -166,6 +166,7 @@ syscall_handler:
         mov  [syscall_ring], al
         pop  eax
 
+
         ; Reject out-of-range syscall numbers. The compare must be UNSIGNED: a
         ; negative EAX (0x80000000..0xFFFFFFFF) would otherwise index
         ; syscall_table far below its base. It must also reject exactly
@@ -396,8 +397,25 @@ syscall_table:
         dd sys_mmap_file        ; 185 SYS_MMAP_FILE
         ; Reliability testing
         dd sys_faultinject      ; 186 SYS_FAULTINJECT
-        ; Reserved / unimplemented (187..255)
-        times (SYSCALL_MAX - 187) dd syscall_handler.syscall_bad
+        ; M1: the executive. Object create/open/close/dup/query, the three
+        ; waits, the operations that signal a waitable object, and the two
+        ; read-only views a test and a soak run need.
+        dd sys_object_create    ; 187 SYS_OBJECT_CREATE
+        dd sys_object_open      ; 188 SYS_OBJECT_OPEN
+        dd sys_object_close     ; 189 SYS_OBJECT_CLOSE
+        dd sys_object_dup       ; 190 SYS_OBJECT_DUP
+        dd sys_object_query     ; 191 SYS_OBJECT_QUERY
+        dd sys_wait_one         ; 192 SYS_WAIT_ONE
+        dd sys_wait_any         ; 193 SYS_WAIT_ANY
+        dd sys_wait_all         ; 194 SYS_WAIT_ALL
+        dd sys_event_set        ; 195 SYS_EVENT_SET
+        dd sys_event_reset      ; 196 SYS_EVENT_RESET
+        dd sys_mutant_release   ; 197 SYS_MUTANT_RELEASE
+        dd sys_semaphore_release; 198 SYS_SEMAPHORE_RELEASE
+        dd sys_object_stats     ; 199 SYS_OBJECT_STATS
+        dd sys_token_query      ; 200 SYS_TOKEN_QUERY
+        ; Reserved / unimplemented (201..511)
+        times (SYSCALL_MAX - 201) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)
@@ -3154,7 +3172,7 @@ sys_print:
         pop eax
         push esi
         mov esi, ebx
-        call vga_print
+        call serial_print
         pop esi
         xor eax, eax
         iretd

@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, " HBFS v3/4 ", 0xF9, "  187 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
+        db 0xBA, " HBFS v3/4 ", 0xF9, "  201 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -151,7 +151,7 @@ version_text:
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (187 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (201 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
         db "  Scheduler:     Priority-based preemptive (128 tasks, 4 levels)", 0x0A
@@ -541,6 +541,94 @@ shift_table:
 idt_descriptor:
         dw 256 * 8 - 1         ; IDT size (256 entries * 8 bytes)
         dd idt_table            ; IDT base address
+
+;=======================================================================
+; The executive (M1) - initialised data
+;
+; This lives above bss_start on purpose: everything below bss_start is zeroed
+; at boot, so a table or a string placed there is silently emptied and reads
+; as a valid pointer to nothing. The zero-initialised half of the same
+; subsystem is in the BSS block further down.
+;=======================================================================
+align 4
+obj_str_sessions:   db "Sessions\", 0
+obj_dir_kernel:     db "KernelObjects", 0
+obj_dir_rpc:        db "RpcControl", 0
+obj_dir_devices:    db "Devices", 0
+obj_dir_sessions:   db "Sessions", 0
+obj_init_s0:        db "0", 0
+obj_init_s1:        db "1", 0
+obj_init_bno:       db "BaseNamedObjects", 0
+obj_init_lobby:     db "Lobby", 0
+
+obj_msg_underflow:  db "OBJ_UNDERFLOW type=", 0
+obj_msg_newline:    db 10, 0
+dbg_dis: db "DISPATCH ",10,0
+dbg_t1: db "T1",10,0
+dbg_t2: db "T2",10,0
+dbg_t3: db "T3",10,0
+dbg_t4: db "T4",10,0
+dbg_t5: db "T5",10,0
+dbg_t6: db "T6",10,0
+dbg_t7: db "T7",10,0
+dbg_t8: db "T8",10,0
+obj_msg_init_ok: db "OBJ_INIT_OK", 10, 0
+msg_dpc_failed: db "DPC_SELFTEST_FAIL", 10, 0
+msg_obj_init_failed: db "OBJ_INIT_FAILED: the object namespace could not be built", 10, 0
+
+; Type table records: { name, rights-the-type-defines, flags, close }
+align 4
+obj_type_table:
+        dd obj_tn_directory
+        dd RIGHT_QUERY_STATE | RIGHT_SET_STATE | RIGHT_READ_DATA | RIGHT_WRITE_DATA | RIGHT_EXECUTE | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR
+        dd TF_NAMED | TF_SECURED
+        dd 0
+        dd obj_tn_event
+        dd RIGHT_QUERY_STATE | RIGHT_SET_STATE | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR | RIGHT_SYNCHRONIZE
+        dd TF_WAITABLE | TF_NAMED | TF_SECURED
+        dd 0
+        dd obj_tn_mutant
+        dd RIGHT_QUERY_STATE | RIGHT_SET_STATE | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR | RIGHT_SYNCHRONIZE
+        dd TF_WAITABLE | TF_NAMED | TF_SECURED
+        dd 0
+        dd obj_tn_semaphore
+        dd RIGHT_QUERY_STATE | RIGHT_SET_STATE | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR | RIGHT_SYNCHRONIZE
+        dd TF_WAITABLE | TF_NAMED | TF_SECURED
+        dd 0
+        dd obj_tn_timer
+        dd RIGHT_QUERY_STATE | RIGHT_SET_STATE | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR | RIGHT_SYNCHRONIZE
+        dd TF_WAITABLE | TF_NAMED | TF_SECURED
+        dd 0
+        dd obj_tn_token
+        dd RIGHT_QUERY_STATE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR | RIGHT_SYNCHRONIZE
+        dd TF_SECURED
+        dd 0
+        dd obj_tn_process
+        dd RIGHT_QUERY_STATE | RIGHT_SET_STATE | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR | RIGHT_SYNCHRONIZE | RIGHT_EXECUTE
+        dd TF_WAITABLE | TF_SECURED
+        dd 0
+        dd obj_tn_symlink
+        dd RIGHT_QUERY_STATE | RIGHT_READ_DATA | RIGHT_WRITE_DATA | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR
+        dd TF_NAMED | TF_SECURED
+        dd 0
+
+obj_tn_directory:   db "Directory", 0
+obj_tn_event:       db "Event", 0
+obj_tn_mutant:      db "Mutant", 0
+obj_tn_semaphore:   db "Semaphore", 0
+obj_tn_timer:       db "Timer", 0
+obj_tn_token:       db "Token", 0
+obj_tn_process:     db "Process", 0
+obj_tn_symlink:     db "Symlink", 0
+
+; { name pointer, address of the global that should remember it or 0 }
+obj_init_dirs:
+        dd obj_dir_kernel,   obj_kernelobjects
+        dd obj_dir_rpc,      obj_rpccontrol
+        dd obj_dir_devices,  obj_devices
+        dd obj_dir_sessions, obj_sessions
+        dd 0, 0
+
 
 ;=======================================================================
 ; BSS (Uninitialized Data) - zeroed at boot
@@ -1165,6 +1253,46 @@ fpu_selftest_zero:    resb 16
 fpu_selftest_int:     resd 1
 fpu_selftest_got_int: resd 1
 fpu_selftest_expect:  resd 1
+
+;=======================================================================
+; The executive (M1) - object manager storage
+;
+; Layouts and constants are in kernel/object.inc; this is the memory. Caches
+; are registered by kmem_init from the same constants, so a size change moves
+; both together.
+;=======================================================================
+; Deferred procedure calls (kernel/dpc.inc)
+dpc_head:           dd 0
+dpc_tail:           dd 0
+dpc_overflow:       dd 0
+dpc_trace:          dd 0
+dpc_slots:          times DPC_MAX dd 0
+
+obj_wait_one_handle: dd 0
+cache_object:       dd 0
+cache_security:     dd 0
+cache_waiter:       dd 0
+cache_waitset:      dd 0
+
+obj_root:           dd 0
+obj_kernelobjects:  dd 0
+obj_rpccontrol:     dd 0
+obj_devices:        dd 0
+obj_sessions:       dd 0
+obj_session0:       dd 0
+obj_session1:       dd 0
+obj_base0:          dd 0
+obj_lobby:          dd 0
+
+obj_total_live:     dd 0
+obj_type_live:      times OBJ_T_COUNT dd 0
+obj_type_peak:      times OBJ_T_COUNT dd 0
+obj_audit_last:     dd 0
+
+obj_name_buf:       resb OBJ_NAME_MAX + 1
+obj_parent_buf:     resb OBJ_NAME_MAX + 1
+obj_leaf_buf:       resb OBJ_NAME_MAX + 1
+
 
 bss_end:
 

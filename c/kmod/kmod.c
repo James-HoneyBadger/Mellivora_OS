@@ -18,6 +18,7 @@
  * same code would run whether the console is text or serial.
  */
 #include <mv/cmod.h>
+#include <mv/objects.h>
 #include <mv/string.h>
 #include <mv/types.h>
 
