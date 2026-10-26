@@ -6363,6 +6363,7 @@ cmd_exec_program:
         mov esi, msg_exec
         call vga_print
 
+
         ; Write the SYS_EXIT trampoline just above the top, and put its address
         ; where the stack's first dword points: B8 00 00 00 00 CD 80 =
         ; mov eax, 0 / int 0x80

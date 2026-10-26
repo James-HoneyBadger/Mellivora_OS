@@ -71,17 +71,26 @@ fi
 
 failures=0
 
-# run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB] [SMP] [CPU]
+# run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB] [SMP] [CPU] [WAIT_S]
 # An empty EXPECT means "only check that nothing faulted" (useful for a
 # graphics program that owns the screen and prints nothing).
+#
+# WAIT_S is how long the driver keeps looking for EXPECT after the command
+# (its default is 6 seconds). A case that forks and execs a program sixteen
+# times needs a real budget: it is not slow because anything is wrong, it is
+# slow because it does the work, and a window that is too small reports "not
+# found" for a program that is still running.
 #
 # CPU and SMP choose the machine. The default (a 486, one CPU) has no local
 # APIC, which exercises the 8259 path; a Pentium with two CPUs exercises the
 # I/O APIC path, and that is the machine a 2000-era user actually had.
 run_case() {
     local name="$1" cmd="$2" expect="$3" then="${4:-}" reject="${5:-CPU EXCEPTION}"
-    local mem="${6:-}" smp="${7:-}" cpu="${8:-}"
+    local mem="${6:-}" smp="${7:-}" cpu="${8:-}" wait_s="${9:-}"
     local args=("$IMAGE" "$cmd" --reject "$reject")
+    if [ -n "$wait_s" ]; then
+        args+=(--wait "$wait_s")
+    fi
     if [ -n "$expect" ]; then
         args+=(--expect "$expect")
     fi
@@ -260,7 +269,7 @@ run_case "stack overflow contained"      "stack_overflow"        "task killed"  
 # Every launch unmaps the lower 48 stack pages of the image it replaces. Their
 # frames are private to that task, so dropping the mapping has to return them:
 # a fork+exec loop must not walk the free-page count down.
-run_case "launch does not leak frames"   "stack_leak_test"       "STACKLEAK_OK"       "" "CPU EXCEPTION|STACKLEAK_FAIL"
+run_case "launch does not leak frames"   "stack_leak_test"       "STACKLEAK_OK"       "" "CPU EXCEPTION|STACKLEAK_FAIL" "" "" "" 40
 # A task torn down by a signal never runs its own exit path, so the kill has to
 # release what it mapped - frames, page-cache references and page tables.
 run_case "signal kill releases memory"   "kill_leak_test"        "KILLLEAK_OK"        "" "CPU EXCEPTION|KILLLEAK_FAIL"
