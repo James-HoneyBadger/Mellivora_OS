@@ -7,7 +7,7 @@
 ;   3. Loads stage 2 (32 sectors = 16KB) from LBA 1-32
 ;   4. Jumps to stage 2 at 0x7E00
 ;
-; Target: i486+
+; Target: Pentium 4
 ; Assembled with: nasm -f bin boot.asm -o boot.bin
 ;
 

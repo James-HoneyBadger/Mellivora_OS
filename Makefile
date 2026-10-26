@@ -7,7 +7,8 @@
 #   Sectors 33+:   Kernel (size = kernel_sectors.inc, computed from the binary)
 #   Remaining:     Filesystem area
 #
-# Target: i486+ emulation via QEMU
+# Target: Pentium 4 (32-bit) emulation via QEMU. The machine - CPU, RAM,
+# chipset, devices - is defined once in tools/machine_profiles.py.
 #
 # Parallel program compilation is enabled automatically when make -j is
 # not already set.  Override with:  make programs NPROC=1
@@ -68,9 +69,19 @@ ifeq ($(UNAME_S),Darwin)
 QEMU_AUDIO_BACKEND = coreaudio
 endif
 
-QEMU_AUDIO_FLAGS = -audiodev $(QEMU_AUDIO_BACKEND),id=snd0 \
-			 -machine pcspk-audiodev=snd0,usb=off \
-			 -device sb16,audiodev=snd0
+PYTHON ?= python3
+
+# The emulated machine - CPU model, RAM, chipset, guest devices - comes from
+# tools/machine_profiles.py, so `make run`, `make check` and a hand-run QEMU are
+# the same computer. MV_PROFILE picks a profile (p4 by default, i486 to see the
+# unsupported-CPU refusal); QEMU_AUDIO_BACKEND is the *host* backend only.
+MV_PROFILE ?= p4
+export MV_PROFILE
+MACHINE_PROFILES = tools/machine_profiles.py
+MV_MACHINE_FLAGS = $(shell $(PYTHON) $(MACHINE_PROFILES) --qemu-flags --audio $(QEMU_AUDIO_BACKEND))
+ifeq ($(strip $(MV_MACHINE_FLAGS)),)
+$(error machine_profiles.py produced no QEMU flags for MV_PROFILE=$(MV_PROFILE))
+endif
 
 # Reboot behavior: allow guest reboot by default.
 # Set QEMU_NO_REBOOT=1 to make QEMU exit on guest reset.
@@ -79,7 +90,7 @@ ifeq ($(QEMU_NO_REBOOT),1)
 QEMU_RESET_FLAGS += -no-reboot
 endif
 
-QEMU_FLAGS = -cpu 486 -m 128 -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_AUDIO_FLAGS) $(QEMU_RESET_FLAGS) -netdev user,id=net0 -device rtl8139,netdev=net0
+QEMU_FLAGS = $(MV_MACHINE_FLAGS) -drive file=$(IMAGE),format=raw,if=ide,cache=writethrough -boot c -no-shutdown $(QEMU_RESET_FLAGS)
 
 # For debugging
 QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
@@ -155,12 +166,16 @@ endif
 
 # -ffreestanding and -fno-builtin: there is no libc, and c/rt/string.c is the
 # whole runtime. -fno-pic/-fno-pie: everything is linked at a fixed address.
-# -fno-stack-protector: ring 0 has no TLS segment for a canary. -mno-sse and
-# -msoft-float: the CPU floor is an i486, which has neither, so kernel C must
-# not contain vector instructions even though the scheduler now keeps SSE
-# state for tasks on CPUs that do have it.
+# -fno-stack-protector: ring 0 has no TLS segment for a canary.
+#
+# -march=pentium4: the CPU floor is a Pentium 4, so cmov and the Netburst
+# instruction selection are fair game. -mno-sse/-mno-mmx/-msoft-float stay:
+# the kernel keeps its C at the scalar ABI on purpose. XMM state belongs to
+# *tasks*, which the scheduler saves per task; if kernel C used XMM too, every
+# C call would have to declare which half of the vector state it owns.
 C_CFLAGS = -c -O2 -std=c11 -ffreestanding -fno-builtin -fno-stack-protector \
            -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables \
+           -march=pentium4 -mtune=pentium4 \
            -mno-sse -mno-mmx -msoft-float -Wall -Wextra -Ic/include
 
 C_INCS    = $(wildcard c/include/mv/*.h)
@@ -297,7 +312,7 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "=== $(IMAGE) updated ($(IMAGE_SIZE_MB) MB) ==="
 	@ls -la $(IMAGE)
 
-# Run in QEMU with i486 CPU
+# Boot the image under QEMU (machine comes from tools/machine_profiles.py)
 check-qemu:
 	@QEMU_BIN='$(firstword $(QEMU))'; \
 		if ! command -v "$$QEMU_BIN" >/dev/null 2>&1; then \
@@ -311,12 +326,12 @@ check-qemu:
 
 # `make run` boots the 32-bit tree with its shell and GUI.
 run: check-qemu $(IMAGE)
-	@echo "=== Launching Mellivora in QEMU (32-bit, i486, 128MB RAM) ==="
+	@echo "=== Launching Mellivora in QEMU ($(MV_PROFILE) machine) ==="
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS)
 
 run-32: check-qemu $(IMAGE)
-	@echo "=== Launching Mellivora in QEMU (32-bit, i486, 128MB RAM) ==="
+	@echo "=== Launching Mellivora in QEMU ($(MV_PROFILE) machine) ==="
 	@echo "    Host: $(UNAME_S), audio backend: $(QEMU_AUDIO_BACKEND)"
 	$(QEMU) $(QEMU_FLAGS)
 
@@ -794,7 +809,8 @@ help:
 	@echo "    make hbpkg        Build package manager (tools/hbpkg)"
 	@echo ""
 	@echo "  Run"
-	@echo "    make run          Launch in QEMU (i486, 128 MB RAM)"
+	@echo "    make run          Launch in QEMU ($(MV_PROFILE) machine)"
+	@echo "                      MV_PROFILE=p4|p4-noapic|i486 picks the machine"
 	@echo "    make dev          Full build + launch in one step"
 	@echo "    make debug        Launch with QEMU monitor on stdio"
 	@echo "    make run-serial   Launch with serial on TCP port 4555"

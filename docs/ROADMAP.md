@@ -68,7 +68,7 @@ A wave does not close until these are measured and reported by `make check`:
 | Containment | A faulting user program is retired; the machine survives 24 hours of it |
 | Concurrency | 4 vCPUs under mixed load for 24 hours with no panic and no lost wakeup |
 | Durability | 10 000 power-cut iterations on a written volume, every one recoverable |
-| Latency | syscall < 1 µs, context switch < 5 µs, fork+exec < 5 ms (i486-era target) |
+| Latency | syscall < 1 µs, context switch < 5 µs, fork+exec < 5 ms (Pentium 4-era target) |
 | Footprint | < 16 MB RAM idle; < 5 s to the desktop under QEMU |
 | Admin | Every setting in the machine is reachable from the management console and the store |
 | Parity | `make check-parity` reports at least the baseline, and no row ever moves backwards |
@@ -239,9 +239,10 @@ sleep, or switch itself off.
 - **Interrupts follow the hardware (landed).** The interrupt controller is
   chosen by probing, not by trusting the table: the local APIC is enabled and
   read back, and only if the write sticks are the 8259s masked and the I/O APIC
-  programmed. QEMU's 486 reports a local APIC in its MADT and has none - a
-  table describes a machine, it does not guarantee one - so a machine without
-  one stays on the 8259 exactly as before. Redirection entries come from the
+  programmed. QEMU's MADT reports a local APIC even on a model that has none -
+  a table describes a machine, it does not guarantee one - so the `p4-noapic`
+  profile (the same Pentium 4 with APIC removed from CPUID) stays on the 8259,
+  and `make check-runtime` asserts it. Redirection entries come from the
   MADT's interrupt source overrides, which is how the PIT lands on pin 2 rather
   than pin 0; lines the table does not describe are taken as ISA edge/high,
   except the chipset's two PCI link lines (GSI 10/11), which are level/low
@@ -450,7 +451,7 @@ Named explicitly so the plan does not drift into them:
 | The C boundary becomes two systems in one tree | One calling convention, one ABI document, one build entry point per module, and a lint gate that rejects a module mixing the two without an entry stub |
 | Objects and security are retrofitted too late | They are wave M1, before any feature that would have to be reworked for them |
 | SMP destabilises the tree | AP start-up is a separate gate; the machine stays bootable single-CPU, and the 24-hour soak is the entry condition for M3 |
-| `paging_map_page` allocates a page table from the frame allocator, and above 128 MB of RAM a mapping taken at boot can leave the paging tests faulting in data (found while mapping the APIC windows; worked around there with a static table) | M2 owns the fix: one allocator-visible page-table pool, and a test that maps a page in a fresh 4 MB region with 192 MB and 384 MB of RAM |
+| ~~`paging_map_page` allocates a page table from the frame allocator, and above 128 MB of RAM a mapping taken at boot can leave the paging tests faulting in data~~ **Closed.** The boot identity map now covers every frame the allocator owns (all of RAM up to 512 MB), so kernel code never faults on allocator bookkeeping; the fault handler no longer allocates on the kernel's behalf. `vmtest2` is required at 128, 192, 256 and 512 MB, and a 2-CPU 512 MB machine is part of the default suite | Was: M2 to own the fix |
 | Driver breadth exceeds the budget | QEMU-first hardware list; a driver is only in scope if a test can exercise it |
 | The scorecard is gamed by partial credit | Rows move only when their named test passes in CI |
 | Printing and USB are larger than they look | Both are scoped to one working path first, breadth afterwards |

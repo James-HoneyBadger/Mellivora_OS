@@ -1,5 +1,59 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the platform is a Pentium 4
+
+### Machine and CPU floor
+
+- **The kernel now requires a Pentium 4 and says so.** `kernel/cpu.inc` reads
+  CPUID properly - vendor, family/model/stepping through the extended rules,
+  the feature bits, and the 48-byte brand string from leaf `80000004H` - and
+  `cpu_require_pentium4` stops the boot with one legible line when FXSR, SSE or
+  SSE2 is missing:
+
+  ```
+  CPU_UNSUPPORTED: Mellivora needs a Pentium 4 or later (fxsr+sse+sse2); found family 4 model 8 - halting
+  ```
+
+  On an accepted part the first thing on COM1 is
+  `CPU_P4 Intel(R) Pentium(R) 4 CPU 2.40GHz family=15 model=2 step=7 fxsr=1 sse=1 sse2=1`,
+  and `tests/test_boot.sh` requires it.
+- **The x87-only fallback is gone.** `fnsave`/`frstor` and the
+  `cpu_has_fxsr` branch in `sched.inc` are deleted; every task image is a
+  512-byte `fxsave`, and `CR4.OSFXSR`/`OSXMMEXCPT` are set unconditionally. Two
+  save formats that have to agree was a bug class, not a feature — the boot gate
+  now requires `FPU_SELFTEST_OK`, and the round trip really runs on every boot
+  instead of printing `FPU_SELFTEST_SKIP`.
+- **Kernel C is compiled for the Pentium 4** (`-march=pentium4 -mtune=pentium4`)
+  while keeping `-mno-sse -mno-mmx -msoft-float`: XMM state belongs to tasks,
+  and a ring-0 C ABI that also used it would give the per-task image a second
+  owner.
+- **One definition of the machine.** `tools/machine_profiles.py` (with
+  `tools/machine_profile.sh` for shell callers) defines the CPU, RAM, chipset and
+  guest devices, and the Makefile, both shell test suites, the desktop test, the
+  QEMU drivers, the GDB launcher and the installers all read it from there.
+  Three profiles: `p4` (default — 512 MB, AC'97, USB 1.1, RTL8139), `p4-noapic`
+  (the same part with APIC removed, for the 8259 path) and `i486` (legacy; must
+  be refused at boot). `MV_PROFILE` selects one, so `make run` and `make check`
+  cannot drift apart.
+- **Every frame is identity-mapped, so 512 MB works.** `paging_init` now fills
+  `ceil(mem_top / 4 MB)` page tables 1:1 (256 tables, 1 MB, `0x411000..0x511000`)
+  instead of the first 32, and the kernel no longer asks the fault handler to map
+  its own RAM. This closes a real bug: above 128 MB the buddy allocator wrote
+  free-list links into unmapped frames, the fault handler called the allocator for
+  a page table, and the allocator wrote into another unmapped frame — a triple
+  fault whose first victim was an application processor's start-up. The PMM bitmap
+  and tag array moved up to make room (`0x620000`/`0x640000`), the user demand zone
+  runs `512 MB..1 GB`, and `USER_DEMAND_MAX`/`USER_DEMAND_BASE_MAX` follow.
+- **`mmap` treats its hint as a hint.** An address below the demand zone (which
+  moves with the amount of RAM), unaligned, out of range or already occupied now
+  falls back to the allocator instead of failing the call — there is no `MAP_FIXED`
+  to promise anything. `vmtest2` discovers a usable address first, so the VMM gate
+  passes at 128, 192, 256 and 512 MB.
+- **Architecture strings follow the machine**: `uname` reports `i686`,
+  `sysinfo` prints the CPU brand and family/model it actually detected, and the
+  banners, `neofetch`, `bsysmon`, `pkginfo` and the desktop's about box say
+  Pentium 4 rather than i486.
+
 ## Unreleased - the executive: objects, handles, waits and security
 
 ### Kernel (roadmap M1)

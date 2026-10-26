@@ -76,14 +76,18 @@ if [[ "$INSTALL" -eq 1 ]]; then
 fi
 
 info "Booting $ISO - pick the disk in the installer, then boot $DISK with:"
-info "  $QEMU -m 128 -drive file=$DISK,format=raw,if=ide -boot c"
+info "  $QEMU $(mv_machine_flags) -drive file=$DISK,format=raw,if=ide -boot c"
 echo
+# The machine comes from tools/machine_profiles.py, the same one `make run` and
+# the tests use.
+. "$SCRIPT_DIR/../../tools/machine_profile.sh"
+mv_machine_args
+
 QEMU_ARGS=(
-  -cpu 486 -m 128
+  "${MV_MACHINE_ARGS[@]}"
   -cdrom "$ISO"
   -drive "file=$DISK,format=raw,if=ide,cache=writeback"
   -boot d -no-shutdown
-  -audiodev none,id=snd0 -machine pcspk-audiodev=snd0,usb=off
 )
 if [[ -n "$DISPLAY" ]]; then
   QEMU_ARGS+=(-display "$DISPLAY")

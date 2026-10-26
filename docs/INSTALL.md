@@ -19,7 +19,7 @@ This guide covers everything you need to build, run, and test the OS.
 | **NASM** | 2.15+ | Netwide Assembler — assembles all `.asm` sources |
 | **C compiler** | any 32-bit capable | Builds the freestanding kernel module and the C user programs; `tools/find_c_toolchain.sh` proves the candidate by reading the object header back |
 | **GNU Make** | 4.0+ | Build orchestration |
-| **QEMU** | 6.0+ | `qemu-system-x86_64` — i486-compatible emulator for testing |
+| **QEMU** | 6.0+ | `qemu-system-x86_64` — runs the Pentium 4 machine described in `tools/machine_profiles.py` |
 | **Python 3** | 3.6+ | Runs `populate.py` to populate the filesystem |
 | **dd** | any | Disk image construction (standard on Linux/macOS) |
 
@@ -49,7 +49,7 @@ sudo pacman -S nasm qemu-full make python
 
 ### Linux Host Architectures
 
-Mellivora is a BIOS-booted i486 guest. On an x86_64 Linux host, run it with QEMU
+Mellivora is a BIOS-booted 32-bit Pentium 4 guest. On an x86_64 Linux host, run it with QEMU
 or boot it on compatible hardware. On an ARM64/aarch64 Linux host, run it under
 QEMU's x86 system emulator; QEMU translates the guest instructions in software,
 so performance is typically slower. ARM hardware cannot boot Mellivora natively.
@@ -277,16 +277,19 @@ installer expects. Pick the disk in the menu, type `YES`, and when it reports
 `Installation complete.` boot the target:
 
 ```bash
-qemu-system-i386 -m 128 -drive file=mellivora-install-target.img,format=raw,if=ide -boot c
+qemu-system-i386 "$(python3 tools/machine_profiles.py --qemu-flags)" \
+  -drive file=mellivora-install-target.img,format=raw,if=ide -boot c
 ```
+
+(Quote that substitution: the CPU model string carries spaces and parentheses.)
 
 `tests/test_iso.py --end-to-end` performs the whole cycle unattended and
 asserts that the target matches the image and boots.
 
 | Setting | Value |
 | --------- | ------- |
-| **CPU** | i486-compatible x86 emulation |
-| **RAM** | 128 MB |
+| **CPU** | Pentium 4 (`qemu32` with CPUID family 15/model 2; see `tools/machine_profiles.py`) |
+| **RAM** | 512 MB |
 | **CD-ROM** | `mellivora.iso` (El Torito, BIOS boot) |
 | **Disk** | blank image, at least as large as `ISO_IMAGE_MB` |
 | **Boot** | CD-ROM (drive D) |
@@ -308,11 +311,20 @@ Adds QEMU Monitor on stdio and interrupt/reset logging. Useful monitor commands:
 
 ### Custom QEMU Options
 
+The machine itself — CPU model, RAM, chipset and guest devices — is defined in
+`tools/machine_profiles.py` and shared by the Makefile, the tests and the
+installers, so a hand-run QEMU matches `make run`:
+
 ```bash
-qemu-system-i386 -m 128 \
+# one flag per line, so nothing has to be quoted by hand
+mapfile -t MACHINE < <(python3 tools/machine_profiles.py --qemu-args)
+qemu-system-i386 "${MACHINE[@]}" \
   -drive file=mellivora.img,format=raw,if=ide,cache=writethrough \
   -boot c -no-reboot -no-shutdown
 ```
+
+`MV_PROFILE` picks a profile: `p4` (default), `p4-noapic` (the 8259 path) or
+`i486` (legacy, refused at boot by the kernel's CPU floor).
 
 Useful additional options:
 
@@ -364,9 +376,9 @@ The `populate.py` script creates 5 subdirectories and places the curated runtime
 
 ### Requirements
 
-- i486-or-newer x86 CPU with BIOS legacy boot support
+- Pentium 4 or later (FXSR + SSE + SSE2; a part without them is refused at boot)
 - IDE or SATA disk / USB drive with BIOS legacy boot
-- At least 1 MB RAM (128 MB recommended)
+- At least 64 MB RAM (512 MB is what the test machine uses)
 - PS/2 keyboard (USB works if BIOS provides PS/2 emulation)
 - VGA-compatible display
 
@@ -414,7 +426,7 @@ to a stick.
 1. Create a new **x86** VM in legacy BIOS mode
 2. Attach `mellivora.iso` as the VM's optical drive
 3. Attach an empty virtual hard disk **at least as large as `ISO_IMAGE_MB`**
-4. Give the VM at least **128 MB RAM**
+4. Give the VM **512 MB RAM** (the test machine; 128 MB is the floor)
 5. Boot from the ISO, pick the virtual disk in the installer, type `YES`
 6. Reboot from the hard disk
 
@@ -487,14 +499,15 @@ code generation", ensure `-O0` is present in the kernel build rule in the Makefi
 Run `make full` (not just `make`) — this includes the populate step that writes programs
 to the filesystem.
 
-### No sound from PC speaker
+### No sound
 
-QEMU requires explicit audio configuration:
+The machine profile already wires the guest's sound device (AC'97 on `p4`) to a
+host backend id; only the host backend has to be chosen. `make run` picks one for
+the host, and for a hand-run QEMU:
 
 ```bash
-qemu-system-i386 -m 128 \
-  -drive file=mellivora.img,format=raw,if=ide -boot c \
-  -audiodev id=snd,driver=sdl -machine pcspk-audiodev=snd
+# MV_AUDIO is the host backend: pa, alsa, coreaudio, sdl or none
+MV_AUDIO=sdl python3 tools/machine_profiles.py --qemu-flags
 ```
 
 ### Kernel size and sector count

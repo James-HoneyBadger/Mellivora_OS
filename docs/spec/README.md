@@ -55,7 +55,7 @@ named.
 | Handle rights | read/write only | 16-bit rights mask plus generic mapping per type | M1 |
 | Kernel virtual space | ~2 MB image window at 1 MB, 8 MB reserve | 1 GiB at `0xC0000000`: image, heaps, page tables, cache | M1 |
 | User virtual space | ~1 MB program window plus a demand zone under 512 MB | 3 GiB per process, ASLR across the whole range | M1 |
-| Physical memory | 128 MB tested; frames only below 448 MB | 64 GiB via PAE, PFN database over all of it | M1 |
+| Physical memory | 512 MB tested; frames only below 512 MB | 64 GiB via PAE, PFN database over all of it | M1 |
 | Syscalls | 187, flat, frozen by number | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
 | Names | 63 bytes, 8-bit | 255 UTF-16 code units, resolved case-insensitively for the Windows-facing namespace | M1 |
 | Directory entries | 224 per subdirectory, 2 048 per root | 65 535 per directory, B+tree directories | M3 |

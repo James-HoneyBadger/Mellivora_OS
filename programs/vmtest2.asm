@@ -16,11 +16,37 @@
 
 CRASH_STATUS equ 0x80000000
 
-MAP_HINT     equ 0x10000000     ; 256 MB, 4 MB aligned (one demand page table)
-CHILD_HINT   equ 0x14000000     ; 320 MB, used only by the reclaim child
 PAGES        equ 64             ; 256 KB mapping
 
 start:
+        ; ---------------------------------------------------------------
+        ; 0. Find an address this machine will accept as a hint
+        ; ---------------------------------------------------------------
+        ; The demand zone starts above the highest frame of RAM, so the fixed
+        ; 256 MB address this test used to name is user space on a 128 MB
+        ; machine and inside physical memory on a 512 MB one. Ask for a page
+        ; with no hint, keep the address the allocator chose (4 MB aligned so
+        ; it starts a page table, which makes the table accounting below
+        ; exact), then hand it back: that is a hint this machine honours.
+        mov eax, SYS_MMAP
+        mov ebx, 0x400000
+        mov ecx, 0x400000
+        mov edx, PROT_READ | PROT_WRITE
+        int 0x80
+        cmp eax, -1
+        je fail
+        mov ebx, eax                 ; give the probe back exactly as it came
+        mov ecx, 0x400000
+        mov [map1], eax              ; (map1 is overwritten in case 1)
+        mov eax, SYS_MUNMAP
+        int 0x80
+        test eax, eax
+        jnz fail
+        mov eax, [map1]
+        add eax, 0x3FFFFF
+        and eax, 0xFFC00000
+        mov [map_hint], eax
+
         ; ---------------------------------------------------------------
         ; 1. mmap is demand-zero: reserving pages allocates nothing
         ; ---------------------------------------------------------------
@@ -29,13 +55,13 @@ start:
         mov [free_base], eax
 
         mov eax, SYS_MMAP
-        mov ebx, MAP_HINT
+        mov ebx, [map_hint]
         mov ecx, PAGES * 4096
         mov edx, PROT_READ | PROT_WRITE
         int 0x80
         cmp eax, -1
         je fail
-        cmp eax, MAP_HINT
+        cmp eax, [map_hint]
         jne fail
         mov [map1], eax
 
@@ -251,7 +277,8 @@ start:
 
 .reclaim_child:
         mov eax, SYS_MMAP
-        mov ebx, CHILD_HINT
+        mov ebx, [map_hint]
+        add ebx, 0x800000            ; two page tables up: still this machine's zone
         mov ecx, 32 * 4096
         mov edx, PROT_READ | PROT_WRITE
         int 0x80
@@ -277,7 +304,8 @@ start:
         ;    user page in with user access, not identity-map over it.
         ; ---------------------------------------------------------------
         mov eax, SYS_MMAP
-        mov ebx, 0x18000000
+        mov ebx, [map_hint]
+        add ebx, 0x1000000
         mov ecx, 4096
         mov edx, PROT_READ | PROT_WRITE
         int 0x80
@@ -414,6 +442,7 @@ msg_no_fault: db "VMTEST2_FAIL_NO_FAULT", 10, 0
 ; directive here would restart the address counter at zero, so every buffer
 ; would alias the program's own code instead of following it.
 map1:        dd 0
+map_hint:    dd 0
 probe_addr:  dd 0
 free_base:   dd 0
 free_before: dd 0

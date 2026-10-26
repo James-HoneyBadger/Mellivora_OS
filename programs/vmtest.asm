@@ -23,9 +23,12 @@ start:
         je .fail
         test eax, 0xFFF                 ; page aligned?
         jnz .fail
-        cmp eax, 0x08000000             ; inside the demand zone?
+        ; Inside the demand zone. Only the floor is fixed: the zone starts
+        ; above the highest frame of RAM, so a 512 MB machine begins it at
+        ; 0x20000000 and the ceiling (1 GB) is what bounds it from above.
+        cmp eax, 0x08000000
         jb .fail
-        cmp eax, 0x20000000
+        cmp eax, 0x40000000
         jae .fail
         mov [map1], eax
         cmp dword [eax], 0              ; fresh pages read as zero

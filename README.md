@@ -401,8 +401,8 @@ Mellivora_OS/
 
 ### Real Hardware
 
-- i486-or-newer x86 CPU with BIOS legacy boot support
-- 1 MB RAM minimum (128 MB recommended)
+- Pentium 4 or later x86 CPU (FXSR + SSE + SSE2) with BIOS legacy boot support
+- 128 MB RAM minimum; 512 MB is what the test machine uses
 - IDE/SATA disk or USB drive (BIOS legacy boot)
 - VGA-compatible display
 - PS/2 keyboard

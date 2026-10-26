@@ -20,9 +20,10 @@ Options:
   --screendump FILE   save the framebuffer as PNG (works in VBE graphics modes)
   --json              emit a machine-readable result object
   --out FILE          write the combined serial+screen output to FILE
-  --mem MB            guest RAM in MB (default 128)
-  --cpu MODEL         CPU model (default 486); a model with a local APIC is
-                      needed to exercise the APIC interrupt path
+  --mem MB            guest RAM in MB (default: the machine profile's)
+  --cpu MODEL         override the CPU model (default: the machine profile's)
+  --profile NAME      machine profile from tools/machine_profiles.py
+                      (default $MV_PROFILE, else p4)
   --smp N             give the guest N CPUs (default: QEMU's, i.e. 1); used to
                       prove a reported CPU count is read, not assumed
 
@@ -51,6 +52,13 @@ KEYS = {
     "'": "apostrophe", "\"": "shift-apostrophe", "_": "shift-minus",
     "*": "shift-8", ">": "shift-dot", "<": "shift-comma",
 }
+
+
+def machine_args():
+    """The machine this run uses: the profile, with per-run overrides applied."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from machine_profiles import qemu_args as _qemu_args
+    return _qemu_args(audio="none")
 
 
 def find_qemu() -> str:
@@ -271,9 +279,12 @@ def main() -> int:
     thens = _opt_all(args, "--then")
     out_file = _opt(args, "--out")
     screendump = _opt(args, "--screendump")
-    mem_mb = _opt(args, "--mem", "128")
+    mem_mb = _opt(args, "--mem")
     smp = _opt(args, "--smp")
     cpu = _opt(args, "--cpu")
+    chosen_profile = _opt(args, "--profile")
+    if chosen_profile:
+        os.environ["MV_PROFILE"] = chosen_profile
     want_json = "--json" in args
 
     qemu = find_qemu()
@@ -281,17 +292,20 @@ def main() -> int:
     mon_path = os.path.join(tmp, "mon.sock")
     ser_path = os.path.join(tmp, "serial.sock")
 
+    machine = machine_args()
+    if cpu:
+        machine[machine.index("-cpu") + 1] = cpu
+    if mem_mb:
+        machine[machine.index("-m") + 1] = str(mem_mb)
+
     proc = subprocess.Popen(
-        [qemu, "-cpu", cpu or "486", "-m", str(mem_mb),
-         "-drive", f"file={image},format=raw,if=ide,cache=writethrough",
+        [qemu] + machine +
+        ["-drive", f"file={image},format=raw,if=ide,cache=writethrough",
          "-boot", "c", "-display", "none", "-no-reboot",
          # wait=on keeps the VM paused until this process connects, so the boot
          # marker cannot be emitted before the reader exists.
          "-serial", f"unix:{ser_path},server=on,wait=on",
-         "-monitor", f"unix:{mon_path},server,nowait",
-         "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off",
-         "-device", "sb16,audiodev=snd0",
-         "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"]
+         "-monitor", f"unix:{mon_path},server,nowait"]
         + (["-smp", smp] if smp else []),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

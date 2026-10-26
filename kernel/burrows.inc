@@ -10248,7 +10248,7 @@ gui_str_settings:   db "Settings", 0
 gui_str_about_l1:   db "Mellivora OS", 0
 gui_str_about_l2:   db "v3.0.0", 0
 gui_str_about_l3:   db "Burrows Desktop Environment", 0
-gui_str_about_l4:   db "32-bit Protected Mode / i486+", 0
+gui_str_about_l4:   db "32-bit Protected Mode / Pentium 4 SSE2", 0
 gui_str_about_l5:   db "HBFS Filesystem / 2 GB", 0
 gui_str_about_l6:   db "Press ESC to close", 0
 gui_str_ok:         db "OK", 0

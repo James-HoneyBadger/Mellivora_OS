@@ -86,11 +86,10 @@ TCB_CR3         equ 128     ; v13: Physical address of this task's page director
 ; what a process *is* in this wave, and each lives where its hot path reads it.
 ; The floating-point and vector image starts at 144 so it is 16-byte aligned
 ; relative to a 16-aligned TCB, which is what fxsave requires.
-TCB_FPU_AREA    equ 144     ; v15: fxsave image (or fnsave on a CPU without FXSR)
-                            ;      (0 = not allocated; the kernel/shell uses the
-                            ;       master directory at PAGE_DIR_ADDR)
-FPU_AREA_SIZE   equ 512     ; fxsave writes 512 bytes; the first 108 are the
-                            ; x87 image fnsave writes on a CPU without FXSR
+TCB_FPU_AREA    equ 144     ; fxsave image: x87, MXCSR, XMM0-15
+FPU_AREA_SIZE   equ 512     ; fxsave writes 512 bytes and needs 16-byte
+                            ; alignment, which TCB_FPU_AREA's 144 gives on a
+                            ; 16-aligned TCB
 
 ; M1: the executive's per-process state, after the floating-point image so the
 ; offset the FPU code has always used does not move.
@@ -201,14 +200,11 @@ sched_swap_fd_tables:
 ; the shell, which owns the console between jobs and gets its own image for
 ; the same reason.
 ;
-; Two save formats, one image slot. Where CPUID advertises FXSR the whole 512
-; bytes are saved with fxsave/fxrstor, which covers x87, MXCSR and XMM0-15;
-; otherwise fnsave/frstor save the 108-byte x87 image the target's i486 floor
-; actually has. cpu_has_fxsr is set once at boot, so the save and the load
-; always agree on the format.
-;
-; fnsave re-initialises the FPU after saving, which is harmless because
-; frstor follows immediately.
+; One save format, one image slot: the whole 512 bytes are saved with
+; fxsave/fxrstor, which covers x87, MXCSR and XMM0-15. There is no x87-only
+; path left to disagree with it - the kernel does not boot on a processor
+; without FXSR (cpu.inc refuses it), so the format is a property of the build
+; rather than of the machine.
 ;-----------------------------------------------------------------------
 sched_fpu_save:                 ; In: EDI = TCB, or 0 for the shell
         push eax
@@ -219,13 +215,7 @@ sched_fpu_save:                 ; In: EDI = TCB, or 0 for the shell
 .save_shell:
         mov eax, fpu_shell_area
 .save:
-        cmp dword [cpu_has_fxsr], 0
-        je .save_x87
         fxsave [eax]            ; 512 bytes: x87, MXCSR, XMM0-15
-        jmp .save_done
-.save_x87:
-        fnsave [eax]            ; 108 bytes: x87 only
-.save_done:
         pop eax
         ret
 
@@ -238,13 +228,7 @@ sched_fpu_load:                 ; In: EBX = TCB, or 0 for the shell
 .load_shell:
         mov eax, fpu_shell_area
 .load:
-        cmp dword [cpu_has_fxsr], 0
-        je .load_x87
         fxrstor [eax]
-        jmp .load_done
-.load_x87:
-        frstor [eax]
-.load_done:
         pop eax
         ret
 
@@ -265,8 +249,7 @@ sched_swap_fpu:                 ; In: EDI = outgoing, EBX = incoming (0 = shell)
 ; requires each load to bring back exactly what was saved - both the x87 stack
 ; and, where the CPU has it, XMM0 through fxsave/fxrstor.
 ;
-; Prints FPU_SELFTEST_OK, FPU_SELFTEST_FAIL or FPU_SELFTEST_SKIP (a CPU with
-; no FXSR has no vector state to carry) on COM1, and runs once at boot.
+; Prints FPU_SELFTEST_OK or FPU_SELFTEST_FAIL on COM1 and runs once at boot.
 ;
 ; The two images are stand-in TCBs: sched_fpu_save/load address the image at
 ; TCB_FPU_AREA past the pointer, so the pointer handed in is the image minus
@@ -277,12 +260,9 @@ FPU_SELFTEST_B   equ 0xB1670002
 
 FPU_SELFTEST_OK    equ 0
 FPU_SELFTEST_BAD   equ 1
-FPU_SELFTEST_NA    equ 2         ; no FXSR: nothing to carry
 
 fpu_selftest:
         pushad
-        cmp dword [cpu_has_fxsr], 0
-        je .fs_skip
 
         ;--- state A: x87 st0 = A, XMM0 = A ---
         fninit
@@ -324,8 +304,6 @@ fpu_selftest:
 .fs_fail:
         mov  ebx, FPU_SELFTEST_BAD
         jmp  .fs_done
-.fs_skip:
-        mov  ebx, FPU_SELFTEST_NA
 .fs_done:
         mov  [esp + 28], ebx        ; popad's saved EAX slot: the status
         popad
@@ -334,22 +312,21 @@ fpu_selftest:
 ;---------------------------------------
 ; fpu_selftest_boot - run the round trip once, and say so on COM1
 ;
-; A successful boot stays quiet here for the skip case (a 486 has no vector
-; state to carry and every boot would print the same line), but a failure has
-; to be visible in a log nobody is watching.
+; Prints the verdict either way. It used to stay quiet on success, which was
+; fine while the whole path was optional (a 486 had nothing to carry); now that
+; every switch depends on the image, a boot log that does not mention it cannot
+; tell "passed" from "never ran", and the boot gate requires the line.
 ;---------------------------------------
 fpu_selftest_boot:
         pushad
         call fpu_selftest
         cmp  eax, FPU_SELFTEST_OK
-        je   .fsb_done
-        cmp  eax, FPU_SELFTEST_BAD
-        jne  .fsb_skip
-        mov  esi, fpu_selftest_fail_msg
+        jne  .fsb_fail
+        mov  esi, fpu_selftest_ok_msg
         call serial_print
         jmp  .fsb_done
-.fsb_skip:
-        mov  esi, fpu_selftest_skip_msg
+.fsb_fail:
+        mov  esi, fpu_selftest_fail_msg
         call serial_print
 .fsb_done:
         popad
@@ -393,14 +370,8 @@ sched_fpu_report:
         pushad
         call fpu_selftest
         test eax, eax
-        jnz .sfr_not_ok
+        jnz .sfr_fail
         mov  esi, fpu_selftest_ok_msg
-        call vga_print
-        jmp  .sfr_done
-.sfr_not_ok:
-        cmp  eax, FPU_SELFTEST_NA
-        jne  .sfr_fail
-        mov  esi, fpu_selftest_skip_msg
         call vga_print
         jmp  .sfr_done
 .sfr_fail:
@@ -412,7 +383,6 @@ sched_fpu_report:
 
 fpu_selftest_ok_msg:    db "FPU_SELFTEST_OK", 10, 0
 fpu_selftest_fail_msg:  db "FPU_SELFTEST_FAIL", 10, 0
-fpu_selftest_skip_msg:  db "FPU_SELFTEST_SKIP: no FXSR on this CPU", 10, 0
 
 ;---------------------------------------
 ; sched_init - Initialize the scheduler
@@ -441,12 +411,7 @@ sched_init:
         ; must be in the same format the save path writes: a fxsave image
         ; carries MXCSR, and a zeroed one would unmask every SSE exception.
         fninit
-        cmp dword [cpu_has_fxsr], 0
-        je .si_fpu_x87
         fxsave [fpu_init_image]
-        jmp .si_fpu_captured
-.si_fpu_x87:
-        fnsave [fpu_init_image]
 .si_fpu_captured:
         push edi
         push esi

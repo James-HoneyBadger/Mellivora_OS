@@ -7,9 +7,10 @@
 #   1. the shell reached its first prompt (the MELLIVORA_BOOT_OK marker that
 #      shell.inc writes to COM1),
 #   2. no CPU exception was reported during boot, and
-#   3. every boot self-test that reports on COM1 reported success. A kernel
-#      invariant that is only checked by a test someone remembers to run is not
-#      checked, so the lines that matter are required here.
+#   3. every boot self-test that reports on COM1 reported success, and
+#   4. the machine really is the one the profile promises: a Pentium 4 with
+#      SSE2, as CPUID describes it. A kernel that quietly fell back to a
+#      scalar path would still boot, so the identity is asserted, not assumed.
 #
 # Both matter. The kernel's fault handlers recover by tearing down every ring-3
 # task and jumping back to shell_main, so a kernel that faults during boot can
@@ -34,15 +35,18 @@ TIMEOUT="${BOOT_TIMEOUT:-60}"
 MARKER="MELLIVORA_BOOT_OK"
 FAULT_RE='CPU EXCEPTION|double fault|triple fault'
 
+. "$ROOT/tools/machine_profile.sh"
+
 # Each pattern must appear on COM1 once boot has reached the prompt:
+#   - the CPU the profile promises (family/model/stepping and SSE2),
 #   - the lock-order gate,
 #   - the allocator's register and accounting contract,
-#   - the per-task x87/SSE image (OK where the CPU has FXSR, SKIP where it has
-#     none to carry, never FAIL).
+#   - the per-task x87/SSE image.
 REQUIRED_RES=(
+    "${BOOT_CPU_RE:-CPU_P4 .*family=15 model=2 step=7 fxsr=1 sse=1 sse2=1}"
     'LOCK_SELFTEST_OK'
     'PMM_SELFTEST_OK'
-    'FPU_SELFTEST_(OK|SKIP)'
+    'FPU_SELFTEST_OK'
 )
 
 LOG_DIR="$ROOT/.build"
@@ -108,23 +112,22 @@ read -r -a QEMU_CMD <<< "$QEMU"
 mkdir -p "$LOG_DIR"
 : > "$LOG"
 
-echo "  boot test: $(basename "${QEMU_CMD[0]}") -cpu 486 -m 128, timeout ${TIMEOUT}s"
+echo "  boot test: $(basename "${QEMU_CMD[0]}"), $MV_PROFILE machine, timeout ${TIMEOUT}s"
 echo "  image:     $IMAGE"
+echo "  machine:   $(mv_machine_flags)"
 
 # --- boot headless ------------------------------------------------------
-# Flags mirror the 'make run' target so the test exercises the same machine
-# the developer runs, minus the display and with a non-interactive audio
-# backend (CI has no PulseAudio).
+# The machine comes from tools/machine_profiles.py, so this boots exactly what
+# 'make run' boots: same CPU, same RAM, same chipset. Only the display and the
+# host audio backend differ (CI has no PulseAudio).
+mv_machine_args
 "${QEMU_CMD[@]}" \
-    -cpu 486 -m 128 \
+    "${MV_MACHINE_ARGS[@]}" \
     -drive "file=$IMAGE,format=raw,if=ide,cache=writethrough" \
     -boot c \
     -display none -monitor none \
     -serial "file:$LOG" \
     -no-reboot \
-    -audiodev none,id=snd0 -machine pcspk-audiodev=snd0,usb=off \
-    -device sb16,audiodev=snd0 \
-    -netdev user,id=net0 -device rtl8139,netdev=net0 \
     >/dev/null 2>&1 &
 QPID=$!
 

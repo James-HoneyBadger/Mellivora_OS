@@ -29,6 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import qemu_drive as qd  # noqa: E402
+from machine_profiles import qemu_args as machine_args  # noqa: E402
 
 IMAGE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "mellivora.img")
 BOOT_TIMEOUT = int(os.environ.get("DESKTOP_TIMEOUT", "90"))
@@ -103,14 +104,11 @@ def main():
     mon_path = os.path.join(workdir, "monitor.sock")
     ser_path = os.path.join(workdir, "serial.sock")
     proc = subprocess.Popen(
-        [qemu, "-cpu", "486", "-m", "128",
-         "-drive", "file=%s,format=raw,if=ide,cache=writethrough" % IMAGE,
+        [qemu] + machine_args() +
+        ["-drive", "file=%s,format=raw,if=ide,cache=writethrough" % IMAGE,
          "-boot", "c", "-display", "none", "-no-reboot",
          "-serial", "unix:%s,server=on,wait=on" % ser_path,
-         "-monitor", "unix:%s,server,nowait" % mon_path,
-         "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off",
-         "-device", "sb16,audiodev=snd0", "-netdev", "user,id=net0",
-         "-device", "rtl8139,netdev=net0"],
+         "-monitor", "unix:%s,server,nowait" % mon_path],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     cases = []
 

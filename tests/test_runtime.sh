@@ -71,7 +71,7 @@ fi
 
 failures=0
 
-# run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB] [SMP] [CPU] [WAIT_S]
+# run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB] [SMP] [CPU] [WAIT_S] [PROFILE]
 # An empty EXPECT means "only check that nothing faulted" (useful for a
 # graphics program that owns the screen and prints nothing).
 #
@@ -81,12 +81,14 @@ failures=0
 # slow because it does the work, and a window that is too small reports "not
 # found" for a program that is still running.
 #
-# CPU and SMP choose the machine. The default (a 486, one CPU) has no local
-# APIC, which exercises the 8259 path; a Pentium with two CPUs exercises the
-# I/O APIC path, and that is the machine a 2000-era user actually had.
+# The default machine is the `p4` profile from tools/machine_profiles.py: a
+# Pentium 4 with SSE2, a local APIC, 512 MB and AC'97. A case overrides the
+# profile when it is about the machine rather than the guest: `p4-noapic` for
+# the 8259 path, `--smp 2` for the I/O APIC path. A raw CPU model override is
+# still there for a one-off, but a profile is the thing to reach for.
 run_case() {
     local name="$1" cmd="$2" expect="$3" then="${4:-}" reject="${5:-CPU EXCEPTION}"
-    local mem="${6:-}" smp="${7:-}" cpu="${8:-}" wait_s="${9:-}"
+    local mem="${6:-}" smp="${7:-}" cpu="${8:-}" wait_s="${9:-}" profile="${10:-}"
     local args=("$IMAGE" "$cmd" --reject "$reject")
     if [ -n "$wait_s" ]; then
         args+=(--wait "$wait_s")
@@ -105,6 +107,9 @@ run_case() {
     fi
     if [ -n "$cpu" ]; then
         args+=(--cpu "$cpu")
+    fi
+    if [ -n "$profile" ]; then
+        args+=(--profile "$profile")
     fi
     printf '  %-34s ' "$name"
     if timeout "$CASE_TIMEOUT" python3 "$DRIVE" "${args[@]}" >/dev/null 2>&1; then
@@ -170,12 +175,12 @@ run_case "copy-on-write fork"        "cow_test"              "COW_OK"           
 run_case "x87 state per task"         "fpu_test"              "FPU_OK"             "" "CPU EXCEPTION|FPU_FAIL"
 # The save/restore itself, proved before any task exists: two distinct x87+SSE
 # states are saved, the live registers disturbed, and each loaded back and
-# required byte for byte. Boots a Pentium III because the default 486 model has
-# no FXSR and so nothing to carry (it prints FPU_SELFTEST_SKIP there).
-run_case "x87+SSE image round trip"   "fpu"                   "FPU_SELFTEST_OK"    "" "CPU EXCEPTION|FPU_SELFTEST_FAIL|FPU_SELFTEST_SKIP" "" "" pentium3
+# required byte for byte. Runs on the default machine, which is a Pentium 4 and
+# therefore has FXSR; a machine without it would not have booted at all.
+run_case "x87+SSE image round trip"   "fpu"                   "FPU_SELFTEST_OK"    "" "CPU EXCEPTION|FPU_SELFTEST_FAIL|FPU_SELFTEST_SKIP"
 # SSE state is per-task too, and is saved in the same slot with
 # fxsave/fxrstor: the same two-task test as fpu_test, with XMM registers.
-run_case "SSE state per task"         "sse_test"              "SSE_OK"             "" "CPU EXCEPTION|SSE_FAIL|SSE_SKIP" "" "" pentium3
+run_case "SSE state per task"         "sse_test"              "SSE_OK"             "" "CPU EXCEPTION|SSE_FAIL|SSE_SKIP"
 # M0's C exit criterion, kernel half: the module is linked into the image at a
 # fixed address, its header is checked, its init is handed the host table, and
 # it verifies the freestanding runtime and the C-to-assembly call.
@@ -219,36 +224,37 @@ run_case "unknown name still errors"  "nosuchthing"           "Type 'help'"     
 # RSDT/XSDT walked, and the MADT read for the CPU and APIC inventory.
 run_case "ACPI tables are read"       "acpi"                  "ACPI: MADT at 0x"   "" "CPU EXCEPTION|no RSDP"
 # ...and the count is the firmware's: the same image on a 2-CPU machine must
-# report 2. (QEMU gives the CPUs a local APIC once there is more than one, even
-# on a 486 model, so this machine also switches to the I/O APIC.) The assertion
-# is on the command's output rather than the boot line: an expectation is
-# matched after the echoed command, and the boot line is printed before it.
+# report 2. The assertion is on the command's output rather than the boot line:
+# an expectation is matched after the echoed command, and the boot line is
+# printed before it.
 run_case "ACPI counts the CPUs"       "acpi"                  "ACPI: CPUs: 2"      "" "CPU EXCEPTION|ACPI: CPUs: 1" "" 2
-# One 486 has no local APIC at all, so the 8259 stays in charge and the PIT
-# keeps the tick: the firmware described an APIC the CPU does not have, and the
-# probe is what decides.
-run_case "no APIC means the 8259"     "acpi"                  "8259 (no usable local APIC)" "" "CPU EXCEPTION|I/O APIC\\|no RSDP"
+# A part with no local APIC keeps the 8259 in charge and the PIT on the tick:
+# the firmware described an APIC the CPU does not have, and the probe is what
+# decides. This used to be the default 486; now that the kernel refuses a 486,
+# the 8259 path is reached through the p4-noapic profile, which is the same
+# Pentium 4 with APIC removed from CPUID.
+run_case "no APIC means the 8259"     "acpi"                  "8259 (no usable local APIC)" "" "CPU EXCEPTION|I/O APIC\\|no RSDP" "" "" "" "" p4-noapic
 # With a local APIC the tick moves to its timer, measured against the PIT
 # because nothing states the APIC timer's frequency.
-run_case "tick moves to the APIC timer" "acpi"                "tick clock: local APIC timer" "" "CPU EXCEPTION|tick clock: PIT" "" 2 pentium
+run_case "tick moves to the APIC timer" "acpi"                "tick clock: local APIC timer" "" "CPU EXCEPTION|tick clock: PIT" "" 2
 # ...and it really ticks: this program sleeps on tick counts and waits for
 # children, so a clock that does not fire would hang here.
-run_case "SMP machine sleeps on its timer" "hostile_test"      "HOSTILE_OK"         "" "CPU EXCEPTION|HOSTILE_FAIL" "" 2 pentium
-# The interrupt controller follows the hardware, not the table: a Pentium has
-# a local APIC, so the 8259s are masked and the I/O APIC routes every line.
-run_case "APIC is used when the CPU has one" "acpi"           "ACPI: interrupts: I/O APIC" "" "CPU EXCEPTION|8259 (no" "" 2 pentium
+run_case "SMP machine sleeps on its timer" "hostile_test"      "HOSTILE_OK"         "" "CPU EXCEPTION|HOSTILE_FAIL" "" 2
+# The interrupt controller follows the hardware, not the table: this CPU has a
+# local APIC, so the 8259s are masked and the I/O APIC routes every line.
+run_case "APIC is used when the CPU has one" "acpi"           "ACPI: interrupts: I/O APIC" "" "CPU EXCEPTION|8259 (no" "" 2
 # ...and that is what makes an SMP machine usable: before this, a machine with
 # two CPUs received no interrupts at all, so nothing typed was ever read.
-run_case "SMP machine takes input"    "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL" "" 2 pentium
+run_case "SMP machine takes input"    "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL" "" 2
 # The lock-order gate refuses an inversion. It runs at boot, and again here on
 # demand, so the gate itself is a thing that can be tested rather than trusted.
-run_case "lock order is enforced"     "locks"                 "LOCK_SELFTEST_OK"   "" "CPU EXCEPTION|LOCK_SELFTEST_FAIL" "" 2 pentium
+run_case "lock order is enforced"     "locks"                 "LOCK_SELFTEST_OK"   "" "CPU EXCEPTION|LOCK_SELFTEST_FAIL" "" 2
 # All of them, not just the second: every processor the firmware describes is
 # woken with INIT-SIPI-SIPI and must check in.
-run_case "every described CPU comes online" "acpi"             "processors online: 4 of 4" "" "CPU EXCEPTION|online: 3 of|online: 2 of" "" 4 pentium
+run_case "every described CPU comes online" "acpi"             "processors online: 4 of 4" "" "CPU EXCEPTION|online: 3 of|online: 2 of" "" 4
 # Line routing, not just the tick: the network stack's interrupts arrive
 # through an I/O APIC entry programmed level-triggered active-low.
-run_case "SMP machine serves network" "dhcp"                  "ANSWER SECTION"     "dig example.com" "CPU EXCEPTION" "" 2 pentium
+run_case "SMP machine serves network" "dhcp"                  "ANSWER SECTION"     "dig example.com" "CPU EXCEPTION" "" 2
 run_case "HBFS metadata writes"      "fs_meta_test"          "FS_META_OK"         "" "CPU EXCEPTION|FS_META_FAIL"
 run_case "HBFS metadata churn"       "fs_mkdir_test"         "CRASH_LOOP_OK"      "" "CPU EXCEPTION|CRASH_LOOP_FAIL"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"

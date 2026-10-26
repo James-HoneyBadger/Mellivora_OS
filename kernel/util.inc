@@ -540,7 +540,29 @@ print_sysinfo:
         pushad
         call vga_set_info
 
+        ; The CPU line is the processor's own answer, not a build-time claim:
+        ; CPUID has already run, so the brand string and the family/model the
+        ; machine reports are printed as they are.
         mov esi, msg_cpu
+        call vga_print
+        cmp dword [cpu_brand_len], 0
+        je  .psi_cpu_unknown
+        mov esi, cpu_brand
+        call vga_print
+        jmp .psi_cpu_details
+.psi_cpu_unknown:
+        mov esi, msg_cpu_unknown
+        call vga_print
+.psi_cpu_details:
+        mov esi, msg_cpu_details
+        call vga_print
+        mov eax, [cpu_family]
+        call vga_print_dec
+        mov esi, msg_cpu_model
+        call vga_print
+        mov eax, [cpu_model]
+        call vga_print_dec
+        mov esi, msg_cpu_close
         call vga_print
 
         mov esi, msg_mem_detect
@@ -658,6 +680,30 @@ serial_print_hex:
         jnz .sph_loop
         mov al, ' '
         call serial_putchar
+        popad
+        ret
+
+; Write EAX as unsigned decimal to COM1 (no trailing space)
+serial_print_dec:
+        pushad
+        sub  esp, 16            ; digit buffer, filled backwards
+        mov  ebx, 10
+        xor  ecx, ecx
+.spd_div:
+        xor  edx, edx
+        div  ebx
+        add  dl, '0'
+        mov  [esp + ecx], dl
+        inc  ecx
+        test eax, eax
+        jnz  .spd_div
+.spd_out:
+        dec  ecx
+        mov  al, [esp + ecx]
+        call serial_putchar
+        test ecx, ecx
+        jnz  .spd_out
+        add  esp, 16
         popad
         ret
 

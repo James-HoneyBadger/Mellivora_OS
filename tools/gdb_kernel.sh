@@ -45,14 +45,16 @@ mkdir -p "$LOG_DIR"
 
 # -S freezes the CPU at reset and -s opens the gdbstub on TCP port 1234, so the
 # debugger is attached before the first instruction executes.
+# The machine comes from tools/machine_profiles.py, so the debugger sees the
+# same CPU and memory map the tests use.
+. "$(dirname "${BASH_SOURCE[0]}")/machine_profile.sh"
+mv_machine_args
+
 "$QEMU" -S -s \
-    -cpu 486 -m 128 \
+    "${MV_MACHINE_ARGS[@]}" \
     -drive "file=$IMAGE,format=raw,if=ide,cache=writethrough" \
     -boot c -display none -no-reboot \
-    -serial "file:$LOG" -monitor none \
-    -audiodev none,id=snd0 -machine pcspk-audiodev=snd0,usb=off \
-    -device sb16,audiodev=snd0 \
-    -netdev user,id=net0 -device rtl8139,netdev=net0 &
+    -serial "file:$LOG" -monitor none &
 QPID=$!
 trap 'kill "$QPID" 2>/dev/null || true' EXIT
 

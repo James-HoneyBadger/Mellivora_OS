@@ -532,7 +532,7 @@ lbl_vidmem:     db "Video:", 0
 val_vidmem:     db "640x480x32 VBE", 0
 
 lbl_arch:       db "CPU:", 0
-val_arch:       db "i486+ (32-bit)", 0
+val_arch:       db "Pentium 4 (32-bit)", 0
 
 lbl_disk:       db "Disk:", 0
 val_disk:       db "2 GB HBFS", 0

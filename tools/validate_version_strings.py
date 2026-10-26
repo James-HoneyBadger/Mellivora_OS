@@ -39,7 +39,7 @@ def main() -> int:
     expect_substring(errors, "kernel/cmdtable.inc", f"HB Lair v{SHELL_VERSION} commands:")
 
     expect_substring(errors, "programs/neofetch.asm", f"Mellivora OS v{OS_VERSION}")
-    expect_substring(errors, "programs/neofetch.asm", f"Mellivora v{OS_VERSION} (i486 32-bit)")
+    expect_substring(errors, "programs/neofetch.asm", f"Mellivora v{OS_VERSION} (Pentium 4 32-bit)")
     expect_substring(errors, "programs/neofetch.asm", f"HB Lair v{SHELL_VERSION} (Honey Badger Lair)")
 
     expect_substring(errors, "README.md", f"v1.0 → v{OS_VERSION}")

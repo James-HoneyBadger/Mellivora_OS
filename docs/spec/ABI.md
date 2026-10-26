@@ -36,7 +36,8 @@ are built freestanding by a host compiler proved by
 | Position independence | off (`-fno-pic -fno-pie`) | Everything is linked at a fixed address |
 | Stack protector | off (`-fno-stack-protector`) | No TLS segment in ring 0 |
 | Unwind information | off (`-fno-asynchronous-unwind-tables -fno-unwind-tables`) | Nothing unwinds |
-| Vector state | off for kernel C (`-mno-sse -mno-mmx -msoft-float`) | The CPU floor is an i486; see §7 |
+| Instruction set | `-march=pentium4 -mtune=pentium4` | The CPU floor is a Pentium 4; `cmov` and Netburst selection are available |
+| Vector state | off for kernel C (`-mno-sse -mno-mmx -msoft-float`) | XMM belongs to tasks, not to ring-0 C; see §7 |
 | Warnings | `-Wall -Wextra`, warnings are not errors | The tree carries historical assembly that is not C |
 
 ## 3. Types
@@ -155,18 +156,24 @@ The layout is an [ABI](README.md) commitment: a program may hold a handle in a
 ## 7. Floating point and vector state
 
 Each task owns a 512-byte image, saved and restored across a context switch with
-`fxsave`/`fxrstor` where `CPUID` advertises FXSR and `fnsave`/`frstor` where it
-does not; `CR4.OSFXSR` and `CR4.OSXMMEXCPT` are set only on a CPU that has the
-state to keep. The image is captured once in the format the CPU uses, because a
-zeroed `fxsave` area would unmask every SSE exception. This is **as built** and
-proved by `fpu` (`FPU_SELFTEST_OK`) and `programs/fpu_test.asm`.
+`fxsave`/`fxrstor` — x87, `MXCSR` and XMM0-15 in one format. There is no second
+format: `FXSR`, SSE and SSE2 are part of the CPU floor, so a machine without
+them is refused at boot ([PLATFORM.md](PLATFORM.md#8-cpu-features)) instead of
+running a degraded save path. `CR4.OSFXSR` and `CR4.OSXMMEXCPT` are set
+unconditionally, before paging. The image is captured once at `sched_init`,
+because a zeroed `fxsave` area would unmask every SSE exception. This is **as
+built** and proved by `fpu` (`FPU_SELFTEST_OK`, run at boot and on demand) and
+`programs/fpu_test.asm`.
 
 Consequences:
 
-- **Kernel C stays `-mno-sse`.** The CPU floor is an i486; vector instructions in
-  ring 0 would fault on the oldest machine the system supports.
-- **User code may use SSE** where `CPUID` advertises it, and must check: the
-  contract does not promise SSE on a machine that does not have it.
+- **Kernel C stays `-mno-sse`.** Not because the floor lacks SSE2 — it has it —
+  but because XMM state then belongs to two owners at once. If ring-0 C used
+  XMM, every C call would have to declare which half of the vector state it
+  owns, and the per-task image would stop being the single answer.
+- **User code may use SSE unconditionally.** Every accepted CPU has SSE2, so a
+  program does not have to probe; the scheduler carries its XMM state across
+  switches.
 - A future per-task extended state (AVX, if the CPU line ever reaches it) is a
   larger image behind the same `TCB_FPU_AREA` pointer and the same save/restore
   entry points, not a second mechanism.

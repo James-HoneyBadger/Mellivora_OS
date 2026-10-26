@@ -287,8 +287,8 @@ M1 does not close until all of these hold, and `make check` keeps them holding:
 
 | Contract | Tree today |
 |---|---|
-| 3 GiB / 1 GiB split | Flat identity map below 8 MB, 1 MB program window, demand zone under 512 MB |
-| PAE, 64 GiB | 2-level tables, 4 GiB at most, 128 MB tested |
+| 3 GiB / 1 GiB split | Flat identity map over all RAM (512 MB ceiling), 1 MB program window, user demand zone 512 MB-1 GB |
+| PAE, 64 GiB | 2-level tables, 4 GiB at most, 512 MB tested |
 | PFN database | Bitmap plus buddy order lists |
 | Physical map window | RAM is identity-mapped, so a kernel pointer is a physical address |
 | Regions in a tree | A linked list of `vm_area` per task |

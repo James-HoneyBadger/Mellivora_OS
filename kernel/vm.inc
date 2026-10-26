@@ -1005,23 +1005,31 @@ sys_mmap:
 
         ; Choose the virtual range: honour a page-aligned hint inside the
         ; demand zone if it is free, otherwise allocate one.
+        ;
+        ; A hint that cannot be honoured is not an error - it is a hint. The
+        ; demand zone moves with the amount of RAM (it starts above the highest
+        ; frame), so a program's favourite address is legitimate on one machine
+        ; and inside physical memory on the next; failing the call there turned
+        ; "mmap me something near 256 MB" into a hard error on a 512 MB
+        ; machine. Without MAP_FIXED there is nothing to promise, so an
+        ; unusable hint falls through to the allocator.
         cmp dword [.mm_hint], 0
         je .mm_pick
         mov eax, [.mm_hint]
         test eax, 0xFFF
-        jnz .mm_fail
+        jnz .mm_pick
         cmp eax, [user_demand_base]
-        jb .mm_fail
+        jb .mm_pick
         mov edx, eax
         mov ecx, [.mm_pages]
         shl ecx, 12
         add edx, ecx
         cmp edx, USER_DEMAND_MAX
-        ja .mm_fail
+        ja .mm_pick
         mov ebx, ecx
         call vm_overlaps
         test eax, eax
-        jnz .mm_fail
+        jnz .mm_pick
         mov eax, [.mm_hint]
         mov [.mm_virt], eax
         jmp .mm_record
@@ -1314,6 +1322,7 @@ sys_mprotect:
         test eax, eax
         jz .mp_fail
         mov esi, eax
+        mov [.mp_rec], eax
         mov ecx, [.mp_prot]
         mov [esi + VMA_PROT], ecx
 
@@ -1377,6 +1386,11 @@ sys_mprotect:
         call cow_release_frame
 
 .mp_map:
+        ; The detach path borrows ESI for the page copy, so the record pointer
+        ; is reloaded rather than assumed: reading VMA_FLAGS through a physical
+        ; address is how a protection change turned into a wild read of the
+        ; frame it had just copied.
+        mov esi, [.mp_rec]
         ; Re-mapping a page loses its dirty bit, so a shared file mapping has to
         ; push what it wrote back before the protection changes.
         test dword [esi + VMA_FLAGS], VM_MAP_SHARED
@@ -1403,6 +1417,7 @@ sys_mprotect:
         popad
         iretd
 .mp_prot:  dd 0
+.mp_rec:   dd 0
 .mp_virt:  dd 0
 .mp_pages: dd 0
 .mp_phys:  dd 0

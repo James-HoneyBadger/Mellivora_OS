@@ -234,14 +234,14 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 0x00410000 ├─────────────────────────┤
            │ Page directory          │  4 KB — must NOT overlap 3-4 MB
 0x00411000 ├─────────────────────────┤  (a 512 KB+ program would
-           │ 32 identity page tables │  128 KB   overwrite its page dir)
-0x00431000 ├─────────────────────────┤
-           │ 96 demand page tables   │  384 KB (128-512 MB zone)
-0x00491000 ├─────────────────────────┤
+           │ 256 page tables         │  1 MB     overwrite its page dir)
+           │  PDE 0..127: all of RAM │  1:1 mapped at boot
+           │  PDE 128..255: user     │  empty until a task touches them
+0x00511000 ├─────────────────────────┤
            │ (gap / reserved)        │
-0x00500000 ├─────────────────────────┤  ← 5 MB
+0x00620000 ├─────────────────────────┤  ← 6.125 MB
            │ PMM bitmap              │  128 KB (tracks up to 4 GB)
-0x00520000 ├─────────────────────────┤
+0x00640000 ├─────────────────────────┤
            │ PMM buddy tags          │  4 KB (currently unused)
 0x00700000 ├─────────────────────────┤  ← 7 MB
            │ Heap window (unused)    │
@@ -261,10 +261,10 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 | `PROGRAM_BASE` | `0x00300000` (3 MB) | User program load address |
 | `PROGRAM_MAX_SIZE` | `0x00100000` (1 MB) | Max program size |
 | `PROGRAM_EXIT_ADDR` | `0x003FFFF0` | SYS_EXIT trampoline |
-| `PMM_BITMAP` | `0x00500000` (5 MB) | Physical memory bitmap |
-| `PMM_BUDDY_TAGS` | `0x00520000` | Buddy allocator tag array |
 | `PAGE_DIR_ADDR` | `0x00410000` | Page directory (above the program window) |
-| `PAGE_TABLE_BASE` | `0x00411000` | First of 32 identity page tables |
+| `PAGE_TABLE_BASE` | `0x00411000` | First of 256 page tables (`0x411000..0x511000`) |
+| `PMM_BITMAP` | `0x00620000` (6.125 MB) | Physical memory bitmap |
+| `PMM_BUDDY_TAGS` | `0x00640000` | Buddy allocator tag array |
 | `HEAP_BASE` | `0x00700000` (7 MB) | Heap window (reserved, currently unused) |
 | `KERNEL_RESERVED_END` | `0x00800000` (8 MB) | Lower bound of PMM-managed memory |
 | `VGA_BASE` | `0x000B8000` | VGA text mode framebuffer |
@@ -347,7 +347,7 @@ Making `vfs_fd_table` per-task is the remaining isolation step.
 
 ### Overview
 
-The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x500000). Each bit represents one
+The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x620000). Each bit represents one
 4 KB page. Bit = 1 means used, bit = 0 means free.
 
 ### Specifications
@@ -358,11 +358,18 @@ The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x500000). Each bit represe
 | Bitmap size | 128 KB (0x20000 bytes) |
 | Total bits | 1,048,576 |
 | Max addressable | 4 GB (theoretical) |
-| Practical limit | 448 MB (`USER_DEMAND_BASE_MAX`: frames may not reach user space) |
+| Practical limit | 512 MB (`USER_DEMAND_BASE_MAX`: frames may not reach user space) |
 
-The first 128 MB (`PAGING_MAP_MB`) are identity-mapped at boot; RAM above that is
-mapped on demand by the page-fault handler the first time the kernel touches it, so a
-large guest costs page tables, not boot time.
+**All of RAM is identity-mapped at boot.** `paging_init` fills `ceil(mem_top / 4 MB)`
+page tables 1:1, up to the 512 MB ceiling: every frame the allocator can hand out is
+reachable by the kernel without taking a fault, including on an application processor
+whose stack is a frame like any other. Earlier trees mapped only the first 128 MB and
+finished the job from the page-fault handler, which was one allocation away from
+recursing into itself - `pmm_push_free_block` writing a free-list link into an
+unmapped frame faulted, the handler asked the allocator for a page table, and the
+allocator wrote into another unmapped frame: a triple fault that only appeared above
+128 MB of guest RAM. The tables above the RAM ceiling belong to the user demand zone
+and stay empty until a task touches them.
 
 ### Initialization
 
@@ -1444,20 +1451,21 @@ switch only if the scheduler swaps them with the task. Every TCB carries a
 convention as `sched_swap_fd_tables`: outgoing in `EDI`, incoming in `EBX`, and
 0 meaning the shell, which has its own image.
 
-Two formats, one slot. Where `CPUID.01H:EDX` advertises FXSR, the whole 512
-bytes are saved with `fxsave`/`fxrstor` — x87, MXCSR and XMM0-15 — and
-`CR4.OSFXSR`/`OSXMMEXCPT` are set so the CPU keeps that state on the OS's
-behalf. Otherwise `fnsave`/`frstor` save the 108-byte x87 image the i486 floor
-has. `cpu_has_fxsr` is sampled once at boot (`kernel/cpu.inc`) and both the
-save and the load read it, so they always agree on the format. New tasks start
-from an image captured once by `sched_init` after `fninit` — in the *save
-format the CPU uses*, because a zeroed image would unmask every SSE exception.
+One format, one slot. The whole 512 bytes are saved with `fxsave`/`fxrstor` —
+x87, MXCSR and XMM0-15 — and `CR4.OSFXSR`/`OSXMMEXCPT` are set unconditionally so
+the CPU keeps that state on the OS's behalf. There is no `fnsave`/`frstor` path
+any more: FXSR, SSE and SSE2 are part of the CPU floor (`cpu_require_pentium4`
+in `kernel/cpu.inc` refuses a part without them at boot), so a second format to
+keep in agreement would be a bug class with no upside. New tasks start from an
+image captured once by `sched_init` after `fninit`, because a zeroed image would
+unmask every SSE exception.
 
 The image is proved before any task exists: `fpu` (`make check-runtime`, case
 "x87+SSE image round trip") saves two distinct states into two stand-in TCBs,
 disturbs the live registers and requires each back byte for byte. It prints
-`FPU_SELFTEST_OK`, `FPU_SELFTEST_FAIL`, or `FPU_SELFTEST_SKIP` on a CPU with no
-FXSR; the boot path reports a failure on COM1 and stays quiet otherwise.
+`FPU_SELFTEST_OK` or `FPU_SELFTEST_FAIL`, at boot and again on demand; the boot
+gate requires the OK line, so a boot log cannot show "passed" and "never ran"
+as the same thing.
 
 Without this, two programs using floating point or SSE silently corrupt each
 other: `programs/fpu_test.asm` and `programs/sse_test.asm` fork, have both tasks
@@ -1845,8 +1853,9 @@ future task copies) and in the active directory; demand paging instead uses
 ### Double Buffering — Shadow Buffer
 
 To eliminate screen tearing, a **shadow buffer** the same size as the LFB is
-allocated via `pmm_alloc_pages` and lives entirely within the first 128 MB of physical
-memory (identity-mapped, accessible from Ring 3).
+allocated via `pmm_alloc_pages` from RAM that is identity-mapped at boot, so the
+kernel can address it directly (and it is then mapped user-accessible where the
+framebuffer is).
 
 | Variable | Description |
 | -------- | ----------- |

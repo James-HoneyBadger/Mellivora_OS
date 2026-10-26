@@ -749,17 +749,17 @@ D=LightMagenta, E=Yellow, F=White
 
 ## Limitations
 
-- **Paging without isolation:** the kernel enables an identity map for the
-  first 128 MB, so every task still shares one flat address space.
+- **Paging without isolation:** the kernel maps all of RAM 1:1, so every task
+  still shares one flat address space for kernel memory.
 - **Permissions are enforced, but not everywhere yet:** `open`, `SYS_FWRITE` over
   an existing file and `unlink` check the mode against your effective uid/gid;
   creating a file in a directory whose write bit is clear is not checked yet,
   and neither is `truncate` or `rename`.
 - **`chmod` is the owner's to make, `chown` is root's.**
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
-- **448 MB RAM limit:** The physical memory manager stops handing out frames at
-  `0x1C000000` so a frame can never collide with a user address. The first 128 MB are
-  identity-mapped at boot; the rest is mapped on demand.
+- **512 MB RAM limit:** The physical memory manager stops handing out frames at
+  `0x20000000` so a frame can never collide with a user address. All of RAM below
+  that ceiling is identity-mapped at boot; user pages are demand-mapped above it.
 - **Root: 455 files, Subdirs: 224 files:** Directory entry limits per HBFS layout.
 - **16-level directory nesting:** Maximum subdirectory depth.
 - **Tab completion:** completes every built-in name and files in the current

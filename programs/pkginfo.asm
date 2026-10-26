@@ -145,7 +145,7 @@ val_os:    db 'Mellivora "Expanded"', 10, 0
 lbl_ver:   db 'Version:  ', 0
 val_ver:   db '8.5.0', 10, 0
 lbl_arch:  db 'Arch:     ', 0
-val_arch:  db 'x86 (i486+) 32-bit protected mode', 10, 0
+val_arch:  db 'x86 (i686, Pentium 4) 32-bit protected mode', 10, 0
 lbl_host:  db 'Host:     ', 0
 lbl_mem:   db 'Memory:   ', 0
 str_kb_total: db ' KB total, ', 0

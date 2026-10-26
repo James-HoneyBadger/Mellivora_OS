@@ -9,10 +9,11 @@
 ;
 ; Memory consumed:
 ;   Page directory:  4 KB  (at PAGE_DIR_ADDR)
-;   32 page tables:  128 KB total (at PAGE_TABLE_BASE)
-;   Each page table maps 4 MB (1024 entries × 4 KB each).
-;   32 tables × 4 MB = 128 MB identity-mapped.
-;   96 demand tables: 384 KB (at DEMAND_TABLE_BASE) for the 128-512MB zone.
+;   256 page tables: 1 MB total (at PAGE_TABLE_BASE), one per PDE up to 1 GB.
+;   Each page table maps 4 MB (1024 entries x 4 KB each).
+;   Every frame the allocator can hand out is identity-mapped at boot; the
+;   tables for the user demand zone above the supported RAM ceiling start empty
+;   and are filled by the fault handler.
 ;
 ; A page-fault ISR (INT 14) is installed that prints the faulting
 ; address (CR2) and error code, then recovers to the shell.
@@ -24,27 +25,22 @@
 ; silently overwrite the page directory and every page table.  They sit above
 ; the program window and below PMM_BITMAP, inside the kernel-reserved region.
 ;   page directory   0x410000 .. 0x411000  (4 KB, 4 KB-aligned for CR3)
-;   32 identity PTs  0x411000 .. 0x431000  (128 KB)
-;   96 demand PTs    0x431000 .. 0x491000  (384 KB)
+;   256 page tables  0x411000 .. 0x511000  (1 MB, PDEs 0..255)
+;   1023 more PDEs are never used (the 1 GB the kernel ever addresses).
 PAGE_DIR_ADDR    equ 0x00410000     ; Page directory (4 KB)
-PAGE_TABLE_BASE  equ 0x00411000     ; First page table (128 KB for 32 tables)
-PAGING_MAP_MB    equ 128            ; How many MB to identity-map
-PAGING_MAP_TABLES equ PAGING_MAP_MB / 4  ; 32 page tables
+PAGE_TABLE_BASE  equ 0x00411000     ; First page table (256 x 4 KB)
+PAGING_TABLES    equ 256            ; Tables for the first 1 GB of address space
+PAGING_MAP_MB    equ 512            ; RAM the kernel manages, 1:1 mapped at boot
+PAGING_MAP_TABLES equ PAGING_MAP_MB / 4  ; 128 tables, the most ever filled
 
-; v9.0 Demand-paging extension:
-;   Virtual 128MB–512MB (PDEs 32–127) backed by empty page tables.
-;   Physical pages are allocated on first access.
-DEMAND_MAP_TABLES equ 96           ; Extra page tables: covers 96×4MB = 384MB
-DEMAND_TABLE_BASE equ PAGE_TABLE_BASE + PAGING_MAP_TABLES * 4096  ; 0x431000
 ; The demand zone starts at user_demand_base (a variable, computed at boot) and
 ; runs to USER_DEMAND_MAX. The kernel addresses physical memory 1:1, so user
 ; virtual addresses must begin ABOVE the highest byte of RAM: otherwise a kernel
-; access to a frame above 128 MB would look like a user page, and a task with an
-; area there would have its own frame mapped as user scratch. With the original
-; 128 MB of RAM the base is the historical 0x08000000.
+; access to a frame above the mapped RAM would look like a user page, and a task
+; with an area there would have its own frame mapped as user scratch.
 USER_DEMAND_MIN   equ 0x08000000   ; lowest possible base (128 MB)
-USER_DEMAND_BASE_MAX equ 0x1C000000 ; highest base: keeps 64 MB of user space
-USER_DEMAND_MAX   equ 0x20000000   ; End of demand-paged zone  (512MB)
+USER_DEMAND_BASE_MAX equ 0x20000000 ; highest base: the RAM ceiling (512 MB)
+USER_DEMAND_MAX   equ 0x40000000   ; End of demand-paged zone  (1 GB)
 
 ; Copy-on-write bookkeeping: one refcount byte per 4 KB frame the allocator can
 ; hand out (cow_ref in data.inc). pmm_init refuses to seed frames at or above
@@ -156,13 +152,37 @@ paging_init:
 
         ;-----------------------------------
         ; Step 2: Build identity-map page
-        ;         tables for 0..128 MB
+        ;         tables for all of RAM
         ;-----------------------------------
-        ; Outer loop: one iteration per 4 MB region
-        xor ebx, ebx           ; table index (0..31)
+        ; Every table starts empty. The ones below the RAM ceiling are then
+        ; filled 1:1; the ones above it are the user demand zone, which the
+        ; fault handler fills a page at a time.
+        mov edi, PAGE_TABLE_BASE
+        xor eax, eax
+        mov ecx, (PAGING_TABLES * 1024)
+        rep stosd
+
+        ; How many 4 MB regions does RAM need? The allocator can hand out any
+        ; frame below pmm_mem_top and kernel code addresses frames directly, so
+        ; a frame that is not mapped here is a kernel fault the moment the
+        ; allocator writes its free-list link into it.
+        mov eax, [pmm_mem_top]
+        add eax, 0x3FFFFF
+        shr eax, 22                    ; ceil(mem_top / 4 MB)
+        cmp eax, PAGING_MAP_TABLES
+        jbe .bt_capped
+        mov eax, PAGING_MAP_TABLES
+.bt_capped:
+        test eax, eax
+        jnz .bt_have
+        mov eax, 1                     ; a machine with no usable RAM still boots
+.bt_have:
+        mov [paging_identity_tables], eax
+
+        xor ebx, ebx                   ; table index
         mov esi, PAGE_TABLE_BASE
 .build_tables:
-        cmp ebx, PAGING_MAP_TABLES
+        cmp ebx, [paging_identity_tables]
         jge .fill_dir
 
         ; Fill 1024 page-table entries for this 4 MB region.
@@ -214,8 +234,8 @@ paging_init:
         mov esi, PAGE_TABLE_BASE
         xor ecx, ecx
 .fill_pde:
-        cmp ecx, PAGING_MAP_TABLES
-        jge .demand_init
+        cmp ecx, PAGING_TABLES
+        jge .enable
 
         mov eax, esi
         or  eax, PG_PRESENT | PG_WRITABLE | PG_USER
@@ -225,39 +245,6 @@ paging_init:
         add esi, 4096
         inc ecx
         jmp .fill_pde
-
-.demand_init:
-        ;-----------------------------------
-        ; Step 3b: Build demand-paged page
-        ;          tables for 128MB–512MB
-        ;-----------------------------------
-        ; EDI still points to PDE 32 (128MB)
-        ; Allocate DEMAND_MAP_TABLES zeroed page tables
-        mov esi, DEMAND_TABLE_BASE
-        xor ecx, ecx
-.demand_pt_loop:
-        cmp ecx, DEMAND_MAP_TABLES
-        jge .enable
-
-        ; Zero this page table (all PTEs not-present)
-        push ecx
-        push edi
-        mov  edi, esi
-        xor  eax, eax
-        mov  ecx, 1024
-        rep  stosd
-        pop  edi
-        pop  ecx
-
-        ; Install PDE pointing to this empty page table
-        mov  eax, esi
-        or   eax, PG_PRESENT | PG_WRITABLE | PG_USER
-        mov  [edi], eax
-
-        add  edi, 4
-        add  esi, 4096
-        inc  ecx
-        jmp  .demand_pt_loop
 
 .enable:
         ;-----------------------------------
@@ -375,14 +362,13 @@ isr_page_fault:
         ; copying into an untouched mmap buffer, or SYS_REALLOC copying into a
         ; fresh block. When the address belongs to one of the task's areas the
         ; page is mapped with the user's protection, exactly as a ring-3 fault
-        ; would be; anything else falls through to the identity-demand logic
-        ; (and then to the panic path).
+        ; would be; anything else is a kernel address that is not mapped.
         mov  eax, [pf_addr]
         mov  ebx, eax
         call vm_find_area
         test eax, eax
         jnz  .pf_user_demand
-        jmp  .pf_identity_demand
+        jmp  .pf_kernel_fault
 
 .pf_user_fault:
         ; Check: not-present fault (error bit 0 clear)
@@ -403,32 +389,6 @@ isr_page_fault:
         jz   .pf_not_stack
         jmp  .pf_resume
 .pf_not_stack:
-
-.pf_identity_demand:
-        ; Kernel identity demand: the allocator and other kernel code address
-        ; physical memory directly, but only the first PAGING_MAP_MB is mapped
-        ; at boot. A supervisor, not-present fault in the identity-managed zone
-        ; maps that page identity so RAM above 128 MB is usable instead of
-        ; crashing the kernel the first time the buddy allocator touches it.
-        ; Bounded by the highest address the firmware reported as usable, so a
-        ; kernel bug in that range still faults where it should.
-        mov  eax, [pf_errcode]
-        test eax, 0x05              ; user fault, or a protection violation?
-        jnz  .pf_user_demand
-        mov  eax, [pf_addr]
-
-        ; RAM that the boot identity map already covers is not demand territory:
-        ; a fault there is a kernel bug. Above it, physical memory is mapped on
-        ; demand - but only up to the highest usable byte the firmware reported.
-        cmp  eax, PAGING_MAP_MB * 0x100000
-        jb   .pf_kernel_fault
-        cmp  eax, [pmm_mem_top]
-        jae  .pf_kernel_fault
-        and  eax, 0xFFFFF000
-        mov  ebx, eax
-        mov  ecx, PG_PRESENT | PG_WRITABLE      ; supervisor only
-        call paging_map_page_all
-        jmp  .pf_resume
 
 .pf_user_demand:
         ; Check: faulting address in demand zone [user_demand_base, USER_DEMAND_MAX)

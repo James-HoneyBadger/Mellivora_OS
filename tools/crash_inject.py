@@ -30,6 +30,9 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from machine_profiles import qemu_args as machine_args  # noqa: E402
+
 BOOT_MARKER = "MELLIVORA_BOOT_OK"
 QEMU_CANDIDATES = (
     "qemu-system-x86_64",
@@ -92,14 +95,11 @@ def boot(qemu: str, image: str, tmp: str) -> tuple[subprocess.Popen, str]:
     ser_path = os.path.join(tmp, "serial.sock")
     mon_path = os.path.join(tmp, "mon.sock")
     proc = subprocess.Popen(
-        [qemu, "-cpu", "486", "-m", "128",
-         "-drive", f"file={image},format=raw,if=ide,cache=writethrough",
+        [qemu] + machine_args() +
+        ["-drive", f"file={image},format=raw,if=ide,cache=writethrough",
          "-boot", "c", "-display", "none", "-no-reboot",
          "-serial", f"unix:{ser_path},server=on,wait=on",
-         "-monitor", f"unix:{mon_path},server,nowait",
-         "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off",
-         "-device", "sb16,audiodev=snd0",
-         "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"],
+         "-monitor", f"unix:{mon_path},server,nowait"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc, ser_path
 

@@ -358,7 +358,11 @@ msg_shutdown_sync: db "  Syncing filesystem...", 0x0A, 0
 msg_shutdown_done: db "  Filesystem synced. Powering off...", 0x0A, 0
 msg_reboot:     db "  Rebooting Mellivora OS...", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0
-msg_cpu:        db "  CPU:           i486+ (32-bit protected mode)", 0x0A, 0
+msg_cpu:        db "  CPU:           ", 0
+msg_cpu_unknown: db "(unknown)", 0
+msg_cpu_details: db " (family ", 0
+msg_cpu_model:  db " model ", 0
+msg_cpu_close:  db "), SSE2", 0x0A, 0
 msg_mem_detect: db "  RAM:           ", 0
 msg_mem_total:  db "  Total memory:  ", 0
 msg_mem_header: db "=== Memory Information ===", 0x0A, 0
@@ -645,14 +649,26 @@ tick_count:     resd 1
 total_free_pages: resd 1
 pmm_mem_top:      resd 1     ; highest usable physical byte (page-aligned, exclusive)
 user_demand_base: resd 1     ; first user virtual address (above all RAM)
+paging_identity_tables: resd 1 ; 4 MB regions identity-mapped at boot (<= 128)
 buddy_free_list:  resd 12          ; v9.0: per-order buddy allocator free-list heads
 
-; What CPUID reported (kernel/cpu.inc). cpu_has_fxsr decides whether the
-; scheduler saves 512 bytes with fxsave or 108 with fnsave, so the save and
-; the load path always have to read the same value.
+; What CPUID reported (kernel/cpu.inc). Every task image is a 512-byte fxsave
+; now that the kernel requires FXSR; the flags stay because the reporter and
+; `sysinfo` print them, and because the boot gate refuses a part without them.
 cpu_has_fxsr:     resd 1
 cpu_has_sse:      resd 1
 cpu_has_sse2:     resd 1
+cpu_has_mmx:      resd 1
+cpu_has_cmov:     resd 1
+cpu_has_tsc:      resd 1
+cpu_has_pae:      resd 1
+cpu_max_leaf:     resd 1        ; highest basic CPUID leaf
+cpu_family:       resd 1        ; effective family (extended rules applied)
+cpu_model:        resd 1        ; effective model
+cpu_stepping:     resd 1
+cpu_brand_len:    resd 1        ; 0 when the part has no brand string
+cpu_brand:        resb 49       ; trimmed brand string, NUL-terminated
+cpu_vendor:       resb 13       ; "GenuineIntel"/"AuthenticAMD" + NUL
 
 kb_buffer:      resb KB_BUFFER_SIZE
 kb_read_idx:    resd 1

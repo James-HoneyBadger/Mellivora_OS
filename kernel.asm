@@ -23,7 +23,7 @@
 ;   - Syscall interface via INT 0x80
 ;   - Interactive command shell
 ;
-; Target: i486+
+; Target: Pentium 4
 ;
 
 [BITS 32]
@@ -53,7 +53,11 @@ KERNEL_STACK        equ 0x009FC00       ; Top of conventional memory for kernel 
 PROGRAM_BASE        equ 0x00300000      ; Programs load at 3MB
 PROGRAM_END_ADDR    equ 0x00400000      ; End of static program area (for sbrk)
 PROGRAM_MAX_SIZE    equ 0x00100000      ; Max 1MB per program = END - BASE
-PMM_BITMAP          equ 0x00500000      ; Physical memory bitmap at 5MB (128KB)
+PMM_BITMAP          equ 0x00620000      ; Physical memory bitmap (128KB)
+                                        ; 0x411000-0x511000 is now 256 page tables
+                                        ; (1MB): every frame the allocator owns is
+                                        ; identity-mapped, so the bitmap and the
+                                        ; heap window moved up.
 HEAP_BASE           equ 0x00700000      ; Kernel heap window (currently unused)
 KERNEL_RESERVED_END equ 0x00800000      ; 8MB — lower bound of PMM-managed memory
 BG_PROG_PAGES       equ 256             ; Pages per background program slot (1MB)
@@ -673,6 +677,14 @@ kernel_entry:
         call kmem_init
         call ata_init
         call serial_init
+
+        ; The first thing said on COM1 is what the machine is, and whether it
+        ; is allowed to run this kernel at all. Both belong here: serial is up,
+        ; and nothing that saves task state (tss_init onward) has run yet, so a
+        ; part below the Pentium 4 floor stops before it can corrupt anything.
+        call cpu_require_pentium4
+        call cpu_report_boot
+
         call tss_init
         call sched_init
         call ipc_init

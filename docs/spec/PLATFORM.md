@@ -6,9 +6,10 @@ started, how the machine sleeps and switches off, and which CPU features the
 kernel is allowed to assume.
 
 The rule behind all of it: **the firmware describes, the kernel verifies, and
-nothing is assumed because a table said so.** QEMU's 486 model advertises a local
-APIC in its MADT and has none — a table describes a machine, it does not
-guarantee one. Every fact below is probed and can be refused.
+nothing is assumed because a table said so.** QEMU's MADT advertises a local
+APIC even on a model that has none — the `p4-noapic` profile is that machine,
+and it is in the test matrix precisely because a table describes a machine
+without guaranteeing it. Every fact below is probed and can be refused.
 
 ## 1. Firmware hand-off
 
@@ -155,15 +156,51 @@ without naming its cache policy gets uncacheable, which is the safe direction.
 |---|---|---|
 | PAE | Always (the address space needs it) | A CPU without PAE is not supported; the boot says so |
 | NX | Per-page no-execute | A CPU without NX has W^X enforced by mapping only |
-| FXSR / SSE / SSE2 | Per-task vector state ([ABI.md](ABI.md#7-floating-point-and-vector-state)) | Kernel C stays `-mno-sse` on the i486 floor |
+| FXSR / SSE / SSE2 | Per-task vector state ([ABI.md](ABI.md#7-floating-point-and-vector-state)) | **Required**: a part without all three is refused at boot |
 | SMEP / SMAP | Keep ring 0 from executing or reading user pages | Where absent, user-copy goes through an explicit path |
 | Invariant TSC | Fast time | Falls back to HPET |
 | APIC / x2APIC | Interrupt delivery | xAPIC only; x2APIC's 32-bit register interface is not used |
 | MTRR / PAT | Cache policy | Uncacheable everywhere, which is slower and correct |
 | CPUID leaf 7 | Feature bits | Absence means "not offered" |
 
-The feature probe is guarded by the `EFLAGS.ID` bit, because not every 486 has
-`CPUID` ([as built](ABI.md#7-floating-point-and-vector-state)).
+### 8.1 The CPU floor is a Pentium 4
+
+SSE2 is not optional here. Every task image is a 512-byte `fxsave`
+([ABI.md](ABI.md#7-floating-point-and-vector-state)), the scheduler writes it on
+every switch, and the kernel's C is compiled for the Pentium 4. A processor
+without FXSR, SSE and SSE2 therefore cannot run this kernel, and
+`cpu_require_pentium4` stops the boot with one line naming what it found:
+
+```
+CPU_UNSUPPORTED: Mellivora needs a Pentium 4 or later (fxsr+sse+sse2); found family 4 model 8 - halting
+```
+
+The alternative — a degraded save path chosen at run time — was the old
+behaviour and it is gone: two formats that must agree is a class of bug, not a
+feature. Conformance (§11) covers it: booting the `i486` machine profile must
+produce exactly that line and stay halted.
+
+What is *not* required is Netburst itself being present: the check is on the
+feature bits and a family of 15 or above, so a newer processor that still
+reports a compatible CPUID runs, and `p4-noapic` (a Pentium 4 with the local
+APIC removed from CPUID) is a supported machine.
+
+### 8.2 The emulated machine
+
+The machine is defined once, in `tools/machine_profiles.py`, and every tool
+reads it from there: the `Makefile`, `tests/test_boot.sh`,
+`tests/test_runtime.sh`, `tests/test_desktop.py`, `tools/qemu_drive.py`,
+`tools/crash_inject.py`, `tools/gdb_kernel.sh` and the installers. Shell callers
+source `tools/machine_profile.sh`.
+
+| Profile | Machine | Use |
+|---|---|---|
+| `p4` (default) | Pentium 4 (CPUID family 15, model 2, stepping 7, brand `Intel(R) Pentium(R) 4 CPU 2.40GHz`), SSE2, 512 MB, i440FX, AC'97, USB 1.1, RTL8139 | Everything, unless a case says otherwise |
+| `p4-noapic` | The same part with `APIC` removed from CPUID | The 8259 interrupt path |
+| `i486` | 486, 128 MB, SB16 | Legacy: must be **refused** by the boot |
+
+`MV_PROFILE` selects one; `make run` and `make check` agree because they read
+the same file.
 
 ## 9. Error reporting
 
@@ -201,8 +238,8 @@ M2 does not close until:
 
 1. `acpi` reports the processor count, APIC addresses, I/O APICs, interrupt
    controller in use, clock of record and resolution — and reports them
-   correctly on a 486 with no APIC, on a 2-processor Pentium and on a
-   4-processor model.
+   correctly on `p4-noapic` (no local APIC), on a 2-processor `p4` and on a
+   4-processor `p4`.
 2. Four processors run the mixed-load soak for 24 hours with no panic and no
    lost wakeup.
 3. Sleep and soft-off work from the shell and from the desktop; a driver that
@@ -226,6 +263,8 @@ M2 does not close until:
 | NX, SMEP, SMAP | NX and SMEP/SMAP enabled where offered |
 | Machine-check and NMI handling | Fault handler only |
 | Cache policy per mapping | Not programmable |
+| CPU floor (FXSR+SSE+SSE2, family 15) | Enforced at boot; `i486` profile refused with `CPU_UNSUPPORTED` |
+| One machine definition for build, tests and installers | `tools/machine_profiles.py` (`p4`, `p4-noapic`, `i486`) |
 
 The ACPI inventory, the APIC selection, the AP start-up, the lock-rank gate and
 the calibrated APIC timer are real and tested; the table above is what they grow

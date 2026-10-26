@@ -1630,7 +1630,7 @@ sys_uname:
 .uname_nodename: db 'mellivora', 0
 .uname_release:  db '12.1.0', 0
 .uname_version:  db 'Mellivora OS v12.1.0 (POSIX)', 0
-.uname_machine:  db 'i386', 0
+.uname_machine:  db 'i686', 0
 
 ;-----------------------------------------------------------------------
 ; sys_utime (164) — set file access/modification times

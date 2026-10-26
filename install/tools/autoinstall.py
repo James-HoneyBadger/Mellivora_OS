@@ -34,6 +34,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
 
+from machine_profiles import qemu_args as machine_args  # noqa: E402
 from qemu_drive import Monitor, SerialConsole, find_qemu  # noqa: E402
 
 MARKER_OK = "Installation complete."
@@ -106,13 +107,12 @@ def run_install(iso: str, target: str, display: str = "none",
     tmp = tempfile.mkdtemp(prefix="mellivora-install-")
     mon_path = os.path.join(tmp, "mon.sock")
     proc = subprocess.Popen(
-        [qemu, "-cpu", "486", "-m", "128",
-         "-cdrom", iso,
+        [qemu] + machine_args() +
+        ["-cdrom", iso,
          "-drive", f"file={target},format=raw,if=ide,cache=writeback",
          "-boot", "d", "-display", display, "-no-reboot",
          "-monitor", f"unix:{mon_path},server,nowait",
-         "-serial", "null",
-         "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off"],
+         "-serial", "null"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     log = []
     ok = False
@@ -170,16 +170,14 @@ def boot_check(target: str, timeout: float = 120.0) -> bool:
     mon_path = os.path.join(tmp, "mon.sock")
     ser_path = os.path.join(tmp, "serial.sock")
     proc = subprocess.Popen(
-        [qemu, "-cpu", "486", "-m", "128",
-         "-drive", f"file={target},format=raw,if=ide,cache=writethrough",
+        [qemu] + machine_args() +
+        ["-drive", f"file={target},format=raw,if=ide,cache=writethrough",
          "-boot", "c", "-display", "none", "-no-reboot",
          "-monitor", f"unix:{mon_path},server,nowait",
          # wait=on so the guest does not start before this process is reading:
          # with no client attached the early boot output is lost and the console
          # never recovers, which looked exactly like a disk that would not boot.
-         "-serial", f"unix:{ser_path},server=on,wait=on",
-         "-audiodev", "none,id=snd0", "-machine", "pcspk-audiodev=snd0,usb=off",
-         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0"],
+         "-serial", f"unix:{ser_path},server=on,wait=on"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         serial = SerialConsole(ser_path)

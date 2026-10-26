@@ -9,7 +9,7 @@
 ;   4. Switch to 32-bit protected mode
 ;   5. Jump to 32-bit kernel entry point
 ;
-; Target: i486+
+; Target: Pentium 4
 ;
 
 [BITS 16]
