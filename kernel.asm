@@ -729,6 +729,12 @@ kernel_entry:
         ; names nothing.
         call lock_selftest
 
+        ; The allocator promises that every entry point preserves every
+        ; register but the result, and callers hold addresses in those
+        ; registers. Checked at boot because a violation faults somewhere else
+        ; later, with nothing pointing back at the allocator.
+        call pmm_selftest
+
         ; The per-task image has to carry x87 and SSE state, not just claim to:
         ; this saves two distinct states, disturbs the live registers and
         ; requires each back exactly. Skipped on a CPU with no FXSR.

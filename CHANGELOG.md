@@ -107,36 +107,42 @@
   `-mno-sse` "until per-task FPU state lands" and described the module boundary
   as a syscall stub. Both are corrected.
 
-### Found (not fixed here)
+### Fixed: two tasks could not run
 
-- **Two tasks cannot run on the tip commit.** `cow_test`, `fpu_test`,
-  `fork + exec`, every mmap/vm case and the background-launch path all take the
-  machine down with a triple fault immediately after `mov cr3` in
-  `sched_apply_cr3` — the new task's page directory does not map the kernel. CI
-  on `4ac3a6f` failed 24 runtime cases for this, and the same image built from
-  a pristine worktree of that commit reproduces it deterministically.
+- **`pmm_alloc_page` did not keep the registers it promised to.** The allocator's
+  lock landed in `4ac3a6f` as `push edi … pop edi`, which dropped the `push ecx`
+  / `pop ecx` the routine had used to save `ECX` across its own `xor ecx, ecx`.
+  Every function in the file documents "All other registers preserved" and
+  callers rely on it: `paging_clone_pd` holds the source page-table address in
+  `ECX` across the call, so it copied 4 KB **from physical address 0** into the
+  child's page table. The result was an address space with no kernel mapped — a
+  triple fault on the next `mov cr3`, in `sched_apply_cr3`, in every forked
+  task, and in every case that needed a second task. 24 runtime cases were red
+  on `4ac3a6f` for this, including `cow_test`, `fpu_test`, `fork + exec`, the
+  mmap/vm cases and the background-launch path.
 
-  Bisect, all against the same 2 GB image with a matching `stage2`/sector count:
+  Found by instrumenting the clone and the switch rather than by reading: the
+  tracer printed the new directory's `PDE[0]`, its `PTE` for `0x101000` and the
+  master's for the same page, which showed a freshly built table of zeros
+  (`07FD3000 07FD4027 00000000 00000000 00101063`) while the master's was
+  present. That named the copy, the copy named the clobbered register, and the
+  register named the lock's save list.
 
-  | `kernel/pmm.inc` | `cow_test` |
-  | --- | --- |
-  | as of `d992200` (no allocator lock, no range guard) | pass |
-  | as of `4ac3a6f` | fail |
-  | `4ac3a6f`, range guards disabled, lock kept | fail |
-  | `4ac3a6f`, lock removed from `pmm_alloc_page`/`pmm_free_page` | pass |
-  | `4ac3a6f`, lock replaced by bare `pushfd; cli` / `popfd` | fail |
+  The fix is `pushad`/`popad` around the body with the result left in the saved
+  `EAX` slot: a hand-written save list is what drifted, so the routine no longer
+  keeps one. `pmm_alloc_pages`, `pmm_free_page` and `pmm_free_pages` were
+  audited for the same class of bug and are correctly balanced.
 
-  So it is neither the guard nor the lock's bookkeeping: **running
-  `pmm_alloc_buddy_order` with interrupts disabled** is what turns every
-  multi-task case red, which points at something in that window that the
-  allocator's own state does not explain (it does not take an interrupt, and the
-  stack depth is unchanged — the 4 bytes `pushfd` uses are the 4 bytes the old
-  `push ecx` used).
+- **The contract is now checked at boot, not assumed.** `pmm_selftest` puts a
+  distinct value in `ECX`, `EDX`, `EBX`, `ESI` and `EDI`, calls each of the four
+  allocation and free entry points, and requires every one of them back — plus
+  the free-page count returning to where it started. It prints
+  `PMM_SELFTEST_OK` on COM1, and `make check-boot` now fails when any boot
+  self-test (`LOCK_SELFTEST_OK`, `PMM_SELFTEST_OK`, `FPU_SELFTEST_OK|SKIP`) does
+  not report, so the check cannot be forgotten.
 
-  The work in this release is single-task and unaffected: `cmod`, `cprog` and
-  the `fpu` round trip pass on this tree. The per-task SSE case (`sse_test`) and
-  the pre-existing `fpu_test`, `cow_test` and vm cases stay red until the
-  allocator is fixed.
+  With this in place the three cases M0's third exit criterion depends on pass:
+  `cow_test` (`COW_OK`), `fpu_test` (`FPU_OK`) and `sse_test` (`SSE_OK`).
 
 ## Unreleased - a volume is verified before it is trusted
 

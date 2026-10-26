@@ -286,18 +286,23 @@ pmm_bad_frees: dd 0            ; frees refused as outside the arena
 
 pmm_alloc_page:
         ; The free lists are shared the moment two processors run, so every
-        ; entry point takes the allocator's lock. EDI is the lock register and
-        ; callers rely on "all other registers preserved", so it is saved here.
-        push edi
+        ; entry point takes the allocator's lock.
+        ;
+        ; The whole register set is saved, not the two registers this body
+        ; happens to touch. Callers rely on "all other registers preserved"
+        ; (paging_clone_pd holds a page-table address in ECX across the call),
+        ; and a hand-maintained save list got it wrong once: ECX came back as
+        ; zero, the copy read from physical address 0, and every forked address
+        ; space was built with no kernel in it. A pushad cannot drift.
+        pushad
         mov  edi, pmm_lock
         call spin_lock
         xor  ecx, ecx               ; order 0
         call pmm_alloc_buddy_order
-        push eax
+        mov  [esp + 28], eax        ; the answer, kept across spin_unlock
         mov  edi, pmm_lock
         call spin_unlock
-        pop  eax
-        pop  edi
+        popad
         ret
 
 ;-----------------------------------------------------------------------
@@ -555,6 +560,139 @@ pmm_free_pages:
         pop  ecx
         pop  eax
         ret
+
+;-----------------------------------------------------------------------
+; pmm_selftest — every entry point keeps the registers it promises to
+;
+; Each function above documents "All other registers preserved", and callers
+; depend on it. That promise is checked here rather than assumed: the failure
+; it guards against is silent, because a clobbered register does not fault at
+; the call, it faults somewhere else later with no connection to the cause.
+;
+; It also proves the accounting: the free count after allocating and releasing
+; the same pages is the count before.
+;
+; Prints PMM_SELFTEST_OK or PMM_SELFTEST_FAIL on COM1. Runs once at boot.
+;-----------------------------------------------------------------------
+PMM_T_ECX   equ 0x13572468
+PMM_T_EDX   equ 0x24681357
+PMM_T_EBX   equ 0x0BADF00D
+PMM_T_ESI   equ 0x5EED5EED
+PMM_T_EDI   equ 0x1DEA1DEA
+
+pmm_selftest:
+        pushad
+        mov  eax, [total_free_pages]
+        mov  [.ps_before], eax
+
+        ;--- pmm_alloc_page: EAX is the page, nothing else changes ---
+        mov  ecx, PMM_T_ECX
+        mov  edx, PMM_T_EDX
+        mov  ebx, PMM_T_EBX
+        mov  esi, PMM_T_ESI
+        mov  edi, PMM_T_EDI
+        call pmm_alloc_page
+        mov  [.ps_page], eax
+        test eax, eax
+        jz   .ps_fail
+        cmp  ecx, PMM_T_ECX
+        jne  .ps_fail
+        cmp  edx, PMM_T_EDX
+        jne  .ps_fail
+        cmp  ebx, PMM_T_EBX
+        jne  .ps_fail
+        cmp  esi, PMM_T_ESI
+        jne  .ps_fail
+        cmp  edi, PMM_T_EDI
+        jne  .ps_fail
+
+        ;--- pmm_alloc_pages: same, with the count in ECX ---
+        mov  ecx, 1
+        mov  edx, PMM_T_EDX
+        mov  ebx, PMM_T_EBX
+        mov  esi, PMM_T_ESI
+        mov  edi, PMM_T_EDI
+        call pmm_alloc_pages
+        mov  [.ps_pages], eax
+        test eax, eax
+        jz   .ps_fail
+        cmp  ecx, 1
+        jne  .ps_fail
+        cmp  edx, PMM_T_EDX
+        jne  .ps_fail
+        cmp  ebx, PMM_T_EBX
+        jne  .ps_fail
+        cmp  esi, PMM_T_ESI
+        jne  .ps_fail
+        cmp  edi, PMM_T_EDI
+        jne  .ps_fail
+
+        ;--- pmm_free_pages: give that one back ---
+        mov  eax, [.ps_pages]
+        mov  ecx, 1
+        mov  edx, PMM_T_EDX
+        mov  ebx, PMM_T_EBX
+        mov  esi, PMM_T_ESI
+        mov  edi, PMM_T_EDI
+        call pmm_free_pages
+        cmp  ecx, 1
+        jne  .ps_fail
+        cmp  edx, PMM_T_EDX
+        jne  .ps_fail
+        cmp  ebx, PMM_T_EBX
+        jne  .ps_fail
+        cmp  esi, PMM_T_ESI
+        jne  .ps_fail
+        cmp  edi, PMM_T_EDI
+        jne  .ps_fail
+
+        ;--- pmm_free_page: and the single page ---
+        mov  eax, [.ps_page]
+        mov  ecx, PMM_T_ECX
+        mov  edx, PMM_T_EDX
+        mov  ebx, PMM_T_EBX
+        mov  esi, PMM_T_ESI
+        mov  edi, PMM_T_EDI
+        call pmm_free_page
+        cmp  ecx, PMM_T_ECX
+        jne  .ps_fail
+        cmp  edx, PMM_T_EDX
+        jne  .ps_fail
+        cmp  ebx, PMM_T_EBX
+        jne  .ps_fail
+        cmp  esi, PMM_T_ESI
+        jne  .ps_fail
+        cmp  edi, PMM_T_EDI
+        jne  .ps_fail
+
+        ;--- the accounting came back ---
+        mov  eax, [total_free_pages]
+        cmp  eax, [.ps_before]
+        jne  .ps_fail
+
+        mov  ebx, 0
+        jmp  .ps_report
+.ps_fail:
+        mov  ebx, 1
+.ps_report:
+        mov  [esp + 28], ebx        ; popad's saved EAX: the status
+        popad
+        test eax, eax
+        jnz  .ps_bad
+        mov  esi, pmm_selftest_ok_msg
+        call serial_print
+        jmp  .ps_done
+.ps_bad:
+        mov  esi, pmm_selftest_fail_msg
+        call serial_print
+.ps_done:
+        ret
+
+.ps_before: dd 0
+.ps_page:   dd 0
+.ps_pages:  dd 0
+pmm_selftest_ok_msg:   db "PMM_SELFTEST_OK", 10, 0
+pmm_selftest_fail_msg: db "PMM_SELFTEST_FAIL: an entry point did not preserve its registers", 10, 0
 
 ;-----------------------------------------------------------------------
 ; pmm_free_region — free a raw byte range into buddy lists (init helper)

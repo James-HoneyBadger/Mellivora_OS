@@ -81,6 +81,14 @@ The existing kernel is written in a `pushad`/`popad` style that preserves
 everything. That is compatible with cdecl and stays as it is: a routine that
 preserves more than it must is not a bug.
 
+A routine that documents what it preserves must actually preserve it, and a
+hand-written save list is not evidence: the allocator once saved `EDI` and
+forgot the `ECX` it clobbered two instructions later, and the caller that held a
+page-table address in `ECX` copied 4 KB from physical address 0. A clobbered
+register does not fault at the call — it faults somewhere else later — so the
+rule is to save the whole set when the body is not trivially inspectable, and to
+have a self-test that checks the contract at boot.
+
 ## 5. Status codes
 
 All new calls return `mv_status`, a 32-bit value:

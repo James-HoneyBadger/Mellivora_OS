@@ -147,22 +147,20 @@ What the plan builds on, and must not regress:
   this wave built. `OBJECTS.md`, `DRIVERS.md` and `CONFIG.md` are still owed by
   M1, M2 and M4 respectively, as the [specs table](#specs) says.
 
-**Exit:** one of the three criteria is blocked by a defect M0 does not own, and
-this is the honest state rather than a table that looks finished.
+**Exit:** met.
 
 | Criterion | State |
 |---|---|
-| The scorecard runs in CI and reports the true baseline; a row moves only by adding evidence | **Met** — `make check-parity` (13 checks) and `make check-cmodule` pass |
+| The scorecard runs in CI and reports the true baseline; a row moves only by adding evidence | **Met** — `make check-parity` (13 checks), `make check-cmodule` |
 | A C-built kernel module and a C-built user program both run | **Met** — `cmod` prints `CMOD_OK`, `cprog` prints `C_PROG_OK` |
-| A floating-point workload across a context switch is correct under `make check` | **Blocked** — the cases exist and the save/restore round trip passes (`fpu` → `FPU_SELFTEST_OK`), but `fpu_test`, `sse_test` and `cow_test` all need two tasks, and two tasks cannot run on this tree |
+| A floating-point workload across a context switch is correct under `make check` | **Met** — `fpu_test` (`FPU_OK`) and `sse_test` (`SSE_OK`) pass, and `fpu` proves the save/restore round trip before any task exists |
 
-The block is the allocator regression recorded in the CHANGELOG under "Found (not
-fixed here)": CI on the parent commit failed 24 runtime cases, a pristine
-worktree reproduces it, and bisecting `kernel/pmm.inc` puts it on the lock added
-to `pmm_alloc_page`/`pmm_free_page`. Every single-task gate in this wave passes;
-fixing the allocator is the one change that turns the third criterion green, and
-it belongs in its own commit with its own test rather than being folded into the
-C work.
+The third criterion was blocked by a defect this wave did not cause:
+`pmm_alloc_page` returned with `ECX` clobbered, so `paging_clone_pd` copied every
+new page table from physical address 0 and every forked address space was built
+with no kernel in it. That is fixed, and the contract is now checked at boot by
+`pmm_selftest` so the same class of bug cannot return quietly. The full story is
+in the CHANGELOG under "Fixed: two tasks could not run".
 
 ### M1 · The executive: objects, handles, security (8–12 weeks)
 

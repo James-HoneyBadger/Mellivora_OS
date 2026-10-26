@@ -378,7 +378,19 @@ large guest costs page tables, not boot time.
 | `pmm_alloc_page` | — | Returns first free page address (EAX), sets bit |
 | `pmm_free_page` | EAX = address | Clears bit for given address |
 | `pmm_alloc_pages` | ECX = count | Allocates N contiguous pages, returns base in EAX |
+| `pmm_free_pages` | EAX = base, ECX = count | Returns a contiguous run |
 | `pmm_count_free` | — | Counts free pages (Kernighan's bit-clearing method) |
+
+Every entry point takes the allocator's lock and **preserves every register but
+the result** — callers hold page-table addresses in `ECX` across a call. The
+promise is checked at boot rather than assumed: `pmm_selftest` loads a distinct
+value into `ECX`, `EDX`, `EBX`, `ESI` and `EDI`, calls all four allocation and
+free entry points and requires every one back, then requires the free-page count
+to return to where it started. It prints `PMM_SELFTEST_OK` on COM1 and
+`make check-boot` fails without it. The routines save the whole register set
+with `pushad` rather than a hand-written list, because a hand-written list is
+what dropped `ECX` once: a forked address space was then built from a page table
+copied out of physical address 0 and every multi-task case triple-faulted.
 
 ### Kernel slab allocator (`kernel/kmem.inc`)
 

@@ -5,8 +5,11 @@
 # Boots the disk image headless, captures COM1, and asserts that
 #
 #   1. the shell reached its first prompt (the MELLIVORA_BOOT_OK marker that
-#      shell.inc writes to COM1), and
-#   2. no CPU exception was reported during boot.
+#      shell.inc writes to COM1),
+#   2. no CPU exception was reported during boot, and
+#   3. every boot self-test that reports on COM1 reported success. A kernel
+#      invariant that is only checked by a test someone remembers to run is not
+#      checked, so the lines that matter are required here.
 #
 # Both matter. The kernel's fault handlers recover by tearing down every ring-3
 # task and jumping back to shell_main, so a kernel that faults during boot can
@@ -30,6 +33,17 @@ IMAGE="${1:-${BOOT_IMAGE:-$ROOT/mellivora.img}}"
 TIMEOUT="${BOOT_TIMEOUT:-60}"
 MARKER="MELLIVORA_BOOT_OK"
 FAULT_RE='CPU EXCEPTION|double fault|triple fault'
+
+# Each pattern must appear on COM1 once boot has reached the prompt:
+#   - the lock-order gate,
+#   - the allocator's register and accounting contract,
+#   - the per-task x87/SSE image (OK where the CPU has FXSR, SKIP where it has
+#     none to carry, never FAIL).
+REQUIRED_RES=(
+    'LOCK_SELFTEST_OK'
+    'PMM_SELFTEST_OK'
+    'FPU_SELFTEST_(OK|SKIP)'
+)
 
 LOG_DIR="$ROOT/.build"
 LOG="$LOG_DIR/boot.log"
@@ -154,4 +168,14 @@ fi
 
 echo "  PASS  boot reached the HB Lair prompt ($MARKER)"
 echo "  PASS  no CPU exception reported on COM1"
+
+boot_log="$(cat "$LOG" 2>/dev/null)"
+for pattern in "${REQUIRED_RES[@]}"; do
+    if printf '%s' "$boot_log" | grep -Eq -- "$pattern"; then
+        echo "  PASS  boot self-test reported: /$pattern/"
+    else
+        dump_log
+        fail "boot test: a boot self-test never reported success (/$pattern/)"
+    fi
+done
 exit 0
