@@ -235,11 +235,18 @@ case afterwards, which is the other half of the claim.
 
 The Warren is built: typed objects with one 512-byte body, a per-process handle
 table with generations and rights, one namespace, wait sets, tokens and an
-access check, and a deferred-work queue. What M1 did not finish is written
-down in [OBJECTS.md](spec/OBJECTS.md#12-as-built) rather than left implied; the
-one that matters most is that a signal does not yet wake a waiter in another
-task, so `object_test` and `wait_test` prove the model inside one task and the
-cross-task wake is the next change.
+access check, and a deferred-work queue.
+
+**The cross-task wake works now**, and it took three fixes that nothing could
+have caught while every wait in the tree was satisfied by the task that asked
+for it: `obj_satisfy_waiters` handed `obj_wait_consume` the evaluation result
+instead of the wait set (a kernel fault the first time a signal completed
+somebody else's wait), `obj_yield_cpu` turned "no task ready" into an instant
+timeout even when the signaller was merely asleep, and `sys_waitpid` inherited
+an expired `TCB_WAKEUP` and returned its own syscall number instead of an exit
+code. `crosswait_test` proves both directions in `make check-runtime`. What M1
+still has not finished is written down in
+[OBJECTS.md](spec/OBJECTS.md#12-as-built) rather than left implied.
 
 ### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks)
 

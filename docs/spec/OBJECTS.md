@@ -288,16 +288,32 @@ Types, and what each can do:
 | `Symlink` | no | yes | absolute targets only |
 
 The conformance §11 names: `handle_test` and `hostile_test` pass, `object_test`
-covers §11's items 3 and 5 and adds the two security refusals, and `wait_test`
-covers item 4. All three run in `make check-runtime`.
+covers §11's items 3 and 5 and adds the two security refusals, `wait_test`
+covers item 4 inside one task, and `crosswait_test` covers it across tasks —
+the waiter and the signaller are different tasks in both directions, and the
+child finds the object by name because a fork starts with an empty handle
+table. All four run in `make check-runtime`.
+
+Waking a waiter in another task needed three fixes before it worked, none of
+them visible while every wait was satisfied by the task that asked for it:
+
+- `obj_satisfy_waiters` passed the *result of the evaluation* (the constant 1)
+  to `obj_wait_consume` where a wait set belonged, so the consume walked the
+  object array at address 1. The first signal that ever completed somebody
+  else's wait faulted the kernel at `0x54F000FF`.
+- `obj_yield_cpu` treated "no task is READY" as "nobody can ever signal me" and
+  returned `WAIT_TIMEOUT` at once. A waiting task whose signaller is asleep -
+  the ordinary case - was therefore told it had timed out microseconds after
+  blocking. It now idles with interrupts enabled and re-scans, which is what a
+  blocked task with a deadline should do; the immediate timeout is reserved for
+  the one case where it is true, a machine with no other task at all.
+- `sys_waitpid` blocked without clearing `TCB_WAKEUP`, so an expired deadline
+  left over from an earlier `SYS_SLEEP` made the tick scan wake it on the next
+  tick: the parent resumed with the `EAX` it blocked with (`92`, its own syscall
+  number) instead of an exit code, and only when the task had slept first.
+  Both ends now clear the field.
 
 Stated plainly, and to be removed as the waves land:
-
-- **A signal does not yet wake a waiter in another task.** A wait set is
-  enqueued and a timeout is delivered, both proved by `wait_test`; a waiter in
-  a different task being released by `obj_signal` is written and does not work
-  yet. This is the one part of §6 the wave does not prove, and it is the next
-  thing to fix.
 - **A file is not yet an object.** `SYS_OPEN` and its friends keep the frozen
   fd path; typing files means the VFS rewrite, which is its own wave. The
   compatibility aliases §2 of the roadmap describes therefore do not exist yet.

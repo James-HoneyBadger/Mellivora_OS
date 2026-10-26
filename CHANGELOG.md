@@ -1,5 +1,28 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M1: a wait can be completed by another task
+
+- **The cross-task wake works, after three fixes it exposed.** This was the one
+  part of the waiting contract M1 could not claim: a signal released a waiter in
+  *the same* task and nothing ever tried the other case. `programs/crosswait_test.asm`
+  now does, in both directions, with the child finding the object by name
+  because a fork starts with an empty handle table. What it found:
+  - `obj_satisfy_waiters` passed the evaluation result (the constant 1) to
+    `obj_wait_consume` where the wait set belonged, so the consume walked the
+    object array at address 1 and the kernel faulted at `0x54F000FF`.
+  - `obj_yield_cpu` treated "no task is READY" as "nobody can ever signal me"
+    and returned `WAIT_TIMEOUT` immediately. A waiter whose signaller is asleep
+    was told it had timed out microseconds after blocking. It now idles with
+    interrupts enabled and re-scans; the immediate timeout survives only for a
+    machine with no other task at all.
+  - `sys_waitpid` blocked without clearing `TCB_WAKEUP`, so an expired deadline
+    from an earlier `SYS_SLEEP` made the tick scan wake it on the next tick and
+    the parent returned the `EAX` it blocked with - 92, its own syscall number -
+    instead of an exit code. `sched_wake_sleepers` now also clears the deadline
+    when it wakes a task, so the stale-deadline class is gone.
+- `crosswait_test` joins `make check-runtime`; `wait_test` keeps the
+  single-task cases and says so.
+
 ## Unreleased - M0 measured the machine, not just the build
 
 - **A guest benchmark, because the Latency and Footprint gates named numbers

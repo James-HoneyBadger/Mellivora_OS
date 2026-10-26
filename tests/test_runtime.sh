@@ -207,6 +207,11 @@ run_case "object model conformance" "object_test" "OBJECT_OK" "" "CPU EXCEPTION|
 # M1's waiting primitive: poll versus block, WaitAny by index, WaitAll, an
 # auto-reset signal consumed by one waiter, and the 64-handle limit.
 run_case "wait sets"                "wait_test"   "WAIT_OK"  "" "CPU EXCEPTION|WAIT_FAIL"
+# The waiting primitive across tasks: in one direction the child waits and the
+# parent signals, in the other the parent waits and the child signals. The child
+# finds the object by name because a fork starts with an empty handle table, so
+# this also proves the namespace is shared rather than per process.
+run_case "cross-task wake, both ways" "crosswait_test"    "XWAIT_OK"           "" "CPU EXCEPTION|XWAIT_FAIL|PAGE FAULT" "" "" "" 15
 # A handle carries its own rights: a read-only handle cannot write back, a
 # write-only one cannot be read, even as root where the mode allows both.
 run_case "handle rights are enforced" "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL"

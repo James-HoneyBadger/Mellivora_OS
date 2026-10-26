@@ -2036,8 +2036,15 @@ obj_satisfy_waiters:
         jz .osw_advance
 
         ; Satisfied: commit, then hand the task its index and make it runnable.
-        mov edi, [.osw_next]
-        mov edi, [edi + WT_SET]
+        ;
+        ; The set goes in EAX, which is what obj_wait_consume reads. It used to
+        ; pass the *result of obj_wait_eval* - the constant 1 - so the consume
+        ; walked the object array at address 1 and the kernel faulted at
+        ; 0x54F000FF the first time a signal ever completed someone else's wait.
+        ; Nothing had reached this line before, because every wait in the tree
+        ; was satisfied by the task that was waiting.
+        mov eax, [.osw_next]
+        mov eax, [eax + WT_SET]
         call obj_wait_consume
         mov edi, [.osw_next]
         mov edi, [edi + WT_SET]
@@ -2121,11 +2128,25 @@ obj_wait_timeouts:
 ;-----------------------------------------------------------------------
 ; obj_yield_cpu - hand the CPU to the next READY task
 ;   In : EDI = our TCB, already BLOCKED with TCB_ESP saved
-;   Out: does not return when a task was ready; CF=1 when none was
+;   Out: does not return when a task was ready or became ready while idling;
+;        CF=1 only when this is the only task that exists
 ;
-; The caller is a blocked syscall, so returning here would mean waiting for a
-; signal from a task that does not exist. CF=1 says so and the caller turns it
-; into a timeout.
+; A blocked waiter usually leaves nothing runnable: the task that will signal it
+; may be asleep, or itself waiting for something the waiter will do. Treating
+; that as "nobody can ever signal me" and returning a timeout was wrong, and it
+; is why a wait could not be completed across tasks - the child blocked while
+; its parent slept, no task was READY, and the child was told it had timed out
+; within microseconds of blocking.
+;
+; So: when another task exists but none is ready, idle with interrupts on and
+; re-scan. The timer wakes sleepers and completes expired waits, and a wakeup
+; arrives as an interrupt, so there is nothing to do but hlt. If the waiter is
+; then made READY it is scheduled like any other task, and this stack frame is
+; resumed from TCB_ESP - which is why the idle loop must not touch ESP.
+;
+; CF=1 is reserved for the one case where the answer is really "nobody":
+; this is the only task in the table, so no signal can ever arrive. The caller
+; turns that into a timeout.
 ;-----------------------------------------------------------------------
 obj_yield_cpu:
         pushad
@@ -2151,9 +2172,61 @@ obj_yield_cpu:
         je .oyc_switch
         dec ecx
         jnz .oyc_scan
+
+        ; Nothing ready. Is there anyone at all who could signal us later?
+        mov edi, task_table
+        xor ecx, ecx
+        xor edx, edx
+.oyc_count:
+        cmp ecx, MAX_TASKS
+        jae .oyc_counted
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .oyc_count_next
+        inc edx
+.oyc_count_next:
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .oyc_count
+.oyc_counted:
+        cmp edx, 1
+        ja .oyc_idle                     ; someone else exists: they can wake us
         popad
         stc
         ret
+
+.oyc_idle:
+        ; hlt until an interrupt makes another task runnable. Interrupts are off
+        ; inside a syscall, and the tick is what wakes a sleeper or expires a
+        ; deadline, so they have to be on here.
+        sti
+        hlt
+        cli
+
+        ; Re-scan. If the waker already switched away, this frame is never
+        ; reached again: the scheduler resumes it from TCB_ESP.
+        mov edi, [.oyc_me]
+        mov eax, edi
+        sub eax, task_table
+        xor edx, edx
+        mov ecx, TCB_SIZE
+        div ecx
+        mov esi, eax
+        mov ecx, MAX_TASKS
+.oyc_idle_scan:
+        inc esi
+        cmp esi, MAX_TASKS
+        jb .oyc_idle_check
+        xor esi, esi
+.oyc_idle_check:
+        mov eax, esi
+        imul eax, TCB_SIZE
+        lea ebx, [task_table + eax]
+        cmp dword [ebx + TCB_STATE], TASK_READY
+        je .oyc_switch
+        dec ecx
+        jnz .oyc_idle_scan
+        jmp .oyc_idle
+
 .oyc_switch:
         mov edi, [.oyc_me]
         call sched_swap_fd_tables       ; EDI = outgoing, EBX = incoming

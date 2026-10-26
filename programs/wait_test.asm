@@ -9,9 +9,8 @@
 ; peer to switch to is told its wait timed out at once, which is correct but
 ; would make the blocking cases test nothing.
 ;
-; Waking a waiter in *another* task is not covered here - see the "as built"
-; note in docs/spec/OBJECTS.md, which names it as the one part of §6 this wave
-; does not yet prove.
+; Waking a waiter in *another* task is crosswait_test.asm's job, in both
+; directions: here every case is satisfied by the task that asked for it.
 ;
 ; Prints WAIT_OK when every case behaves, WAIT_FAIL otherwise.
 

@@ -1171,8 +1171,14 @@ sys_waitpid:
         ; Set TCB_WAIT_PID so sched_exit_task will wake us
         mov [edi + TCB_WAIT_PID], ebx
 
-        ; Save ESP and block
+        ; Save ESP and block. TCB_WAKEUP must be cleared: a task that slept
+        ; earlier carries its old deadline here, and sched_wake_sleepers would
+        ; wake this wait on the next tick - the parent then resumes with the
+        ; EAX it blocked with instead of an exit code. That is the whole reason
+        ; waitpid could return 92 (its own syscall number) for a child that
+        ; was still running, and why it did so only after a sleep.
         mov [edi + TCB_ESP], esp
+        mov dword [edi + TCB_WAKEUP], 0
         mov dword [edi + TCB_STATE], TASK_BLOCKED
 
         ; Find next READY task to run
@@ -2489,7 +2495,11 @@ sched_wake_sleepers:
         mov eax, [tick_count]
         cmp eax, [edi + TCB_WAKEUP]
         jb .wake_next
-        ; Wake this task
+        ; Wake this task, and forget the deadline: a TCB_WAKEUP left behind
+        ; after a completed sleep is a deadline the *next* block inherits,
+        ; which is how a waitpid could be woken by a tick that was meant for a
+        ; sleep that had already finished.
+        mov dword [edi + TCB_WAKEUP], 0
         mov dword [edi + TCB_STATE], TASK_READY
 .wake_next:
         add edi, TCB_SIZE
