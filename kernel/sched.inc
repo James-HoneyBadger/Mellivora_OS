@@ -84,25 +84,28 @@ TCB_CR3         equ 128     ; v13: Physical address of this task's page director
 ; M1: the executive's per-process state. A process object wraps this TCB and
 ; points back at it; the address space, the token and the handle table are
 ; what a process *is* in this wave, and each lives where its hot path reads it.
-TCB_HANDLES     equ 132     ; M1: handle table entries (0 = none allocated)
-TCB_HCAP        equ 136     ; M1: entries the table can hold
-TCB_HCOUNT      equ 140     ; M1: live handles, for accounting and leaks
-TCB_TOKEN       equ 144     ; M1: this process's token object (0 = kernel)
-TCB_WAITOBJ     equ 148     ; M1: object this task is blocked on (0 = none)
-TCB_WAITRES     equ 152     ; M1: result to deliver when the wait completes
-TCB_WAITKIND    equ 156     ; M1: WAITK_* — one, any or all
-TCB_WAITR       equ 160     ; M1: wait reason, for a hung-system report
-TCB_PROCOBJ     equ 164     ; M1: the process object wrapping this TCB
-TCB_WAITSET     equ 168     ; M1: this task's wait set (allocated on first use)
-
-; The floating-point and vector image starts at 176 so it is 16-byte aligned
+; The floating-point and vector image starts at 144 so it is 16-byte aligned
 ; relative to a 16-aligned TCB, which is what fxsave requires.
-TCB_FPU_AREA    equ 176     ; v15: fxsave image (or fnsave on a CPU without FXSR)
+TCB_FPU_AREA    equ 144     ; v15: fxsave image (or fnsave on a CPU without FXSR)
                             ;      (0 = not allocated; the kernel/shell uses the
                             ;       master directory at PAGE_DIR_ADDR)
 FPU_AREA_SIZE   equ 512     ; fxsave writes 512 bytes; the first 108 are the
                             ; x87 image fnsave writes on a CPU without FXSR
-TCB_SIZE        equ 688     ; Bytes per TCB: 176 + 512, still 16-byte aligned
+
+; M1: the executive's per-process state, after the floating-point image so the
+; offset the FPU code has always used does not move.
+TCB_HANDLES     equ 656     ; M1: handle table entries (0 = none allocated)
+TCB_HCAP        equ 660     ; M1: entries the table can hold
+TCB_HCOUNT      equ 664     ; M1: live handles, for accounting and leaks
+TCB_TOKEN       equ 668     ; M1: this process's token object (0 = kernel)
+TCB_WAITOBJ     equ 672     ; M1: object this task is blocked on (0 = none)
+TCB_WAITRES     equ 676     ; M1: result to deliver when the wait completes
+TCB_WAITKIND    equ 680     ; M1: WAITK_* — one, any or all
+TCB_WAITR       equ 684     ; M1: wait reason, for a hung-system report
+TCB_PROCOBJ     equ 688     ; M1: the process object wrapping this TCB
+TCB_WAITSET     equ 692     ; M1: this task's wait set (allocated on first use)
+
+TCB_SIZE        equ 704     ; Bytes per TCB: 144 + 512 + 40, 16-byte aligned
 
 
 MAX_TASKS    equ 128         ; v5.0: Doubled from 64
