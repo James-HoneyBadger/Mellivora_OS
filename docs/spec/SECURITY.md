@@ -1,195 +1,314 @@
 # Security model (normative)
 
-Status: **draft**. P1 defines isolation; P6 defines identity, capabilities and audit.
+**Normative from:** M1. **Governs:** who a process is, what it may do, how a
+refusal is decided, what is written down when a decision is made, and what
+protects the kernel from its users.
 
-## File permissions
-
-HBFS stores a mode word (owner/group/world read, write, execute) and an owner
-uid/gid per directory entry. The mode is enforced, not advisory:
-
-| Operation | Rule |
-|---|---|
-| `open` for read | owner/group/world read bit, by the caller's effective uid/gid |
-| `open` for write | owner/group/world write bit |
-| `SYS_FWRITE` over an existing file | write bit on the file |
-| `unlink` | write bit on the file |
-| create a file or subdirectory | write bit on the **directory** |
-| `rename` | write bit on the file and on the directory |
-| `truncate` | write bit on the file |
-| `rmdir` | write bit on the directory |
-| `chmod` | root, or the file's owner |
-| `chown` | root only |
-| anything, as uid 0 | allowed |
-
-Access is checked in `fd_open`, which every open funnels through, and in the
-write paths that do not open a descriptor first. The shell and other kernel
-contexts have no task control block and are treated as root.
-
-`setuid`/`setgid` move the effective ID as well as the real one, because the
-checks read the effective ID; a process that dropped privileges used to keep
-passing them as root.
-
-A name is part of the directory that holds it, so adding one is a write to the
-directory: `hbfs_create_file` and `hbfs_mkdir` check the directory's write bit
-before the transaction opens, and a refusal journals nothing. The directory's
-own mode and owner are found in the entry that names it in its parent, which
-the directory stack records; the root directory has no such entry and uses a
-stand-in - root-owned, `0755`. A mode of 0 is treated as a legacy entry:
-readable by its owner, not writable.
-
-**Not yet enforced:** directory *execute* (search) permission, and the sticky
-bit on shared directories. Ownership of a directory is not required to rename
-within it beyond the write bits above.
-
-## Handle rights
-
-File permissions decide whether an open succeeds. They do not decide what the
-resulting handle may do. Every virtual descriptor carries a right word, stamped
-at open time from the flags the open asked for, and the read and write paths
-check it before any backend runs:
-
-| Opened with | May read | May write |
-|---|---|---|
-| `O_RDONLY` (0) | yes | no — even as root, even if the mode allows it |
-| `O_WRONLY` (1) | no | yes |
-| `O_RDWR` (2) | yes | yes |
-
-The bits are the same numbers as the kernel's internal `FD_FLAG_READ` and
-`FD_FLAG_WRITE`, which is exactly why the mapping happens once, at the `SYS_OPEN`
-boundary: `O_RDONLY` is 0 and `O_WRONLY` is 1, so a program that passes the
-internal bits is asking for the wrong thing. Passing `1` ("read", if you are
-thinking in `FD_FLAG_*`) opens write-only.
-
-Sockets are created with both rights, and the ends of a pipe get the right that
-matches their end. Closing a handle takes its rights with it.
-
-This is the first piece of the object model in `docs/ROADMAP.md`: a handle is
-not a bare number, it is a number bound to a right. Generically typed objects,
-per-object reference counts and wait-on-object arrive in the Warren.
-
-The rule is exercised by `programs/handle_test.asm`, which runs as root: every
-file operation it makes is permitted by the file's mode, so a refusal can only
-come from the handle.
-
-## Signals
-
-`kill` reaches only a task the sender may touch: itself, another task of the
-same effective user, or anything at all when the sender is root. Every match is
-checked before anything is delivered, so a process-group signal that includes a
-task the sender does not own is refused whole rather than half-delivered. The
-shell and other kernel contexts have no task control block and are root.
-
-The rule is exercised by `programs/hostile_test.asm`: as uid 1000 it must fail
-to kill a uid-2000 task, and must succeed killing a child of its own.
-
-## Conformance gate
-
-`programs/hostile_test.asm` is the executable form of this document's claims.
-It runs as uid 1000 and requires eleven outcomes: five refusals on a file owned
-by somebody else (read, write, `access`, remove, replace-by-write), two on its
-metadata (`chmod`, `chown`), two on kernel addresses passed where user pointers
-belong (`open`, `write`), and two controls that must still succeed (reading a
-world-readable file, and being refused its write). It prints `HOSTILE_OK` only
-when every one holds, and it is a `make check-runtime` case.
-
-The gate has been seen to say no: with the access check in `fd_open` temporarily
-forced to succeed, the program fails on its first attempt.
-
-`programs/handle_test.asm` is the gate for the handle-rights section, and
-`programs/dirperm_test.asm` for the directory rules: as uid 2000, owning both
-directories, it must be refused a create in one whose write bit is clear, and
-allowed the same call in the other, and it must be refused renaming and
-truncating a file of uid 1000's that sits in its own writable directory. Forcing
-`hbfs_cwd_access_current` to allow makes it print `DIRPERM_FAIL`. Both are
-`make check-runtime` cases.
-
+The model is **capability-based in spirit and ACL-based in mechanism**: every
+object carries a descriptor, every handle carries rights, and nothing a process
+can reach is reachable without a check that names the right it needed
+([S6](README.md#decisions-this-set-records)).
 
 ## 1. Threat model
 
 In scope:
 
-- A hostile **application** running with user privileges (a downloaded program, a game,
-  a package with a malicious manifest).
-- **Corrupted on-disk data** (a damaged or crafted filesystem image).
-- **Malformed input** from the network, the GUI event queue and syscall arguments.
-- A **buggy application** that crashes: it must not take the system with it.
+- a hostile **application** at user privilege: downloaded, packaged, buggy or
+  deliberate;
+- **corrupted or crafted on-disk data** — a damaged volume, a doctored image;
+- **malformed input** from the network, the GUI event queue, a driver and every
+  syscall argument;
+- a **buggy application** that crashes: it must not take the machine with it;
+- a **hostile local user** on a multi-user machine, including one who can run at
+  the same privilege as the victim;
+- a **compromised service** running with a service token.
 
-Out of scope today: physical attacks, malicious firmware, side channels, and a hostile
-*kernel* (no in-kernel sandboxing).
+Out of scope, and stated so nobody assumes otherwise: physical attacks, malicious
+firmware, microarchitectural side channels beyond the mitigations in §11, and a
+hostile kernel (the kernel is the trusted computing base).
 
-## 2. Isolation guarantees
+## 2. Identities
 
-| Resource | Guarantee | Enforced by |
+### 2.1 Security identifiers
+
+A **SID** is a variable-length identity: `u8 revision`, `u8 subauthority count`,
+6 bytes of authority, then up to 15 `u32` subauthorities. The well-known set is
+fixed in `c/include/mv/sids.h`:
+
+| SID | Meaning |
+|---|---|
+| `S-1-5-18` | Local System — the kernel's own authority for service work |
+| `S-1-5-19`, `S-1-5-20` | Local Service, Network Service |
+| `S-1-5-32-544` | Administrators |
+| `S-1-5-32-545` | Users |
+| `S-1-5-32-546` | Guests |
+| `S-1-5-32-555` | Remote Desktop Users |
+| `S-1-5-32-568` | IIS_IUSRS-analogue: sandboxed service accounts |
+| `S-1-5-4` | Interactive logon |
+| `S-1-5-7` | Anonymous |
+| `S-1-5-11` | Authenticated users |
+| `S-1-5-21-…` | A machine-local account |
+
+Floating SIDs — "logon session", "restricted", "integrity" — are computed at
+logon and never stored.
+
+### 2.2 Tokens
+
+A **token** is an object ([OBJECTS.md](OBJECTS.md)) describing a security
+context. Every process and thread has one; a thread may temporarily assume
+another for impersonation.
+
+| Field | Contents |
+|---|---|
+| `user` | The account SID |
+| `groups[]` | Up to 64 group SIDs, each with a `MANDATORY` or `ENABLED`/`DISABLED` flag |
+| `privileges[]` | Up to 32 entries: `{luid, attributes}` (enabled, default, used-for-access) |
+| `integrity` | Level 0..5: untrusted, low, medium, high, system, plus a policy mask |
+| `session` | The session the token belongs to ([OBJECTS.md](OBJECTS.md#5-the-namespace)) |
+| `restricted[]` | Optional list of restricting SIDs (a sandbox) |
+| `logon_type` | Interactive, network, batch, service, unlock |
+| `impersonation_level` | Anonymous, identify, impersonate, delegate |
+
+Logon produces a **primary** token; impersonation produces an **impersonation**
+token that may never be assigned to a process, only to a thread, and only at or
+below the primary token's impersonation level.
+
+## 3. Privileges
+
+A privilege is a right to bypass a class of check. It is not an identity and it
+is not inherited by every process: a token holds privileges, and most are
+disabled until a program asks for them.
+
+| Privilege | Gates |
+|---|---|
+| `SE_BACKUP` / `SE_RESTORE` | Reading or writing an object regardless of its ACL (for backup tools) |
+| `SE_DEBUG` | Opening any process or thread for any right |
+| `SE_TAKE_OWNERSHIP` | Changing an object's owner, and `WRITE_OWNER` without the ACL bit |
+| `SE_LOAD_DRIVER` / `SE_UNLOAD_DRIVER` | Loading and unloading a module ([DRIVERS.md](DRIVERS.md)) |
+| `SE_SHUTDOWN` | Power state changes ([PLATFORM.md](PLATFORM.md)) |
+| `SE_AUDIT` | Reading and clearing the security log |
+| `SE_SESSION_CROSS` | Addressing another session's namespace |
+| `SE_TCB` | Raw access to the kernel's own objects |
+| `SE_CHANGE_NOTIFY` | Watching a directory or key for changes |
+| `SE_TIME_ZONE`, `SE_SYSTEMTIME` | Setting the clock |
+| `SE_NETWORK_BIND_LOW` | Binding a port below 1024 ([NETWORK.md](NETWORK.md)) |
+| `SE_CREATE_PAGEFILE`, `SE_INCREASE_QUOTA` | Memory policy |
+| `SE_SECURITY` | Reading or writing an object's *audit* ACEs and the security log |
+
+`SE_SESSION_CROSS` and `SE_TCB` replace the old "uid 0 is the kernel" rule. UID
+0 survives as a **compatibility identity** for the frozen syscalls
+([ABI.md](ABI.md#5-status-codes)): it maps to the Administrators group with
+significant privileges, and the legacy checks that read `uid == 0` keep working
+on it. Nothing new may use uid alone as an authorisation decision.
+
+## 4. Integrity and mandatory policy
+
+Every object and every token carries an **integrity level**. The level is a
+floor, not a ceiling: a **no-write-up** rule applies to writable access.
+
+| Actor \ Target | Untrusted | Low | Medium | High | System |
+|---|---|---|---|---|---|
+| Untrusted | read/write | read | read | read | read |
+| Low | read/write | read/write | read | read | read |
+| Medium | read/write | read/write | read/write | read | read |
+| High | read/write | read/write | read/write | read/write | read |
+| System | read/write | read/write | read/write | read/write | read/write |
+
+A process is born at the level its token carries: an unpackaged program at
+**medium**, a sandboxed one at **low**, a service at **high**, the kernel and its
+threads at **system**. A downloaded program that the user marks untrusted learns
+the model the useful way: it can still run, it cannot modify the machine.
+
+The rule is evaluated **before** the ACL check and can only deny. `SE_DEBUG` does
+not cross it; `SE_TCB` does.
+
+## 5. The access check
+
+One function, `mv_access_check`, called from every path that turns a name or a
+duplicated handle into a handle ([S8](README.md#decisions-this-set-records)).
+[OBJECTS.md](OBJECTS.md#9-security-hook) names the call sites.
+
+```text
+Inputs:  token, security descriptor, desired rights, optional object path
+Output:  granted rights, or MV_ACCESS_DENIED with the right that failed
+
+1. If the descriptor is NULL, grant MV_RIGHTS_ALL (unprotected object).
+2. If the caller demanded MV_RIGHTS_ALL, map it to the type's specific rights.
+3. Mandatory policy (§4): if the access is a write and the level is below the
+   object's, deny, recording MANDATORY in the audit record.
+4. Walk the DACL in canonical order and accumulate:
+     - ALLOWED if the SID matches and the ACE is an allow
+     - DENIED  if the SID matches and the ACE is a deny
+   A deny wins over an allow for the same SID, in ACE order.
+5. If any restricting SID is present, the access must also be allowed by the
+   restricting ACLs; a denial there is final.
+6. If the caller's token holds the privilege that bypasses this check
+   (§3), grant and record BYPASS.
+7. If the DACL is absent, deny. If the DACL is present and empty, grant nothing.
+8. If the desired rights are not all present, deny and name the missing right.
+```
+
+`MV_RIGHTS_ALL` (generic all) maps per type to its specific rights, so a caller
+that asks for "all" on an event gets `SIGNAL | QUERY | SET`, not `READ_DATA`.
+The mapping lives in the type descriptor and is asserted by a test for every
+type.
+
+### 5.1 Descriptor and ACE format
+
+```text
+security descriptor
+  u8  revision
+  u8  sbz0
+  u16 control          /* DACL_PRESENT, SACL_PRESENT, SELF_RELATIVE, PROTECTED */
+  u32 owner_sid_off
+  u32 group_sid_off
+  u32 sacl_off
+  u32 dacl_off
+  (SIDs and ACLs follow, offsets from the descriptor's start)
+
+ACE (header)
+  u8  type             /* 0 allow, 1 deny, 2 audit, 3 alarm,
+                          4 compound allow (object ACE), 5 compound deny,
+                          6 mandatory label, 7 resource attribute,
+                          8 scoped allow (bounding) */
+  u8  flags            /* inherited, inherit-only, no-propagate-inherit,
+                          no-propagate-inherit-only, audit-success,
+                          audit-failure */
+  u16 size             /* bytes, including the header */
+  u32 mask             /* the rights the ACE grants, denies or audits */
+  SID sid
+  [u32 object_type_guid_lo, guid_hi, inherited_type_lo, inherited_type_hi]
+```
+
+Canonical order is **deny, allow, audit**, each group ordered so that
+object-specific ACEs precede generic ones. A descriptor that is not canonical is
+rejected at parse time, because two orderings of the same ACEs are two different
+security policies and only one of them is the one the administrator wrote.
+
+### 5.2 Inheritance
+
+- An ACE with `INHERITED` came from a parent and is never edited in place; the
+  parent's change propagates.
+- `INHERIT_ONLY` applies to children only.
+- `NO_PROPAGATE_INHERIT` stops the chain at the next level.
+- `PROTECTED` on a descriptor stops inheritance for that object entirely.
+- Default propagation is **containers and leaves** (directories and files, keys
+  and values), which is what an administrator means nine times out of ten.
+
+### 5.3 Default descriptors
+
+A new object gets the descriptor its type names, not "everything allowed":
+
+| Created in | Default owner | Default DACL |
 |---|---|---|
-| Kernel memory | Ring 3 cannot read or write it | Page tables: kernel RAM is supervisor-only (`docs/spec/VMM.md`) |
-| Other processes' memory | Not mapped in the process's address space | Per-process page directories |
-| Devices | Reachable only through driver syscalls | No user mapping of MMIO/PIO; `IOPL=0` |
-| Filesystem | Access checked per open, per file mode | HBFS permissions + VFS checks |
-| Shared buffers | Only buffers the kernel explicitly publishes | `paging_map_phys_user` on the VBE shadow buffer, IPC surfaces, shared memory |
-| Faulting task | Killed alone; system keeps running | `fault_kill_current_task` |
+| A user's session directory | The creating user | The creator full, `Users` read, `SYSTEM` full |
+| `\Devices`, `\Drivers`, `\Registry` (machine) | `SYSTEM` | Administrators full, `Users` read |
+| `\KernelObjects` | The creating process | The creator full, `SYSTEM` full |
+| A named port | The creating process | The creator full, `SYSTEM` full, no implicit `Users` |
+| A service's own objects | The service's token | The service full, administrators read |
 
-### 2.1 Documented exceptions
+## 6. Application capability manifests
 
-| Exception | Justification | Bound |
-|---|---|---|
-| VGA text aperture (`0xA0000`–`0xC0000`) writable | Direct text output is a documented programming technique | 128 KB, affects only the display |
-| Framebuffer shadow buffer | Programs render into it; `SYS_FRAMEBUF/4` presents it | The buffer's pages only |
-| IPC surface pixels | The owning app draws its window | The surface's pages only |
-| Shared memory | Explicitly shared between cooperating processes | The shm table's pages only |
+A published application declares what it needs in its manifest
+([ECOSYSTEM.md](ECOSYSTEM.md)). **A manifest is a request, not a grant.**
 
-Every exception has a regression test that also proves the *surrounding* pages remain
-unreachable.
+- At install, the user sees the list in plain language and approves it once.
+- At launch, the launcher builds a token: the user's identity, restricted
+  integrity if the app is sandboxed, and **only** the privileges the manifest was
+  granted.
+- An undeclared access is refused exactly like a missing ACL bit — same status,
+  same audit record, same message.
+- A package update that widens the request re-prompts; it never widens silently.
 
-## 3. Identities and privileges
+This is how "the app can read my documents" stays a decision the user made
+rather than a property of the desktop session.
 
-- A process has UID, GID, EUID, EGID, SID, groups.
-- UID 0 is the system administrator; everything else is unprivileged.
-- Capabilities replace "root can do anything" as the enforcement unit:
-  `CAP_FS_RAW`, `CAP_NET_BIND_LOW`, `CAP_DEV_*`, `CAP_PROC_CONTROL`, `CAP_SYS_BOOT`.
-- An app manifest declares the capabilities it needs; the launcher passes them at spawn
-  and the kernel enforces them per syscall. **A manifest is a request, not a grant** —
-  the user approves it on first run.
+## 7. Audit
 
-## 4. Filesystem security
+Security-relevant decisions are recorded, because a refusal nobody can explain is
+a support call nobody can answer.
 
-- Unix-style 12-bit modes with owner/group/other; symlinks are not followed for
-  privileged operations unless `CAP_FS_RAW`.
-- ACLs (P4) extend modes for named users and groups.
-- `noexec` and `nosuid` mount options.
-- Every open records the credentials used, so a compromised process cannot re-open
-  something it lost access to.
+| Event | Fields |
+|---|---|
+| Logon / logoff / failed logon | account, session, type, source |
+| Access denied | object name, requested rights, missing right, token SIDs |
+| Privilege use | privilege, process, object if any |
+| Descriptor change | object, old and new owner/group/DACL hash |
+| Driver load/unload | module, signer, image hash |
+| Package install / removal | package, publisher, granted capabilities |
+| Mandatory policy denial | integrity levels, object |
+| Audit log cleared | who, when |
 
-## 5. Kernel self-protection
+Records go to an `eventlog` object ([OBJECTS.md](OBJECTS.md#3-types)) with a
+monotonic sequence number and a per-record checksum chained to the previous one,
+so a deletion shows up as a gap and an edit as a broken chain. `SE_SECURITY`
+gates reading and clearing. An audit buffer that is full **drops with a counted
+gap**, never blocks the machine.
 
-- No writable+executable pages; `PROT_EXEC` on writable mappings requires `MAP_JIT`.
-- Kernel text mapped read-only (`CR0.WP` on; already enforced for kernel writes).
-- Guard pages at the bottom of every kernel stack; stack overflow panics loudly instead
-  of corrupting the allocator.
-- Allocator metadata behind magic numbers and canaries (P6).
-- Syscall arguments validated with `user_range_ok` before any dereference; a bad pointer
-  returns `EFAULT`, it never faults the kernel.
+## 8. Kernel self-protection
 
-## 6. Audit
+| Control | Requirement |
+|---|---|
+| W^X | No page is both writable and executable, in ring 0 or ring 3. `MAP_JIT` is a capability, not a flag. |
+| Kernel text | Mapped read-only; `CR0.WP` set so a stray kernel write faults instead of succeeding |
+| Kernel base | Randomised within the kernel window at boot (KASLR-lite); the offset is reported only to `SE_TCB` |
+| SMEP / SMAP | Enabled where `CPUID` offers them; user pointers are never dereferenced without an explicit copy |
+| User pointer validation | Every pointer and length pair goes through `mv_probe_user` (range, overflow, wrap) before use; a bad one returns `MV_INVALID_PARAMETER`, it never faults the kernel |
+| Kernel stacks | One per task, guard page below, canary above; overflow panics with the task name |
+| Allocator metadata | Magic numbers and canaries on every block; a corrupted header stops the machine naming the block |
+| Double-free | The slub and the frame allocator refuse a second free and count it ([RELIABILITY.md](RELIABILITY.md)) |
+| Speculation | `IBRS`/`IBPB` or retpoline-equivalent at the syscall and interrupt boundary, chosen by `CPUID`; documented in `PLATFORM.md` |
+| Fault containment | A ring-3 fault kills the task, not the system ([RELIABILITY.md](RELIABILITY.md#3-fault-containment)) |
 
-Security-relevant events are appended to a ring buffer with a monotonic sequence number:
-identity changes, capability grants/denials, permission denials, raw device opens,
-package installs. `dmesg`-style tooling reads it; P6 adds persistence.
+## 9. Secrets
 
-## 7. Signals and crashes
+- Passwords are stored as a salted, memory-hard hash (Argon2id parameters fixed
+  in `SERVICES.md`); the plaintext exists only for the duration of the logon.
+- The credential store is encrypted at rest with a machine key held in the
+  platform's secure store where one exists, and derived from a passphrase
+  otherwise ([CONFIG.md](CONFIG.md)).
+- A process may ask for a secret only through the store, only for a secret its
+  token may read, and the read is audited.
+- No secret is ever placed in an environment variable, a command line, the
+  clipboard history or a crash dump. The dump writer redacts by address range,
+  and the range is set by the store.
 
-- A user-mode fault kills the faulting task and reports `[fault] task killed, eip=…
-  addr=…`. The desktop and the shell both survive.
-- A supervisor fault is fatal by definition: panic, symbolised stack, restart. Silently
-  continuing after a kernel fault is never acceptable.
-- Crash data (EIP, address, error code, task name) is written to COM1 so a host-side
-  harness can collect it.
+## 10. Signals, crashes and refusals
 
-## 8. Test obligations
+- `kill` reaches only a task the sender may touch: itself, a task of the same
+  user, or anything with `CAP_PROC_CONTROL`/`SE_DEBUG`. A process-group signal
+  that includes a task the sender may not touch is refused **whole**, so a
+  partial delivery cannot be mistaken for success. [As built and tested.]
+- A user-mode fault kills the faulting task and reports
+  `[fault] task killed, eip=… addr=…`. The desktop and the shell survive.
+  [As built and tested.]
+- A supervisor fault is fatal: panic with a symbolised stack, dump if configured,
+  restart ([RELIABILITY.md](RELIABILITY.md)). Silently continuing after a kernel
+  fault is never acceptable.
+- A refusal always names the check: `MV_ACCESS_DENIED` carries the missing right
+  in the audit record, and the user-visible message says which. "Access denied"
+  alone is not an acceptable message.
 
-`make check` fails if any of these regress:
+## 11. As built (the gap)
 
-1. `memprot_test` — ring 3 cannot write kernel memory (child faults; parent survives).
-2. `sbrk_test` — heap growth works and returns valid, zeroed memory.
-3. `vmtest` (P1) — `mmap`/`munmap`/`mprotect` semantics per `VMM.md`.
-4. `permtest` (P6) — an unprivileged process is denied on every protected object.
-5. Filesystem fuzzing — a corrupted image never panics the kernel.
+Enforced and tested today:
+
+| Rule | Test |
+|---|---|
+| Mode bits deny for `open`, `SYS_FWRITE`, `unlink`, `create`, `mkdir`, `rename`, `truncate`, `rmdir` | `perm_test`, `dirperm_test` |
+| `chmod` is the owner's, `chown` is root's, `setuid`/`setgid` move the effective ID | `perm_test` |
+| A handle carries its rights; a read-only handle cannot write back, even as root | `handle_test` |
+| Eleven refusals and two controls from an unprivileged program, machine survives | `hostile_test` |
+| `kill` follows the uid policy, whole-or-nothing per group | `hostile_test` |
+
+Stated plainly, and to be removed from this section as the waves land:
+
+- Access is decided by 12-bit modes; there are no ACLs, no tokens, no
+  privileges, no integrity levels.
+- "Root" is uid 0; there is no distinction between an administrator and the
+  kernel.
+- Identity is a `uid`/`gid` pair; there are no SIDs, no groups beyond one, and no
+  logon.
+- There is no audit trail beyond a text ring buffer.
+- Directory search permission and the sticky bit are not enforced.
+- Mount options (`noexec`, `nosuid`) do not exist ([STORAGE.md](STORAGE.md)).

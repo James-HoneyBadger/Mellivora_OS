@@ -265,7 +265,8 @@ Mellivora_OS/
 | [Installation Guide](docs/INSTALL.md) | Prerequisites, building, QEMU, real hardware |
 | [User Guide](docs/USER_GUIDE.md) | Complete shell command reference and usage |
 | [Programming Guide](docs/PROGRAMMING_GUIDE.md) | Writing assembly programs with syscalls |
-| [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, memory map, HBFS, drivers |
+| [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, memory map, HBFS, drivers (as built) |
+| [Specifications](docs/spec/README.md) | The normative contract: ABI, objects, security, memory, storage, drivers, services, network, media, reliability, ecosystem |
 | [Tutorial](docs/TUTORIAL.md) | Step-by-step beginner walkthrough |
 | [API Reference](docs/API_REFERENCE.md) | Library functions and calling conventions |
 | [Roadmap](docs/ROADMAP.md) | Phased plan to a general-purpose OS |

@@ -56,6 +56,38 @@
   TCB table now shows the 512-byte image, and the memory map shows the module
   slot at the end of the kernel image.
 
+### Documentation
+
+- **The specification set is rewritten as a contract for the system being built,
+  not a description of the one we have.** `docs/spec/README.md` is the index: the
+  status vocabulary, the document map, the table of ceilings each wave removes,
+  and the eight decisions (S1–S8) the rest of the set cites instead of
+  re-litigating.
+- **Every ceiling a user can hit is gone from the contract.** Live tasks 128 →
+  65 536, handles per process 64+128 → 4 096 growing to 65 536, kernel virtual
+  space 2 MB → 1 GiB, user virtual space ~1 MB → 3 GiB, physical memory 128 MB →
+  64 GiB over PAE, directory entries 224 → 65 535, file size 2 GB → 2^63, block
+  numbers 32-bit → 64-bit, program image 1 MB → 3 GiB, processors 8 parked → 64
+  scheduling, syscalls 187 → 187 frozen plus a typed object-manager space.
+- **New specifications:** `OBJECTS.md` (the Warren: typed objects, generation-
+  checked handles with 16-bit rights, one namespace, wait-many, lifetime),
+  `SCHED.md`, `PLATFORM.md`, `DRIVERS.md`, `STORAGE.md` (HBFS v5),
+  `CONFIG.md` (the Sett), `SERVICES.md`, `EXEC.md`, `IPC.md`, `NETWORK.md`,
+  `MEDIA.md`, `SHELL.md`, `RELIABILITY.md`, `ECOSYSTEM.md`.
+- **Rewritten specifications:** `ABI.md` (fixed-width boundary types, 8-aligned
+  `u64`, versioned structures, an `mv_status` severity space, generated handles,
+  255-code-unit UTF-16 names, parameter blocks, a number-space map), `VMM.md`
+  (3 GiB/1 GiB split over PAE, a PFN database, a bounded physical map window
+  instead of an identity map, reserve/commit, region trees, sections) and
+  `SECURITY.md` (SIDs, tokens, privileges, integrity levels with no-write-up,
+  ACL and ACE formats, the one access-check algorithm, inheritance, audit).
+- **Each document ends with a conformance section naming the tests that must
+  fail first**, and an **as built** section that states the distance from the
+  tree — so "not done yet" is a table, not an assumption.
+- The roadmap gains D9–D12 (the 3 GiB/1 GiB split over PAE, no accidental
+  ceilings, the 187 syscalls as a permanent compatibility layer, and specs that
+  describe the target) and links every wave's contract.
+
 ### Fixed
 
 - **`populate.py` no longer hides a program it could not install.** A program

@@ -1,318 +1,301 @@
-# VMM specification (normative)
+# Virtual memory (normative)
 
-Status: **draft** — this document is the contract for P1. Code that disagrees with it is
-the bug.
+**Normative from:** M1. **Governs:** address spaces, regions, page tables, the
+physical frame database, fault rules, sections and the kernel's own memory.
+
+Today's tree is a flat 32-bit kernel that identity-maps RAM and hands a program a
+1 MB window. That was the right shape for a small system and the wrong shape for
+this one: it caps a program at 1 MB, caps RAM at what a bitmap can describe, and
+makes every kernel pointer a physical address. This document replaces it. The
+replacement is not a tweak — every address in the system changes, which is why
+it is M1's first commit and why the old layout is kept only as an **as-built**
+appendix.
 
 ## 1. Principles
 
-1. **Ring 3 sees only what it owns.** No kernel data structure, page table, allocator
-   bitmap, driver register or another process's memory is reachable from user mode.
-2. **Every mapping is declared.** A page becomes user-accessible only when a subsystem
-   explicitly maps it for a process (program window, stack, framebuffer shadow, IPC
-   surface, trampoline).
-3. **Fail closed.** A missing flag denies access; it never grants it.
-4. **No identity-map shortcuts.** The historical "everything below 128 MB is user
-   writable" identity map is being removed. Code that relied on it (PIO buffers, VGA
-   text, shadow framebuffers) must declare a mapping instead.
+1. **A process sees 3 GiB of its own.** Address space is a resource like any
+   other: reserved, committed, accounted, and reclaimed
+   ([S2](README.md#decisions-this-set-records)).
+2. **The kernel is not identity-mapped.** A kernel pointer is not a physical
+   address. Physical memory is reached through the frame database and a bounded
+   mapping window, so the kernel can describe 64 GiB of RAM while running under
+   a 32-bit page table.
+3. **Every mapping is declared** — by a region, with a protection and an owner.
+   A page that no region covers is not user-accessible, and touching it is a
+   fault, not a surprise.
+4. **Fail closed.** A missing protection bit denies. A protection that cannot be
+   honoured refuses the mapping, rather than granting something weaker.
+5. **No writable-and-executable page, ever** — in either ring.
+6. **Accounting is exact.** Every committed page is charged to a process and to
+   its job, and both counters return to their starting value when the process
+   exits. A leak is a test failure, not a slow drift ([S7](README.md#decisions-this-set-records)).
 
-## 2. Address space layout (32-bit, current)
+## 2. Address space
 
-| Range | Contents | Ring 3 access |
+32-bit, PAE, split 3 GiB / 1 GiB ([S5](README.md#decisions-this-set-records)).
+
+### 2.1 User space
+
+The range is `0x00000000`–`0xBFFFFFFF`.
+
+| Range | Contents | Notes |
 |---|---|---|
-| `0x00000000`–`0x000A0000` | Real-mode IVT, BIOS data, kernel image, page tables, PMM bitmaps, kernel BSS/heap | **never** |
-| `0x000A0000`–`0x000C0000` | Legacy video aperture (VGA text at `0xB8000`) | read/write (compatibility: direct text-mode output is a documented feature) |
-| `0x000C0000`–`0x00300000` | ROMs, kernel workspace | **never** |
-| `0x00300000`–`0x003C0000` | Program window: code, data, BSS, heap (grows up, capped at `USER_STACK_BASE`) | read/write/execute |
-| `0x003C0000`–`0x00400000` | Reserved user stack region: guard page at `0x003C0000`, on-demand growth area, then the 64 KB below a per-launch randomised top mapped at exec (the top is drawn from the last 16 pages of the region) | read/write, guard page **never** |
-| `0x00400000`–`0x08000000` | Reserved | **never** |
-| `user_demand_base`–`0x20000000` | Demand-paged user zone (`mmap`, large heaps) | read/write, per-`vm_area` permissions |
-| `0x1FFFF000` | Sigreturn trampoline (single page) | read/execute only |
-| `0xFD000000`+ | VBE linear framebuffer | read/write for the process holding the graphics grant |
+| `0x00000000`–`0x0000FFFF` | Reserved | Null and near-null: any access faults, so a null dereference is always caught |
+| `0x00010000`–`0x7FFFFFFF` | Private per process | Image, heaps, thread stacks, private sections |
+| `0x80000000`–`0xBFFFFFFF` | Shared | Shared sections, mapped files, and the image bases of shared libraries |
+| `0xBFFF0000`–`0xBFFFFFFF` | Reserved | The top 64 KB of user space is never mapped, so a wild upward pointer cannot wrap into the kernel |
 
-Kernel mappings are `PG_PRESENT | PG_WRITABLE` with **no** `PG_USER`. User mappings are
-`PG_PRESENT | PG_USER` plus `PG_WRITABLE` only where the contract says so.
+Allocation strategy inside the private zone:
 
-`user_demand_base` is computed at boot: the kernel addresses physical memory 1:1, so
-user virtual addresses must begin **above** the highest byte of RAM. Otherwise a
-kernel access to a frame above 128 MB would land inside the demand zone, and a task
-holding an area there would have that frame mapped as user scratch. The base is the
-first 4 MB boundary at or above the top of RAM, never below `0x08000000` (so a 128 MB
-machine keeps the historical layout) and never above `0x1C000000` (which keeps 64 MB
-of user space below `0x20000000`). For the same reason the allocator only hands out
-frames below `0x1C000000`; RAM above that is not used.
+| Object | Placement |
+|---|---|
+| Main image | Random base in `0x00010000`–`0x40000000`, 64 KB aligned (ASLR) |
+| Shared libraries | Random base in `0x80000000`–`0xA0000000` (ASLR) |
+| Main thread stack | 1 MiB reserved, 64 KiB committed, top randomised in `0x60000000`–`0x7FFF0000` |
+| Additional thread stacks | 1 MiB reserved each, from the private zone, top randomised per thread |
+| Heap | Committed regions on demand from the private zone, never adjacent to a stack |
+| Sections | Anywhere in the private zone, honouring the caller's alignment up to 64 KiB |
 
-## 3. Objects
+### 2.2 Kernel space
 
-### 3.1 `vm_area`
+The range is `0xC0000000`–`0xFFFFFFFF`.
 
+| Range | Contents | Size |
+|---|---|---|
+| `0xC0000000`–`0xC0FFFFFF` | Kernel image: text, rodata, data, the C module slot ([ABI.md](ABI.md#10-kernel-module-abi)) | 16 MiB |
+| `0xC1000000`–`0xC8FFFFFF` | Kernel stacks: two pages per task plus a guard, from a pool | 128 MiB |
+| `0xC9000000`–`0xC9FFFFFF` | Per-CPU blocks, interrupt stacks, the GDT/TSS/IDT per processor | 16 MiB |
+| `0xCA000000`–`0xCBFFFFFF` | Paged pool (mapped on demand, can be trimmed) | 32 MiB |
+| `0xCC000000`–`0xCFFFFFFF` | Nonpaged pool: objects, IRPs, driver data | 64 MiB |
+| `0xD0000000`–`0xDFFFFFFF` | **Physical map window** — see §3.3 | 256 MiB |
+| `0xE0000000`–`0xEFFFFFFF` | Section and cache views, mapped large regions | 256 MiB |
+| `0xF0000000`–`0xF0FFFFFF` | MMIO: local APIC, I/O APIC, HPET, PCIe ECAM | 16 MiB |
+| `0xF1000000`–`0xF3FFFFFF` | Framebuffer window | 48 MiB |
+| `0xFF000000`–`0xFF3FFFFF` | Page-table self-map and the PFN database's active windows | 4 MiB |
+| `0xFFF00000`–`0xFFFFFFFF` | The system page-table page and the per-CPU TSS | 1 MiB |
+
+Kernel pages are `PRESENT | WRITE` with **no** `USER` bit. Kernel text and
+rodata are read-only even to the kernel (`CR0.WP=1`). The physical map window,
+the framebuffer window and the cache views are the only kernel ranges with
+special rules, and each is listed in [SECURITY.md](SECURITY.md#8-kernel-self-protection).
+
+## 3. Page tables and physical memory
+
+### 3.1 Three levels, PAE
+
+PAE is the ceiling-raise ([S5](README.md#decisions-this-set-records)):
+
+| Level | Entry | Covers |
+|---|---|---|
+| PDPT | 4 entries, one per 1 GiB | Selected by `CR3` |
+| PD | 512 entries, one per 2 MiB | A `PS` bit here maps a 2 MiB large page |
+| PT | 512 entries, one per 4 KiB | The ordinary mapping |
+
+- **Large pages**: 2 MiB, used for the kernel image, the physical map window,
+  the framebuffer and sections of 2 MiB or more. A large page is never used for
+  a range that needs differing protections inside it.
+- **NX** is honoured per entry. A page is executable only if its region says so.
+- **Global pages** are not used: a per-process `CR3` is the model, and a global
+  bit would be a stale-mapping bug waiting for an SMP machine.
+- **TLB shootdown** is an IPI to every other processor with the affected
+  address range; a mapping change does not complete until every processor has
+  acknowledged. On uniprocessor, the local TLB is invalidated in place.
+- A page directory and each page table are **pools**, not per-allocation pages:
+  allocating a page table at a page-fault time that itself needs a page table is
+  how a kernel deadlocks on itself. Pools are replenished by a low-priority
+  thread and by a reserve for the fault path.
+
+### 3.2 The frame database
+
+One **PFN entry** per physical frame, 16 bytes, allocated at boot from the
+largest contiguous run:
+
+| Field | Meaning |
+|---|---|
+| `refs` | Mappings and kernel references |
+| `share` | Copy-on-write share count |
+| `state` | Free, standby, active, modified, bad |
+| `flags` | Zeroed, dirty, large, DMA-capable, pinned |
+| `original_prot` | Protection to restore after a COW break |
+| `owner` | Process or section that is charged, 0 for kernel |
+
+At 64 GiB the database is 256 MiB for 16.7 M frames: allocated from the top of
+RAM at boot, outside the pool, and never moved. It replaces the bitmap and the
+buddy tags, which is why the "used" and "free" numbers the shell prints become
+exact rather than estimated.
+
+### 3.3 The physical map window
+
+The kernel cannot address 64 GiB of physical memory with 1 GiB of virtual space,
+so it does not try:
+
+```text
+mv_phys_map(pa, length)   ->  a VA in 0xD0000000..0xDFFFFFFF
+mv_phys_unmap(va)         ->  releases the window
 ```
-struct vm_area {
-    uintptr_t start;      /* page aligned */
-    uintptr_t end;        /* page aligned, exclusive */
-    uint32_t  prot;       /* PROT_READ | PROT_WRITE | PROT_EXEC */
-    uint32_t  flags;      /* MAP_SHARED | MAP_PRIVATE | MAP_ANON | MAP_FIXED */
-    struct file *file;    /* MAP_SHARED/MAP_PRIVATE file backing, else NULL */
-    uint32_t  file_off;   /* page aligned */
-    struct vm_area *next;
-};
+
+- A window is at most **2 MiB** and 4 KiB aligned; up to 128 windows may be live
+  at once in total.
+- A window may not span a 2 MiB boundary, so a window is a whole number of
+  large pages, not a fragmentation source.
+- A window is a **short-lived** reference. Anything the kernel keeps must be a
+  PFN plus an offset, not a pointer into the window.
+- A window is never held across a blocking call, a spinlock release, or a
+  context switch. This is enforced: a debug build records the holding task and
+  panics if a window outlives its slice.
+- Small fixed structures (the page directories, the PFN database, the kernel
+  stack of the running task) are the exception: they live in the permanently
+  mapped ranges of §2.2.
+
+## 4. Regions
+
+A **region** is the unit of address-space accounting:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `start`, page aligned |
+| 4 | 4 | `end`, page aligned, exclusive |
+| 8 | 4 | `prot`, `PROT_READ|WRITE|EXEC|GUARD` |
+| 12 | 4 | `type`, image / mapped / private / stack / shared |
+| 16 | 4 | `flags`, reserve / commit / no-cache / large / write-combine |
+| 20 | 4 | `section`, a handle or 0 for anonymous |
+| 24 | 8 | `file_offset`, `u64` ([ABI.md](ABI.md#3-types)) |
+| 32 | 4 | `charge`, committed pages charged here |
+| 36 | 4 | `owner_tag`, for leak attribution |
+
+Regions are kept in a red-black tree keyed by `start` and never overlap. A
+process may hold **65 536** regions; the tree depth is bounded by that, not by
+an array ([S1](README.md#decisions-this-set-records)).
+
+### 4.1 Reserve, then commit
+
+Two-stage, because it is what makes a large allocation fail at the right moment:
+
+| Step | Meaning | Failure |
+|---|---|---|
+| **Reserve** | Take address space only; no RAM, no charge | `MV_NO_MEMORY` when the address space is exhausted |
+| **Commit** | Back a page with RAM (or a file) and charge it | `MV_NO_MEMORY` when the commit limit is reached |
+
+The commit limit is `physical RAM + pagefile − kernel reserve`. A guard page is
+reserved and never committed, so an overflow faults into a growth decision
+instead of into another region.
+
+### 4.2 Protections
+
+| Protection | Read | Write | Execute | Notes |
+|---|---|---|---|---|
+| `PROT_NONE` | — | — | — | Reserved or poisoned |
+| `PROT_READ` | ✓ | — | — | |
+| `PROT_RW` | ✓ | ✓ | — | The default |
+| `PROT_RX` | ✓ | — | ✓ | The only executable form |
+| `PROT_RWX` | refused | | | `MAP_JIT` grants a *pair* of pages, not a writable executable page |
+
+`mprotect` may narrow or widen within the region's rules; widening to `EXEC` on
+a range that was written requires `MAP_JIT`, and the JIT contract is that the
+code page and the writable page are distinct.
+
+## 5. Fault semantics
+
+One handler, one decision tree:
+
+```text
+1. The address is in kernel space?
+   a. Inside a kernel range -> panic (a kernel bug, not user input)
+   b. Outside every kernel range -> panic, with the range table printed
+2. Find the region containing the address.
+   a. None -> if the address is within 64 KiB below a stack's guard, grow the
+      stack (up to its reservation) and retry; otherwise kill the task with
+      MV_ACCESS_VIOLATION.
+   b. Region is reserved but not committed -> demand-zero page, charge it.
+   c. Region is a file view -> read the page through the cache, map it, retry
+      once (a second fault on the same page is fatal, because the cache is
+      wrong and retrying will not help).
+   d. The page is copy-on-write and the access is a write -> allocate, copy,
+      add to the COW share count, remap writable.
+   e. The access violates `prot` -> kill the task.
+3. Charge the frame to the process and its job; on `MV_NO_MEMORY`, kill the
+   task rather than returning a page that is not there.
 ```
 
-Areas are sorted by `start`, never overlap, and are owned by the address space.
+Rules that are not negotiable:
 
-### 3.2 Rules
+- **No fault while holding a spinlock.** A fault inside a non-preemptible
+  critical section panics, naming the lock. The fault path itself allocates from
+  a reserve so it cannot recurse into the allocator ([SCHED.md](SCHED.md)).
+- **Nested faults** are bounded: one level of recursion for a user-copy, then a
+  panic. A kernel that faults copying to a user address has a bug, and the
+  second fault would hide it.
+- **Fault accounting** is per task, and a task that faults in a loop is stopped
+  rather than allowed to burn the machine.
 
-- `mmap` with a hint of 0 allocates from the demand zone; a page-aligned hint is
-  honoured when the range is free. Anonymous mappings are **demand-zero**: `mmap`
-  only records the area, and the first access to each page allocates and zeroes a
-  frame with the area's protection. Reserving memory therefore costs no RAM.
-- `munmap` / `mprotect` operate on any page-aligned sub-range of one area. The area
-  is split so the requested range is exactly one record; `munmap` then releases the
-  frames in it and drops the record, while `mprotect` rewrites the area's protection
-  and the PTEs of pages that are already present. Frames are released through their
-  reference count, so a page still shared with a fork relative survives until the
-  last owner unmaps it.
-- `mprotect(PROT_NONE)` keeps the frame mapped supervisor-only: ring 3 faults on
-  every access but the data survives a later `mprotect(PROT_READ|PROT_WRITE)`.
-- A protection change on a page that is still copy-on-write shared with another
-  address space copies the frame first, so one process's `mprotect` can never change
-  what the other sees.
-- `SYS_MMAP_FILE(path, len, prot, offset)` maps a file's contents. It is
-  demand-paged: nothing is read until a page is touched, and the block for that page
-  is read into a fresh frame. Pages past the end of the file read as zero instead of
-  faulting, and the file's length never changes. `offset` must be page aligned. Only
-  HBFS files can be mapped; tmpfs, procfs and devfs paths return `-1`.
-- **Private mappings** (the default) never write back: a program can scribble on a
-  writable private mapping and the file is untouched.
-- **Shared mappings** — OR `MF_SHARED` (0x10) into the protection mask — write back
-  every page the CPU marked dirty, at the moment the mapping is released (`munmap`,
-  `free`, or the task exiting) and before `mprotect` re-maps a page (which would lose
-  the dirty bit). Only pages the file actually owns are written; a page past the end
-  of the file is scratch space and is never pushed back, because the next block in
-  the allocator's geometry belongs to some other file.
-  Every shared mapping of a block maps the *same* frame, taken from the page cache
-  (`kernel/pagecache.inc`), so a write through one mapping is immediately visible
-  through every other mapping of that block — in the same task or in another one.
-  fork keeps the frame instead of copy-on-write, which is what `MAP_SHARED` means;
-  each inherited page counts as one more reference.
-- `PROT_EXEC` on a writable anonymous mapping requires an explicit `MAP_JIT` flag
-  (W^X); without it the request fails with `EPERM`.
-- Unmapped pages inside the demand zone fault with `SIGSEGV` (once signals land) or kill
-  the task (current containment behaviour).
+## 6. Sections
 
-## 4. Fault semantics
+A **section** is a shareable run of pages, and the only way two address spaces
+see the same memory ([OBJECTS.md](OBJECTS.md#3-types)):
 
-| Fault | Cause | Action |
+| Kind | Backing | Charge |
 |---|---|---|
-| Demand zero | Anonymous area, page not yet backed | Allocate a zeroed page, map it with the area's protections, retry |
-| File-backed | Area backed by an HBFS file | Read the page's block into a fresh zeroed frame, then map it with the area's protection |
-| Write-back | A shared mapping is released, or `mprotect` re-maps a dirty page | Write the frame back to its file block (only for pages inside the file) |
-| COW | Write to a frame that was writable when shared | Copy the frame, drop the old reference, remap writable |
-| Guard page | Access immediately below a stack area | Report stack overflow (task killed, shell survives) |
-| Permission | Write to a read-only or supervisor page, or any access to `PROT_NONE` | Deny: kill the task, leave the system running |
-| Kernel fault | Any fault with `CS & 3 == 0` | Fatal: panic with a symbolised stack |
+| Pagefile section | The pagefile / swap area | Committed pages |
+| File section | A file's data ([STORAGE.md](STORAGE.md)) | Cache pages |
+| Image section | An executable image | Cache pages, executable |
+| Physical section | A device's memory, given by a driver | Not charged; the driver owns it |
 
-A **supervisor** fault is serviced when the address belongs to the current task's own
-areas: a syscall copying into an untouched buffer, or `SYS_REALLOC` copying into a
-fresh block, maps the page with the user's protection exactly as a ring-3 fault would.
-Anything else from ring 0 falls through to the identity-demand logic (RAM above
-128 MB) and then to the panic path, so a genuine kernel bug is still fatal.
+- A view may be mapped read-only, read/write, execute-only or execute-read;
+  `SECTION_MAP_WRITE` on the handle is required to ask for a write view.
+- A view's size and offset are page aligned, up to 2^47 bytes of section.
+- The page cache is the only path from a file to a page. A section does not
+  read the volume itself, which is what makes `cat`, `mmap` and the loader see
+  the same bytes ([STORAGE.md](STORAGE.md#6-the-cache)).
+- A section that is mapped writable and executable at once is refused.
 
-Stack top (implemented): the top of a task's stack is not a fixed address.
-`vm_random_stack_top` draws a page-granular offset in `[0, STACK_ASLR_PAGES)` and puts
-the top that far below `PROGRAM_EXIT_ADDR - 4`; the exit trampoline is written at the
-chosen top and `TCB_USTACK` records it, so ESP at entry and the first 64 KB of stack move
-with it. The spread is deliberately small - 16 pages, because the region has to keep
-`USER_STACK_MAX_PAGES` of room and `USER_STACK_INIT_PAGES` of it is already mapped - so it
-removes a fixed-address assumption rather than hiding the stack from a patient attacker.
-exec in place is the exception: a task that `execve`s keeps the top it already has,
-because the pages outside its existing window are unmapped in its directory and a new top
-could put the trampoline in one of them.
+## 7. The two allocators, and why there are two
 
-Stack growth (implemented): the user stack has its own region at the top of the program
-window — `USER_STACK_BASE` (0x003C0000) to `PROGRAM_END_ADDR` (0x00400000), 256 KB in
-total. Only the `USER_STACK_INIT_PAGES` (64 KB) below the task's stack top are mapped when
-a task starts, and everything else in the region is unmapped - the growth area *and* the
-gap a randomised top leaves above it; the page at `USER_STACK_BASE` is a **permanent
-guard page**. A not-present user fault in the region is serviced by
-`pf_try_stack_growth`, which:
+| Allocator | Serves | Backing | Free-time |
+|---|---|---|---|
+| **Frame allocator** | Whole 4 KiB pages, large pages | PFN database, buddy lists per zone | Any context; lock-free per zone with a spinlock |
+| **Pool / slab** | Kernel objects, buffers, IRPs | Frames, mapped in the pool ranges | Nonpaged: any context. Paged: not from a DPC or a spinlock |
 
-1. finds the lowest mapped stack page by walking the window's page table down from the
-   task's own top, `TCB_USTACK + 4` (the page tables *are* the state, so a forked or
-   resumed task needs no bookkeeping), and refuses to act at all when that top lies
-   outside the stack region;
-2. accepts the fault only if it lies at most `STACK_GROWTH_SLACK` (16 pages, 64 KB)
-   below that frontier, so a stray pointer cannot reserve the region;
-3. maps every page between the fault and the frontier with a freshly zeroed frame
-   (`PG_PRESENT | PG_WRITABLE | PG_USER`) and retries the instruction.
+Zones: `DMA` (`< 16 MiB`, for devices that need it), `NORMAL` (everything else).
+High memory is not a zone; it is the same pool reached through the window.
 
-Anything else in the region — the guard page itself, a jump further than the slack — is
-not growth: the task is killed with the one-line report and the shell keeps running.
-`SYS_SBRK` refuses to move the break above `USER_STACK_BASE`, so the heap cannot grow
-into the stack region, and `set_program_brk_init` caps the initial break the same way.
+Every allocation is tagged with its owner for `pool`/`frames` accounting, so a
+leak is attributed to a subsystem instead of appearing as "memory disappeared"
+([RELIABILITY.md](RELIABILITY.md#8-tracing)).
 
-Kernel identity demand: the kernel addresses physical memory directly, but only the first
-`PAGING_MAP_MB` (128 MB) is mapped at boot. A supervisor not-present fault between
-`USER_DEMAND_BASE` (128 MB) and the highest address the firmware reported as usable
-(`pmm_mem_top`) maps that page identity in the master and the active directory, so the
-buddy allocator can use RAM above 128 MB instead of faulting the first time it touches
-it. Addresses beyond the reported RAM still fault, so a kernel bug is not hidden.
+## 8. Invariants and conformance
 
-Two properties make that safe, and both are easy to lose:
+M1 does not close until all of these hold, and `make check` keeps them holding:
 
-- **The handler returns the interrupted code its registers untouched.** It saves the
-  whole set (`pushad`) and restores it on every path that resumes the fault, because the
-  helpers it calls (`vm_find_area`, `cow_break_page`, `paging_map_page_all`,
-  `paging_privatize_pde`, `pmm_alloc_page`) clobber EBX/ESI/EDI/EBP. Kernel code keeps
-  loop cursors there — the buddy allocator's free-list walk lives in EBX — so a partial
-  save silently redirects whatever was running when the fault arrived.
-- **The handler is re-entrant.** Zeroing or filling a freshly allocated frame above the
-  identity map faults, which re-enters the same handler. `pf_addr`, `pf_eip`,
-  `pf_errcode` and `pf_demand_frame` are therefore saved and restored around it; a
-  nested fault must not overwrite the address the outer entry is still mapping.
+1. `memprot_test` — ring 3 cannot read, write or execute kernel memory, and the
+   child faults while the parent survives.
+2. `vmtest` — reserve, commit, `mprotect`, `munmap` of partial regions, and the
+   region tree staying consistent across 10 000 random operations.
+3. `vmtest2` — demand-zero pages are zero, and a partial unmap frees exactly the
+   committed pages it names.
+4. `cow_test` — a fork sees its own copy after a write, the parent is unchanged,
+   and the share count returns to 1.
+5. `vmtest3` / `vmtest5` — a file-backed page and a shared section read the same
+   bytes as `read`, including through the cache's writeback.
+6. `highmem` cases — the same tests with 4 GiB of physical RAM, so the PFN
+   database, the window and a 32-bit physical address are exercised.
+7. **Accounting**: after every suite, the commit charge per process, the pool
+   charge per tag and the free frame count return to their pre-test values.
+8. **No window leaks**: the number of live physical-map windows is 0 between
+   tests and never exceeds 128 during one.
 
-## 4a. Status of the 32-bit implementation (P1)
+## 9. As built (the gap)
 
-Implemented in `kernel/vm.inc`:
+| Contract | Tree today |
+|---|---|
+| 3 GiB / 1 GiB split | Flat identity map below 8 MB, 1 MB program window, demand zone under 512 MB |
+| PAE, 64 GiB | 2-level tables, 4 GiB at most, 128 MB tested |
+| PFN database | Bitmap plus buddy order lists |
+| Physical map window | RAM is identity-mapped, so a kernel pointer is a physical address |
+| Regions in a tree | A linked list of `vm_area` per task |
+| Reserve/commit | `sbrk` and `mmap` commit immediately |
+| Sections | Shared-memory table keyed by name |
+| 2 MiB large pages | None |
 
-- Per-task `vm_area` table (32 areas per task) recording start, pages and protection.
-  Records are keyed by task slot (= PID). The table is a slab object created with the
-  task and freed when the slot is released, so a recycled slot starts empty by
-  construction rather than by clearing; `vm_area_base` returns 0 for a slot without a
-  table and the fault path treats that as "no mappings".
-- `mmap`: anonymous **demand-zero** mappings in the demand zone, page-aligned, with a
-  randomized first base (16 MB of ASLR spread) and overlap-checked placement. No
-  frame is allocated until a page is touched.
-- Demand faults allocate a zeroed frame, privatise the 4 MB page table first (so the
-  mapping cannot leak into another address space), map it with the area's protection,
-  and refuse any access the protection does not allow. Faults **fail closed**: an
-  address that belongs to no area — including one `munmap` just released — kills the
-  task.
-- Heap: `SYS_MALLOC`/`SYS_FREE`/`SYS_REALLOC` are thin wrappers over the same
-  machinery. `malloc` creates an anonymous demand-zero area (so a block is zeroed on
-  first touch, the program never learns a physical address, and blocks are not limited
-  by the 1 MB program window), `free` releases the area when the pointer is its base,
-  and `realloc` allocates, copies and releases. Before this, `malloc` handed out raw
-  PMM pages at their identity addresses: a block contained whatever the previous owner
-  had left, and `free` freed the frames while leaving the mapping in place.
-- `SYS_MMAP_FILE`: maps an HBFS file's contents privately and demand-paged. The record
-  stores the file's first data sector (plus 1, so 0 means anonymous) and the number of
-  blocks the file can back; a demand fault reads the block for the touching page into
-  the frame. No data is read until a page is touched and nothing is ever written back.
-- `munmap`: accepts any page-aligned sub-range of one area, splits the area, drops the
-  PTEs and releases each frame through its COW reference count.
-- `mprotect`: accepts any page-aligned sub-range, splits the area, updates its
-  protection and rewrites the PTEs that are present. A page still shared copy-on-write
-  is copied first.
-- `PROT_NONE` leaves the frame mapped supervisor-only, so the data survives.
-- W^X: `PROT_WRITE|PROT_EXEC` is refused by both `mmap` and `mprotect` unless
-  `MAP_JIT` (0x40) is requested.
-- `fork` copies the parent's area records and marks their writable pages copy-on-write
-  (COW). `exit` and `exec` release every area and its frames; a parent's pages survive
-  a child's exit through the reference count.
-
-Also implemented:
-
-- Stack guard page, randomised stack top and on-demand stack growth
-  (`paging_setup_user_stack`, `pf_try_stack_growth` in `kernel/paging.inc`,
-  `vm_random_stack_top` in `kernel/vm.inc`), set up per task for both the console and
-  the Burrows launch paths; the heap is capped at the stack region in `SYS_SBRK` and
-  `set_program_brk_init`.
-- Kernel identity demand above 128 MB, bounded by the firmware-reported memory top,
-  with a handler that preserves the interrupted register set and its own scratch across
-  the nested fault that zeroing a high frame causes.
-- COW reference bytes use bit 7 as a "was writable when shared" mark. A frame that was
-  read-only at fork time is counted (both processes map it) but is not marked, so a
-  write to it stays a protection fault. The table spans every frame the allocator can
-  hand out (to `USER_DEMAND_BASE_MAX`); a frame outside it would be reported as "not
-  shared" and a forked share would be freed twice.
-
-File-backed mappings (`SYS_MMAP_FILE`) are implemented on the same demand path: the
-area records the file's first data sector and how many blocks the file can back, so a
-demand fault reads the right block into the frame. A split (`munmap`/`mprotect` of a
-sub-range) advances that sector by the pages it moved into the new record.
-
-- Page cache (`kernel/pagecache.inc`, 128 entries): one frame per HBFS block, keyed by
-  block number counted from `HBFS_DATA_START`, shared by every `MF_SHARED` mapping of
-  that block. `pc_refs` counts mapped page-table entries; fork adds one per inherited
-  PTE and a release drops one. An entry with references is never evicted; a clean,
-  unreferenced one is, and its frame goes back to the PMM. Dirty state is not tracked
-  here: the writing mapping's own PTE carries the dirty bit and its release flushes
-  the block before dropping the reference, so an entry is clean once its count is 0.
-- If the cache cannot take a block (every entry still mapped, or the frame or the read
-  could not be obtained), a shared page falls back to a private frame: the data is
-  correct but the page is not coherent with other mappings of the block.
-- A disk write drops cached blocks that nobody maps (`pc_invalidate`, called next to
-  `blk_cache_flush`), so a block freed and handed to another file cannot serve its old
-  bytes to the next mapping. A block that is still mapped is left alone: writing the
-  same file through an fd while it is mapped shared is not coherent with the mapping.
-- Not yet implemented: a re-entrant, size-changing `truncate` flushing the affected
-  blocks, and a kernel slab allocator in front of the PMM.
-
-## 5. Isolation invariants (tested)
-
-1. A ring 3 write to `0x00100000` (kernel image) faults and cannot be observed to
-   succeed.
-2. A ring 3 read of another task's program window faults.
-3. A ring 3 write to a read-only file mapping faults unless it is `MAP_PRIVATE`.
-4. After `munmap`, the range faults.
-5. No stale bytes: a fresh anonymous page reads as zero.
-6. Kernel code may still write VGA text (`0xB8000`) and its own memory without faults.
-
-7. A task that writes past the bottom of its stack region dies alone: the guard page is
-   never mapped and the shell survives (`stack_overflow`).
-8. A task can grow its stack down to the last page above the guard, and every grown page
-   keeps what was written to it (`stack_test`).
-9. `mmap` allocates nothing until a page is touched, and the first read returns zero
-   (`vmtest2`).
-10. A partial `munmap` removes only that range: the pages on both sides keep their
-    contents and only the removed range faults (`vmtest2`).
-11. A partial `mprotect` changes only its range; `PROT_NONE` denies access but preserves
-    the data (`vmtest2`).
-12. A forked child's writes to an `mmap` page stay private, and a dead child's mappings
-    are reclaimed (`vmtest2`).
-13. A syscall copying into an untouched `mmap` buffer faults the page in with user
-    access; the buffer remains readable and writable by the task (`vmtest2`).
-14. A file mapping reads no data until a page is touched, returns the file's bytes,
-    zero-fills past the end of the file, honours a page-aligned offset, and never
-    writes through to the file (`vmtest3`).
-15. Splitting a file mapping with `mprotect` keeps each piece bound to its own file
-    block (`vmtest3`).
-16. A heap block is zeroed, larger blocks than the program window work, `realloc`
-    keeps the data, a freed block faults when touched, a re-allocated block is zeroed
-    again, and `free` of a non-base pointer is refused (`heaptest`).
-17. A shared file mapping writes the pages it changed back to the file, leaves pages
-    it only read alone, keeps the file's length, and a private mapping still does not
-    write through (`vmtest4`).
-18. Two shared mappings of one file are coherent in both directions, a forked child
-    writes the same pages as its parent, and a fresh mapping reads everything that was
-    written back (`vmtest5`).
-19. A launch returns the stack-region frames it drops, so a fork+exec loop does not walk
-    the free-page count down (`stack_leak_test`).
-20. A task torn down by a signal releases its mmap frames, page-cache references and the
-    page tables it privatised (`kill_leak_test`).
-21. The user stack top differs between launches of the same program, and every launch
-    still exits cleanly through the trampoline at the top it chose (`stack_aslr_test`,
-    which `tests/test_runtime.sh` runs four times in one boot and compares).
-22. A new program reads zeros where the previous program had its heap and its stack: a
-    task's window starts as a copy of the launcher's, so the launcher clears
-    `[image end, PROGRAM_END_ADDR)` before it writes the trampoline and before the task
-    is created. exec in place is exempt - the task owns what is there (`stale_write` then
-    `stale_probe`).
-
-Each invariant has a regression test; `tests/test_runtime.sh` drives `memprot_test`,
-`vmtest`, `vmtest2`, `vmtest3`, `vmtest4`, `vmtest5`, `heaptest`, `stack_test`,
-`stack_overflow`, `stack_leak_test`, `kill_leak_test`, `stack_aslr_test` and the
-`stale_write`/`stale_probe` pair over QEMU and `make check` fails if any regresses.
-
-## 6. Compatibility exceptions
-
-These exist for documented features and are bounded:
-
-| Exception | Why | Bound |
-|---|---|---|
-| VGA text aperture user-writable | "Direct VGA access" is a documented programming technique; `color`, `top` and friends rely on it | 128 KB window, affects only the screen |
-| Framebuffer shadow buffer user-writable | `SYS_FRAMEBUF/0` hands programs a shadow buffer they render into | Only the buffer's own pages, mapped per process |
-| Sigreturn trampoline executable | Signal return ABI | One page, read-only |
-
-Each exception is listed in `SECURITY.md` with its justification and is covered by a test
-that proves nothing else in the same 4 MB region is reachable.
+The `vm_area` list, the fault tree's demand-zero/COW/file paths and the
+isolation invariants are real and tested; the address space they operate in is
+what changes.

@@ -28,6 +28,10 @@ today, not against a list of finished features.
 | D6 | Monolithic kernel with a loadable driver model | Best performance per unit of effort, and the existing drivers already live in the kernel. Loadable modules give PnP and third-party drivers without moving to a microkernel. |
 | D7 | The compositor stays in the kernel for this plan | The surface IPC and damage-rect compositor already work. A user-space display server is a later, separately gated decision. |
 | D8 | ACPI-first hardware model, QEMU-first testing | Every hardware path in this plan is one QEMU can emulate, so the test suite stays honest. Real-hardware coverage is a separate, later campaign. |
+| D9 | **A 3 GiB user / 1 GiB kernel address space over PAE** | The flat identity map caps a program at 1 MB and RAM at what a bitmap describes. PAE is the ceiling-raise D1 named: 64 GiB of physical memory, 3 GiB per process, and a kernel that is no longer addressed by physical address. |
+| D10 | **No accidental ceilings** | Every ceiling we have hit was a hand-sized array: 128 tasks, 224 directory entries, a 2 MB kernel window that is 95 % full. A limit is either hardware or documented policy. The rest are removed as the waves touch them. |
+| D11 | **The 187 existing syscalls are a permanent compatibility layer** | "Monumental" must not mean "rewrite 278 programs and every test". The old calls keep their numbers and meanings forever and are re-implemented over objects (D3). |
+| D12 | **Specifications describe the target, not the tree** | A spec constrained by today's buffer size is not a contract, it is a description. Each document marks what exists as **as built** so the distance is visible and countable. |
 
 ## The parity scorecard
 
@@ -96,7 +100,9 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 187 syscalls, 93 shell built-ins, 264 programs, an in-OS C compiler and `hbpkg`.
+- 187 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
+  in-OS C compiler, `hbpkg`, and a C-built kernel module with a freestanding C
+  runtime behind it.
 
 ## Waves
 
@@ -441,15 +447,31 @@ Named explicitly so the plan does not drift into them:
 
 ## Specs
 
-The normative documents this plan depends on. Existing ones are linked; the rest
-are written before the wave that needs them.
+The normative documents. They describe the system being built, not the tree —
+where a document and the tree disagree, the tree is the bug unless the section
+is marked **as built**. [docs/spec/README.md](spec/README.md) holds the index,
+the status vocabulary and the table of ceilings each wave removes.
 
-| Document | Covers | Needed by |
+| Document | Governs | Normative from |
 |---|---|---|
-| [SECURITY.md](spec/SECURITY.md) | Threat model, privilege boundaries, exception justifications | M1 |
-| [VMM.md](spec/VMM.md) | Address-space layout and mapping rules | M1 |
-| `spec/ABI.md` | Calling convention, structure layout, syscall numbering at the asm/C boundary | M0 |
-| `spec/OBJECTS.md` | Object types, handle rights, lifetime and waiting | M1 |
-| `spec/DRIVERS.md` | Driver interface, device tree, power and PnP contracts | M2 |
-| `spec/CONFIG.md` | The Sett's key space, typing, transaction rules and migration | M4 |
-| `spec/STORAGE.md` | HBFS v5 on-disk format, access control and recovery | M3 |
+| [ABI](spec/ABI.md) | Calling convention, types, structure layout and versioning, status codes, handles, names, syscall encoding | M0 (C boundary), M1 (v2) |
+| [OBJECTS](spec/OBJECTS.md) | The object namespace: types, handles, rights, lifetime, waiting, sessions | M1 |
+| [SECURITY](spec/SECURITY.md) | Threat model, tokens, privileges, integrity, ACLs, the access check, audit | M1 |
+| [VMM](spec/VMM.md) | Address space, regions, page tables, PFN database, faults, sections | M1 |
+| [IPC](spec/IPC.md) | Ports, messages, completion ports, sections, pipes, deadlock rules | M1 (sections), M5 (ports) |
+| [SCHED](spec/SCHED.md) | Processors, priorities, dispatch, timers, jobs, accounting | M2 |
+| [PLATFORM](spec/PLATFORM.md) | ACPI, interrupts, clocks, SMP, power, caching, CPU features | M2 |
+| [DRIVERS](spec/DRIVERS.md) | Modules, device tree, resources, IRPs, DMA, power, PnP | M2 |
+| [STORAGE](spec/STORAGE.md) | HBFS v5: format, volumes, transactions, cache, quotas, snapshots | M3 |
+| [CONFIG](spec/CONFIG.md) | The Sett: keys, types, transactions, notifications, hives | M4 |
+| [SERVICES](spec/SERVICES.md) | Services, dependencies, recovery, logon, sessions, profiles | M4 |
+| [EXEC](spec/EXEC.md) | Images, loader, libraries, TLS, ASLR, process creation | M5 |
+| [SHELL](spec/SHELL.md) | Shell namespace, associations, drag and drop, clipboard, notifications | M6 |
+| [NETWORK](spec/NETWORK.md) | Sockets, stack contracts, shares, RPC, remote administration, firewall | M7 |
+| [MEDIA](spec/MEDIA.md) | Audio graph, video, USB, printing | M8 |
+| [RELIABILITY](spec/RELIABILITY.md) | Dumps, safe mode, recovery console, restore points, tracing, gates | M9 |
+| [ECOSYSTEM](spec/ECOSYSTEM.md) | Packages, registration, trust, SDK, ABI and release policy | M10 |
+
+A wave does not close until its documents' **Conformance** sections pass. The
+gates in [RELIABILITY](spec/RELIABILITY.md#9-the-gates) are the same numbers the
+Gate table above uses; that document is the authority if the two ever differ.

@@ -1,141 +1,273 @@
-# ABI — the boundary between NASM and C
+# ABI — the binary interface (normative)
 
-**Status:** draft, normative from roadmap wave M1.
+**Normative from:** M0 for the C boundary (as built), M1 for v2. **Governs:** the
+calling convention, the type system at every boundary, structure layout and
+versioning, status codes, handles, names, and the encoding of system calls.
 
-New subsystems are written in freestanding 32-bit C ([ADR D2](../ROADMAP.md)).
-The boot path, entry stubs, context switch and every existing module stay in
-NASM. This document is the contract between the two, and the reason a C module
-can be linked into this kernel at all.
+The ABI is the one document every other specification leans on. It is written so
+that a structure defined here is still valid after the kernel gains an object
+manager, a 64 GiB physical ceiling and — if it ever happens — a 64-bit build.
 
-## 1. Compilation
+## 1. Principles
+
+1. **Fixed width at every boundary.** `u8`, `u16`, `u32`, `u64` and their signed
+   forms. No `int`, no `long`, no `size_t`, no pointer in a structure that is
+   shared with assembly, stored on disk, sent over a wire or handed to a driver.
+   A pointer that must cross a boundary is a `u32` handle or a `u64` address.
+2. **The compiler never chooses a layout.** Every shared structure states its
+   padding, and both sides assert its size and the offset of every field
+   ([S4](README.md#decisions-this-set-records)).
+3. **Extension is additive.** A structure gains fields at the end and a version;
+   a caller passes the size it knows, a callee refuses a size it cannot read.
+   Nothing is ever reordered or reused.
+4. **One status space.** Errors do not travel as `-1` with a side channel except
+   in the legacy calls, which are frozen and mapped.
+
+## 2. Compilation of C
+
+[As built, and normative for kernel C.] The kernel module and the user programs
+are built freestanding by a host compiler proved by
+`tools/find_c_toolchain.sh`:
 
 | Setting | Value | Why |
 |---|---|---|
-| Target | `i386` / `i686`, 32-bit ELF, flat or linked image | The kernel is 32-bit protected mode |
-| Language | C11, freestanding (`-ffreestanding -fno-builtin`) | There is no hosted runtime |
-| Optimisation | `-O2` | Matches the asm kernel's size budget |
-| Stack protector | off (`-fno-stack-protector`) | No TLS segment is set up for ring 0 C |
-| Position independence | off (`-fno-pic -fno-pie`) | The image is linked at a fixed base |
-| Unwind tables | off (`-fno-asynchronous-unwind-tables -fno-unwind-tables`) | Nothing unwinds |
-| FPU | `-mno-sse -mno-mmx -msoft-float` | The CPU floor is an i486, which has no SSE; see §5 |
-| Symbol prefix | none | i386 ELF has no leading underscore |
+| Target | 32-bit ELF (`i686-elf`, `gcc -m32`, `clang --target=i386-elf`) | The system is 32-bit ([S5](README.md#decisions-this-set-records)) |
+| Language | C11, `-ffreestanding -fno-builtin` | There is no libc; `c/rt/` is the runtime |
+| Position independence | off (`-fno-pic -fno-pie`) | Everything is linked at a fixed address |
+| Stack protector | off (`-fno-stack-protector`) | No TLS segment in ring 0 |
+| Unwind information | off (`-fno-asynchronous-unwind-tables -fno-unwind-tables`) | Nothing unwinds |
+| Vector state | off for kernel C (`-mno-sse -mno-mmx -msoft-float`) | The CPU floor is an i486; see §7 |
+| Warnings | `-Wall -Wextra`, warnings are not errors | The tree carries historical assembly that is not C |
 
-`sh tools/find_c_toolchain.sh` proves a candidate compiles a 32-bit object and
-that `ld -m elf_i386` links it. A compiler that cannot do that is rejected: a
-native compiler on a non-x86 host builds happily and produces objects the
-kernel cannot call. The Makefile reads the probe's answer and refuses to build
-without one; `make check-toolchain` reports which toolchain it found.
+## 3. Types
 
-Two kinds of C are built today, both with the flags above:
+| Type | Size | Alignment | Notes |
+|---|---|---|---|
+| `u8` / `i8` | 1 | 1 | |
+| `u16` / `i16` | 2 | 2 | |
+| `u32` / `i32` | 4 | 4 | Also the width of a handle and of every shared pointer |
+| `u64` / `i64` | 8 | **8** | 8-aligned even here, so the structure survives a 64-bit move unchanged |
+| `mv_handle` | 4 | 4 | §6 |
+| `mv_status` | 4 | 4 | §5 |
+| `mv_time` | 8 | 8 | 100 ns units, monotonic or absolute as documented per call |
+| `char16` | 2 | 2 | A UTF-16 code unit; the system's native text type |
+| `void` | — | — | Used for "no value", never as a pointer type |
 
-- a **kernel module** (`c/kmod/`), linked as a flat blob at an address the
-  assembler measures and assembled into the kernel image with `incbin`
-  (`kernel/cmod.inc`, the slot at the end of `kernel/data.inc`). It has no
-  undefined symbols: everything it may call arrives in a host table passed to
-  its `init`, and its header is read by number, with every offset asserted at
-  compile time in `c/include/mv/cmod.h`;
-- **user programs** (`c/prog/`), linked at `PROGRAM_BASE` (0x00300000) with
-  `--oformat binary`, entry first, `.bss` folded into a PROGBITS section so the
-  image carries its own zeros rather than inheriting the window's last
-  occupant.
+Enumerations are `u32`. Bitfields are forbidden in shared structures; use a
+`u32` and named masks, because two compilers disagree about bit order in ways
+that only show up in the field.
 
-Both link the same freestanding runtime (`c/rt/string.c`): `memcpy`, `memmove`,
-`memset`, `memcmp`, `strlen`, `strcmp` and `strncmp`. They are not optional —
-with optimization on, the compiler itself emits calls to the first four.
+A `u64` on a 32-bit target is returned in `EDX:EAX` and passed as two
+consecutive 4-byte stack slots, low half first. Its 8-byte alignment rule means
+a structure containing one is 8-aligned, which is where it wants to be anyway.
 
-## 2. Calling convention
+## 4. Calling convention
 
-The kernel uses **cdecl** for every C boundary.
+The kernel uses **cdecl** at every boundary, including `sched_switch` targets
+and driver entry points.
 
 - Arguments are pushed right to left; the caller removes them.
-- Return value in `EAX`; a 64-bit return (a packed structure passed by value) in
-  `EDX:EAX`.
-- Callee saves `EBX`, `ESI`, `EDI`, `EBP` and `ESP`. `EAX`, `ECX` and `EDX` are
-  scratch.
+- The return value is in `EAX`; a 64-bit value is in `EDX:EAX`; a structure
+  returned by value is the caller's buffer passed as a hidden first argument.
+- The callee preserves `EBX`, `ESI`, `EDI`, `EBP` and `ESP`. `EAX`, `ECX`, `EDX`
+  and the flags are scratch.
 - The direction flag is clear on entry and must be clear on return.
-
-Assembly that calls C does `push` arguments, `call`, then `add esp, N`. C that
-calls an assembly routine declares it `extern` and calls it as a normal
-function; the assembly side obeys the same rules, including preserving
-`EBX`/`ESI`/`EDI`/`EBP`.
+- The stack is 4-byte aligned at the call instruction and must be 16-byte
+  aligned at every call the compiler emits, because a callee may use `fxsave`
+  or a vector move on 16 bytes of stack. The entry stubs that call C from
+  assembly are responsible for that alignment.
 
 The existing kernel is written in a `pushad`/`popad` style that preserves
-everything. That is compatible with cdecl and stays as it is.
+everything. That is compatible with cdecl and stays as it is: a routine that
+preserves more than it must is not a bug.
 
-## 3. Structure layout
+## 5. Status codes
 
-Structures cross the boundary, so their layout is fixed rather than left to the
-compiler:
+All new calls return `mv_status`, a 32-bit value:
 
-- Fixed-width types only: `u8`, `u16`, `u32`, `i8`, `i16`, `i32`. `int` is never
-  used for a field that asm reads.
-- Natural alignment, capped at 4 bytes. A `u32` is 4-aligned, a `u16` 2-aligned.
-- No bitfields and no anonymous unions in a shared structure. Use a `u32` and
-  named masks.
-- Padding is explicit: a structure asm walks must name its `reserved` fields so
-  both sides count the same bytes.
-- Enums are 32-bit and are not used as structure fields; use `u32` plus a named
-  constant.
-- A structure shared with assembly carries a compile-time size assertion:
+| Bits | Field | Meaning |
+|---|---|---|
+| 31–30 | severity | `00` success, `01` informational, `10` warning, `11` error |
+| 29 | customer | set for vendor-specific codes; the system never sets it |
+| 28–16 | facility | the subsystem that produced the code |
+| 15–0 | code | the condition |
 
-```c
-typedef char assert_tcb_size[(sizeof(struct tcb) == TCB_SIZE) ? 1 : -1];
+Success is `0`. A caller tests the severity bits, never the whole word, and
+never compares against a specific success code. The first constants:
+
+```text
+MV_OK                 0x00000000
+MV_PENDING            0x00000103   status: complete later, see §9
+MV_TIMEOUT            0x00000102
+MV_INVALID_PARAMETER  0xC000000D
+MV_ACCESS_DENIED      0xC0000022
+MV_INVALID_HANDLE     0xC0000008
+MV_END_OF_FILE        0xC0000011
+MV_NO_MEMORY          0xC0000017
+MV_BUFFER_TOO_SMALL   0xC0000023
+MV_NOT_SUPPORTED      0xC00000BB
+MV_UNEXPECTED         0xC000000D  /* wrong type, wrong state, wrong owner */
 ```
 
-Offsets are asserted the same way against the `%define`d constants already used
-by the asm (`TCB_ESP`, `TCB_STATE`, ...), so a field inserted in the middle is a
-compile error rather than a kernel that corrupts its own scheduler.
+Legacy syscalls keep returning what they return today — `-1` in `EAX` and an
+`errno` in the TCB — forever ([S3](README.md#decisions-this-set-records)). Each
+legacy number maps to exactly one `mv_status` in a generated table
+(`docs/syscalls.json`), so a new caller can translate and a test can prove the
+mapping did not drift.
 
-## 4. Syscalls
+## 6. Handles
 
-The user-facing ABI does not change in this plan:
+A handle is a 32-bit value that is only meaningful in the process that owns it:
 
-- `int 0x80`, call number in `EAX`, arguments in `EBX`, `ECX`, `EDX`, `ESI`,
-  `EDI`.
-- The result is returned in `EAX` and **every other register is preserved**.
-  User code may hold a value in `ECX` or `EDI` across a syscall.
-- Numbers are allocated once in `programs/syscalls.inc` and never reused;
-  `docs/syscalls.json` is generated from that file and checked in CI.
+```text
+31            16 15                        2 1  0
++---------------+---------------------------+-----+
+|  generation   |        table index        | 00  |
++---------------+---------------------------+-----+
+```
 
-A C-implemented syscall body is reached through a small NASM entry stub that
-saves the caller's registers, builds the C argument list on the kernel stack,
-calls the C handler and writes the result back to the saved `EAX` slot. The
-stub is the only place that knows both languages.
+- The low two bits are zero, so a handle can never be mistaken for a small
+  integer or a tagged pointer.
+- The **generation** advances every time the slot is reused. A handle that was
+  closed and whose slot was handed out again names nothing: the kernel compares
+  the generation and returns `MV_INVALID_HANDLE` rather than acting on the new
+  contents. This is what makes a stale handle a refusal and not a security bug.
+- Handle `0` is always invalid. `MV_HANDLE_CURRENT_PROCESS`, `MV_HANDLE_CURRENT_THREAD`
+  and `MV_HANDLE_SELF` are constants in the private range below.
+- Handles are per process, never per thread, and are inherited only where a
+  create call asks for it.
 
-## 5. Floating point and vector state
+The layout is an [ABI](README.md) commitment: a program may hold a handle in a
+`u32` and compare it for equality, and nothing else may be assumed about it.
 
-The x87 stack, MXCSR and the XMM registers belong to the CPU, not to a task, so
-each TCB carries a 512-byte image at `TCB_FPU_AREA` (offset 144, 16-byte
-aligned) and every switch path swaps it with the task.
+## 7. Floating point and vector state
 
-Two save formats, one slot. Where `CPUID.01H:EDX` advertises FXSR the whole
-512 bytes are saved with `fxsave`/`fxrstor`, which covers x87, MXCSR and
-XMM0-15; otherwise `fnsave`/`frstor` save the 108-byte x87 image the i486 floor
-actually has. `cpu_has_fxsr` is sampled once at boot (`kernel/cpu.inc`), so the
-save and the load always agree on the format, and `CR4.OSFXSR`/`OSXMMEXCPT` are
-set only on a CPU that advertises FXSR — on one that does not, those bits are
-reserved and writing them is a `#GP`.
+Each task owns a 512-byte image, saved and restored across a context switch with
+`fxsave`/`fxrstor` where `CPUID` advertises FXSR and `fnsave`/`frstor` where it
+does not; `CR4.OSFXSR` and `CR4.OSXMMEXCPT` are set only on a CPU that has the
+state to keep. The image is captured once in the format the CPU uses, because a
+zeroed `fxsave` area would unmask every SSE exception. This is **as built** and
+proved by `fpu` (`FPU_SELFTEST_OK`) and `programs/fpu_test.asm`.
 
-Consequences for C:
+Consequences:
 
-- **kernel C stays `-mno-sse -mno-mmx -msoft-float`.** This is now about the
-  CPU floor rather than about missing save code: the kernel must run on an
-  i486, which has no SSE at all, so vector instructions in ring 0 would fault
-  on the oldest machine the tree supports. No kernel path uses `float` or
-  `double` for anything that must be exact.
-- **user programs may use SSE** where the CPU advertises it. `programs/sse_test`
-  checks `CPUID` first and skips on a machine without SSE; where the bits are
-  present the kernel has already enabled them, so `movaps` executes instead of
-  faulting.
+- **Kernel C stays `-mno-sse`.** The CPU floor is an i486; vector instructions in
+  ring 0 would fault on the oldest machine the system supports.
+- **User code may use SSE** where `CPUID` advertises it, and must check: the
+  contract does not promise SSE on a machine that does not have it.
+- A future per-task extended state (AVX, if the CPU line ever reaches it) is a
+  larger image behind the same `TCB_FPU_AREA` pointer and the same save/restore
+  entry points, not a second mechanism.
 
-`fpu` (`FPU_SELFTEST_OK`/`FAIL`/`SKIP`, and the `fpu_selftest_boot` line on
-COM1) saves two distinct x87+SSE states, disturbs the live registers and
-requires each back exactly, so the image is proved before any task exists.
+## 8. Text and names
 
-## 6. Versioning
+- The native text type is **UTF-16** (`char16`), because it is what the
+  Windows-facing namespace, the clipboard and file associations need, and
+  because a 255-character name does not fit in a byte string.
+- A **name** is at most 255 `char16` code units including the terminator. It may
+  contain any code point except `\0`, `/` and `\`; the namespace is
+  case-insensitive and case-preserving, with the fold table fixed in
+  `c/rt/utf.c` so two machines agree.
+- A **byte string** (a path on the wire, a command line, a config value marked as
+  such) is UTF-8. Conversion happens once, at the boundary named in the
+  specification that owns that boundary, never in the middle.
+- Invalid input is refused (`MV_INVALID_PARAMETER`); unpaired surrogates never
+  reach a structure, because two different names must never be equal.
 
-The ABI is versioned in one place: the syscall table. Adding a call is additive
-and needs no version bump. Changing the meaning of an existing number, the size
-of a structure a program passes, or the register contract does — and requires a
-`docs/syscalls.json` regeneration, a CHANGELOG entry and a compatibility note in
-this document.
+## 9. System call encoding
+
+`int 0x80`, unchanged, because 2 000 programs and every sample in the tree use
+it ([S3](README.md#decisions-this-set-records)):
+
+| Register | In | Out |
+|---|---|---|
+| `EAX` | call number | status / result |
+| `EBX`, `ECX`, `EDX`, `ESI`, `EDI` | arguments 1–5 | preserved |
+| `EDX:EAX` | — | a 64-bit result where the call returns one |
+
+- Every register except `EAX` is preserved, including the flags except where a
+  call documents otherwise. User code may hold a value in `ECX` across a call.
+- A call needing more than five arguments takes a **parameter block**: a user
+  pointer in `EBX` to a structure whose first two fields are `u32 size` and
+  `u32 version`. The kernel validates the range, refuses a size it does not
+  know, and copies in before acting. No call ever grows by adding a sixth
+  register convention.
+- **Numbers are never reused.** Retiring a call leaves its number reserved
+  forever. The registry is `programs/syscalls.inc`, `docs/syscalls.json` and
+  `c/include/mv/syscall_numbers.h`, all generated from the same file and all
+  checked by `make lint`.
+
+### 9.1 Number space
+
+| Range | Class | Rule |
+|---|---|---|
+| `0`–`186` | Legacy | Frozen by number and meaning; implemented over objects, never changed |
+| `187`–`511` | Object manager | New handle-based calls; may still be renumbered before M1 closes |
+| `512`–`1023` | Subsystems | Security, storage, config, network, media — one block per facility |
+| `1024`–`0x7FFF` | Reserved | Allocated by the specification that needs it |
+| `0x8000`–`0xFFFF` | Private | Test and debug calls, not guaranteed to exist |
+
+### 9.2 Asynchronous calls
+
+An operation that cannot complete inside the call returns `MV_PENDING` and
+completes on a **port** object ([IPC.md](IPC.md)). Every such call documents:
+what the completion message carries, what happens on cancellation, and whether
+the operation is restartable. A call that can block is documented as blocking;
+none may block unexpectedly, because a program cannot be asked to guess.
+
+## 10. Kernel module ABI
+
+The C-built module contract is versioned the same way as every other structure:
+a header at offset 0 of the module with `magic`, `version`, `size` and function
+pointers, read by number from both sides and asserted at compile time in
+`c/include/mv/cmod.h`. Its growth path — export tables, imports, IRP entry
+points — belongs to [DRIVERS.md](DRIVERS.md); what this document fixes is that
+the header stays at offset 0, that every field is 4-byte, and that a host table
+is refused whole when its size disagrees rather than read past.
+
+## 11. Versioning
+
+| Thing | How it is versioned | What a mismatch does |
+|---|---|---|
+| Syscall number | Never reused; table is append-only | Old call keeps working forever |
+| Parameter block | `size` + `version` in the block | `MV_BUFFER_TOO_SMALL`, or a refusal naming the version |
+| Shared structure | `size` + `version`, fields appended | Callee refuses what it cannot read |
+| On-disk structure | magic + version + checksum ([STORAGE.md](STORAGE.md)) | Volume refused, never reformatted |
+| Module header | `magic` + `version` + `size` | Module refused at load, reported by name |
+| `mv_abi_version` | One call returning the running ABI level | A program that needs more says so at start-up |
+
+A change that alters the meaning of an existing field, the size of a structure a
+program passes, or the register contract is not a version bump: it is a new call
+and a new structure. The old one stays.
+
+## 12. Conformance
+
+`make lint` fails if any of these regress:
+
+1. `docs/syscalls.json` and `docs/syscalls.md` match `programs/syscalls.inc`
+   (`check-syscalls-json`, `check-syscalls-md`).
+2. `c/include/mv/syscall_numbers.h` matches the same file
+   (`check-syscall-header`).
+3. No syscall number is defined twice, or reused after retirement
+   (`validate-syscalls`).
+4. Every shared structure asserts its size and field offsets at compile time; a
+   field inserted in the middle is a compile error, not a kernel that reads the
+   wrong bytes.
+5. The kernel module is where the build says it is, with the header this
+   document describes (`make check-cmodule`).
+6. `tools/validate_constants.py` proves the assembly and Python views of the
+   same number still agree.
+
+## 13. As built (the gap)
+
+| Contract | Tree today |
+|---|---|
+| `mv_status` on new calls | Legacy `-1`/`errno` only |
+| Generated handles with generations | Bare small integers |
+| 255 UTF-16 names | 63-byte byte strings |
+| Parameter blocks beyond five arguments | Five registers, no block |
+| `u64` 8-aligned | Natural alignment capped at 4 in shared structures |
+| Object-manager call range | Not allocated yet |
+| `mv_abi_version` | Absent |
+
+The C boundary (§2, §10) is in place; the rest arrives with M1.
