@@ -661,7 +661,7 @@ class FSImage:
                 slot = self._find_free_slot(sd['data'], HBFS_SUBDIR_MAX_FILES)
             if slot is None:
                 print(f"  WARNING: /{directory} full, skipping {filename}")
-                return
+                return False
             off = slot * HBFS_DIR_ENTRY_SIZE
             sd['data'][off:off + HBFS_DIR_ENTRY_SIZE] = entry
             sd['entry_count'] = max(sd['entry_count'], slot + 1)
@@ -673,7 +673,7 @@ class FSImage:
                 slot = self._find_free_slot(self.root_dir, HBFS_MAX_FILES)
             if slot is None:
                 print(f"  WARNING: Root full, skipping {filename}")
-                return
+                return False
             off = slot * HBFS_DIR_ENTRY_SIZE
             self.root_dir[off:off + HBFS_DIR_ENTRY_SIZE] = entry
             path_display = f"/{filename}"
@@ -683,6 +683,7 @@ class FSImage:
             f"  [{self.total_files:2d}] {path_display:28s}"
             f" {len(data):6d} bytes"
             f"  -> block {block_num} (LBA {data_lba})")
+        return True
 
     def cleanup_stale_root_entries(self):
         """Remove root-level file entries that have been migrated to a subdir.
@@ -1048,9 +1049,21 @@ echo Done.
 
 # Burrows GUI applications — go into /Burrows subdirectory
 # Programs installed at the root of the volume rather than in /bin.
-# /bin is at the 227-entry limit of an HBFS subdirectory (roadmap M3
-# grows it); root holds 455 entries and is searched before PATH.
-ROOT_PROGRAMS = {'perm_test', 'hostile_test', 'handle_test', 'dirperm_test'}
+# /bin is at the 224-entry limit of an HBFS subdirectory (roadmap M3
+# grows it); root holds 455 entries and is searched before PATH, so a program
+# installed here still runs by name.
+#
+# Conformance fixtures - every program named *_test - live here by rule rather
+# than by listing: they are run by the host test suites and never typed by a
+# user, and there are enough of them that leaving them in /bin pushes the
+# alphabetical tail of the directory out entirely.
+ROOT_PROGRAMS = {'perm_test', 'hostile_test', 'handle_test', 'dirperm_test', 'cprog'}
+ROOT_PROGRAM_SUFFIXES = ('_test',)
+
+
+def installs_at_root(prog_name: str) -> bool:
+    return (prog_name in ROOT_PROGRAMS
+            or prog_name.endswith(ROOT_PROGRAM_SUFFIXES))
 
 BURROWS_PROGRAMS = {
     'bcalc', 'bedit', 'bforager', 'bhive', 'bnotes', 'bpaint',
@@ -1125,7 +1138,9 @@ def main():
         fname[:-4] for fname in cache
         if fname.endswith('.bin')
     }
-    for prog_name in sorted(ROOT_PROGRAMS):
+    for prog_name in sorted(
+            fname[:-4] for fname in os.listdir(programs_dir)
+            if fname.endswith('.bin') and installs_at_root(fname[:-4])):
         root_bin = os.path.join(programs_dir, prog_name + '.bin')
         if os.path.isfile(root_bin):
             with open(root_bin, 'rb') as f:
@@ -1157,13 +1172,17 @@ def main():
                 fpath = os.path.join(programs_dir, fname)
                 mtime = os.path.getmtime(fpath)
                 src_path = os.path.join(programs_dir, fname[:-4] + '.asm')
-                if not os.path.exists(src_path):
+                # A program built from C by the host toolchain has no .asm
+                # beside it (c/prog/cprog.c, roadmap M0); without this it
+                # would be treated as an orphan and never installed.
+                c_src_path = os.path.join("c", "prog", fname[:-4] + ".c")
+                if not os.path.exists(src_path) and not os.path.exists(c_src_path):
                     print(f"  [SKIP] orphaned binary without source: {fname}")
                     continue
                 new_cache[fname] = mtime
 
                 prog_name = fname[:-4]
-                if prog_name in ROOT_PROGRAMS:
+                if installs_at_root(prog_name):
                     continue            # installed at the root above
                 # Determine target directory (used for skip check below)
                 if prog_name in BURROWS_PROGRAMS:
@@ -1214,11 +1233,17 @@ def main():
                 with open(fpath, 'rb') as f:
                     data = f.read()
                 if prog_name in BURROWS_PROGRAMS:
-                    fs.add_file(prog_name, data, directory="Burrows")
+                    added = fs.add_file(prog_name, data, directory="Burrows")
                 elif prog_name in GAME_PROGRAMS:
-                    fs.add_file(prog_name, data, directory="games")
+                    added = fs.add_file(prog_name, data, directory="games")
                 else:
-                    fs.add_file(prog_name, data, directory="bin")
+                    added = fs.add_file(prog_name, data, directory="bin")
+                if not added:
+                    # The directory was full, so the program is not in the
+                    # image. Recording its mtime anyway would make the next run
+                    # read the gap as a user deletion and tombstone a program
+                    # that was never installed.
+                    new_cache.pop(fname, None)
 
     if fs.preserve_mode:
         fs.cleanup_stale_subdir_entries(

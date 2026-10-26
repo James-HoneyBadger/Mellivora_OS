@@ -17,6 +17,7 @@ This guide covers everything you need to build, run, and test the OS.
 | Tool | Version | Purpose |
 | ------ | --------- | --------- |
 | **NASM** | 2.15+ | Netwide Assembler — assembles all `.asm` sources |
+| **C compiler** | any 32-bit capable | Builds the freestanding kernel module and the C user programs; `tools/find_c_toolchain.sh` proves the candidate by reading the object header back |
 | **GNU Make** | 4.0+ | Build orchestration |
 | **QEMU** | 6.0+ | `qemu-system-x86_64` — i486-compatible emulator for testing |
 | **Python 3** | 3.6+ | Runs `populate.py` to populate the filesystem |
@@ -26,8 +27,13 @@ This guide covers everything you need to build, run, and test the OS.
 
 ```bash
 sudo apt update
-sudo apt install nasm qemu-system-x86 make python3
+sudo apt install nasm qemu-system-x86 make python3 clang lld
 ```
+
+`clang` from the distribution targets `i386-elf` without multilib; if you
+prefer GCC on an x86 host, `gcc-multilib` works, and on an ARM host only a
+cross compiler such as `i686-elf-gcc` will. Run `make check-toolchain` to see
+which candidates the probe accepted.
 
 ### Installing on Fedora/RHEL
 

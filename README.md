@@ -5,14 +5,14 @@
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
 Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3/v4 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 187 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
-compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 273 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC).
+compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program sources (277 NASM and one C), and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** BIOS 3-stage boot into 32-bit protected mode
-- **Userland:** 95 shell built-ins, 273 assembly sources, and 37 bundled samples (NASM, C, Perl, and BASIC)
+- **Userland:** 97 shell built-ins, 278 program sources (277 NASM and one C), and 37 bundled samples (NASM, C, Perl, and BASIC)
 - **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
 
@@ -99,7 +99,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 273 assembl
 - **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
 - **GDB remote stub** (v11) — RSP protocol over COM1; supports registers, memory, continue, step, breakpoints
 
-### Programs (273 assembly sources + 37 bundled samples)
+### Programs (278 program sources + 37 bundled samples)
 
 - **Games (29)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
@@ -152,17 +152,22 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 273 assembl
 
 ```bash
 # Debian/Ubuntu
-sudo apt install nasm qemu-system-x86 make python3
+sudo apt install nasm qemu-system-x86 make python3 clang lld
 
 # Fedora
-sudo dnf install nasm qemu-system-x86 make python3
+sudo dnf install nasm qemu-system-x86 make python3 clang lld
 
 # Arch Linux
-sudo pacman -S nasm qemu-full make python
+sudo pacman -S nasm qemu-full make python clang lld
 
 # macOS
-brew install nasm qemu make python3
+brew install nasm qemu make python3 llvm
 ```
+
+A 32-bit-capable C compiler is required: the kernel carries a freestanding C
+module and the C user programs are built by the host toolchain. Any of
+`i686-elf-gcc`, `gcc -m32` (from `gcc-multilib`) or `clang --target=i386-elf`
+works — `make check-toolchain` runs a probe and reports which one is used.
 
 ### Build & Run
 
@@ -232,7 +237,7 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (273 assembly sources total)
+│   └── ...                 (278 program sources total)
 ├── samples/                NASM, C, Perl, and BASIC source files
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c, hanoi.c
 │   ├── bf.c, wumpus.c, boxes.c, stars.c, echo.c
@@ -412,7 +417,7 @@ ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on A
 | Kernel source | Entry file + 30 modular include files |
 | Syscalls | 185 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 273 assembly sources built by the Makefile |
+| User programs | 278 program sources built by the Makefile (277 NASM, one C) |
 | Bundled samples | 37 (2 NASM + 18 C + 11 Perl + 6 BASIC) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |

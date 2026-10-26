@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, " HBFS v3/4 ", 0xF9, "  187 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  273 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
+        db 0xBA, " HBFS v3/4 ", 0xF9, "  187 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -176,6 +176,8 @@ cmd_help_str:   db "help", 0
 cmd_ver_str:    db "ver", 0
 cmd_acpi_str:   db "acpi", 0
 cmd_locks_str:  db "locks", 0
+cmd_cmod_str:   db "cmod", 0
+cmd_fpu_str:    db "fpu", 0
 cmd_clear_str:  db "clear", 0
 cmd_dir_str:    db "dir", 0
 cmd_ls_str:     db "ls", 0
@@ -556,6 +558,13 @@ total_free_pages: resd 1
 pmm_mem_top:      resd 1     ; highest usable physical byte (page-aligned, exclusive)
 user_demand_base: resd 1     ; first user virtual address (above all RAM)
 buddy_free_list:  resd 12          ; v9.0: per-order buddy allocator free-list heads
+
+; What CPUID reported (kernel/cpu.inc). cpu_has_fxsr decides whether the
+; scheduler saves 512 bytes with fxsave or 108 with fnsave, so the save and
+; the load path always have to read the same value.
+cpu_has_fxsr:     resd 1
+cpu_has_sse:      resd 1
+cpu_has_sse2:     resd 1
 
 kb_buffer:      resb KB_BUFFER_SIZE
 kb_read_idx:    resd 1
@@ -1138,4 +1147,63 @@ proc_scratch_buf: resb 512
 ; v10.0 — HBFS v3 sector scratch buffer (used by hbfs_flush_dir_entry)
 hbfs_sector_rw_buf: resb 512
 
+; Set once the C-built kernel module accepts the host table (kernel/cmod.inc).
+cmod_ready:      resd 1
+
+; The floating-point self-test's two stand-in images and its scratch space
+; (kernel/sched.inc, fpu_selftest).
+align 16
+fpu_selftest_image_a: resb FPU_AREA_SIZE
+align 16
+fpu_selftest_image_b: resb FPU_AREA_SIZE
+align 16
+fpu_selftest_vec:     resb 16
+align 16
+fpu_selftest_got_vec: resb 16
+align 16
+fpu_selftest_zero:    resb 16
+fpu_selftest_int:     resd 1
+fpu_selftest_got_int: resd 1
+fpu_selftest_expect:  resd 1
+
 bss_end:
+
+;=======================================================================
+; C module slot
+;
+; A C subsystem is linked before it is assembled into this image, so it needs
+; an address to be linked at, and that address is not known until the assembler
+; has laid out everything above it. The Makefile therefore assembles the kernel
+; once without the blob to measure where this slot lands, links the C module at
+; that address, and assembles again with -DCMOD_ADDR set to it. The guard below
+; stops a stale address turning into a kernel that calls the wrong bytes.
+;
+; The slot sits after the BSS so neither the blob's size nor its contents can
+; move anything the kernel refers to.
+;
+; -DCMOD_ABSENT builds the same kernel without the blob, which is what the
+; measuring pass and the ELF symbol build use. The label still resolves there -
+; to the end of the image, where the first word is zero rather than 'CMOD' - so
+; the code above it is byte-for-byte identical in both builds and the
+; measurement is exact.
+;=======================================================================
+%ifdef CMOD_ABSENT
+cmod_blob equ bss_end
+%else
+%ifndef CMOD_ADDR
+    %error "CMOD_ADDR is not set - build the kernel through the Makefile"
+%endif
+; NASM's TIMES and %if want a scalar expression, and a label with ORG is not
+; one; $ - $$ is the offset from the start of the image, which is.
+%assign CMOD_OFF (CMOD_ADDR - 0x00100000)
+%if (($ - $$) > CMOD_OFF)
+    %error "the kernel has grown past the C module slot - rebuild through the Makefile"
+%endif
+        times (CMOD_OFF - ($ - $$)) db 0
+cmod_blob:
+        incbin "c/build/kmod.bin"
+%if (($ - $$) > (CMOD_OFF + 0x8000))
+    %error "the C module is larger than its 32 KB slot"
+%endif
+%endif ; CMOD_ABSENT
+

@@ -159,6 +159,22 @@ run_case "copy-on-write fork"        "cow_test"              "COW_OK"           
 # their own values if the scheduler saves and restores it. Both tasks check
 # that the number they pushed is the number they pop back after 64 switches.
 run_case "x87 state per task"         "fpu_test"              "FPU_OK"             "" "CPU EXCEPTION|FPU_FAIL"
+# The save/restore itself, proved before any task exists: two distinct x87+SSE
+# states are saved, the live registers disturbed, and each loaded back and
+# required byte for byte. Boots a Pentium III because the default 486 model has
+# no FXSR and so nothing to carry (it prints FPU_SELFTEST_SKIP there).
+run_case "x87+SSE image round trip"   "fpu"                   "FPU_SELFTEST_OK"    "" "CPU EXCEPTION|FPU_SELFTEST_FAIL|FPU_SELFTEST_SKIP" "" "" pentium3
+# SSE state is per-task too, and is saved in the same slot with
+# fxsave/fxrstor: the same two-task test as fpu_test, with XMM registers.
+run_case "SSE state per task"         "sse_test"              "SSE_OK"             "" "CPU EXCEPTION|SSE_FAIL|SSE_SKIP" "" "" pentium3
+# M0's C exit criterion, kernel half: the module is linked into the image at a
+# fixed address, its header is checked, its init is handed the host table, and
+# it verifies the freestanding runtime and the C-to-assembly call.
+run_case "C kernel module"            "cmod"                  "CMOD_OK"            "" "CPU EXCEPTION|CMOD_FAIL|CMOD_ABSENT"
+# M0's C exit criterion, user half: a program built by the host C compiler
+# (not tcc), linked at the same 0x00300000 as every other program, using the
+# same runtime in ring 3.
+run_case "C user program"             "cprog"                 "C_PROG_OK"          "" "CPU EXCEPTION|C_PROG_FAIL"
 # The stored mode has to deny, not decorate: root passes, the owner is held
 # to the owner bits, and a stranger to the world bits.
 run_case "permissions deny"           "perm_test"             "PERM_OK"            "" "CPU EXCEPTION|PERM_FAIL"

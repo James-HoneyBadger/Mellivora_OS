@@ -1,5 +1,111 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the kernel carries a module written in C
+
+### Kernel (roadmap M0)
+
+- **A freestanding C toolchain is part of the build.** `tools/find_c_toolchain.sh`
+  now writes make assignments (`--make`) as well as a report, and the Makefile
+  reads them: `C_CC` and `C_LD` come from a probe that compiles a 32-bit object
+  and links it, so a native compiler on a 64-bit host is rejected rather than
+  trusted. The build stops with the probe's own guidance when neither is found;
+  `make check-toolchain` prints what was found. CI installs `clang`, `lld` and
+  `binutils`.
+- **A C-built kernel module runs.** `c/kmod/kmod.c` is linked as a flat blob and
+  assembled into the image at an address the assembler measures: `kernel.bin` is
+  assembled once with `-DCMOD_ABSENT` to find the slot, the module is linked at
+  that address, and the image is assembled again with `-DCMOD_ADDR`, which pads
+  to the slot, `incbin`s the blob and refuses to assemble if the address has
+  gone stale. The slot sits after the BSS and is capped at 32 KB by an
+  assembler assertion. New `cmod` built-in runs its self-test — header check,
+  host table check, the freestanding runtime and a call back into assembly —
+  and prints `CMOD_OK`; `make check-cmodule` reads the image back and requires
+  the `CMOD` header where the build says it is.
+- **A C-built user program runs.** `c/prog/cprog.c` is linked at
+  `PROGRAM_BASE` with `--oformat binary`, entry first and `.bss` folded into a
+  PROGBITS section so the reused program window cannot hand it the last
+  program's leftovers. It links the same runtime, checks it, checks compiled
+  arithmetic and the syscall path, and prints `C_PROG_OK` — the "C user
+  program" case in `make check-runtime`.
+- **The freestanding runtime** is `c/rt/string.c`: `memcpy`, `memmove`,
+  `memset`, `memcmp`, `strlen`, `strcmp`, `strncmp`. These are not optional —
+  with `-O2` the compiler emits calls to the first four for structure copies.
+- **`c/include/mv/syscall_numbers.h`** is generated from `programs/syscalls.inc`
+  by `tools/generate_syscall_header.py` and checked by
+  `make check-syscall-header` (in `make lint`), so a C program and an assembly
+  program cannot disagree about a syscall number.
+- **Per-task SSE state.** Each TCB now carries a 512-byte image instead of a
+  128-byte one, and every switch path uses `fxsave`/`fxrstor` where `CPUID`
+  advertises FXSR and `fnsave`/`frstor` where it does not. `kernel/cpu.inc`
+  probes CPUID (guarded by the EFLAGS.ID bit, which is not on every 486) and
+  sets `CR4.OSFXSR`/`OSXMMEXCPT` only where the state exists; the initial image
+  `sched_init` captures is in the same format, because a zeroed `fxsave` area
+  would unmask every SSE exception. `TCB_SIZE` is 656 bytes, still 16-byte
+  aligned.
+- **`fpu` proves the image round-trips.** Two distinct x87+SSE states are saved,
+  the live registers disturbed, and each loaded back and compared; prints
+  `FPU_SELFTEST_OK`, `FPU_SELFTEST_FAIL` or `FPU_SELFTEST_SKIP` (no FXSR). The
+  boot path reports a failure on COM1 and stays quiet otherwise. New
+  `programs/sse_test.asm` is the per-task half, alongside the existing
+  `programs/fpu_test.asm`.
+- **Kernel C stays `-mno-sse -mno-mmx -msoft-float`,** now because the CPU
+  floor is an i486 rather than because nothing saves the state: the kernel has
+  to run on a machine that has no SSE at all. `docs/spec/ABI.md` §5 says so, and
+  documents the module and program build paths.
+- `docs/TECHNICAL_REFERENCE.md` gains a "Freestanding C Subsystems" section, the
+  TCB table now shows the 512-byte image, and the memory map shows the module
+  slot at the end of the kernel image.
+
+### Fixed
+
+- **`populate.py` no longer hides a program it could not install.** A program
+  that did not fit `/bin` was recorded in the cache as copied, so the next run
+  read the gap as a user deletion and tombstoned a program that had never been
+  there. `add_file` now reports whether the entry was written and the cache
+  records only what landed.
+- **Conformance fixtures install at the volume root.** Every program named
+  `*_test` now installs at the root rather than in `/bin`, which is at the
+  224-entry limit of an HBFS subdirectory (roadmap M3 grows it). Without this
+  the alphabetical tail of `/bin` — `fpu_test`, `fd_frag_test`, the v4 test
+  programs — silently never made it into the image.
+- **A binary built from C is not an orphan.** `populate.py` skipped any `.bin`
+  with no `.asm` beside it; a program built from `c/prog/*.c` now counts as
+  sourced.
+- **`docs/spec/ABI.md` did not describe the tree it governs** — it promised
+  `-mno-sse` "until per-task FPU state lands" and described the module boundary
+  as a syscall stub. Both are corrected.
+
+### Found (not fixed here)
+
+- **Two tasks cannot run on the tip commit.** `cow_test`, `fpu_test`,
+  `fork + exec`, every mmap/vm case and the background-launch path all take the
+  machine down with a triple fault immediately after `mov cr3` in
+  `sched_apply_cr3` — the new task's page directory does not map the kernel. CI
+  on `4ac3a6f` failed 24 runtime cases for this, and the same image built from
+  a pristine worktree of that commit reproduces it deterministically.
+
+  Bisect, all against the same 2 GB image with a matching `stage2`/sector count:
+
+  | `kernel/pmm.inc` | `cow_test` |
+  | --- | --- |
+  | as of `d992200` (no allocator lock, no range guard) | pass |
+  | as of `4ac3a6f` | fail |
+  | `4ac3a6f`, range guards disabled, lock kept | fail |
+  | `4ac3a6f`, lock removed from `pmm_alloc_page`/`pmm_free_page` | pass |
+  | `4ac3a6f`, lock replaced by bare `pushfd; cli` / `popfd` | fail |
+
+  So it is neither the guard nor the lock's bookkeeping: **running
+  `pmm_alloc_buddy_order` with interrupts disabled** is what turns every
+  multi-task case red, which points at something in that window that the
+  allocator's own state does not explain (it does not take an interrupt, and the
+  stack depth is unchanged — the 4 bytes `pushfd` uses are the 4 bytes the old
+  `push ecx` used).
+
+  The work in this release is single-task and unaffected: `cmod`, `cprog` and
+  the `fpu` round trip pass on this tree. The per-task SSE case (`sse_test`) and
+  the pre-existing `fpu_test`, `cow_test` and vm cases stay red until the
+  allocator is fixed.
+
 ## Unreleased - a volume is verified before it is trusted
 
 ### Filesystem

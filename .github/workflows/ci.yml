@@ -21,7 +21,12 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nasm make python3 qemu-system-x86 fdisk dosfstools
+          # clang and lld build the freestanding C subsystem the kernel now
+          # carries and the C user programs; a compiler that cannot produce
+          # 32-bit objects is rejected by tools/find_c_toolchain.sh, so clang
+          # is asked to target i386-elf directly rather than relying on
+          # multilib.
+          sudo apt-get install -y nasm make python3 qemu-system-x86 fdisk dosfstools clang lld binutils
 
       - name: Run lint and contract checks
         run: make lint

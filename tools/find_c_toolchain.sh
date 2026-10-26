@@ -10,11 +10,19 @@
 #
 # Usage:
 #   sh tools/find_c_toolchain.sh          # report the compiler and linker found
+#   sh tools/find_c_toolchain.sh --make   # emit make variable assignments
 #   sh tools/find_c_toolchain.sh --require  # exit non-zero when there is none
 #
-# Output is one line per role: "cc: <command>" and "ld: <command>".
+# Output is one line per role: "cc: <command>" and "ld: <command>". --make
+# prints "C_CC := <command>" and "C_LD := <command>" instead, so the Makefile
+# can $(eval) it without parsing prose.
 
 set -u
+
+MODE="report"
+case "${1:-}" in
+    --make) MODE="make" ;;
+esac
 
 PROBE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mellivora-c-probe.XXXXXX")
 trap 'rm -rf "$PROBE_DIR"' EXIT INT TERM
@@ -81,16 +89,28 @@ for candidate in $LD_CANDIDATES; do
 done
 
 if [ -n "$CC_FOUND" ]; then
-    echo "cc: $CC_FOUND"
-    echo "ld: ${LD_FOUND:-none (the C probe object linked with none of: $LD_CANDIDATES)}"
+    if [ "$MODE" = "make" ]; then
+        echo "C_CC := $CC_FOUND"
+        echo "C_LD := ${LD_FOUND:-none (the C probe object linked with none of: $LD_CANDIDATES)}"
+    else
+        echo "cc: $CC_FOUND"
+        echo "ld: ${LD_FOUND:-none (the C probe object linked with none of: $LD_CANDIDATES)}"
+    fi
     exit 0
 fi
 
-echo "cc: none"
-echo "  Tried: $(echo $CC_CANDIDATES | tr -s ' ')"
-echo "  Install one of: gcc-multilib (x86 host), i686-elf-gcc (a cross"
-echo "  compiler, which is the only route on an ARM host), or clang"
-echo "  (which can target i386-elf without multilib)."
+if [ "$MODE" = "make" ]; then
+    # Empty assignments: make treats them as "not found" and prints its own
+    # guidance, which belongs where the build fails rather than in a probe.
+    echo "C_CC :="
+    echo "C_LD :="
+else
+    echo "cc: none"
+    echo "  Tried: $(echo $CC_CANDIDATES | tr -s ' ')"
+    echo "  Install one of: gcc-multilib (x86 host), i686-elf-gcc (a cross"
+    echo "  compiler, which is the only route on an ARM host), or clang"
+    echo "  (which can target i386-elf without multilib)."
+fi
 if [ "${1:-}" = "--require" ]; then
     exit 1
 fi

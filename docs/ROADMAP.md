@@ -100,37 +100,52 @@ What the plan builds on, and must not regress:
 
 ## Waves
 
-### M0 · Measurement, contract and the C foundation (3–5 weeks)
+### M0 · Measurement, contract and the C foundation (3–5 weeks) — **closed**
 
-- The parity scorecard as an executable harness: `tools/parity_scorecard.py`
-  computes the fourteen rows below from evidence in the tree and compares them
-  with `docs/parity-baseline.json`. `make check-parity` runs it, `make check` and
-  CI both fail when a row regresses, and `make check-parity-update` is the only
-  way a row improves — reviewed with the change that earns it.
-- Freeze the syscall ABI behind a versioned table. New calls get numbers from the
-  table; old numbers keep working. `docs/syscalls.json` stays generated.
-- **C toolchain bootstrap.** `tools/find_c_toolchain.sh` probes `i686-elf-gcc`,
-  `i386-elf-gcc`, `gcc -m32` and `clang --target=i386-elf`, and proves each by
-  compiling a probe and checking the object is 32-bit ELF and links with
-  `ld -m elf_i386`. On a non-x86 host only a cross compiler will pass, so
-  `make check-toolchain` reports what is available instead of failing a build
-  that does not need C yet. Build integration, a linker script for C-built
-  subsystems, and a freestanding runtime (`memcpy`, `memset`, `strlen`,
-  `memmove`) land here.
-- **Per-task FPU and SSE state.** *Done for x87:* each TCB carries an image and
-  every switch path saves and restores it with `fnsave`/`frstor`, proved by
-  `programs/fpu_test.asm` in `make check-runtime`. SSE state is not saved yet,
-  which is why kernel C is still compiled `-mno-sse`; the area is 16-byte
-  aligned so `fxsave`/`fxrstor` can replace it when a CPU with FXSR is the
-  baseline.
-- Normative specs written before the code that needs them: `docs/spec/ABI.md`
-  (calling convention and structure layout at the asm/C boundary),
-  `docs/spec/OBJECTS.md`, `docs/spec/DRIVERS.md`, `docs/spec/CONFIG.md`.
+- **The parity scorecard (landed).** `tools/parity_scorecard.py` computes the
+  fourteen rows below from evidence in the tree and compares them with
+  `docs/parity-baseline.json`; `make check-parity` runs it, `make check` and CI
+  both fail when a row regresses, and `make check-parity-update` is the only way
+  a row improves — reviewed with the change that earns it. The baseline has
+  moved once since it was recorded: "Detect hardware" went `fail` → `partial`
+  with the ACPI tables.
+- **The syscall ABI, versioned (landed).** `docs/spec/ABI.md` §6 makes the
+  syscall table the one place a number is allocated, `docs/syscalls.json` and
+  `docs/syscalls.md` stay generated from `programs/syscalls.inc`, and
+  `c/include/mv/syscall_numbers.h` is generated from the same file so a C
+  program cannot fall out of step with the numbers. `make check-syscall-header`
+  is part of `make lint`.
+- **C toolchain bootstrap (landed).** `tools/find_c_toolchain.sh` probes
+  `i686-elf-gcc`, `i386-elf-gcc`, `gcc -m32` and `clang --target=i386-elf`, and
+  proves each by compiling a probe and checking the object is 32-bit ELF and
+  links with `ld -m elf_i386`; the Makefile reads its answer and the build now
+  requires one — `make check-toolchain` reports which. The build integration, a
+  linker script per C target, and a freestanding runtime
+  (`c/rt/string.c`: `memcpy`, `memmove`, `memset`, `memcmp`, `strlen`, `strcmp`,
+  `strncmp`) landed with two real consumers: **a C-built kernel module**
+  (`c/kmod/`, linked at a measured address, assembled into the image with
+  `incbin`, `cmod` on the shell runs its self-test, `make check-cmodule` reads
+  the image back) and **a C-built user program** (`c/prog/`, linked at
+  `PROGRAM_BASE`, `cprog` in `make check-runtime`). The module boundary is one
+  structure each way, with every offset asserted at compile time
+  (`c/include/mv/cmod.h`).
+- **Per-task FPU and SSE state (landed).** Each TCB carries a 512-byte image at
+  `TCB_FPU_AREA`; every switch path saves and restores it with
+  `fxsave`/`fxrstor` where `CPUID` advertises FXSR and `fnsave`/`frstor` where it
+  does not, and `CR4.OSFXSR`/`OSXMMEXCPT` are set only on a CPU that has the
+  state to keep (`kernel/cpu.inc`). `fpu` saves two distinct x87+SSE states,
+  disturbs the live registers and requires each back (`make check-runtime`,
+  case "x87+SSE image round trip"); `programs/fpu_test.asm` and
+  `programs/sse_test.asm` prove the per-task half with two tasks.
+- **Normative specs.** `docs/spec/ABI.md` is written and covers the boundary
+  this wave built. `OBJECTS.md`, `DRIVERS.md` and `CONFIG.md` are still owed by
+  M1, M2 and M4 respectively, as the [specs table](#specs) says.
 
-**Exit:** the scorecard runs in CI and reports the true 1/7/6 baseline, and a
-row is proven to move only by adding evidence; a
-C-built kernel module and a C-built user program both run; a floating-point
-workload across a context switch is correct under `make check`.
+**Exit:** met — the scorecard runs in CI and reports the true baseline, and a
+row moves only by adding evidence; a C-built kernel module (`CMOD_OK`) and a
+C-built user program (`C_PROG_OK`) both run; and a floating-point workload
+across a context switch is a `make check` case, with the save/restore itself
+proved independently of any task.
 
 ### M1 · The executive: objects, handles, security (8–12 weeks)
 

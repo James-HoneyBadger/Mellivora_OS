@@ -53,6 +53,8 @@ cmd_table:
         CMDENT cmd_time_str, CAT_SYSTEM, sum_time, det_time
         CMDENT cmd_acpi_str, CAT_SYSTEM, sum_acpi, det_acpi
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
+        CMDENT cmd_cmod_str, CAT_SYSTEM, sum_cmod, det_cmod
+        CMDENT cmd_fpu_str, CAT_SYSTEM, sum_fpu, det_fpu
         CMDENT cmd_ver_str, CAT_SYSTEM, sum_ver, det_ver
         CMDENT cmd_watch_str, CAT_SYSTEM, sum_watch, det_watch
         CMDENT cmd_which_str, CAT_SYSTEM, sum_which, det_which
@@ -236,6 +238,19 @@ det_locks:
         db "  Run the spinlock self-test: take two locks in the wrong order and", 0x0A
         db "  require the gate to refuse, then in the right order and require it", 0x0A
         db "  to grant. Prints LOCK_SELFTEST_OK or LOCK_SELFTEST_FAIL.", 0x0A, 0
+sum_fpu: db "Prove the per-task x87 and SSE image round-trips", 0
+det_fpu:
+        db "fpu", 0x0A
+        db "  Save two different x87+SSE states, disturb the live registers and", 0x0A
+        db "  load each back. Prints FPU_SELFTEST_OK, FPU_SELFTEST_FAIL, or", 0x0A
+        db "  FPU_SELFTEST_SKIP on a CPU with no FXSR to carry.", 0x0A, 0
+sum_cmod: db "Run the C-built kernel module's self-test", 0
+det_cmod:
+        db "cmod", 0x0A
+        db "  Call the kernel module written in C: its header is checked, its init", 0x0A
+        db "  is handed the host table, and it checks the freestanding runtime and", 0x0A
+        db "  the C-to-assembly call before printing CMOD_OK. An image built", 0x0A
+        db "  without a C toolchain says CMOD_ABSENT instead.", 0x0A, 0
 sum_acpi: db "The machine's own description: CPUs, APICs, table of contents", 0
 det_acpi:
         db "acpi", 0x0A

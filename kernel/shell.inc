@@ -1875,6 +1875,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_locks
 
+        mov edi, cmd_cmod_str
+        call str_starts_with
+        jc .cmd_cmod
+
+        mov edi, cmd_fpu_str
+        call str_starts_with
+        jc .cmd_fpu
+
         mov edi, cmd_acpi_str
         call str_starts_with
         jc .cmd_acpi
@@ -2298,6 +2306,14 @@ shell_dispatch_core:
 
 .cmd_locks:
         call lock_selftest
+        ret
+
+.cmd_cmod:
+        call cmod_selftest
+        ret
+
+.cmd_fpu:
+        call sched_fpu_report
         ret
 
 .cmd_acpi:

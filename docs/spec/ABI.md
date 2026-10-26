@@ -17,13 +17,31 @@ can be linked into this kernel at all.
 | Stack protector | off (`-fno-stack-protector`) | No TLS segment is set up for ring 0 C |
 | Position independence | off (`-fno-pic -fno-pie`) | The image is linked at a fixed base |
 | Unwind tables | off (`-fno-asynchronous-unwind-tables -fno-unwind-tables`) | Nothing unwinds |
-| FPU | `-mno-sse -mno-mmx -msoft-float` until per-task FPU state lands | See §5 |
+| FPU | `-mno-sse -mno-mmx -msoft-float` | The CPU floor is an i486, which has no SSE; see §5 |
 | Symbol prefix | none | i386 ELF has no leading underscore |
 
 `sh tools/find_c_toolchain.sh` proves a candidate compiles a 32-bit object and
 that `ld -m elf_i386` links it. A compiler that cannot do that is rejected: a
 native compiler on a non-x86 host builds happily and produces objects the
-kernel cannot call.
+kernel cannot call. The Makefile reads the probe's answer and refuses to build
+without one; `make check-toolchain` reports which toolchain it found.
+
+Two kinds of C are built today, both with the flags above:
+
+- a **kernel module** (`c/kmod/`), linked as a flat blob at an address the
+  assembler measures and assembled into the kernel image with `incbin`
+  (`kernel/cmod.inc`, the slot at the end of `kernel/data.inc`). It has no
+  undefined symbols: everything it may call arrives in a host table passed to
+  its `init`, and its header is read by number, with every offset asserted at
+  compile time in `c/include/mv/cmod.h`;
+- **user programs** (`c/prog/`), linked at `PROGRAM_BASE` (0x00300000) with
+  `--oformat binary`, entry first, `.bss` folded into a PROGBITS section so the
+  image carries its own zeros rather than inheriting the window's last
+  occupant.
+
+Both link the same freestanding runtime (`c/rt/string.c`): `memcpy`, `memmove`,
+`memset`, `memcmp`, `strlen`, `strcmp` and `strncmp`. They are not optional —
+with optimization on, the compiler itself emits calls to the first four.
 
 ## 2. Calling convention
 
@@ -84,23 +102,35 @@ saves the caller's registers, builds the C argument list on the kernel stack,
 calls the C handler and writes the result back to the saved `EAX` slot. The
 stub is the only place that knows both languages.
 
-## 5. Floating point
+## 5. Floating point and vector state
 
-The task control block carries a per-task x87 image, saved and restored across a
-context switch, so two tasks doing floating point keep their own values. What is
-still missing is SSE state: the kernel does not enable `CR4.OSFXSR`, so a task
-that runs SSE instructions is not saved per task.
+The x87 stack, MXCSR and the XMM registers belong to the CPU, not to a task, so
+each TCB carries a 512-byte image at `TCB_FPU_AREA` (offset 144, 16-byte
+aligned) and every switch path swaps it with the task.
 
-Until the SSE half lands:
+Two save formats, one slot. Where `CPUID.01H:EDX` advertises FXSR the whole
+512 bytes are saved with `fxsave`/`fxrstor`, which covers x87, MXCSR and
+XMM0-15; otherwise `fnsave`/`frstor` save the 108-byte x87 image the i486 floor
+actually has. `cpu_has_fxsr` is sampled once at boot (`kernel/cpu.inc`), so the
+save and the load always agree on the format, and `CR4.OSFXSR`/`OSXMMEXCPT` are
+set only on a CPU that advertises FXSR — on one that does not, those bits are
+reserved and writing them is a `#GP`.
 
-- kernel C is compiled `-mno-sse -mno-mmx -msoft-float` — the soft-float flags
-  keep the compiler from emitting vector state nothing saves;
-- no kernel path uses `float` or `double` for anything that must be exact;
-- user programs that use x87 are safe; user programs that execute SSE are a
-  documented hazard.
+Consequences for C:
 
-After that change, SSE2 is permitted (the kernel sets `CR4.OSFXSR`) and the
-compiler flags are revisited in the same commit that adds the SSE save.
+- **kernel C stays `-mno-sse -mno-mmx -msoft-float`.** This is now about the
+  CPU floor rather than about missing save code: the kernel must run on an
+  i486, which has no SSE at all, so vector instructions in ring 0 would fault
+  on the oldest machine the tree supports. No kernel path uses `float` or
+  `double` for anything that must be exact.
+- **user programs may use SSE** where the CPU advertises it. `programs/sse_test`
+  checks `CPUID` first and skips on a machine without SSE; where the bits are
+  present the kernel has already enabled them, so `movaps` executes instead of
+  faulting.
+
+`fpu` (`FPU_SELFTEST_OK`/`FAIL`/`SKIP`, and the `fpu_selftest_boot` line on
+COM1) saves two distinct x87+SSE states, disturbs the live registers and
+requires each back exactly, so the image is proved before any task exists.
 
 ## 6. Versioning
 

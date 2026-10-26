@@ -650,6 +650,12 @@ kernel_entry:
         mov cr0, eax
         fninit                  ; Initialize FPU to known state
 
+        ; Ask the processor what it can do, then let it keep XMM state for
+        ; tasks where it can. The scheduler reads these flags on every switch,
+        ; so they must be settled before the first task is created.
+        call cpu_detect
+        call cpu_enable_sse
+
         ; Initialize current directory to root
         mov dword [current_dir_lba], HBFS_ROOT_DIR_START
         mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
@@ -723,6 +729,16 @@ kernel_entry:
         ; names nothing.
         call lock_selftest
 
+        ; The per-task image has to carry x87 and SSE state, not just claim to:
+        ; this saves two distinct states, disturbs the live registers and
+        ; requires each back exactly. Skipped on a CPU with no FXSR.
+        call fpu_selftest_boot
+
+        ; Bring the C-built module up once. A module that is linked in and
+        ; refuses the host table can only get worse, so the refusal is
+        ; reported here; a successful load is silent and `cmod` proves it.
+        call cmod_boot
+
         ; Enter the command shell
         jmp shell_main
 
@@ -733,6 +749,7 @@ kernel_entry:
 ; Subsystem includes – each file corresponds to a logical kernel module.
 ; The build still produces one flat binary; this split is for readability.
 ;-----------------------------------------------------------------------
+%include "kernel/cpu.inc"
 %include "kernel/sched.inc"
 %include "kernel/vga.inc"
 %include "kernel/pic.inc"
@@ -772,4 +789,5 @@ kernel_entry:
 %include "kernel/util.inc"
 %include "kernel/syscall.inc"
 %include "kernel/cmdtable.inc"
+%include "kernel/cmod.inc"
 %include "kernel/data.inc"

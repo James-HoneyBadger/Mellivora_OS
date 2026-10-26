@@ -40,7 +40,8 @@ anyone who wants to understand how the system works under the hood.
 30. [Alias System](#alias-system)
 31. [Command History](#command-history)
 32. [Tab Completion](#tab-completion)
-33. [Fault Injection (P10)](#fault-injection-p10)
+33. [Freestanding C Subsystems](#freestanding-c-subsystems)
+34. [Fault Injection (P10)](#fault-injection-p10)
 
 ---
 
@@ -221,6 +222,9 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 0x000B8000 │ VGA text framebuffer    │  4000 bytes (80×25×2)
 0x00100000 ├─────────────────────────┤  ← 1 MB
            │ Kernel code + data      │  Variable (generated sector count)
+           │ ... BSS ...             │
+           │ C module slot           │  The C-built kernel module, linked at an
+           │                         │  address the assembler measures
 0x00300000 ├─────────────────────────┤  ← 3 MB
            │ User program space      │  1 MB max
 0x003FFxxx │ SYS_EXIT trampoline     │  Safety net for programs that RET;
@@ -1347,7 +1351,7 @@ return from an interrupt that was taken in ring 3.
 
 ### Task Control Block (TCB)
 
-Each task occupies **136 bytes** in the static `task_table` array
+Each task occupies **656 bytes** in the static `task_table` array
 (`MAX_TASKS × TCB_SIZE`). Layout:
 
 | Offset | Size | Name | Description |
@@ -1382,28 +1386,39 @@ Each task occupies **136 bytes** in the static `task_table` array
 | 120 | 4 | `TCB_FD_TABLE_PTR` | Physical address of the per-task fd table page |
 | 124 | 4 | `TCB_ERRNO` | Per-task errno value |
 | 128 | 4 | `TCB_CR3` | Physical address of this task's page directory (0 = master) |
-| **136** | — | `TCB_SIZE` | Total TCB size |
+| 144 | 512 | `TCB_FPU_AREA` | This task's `fxsave` image (or `fnsave` where the CPU has no FXSR) |
+| **656** | — | `TCB_SIZE` | Total TCB size (16-byte aligned, so the FPU image is too) |
 
 
-### Per-task x87 state
+### Per-task x87 and SSE state
 
-The x87 register stack belongs to the CPU, not to a task, so a program that does
-floating point keeps its values across a switch only if the scheduler swaps them
-with the task. Every TCB carries a 128-byte image at `TCB_FPU_AREA` (offset 144,
-16-byte aligned relative to a 16-aligned TCB), and every switch path calls
-`sched_swap_fpu` with the same convention as `sched_swap_fd_tables`: outgoing in
-`EDI`, incoming in `EBX`, and 0 meaning the shell, which has its own image.
+The x87 stack, MXCSR and the XMM registers belong to the CPU, not to a task, so
+a program that does floating point or vector work keeps its values across a
+switch only if the scheduler swaps them with the task. Every TCB carries a
+512-byte image at `TCB_FPU_AREA` (offset 144, 16-byte aligned relative to a
+16-aligned TCB), and every switch path calls `sched_swap_fpu` with the same
+convention as `sched_swap_fd_tables`: outgoing in `EDI`, incoming in `EBX`, and
+0 meaning the shell, which has its own image.
 
-`fnsave`/`frstor` are used rather than `fxsave`/`fxrstor` because the target is
-i486-and-up and QEMU's 486 model offers no FXSR. `fnsave` re-initialises the FPU
-after saving, which is harmless because `frstor` follows immediately. New tasks
-start from an image captured once by `sched_init` after `fninit`, so a task that
-never touches the FPU still has a valid control word when it is first switched
-to.
+Two formats, one slot. Where `CPUID.01H:EDX` advertises FXSR, the whole 512
+bytes are saved with `fxsave`/`fxrstor` — x87, MXCSR and XMM0-15 — and
+`CR4.OSFXSR`/`OSXMMEXCPT` are set so the CPU keeps that state on the OS's
+behalf. Otherwise `fnsave`/`frstor` save the 108-byte x87 image the i486 floor
+has. `cpu_has_fxsr` is sampled once at boot (`kernel/cpu.inc`) and both the
+save and the load read it, so they always agree on the format. New tasks start
+from an image captured once by `sched_init` after `fninit` — in the *save
+format the CPU uses*, because a zeroed image would unmask every SSE exception.
 
-Without this, two programs using floating point silently corrupt each other:
-`programs/fpu_test.asm` forks, has both tasks push their own value, yield 64
-times and require the exact value back, and is a case in `make check-runtime`.
+The image is proved before any task exists: `fpu` (`make check-runtime`, case
+"x87+SSE image round trip") saves two distinct states into two stand-in TCBs,
+disturbs the live registers and requires each back byte for byte. It prints
+`FPU_SELFTEST_OK`, `FPU_SELFTEST_FAIL`, or `FPU_SELFTEST_SKIP` on a CPU with no
+FXSR; the boot path reports a failure on COM1 and stays quiet otherwise.
+
+Without this, two programs using floating point or SSE silently corrupt each
+other: `programs/fpu_test.asm` and `programs/sse_test.asm` fork, have both tasks
+set their own values, yield 64 times and require the exact values back, and are
+cases in `make check-runtime`.
 
 ### Per-task File Descriptor Isolation (v12.1, extended v14)
 
@@ -2072,6 +2087,61 @@ length, which also rejects a range that wraps past 2^32):
 **Total: 187 syscalls defined (0–186, no gaps).**
 
 ---
+
+## Freestanding C Subsystems
+
+The boot path, entry stubs, context switch and every module older than roadmap
+wave M0 are NASM. New subsystems are freestanding 32-bit C, linked into the same
+flat image, with the boundary fixed by [docs/spec/ABI.md](spec/ABI.md).
+
+| Piece | Where | Built by |
+| --- | --- | --- |
+| Runtime (`memcpy`, `memmove`, `memset`, `memcmp`, `strlen`, `strcmp`, `strncmp`) | `c/rt/string.c` | the host C toolchain |
+| Kernel module (header, host table, self-test) | `c/kmod/kmod.c` | linked flat at a measured address, then `incbin`-ed |
+| User program | `c/prog/cprog.c` | linked at `PROGRAM_BASE` with `--oformat binary` |
+| Shared headers | `c/include/mv/` | — |
+
+`tools/find_c_toolchain.sh` is the only thing that picks the compiler: it
+compiles a probe, reads the object header back and requires 32-bit ELF, then the
+same test for a linker. The Makefile reads its answer into `C_CC`/`C_LD`
+(`make check-toolchain` prints them) and refuses to build without them.
+
+**Kernel module placement.** The module has to be linked before it can be
+assembled into the image, and its link address depends on how big the kernel is,
+so `kernel.bin` is assembled twice: once with `-DCMOD_ABSENT` to measure where
+the slot lands, then with `-DCMOD_ADDR` set to that address, which pads to the
+slot, `incbin`s the blob and refuses to assemble if the address has gone stale.
+The slot sits *after* the BSS so the blob cannot move anything the kernel
+refers to, and it is capped at 32 KB by an assembler assertion. `make
+check-cmodule` reads the image back and requires the `CMOD` header where the
+build says it is, with the module's `init` and `selftest` pointers inside the
+blob.
+
+**The module ABI** is one structure each way, read by number from both sides and
+asserted at compile time in `c/include/mv/cmod.h`:
+
+```text
+cmod_header (offset 0 of the blob)     cmod_host (passed to init)
+  0  magic    'CMOD'                    0  api_version
+  4  version                            4  size
+  8  size                              8  u32 (*add)(u32, u32)    NASM
+ 12  i32 (*init)(const cmod_host *)    12  void (*print)(const char *)  NASM
+ 16  i32 (*selftest)(void)
+ 20  const char *name
+```
+
+Because the blob is linked on its own it has no undefined symbols: everything it
+may call arrives in the host table, which is why `init` can refuse a table built
+against a different header instead of reading past it. `cmod` runs the module's
+self-test and prints `CMOD_OK`; an image built without a C toolchain cannot
+happen any more, but the assembler still has a `-DCMOD_ABSENT` path for the
+measuring pass and the GDB symbol build.
+
+**User programs** are flat binaries in the program window like every NASM
+program, with two differences the linker script enforces: `_start` is first, and
+`.bss` is folded into a PROGBITS section so the zeros are in the image — the
+program window is reused between launches, and a NOBITS section would start life
+holding the last program's leftovers.
 
 ## Fault Injection (P10)
 

@@ -89,9 +89,15 @@ QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
 # Programs
 PROG_DIR = programs
 PROG_SRCS = $(wildcard $(PROG_DIR)/*.asm)
-PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS))
+PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS)) programs/cprog.bin
 
 TEST_PROGS = programs/sbrk_test.asm programs/hello_test.asm
+
+# A program window is 1 MB (PROGRAM_BASE..PROGRAM_END_ADDR), but the top part
+# of it holds the user stack, so an image has to stay well below the whole
+# window. 768 KB leaves a 256 KB stack, which is more than USER_STACK_MAX_PAGES
+# allows anyway.
+PROGRAM_MAX_BYTES = 786432
 
 
 # Installer disc. The ISO ships a right-sized disk image (populate.py derives
@@ -111,9 +117,90 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
+
+# -----------------------------------------------------------------------
+# Freestanding 32-bit C (docs/spec/ABI.md)
+#
+# New kernel subsystems are C, linked into the same flat image; the boot path,
+# entry stubs, context switch and every existing module stay NASM.
+# tools/find_c_toolchain.sh is the only thing that chooses the compiler: it
+# compiles a probe and reads the object header back, because a native compiler
+# on a 64-bit host builds happily and produces objects this kernel cannot call.
+#
+# The probe costs a compiler run, so it is skipped for the goals that do not
+# build anything (`make clean`, `make help`): a host with no C toolchain can
+# still tidy up or read the list of targets.
+# -----------------------------------------------------------------------
+C_GOALS := $(if $(MAKECMDGOALS),$(if $(filter-out clean help,$(MAKECMDGOALS)),1),1)
+
+ifeq ($(C_GOALS),1)
+# The probe runs once per make invocation and writes plain assignments, which
+# are read back from a file: $(shell) turns newlines into spaces, so feeding
+# two assignments through $(eval) would swallow one into the other on the
+# command line of the next compiler call.
+C_TOOLCHAIN_MK = .build/toolchain.mk
+$(shell mkdir -p .build && sh tools/find_c_toolchain.sh --make > $(C_TOOLCHAIN_MK) 2>/dev/null)
+-include $(C_TOOLCHAIN_MK)
+
+ifeq ($(strip $(C_CC)),)
+$(error No 32-bit C compiler found. Run 'sh tools/find_c_toolchain.sh' to see the candidates, then install gcc-multilib, a cross compiler such as i686-elf-gcc, or clang with lld)
+endif
+ifneq ($(filter none%,$(strip $(C_LD))),)
+$(error '$(C_CC)' was found but no 32-bit linker was. Install binutils (ld -m elf_i386) or lld)
+endif
+endif
+
+# -ffreestanding and -fno-builtin: there is no libc, and c/rt/string.c is the
+# whole runtime. -fno-pic/-fno-pie: everything is linked at a fixed address.
+# -fno-stack-protector: ring 0 has no TLS segment for a canary. -mno-sse and
+# -msoft-float: the CPU floor is an i486, which has neither, so kernel C must
+# not contain vector instructions even though the scheduler now keeps SSE
+# state for tasks on CPUs that do have it.
+C_CFLAGS = -c -O2 -std=c11 -ffreestanding -fno-builtin -fno-stack-protector \
+           -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables \
+           -mno-sse -mno-mmx -msoft-float -Wall -Wextra -Ic/include
+
+C_INCS    = $(wildcard c/include/mv/*.h)
+C_OBJ_DIR = .build/c
+C_RT_OBJS = $(C_OBJ_DIR)/rt/string.o
+
+# The kernel module: a C subsystem linked at the cmod slot (kernel/data.inc).
+CMOD_OBJS = $(C_OBJ_DIR)/kmod/kmod.o $(C_RT_OBJS)
+CMOD_BLOB = c/build/kmod.bin
+
+# The user program: the same runtime, linked at PROGRAM_BASE instead.
+CPROG_OBJS = $(C_OBJ_DIR)/prog/cprog.o $(C_RT_OBJS)
+CPROG_BIN  = programs/cprog.bin
+
+$(C_OBJ_DIR)/%.o: c/%.c $(C_INCS)
+	@mkdir -p $(dir $@)
+	$(C_CC) $(C_CFLAGS) -o $@ $<
+
+# Linked at the address the measuring pass of the kernel build reports for the
+# cmod slot. Nothing relocates the blob afterwards, so this address is the
+# address it runs at.
+$(CMOD_BLOB): $(CMOD_OBJS) c/kmod/kmain.ld $(C_OBJ_DIR)/kmod.addr
+	@mkdir -p $(dir $@)
+	$(C_LD) -m elf_i386 -T c/kmod/kmain.ld \
+	    --defsym=cmod_addr=`cat $(C_OBJ_DIR)/kmod.addr` \
+	    --oformat binary -o $@ $(CMOD_OBJS)
+	@SIZE=$$(wc -c < $@); \
+	if [ $$SIZE -gt 32768 ]; then \
+	    echo "  ERROR: $@ is $$SIZE bytes; the slot is 32 KB (kernel/data.inc)"; \
+	    exit 1; \
+	fi
+
+$(CPROG_BIN): $(CPROG_OBJS) c/prog/prog.ld
+	@mkdir -p $(dir $@)
+	$(C_LD) -m elf_i386 -T c/prog/prog.ld --oformat binary -o $@ $(CPROG_OBJS)
+	@SIZE=$$(wc -c < $@); \
+	if [ $$SIZE -gt $(PROGRAM_MAX_BYTES) ]; then \
+	    echo "  ERROR: $@ is $$SIZE bytes; a program window is $(PROGRAM_MAX_BYTES) bytes"; \
+	    exit 1; \
+	fi
 
 # Assemble stage 1 boot sector
 $(BOOT_BIN): $(BOOT_SRC)
@@ -130,8 +217,25 @@ KERNEL_INCS = $(wildcard kernel/*.inc)
 # Failing here beats a boot that silently corrupts itself.
 KERNEL_MAX_BYTES = 2097152
 
-$(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS)
-	$(NASM) -f bin -O0 -w-zeroing -o $@ -l $(@:.bin=.lst) $<
+# Two passes, because the C module has to be linked before it can be assembled
+# in, and its link address depends on how big the kernel is:
+#
+#   1. assemble without the blob (-DCMOD_ABSENT) to find where the slot lands;
+#   2. link the C module at that address (see the rule above);
+#   3. assemble again with -DCMOD_ADDR, which pads to the slot, incbins the
+#      blob, and refuses to assemble if the address has gone stale.
+$(C_OBJ_DIR)/kernel-probe.bin: $(KERNEL_SRC) $(KERNEL_INCS)
+	@mkdir -p $(dir $@)
+	$(NASM) -f bin -O0 -w-zeroing -DCMOD_ABSENT -o $@ $(KERNEL_SRC)
+
+$(C_OBJ_DIR)/kmod.addr: $(C_OBJ_DIR)/kernel-probe.bin
+	@SIZE=$$(wc -c < $<); \
+	ADDR=$$(( (0x00100000 + SIZE + 15) & ~15 )); \
+	printf '0x%08X\n' $$ADDR > $@; \
+	echo "  [c] C module slot at $$(cat $@)"
+
+$(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS) $(CMOD_BLOB)
+	$(NASM) -f bin -O0 -w-zeroing -DCMOD_ADDR=`cat $(C_OBJ_DIR)/kmod.addr` -o $@ -l $(@:.bin=.lst) $<
 	@SIZE=$$(wc -c < $@); \
 	if [ $$SIZE -gt $(KERNEL_MAX_BYTES) ]; then \
 		echo "  ERROR: $@ is $$SIZE bytes (limit $(KERNEL_MAX_BYTES)):"; \
@@ -144,8 +248,10 @@ $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS)
 # Symbol-bearing ELF32 build. This is not booted; it exists so GDB can resolve
 # addresses. Symbols are relative to 0 because the ELF has no ORG; gdb is told
 # the load base via `add-symbol-file kernel.elf 0x00100000` (see tools/gdb_kernel.sh).
+# The C module slot is left out: it carries no symbols, and nothing in the
+# kernel sits after it.
 $(KERNEL_ELF): $(KERNEL_SRC) $(KERNEL_INCS)
-	$(NASM) -f elf32 -dKERNEL_ELF -O0 -w-zeroing -o $@ $<
+	$(NASM) -f elf32 -dKERNEL_ELF -DCMOD_ABSENT -O0 -w-zeroing -o $@ $<
 
 symbols: $(KERNEL_ELF)
 	@echo "  Symbols: $(KERNEL_ELF) (load base 0x00100000)"
@@ -469,7 +575,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -484,10 +590,26 @@ check-parity:
 check-parity-update:
 	@python3 tools/parity_scorecard.py --update-baseline
 
-# Prove the toolchain for new C subsystems exists and targets 32-bit ELF.
-# Informational: no compiler is required to build the kernel, which is NASM.
+# Report which 32-bit C toolchain the build will use. The build itself now
+# requires one (the kernel carries a C module and user programs are compiled
+# from C), so this exists to explain a failure, not to predict one.
 check-toolchain:
 	@sh tools/find_c_toolchain.sh
+
+# The C module is at the address the assembler measured and the linker was
+# told, with the header kernel/cmod.inc reads. A mismatch there is a call into
+# whatever the address happens to hold, so it is worth checking without QEMU.
+check-cmodule: $(KERNEL_BIN)
+	@python3 tools/check_cmodule.py
+
+# The C view of the syscall numbers is generated from programs/syscalls.inc and
+# checked in, like docs/syscalls.json: a number allocated on one side cannot go
+# missing on the other.
+syscall-header:
+	@python3 tools/generate_syscall_header.py
+
+check-syscall-header:
+	@python3 tools/generate_syscall_header.py --check
 
 validate-constants:
 	@python3 tools/validate_constants.py
@@ -563,7 +685,7 @@ launcher-catalog: docs/app-catalog.json tools/generate_launcher_catalog.py
 check-launcher-catalog:
 	@python3 tools/generate_launcher_catalog.py --check
 
-lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-app-catalog check-launcher-catalog validate-manifest check-docs check-font check-command-table
+lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-syscall-header check-app-catalog check-launcher-catalog validate-manifest check-docs check-font check-command-table
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm \
 		install/boot/stage1.asm install/boot/installer.asm
 	@echo "=== Lint checks complete ==="
@@ -692,6 +814,10 @@ help:
 	@echo "    make check-faults Inject OOM / disk-full / frame drops and require clean errors"
 	@echo "    make lint         Run contract and NASM source lint checks"
 	@echo "    make validate-version Validate repo version strings for the current release"
+	@echo "    make check-toolchain Report which 32-bit C toolchain the build uses"
+	@echo "    make check-cmodule Verify the C kernel module is at its linked address"
+	@echo "    make syscall-header Generate the C syscall numbers header"
+	@echo "    make check-syscall-header Verify the C syscall header is up to date"
 	@echo "    make syscalls-json Generate docs/syscalls.json + docs/syscalls.md"
 	@echo "    make check-syscalls-json Verify docs/syscalls.json is up to date"
 	@echo "    make check-syscalls-md Verify docs/syscalls.md is up to date"
@@ -752,4 +878,5 @@ clean:
 	rm -f *.lst
 	rm -f $(PROG_DIR)/*.bin $(PROG_DIR)/*.lst
 	rm -rf .build
+	rm -rf $(dir $(CMOD_BLOB))
 	rm -f $(HBPKG_BIN)

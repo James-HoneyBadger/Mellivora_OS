@@ -17,6 +17,9 @@ kernel.elf
 *.iso
 .build/
 
+# C build output (the kernel module blob is generated, not checked in)
+c/build/
+
 # Windows executables
 *.exe
 
