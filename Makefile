@@ -128,7 +128,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
 
@@ -590,7 +590,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -604,6 +604,18 @@ check-parity:
 
 check-parity-update:
 	@python3 tools/parity_scorecard.py --update-baseline
+
+# The Latency and Footprint gates docs/ROADMAP.md names. `make bench` times host
+# make targets, so it says nothing about the machine under test; this runs
+# programs/perf_test.asm inside the guest and compares the numbers with a
+# baseline recorded on the same machine profile. `make check-perf-update` is the
+# only way the baseline moves. GUEST_ALLOW_SKIP=1 keeps `make check` usable on a
+# host without QEMU.
+check-perf:
+	@GUEST_ALLOW_SKIP=1 bash tests/bench_guest.sh
+
+check-perf-update:
+	@bash tests/bench_guest.sh --update
 
 # Report which 32-bit C toolchain the build will use. The build itself now
 # requires one (the kernel carries a C module and user programs are compiled
@@ -843,7 +855,8 @@ help:
 	@echo "    make check-launcher-catalog Verify the launcher app table is up to date"
 	@echo "    make validate-permissions Validate app permissions against platform policy"
 	@echo "    make bench        Run build-time benchmark suite"
-	@echo "    make bench-check  Run benchmarks and fail on regression"
+	@echo "    make check-perf   Guest latency and footprint against the baseline"
+	@echo "    make bench-check  Run host build-time benchmarks, fail on regression"
 	@echo "    make bench-baseline Update benchmark/baseline.txt"
 	@echo "    make bench-trend  Generate benchmark trend summary/json"
 	@echo "    make bench-trend-check Fail on sustained trend regressions when enough history exists"

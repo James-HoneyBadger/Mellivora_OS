@@ -68,8 +68,8 @@ A wave does not close until these are measured and reported by `make check`:
 | Containment | A faulting user program is retired; the machine survives 24 hours of it |
 | Concurrency | 4 vCPUs under mixed load for 24 hours with no panic and no lost wakeup |
 | Durability | 10 000 power-cut iterations on a written volume, every one recoverable |
-| Latency | syscall < 1 µs, context switch < 5 µs, fork+exec < 5 ms (Pentium 4-era target) |
-| Footprint | < 16 MB RAM idle; < 5 s to the desktop under QEMU |
+| Latency | Measured by `make check-perf` on the profile machine; gated on regression against `benchmark/guest-<profile>.txt`. The µs targets (syscall < 1 µs, switch < 5 µs, fork+exec < 5 ms) need a clock of record, which is M2's |
+| Footprint | Measured by `make check-perf`: kernel-reserved bytes at boot < 16 MB, plus < 5 s to the desktop under QEMU |
 | Admin | Every setting in the machine is reachable from the management console and the store |
 | Parity | `make check-parity` reports at least the baseline, and no row ever moves backwards |
 
@@ -115,6 +115,19 @@ What the plan builds on, and must not regress:
   a row improves — reviewed with the change that earns it. The baseline has
   moved once since it was recorded: "Detect hardware" went `fail` → `partial`
   with the ACPI tables.
+- **The machine is measured, not just the build (landed).** `make bench` times
+  host make targets, so it says nothing about the machine under test — and the
+  Latency and Footprint gates above name numbers nothing measured.
+  `programs/perf_test.asm` runs in the guest and reports TSC cycles for a
+  syscall round trip, a yield with a second task ready, and a
+  fork-exec-waitpid, plus the free-frame counts that give the footprint;
+  `tests/bench_guest.sh` (`make check-perf`, part of `make check`) compares them
+  with `benchmark/guest-<profile>.txt` and refuses a regression, taking the best
+  of three samples because a single sample of a shared host can be three times
+  slow through no fault of the tree. Units are cycles, deliberately: the TSC
+  rate is not architectural and nothing publishes it, and measuring it against
+  a sleep gave 163–6427 cycles/µs on one machine. Microseconds arrive with M2's
+  clock of record.
 - **The syscall ABI, versioned (landed).** `docs/spec/ABI.md` §6 makes the
   syscall table the one place a number is allocated, `docs/syscalls.json` and
   `docs/syscalls.md` stay generated from `programs/syscalls.inc`, and
@@ -137,15 +150,18 @@ What the plan builds on, and must not regress:
   (`c/include/mv/cmod.h`).
 - **Per-task FPU and SSE state (landed).** Each TCB carries a 512-byte image at
   `TCB_FPU_AREA`; every switch path saves and restores it with
-  `fxsave`/`fxrstor` where `CPUID` advertises FXSR and `fnsave`/`frstor` where it
-  does not, and `CR4.OSFXSR`/`OSXMMEXCPT` are set only on a CPU that has the
-  state to keep (`kernel/cpu.inc`). `fpu` saves two distinct x87+SSE states,
-  disturbs the live registers and requires each back (`make check-runtime`,
-  case "x87+SSE image round trip"); `programs/fpu_test.asm` and
-  `programs/sse_test.asm` prove the per-task half with two tasks.
+  `fxsave`/`fxrstor`, and `CR4.OSFXSR`/`OSXMMEXCPT` are set unconditionally.
+  There is no second format: FXSR, SSE and SSE2 are part of the CPU floor
+  ([PLATFORM.md](spec/PLATFORM.md#81-the-cpu-floor-is-a-pentium-4)), so a part
+  without them is refused at boot. `fpu` saves two distinct x87+SSE states,
+  disturbs the live registers and requires each back — at boot, where
+  `make check-boot` requires `FPU_SELFTEST_OK`, and on demand in
+  `make check-runtime`; `programs/fpu_test.asm` and `programs/sse_test.asm`
+  prove the per-task half with two tasks.
 - **Normative specs.** `docs/spec/ABI.md` is written and covers the boundary
-  this wave built. `OBJECTS.md`, `DRIVERS.md` and `CONFIG.md` are still owed by
-  M1, M2 and M4 respectively, as the [specs table](#specs) says.
+  this wave built, and every document the [specs table](#specs) names now exists:
+  the three that were owed when M0 closed (`OBJECTS.md`, `DRIVERS.md`,
+  `CONFIG.md`) were written by the waves that needed them.
 
 **Exit:** met.
 
@@ -153,7 +169,7 @@ What the plan builds on, and must not regress:
 |---|---|
 | The scorecard runs in CI and reports the true baseline; a row moves only by adding evidence | **Met** — `make check-parity` (13 checks), `make check-cmodule` |
 | A C-built kernel module and a C-built user program both run | **Met** — `cmod` prints `CMOD_OK`, `cprog` prints `C_PROG_OK` |
-| A floating-point workload across a context switch is correct under `make check` | **Met** — `fpu_test` (`FPU_OK`) and `sse_test` (`SSE_OK`) pass, and `fpu` proves the save/restore round trip before any task exists |
+| A floating-point workload across a context switch is correct under `make check` | **Met** — `fpu_test` (`FPU_OK`) and `sse_test` (`SSE_OK`) pass, the round trip is proven before any task exists, and since the CPU floor became a Pentium 4 it is also proven on every boot: `make check-boot` requires `FPU_SELFTEST_OK` rather than accepting a SKIP |
 
 The third criterion was blocked by a defect this wave did not cause:
 `pmm_alloc_page` returned with `ECX` clobbered, so `paging_clone_pd` copied every

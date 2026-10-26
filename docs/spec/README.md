@@ -50,13 +50,13 @@ named.
 
 | Parameter | As built today | Contract | Wave |
 |---|---|---|---|
-| Live tasks | 128, from a fixed 656-byte static table | 65 536, TCB from the slab allocator, sized per task | M1 |
-| Handles per process | 64 legacy + 128 VFS, one 4 KB page | 4 096 by default, growable to 65 536, paged handle table | M1 |
+| Live tasks | 128, from a fixed 704-byte static table | 65 536, TCB from the slab allocator, sized per task | M1 |
+| Handles per process | 65 536-ceiling per-process handle table with generations, grown a page at a time; the 64 legacy and 128 VFS tables still exist beside it | 4 096 by default, growable to 65 536, paged handle table | M1 |
 | Handle rights | read/write only | 16-bit rights mask plus generic mapping per type | M1 |
 | Kernel virtual space | ~2 MB image window at 1 MB, 8 MB reserve | 1 GiB at `0xC0000000`: image, heaps, page tables, cache | M1 |
-| User virtual space | ~1 MB program window plus a demand zone under 512 MB | 3 GiB per process, ASLR across the whole range | M1 |
-| Physical memory | 512 MB tested; frames only below 512 MB | 64 GiB via PAE, PFN database over all of it | M1 |
-| Syscalls | 187, flat, frozen by number | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
+| User virtual space | ~1 MB program window plus a demand zone from the top of RAM to 1 GB | 3 GiB per process, ASLR across the whole range | M1 |
+| Physical memory | 512 MB tested; frames only below 512 MB, all of it identity-mapped | 64 GiB via PAE, PFN database over all of it | M2 |
+| Syscalls | 201, flat: 0–186 legacy and 187–200 the object manager (frozen by number) | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
 | Names | 63 bytes, 8-bit | 255 UTF-16 code units, resolved case-insensitively for the Windows-facing namespace | M1 |
 | Directory entries | 224 per subdirectory, 2 048 per root | 65 535 per directory, B+tree directories | M3 |
 | File size | 32-bit block numbers, 2 GB volume | 2^63 bytes per file, 2^62 bytes per volume, 64-bit block numbers | M3 |

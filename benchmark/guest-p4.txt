@@ -1,0 +1,10 @@
+# guest metrics for machine profile 'p4' (512 MB)
+# recorded by tests/bench_guest.sh --update on 2026-10-26T22:42:54Z
+# cycles are TSC cycles; the TSC rate is not published until M2
+ticks_slept=50
+cycles_per_tick=626482
+syscall_cyc=478
+yield_cyc=31694
+spawn_cyc=77114710
+free_pages_boot=128992
+reserved_kb=8320

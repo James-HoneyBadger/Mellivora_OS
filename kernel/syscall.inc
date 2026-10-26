@@ -3172,6 +3172,8 @@ sys_print:
         pop eax
         push esi
         mov esi, ebx
+        call vga_print
+        mov esi, ebx
         call serial_print
         pop esi
         xor eax, eax

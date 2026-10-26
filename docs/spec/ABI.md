@@ -8,6 +8,12 @@ The ABI is the one document every other specification leans on. It is written so
 that a structure defined here is still valid after the kernel gains an object
 manager, a 64 GiB physical ceiling and — if it ever happens — a 64-bit build.
 
+**v2 (M1)** adds the 14 object-manager calls (`187`–`200`), the `u32` handle and
+its encoding, and the `MV_HANDLE_SELF`/`MV_HANDLE_NONE` constants. Nothing below
+number 187 changes, so a v1 program runs unmodified — that is what makes the
+compatibility claim in the [ceilings table](README.md#the-ceilings-this-set-removes)
+mean something.
+
 ## 1. Principles
 
 1. **Fixed width at every boundary.** `u8`, `u16`, `u32`, `u64` and their signed
@@ -221,7 +227,8 @@ it ([S3](README.md#decisions-this-set-records)):
 | Range | Class | Rule |
 |---|---|---|
 | `0`–`186` | Legacy | Frozen by number and meaning; implemented over objects, never changed |
-| `187`–`511` | Object manager | New handle-based calls; may still be renumbered before M1 closes |
+| `187`–`200` | Object manager | Allocated and **frozen**: created, opened, duplicated, closed, waited on, signalled, queried, and the four create kinds. Shipped in `docs/syscalls.json`, `c/include/mv/syscall_numbers.h` and the shell's `syscalls` listing, so the "numbers are never reused" rule applies to them from now on |
+| `201`–`511` | Object manager | Still free for handle-based calls; may be renumbered before M1 closes |
 | `512`–`1023` | Subsystems | Security, storage, config, network, media — one block per facility |
 | `1024`–`0x7FFF` | Reserved | Allocated by the specification that needs it |
 | `0x8000`–`0xFFFF` | Private | Test and debug calls, not guaranteed to exist |

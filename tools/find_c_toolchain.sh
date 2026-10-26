@@ -30,14 +30,22 @@ trap 'rm -rf "$PROBE_DIR"' EXIT INT TERM
 cat > "$PROBE_DIR/probe.c" <<'EOF'
 typedef unsigned int u32;
 static u32 add(u32 a, u32 b) { return a + b; }
-u32 lm_probe(u32 a) { return add(a, 1u); }
+/* cmov appears in the object only when the target really is P6-or-later, which
+   is the cheapest way to see that -march=pentium4 was honoured. */
+u32 lm_probe(u32 a, u32 b) { return a < b ? add(a, 1u) : add(b, 2u); }
 EOF
+
+# Keep in step with C_CFLAGS in the Makefile: this is the flag set the kernel
+# module and the C user program are built with.
+PROBE_CFLAGS="-O2 -std=c11 -ffreestanding -fno-builtin -fno-stack-protector \
+-fno-pic -fno-pie -march=pentium4 -mtune=pentium4 -mno-sse -mno-mmx -msoft-float"
 
 # True when the named candidates build a 32-bit x86 object.
 try_cc() {
     command=$1
     # shellcheck disable=SC2086
-    $command -c -o "$PROBE_DIR/probe.o" "$PROBE_DIR/probe.c" >/dev/null 2>&1 || return 1
+    $command -c $PROBE_CFLAGS -o "$PROBE_DIR/probe.o" "$PROBE_DIR/probe.c" \
+        >/dev/null 2>&1 || return 1
     readelf -h "$PROBE_DIR/probe.o" 2>/dev/null \
         | grep -q 'Class:.*ELF32' || return 1
     readelf -h "$PROBE_DIR/probe.o" 2>/dev/null \

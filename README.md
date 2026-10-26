@@ -385,8 +385,10 @@ Mellivora_OS/
 | `make iso-check` | Check the disc's structure without booting it |
 | `make test-iso` | Install the disc onto a blank disk in QEMU and boot it |
 | `make sanitize` | Clean-build with bounds instrumentation and run regressions |
-| `make bench` | Measure build and validation stages |
-| `make bench-check` | Compare measurements with the benchmark baseline |
+| `make bench` | Measure build and validation stages (host time) |
+| `make bench-check` | Compare build-time measurements with the baseline |
+| `make check-perf` | Measure the guest: syscall, yield, fork+exec+wait in TSC cycles, plus the boot footprint |
+| `make check-perf-update` | Record the guest baseline for the current machine profile |
 | `make hbpkg` | Build the host package-manager utility |
 
 ---

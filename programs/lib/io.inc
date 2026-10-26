@@ -262,6 +262,60 @@ io_print:
         ret
 
 ;-----------------------------------------------------------------------
+; io_print_u32 - Print EAX as an unsigned decimal number
+; Input:  EAX = value
+; Output: none (registers preserved)
+;
+; The number is formatted into a 16-byte stack buffer, reversed in place and
+; emitted with one SYS_PRINT, so it lands on the same device as the text around
+; it. Printing a digit at a time with SYS_PUTCHAR put numbers on the screen
+; while their labels went to the serial log, which made a transcript of the
+; program unreadable.
+;-----------------------------------------------------------------------
+io_print_u32:
+        push eax
+        push ebx
+        push ecx
+        push edx
+        push esi
+        sub  esp, 16
+        mov  ebx, 10
+        xor  ecx, ecx
+.ipu_div:
+        xor  edx, edx
+        div  ebx
+        add  dl, '0'
+        mov  [esp + ecx], dl
+        inc  ecx
+        test eax, eax
+        jnz  .ipu_div
+        mov  byte [esp + ecx], 0
+        xor  edx, edx
+        dec  ecx
+.ipu_rev:
+        cmp  edx, ecx
+        jge  .ipu_print
+        mov  al, [esp + edx]
+        mov  ah, [esp + ecx]
+        mov  [esp + edx], ah
+        mov  [esp + ecx], al
+        inc  edx
+        dec  ecx
+        jmp  .ipu_rev
+.ipu_print:
+        mov  esi, esp
+        mov  eax, SYS_PRINT
+        mov  ebx, esi
+        int  0x80
+        add  esp, 16
+        pop  esi
+        pop  edx
+        pop  ecx
+        pop  ebx
+        pop  eax
+        ret
+
+;-----------------------------------------------------------------------
 ; io_println - Print string followed by newline
 ; Input:  ESI = string pointer
 ; Output: none

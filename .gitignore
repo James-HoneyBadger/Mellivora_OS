@@ -39,3 +39,8 @@ benchmark/latest-results.json
 benchmark/latest-summary.txt
 benchmark/trend-latest.txt
 benchmark/trend-latest.json
+
+# Benchmark run artifacts (the baselines are checked in; the latest run is not)
+benchmark/latest-*
+benchmark/results-*
+benchmark/summary-*

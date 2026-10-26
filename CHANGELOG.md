@@ -1,5 +1,39 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M0 measured the machine, not just the build
+
+- **A guest benchmark, because the Latency and Footprint gates named numbers
+  nothing measured.** `make bench` times host make targets. `programs/perf_test.asm`
+  now runs inside the guest and reports TSC cycles for a syscall round trip
+  (~480), a yield with a second task ready (~32 000) and fork+exec+waitpid
+  (~72 000 000), plus the free-frame counts that give the boot footprint
+  (8 320 KB reserved against the 16 MB gate). `tests/bench_guest.sh`
+  (`make check-perf`, part of `make check`) compares them with
+  `benchmark/guest-<profile>.txt` and takes the best of three samples, because a
+  single sample on a shared host measured up to 3x slow through no fault of the
+  tree. Units are cycles rather than microseconds on purpose: the TSC rate is
+  not architectural, nothing in the guest publishes it yet, and measuring it
+  against a tick gave 163-6427 cycles/us on one machine. Microseconds arrive
+  with M2's clock of record.
+  The first measurements already say something uncomfortable: fork+exec+waitpid
+  is ~72 000 000 cycles, nowhere near the roadmap's 5 ms target, and that is now
+  a recorded number instead of an assumption.
+- **`io_print_u32` prints numbers through `SYS_PRINT`.** Formatting a digit at a
+  time with `SYS_PUTCHAR` put numbers on the screen while their labels went to
+  COM1, so no transcript of a program was readable. `SYS_PRINT` also writes to
+  the console now, not only to COM1, so a program's text is visible where it
+  prints.
+- **The toolchain probe compiles with the flags the build uses**
+  (`-march=pentium4 -mtune=pentium4 -mno-sse ...`). At the i486 floor the
+  default flags were a subset and the probe proved nothing about the interesting
+  half; at the Pentium 4 floor a compiler that rejects `-march=pentium4` would
+  have passed the probe and failed a minute into the build.
+- **Docs corrected where M0 had drifted**: the FPU bullet no longer describes an
+  `fnsave` path that is gone, the ceilings table's as-built cells now match the
+  tree (201 syscalls, a 704-byte TCB, the handle table, the demand zone), the
+  "specs still owed" line is retired because all three were written, and ABI.md
+  declares v2 with 187-200 frozen by number.
+
 ## Unreleased - the platform is a Pentium 4
 
 ### Machine and CPU floor
