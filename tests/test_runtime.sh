@@ -348,8 +348,10 @@ run_case "every described CPU comes online" "acpi"             "processors onlin
 # Line routing, not just the tick: the network stack's interrupts arrive
 # through an I/O APIC entry programmed level-triggered active-low.
 run_case "SMP machine serves network" "dhcp"                  "ANSWER SECTION"     "dig example.com" "CPU EXCEPTION" "" 2
-run_case "HBFS metadata writes"      "fs_meta_test"          "FS_META_OK"         "" "CPU EXCEPTION|FS_META_FAIL"
-run_case "HBFS metadata churn"       "fs_mkdir_test"         "CRASH_LOOP_OK"      "" "CPU EXCEPTION|CRASH_LOOP_FAIL"
+# Journal-heavy work takes seconds, and the harness starts its clock 1.5 s
+# after typing: a 6 s default made these two cases fail on jitter alone.
+run_case "HBFS metadata writes"      "fs_meta_test"          "FS_META_OK"         "" "CPU EXCEPTION|FS_META_FAIL" "" "" "" 30
+run_case "HBFS metadata churn"       "fs_mkdir_test"         "CRASH_LOOP_OK"      "" "CPU EXCEPTION|CRASH_LOOP_FAIL" "" "" "" 30
 # A path is a name plus a place. `touch /dir/name` must land in /dir - taking
 # the whole string as the name once created entries nothing could look up.
 run_case "touch writes into a path"  "mkdir /pt_paths"       "Saved."             "touch /pt_paths/a.txt" "CPU EXCEPTION|No such directory"
@@ -363,7 +365,7 @@ run_case "del takes a plain path"    "touch /pt_paths/b.txt"  "Deleted."        
 # An ACL, where a file has one, decides instead of the mode word: a named user
 # writes a 0600 file, the mask narrows that grant, the owner is held to their
 # own ACE, and root still passes. Self-cleaning: it deletes its fixture.
-run_case "access control list conformance" "acl_test"          "ACL_OK"             "" "CPU EXCEPTION|ACL_FAIL"
+run_case "access control list conformance" "acl_test"          "ACL_OK"             "" "CPU EXCEPTION|ACL_FAIL" "" "" "" 30
 run_case "acl command reports its usage"   "acl"               "acl show <file>"    "" "CPU EXCEPTION"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"

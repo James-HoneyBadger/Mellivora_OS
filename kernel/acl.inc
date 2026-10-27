@@ -31,8 +31,6 @@
 ; and what an operator reads back out of a hexdump.
 ;=======================================================================
 
-ACL_AFTER_ENTRY equ 0                   ; ACEs placed after the entry's ACL
-
 ;-----------------------------------------------------------------------
 ; acl_key - build the xattr key for one ACE
 ;   In : AL = 'u' or 'g' (ignored when AH is 1 or 2)
