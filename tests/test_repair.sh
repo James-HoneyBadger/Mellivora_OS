@@ -36,7 +36,9 @@ fail() { printf '  FAIL  %s\n' "$*" >&2; exit 1; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-copy="$work/corrupt.img"
+# One image copy at a time: the image is 2 GB, /tmp is a tmpfs, and two copies
+# side by side is how this gate ran out of space.
+copy="$work/img"
 cp "$IMAGE" "$copy"
 
 # The three faults. Block numbers are data-area relative, which is what the
@@ -123,6 +125,24 @@ python3 "$DRIVE" "$copy" "ls /bin" --wait 20 --out "$out" >/dev/null 2>&1 \
     || fail "the volume does not boot after the repair"
 expect "yes" "$out"
 echo PASS
+
+# A check is a read, even though it borrows the resident bitmap as scratch:
+# leaving the cleared copy behind hands the next sync a bitmap with live blocks
+# marked free, which is how one pass of this tool damaged the image it looked at.
+rm -f "$copy"
+cp "$IMAGE" "$copy"
+out="$work/untouched.txt"
+printf '  %-34s ' "a check leaves the volume untouched"
+python3 "$DRIVE" "$copy" "repair" --wait 40 --expect REPAIR_ --out "$out" >/dev/null 2>&1 \
+    || fail "repair did not run"
+python3 "$DRIVE" "$copy" "sync" --wait 20 >/dev/null 2>&1 \
+    || fail "sync did not run"
+if python3 "$FSCK" "$copy" >"$work/fsck2.txt" 2>&1; then
+    echo PASS
+else
+    sed -n '1,20p' "$work/fsck2.txt"
+    fail "a check-only repair changed the volume it checked"
+fi
 
 printf '  PASS  a corrupted volume was found, repaired and verified\n'
 exit 0

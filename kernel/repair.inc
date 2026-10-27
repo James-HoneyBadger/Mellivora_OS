@@ -342,11 +342,14 @@ repair_scan:
 .rs_shared_ok:
         mov [repair_shared], edx
 
-        ; A check-only run stops here: the walk has cleared referenced bits in
-        ; the resident bitmap, which the cache invalidation below throws away,
-        ; so rebuilding it would be a second half of the work for nothing.
+        ; A check-only run stops here: the walk cleared referenced bits in the
+        ; resident bitmap, so the only thing left to do is put the disk's own
+        ; bitmap back in memory. Marking it invalid is not enough - hbfs_sync
+        ; writes that buffer without asking whether it is valid, so leaving the
+        ; cleared copy behind hands the next write a bitmap with live blocks
+        ; marked free. Read it back instead.
         cmp dword [repair_fix_wanted], 0
-        je .rs_checked
+        je .rs_reload
 
         ; The bits still set are the leaks, and they have to go: zero the
         ; bitmap and let the rebuild put back exactly what the tree claims.
@@ -360,7 +363,14 @@ repair_scan:
         call repair_pass
         call repair_popcount
         mov [repair_expected], eax
-.rs_checked:
+        jmp .rs_done
+
+.rs_reload:
+        mov dword [hbfs_bitmap_valid], 0
+        call hbfs_load_bitmap
+        jc .rs_unreadable
+        jmp .rs_done
+.rs_done:
         mov dword [hbfs_bitmap_valid], 0    ; RAM no longer matches the disk
         xor eax, eax
         ret
