@@ -1,5 +1,45 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M3: a corrupted volume can be repaired from the shell
+
+The wave's recovery-console criterion now has its tool and its gate. `repair`
+walks every directory and compares what the tree claims with the allocation
+bitmap:
+
+```text
+Lair:/> repair
+repair entries 341  blocks 2394  leaks 0  shared 0  bad 0  lost 0
+REPAIR_CLEAN
+```
+
+- **What it finds** - blocks a file needs that the bitmap had marked free (the
+  dangerous one: the next allocation hands them to someone else), blocks marked
+  used that nothing references, blocks two entries both claim, and entries that
+  cannot be trusted (empty name, a `/` in the name, an unknown type, a block or
+  xattr pointer outside the data area).
+- **`repair fix`** rewrites the bitmap from what the tree holds and the free
+  count from the bitmap, then reads the bitmap back and refuses to call the
+  repair done unless what landed is what was intended. It refuses outright when
+  an entry is damaged or a block is shared: making the bitmap agree with damage
+  only makes the next check quieter.
+- **`repair journal`** discards a log that can never be replayed. A pre-image
+  torn by the power cut cannot be applied, so its transaction can never be
+  undone; zeroing the log says so instead of replaying a guess.
+- The walk borrows the resident bitmap as its own scratch - referenced bits are
+  cleared as they are met, so what is left set afterwards is exactly the leaks -
+  and writes nothing until the walk is finished, so a machine that dies mid-check
+  leaves the volume untouched.
+- `make check-repair` (now part of `make check`) corrupts a copy of the image
+  three ways, requires the check to find all three, requires the fix to survive a
+  reboot, and requires `tools/fsck_hbfs.py` to agree afterwards.
+
+Two things had to give way for it. The old in-kernel `fsck`, which only looked at
+the root directory and repaired nothing, is gone: `fsck` is now an alias for
+`repair`, which does everything it did and walks what it did not. And the kernel
+is at 4062 of 4062 sectors - the last of the space between the loader and
+`HBFS_SUPERBLOCK_LBA` - so the next feature has to start by reclaiming or by
+moving the superblock deliberately.
+
 ## Unreleased - M3: an ACL decides where the mode word cannot
 
 The v3 permission word answers one question per file: owner, group, world. That

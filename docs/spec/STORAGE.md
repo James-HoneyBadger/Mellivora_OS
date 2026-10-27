@@ -273,6 +273,25 @@ natural backup primitive.
 | `chkdsk` (online) | `PASSIVE`, throttled | Reads every metadata block, verifies its checksum, corrects the free counts from the bitmaps |
 | `chkdsk --repair` | Recovery console or online with the volume quiesced | Repairs a damaged tree from the journal and the secondary structures |
 | `chkdsk --quotas` | Online | Recomputes usage per SID |
+
+As built: the recovery console's command is `repair`. It walks every directory
+and compares what the tree claims with the allocation bitmap.
+
+| Command | What it does |
+|---|---|
+| `repair` | Walks the tree twice against the resident bitmap and reports: blocks claimed but marked free, blocks marked used that nothing claims, blocks two entries claim, and entries that cannot be trusted (empty name, `/` in the name, unknown type, a block or xattr pointer outside the data area). Writes nothing |
+| `repair fix` | The same walk, then rewrites the bitmap from what the tree claims and the free count from the bitmap. Refused when an entry is damaged or a block is shared: rewriting the bitmap to agree with damage only makes the next check quieter |
+| `repair journal` | Discards a log that cannot be replayed. A pre-image torn by the power cut can never be applied, so the transaction it belongs to can never be undone; zeroing the log says so out loud instead of replaying a guess |
+
+`make check-repair` corrupts a copy of the image in the three ways a volume
+really goes wrong - a needed block marked free, an unowned block marked used,
+and a free count that no longer describes the bitmap - and asserts that
+`repair` finds all three, `repair fix` repairs them, a second boot still calls
+the volume clean, and `tools/fsck_hbfs.py` agrees afterwards.
+
+The walk borrows the bitmap as its own scratch (referenced bits are cleared as
+they are met, so what remains set is exactly the leaks), and nothing is written
+until the end: a machine that dies mid-check leaves the volume untouched.
 | Scrub | Background, lowest priority | Reads every allocated block, verifies the run CRCs, remaps a bad block from spare space |
 | Defragment | Background | Moves extents to reduce fragmentation; never runs on a volume with a snapshot that has not been retired |
 
@@ -333,6 +352,7 @@ M3 does not close until:
 | One unified cache | A block cache and a page cache that agree by construction |
 | Partition table | Read: MBR's four primary entries, or GPT behind a protective MBR, with each volume's start, length, type, GUID and UTF-16 name in `vol_table`. The filesystem is *probed* (the superblock LBA must fall inside a volume) rather than assumed |
 | Mount points | One volume, mounted from `vol_base_lba`; labels and multiple mounts are the remaining volume-model work |
+| Online repair | `repair` (report) and `repair fix` (bitmap + free count) from the shell, at parity with the offline checker's classes: leaks, freed-but-claimed blocks, shared blocks, untrusted entries. `make check-repair` proves it on a corrupted copy. `repair journal` discards a log that cannot be replayed |
 | Removable safe ejection | None |
 | Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write. A failed fsck *before* replay is accepted only when the volume is marked for replay - damage with a clean journal is the failure that no replay can repair - and fsck must pass after the replay, which is the assertion. `CRASH_ITERS=10000 make crash-soak` is the exit test, not yet run |
 

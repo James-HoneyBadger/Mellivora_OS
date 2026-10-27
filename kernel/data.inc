@@ -272,6 +272,7 @@ cmd_fsck_str:   db "fsck", 0
 cmd_ln_str:     db "ln", 0
 cmd_chmod_str:  db "chmod", 0
 cmd_acl_str:    db "acl", 0
+cmd_repair_str: db "repair", 0
 cmd_chown_str:  db "chown", 0
 ; v4.0 commands
 cmd_jobs_str:   db "jobs", 0
@@ -492,16 +493,16 @@ msg_batch_nested: db "Error: nested batch execution not supported", 0x0A, 0
 msg_batch_label_nf: db "Batch: label not found: ", 0
 msg_if_el_kw:       db "errorlevel ", 0
 msg_dir_created: db "Directory created.", 0x0A, 0
-msg_no_such_dir: db "No such directory", 0x0A, 0
-msg_path_virtual: db "Virtual directories are read-only", 0x0A, 0
+msg_no_such_dir: db "No such dir", 0x0A, 0
+msg_path_virtual: db "Virtual dirs are read-only", 0x0A, 0
 acl_verb_show:  db "show", 0
 acl_verb_set:   db "set", 0
-msg_acl_equals: db " = ", 0
-msg_acl_none:   db "No access control list", 0x0A, 0
-msg_acl_set:    db "ACE written.", 0x0A, 0
-msg_acl_bad_perm: db "Permission must be 0-7", 0x0A, 0
-msg_acl_bad_spec: db "ACE must be u<id>, g<id>, mask or other", 0x0A, 0
-msg_acl_usage:  db "acl show <file> | acl set <file> u<id>|g<id>|mask|other <0-7>", 0x0A, 0
+msg_acl_equals: db "=", 0
+msg_acl_none:   db "No ACL", 0x0A, 0
+msg_acl_set:    db "ACE set.", 0x0A, 0
+msg_acl_bad_perm: db "Perm must be 0-7", 0x0A, 0
+msg_acl_bad_spec: db "ACE must be u<id>|g<id>|mask|other", 0x0A, 0
+msg_acl_usage:  db "acl show <f> | acl set <f> u<id>|g<id>|mask|other <0-7>", 0x0A, 0
 msg_already_exists: db "Already exists.", 0x0A, 0
 msg_env_set:    db "", 0
 msg_del_prefix: db "  deleted: ", 0

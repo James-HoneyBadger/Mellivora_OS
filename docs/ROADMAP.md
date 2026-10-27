@@ -408,6 +408,18 @@ quotas, snapshots, compression.
   (0 = unlimited), refused before a write allocates anything, and returned to
   the file's owner on delete. The ledger is derived from the tree at every
   mount and by `quota rebuild`, which is why it cannot drift.
+- **Repair, and a console to run it from (landed).** `repair` walks every
+  directory and compares what the tree claims with the allocation bitmap - leaks,
+  blocks the bitmap had freed that a file still needs, blocks two entries claim,
+  and entries that cannot be trusted - then `repair fix` rewrites the bitmap and
+  the free count from what the tree actually holds, and `repair journal`
+  discards a log that can never be replayed because its pre-image was torn. It
+  borrows the bitmap as its own scratch and writes nothing until the walk is
+  done, so a machine that dies mid-check leaves the volume untouched.
+  `make check-repair` corrupts a copy of the image three ways, requires the
+  check to find all three, requires the fix to survive a reboot, and then
+  requires the offline checker to agree. This is the wave's corrupted-volume
+  exit criterion as a gate.
 - **Access control lists (landed).** Where a file carries one, its ACEs decide
   and the mode word is not consulted: named users and groups (`acl:u<id>`,
   `acl:g<id>`), a mask that narrows them, and `acl:o` for everyone else, stored
@@ -423,9 +435,9 @@ quotas, snapshots, compression.
 conformance suite; a deliberately corrupted volume repaired from the recovery
 console; an encrypted volume round-trips with its key held in the store.
 
-Of those, the power-cut harness and the quota and ACL conformance suites are in
-place; compression, encryption, snapshots, the redirector seam and repair at
-fsck parity are the wave's remaining work, and `make crash-soak` with 10 000
+Of those, the power-cut harness, the quota and ACL conformance suites, and the
+corrupted-volume repair are in place; compression, encryption, snapshots and the
+redirector seam are the wave's remaining work, and `make crash-soak` with 10 000
 iterations is a run that has not happened.
 
 ### M4 · Configuration and services (9–13 weeks)

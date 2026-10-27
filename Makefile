@@ -570,6 +570,11 @@ CRASH_ITERS ?= 5
 check-durability: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
 	@CRASH_ALLOW_SKIP=1 bash tests/test_powercut.sh $(IMAGE)
 
+# A deliberately corrupted volume, repaired from the shell, then checked again
+# by the offline tool. This is M3's recovery-console exit criterion as a gate.
+check-repair: $(POPULATE_STAMP) tools/fsck_hbfs.py
+	@bash tests/test_repair.sh $(IMAGE)
+
 crash-soak: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
 	@CRASH_ITERS=$${CRASH_ITERS:-10000} bash tests/test_powercut.sh $(IMAGE)
 
@@ -598,7 +603,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop check-durability check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 

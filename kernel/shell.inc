@@ -2187,6 +2187,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_stat
 
+        mov edi, cmd_repair_str
+        call str_starts_with
+        jc .cmd_repair
+
         mov edi, cmd_fsck_str
         call str_starts_with
         jc .cmd_fsck
@@ -2746,8 +2750,14 @@ shell_dispatch_core:
         call cmd_stat
         ret
 
+.cmd_repair:
+        call cmd_repair
+        ret
+
 .cmd_fsck:
-        call cmd_fsck
+        ; `fsck` is the name operators reach for; it runs the same walk as
+        ; `repair`, which is where the checks and the fixes live.
+        call cmd_repair
         ret
 
 .cmd_ln:
@@ -8020,208 +8030,6 @@ cmd_stat:
 ; Command: fsck
 ; Filesystem consistency check
 ;---------------------------------------
-cmd_fsck:
-        pushad
-        mov esi, .fsck_banner
-        call vga_print
-
-        ; Step 1: Validate superblock magic
-        mov esi, .fsck_check_sb
-        call vga_print
-        mov eax, HBFS_SUPERBLOCK_LBA
-        mov ecx, 1
-        mov edi, hbfs_block_buf
-        call ata_read_sectors
-        jc .fsck_sb_fail
-        cmp dword [hbfs_block_buf], 'HBFS'
-        jne .fsck_sb_fail
-        mov esi, .fsck_ok
-        call vga_print
-        jmp .fsck_step2
-.fsck_sb_fail:
-        mov esi, .fsck_fail
-        call vga_print
-        mov esi, .fsck_sb_corrupt
-        call vga_print
-        popad
-        ret
-
-.fsck_step2:
-        ; Step 2: Count allocated bits in bitmap
-        mov esi, .fsck_check_bmp
-        call vga_print
-        call hbfs_load_bitmap
-        jc .fsck_bmp_fail
-        xor edx, edx           ; EDX = allocated bit count
-        mov esi, hbfs_bitmap_buf
-        mov ecx, HBFS_BITMAP_SIZE
-.fsck_count_bits:
-        lodsb
-        test al, al
-        jz .fsck_next_byte
-        ; Count set bits in AL
-        push ecx
-        mov ecx, 8
-.fsck_bit_loop:
-        test al, 1
-        jz .fsck_no_bit
-        inc edx
-.fsck_no_bit:
-        shr al, 1
-        loop .fsck_bit_loop
-        pop ecx
-.fsck_next_byte:
-        loop .fsck_count_bits
-        mov [.fsck_bmp_alloc], edx
-        mov esi, .fsck_ok
-        call vga_print
-        jmp .fsck_step3
-.fsck_bmp_fail:
-        mov esi, .fsck_fail
-        call vga_print
-        popad
-        ret
-
-.fsck_step3:
-        ; Step 3: Walk root directory entries, count files and block usage
-        mov esi, .fsck_check_dir
-        call vga_print
-        ; Save current dir state
-        push dword [current_dir_lba]
-        push dword [current_dir_sects]
-        mov dword [current_dir_lba], HBFS_ROOT_DIR_START
-        mov dword [current_dir_sects], HBFS_ROOT_DIR_SECTS
-        ; Invalidate dir cache to force a fresh load
-        mov dword [dir_cache_lba], 0
-        call hbfs_load_root_dir
-        mov edi, hbfs_dir_buf
-        call hbfs_get_max_entries
-        mov ecx, eax
-        xor ebx, ebx           ; EBX = file count
-        xor edx, edx           ; EDX = total blocks from dir entries
-        xor eax, eax           ; EAX = error count
-        mov [.fsck_errors], eax
-
-.fsck_dir_loop:
-        cmp byte [edi + 253], FTYPE_FREE
-        je .fsck_dir_next
-        ; Active entry
-        inc ebx
-        ; Sum block count
-        add edx, [edi + DIRENT_BLOCK_COUNT]
-        ; Validate: block count should match ceil(size/4096)
-        push eax
-        push edx
-        mov eax, [edi + DIRENT_SIZE]
-        add eax, HBFS_BLOCK_SIZE - 1
-        shr eax, 12                    ; ceil(size/4096)
-        cmp eax, 0
-        jg .fsck_has_size
-        mov eax, 1                     ; min 1 block
-.fsck_has_size:
-        cmp eax, [edi + DIRENT_BLOCK_COUNT]
-        je .fsck_size_ok
-        ; Size mismatch
-        push esi
-        push ebx
-        call vga_set_error
-        mov esi, .fsck_warn_size
-        call vga_print
-        mov esi, edi
-        call vga_print         ; filename
-        mov al, 0x0A
-        call vga_putchar
-        call vga_reset_color
-        pop ebx
-        pop esi
-        inc dword [.fsck_errors]
-.fsck_size_ok:
-        pop edx
-        pop eax
-.fsck_dir_next:
-        add edi, HBFS_DIR_ENTRY_SIZE
-        dec ecx
-        jnz .fsck_dir_loop
-
-        mov [.fsck_file_count], ebx
-        mov [.fsck_dir_blocks], edx
-
-        ; Restore directory state
-        pop dword [current_dir_sects]
-        pop dword [current_dir_lba]
-        mov dword [dir_cache_lba], 0   ; invalidate cache
-        mov esi, .fsck_ok
-        call vga_print
-
-        ; Step 4: Compare bitmap vs directory block counts
-        mov esi, .fsck_check_alloc
-        call vga_print
-        mov eax, [.fsck_bmp_alloc]
-        cmp eax, [.fsck_dir_blocks]
-        je .fsck_alloc_ok
-        mov esi, .fsck_warn_alloc
-        call vga_print
-        inc dword [.fsck_errors]
-        jmp .fsck_report
-.fsck_alloc_ok:
-        mov esi, .fsck_ok
-        call vga_print
-
-.fsck_report:
-        ; Print summary
-        mov al, 0x0A
-        call vga_putchar
-        mov esi, .fsck_summary
-        call vga_print
-        mov eax, [.fsck_file_count]
-        call vga_print_dec
-        mov esi, .fsck_sum_files
-        call vga_print
-        mov eax, [.fsck_dir_blocks]
-        call vga_print_dec
-        mov esi, .fsck_sum_blocks
-        call vga_print
-        mov eax, [.fsck_bmp_alloc]
-        call vga_print_dec
-        mov esi, .fsck_sum_bmp
-        call vga_print
-        mov eax, [.fsck_errors]
-        cmp eax, 0
-        je .fsck_clean
-        call vga_print_dec
-        mov esi, .fsck_sum_err
-        call vga_print
-        jmp .fsck_end
-.fsck_clean:
-        call vga_set_success
-        mov esi, .fsck_sum_clean
-        call vga_print
-        call vga_reset_color
-.fsck_end:
-        popad
-        ret
-
-.fsck_bmp_alloc:   dd 0
-.fsck_file_count:  dd 0
-.fsck_dir_blocks:  dd 0
-.fsck_errors:      dd 0
-
-.fsck_banner:       db "fsck: HBFS filesystem check", 0x0A, 0
-.fsck_check_sb:     db "  Checking superblock...      ", 0
-.fsck_check_bmp:    db "  Checking bitmap...          ", 0
-.fsck_check_dir:    db "  Checking directory...       ", 0
-.fsck_check_alloc:  db "  Checking allocation...      ", 0
-.fsck_ok:           db "[OK]", 0x0A, 0
-.fsck_fail:         db "[FAIL]", 0x0A, 0
-.fsck_sb_corrupt:   db "  FATAL: Superblock magic invalid!", 0x0A, 0
-.fsck_warn_size:    db "  WARN: Block/size mismatch: ", 0
-.fsck_warn_alloc:   db "[MISMATCH]", 0x0A, 0
-.fsck_summary:      db "  Summary:", 0x0A, "    Files:           ", 0
-.fsck_sum_files:    db 0x0A, "    Blocks (dir):    ", 0
-.fsck_sum_blocks:   db 0x0A, "    Blocks (bitmap): ", 0
-.fsck_sum_bmp:      db 0x0A, "    ", 0
-.fsck_sum_err:      db " error(s) found", 0x0A, 0
-.fsck_sum_clean:    db "Filesystem clean.", 0x0A, 0
 
 ;---------------------------------------
 ; Command: ln -s <target> <linkname>

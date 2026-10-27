@@ -78,6 +78,7 @@ cmd_table:
         CMDENT cmd_dirs_str, CAT_FILES, sum_dirs, det_dirs
         CMDENT cmd_format_str, CAT_FILES, sum_format, det_format
         CMDENT cmd_fsck_str, CAT_FILES, sum_fsck, det_fsck
+        CMDENT cmd_repair_str, CAT_FILES, sum_repair, det_repair
         CMDENT cmd_head_str, CAT_FILES, sum_head, det_head
         CMDENT cmd_ln_str, CAT_FILES, sum_ln, det_ln
         CMDENT cmd_ls_str, CAT_FILES, sum_ls, det_ls
@@ -361,10 +362,14 @@ sum_format: db "Format the filesystem", 0
 det_format:
         db "format", 0x0A
         db "  Erase and re-create the HBFS volume. Asks for confirmation.", 0x0A, 0
-sum_fsck: db "Check the filesystem", 0
+sum_fsck: db "Check the filesystem (alias of repair)", 0
 det_fsck:
         db "fsck", 0x0A
-        db "  Walk the HBFS volume and report inconsistencies.", 0x0A, 0
+        db "  Same as repair: walk the volume and report.", 0x0A, 0
+sum_repair: db "Check and repair the filesystem", 0
+det_repair:
+        db "repair [fix|journal]", 0x0A
+        db "  Compare the tree with the allocation bitmap.", 0x0A, 0
 sum_head: db "First lines of a file", 0
 det_head:
         db "head [-n N] [FILE]", 0x0A
