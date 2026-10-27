@@ -134,11 +134,24 @@ run_case() {
     if [ -n "$profile" ]; then
         args+=(--profile "$profile")
     fi
+    # Two guests writing the same image at once is not a test result: a case
+    # killed by the timeout used to leave its QEMU behind, and the next boot
+    # then failed its disk writes. Say so instead of reporting a mystery.
+    local stray
+    stray="$(ps -eo args | grep -c '[q]emu-system')"
+    if [ "$stray" -gt 0 ]; then
+        echo "  WARNING: $stray QEMU process(es) already running before \"$name\""
+    fi
     printf '  %-34s ' "$name"
-    if timeout "$CASE_TIMEOUT" python3 "$DRIVE" "${args[@]}" >/dev/null 2>&1; then
+    # A failed case keeps what the machine actually said: without it a FAIL is
+    # a line with no evidence behind it.
+    local log
+    log="$(mktemp)"
+    if timeout "$CASE_TIMEOUT" python3 "$DRIVE" "${args[@]}" --out "$log" >/dev/null 2>&1; then
         echo "PASS"
+        rm -f "$log"
     else
-        echo "FAIL"
+        echo "FAIL  (output: $log)"
         failures=$((failures + 1))
     fi
 }

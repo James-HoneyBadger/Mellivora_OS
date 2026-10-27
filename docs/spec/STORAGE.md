@@ -246,7 +246,9 @@ Evaluation is POSIX's, without inheritance:
 5. `acl:o`.
 
 The mode word is left alone: `chmod` on an ACL'd file changes what a tool that
-only reads the mode word sees, and does not rewrite the ACEs.
+only reads the mode word sees, and does not rewrite the ACEs. Replacing a file's
+contents through the create path - `write`, `save` - writes a fresh entry, so the
+old ACEs go with the old entry; setting an ACL again is the caller's job.
 
 ## 10. Snapshots
 

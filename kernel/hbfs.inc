@@ -2285,6 +2285,15 @@ hbfs_delete_file_entry:
 .hdfe_extent:
         call hbfs_free_extent
 .skip_free:
+        ; The xattr block belongs to this file too. Freeing the data and
+        ; leaving it allocated leaks a block per deleted file, and fsck reports
+        ; it as claimed by nobody.
+        mov eax, [edi + HBFS_DE_XATTR_LBA]
+        test eax, eax
+        jz .hdfe_no_xattr
+        mov ecx, 1
+        call hbfs_free_blocks
+.hdfe_no_xattr:
 
         ; Zero the directory entry
         mov ecx, HBFS_DIR_ENTRY_SIZE / 4
