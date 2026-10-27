@@ -180,6 +180,7 @@ cmd_acpi_str:   db "acpi", 0
 cmd_bootlog_str: db "bootlog", 0
 cmd_drivers_str: db "drivers", 0
 cmd_smpstress_str: db "smpstress", 0
+cmd_volumes_str: db "volumes", 0
 
 msg_smpstress_head:   db 0x0A, "Mixed load across every processor", 0x0A, 0
 msg_smpstress_aps:    db "  application processors online: ", 0

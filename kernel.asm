@@ -761,6 +761,10 @@ kernel_entry:
         ; Initialize filesystem (and the block cache in front of it)
         call blk_cache_init
         call pc_init
+        ; What is on the disk, before the filesystem is asked: the partition
+        ; table is the authority on which volume the superblock should be in.
+        call vol_probe
+        LOGBOOT LOG_INFO, log_volumes
         call hbfs_init
         LOGBOOT LOG_INFO, log_fs
         call vfs_init
@@ -850,6 +854,7 @@ kernel_entry:
 %include "kernel/blkcache.inc"
 %include "kernel/pagecache.inc"
 %include "kernel/hbfs.inc"
+%include "kernel/volume.inc"
 %include "kernel/vfs.inc"
 %include "kernel/filesearch.inc"
 %include "kernel/isr.inc"

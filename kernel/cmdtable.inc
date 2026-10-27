@@ -55,6 +55,7 @@ cmd_table:
         CMDENT cmd_bootlog_str, CAT_SYSTEM, sum_bootlog, det_bootlog
         CMDENT cmd_drivers_str, CAT_SYSTEM, sum_drivers, det_drivers
         CMDENT cmd_smpstress_str, CAT_SYSTEM, sum_smpstress, det_smpstress
+        CMDENT cmd_volumes_str, CAT_SYSTEM, sum_volumes, det_volumes
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
         CMDENT cmd_objects_str, CAT_SYSTEM, sum_objects, det_objects
         CMDENT cmd_handles_str, CAT_SYSTEM, sum_handles, det_handles
@@ -277,6 +278,13 @@ det_acpi:
         db "  interrupt the SCI arrives on, and the S5 encoding read out of the", 0x0A
         db "  DSDT that shutdown writes. ACPI is taken over at boot, so those", 0x0A
         db "  registers are this kernel's, not the firmware's.", 0x0A, 0
+sum_volumes: db "The partitions on the disk, and which one holds the filesystem", 0
+det_volumes:
+        db "volumes", 0x0A
+        db "  Read the partition table - MBR, or GPT behind a protective MBR -", 0x0A
+        db "  and report each volume: where it starts, how large it is, what the", 0x0A
+        db "  table calls it, and which generation of HBFS a probe found inside.", 0x0A
+        db "  Nothing is mounted or written: a disk with no filesystem says so.", 0x0A, 0
 sum_smpstress: db "Mixed kernel load on every processor, and what each one did", 0
 det_smpstress:
         db "smpstress [JOBS]", 0x0A

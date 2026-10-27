@@ -1915,6 +1915,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_drivers
 
+        mov edi, cmd_volumes_str
+        call str_starts_with
+        jc .cmd_volumes
+
         mov edi, cmd_smpstress_str
         call str_starts_with
         jc .cmd_smpstress
@@ -2366,6 +2370,10 @@ shell_dispatch_core:
 
 .cmd_drivers:
         call driver_show
+        ret
+
+.cmd_volumes:
+        call vol_show
         ret
 
 .cmd_smpstress:

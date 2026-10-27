@@ -289,6 +289,7 @@ log_pci:         db "pci: enumeration complete", 0
 log_acpi:        db "acpi: tables read, power hardware taken over", 0
 log_apic:        db "apic: interrupt controller chosen", 0
 log_fs:          db "hbfs: volume mounted", 0
+log_volumes:     db "volumes: partition table read", 0
 log_vfs:         db "vfs: file tables ready", 0
 log_locks:       db "selftest: lock order gate refuses the wrong order", 0
 log_pmmtest:     db "selftest: frame allocator preserves registers", 0
