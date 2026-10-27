@@ -5710,6 +5710,39 @@ cmd_touch_file:
         cmp byte [filename_buf], 0
         je .touch_usage
 
+        ; A path is a name plus a place, and this command has no way to place a
+        ; file outside the current directory. Taking the whole path as the name
+        ; made `touch /overq` an entry whose name *is* "/overq" - a file no
+        ; other command can find, and a warning from fsck for years. Use the
+        ; last component and say where it went.
+        mov esi, filename_buf
+        xor ebx, ebx                    ; EBX = last '/' seen, 0 = none
+        mov ecx, esi
+.touch_scan:
+        mov al, [ecx]
+        test al, al
+        jz .touch_scanned
+        cmp al, '/'
+        jne .touch_scan_next
+        mov ebx, ecx
+.touch_scan_next:
+        inc ecx
+        jmp .touch_scan
+.touch_scanned:
+        test ebx, ebx
+        jz .touch_name_ok
+        inc ebx                         ; EBX = the name after the slash
+        cmp byte [ebx], 0
+        je .touch_usage                  ; a trailing slash names nothing
+        mov esi, ebx
+        mov edi, filename_buf
+.touch_copy_name:
+        lodsb
+        stosb
+        test al, al
+        jnz .touch_copy_name
+.touch_name_ok:
+
         ; Create empty file
         mov esi, filename_buf
         mov edi, PROGRAM_BASE

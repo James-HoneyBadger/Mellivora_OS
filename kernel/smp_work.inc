@@ -60,7 +60,11 @@ smp_work_push:
         push ecx
         push edx
         push edi
-        mov [.swp_job], eax
+        ; The job stays in a register. A static slot here would be shared by
+        ; every processor that calls this - and a job that is written by one
+        ; caller and read by another is a job that goes missing, which is the
+        ; failure this queue spent two rounds of diagnosis finding.
+        mov ebx, eax
 
         mov edi, smp_work_lock
         call spin_lock
@@ -72,8 +76,7 @@ smp_work_push:
         jae .swp_unlock_full
 
         mov eax, [smp_work_head]
-        mov ecx, [.swp_job]
-        mov [smp_work_ring + eax*4], ecx
+        mov [smp_work_ring + eax*4], ebx
         inc eax
         cmp eax, SMP_WORK_MAX
         jb .swp_no_wrap
@@ -88,7 +91,7 @@ smp_work_push:
         ; Wake somebody. The interrupt does no work itself - it interrupts a
         ; halted processor, which then looks at the queue.
         call smp_ipi_all
-        mov dword [.swp_status], 0
+        xor ebx, ebx                    ; 0 = queued
         jmp .swp_out
 
 .swp_unlock_full:
@@ -96,16 +99,14 @@ smp_work_push:
         call spin_unlock
 .swp_full:
         inc dword [smp_work_push_fail]
-        mov dword [.swp_status], -1
+        mov ebx, -1
 .swp_out:
-        mov eax, [.swp_status]
+        mov eax, ebx
         pop edi
         pop edx
         pop ecx
         pop ebx
         ret
-.swp_job:    dd 0
-.swp_status: dd 0
 
 ;-----------------------------------------------------------------------
 ; smp_work_pop - take one job, if there is one
@@ -116,7 +117,12 @@ smp_work_pop:
         push ecx
         push edx
         push edi
-        mov dword [.swq_job], 0
+        ; The result is returned in EBX, never through a static slot. Two
+        ; processors pop concurrently, and a slot written under the lock but read
+        ; after it is released is a slot the other processor can overwrite in
+        ; between: one job runs twice and another is lost, the queue drains to
+        ; empty, and every processor idles waiting for work that no longer exists.
+        xor ebx, ebx
 
         mov edi, smp_work_lock
         call spin_lock
@@ -127,8 +133,7 @@ smp_work_pop:
         je .swq_unlock
 
         mov eax, [smp_work_tail]
-        mov ecx, [smp_work_ring + eax*4]
-        mov [.swq_job], ecx
+        mov ebx, [smp_work_ring + eax*4]
         inc eax
         cmp eax, SMP_WORK_MAX
         jb .swq_no_wrap
@@ -140,13 +145,12 @@ smp_work_pop:
         mov edi, smp_work_lock
         call spin_unlock
 .swq_out:
-        mov eax, [.swq_job]
+        mov eax, ebx
         pop edi
         pop edx
         pop ecx
         pop ebx
         ret
-.swq_job: dd 0
 
 ;-----------------------------------------------------------------------
 ; smp_ipi_all - poke every other processor
@@ -297,8 +301,8 @@ smp_spread_stress:
         test eax, eax
         jz .sss_counted
         ; The ring is full: let the processors drain a little, then try again.
-        mov ecx, 1
-        call smp_delay_ms
+        mov ecx, 200
+        call smp_delay_tsc
         jmp .sss_push
 .sss_counted:
         inc dword [.sss_pushed]
@@ -311,12 +315,15 @@ smp_spread_stress:
         jae .sss_out
         mov ecx, 1
         call smp_delay_ms
-        ; Waiting for work to finish is not progress. After a couple of seconds
-        ; say what the machine looks like, once: a stall with the queue empty
-        ; and every processor idle means a lost wakeup, and a stall with the
-        ; queue full means a processor that took a job and never returned.
+        ; Waiting for work to finish is not progress, but slow is not stuck: a
+        ; job that is sixteen allocations and a megabyte of memory traffic takes
+        ; a while under contention, and a diagnostic that shouts every tenth of
+        ; a second would cry wolf on every round. Several seconds of *no
+        ; completions at all* is the interesting case, and it says what the
+        ; machine looks like: the queue empty with every processor idle means a
+        ; lost wakeup, the queue full means a job that never returned.
         inc dword [.sss_spin]
-        cmp dword [.sss_spin], 2000
+        cmp dword [.sss_spin], 20000
         jne .sss_wait
         mov dword [.sss_spin], 0
         pushad

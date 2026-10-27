@@ -137,9 +137,18 @@ try:
     # The load, and then the same load again: each call is self-timed, so the
     # host is not in the loop and a stall shows up as silence rather than as a
     # command that was queued but never serviced.
+    # Mixed load means both halves: kernel jobs on the other processors *and* a
+    # user program on this one. A soak that only queues kernel work proves the
+    # work queue; the scheduler, the page tables and the drivers are exercised
+    # by a program running beside it.
+    guests = ["fs_meta_test", "vmtest3", "vmtest5", "fs_mkdir_test"]
+    guest_markers = {"fs_meta_test": "FS_META_OK", "vmtest3": "VM3_OK",
+                     "vmtest5": "VM5_OK", "fs_mkdir_test": "CRASH_LOOP_OK"}
+
     started = time.time()
     end = started + minutes * 60
     rounds_sent = 0
+    guest_sent = 0
     while time.time() < end:
         s.sendall(f"smpstress {rounds}\n".encode())
         rounds_sent += 1
@@ -161,13 +170,38 @@ try:
                 fail("a load round never finished: the machine stopped answering")
             time.sleep(0.2)
 
-    # Still alive, still answering?
-    s.sendall(b"acpi\n")
+    # The user-program half of the mixed load, once more with feeling, and the
+    # marker has to be the program's own verdict rather than a prompt.
+    for name in guests:
+        marker = guest_markers[name].encode()
+        before_guest = buf.count(marker)
+        s.sendall((name + "\n").encode())
+        guest_sent += 1
+        guest_deadline = time.time() + 180
+        while buf.count(marker) <= before_guest:
+            pump()
+            if b"SMP_STRESS_FAIL" in buf:
+                fail(f"{name} reported a failure during the soak")
+            if proc.poll() is not None:
+                fail("QEMU exited during the soak")
+            if time.time() > guest_deadline:
+                fail(f"{name} never finished during the soak")
+            time.sleep(0.2)
+        print(f"  guest {name}: {guest_markers[name]}", flush=True)
+
+    # Still alive, still answering? The command has to be one whose answer
+    # reaches COM1 - a machine that is alive but not reading the console is
+    # exactly the failure this check exists to catch, and a screen-only answer
+    # would be invisible from here. `quota` walks the filesystem and ends with a
+    # marker on the serial console, so it proves the shell, the disk and the
+    # kernel are all still working.
+    before_answer = buf.count(b"QUOTA_OK")
+    s.sendall(b"quota\n")
     deadline = time.time() + 120
     answered = False
     while time.time() < deadline:
         pump()
-        if b"processors online" in buf:
+        if buf.count(b"QUOTA_OK") > before_answer:
             answered = True
             break
         if proc.poll() is not None:
@@ -182,8 +216,8 @@ try:
     if not answered:
         fail("the machine was alive but did not answer afterwards")
 
-    print(f"  PASS  {smp} processors, {rounds_sent} load rounds, {minutes:g} minutes, "
-          f"still answering")
+    print(f"  PASS  {smp} processors, {rounds_sent} load rounds and "
+          f"{guest_sent} user programs, {minutes:g} minutes, still answering")
 finally:
     proc.kill()
     proc.wait()

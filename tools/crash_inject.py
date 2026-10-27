@@ -138,12 +138,21 @@ def crash_once(qemu: str, image: str, command: str, kill_ms: float,
         except Exception:
             pass
 
+    # The filesystem on the disk is allowed to be inconsistent at this point,
+    # and with an *undo* journal it normally is: the transaction's pre-images
+    # are in the journal and its metadata writes are half done. What must never
+    # happen is reaching here with damage and no journal to explain it - that
+    # would be a write that landed without its undo record, which no replay can
+    # repair. So the immediate check is a diagnostic unless it finds a mess and
+    # the volume is not marked for replay.
     ok, report = fsck(copy)
+    dirty_journal = "journal is dirty" in report
     if not ok:
-        notes.append("fsck failed immediately after the crash")
-        notes.extend("  " + line for line in report.splitlines()[-24:])
-        if not verbose:
+        if not dirty_journal:
+            notes.append("fsck failed after the crash with no journal to replay")
+            notes.extend("  " + line for line in report.splitlines()[-24:])
             return False, notes
+        notes.append("torn transaction, journal dirty as expected")
 
     # Boot again so the kernel replays the journal, then re-check with the
     # VM shut down again.
@@ -161,10 +170,13 @@ def crash_once(qemu: str, image: str, command: str, kill_ms: float,
         except Exception:
             pass
 
+    # After the replay the volume must be consistent: this is the assertion.
     ok, report = fsck(copy)
     if not ok:
         notes.append("fsck failed after journal replay")
         notes.extend("  " + line for line in report.splitlines()[-24:])
+    elif dirty_journal:
+        notes.append("replay restored the torn transaction")
 
     if verbose and ok:
         notes.append(report.splitlines()[-1].strip() if report else "")

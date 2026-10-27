@@ -85,6 +85,45 @@ smp_delay_ms:
         ret
 
 ;-----------------------------------------------------------------------
+; smp_delay_tsc - wait a while without touching any shared hardware
+;   In : ECX = approximate delay in thousands of cycles
+;
+; smp_delay_ms reads the PIT, and the PIT has one set of registers for the whole
+; machine: the latch command and the two count bytes are shared, so four
+; processors reading it at once can each get half of somebody else's reading,
+; and a delay built on that either returns at once or waits far too long. On the
+; bootstrap processor that almost never matters - it is alone when it uses the
+; PIT - but a delay inside a job runs on every processor at once.
+;
+; The time-stamp counter is per processor, so reading it cannot interfere. Its
+; rate is not architectural, which is why the unit here is cycles and the caller
+; only ever asks for "roughly this long".
+;-----------------------------------------------------------------------
+smp_delay_tsc:
+        push eax
+        push ebx
+        push ecx
+        push edx
+        test ecx, ecx
+        jz .sdt_done
+        mov ebx, ecx
+        imul ebx, 1000                  ; thousands -> cycles
+        rdtsc
+        mov [.sdt_start], eax
+.sdt_loop:
+        rdtsc
+        sub eax, [.sdt_start]
+        cmp eax, ebx
+        jb .sdt_loop
+.sdt_done:
+        pop edx
+        pop ecx
+        pop ebx
+        pop eax
+        ret
+.sdt_start: dd 0
+
+;-----------------------------------------------------------------------
 ; smp_icr_send - put one command in the interrupt command register
 ;   In : EAX = low dword, EBX = destination APIC ID
 ; Waits for the previous command to leave before writing, as the register is
@@ -208,8 +247,10 @@ smp_stress_round:
         ; allocating and freeing inside the same window. Without this the
         ; workers tend to run one after another and a missing lock can pass
         ; unnoticed - which is what a single short round did here.
-        mov  ecx, 1
-        call smp_delay_ms
+        ; The TSC, not the PIT: this runs on every processor at once, and the
+        ; PIT's latch is one set of registers for the whole machine.
+        mov  ecx, 1000                  ; ~1000 x 1000 cycles, roughly a ms
+        call smp_delay_tsc
 
         ; --- stamp: every frame gets (worker<<16)|index, which names its owner
         xor  ebx, ebx

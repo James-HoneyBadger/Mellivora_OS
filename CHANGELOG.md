@@ -1,5 +1,59 @@
 # Mellivora OS - Changelog
 
+## Unreleased - the durability gate was failing on a correct volume
+
+`make check` started failing at `check-durability`, intermittently, at
+`fs_mkdir_test`. The report was an undo journal doing its job:
+
+```text
+ERROR block 127 (/crashme.tmp) is referenced but not marked allocated
+WARN  journal is dirty (state 1, pointer 0); mount will replay it
+```
+
+A crash in the middle of a transaction *is* a half-written volume on the disk -
+that is what the journal is for - and the old harness treated fsck's verdict on
+that half-written state as the assertion, so it failed whenever the crash landed
+inside a transaction. It now asserts the two things that are actually true:
+
+- **before replay**, a failed fsck is acceptable only if the volume is marked for
+  replay. Damage with a clean journal is the failure that matters, because no
+  replay can repair it - a write that landed without its undo record;
+- **after replay**, fsck must pass. That is the assertion.
+
+`touch` also learned that a path is not a name: `touch /overq` used to create an
+entry whose *name* was "/overq" - a file no other command could find, and an fsck
+warning that would have survived every rebuild. It now places the last component
+in the current directory.
+
+## Unreleased - M2 closes: the SMP stall was a job that went missing
+
+`make check-smp` used to stall intermittently: a round of `smpstress` would wait
+for jobs that never arrived, with every application processor halted. It was a
+data race, and it took three bugs to get to it.
+
+- **The queue returned jobs through a static slot.** `smp_work_pop` wrote the
+  job it had taken into a per-function static, released the lock, and then read
+  the slot back. Two processors popping at the same moment therefore overwrote
+  each other's result: one job ran twice, the other was lost, `smp_jobs_run`
+  stopped rising and the waiting processor waited forever. The job now travels
+  in a register, which is the only thing a reentrant function can safely use.
+- **`smp_delay_ms` read the shared PIT from every processor.** The latch command
+  and the two count bytes belong to the whole machine, so four processors
+  reading them at once could each get half of somebody else's reading - and the
+  diagnostic that fires after "no progress" was measuring that instead of a
+  stall. Delays inside jobs now use the per-processor time-stamp counter
+  (`smp_delay_tsc`); the PIT stays for the boot path, where the caller is alone.
+- **The AP idle loop lost wakeups** between the empty-queue check and `hlt`.
+  Already fixed when the queue was written; it is listed here because the stall
+  could not be reproduced reliably until all three were gone.
+
+With those out of the way the gates hold: `make check-smp` - four processors,
+kernel jobs on the APs and user programs on the BSP, one minute - is part of
+`make check`, and soaks of one, two, three and six minutes completed with every
+round finishing and the machine still answering. `SOAK_MINUTES=1440 make soak`
+is the 24-hour exit run, and has not been performed; the wave closes on the
+compressed gate plus the recorded long-run command.
+
 ## Unreleased - M3: the disk has a partition table, and quotas that cannot drift
 
 - **The volume manager.** HBFS was assumed to start at LBA 4096 and the volume

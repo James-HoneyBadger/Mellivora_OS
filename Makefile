@@ -598,7 +598,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop check-durability fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop check-durability check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 

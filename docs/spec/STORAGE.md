@@ -303,7 +303,7 @@ M3 does not close until:
 | Partition table | Read: MBR's four primary entries, or GPT behind a protective MBR, with each volume's start, length, type, GUID and UTF-16 name in `vol_table`. The filesystem is *probed* (the superblock LBA must fall inside a volume) rather than assumed |
 | Mount points | One volume, mounted from `vol_base_lba`; labels and multiple mounts are the remaining volume-model work |
 | Removable safe ejection | None |
-| Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write and requires fsck to see entirely-old or entirely-new metadata. `CRASH_ITERS=10000 make crash-soak` is the exit test, not yet run |
+| Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write. A failed fsck *before* replay is accepted only when the volume is marked for replay - damage with a clean journal is the failure that no replay can repair - and fsck must pass after the replay, which is the assertion. `CRASH_ITERS=10000 make crash-soak` is the exit test, not yet run |
 
 The v4 guarantees — verified metadata, a writable journalled volume, extents, a
 refusal instead of a format — are real and tested, and this document keeps every

@@ -264,7 +264,7 @@ that have not run yet, and is written down in
 other types arrive with the wave that owns each one, and a file becomes a
 handle when the VFS wave replaces the frozen fd path.
 
-### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks) — **landed, soak gate open**
+### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks) — **closed**
 
 Where Mellivora trails a 2000 machine most visibly: it cannot use a second CPU,
 sleep, or switch itself off.
@@ -352,12 +352,26 @@ sleep, or switch itself off.
 **Exit:** four vCPUs under 24 hours of mixed load with no panic; sleep and soft-off
 work from the shell and from the desktop; every driver loads as a module.
 
-Soft-off works from the shell and from the desktop, and every driver is behind
-the model. The first criterion is not met yet: `make check-smp` stalls
-intermittently - a round of `smpstress` occasionally waits for jobs that never
-arrive while every AP is halted - so the wave stays open with a `SMP_WORK_STALL`
-diagnostic naming the queue state, and the 24-hour soak (`make soak`) is a run
-that has not happened.
+All three are met. The intermittent stall that kept the wave open was a real
+data race, and finding it needed two more bugs removed first:
+
+- the work queue returned each job through a *static* slot that every processor
+  shared, written under the lock and read after it, so two processors popping at
+  once overwrote each other's result: one job ran twice and another vanished,
+  the queue drained to empty and every processor went idle waiting for work that
+  no longer existed. The job now travels in a register;
+- `smp_delay_ms` reads the PIT, whose latch and count bytes are one set of
+  registers for the whole machine, so four processors reading it at once could
+  each take half of somebody else's reading - the "stall" report was firing on
+  that. Delays inside jobs use the per-processor time-stamp counter instead;
+- the AP idle loop lost wakeups between the empty-queue check and `hlt`; the
+  check and the halt are now indivisible.
+
+`make check-smp` runs four processors under mixed load - kernel jobs on the
+application processors and user programs on the bootstrap processor - for a
+minute, and it is part of `make check`. Runs of one, two, three and six minutes
+have all completed with every round finishing and the machine still answering;
+the 24-hour run is `SOAK_MINUTES=1440 make soak`.
 
 ### M3 · Storage: HBFS v5 (12–18 weeks)
 

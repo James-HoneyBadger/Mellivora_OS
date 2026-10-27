@@ -60,6 +60,8 @@ if [ "$per" -eq 0 ]; then
     per=1
 fi
 
+log="$(mktemp)"
+trap 'rm -f "$log"' EXIT
 status=0
 total=0
 for i in "${!workloads[@]}"; do
@@ -68,11 +70,16 @@ for i in "${!workloads[@]}"; do
         count=$(( count + 1 ))
     fi
     printf '  %-14s %d crash points  ' "${workloads[$i]}" "$count"
+    # Not --quiet: when a crash point does fail, its report is the only thing
+    # that says which invariant broke, and a gate that hides it makes the next
+    # hour a guess.
     if QEMU="$qemu" python3 "$ROOT/tools/crash_inject.py" "$IMAGE" \
-            "${workloads[$i]}" --iterations "$count" --quiet --seed 7 >/dev/null 2>&1; then
+            "${workloads[$i]}" --iterations "$count" --seed 7 \
+            >"$log" 2>&1; then
         echo PASS
     else
         echo FAIL
+        sed -n '1,40p' "$log"
         status=1
     fi
     total=$(( total + count ))
