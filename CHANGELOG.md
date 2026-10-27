@@ -105,7 +105,8 @@ Two bugs surfaced on the way:
   paths;
 - entering a virtual directory (`/tmp`, `/proc`, `/dev`) and touching an entry
   there meant a block read at LBA `0xFFFFFFFF`. Those locations are read-only and
-  now say so: `mkdir /tmp/x` answers "Virtual directories are read-only".
+  now say so: `mkdir /tmp/x` answers "Virtual dirs are read-only" (the wording was
+  shortened later, when kernel text had to pay for itself).
 
 `tests/test_runtime.sh` covers each of these: a create through a path, a listing
 of one, a flagged delete through one, the virtual-directory refusal, and a
