@@ -379,9 +379,30 @@ quotas, snapshots, compression.
   recovery path for a volume whose journal cannot be replayed.
 - The redirector seam in the VFS that network shares plug into in M7.
 
+- **Durability is a gate, not a claim (landed).** `tests/test_powercut.sh` runs
+  the crash harness over rotating workloads - directory creation and metadata
+  churn - killing QEMU at random points with no clean shutdown, then proving
+  with fsck that the volume recovers to entirely-old or entirely-new metadata
+  and never a mixture. `make check-durability` runs it on every build with a
+  handful of crash points; `CRASH_ITERS=10000 make crash-soak` is the exit test.
+- **The volume manager (landed).** The partition table is read - MBR, or GPT
+  behind a protective MBR - and the filesystem is probed for rather than
+  assumed, so a disk with no filesystem says so and `volumes` can name what the
+  filesystem is inside. Labels, multiple volumes and mount points are the rest
+  of the volume model below.
+- **Per-user quotas (landed).** Blocks are accounted per uid with a ceiling
+  (0 = unlimited), refused before a write allocates anything, and returned to
+  the file's owner on delete. The ledger is derived from the tree at every
+  mount and by `quota rebuild`, which is why it cannot drift.
+
 **Exit:** 10 000 power-cut iterations clean; a quota and an access-control
 conformance suite; a deliberately corrupted volume repaired from the recovery
 console; an encrypted volume round-trips with its key held in the store.
+
+Of those, the power-cut harness and the quota suite's quota half are in place;
+ACLs, compression, encryption, snapshots, the redirector seam and repair at fsck
+parity are the wave's remaining work, and `make crash-soak` with 10 000
+iterations is a run that has not happened.
 
 ### M4 · Configuration and services (9–13 weeks)
 

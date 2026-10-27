@@ -565,6 +565,14 @@ fsck: $(POPULATE_STAMP) tools/fsck_hbfs.py
 # with fsck that the journal recovers. Slower than the rest of the gate, so it
 # is a separate target rather than part of `make check`.
 CRASH_ITERS ?= 5
+# The durability gate: a handful of crash points on every build, and the same
+# harness with a much larger count for the wave's exit test.
+check-durability: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
+	@CRASH_ALLOW_SKIP=1 bash tests/test_powercut.sh $(IMAGE)
+
+crash-soak: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
+	@CRASH_ITERS=$${CRASH_ITERS:-10000} bash tests/test_powercut.sh $(IMAGE)
+
 crash-test: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
 	@CRASH_IMAGE=$(IMAGE); \
 	python3 tools/crash_inject.py "$$CRASH_IMAGE" "fs_mkdir_test" \
@@ -590,7 +598,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop check-durability fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
