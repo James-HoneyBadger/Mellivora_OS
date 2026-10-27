@@ -430,6 +430,16 @@ quotas, snapshots, compression.
   read-only for them, the mask narrows that grant without touching the ACE, the
   owner is held to their own ACE, a stranger falls to `acl:o`, and root passes.
   Inheritance and group-class unions are the remaining ACL work.
+- **A kernel window, not a gap (landed).** The image had filled 4062 of the
+  4062 sectors between the loader and the superblock, because the program window
+  was pinned at 3 MB and everything above it was hand-placed. The layout moved
+  instead of being nudged: a 4 MB kernel window (1-5 MB), `PROGRAM_BASE` at
+  5 MB, the page tables, PMM bitmap and heap window each 2 MB higher,
+  `KERNEL_RESERVED_END` unchanged at 8 MB, and the superblock at LBA 8481 - a
+  fixed 256 sectors past the window rather than wherever the image happened to
+  end. The on-disk cost is 512 blocks of a 523 179-block volume. This is the
+  first thing the wave did *because* the previous one ran out of room, and it is
+  a volume layout change: an image built before it is not readable after it.
 
 **Exit:** 10 000 power-cut iterations clean; a quota and an access-control
 conformance suite; a deliberately corrupted volume repaired from the recovery

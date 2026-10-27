@@ -31,8 +31,8 @@ stage_buf:   db 0, 0
 
 
 CRASH_STATUS equ 0x80000000
-PROGRAM_BASE equ 0x00300000      ; kernel.asm PROGRAM_BASE
-WINDOW_END   equ 0x00400000      ; kernel.asm PROGRAM_END_ADDR
+PROGRAM_BASE equ 0x00500000      ; kernel.asm PROGRAM_BASE
+WINDOW_END   equ 0x00600000      ; kernel.asm PROGRAM_END_ADDR
 
 SMALL_LEN  equ 3000              ; one page
 BIG_LEN    equ 4194304           ; 4 MB: far larger than the 1 MB window

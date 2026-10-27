@@ -41,9 +41,9 @@ MELLIVORA.IMG is a complete Mellivora disk image, byte for byte:
 
   sector 0        boot sector
   sectors 1-32    stage 2 loader
-  sector 33       kernel (as many sectors as the kernel needs)
-  sector 4096     HBFS superblock, bitmap and root directory
-  sector 4481     first HBFS data block
+  sector 33       kernel (as many sectors as the kernel needs, up to 8192)
+  sector 8481     HBFS superblock, bitmap and root directory
+  sector 8866     first HBFS data block
 
 Because the copy is exact, the installed disk behaves exactly like the image
 it came from: same kernel, same programs, same files.

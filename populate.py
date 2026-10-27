@@ -29,7 +29,9 @@ HBFS_MAGIC = 0x48424653  # 'HBFS'
 # HBFS on-disk layout — must match HBFS_SUPERBLOCK_LBA in kernel.asm.
 # All derived constants are computed relative to HBFS_SUPERBLOCK_LBA so
 # only ONE value needs updating if the layout ever changes.
-HBFS_SUPERBLOCK_LBA = 4096
+# = kernel LBA 33 + 8192 sectors (the 4 MB KERNEL_BASE..PROGRAM_BASE window)
+#   + 256 sectors of slack.
+HBFS_SUPERBLOCK_LBA = 8481
 HBFS_BITMAP_BLOCKS = 16
 HBFS_BITMAP_SIZE = HBFS_BITMAP_BLOCKS * BLOCK_SIZE   # 65536 bytes
 HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
@@ -892,22 +894,22 @@ Memory Map:
   0x000A0000 - 0x000BFFFF  VGA memory
   0x000B8000 - 0x000B8F9F  VGA text buffer (80x25x2)
   0x000C0000 - 0x000FFFFF  ROM area
-  0x00100000 - 0x002FFFFF  Kernel (loaded at 1MB, ~1.3MB)
-  0x00300000 - 0x003FFFFF  Program load area (1MB)
-  0x00410000 - 0x00490FFF  Page directory + page tables
-  0x00500000 - 0x0051FFFF  Physical memory bitmap (128KB)
-  0x00520000 - 0x00520FFF  PMM buddy tags (unused)
-  0x00700000 - 0x007FFFFF  Heap window (unused)
+  0x00100000 - 0x004FFFFF  Kernel image window (loaded at 1MB, 4MB)
+  0x00500000 - 0x005FFFFF  Program load area (1MB)
+  0x00610000 - 0x00710FFF  Page directory + page tables
+  0x00720000 - 0x0073FFFF  Physical memory bitmap (128KB)
+  0x00740000 - 0x00740FFF  PMM buddy tags (unused)
+  0x00780000 - 0x007FFFFF  Heap window (unused)
   0x00800000 - onwards     Free memory (managed by PMM), KERNEL_RESERVED_END
 
 Disk Layout:
   LBA 0:         Boot sector (512 bytes)
   LBA 1-32:      Stage 2 loader (16KB)
   LBA 33+:       Kernel (KERNEL_SECTORS from kernel_sectors.inc)
-  LBA 4096:      HBFS Superblock
-  LBA 4097-4224: Block allocation bitmap (128 sectors = 16 blocks)
-  LBA 4225-4480: Root directory (256 sectors = 32 blocks, 455 entries)
-  LBA 4481+:     Data blocks (4KB each)
+  LBA 8481:      HBFS Superblock
+  LBA 8482-8609: Block allocation bitmap (128 sectors = 16 blocks)
+  LBA 8610-8865: Root directory (256 sectors = 32 blocks, 455 entries)
+  LBA 8866+:     Data blocks (4KB each)
 
 Syscall Interface (INT 0x80):
   EAX = syscall number

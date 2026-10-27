@@ -64,15 +64,21 @@
 ; Keep in sync with docs/TECHNICAL_REFERENCE.md and populate.py.
 KERNEL_BASE         equ 0x00100000
 KERNEL_STACK        equ 0x009FC00       ; Top of conventional memory for kernel stack
-PROGRAM_BASE        equ 0x00300000      ; Programs load at 3MB
-PROGRAM_END_ADDR    equ 0x00400000      ; End of static program area (for sbrk)
+; The image gets everything from KERNEL_BASE up to PROGRAM_BASE: a 4 MB window
+; (8192 sectors on disk, guarded by the kernel_sectors.inc rule in the Makefile).
+; It was 2 MB, which the tree had filled to the last sector; the wave's storage
+; work needs the room. Growing it further means moving PROGRAM_BASE and every
+; structure above it, not just this constant.
+PROGRAM_BASE        equ 0x00500000      ; Programs load at 5MB
+KERNEL_MAX_SIZE     equ PROGRAM_BASE - KERNEL_BASE
+PROGRAM_END_ADDR    equ 0x00600000      ; End of static program area (for sbrk)
 PROGRAM_MAX_SIZE    equ 0x00100000      ; Max 1MB per program = END - BASE
-PMM_BITMAP          equ 0x00620000      ; Physical memory bitmap (128KB)
-                                        ; 0x411000-0x511000 is now 256 page tables
+PMM_BITMAP          equ 0x00720000      ; Physical memory bitmap (128KB)
+                                        ; 0x611000-0x711000 is now 256 page tables
                                         ; (1MB): every frame the allocator owns is
                                         ; identity-mapped, so the bitmap and the
                                         ; heap window moved up.
-HEAP_BASE           equ 0x00700000      ; Kernel heap window (currently unused)
+HEAP_BASE           equ 0x00780000      ; Kernel heap window (currently unused)
 KERNEL_RESERVED_END equ 0x00800000      ; 8MB — lower bound of PMM-managed memory
 BG_PROG_PAGES       equ 256             ; Pages per background program slot (1MB)
 BG_STACK_PAGES      equ 16             ; Pages per background task user stack (64KB)
@@ -209,18 +215,24 @@ HBFS_SUBDIR_BLOCKS   equ 16           ; Subdirectories get 16 blocks (224 entrie
 ; HBFS on-disk layout — all LBAs derived from HBFS_SUPERBLOCK_LBA.
 ; HBFS_SUPERBLOCK_LBA must be > (33 + KERNEL_SECTORS).
 ; KERNEL_SECTORS is generated into kernel_sectors.inc by the Makefile from the
-; assembled binary, and that rule hard-fails the build above 4062 sectors (the
-; headroom below this LBA). Do NOT hard-code a sector count here — a number in
-; a comment silently drifts out of date. If the kernel ever really does exceed
-; 4062 sectors, raise this value AND the matching constant in populate.py.
-HBFS_SUPERBLOCK_LBA  equ 4096          ; First LBA of HBFS (well past kernel end)
+; assembled binary, and that rule hard-fails the build above 8192 sectors (the
+; 4 MB window KERNEL_BASE..PROGRAM_BASE). Do NOT hard-code a sector count here —
+; a number in a comment silently drifts out of date. If the kernel ever really
+; does exceed 8192 sectors, move PROGRAM_BASE and the rest of the layout above
+; it, then raise this value AND the matching constant in populate.py.
+KERNEL_LBA           equ 33            ; First LBA of the kernel image
+KERNEL_MAX_SECTORS   equ KERNEL_MAX_SIZE / 512                      ; 8192
+; = KERNEL_LBA + KERNEL_MAX_SECTORS + 256: the end of the kernel's window plus
+; 128 KiB of slack, so a kernel that outgrows the window fails in the loader
+; instead of landing on the superblock.
+HBFS_SUPERBLOCK_LBA  equ 8481          ; First LBA of HBFS (past the kernel window)
 HBFS_BITMAP_START    equ HBFS_SUPERBLOCK_LBA + 1
 HBFS_BITMAP_BLOCKS   equ 16            ; 16 blocks for bitmap (covers 524288 blocks)
 HBFS_BITMAP_SECTS    equ HBFS_BITMAP_BLOCKS * HBFS_SECTORS_PER_BLK ; 128 sectors
 HBFS_BITMAP_SIZE     equ HBFS_BITMAP_BLOCKS * HBFS_BLOCK_SIZE       ; 65536 bytes
-HBFS_TOTAL_BLOCKS    equ 523727        ; Data blocks in a 2048 MiB image
-                                       ; (523728 blocks would run 512 bytes past
-                                       ; the end); must match populate.py
+HBFS_TOTAL_BLOCKS    equ 523179        ; Data blocks in a 2048 MiB image
+                                       ; (523180 blocks would run 1 KiB past the
+                                       ; end); must match populate.py
 HBFS_ROOT_DIR_START  equ HBFS_BITMAP_START + HBFS_BITMAP_SECTS      ; = HBFS_SUPERBLOCK_LBA + 129
 HBFS_DATA_START      equ HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS  ; = HBFS_SUPERBLOCK_LBA + 385
 

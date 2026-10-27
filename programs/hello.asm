@@ -1,6 +1,6 @@
 ; hello.asm - Hello World program for Mellivora OS
 ; Uses INT 0x80 syscalls
-; Loaded at 0x00300000 (kernel.asm PROGRAM_BASE; ORG comes from syscalls.inc)
+; Loaded at 0x00500000 (kernel.asm PROGRAM_BASE; ORG comes from syscalls.inc)
 %include "syscalls.inc"
 
 start:

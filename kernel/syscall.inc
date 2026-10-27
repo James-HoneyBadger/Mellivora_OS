@@ -24,7 +24,7 @@ EFLAGS_USER_MASK equ 0x00240FD7
 
 ; --- Phase 1.2 v9.0: user pointer validation --------------------------------
 ; A valid user pointer must lie in [PROGRAM_BASE, USER_PTR_MAX).
-;   PROGRAM_BASE  = 0x00300000  rejects NULL, real-mode IVT/BDA, kernel image
+;   PROGRAM_BASE  = 0x00500000  rejects NULL, real-mode IVT/BDA, kernel image
 ;   USER_PTR_MAX  = 0x20000000  512 MB — covers the 128 MB identity-mapped zone
 ;                               PLUS the 384 MB v9.0 demand-paged extension.
 USER_PTR_MAX    equ 0x20000000

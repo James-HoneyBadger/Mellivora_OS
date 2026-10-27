@@ -2,7 +2,7 @@
  * cprog.c - a user program built by the host C compiler, not by tcc
  *
  * The other half of M0's C exit criterion. It runs in ring 3 from the program
- * window at 0x00300000, links the same freestanding runtime the kernel module
+ * window at 0x00500000, links the same freestanding runtime the kernel module
  * does, and reaches the kernel only through int 0x80 (docs/spec/ABI.md).
  *
  * It is deliberately a self-test rather than a demo: a program that prints a

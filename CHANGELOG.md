@@ -36,9 +36,46 @@ REPAIR_CLEAN
 Two things had to give way for it. The old in-kernel `fsck`, which only looked at
 the root directory and repaired nothing, is gone: `fsck` is now an alias for
 `repair`, which does everything it did and walks what it did not. And the kernel
-is at 4062 of 4062 sectors - the last of the space between the loader and
-`HBFS_SUPERBLOCK_LBA` - so the next feature has to start by reclaiming or by
-moving the superblock deliberately.
+filled the last of the space between the loader and `HBFS_SUPERBLOCK_LBA`, which
+is why the wave's next change was the layout itself (below).
+
+## Unreleased - M3: the kernel gets a window instead of a gap
+
+The kernel was 4062 sectors with 4062 sectors of room - not a coincidence, but
+the arithmetic of a 2 MB program window placed at 3 MB. Every count in that
+layout was hand-picked, and the wave's storage work needed room that did not
+exist. So the layout above the kernel moved, deliberately, rather than the
+superblock being nudged:
+
+| | Was | Now |
+|---|---|---|
+| Kernel window | 1-3 MB | 1-5 MB (8192 sectors, guarded by `kernel_sectors.inc`) |
+| `PROGRAM_BASE` | `0x00300000` | `0x00500000` |
+| Page directory / 256 tables | `0x410000` / `0x411000` | `0x610000` / `0x611000` |
+| PMM bitmap / buddy tags | `0x620000` / `0x640000` | `0x720000` / `0x740000` |
+| Heap window | `0x700000` | `0x780000` |
+| `KERNEL_RESERVED_END` | 8 MB | 8 MB (unchanged - nothing below it grows) |
+| HBFS superblock | LBA 4096 | LBA 8481 (33 + 8192 + 256) |
+| HBFS data start | LBA 4481 | LBA 8866 |
+| Data blocks (2 GiB image) | 523 727 | 523 179 |
+
+- The superblock now sits a fixed 256 sectors past the kernel's *window*, not
+  wherever the image happened to end, so a kernel that grows into the new room
+  cannot reach it. Its LBA is derived in one place in `kernel.asm` and in
+  `populate.py`, and `tests/test_build.sh` compares the two.
+- `paging.inc` no longer assumes the program window is in the first 4 MB. It
+  marked user pages with "PDE 0 and at or above `PROGRAM_BASE`"; now that the
+  window starts at 5 MB that test would have left every program page
+  supervisor-only. The test is the window's own bounds.
+- The user-visible addresses moved with it: `c/prog/prog.ld`,
+  `programs/basicc.asm` (which reads its own data section by absolute address),
+  and every document that quotes `0x00300000` as the load address.
+- `tools/fsck_hbfs.py` and the tests derive their offsets from the superblock
+  LBA instead of restating it, so the next move costs one number.
+
+**This is a volume layout change: an image built before it is not readable
+after it.** `make image-rebuild` is the target that discards the image and the
+populate cache rather than keeping a volume at a superblock nothing looks at.
 
 ## Unreleased - M3: an ACL decides where the mode word cannot
 

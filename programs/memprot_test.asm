@@ -72,7 +72,7 @@ start:
         int 0x80
 
 KERNEL_RAM_PROBE   equ 0x00100000       ; inside the kernel image
-PROGRAM_WINDOW_PROBE equ 0x00310000     ; scratch inside the program window
+PROGRAM_WINDOW_PROBE equ 0x00510000     ; scratch inside the program window
 
 section .data
 msg_ok:      db "MEMPROT_OK", 10, 0

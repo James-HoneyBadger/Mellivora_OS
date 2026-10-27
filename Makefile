@@ -227,10 +227,10 @@ KERNEL_INCS = $(wildcard kernel/*.inc)
 # Assemble 32-bit kernel.
 #
 # The image is loaded at 0x00100000 and the program window starts at
-# PROGRAM_BASE (0x00300000), so the kernel must stay below 2 MB: past that it
-# overwrites the program window and then the page directory at 0x00410000.
+# PROGRAM_BASE (0x00500000), so the kernel must stay below 4 MB: past that it
+# overwrites the program window and then the page directory at 0x00610000.
 # Failing here beats a boot that silently corrupts itself.
-KERNEL_MAX_BYTES = 2097152
+KERNEL_MAX_BYTES = 4194304
 
 # Two passes, because the C module has to be linked before it can be assembled
 # in, and its link address depends on how big the kernel is:
@@ -254,8 +254,8 @@ $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS) $(CMOD_BLOB)
 	@SIZE=$$(wc -c < $@); \
 	if [ $$SIZE -gt $(KERNEL_MAX_BYTES) ]; then \
 		echo "  ERROR: $@ is $$SIZE bytes (limit $(KERNEL_MAX_BYTES)):"; \
-		echo "  the image is loaded at 0x00100000 and PROGRAM_BASE is 0x00300000,"; \
-		echo "  so the kernel cannot grow past 2 MB."; \
+		echo "  the image is loaded at 0x00100000 and PROGRAM_BASE is 0x00500000,"; \
+		echo "  so the kernel cannot grow past 4 MB."; \
 		exit 1; \
 	fi; \
 	echo "  Kernel size: $$SIZE / $(KERNEL_MAX_BYTES) bytes"
@@ -273,11 +273,14 @@ symbols: $(KERNEL_ELF)
 
 # Generate kernel_sectors.inc from kernel binary size
 # This computes ceil(size / 512) so stage2 loads exactly the right amount.
+# The ceiling is the 4 MB window KERNEL_BASE..PROGRAM_BASE in kernel.asm: a
+# larger image would be loaded on top of the program window, so it fails here
+# instead.
 kernel_sectors.inc: $(KERNEL_BIN)
 	@KSECTORS=$$(( ($$(wc -c < $(KERNEL_BIN)) + 511) / 512 )); \
-		if [ $$KSECTORS -gt 4062 ]; then \
-			echo "  ERROR: kernel is $$KSECTORS sectors (> 4062). HBFS_SUPERBLOCK_LBA=4096"; \
-			echo "  Update HBFS_SUPERBLOCK_LBA in kernel.asm AND populate.py."; \
+		if [ $$KSECTORS -gt 8192 ]; then \
+			echo "  ERROR: kernel is $$KSECTORS sectors (> 8192 = 4 MB at 0x00100000)"; \
+			echo "  Move PROGRAM_BASE and the layout above it in kernel.asm, or reclaim space."; \
 			exit 1; \
 		fi; \
 		echo "KERNEL_SECTORS  equ $$KSECTORS" > $@

@@ -99,8 +99,10 @@ echo ""
 
 # ---------- HBFS superblock ----------
 echo "[HBFS superblock]"
-# Superblock is at LBA 4096 = byte offset 4096*512 = 2097152
-SB_OFF=$((4096 * 512))
+# The layout is derived from HBFS_SUPERBLOCK_LBA in kernel.asm so that moving
+# the filesystem cannot leave this test checking a stale offset.
+SB_LBA=$(grep -E -o 'HBFS_SUPERBLOCK_LBA[[:space:]]+equ[[:space:]]+[0-9]+' kernel.asm | grep -E -o '[0-9]+$')
+SB_OFF=$((SB_LBA * 512))
 MAGIC=$(hex_bytes "$IMG" "$SB_OFF" 4)
 # HBFS_MAGIC = 0x48424653 -> little-endian on disk: 53 46 42 48
 check "Superblock magic = HBFS" "[[ '$MAGIC' == '53464248' ]]"
@@ -115,8 +117,8 @@ echo ""
 
 # ---------- HBFS bitmap sanity ----------
 echo "[HBFS bitmap]"
-# Bitmap at LBA 4097 = offset 4097*512 = 2097664
-BM_OFF=$((4097 * 512))
+# Bitmap is the 16 blocks immediately after the superblock.
+BM_OFF=$(((SB_LBA + 1) * 512))
 # First byte should not be 0x00 (at least some blocks allocated)
 FIRST_BM=$(hex_bytes "$IMG" "$BM_OFF" 1)
 check "Bitmap first byte != 0 (blocks allocated)" "[[ '$FIRST_BM' != '00' ]]"
@@ -125,8 +127,10 @@ echo ""
 
 # ---------- Root directory ----------
 echo "[HBFS root directory]"
-# Root dir at LBA 4225 = offset 4225*512 = 2163200
-RD_OFF=$((4225 * 512))
+# Root dir follows the bitmap: 128 sectors, then 256 sectors of directory.
+RD_LBA=$((SB_LBA + 1 + 128))
+RD_OFF=$((RD_LBA * 512))
+DATA_LBA=$((RD_LBA + 256))
 # First entry should have a non-null first byte (filename)
 FIRST_ENTRY=$(hex_bytes "$IMG" "$RD_OFF" 1)
 check "Root dir first entry not empty" "[[ '$FIRST_ENTRY' != '00' ]]"
@@ -147,11 +151,13 @@ echo ""
 
 # ---------- Filesystem persistence across full rebuild ----------
 echo "[Filesystem persistence]"
-PERSIST_OK=$(python3 - <<'PY' | tail -1
+PERSIST_OK=$(python3 - "$RD_LBA" "$DATA_LBA" <<'PY' | tail -1
 import struct
 import subprocess
 import sys
 from populate import FSImage, FTYPE_TEXT
+
+root_lba, data_lba = int(sys.argv[1]), int(sys.argv[2])
 
 marker = '__persist_regression__'
 fs = FSImage('mellivora.img')
@@ -163,7 +169,7 @@ subprocess.run(['make', 'full'], stdout=subprocess.DEVNULL,
                stderr=subprocess.DEVNULL, check=True)
 
 with open('mellivora.img', 'rb') as f:
-    f.seek(4225 * 512)
+    f.seek(root_lba * 512)
     root = f.read(32 * 4096)
 
 bin_start = None
@@ -178,7 +184,7 @@ if bin_start is None:
     raise SystemExit(0)
 
 with open('mellivora.img', 'rb') as f:
-    f.seek((4481 + bin_start * 8) * 512)
+    f.seek((data_lba + bin_start * 8) * 512)
     data = f.read(16 * 4096)
 
 print('yes' if marker.encode('ascii') + b'\x00' in data else 'no')
@@ -269,17 +275,44 @@ K_SB_LBA=$(grep -E -o 'HBFS_SUPERBLOCK_LBA[[:space:]]+equ[[:space:]]+[0-9]+' ker
 P_SB_LBA=$(grep -E -o 'HBFS_SUPERBLOCK_LBA[[:space:]]*=[[:space:]]*[0-9]+' populate.py | grep -E -o '[0-9]+$')
 check "SUPERBLOCK_LBA matches (kernel=$K_SB_LBA, populate=$P_SB_LBA)" "[[ '$K_SB_LBA' == '$P_SB_LBA' ]]"
 
-K_BM_START=$(grep -E -o 'HBFS_BITMAP_START[[:space:]]+equ[[:space:]]+[0-9]+' kernel.asm | grep -E -o '[0-9]+$')
-P_BM_START=$(grep -E -o 'HBFS_BITMAP_START[[:space:]]*=[[:space:]]*[0-9]+' populate.py | grep -E -o '[0-9]+$')
-check "BITMAP_START matches (kernel=$K_BM_START, populate=$P_BM_START)" "[[ '$K_BM_START' == '$P_BM_START' ]]"
+# The remaining layout constants are expressions ("HBFS_DATA_START equ
+# HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS"), which the literal greps above
+# cannot see - they would compare two empty strings and pass whatever the tree
+# said. Evaluate the equ chain in kernel.asm and import populate.py instead, and
+# derive the block count from the image the way populate does.
+eval "$(python3 - <<'PY'
+import os
+import re
 
-K_ROOT=$(grep -E -o 'HBFS_ROOT_DIR_START[[:space:]]+equ[[:space:]]+[0-9]+' kernel.asm | grep -E -o '[0-9]+$')
-P_ROOT=$(grep -E -o 'HBFS_ROOT_DIR_START[[:space:]]*=[[:space:]]*[0-9]+' populate.py | grep -E -o '[0-9]+$')
-check "ROOT_DIR_START matches (kernel=$K_ROOT, populate=$P_ROOT)" "[[ '$K_ROOT' == '$P_ROOT' ]]"
+values = {}
+for name, rest in re.findall(r'^([A-Z_0-9]+)\s+equ\s+(.+)$',
+                             open('kernel.asm').read(), re.M):
+    expression = rest.split(';')[0].strip()
+    try:
+        values[name] = int(eval(expression, {}, values))
+    except Exception:
+        pass        # a macro or a forward reference is not a layout number
 
-K_DATA=$(grep -E -o 'HBFS_DATA_START[[:space:]]+equ[[:space:]]+[0-9]+' kernel.asm | grep -E -o '[0-9]+$')
-P_DATA=$(grep -E -o 'HBFS_DATA_START[[:space:]]*=[[:space:]]*[0-9]+' populate.py | grep -E -o '[0-9]+$')
-check "DATA_START matches (kernel=$K_DATA, populate=$P_DATA)" "[[ '$K_DATA' == '$P_DATA' ]]"
+import populate as p
+
+for key in ('HBFS_BITMAP_START', 'HBFS_ROOT_DIR_START', 'HBFS_DATA_START',
+            'HBFS_TOTAL_BLOCKS'):
+    print(f"K_{key}={values.get(key, '')}")
+print(f"P_HBFS_BITMAP_START={p.HBFS_BITMAP_START}")
+print(f"P_HBFS_ROOT_DIR_START={p.HBFS_ROOT_DIR_START}")
+print(f"P_HBFS_DATA_START={p.HBFS_DATA_START}")
+image_bytes = os.path.getsize('mellivora.img')
+print(f"P_TOTAL={(image_bytes - p.HBFS_DATA_START * 512) // 4096}")
+PY
+)"
+check "BITMAP_START matches (kernel=${K_HBFS_BITMAP_START:-none}, populate=${P_HBFS_BITMAP_START:-none})" \
+    "[[ -n '${K_HBFS_BITMAP_START:-}' && '${K_HBFS_BITMAP_START:-}' == '${P_HBFS_BITMAP_START:-}' ]]"
+check "ROOT_DIR_START matches (kernel=${K_HBFS_ROOT_DIR_START:-none}, populate=${P_HBFS_ROOT_DIR_START:-none})" \
+    "[[ -n '${K_HBFS_ROOT_DIR_START:-}' && '${K_HBFS_ROOT_DIR_START:-}' == '${P_HBFS_ROOT_DIR_START:-}' ]]"
+check "DATA_START matches (kernel=${K_HBFS_DATA_START:-none}, populate=${P_HBFS_DATA_START:-none})" \
+    "[[ -n '${K_HBFS_DATA_START:-}' && '${K_HBFS_DATA_START:-}' == '${P_HBFS_DATA_START:-}' ]]"
+check "TOTAL_BLOCKS covers the image (kernel=${K_HBFS_TOTAL_BLOCKS:-none}, image=${P_TOTAL:-none})" \
+    "[[ -n '${K_HBFS_TOTAL_BLOCKS:-}' && '${K_HBFS_TOTAL_BLOCKS:-}' == '${P_TOTAL:-}' ]]"
 
 K_ENTRY=$(grep -E -o 'HBFS_DIR_ENTRY_SIZE[[:space:]]+equ[[:space:]]+[0-9]+' kernel.asm | grep -E -o '[0-9]+$')
 P_ENTRY=$(grep -E -o 'HBFS_DIR_ENTRY_SIZE[[:space:]]*=[[:space:]]*[0-9]+' populate.py | grep -E -o '[0-9]+$')

@@ -346,11 +346,12 @@ LBA Range       Size        Content
 ─────────────────────────────────────────────────────────
 LBA 0           512 B       Stage 1 boot sector (MBR)
 LBA 1–32        16 KB       Stage 2 loader
-LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size)
-LBA 4096        512 B       HBFS superblock
-LBA 4097–4224   64 KB       Block allocation bitmap
-LBA 4225–4480   128 KB      Root directory (32 blocks, 455 entries)
-LBA 4481+       ~2 GB       Data blocks (4 KB each)
+LBA 33+         variable    32-bit kernel (sector count generated from `kernel.bin` size,
+                            up to 8192 sectors / 4 MB)
+LBA 8481        512 B       HBFS superblock
+LBA 8482–8609   64 KB       Block allocation bitmap
+LBA 8610–8865   128 KB      Root directory (32 blocks, 455 entries)
+LBA 8866+       ~2 GB       Data blocks (4 KB each)
 ```
 
 ### On-Disk Directory Structure

@@ -57,7 +57,7 @@ FOR_STACK_MAX   equ 16          ; max nested FOR loops (compile-time)
 ; -----------------------------------------------------------------------
 ; Output binary fixed layout constants
 ; -----------------------------------------------------------------------
-BASE_ADDR       equ 0x300000    ; = kernel.asm PROGRAM_BASE, where the shell loads
+BASE_ADDR       equ 0x500000    ; = kernel.asm PROGRAM_BASE, where the shell loads
                                 ; flat binaries. Emitted absolute addresses (vars A-Z,
                                 ; runtime subroutines, string literals) are based here.
 

@@ -20,15 +20,15 @@
 ;=======================================================================
 
 ; Addresses for the paging structures.  These MUST NOT overlap the program
-; window (PROGRAM_BASE..PROGRAM_END_ADDR = 0x300000-0x400000): an executable
+; window (PROGRAM_BASE..PROGRAM_END_ADDR = 0x500000-0x600000): an executable
 ; of up to PROGRAM_MAX_SIZE (1 MB) is loaded there, so a 512 KB+ binary would
 ; silently overwrite the page directory and every page table.  They sit above
 ; the program window and below PMM_BITMAP, inside the kernel-reserved region.
-;   page directory   0x410000 .. 0x411000  (4 KB, 4 KB-aligned for CR3)
-;   256 page tables  0x411000 .. 0x511000  (1 MB, PDEs 0..255)
+;   page directory   0x610000 .. 0x611000  (4 KB, 4 KB-aligned for CR3)
+;   256 page tables  0x611000 .. 0x711000  (1 MB, PDEs 0..255)
 ;   1023 more PDEs are never used (the 1 GB the kernel ever addresses).
-PAGE_DIR_ADDR    equ 0x00410000     ; Page directory (4 KB)
-PAGE_TABLE_BASE  equ 0x00411000     ; First page table (256 x 4 KB)
+PAGE_DIR_ADDR    equ 0x00610000     ; Page directory (4 KB)
+PAGE_TABLE_BASE  equ 0x00611000     ; First page table (256 x 4 KB)
 PAGING_TABLES    equ 256            ; Tables for the first 1 GB of address space
 PAGING_MAP_MB    equ 512            ; RAM the kernel manages, 1:1 mapped at boot
 PAGING_MAP_TABLES equ PAGING_MAP_MB / 4  ; 128 tables, the most ever filled
@@ -204,12 +204,16 @@ paging_init:
 .fill_pt:
         mov edx, eax
         or  edx, PG_PRESENT | PG_WRITABLE
-        test ebx, ebx
-        jnz .pt_store           ; above 4 MB: never user here
+        ; The program window is user-accessible wherever it lands. It used to
+        ; sit in the first 4 MB, so "PDE 0 and at or above PROGRAM_BASE" was
+        ; the test; now that it starts at 5 MB the test is the window itself.
         cmp eax, PROGRAM_BASE
-        jae .pt_user
+        jb  .pt_video
+        cmp eax, PROGRAM_END_ADDR
+        jb  .pt_user
+.pt_video:
         cmp eax, 0xA0000
-        jb .pt_store
+        jb  .pt_store
         cmp eax, 0xC0000
         jae .pt_store
 .pt_user:

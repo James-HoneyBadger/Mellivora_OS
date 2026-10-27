@@ -361,7 +361,7 @@ Create `programs/greet.asm` on your host machine:
 
 ```nasm
 BITS 32
-ORG 0x300000
+ORG 0x500000
 
     ; Clear screen
     mov eax, 17

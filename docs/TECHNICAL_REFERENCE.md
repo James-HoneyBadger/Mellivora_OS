@@ -221,29 +221,29 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
            │ Video memory / ROM      │
 0x000B8000 │ VGA text framebuffer    │  4000 bytes (80×25×2)
 0x00100000 ├─────────────────────────┤  ← 1 MB
-           │ Kernel code + data      │  Variable (generated sector count)
-           │ ... BSS ...             │
+           │ Kernel code + data      │  Variable, up to the 4 MB window
+           │ ... BSS ...             │  (generated sector count)
            │ C module slot           │  The C-built kernel module, linked at an
            │                         │  address the assembler measures
-0x00300000 ├─────────────────────────┤  ← 3 MB
+0x00500000 ├─────────────────────────┤  ← 5 MB
            │ User program space      │  1 MB max
-0x003FFxxx │ SYS_EXIT trampoline     │  Safety net for programs that RET;
+0x005FFxxx │ SYS_EXIT trampoline     │  Safety net for programs that RET;
            │ (+ stack top)           │  both move with the per-launch random top
-0x00400000 ├─────────────────────────┤  ← 4 MB
+0x00600000 ├─────────────────────────┤  ← 6 MB
            │ (gap / reserved)        │
-0x00410000 ├─────────────────────────┤
-           │ Page directory          │  4 KB — must NOT overlap 3-4 MB
-0x00411000 ├─────────────────────────┤  (a 512 KB+ program would
+0x00610000 ├─────────────────────────┤
+           │ Page directory          │  4 KB — must NOT overlap 5-6 MB
+0x00611000 ├─────────────────────────┤  (a 512 KB+ program would
            │ 256 page tables         │  1 MB     overwrite its page dir)
            │  PDE 0..127: all of RAM │  1:1 mapped at boot
            │  PDE 128..255: user     │  empty until a task touches them
-0x00511000 ├─────────────────────────┤
+0x00711000 ├─────────────────────────┤
            │ (gap / reserved)        │
-0x00620000 ├─────────────────────────┤  ← 6.125 MB
+0x00720000 ├─────────────────────────┤  ← 7.125 MB
            │ PMM bitmap              │  128 KB (tracks up to 4 GB)
-0x00640000 ├─────────────────────────┤
+0x00740000 ├─────────────────────────┤
            │ PMM buddy tags          │  4 KB (currently unused)
-0x00700000 ├─────────────────────────┤  ← 7 MB
+0x00780000 ├─────────────────────────┤
            │ Heap window (unused)    │
 0x00800000 ├─────────────────────────┤  ← 8 MB  KERNEL_RESERVED_END
            │ PMM-managed memory      │  Usable memory starts here —
@@ -258,14 +258,14 @@ then recover to the shell by resetting `ESP` to `KERNEL_STACK` and jumping to
 | `KERNEL_BASE` | `0x00100000` (1 MB) | Kernel load address |
 | `KERNEL_SECTORS` | Generated at build time | Kernel disk size in sectors |
 | `KERNEL_STACK` | `0x0009FC00` | Stack top (conventional memory end) |
-| `PROGRAM_BASE` | `0x00300000` (3 MB) | User program load address |
+| `PROGRAM_BASE` | `0x00500000` (5 MB) | User program load address |
 | `PROGRAM_MAX_SIZE` | `0x00100000` (1 MB) | Max program size |
-| `PROGRAM_EXIT_ADDR` | `0x003FFFF0` | SYS_EXIT trampoline |
-| `PAGE_DIR_ADDR` | `0x00410000` | Page directory (above the program window) |
-| `PAGE_TABLE_BASE` | `0x00411000` | First of 256 page tables (`0x411000..0x511000`) |
-| `PMM_BITMAP` | `0x00620000` (6.125 MB) | Physical memory bitmap |
-| `PMM_BUDDY_TAGS` | `0x00640000` | Buddy allocator tag array |
-| `HEAP_BASE` | `0x00700000` (7 MB) | Heap window (reserved, currently unused) |
+| `PROGRAM_EXIT_ADDR` | `0x005FFFF0` | SYS_EXIT trampoline |
+| `PAGE_DIR_ADDR` | `0x00610000` | Page directory (above the program window) |
+| `PAGE_TABLE_BASE` | `0x00611000` | First of 256 page tables (`0x611000..0x711000`) |
+| `PMM_BITMAP` | `0x00720000` (7.125 MB) | Physical memory bitmap |
+| `PMM_BUDDY_TAGS` | `0x00740000` | Buddy allocator tag array |
+| `HEAP_BASE` | `0x00780000` (7.5 MB) | Heap window (reserved, currently unused) |
 | `KERNEL_RESERVED_END` | `0x00800000` (8 MB) | Lower bound of PMM-managed memory |
 | `VGA_BASE` | `0x000B8000` | VGA text mode framebuffer |
 | `VGA_WIDTH` | 80 | Screen columns |
@@ -347,7 +347,7 @@ Making `vfs_fd_table` per-task is the remaining isolation step.
 
 ### Overview
 
-The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x620000). Each bit represents one
+The PMM uses a **bitmap allocator** at `PMM_BITMAP` (0x720000). Each bit represents one
 4 KB page. Bit = 1 means used, bit = 0 means free.
 
 ### Specifications
@@ -1631,7 +1631,7 @@ switch point. Both syscalls now save and restore those registers.
 
 1. Shell parses command into program name (`prog_name_buf`, 256 bytes) and arguments
    (`program_args_buf`, 512 bytes)
-2. Attempts to load file via `hbfs_read_file` to `PROGRAM_BASE` (0x300000)
+2. Attempts to load file via `hbfs_read_file` to `PROGRAM_BASE` (0x500000)
 3. If not found in current directory, searches PATH directories
 
 ### ELF vs Flat Binary Detection
@@ -1937,7 +1937,7 @@ it, with `validate_user_ptr` (one address) or `user_range_ok` (an address and a
 length, which also rejects a range that wraps past 2^32):
 
 - A ring-3 caller must keep the range inside `[PROGRAM_BASE, USER_PTR_MAX)` -
-  `0x00300000` to `0x20000000`. A rejected pointer returns the syscall's failure
+  `0x00500000` to `0x20000000`. A rejected pointer returns the syscall's failure
   value (`-1`, or `0` for `SYS_GETMTIME`/`SYS_FREAD`) instead of faulting.
 - The shell is ring-0 kernel code and passes pointers to its own buffers, which
   sit in the kernel image *below* `PROGRAM_BASE`. `syscall_ring`, recorded from

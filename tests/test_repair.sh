@@ -47,7 +47,7 @@ python3 - "$copy" <<'PY'
 import struct, sys
 path = sys.argv[1]
 SEC, BLK = 512, 4096
-SB_LBA, BITMAP_LBA, BITMAP_SECTS = 4096, 4097, 128
+SB_LBA, BITMAP_LBA, BITMAP_SECTS = 8481, 8482, 128
 img = open(path, "r+b")
 sb = img.read(0)  # keep the handle happy; reads below are explicit
 img.seek(SB_LBA * SEC)

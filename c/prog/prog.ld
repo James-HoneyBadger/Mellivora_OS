@@ -1,7 +1,7 @@
 /*
  * prog.ld - where a C-built user program lands
  *
- * User programs are flat binaries loaded at PROGRAM_BASE (0x00300000) with the
+ * User programs are flat binaries loaded at PROGRAM_BASE (0x00500000) with the
  * user stack near the top of the same 1 MB window (kernel.asm). There is no
  * loader to relocate anything, so the link address is the load address and the
  * entry must be the first byte of the file: _start goes in .text.entry.
@@ -16,7 +16,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x00300000;
+    . = 0x00500000;
 
     .text : {
         *(.text.entry)

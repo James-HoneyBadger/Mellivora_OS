@@ -222,7 +222,7 @@ run_case "SSE state per task"         "sse_test"              "SSE_OK"          
 # it verifies the freestanding runtime and the C-to-assembly call.
 run_case "C kernel module"            "cmod"                  "CMOD_OK"            "" "CPU EXCEPTION|CMOD_FAIL|CMOD_ABSENT"
 # M0's C exit criterion, user half: a program built by the host C compiler
-# (not tcc), linked at the same 0x00300000 as every other program, using the
+# (not tcc), linked at the same 0x00500000 as every other program, using the
 # same runtime in ring 3.
 run_case "C user program"             "cprog"                 "C_PROG_OK"          "" "CPU EXCEPTION|C_PROG_FAIL"
 # The stored mode has to deny, not decorate: root passes, the owner is held
@@ -298,7 +298,7 @@ run_case "the ledger rebuilds on demand" "quota rebuild" "ledger rebuilt" "" "CP
 # The volume manager reads the partition table instead of assuming where the
 # filesystem starts, and probes the volume it finds for a superblock.
 run_case "the volume manager reads the table" "volumes" "Volumes: 1  table: MBR" "" "CPU EXCEPTION"
-run_case "a volume reports its filesystem" "volumes" "HBFS at +4096" "" "CPU EXCEPTION|no filesystem"
+run_case "a volume reports its filesystem" "volumes" "HBFS at +8481" "" "CPU EXCEPTION|no filesystem"
 # The driver model: every driver registered, bound to the device it serves, and
 # the ones this machine does not have reported as absent rather than silent.
 run_case "the driver model binds the machine" "drivers" "10 bound, 0 conflicts" "" "CPU EXCEPTION"

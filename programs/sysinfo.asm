@@ -102,7 +102,7 @@ start:
 msg_header:     db " === Mellivora System Information === ", 0x0A, 0
 msg_arch:       db "  Architecture:  Pentium 4 SSE2 (32-bit Protected Mode)", 0x0A, 0
 msg_mode:       db "  Memory Model:  Flat, 4 GB address space", 0x0A, 0
-msg_addr:       db "  Program Base:  0x00300000 (3 MB)", 0x0A, 0
+msg_addr:       db "  Program Base:  0x00500000 (5 MB)", 0x0A, 0
 msg_init:       db "  Init System:   Ratel", 0x0A, 0
 msg_utils:      db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A, 0
 msg_uptime:     db "  Uptime:        ", 0

@@ -31,7 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 IMAGE_MB = 256
-SUPERBLOCK_LBA = 4096
+SUPERBLOCK_LBA = 8481
 BITMAP_BLOCKS = 16
 ROOT_DIR_BLOCKS = 32
 FAIL = 0

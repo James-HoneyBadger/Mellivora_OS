@@ -7,7 +7,7 @@
 
 ; Program header
 [BITS 32]
-[ORG 0x00300000]
+[ORG 0x00500000]
 
 ; Jump past shared code to program entry point
 jmp start

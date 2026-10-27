@@ -64,7 +64,7 @@ HBFS4_EXTENT_HDR = 8                 # magic, record count
 HBFS4_EXTENT_RECORD = 8              # start block, block count
 HBFS4_EXTENT_MAX = ((BLOCK_SIZE - HBFS4_EXTENT_HDR
                      - HBFS4_RUN_CHECKSUM_BYTES) // HBFS4_EXTENT_RECORD)
-HBFS_SUPERBLOCK_LBA = 4096
+HBFS_SUPERBLOCK_LBA = 8481
 HBFS_BITMAP_BLOCKS = 16
 HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
 HBFS_BITMAP_SIZE = HBFS_BITMAP_BLOCKS * BLOCK_SIZE
@@ -297,7 +297,7 @@ class Fsck:
     def check_superblock(self) -> int:
         sb = self.read_lba(HBFS_SUPERBLOCK_LBA, SECTOR_SIZE)
         if len(sb) < 56:
-            self.error("cannot read the HBFS superblock at LBA 4096")
+            self.error(f"cannot read the HBFS superblock at LBA {HBFS_SUPERBLOCK_LBA}")
             return HBFS_ROOT_DIR_START
 
         magic, version, total, free = struct.unpack_from("<IIII", sb, 0)

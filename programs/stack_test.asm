@@ -15,13 +15,13 @@
 ; =============================================================================
 
 bits 32
-org 0x00300000                  ; must equal kernel.asm PROGRAM_BASE
+org 0x00500000                  ; must equal kernel.asm PROGRAM_BASE
 
 SYS_EXIT    equ 0
 SYS_PRINT   equ 3
 SYS_SBRK    equ 23
 
-GUARD_PAGE   equ 0x003C0000     ; kernel USER_STACK_BASE: never mapped
+GUARD_PAGE   equ 0x005C0000     ; kernel USER_STACK_BASE: never mapped
 DEEPEST_PAGE equ GUARD_PAGE + 0x1000
 PATTERN      equ 0xA5A5A5A5
 

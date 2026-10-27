@@ -1,7 +1,7 @@
 ; =============================================================================
 ; stack_overflow.asm — the guard page must kill only this task
 ;
-; The page at USER_STACK_BASE (0x3C0000) is the bottom of the reserved stack
+; The page at USER_STACK_BASE (0x5C0000) is the bottom of the reserved stack
 ; region and is never mapped. Writing to it must fault, and the kernel must
 ; contain that fault: this program dies with a one-line report and the shell
 ; keeps running. Reaching the failure message means the guard page was
@@ -9,12 +9,12 @@
 ; =============================================================================
 
 bits 32
-org 0x00300000                  ; must equal kernel.asm PROGRAM_BASE
+org 0x00500000                  ; must equal kernel.asm PROGRAM_BASE
 
 SYS_EXIT    equ 0
 SYS_PRINT   equ 3
 
-GUARD_PAGE  equ 0x003C0000      ; kernel USER_STACK_BASE
+GUARD_PAGE  equ 0x005C0000      ; kernel USER_STACK_BASE
 
 section .text
 global _start

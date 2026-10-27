@@ -32,7 +32,7 @@ MAX_FIXUPS      equ 128         ; Max forward reference fixups
 MAX_STRINGS     equ 32          ; Max string literals
 SYM_NAME_LEN    equ 32
 STRING_MAX_LEN  equ 80
-BASE_ADDR       equ 0x300000    ; Load address of compiled binary = kernel.asm PROGRAM_BASE
+BASE_ADDR       equ 0x500000    ; Load address of compiled binary = kernel.asm PROGRAM_BASE
                                 ; (the shell loads flat binaries at PROGRAM_BASE, so emitted
                                 ;  absolute addresses must be based at that address)
 

@@ -35,13 +35,13 @@ compiler.
 
 ### Memory Layout
 
-Programs are loaded at `0x00300000` (3 MB) and run in Ring 3 (user mode).
+Programs are loaded at `0x00500000` (5 MB) and run in Ring 3 (user mode).
 
 | Address | Purpose |
 | --- | --- |
-| `0x00300000` | Program load address (code + data); `PROGRAM_BASE` in `kernel.asm` |
-| `0x003FFFF0` | SYS_EXIT trampoline (safety net) |
-| `0x003FFFEC` | Initial stack pointer (grows downward) |
+| `0x00500000` | Program load address (code + data); `PROGRAM_BASE` in `kernel.asm` |
+| `0x005FFFF0` | SYS_EXIT trampoline (safety net) |
+| `0x005FFFEC` | Initial stack pointer (grows downward) |
 
 ### Execution Model
 
@@ -105,7 +105,7 @@ Lair:/>
 ### Key Points
 
 - **`BITS 32`**: Programs run in 32-bit protected mode
-- **`ORG 0x300000`**: Program is loaded at this address
+- **`ORG 0x500000`**: Program is loaded at this address
 - **`INT 0x80`**: All OS services go through this interrupt
 - **`SYS_EXIT` (EAX=0)**: Always exit cleanly, or the trampoline does it for you
 - **`-O0`**: Disable NASM optimizations (critical — prevents short jump issues)
@@ -1095,7 +1095,7 @@ Here's the standard pattern used by games like Snake, Tetris, and 2048:
 
 ```nasm
 BITS 32
-ORG 0x300000
+ORG 0x500000
 
 main:
     ; Initialize game state
@@ -1389,7 +1389,7 @@ Place your program in the `programs/` directory alongside `syscalls.inc`:
 %include "syscalls.inc"
 
 BITS 32
-ORG 0x300000
+ORG 0x500000
 
     mov eax, SYS_PRINT
     mov ebx, msg
@@ -1411,7 +1411,7 @@ msg: db "It works!", 10, 0
 ### The -O0 Flag
 
 **Always use `-O0`** (disable optimizations). Without it, NASM may generate short jumps
-that break when the binary is loaded at `0x300000` instead of `0x0`. This is the single
+that break when the binary is loaded at `0x500000` instead of `0x0`. This is the single
 most common source of program crashes.
 
 ---
@@ -1603,7 +1603,7 @@ newline_str: db 10, 0
 
 ### Common Pitfalls
 
-1. **Missing `-O0` flag:** NASM optimizations break programs loaded at 0x300000
+1. **Missing `-O0` flag:** NASM optimizations break programs loaded at 0x500000
 2. **Forgetting `SYS_EXIT`:** Program will slide into garbage memory (though the
    trampoline catches `RET`)
 3. **Buffer overflows:** No memory protection — overwriting past your buffer corrupts

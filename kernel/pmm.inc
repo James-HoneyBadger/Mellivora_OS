@@ -5,10 +5,10 @@
 ; Orders 0–11 map to block sizes 4KB–8MB (2^order pages × 4KB).
 ;
 ; Memory layout:
-;   PMM_BITMAP     (0x620000, 128KB) — 1 bit per 4KB page; 0=free, 1=used.
-;   PMM_BUDDY_TAGS (0x640000,   4KB) — reserved for v9.x coalescing tags.
-; Both moved up when paging took 1 MB for the 256 page tables it needs to
-; identity-map every frame the allocator can hand out.
+;   PMM_BITMAP     (0x720000, 128KB) — 1 bit per 4KB page; 0=free, 1=used.
+;   PMM_BUDDY_TAGS (0x740000,   4KB) — reserved for v9.x coalescing tags.
+; Both sit above the page tables, which take 1 MB to identity-map every frame
+; the allocator can hand out.
 ;
 ; Free lists (buddy_free_list[12] in data.inc):
 ;   Per-order singly-linked lists.  Each free block stores the next-block
@@ -35,7 +35,7 @@
 
 BUDDY_ORDERS        equ 12            ; Orders 0..11 (4KB..8MB)
 PMM_FREE_LIST_NIL   equ 0xFFFFFFFF    ; Empty free-list sentinel
-PMM_BUDDY_TAGS      equ PMM_BITMAP + 0x20000  ; 0x640000 — 4KB, currently unused
+PMM_BUDDY_TAGS      equ PMM_BITMAP + 0x20000  ; 0x740000 — 4KB, currently unused
 
 ;-----------------------------------------------------------------------
 ; pmm_init

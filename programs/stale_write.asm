@@ -39,6 +39,6 @@ start:
         mov eax, SYS_EXIT
         int 0x80
 
-FILL_BASE    equ 0x340000       ; 256 KB into the window: above any fixture
-STACK_REGION equ 0x3C0000       ; USER_STACK_BASE: the stack guard page
+FILL_BASE    equ 0x540000       ; 256 KB into the window: above any fixture
+STACK_REGION equ 0x5C0000       ; USER_STACK_BASE: the stack guard page
 msg_ok:  db 'STALE_WROTE_OK', 13, 10, 0

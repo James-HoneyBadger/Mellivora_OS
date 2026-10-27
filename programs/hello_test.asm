@@ -1,5 +1,5 @@
 bits 32
-org 0x00300000                  ; must equal kernel.asm PROGRAM_BASE: this file does
+org 0x00500000                  ; must equal kernel.asm PROGRAM_BASE: this file does
                                 ; not include syscalls.inc, so it sets ORG itself
 
 SYS_EXIT    equ 0

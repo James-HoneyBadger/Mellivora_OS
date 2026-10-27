@@ -12,7 +12,7 @@
 %include "syscalls.inc"
 
 MARKER   equ 0x4D415453         ; 'STAM'
-FILL_BASE equ 0x340000          ; where stale_write.asm started filling
+FILL_BASE equ 0x540000          ; where stale_write.asm started filling
 
 start:
         cmp dword [FILL_BASE], MARKER
