@@ -178,7 +178,7 @@ with no kernel in it. That is fixed, and the contract is now checked at boot by
 `pmm_selftest` so the same class of bug cannot return quietly. The full story is
 in the CHANGELOG under "Fixed: two tasks could not run".
 
-### M1 · The executive: objects, handles, security (8–12 weeks)
+### M1 · The executive: objects, handles, security (8–12 weeks) — **closed**
 
 The highest-leverage change in the plan. Everything after it is cheaper.
 
@@ -258,8 +258,11 @@ stale and had to be flushed before draining, and a new task inherits a copy of
 its creator's descriptors and therefore owes a reference per entry. The shell
 gained the two commands the spec asked for, `objects` and `handles`.
 
-What M1 still has not finished is written down in
-[OBJECTS.md](spec/OBJECTS.md#12-as-built) rather than left implied.
+That is what closes the wave. What is left in the object model belongs to waves
+that have not run yet, and is written down in
+[OBJECTS.md](spec/OBJECTS.md#12-as-built) rather than left implied: the nine
+other types arrive with the wave that owns each one, and a file becomes a
+handle when the VFS wave replaces the frozen fd path.
 
 ### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks)
 
