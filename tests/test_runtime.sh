@@ -81,6 +81,16 @@ failures=0
 # slow because it does the work, and a window that is too small reports "not
 # found" for a program that is still running.
 #
+# KEYS is a comma-separated list of QEMU key names pressed after the shell
+# command, and WAIT_FOR is a serial marker to wait for before pressing them (the
+# desktop's own "up" marker, so a keystroke cannot land on a machine that is
+# still starting).
+#
+# MONITOR is a raw QEMU monitor command run after the shell command, for the
+# things a hand presses rather than types (system_powerdown). EXIT_WAIT is how
+# long QEMU is given to terminate on its own: that is how a machine that powers
+# itself off is asserted, since a powered-off guest has no screen to read.
+#
 # The default machine is the `p4` profile from tools/machine_profiles.py: a
 # Pentium 4 with SSE2, a local APIC, 512 MB and AC'97. A case overrides the
 # profile when it is about the machine rather than the guest: `p4-noapic` for
@@ -89,7 +99,20 @@ failures=0
 run_case() {
     local name="$1" cmd="$2" expect="$3" then="${4:-}" reject="${5:-CPU EXCEPTION}"
     local mem="${6:-}" smp="${7:-}" cpu="${8:-}" wait_s="${9:-}" profile="${10:-}"
+    local monitor="${11:-}" exit_wait="${12:-}" keys="${13:-}" wait_for="${14:-}"
     local args=("$IMAGE" "$cmd" --reject "$reject")
+    if [ -n "$monitor" ]; then
+        args+=(--monitor "$monitor")
+    fi
+    if [ -n "$exit_wait" ]; then
+        args+=(--exit-wait "$exit_wait")
+    fi
+    if [ -n "$keys" ]; then
+        args+=(--keys "$keys")
+    fi
+    if [ -n "$wait_for" ]; then
+        args+=(--wait-for "$wait_for")
+    fi
     if [ -n "$wait_s" ]; then
         args+=(--wait "$wait_s")
     fi
@@ -240,6 +263,31 @@ run_case "unknown name still errors"  "nosuchthing"           "Type 'help'"     
 # M2 starts with the machine describing itself: the RSDP is found, the
 # RSDT/XSDT walked, and the MADT read for the CPU and APIC inventory.
 run_case "ACPI tables are read"       "acpi"                  "ACPI: MADT at 0x"   "" "CPU EXCEPTION|no RSDP"
+# The FADT is the machine's own description of how to stop: the power blocks,
+# the interrupt the SCI arrives on, and the S5 encoding read out of the DSDT.
+# A machine that reports an S5 type of "not in the DSDT" cannot be powered off.
+run_case "ACPI describes the power hardware" "acpi" "ACPI: S5 sleep type: 0" "" "CPU EXCEPTION|ACPI: power: the FADT|not in the DSDT"
+# Soft-off: the shell's shutdown has to make the *machine* go away, not halt
+# the CPU. QEMU exiting is the assertion - a guest that powers down takes the
+# monitor socket with it.
+run_case "shutdown powers the machine off" "shutdown" "" "" "CPU EXCEPTION" "" "" "" "" "" "" 25
+# The power button is a fixed ACPI event on the SCI: the monitor presses the
+# same button a hand would, and the machine has to notice and shut down.
+run_case "the power button shuts down" "help" "POWER: button pressed" "" "CPU EXCEPTION" "" "" "" "" "" "system_powerdown" 25
+# The driver model: every driver registered, bound to the device it serves, and
+# the ones this machine does not have reported as absent rather than silent.
+run_case "the driver model binds the machine" "drivers" "10 bound, 0 conflicts" "" "CPU EXCEPTION"
+run_case "a driver names its device" "drivers" "rtl8139     bound pci" "" "CPU EXCEPTION"
+# The boot log keeps what the boot path said, in order, with the processor.
+run_case "the boot log records the stages" "bootlog" "drv ata: bound" "" "CPU EXCEPTION"
+run_case "the boot log has the early phases" "bootlog" "serial: COM1 online" "" "CPU EXCEPTION"
+# The desktop reaches the same power paths: Ctrl+Esc, six items down to "Shut
+# Down...", Enter. The dialog is a window like any other, so opening it is
+# visible and cancelling it leaves the machine running.
+run_case "desktop opens the shutdown dialog" "burrows" "[burrows] shutdown dialog" "" "CPU EXCEPTION|PAGE FAULT" "" "" "" "" "" "" "" "ctrl-esc,down,down,down,down,down,down,ret" "[burrows] desktop up"
+# ...and Enter on its default button powers the machine off, which is asserted
+# by QEMU itself going away.
+run_case "desktop shuts the machine down" "burrows" "[burrows] shutdown dialog" "" "CPU EXCEPTION|PAGE FAULT" "" "" "" "" "" "" 25 "ctrl-esc,down,down,down,down,down,down,ret,ret" "[burrows] desktop up"
 # ...and the count is the firmware's: the same image on a 2-CPU machine must
 # report 2. The assertion is on the command's output rather than the boot line:
 # an expectation is matched after the echoed command, and the boot line is

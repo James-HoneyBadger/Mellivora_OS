@@ -42,6 +42,20 @@
 ; CONSTANTS
 ;=======================================================================
 
+; Append a boot-log record without disturbing the caller. The boot path is a
+; sequence of calls that each leave registers in use, and a diagnostic that has
+; to be reasoned about at every call site is one that never gets added.
+%macro LOGBOOT 2
+        push eax
+        push esi
+        mov al, %1
+        mov esi, %2
+        call bootlog_write
+        pop esi
+        pop eax
+%endmacro
+
+
 ; Memory layout — everything from KERNEL_BASE up to KERNEL_RESERVED_END is
 ; claimed by the kernel: image, program window, page tables, PMM bitmap/tags
 ; and the heap window.  pmm_init frees only memory at or above
@@ -668,15 +682,35 @@ kernel_entry:
 
         ; Ratel init system — initialize hardware & kernel subsystems
         call vga_init
-        call pic_init
+        LOGBOOT LOG_INFO, log_core
         call idt_init
-        call pit_init
-        call kb_init
+
+        ; The drivers this image carries, registered through a module header
+        ; before anything binds: the table has to exist before the manager can
+        ; walk it.
+        mov eax, drv_builtin_module
+        call driver_module_register
+
+        ; The bootstrap processor's own block, before anything reads [gs:...].
+        xor eax, eax
+        call cpu_local_init
+        ; The interrupt an application processor is woken with.
+        call smp_install_ipi
+
+        ; Phase one: the hardware the architecture guarantees - the interrupt
+        ; controller, the clock, the keyboard controller, serial. It runs before
+        ; the frame allocator exists, because everything after it reports
+        ; through the serial port it brings up.
+        mov eax, 99
+        call driver_init_phase
+        LOGBOOT LOG_INFO, log_core_devices
+        mov byte [bootlog_serial_min], LOG_INFO   ; from here, say it as it happens
+
         call pmm_init
         call fi_init
         call kmem_init
-        call ata_init
-        call serial_init
+        LOGBOOT LOG_INFO, log_pmm
+        LOGBOOT LOG_INFO, log_kmem
 
         ; The first thing said on COM1 is what the machine is, and whether it
         ; is allowed to run this kernel at all. Both belong here: serial is up,
@@ -685,24 +719,26 @@ kernel_entry:
         call cpu_require_pentium4
         call cpu_report_boot
 
+        LOGBOOT LOG_INFO, log_cpu
         call tss_init
         call sched_init
+        LOGBOOT LOG_INFO, log_sched
         call ipc_init
-        call net_init
-        call e1000_init
         call paging_init
         call vm_init
-        ; The interrupt controller is chosen once paging is up, because the
-        ; APIC registers are memory-mapped: a machine that describes an APIC in
-        ; its tables is driven through it from here on.
-        call mouse_init
-        call sb16_init
-        call vbe_init
+        LOGBOOT LOG_INFO, log_vm
+
+        ; The bus has to be enumerated before the second phase can know what is
+        ; plugged in, and paging has to be up before a memory window can be
+        ; mapped for a driver that binds a card.
         call pci_init
-        call ac97_init
-        call atadma_init
-        call ahci_init
-        call virtio_init
+        LOGBOOT LOG_INFO, log_pci
+
+        ; Phase two: what had to wait for the bus - the disk first, then the
+        ; network, sound, video, and the modern storage paths.
+        mov eax, 999
+        call driver_init_phase
+        LOGBOOT LOG_INFO, log_devices
         call burrows_init
         call gdbstub_init
 
@@ -726,7 +762,9 @@ kernel_entry:
         call blk_cache_init
         call pc_init
         call hbfs_init
+        LOGBOOT LOG_INFO, log_fs
         call vfs_init
+        LOGBOOT LOG_INFO, log_vfs
 
         ; The interrupt controller is chosen last, once every subsystem that
         ; allocates memory has been initialised: programming the APIC allocates
@@ -735,22 +773,32 @@ kernel_entry:
         ; over.
         call acpi_init
         call apic_init
+        LOGBOOT LOG_INFO, log_apic
+
+        ; Take ACPI over and arm the power button, now that there is an
+        ; interrupt controller to deliver the SCI through. A machine with no
+        ; SCI reports so and carries on: the button is a convenience.
+        call acpi_install_sci
+        LOGBOOT LOG_INFO, log_acpi
 
         ; The lock gate is exercised before anything depends on it: a
         ; deadlock found at boot names its two locks, one found in the field
         ; names nothing.
         call lock_selftest
+        LOGBOOT LOG_INFO, log_locks
 
         ; The allocator promises that every entry point preserves every
         ; register but the result, and callers hold addresses in those
         ; registers. Checked at boot because a violation faults somewhere else
         ; later, with nothing pointing back at the allocator.
         call pmm_selftest
+        LOGBOOT LOG_INFO, log_pmmtest
 
         ; The per-task image has to carry x87 and SSE state, not just claim to:
         ; this saves two distinct states, disturbs the live registers and
         ; requires each back exactly. Skipped on a CPU with no FXSR.
         call fpu_selftest_boot
+        LOGBOOT LOG_INFO, log_fputest
 
         ; Bring the C-built module up once. A module that is linked in and
         ; refuses the host table can only get worse, so the refusal is
@@ -810,13 +858,18 @@ kernel_entry:
 %include "kernel/paging.inc"
 %include "kernel/acpi.inc"
 %include "kernel/apic.inc"
+%include "kernel/cpu_local.inc"
 %include "kernel/smp.inc"
+%include "kernel/smp_work.inc"
 %include "kernel/lock.inc"
+%include "kernel/bootlog.inc"
 %include "kernel/vm.inc"
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"
 %include "kernel/vbe.inc"
 %include "kernel/pci.inc"
+%include "kernel/driver.inc"
+%include "kernel/driver_table.inc"
 %include "kernel/ac97.inc"
 %include "kernel/atadma.inc"
 %include "kernel/ahci.inc"

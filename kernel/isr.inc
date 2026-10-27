@@ -500,6 +500,15 @@ irq_keyboard:
         jmp .store_key
 .not_alt_tab:
 
+        ; Ctrl+Esc opens the Start menu (0x95), as every Windows since 95 does
+        cmp bl, 0x01            ; Esc scancode
+        jne .not_ctrl_esc
+        cmp byte [kb_ctrl], 1
+        jne .not_ctrl_esc
+        mov al, 0x95
+        jmp .store_key
+.not_ctrl_esc:
+
         ; Alt+F4 closes the focused window (0x97)
         cmp bl, 0x3E            ; F4 scancode
         jne .not_alt_f4

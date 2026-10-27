@@ -313,6 +313,31 @@ irq_spurious:
         iretd
 
 ;-----------------------------------------------------------------------
+; apic_enable_this - turn on the local APIC of whichever processor calls
+;
+; The bootstrap processor's LAPIC is enabled by apic_init, which also probes it
+; and decides whether the machine has one at all. An application processor has
+; to do the same for itself before it can be interrupted: the interrupt command
+; register delivers to a LAPIC that is enabled, and a halted processor whose
+; LAPIC is off is halted for good.
+;-----------------------------------------------------------------------
+apic_enable_this:
+        cmp byte [irq_mode_apic], 1
+        jne .aet_done
+        push eax
+        push ecx
+        mov ecx, LAPIC_SVR
+        mov eax, LAPIC_SVR_ENABLE | LAPIC_SPURIOUS_VEC
+        call lapic_write
+        mov ecx, LAPIC_TPR
+        xor eax, eax
+        call lapic_write
+        pop ecx
+        pop eax
+.aet_done:
+        ret
+
+;-----------------------------------------------------------------------
 ; irq_eoi - acknowledge the interrupt that is being serviced
 ;   In : AL = IRQ (0-15), or 0 when only "the controller" needs telling
 ;

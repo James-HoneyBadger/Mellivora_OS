@@ -10,6 +10,18 @@
 ; The prompt text itself never changes, so tests and scripts are unaffected.
 ;-----------------------------------------------------------------------
 shell_print_prompt:
+        ; Say once, on COM1, that the machine is ready for a command. A harness
+        ; that types before this point loses the line, and a lost line looks
+        ; exactly like a machine that has stopped answering - which is the one
+        ; conclusion a soak test must never draw by accident.
+        cmp byte [shell_announced], 0
+        jne .spp_after_announce
+        mov byte [shell_announced], 1
+        push esi
+        mov esi, msg_shell_ready
+        call serial_print
+        pop esi
+.spp_after_announce:
         mov byte [vga_color], COLOR_PROMPT
         mov esi, shell_prompt_pre
         call vga_print
@@ -1895,6 +1907,18 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_acpi
 
+        mov edi, cmd_bootlog_str
+        call str_starts_with
+        jc .cmd_bootlog
+
+        mov edi, cmd_drivers_str
+        call str_starts_with
+        jc .cmd_drivers
+
+        mov edi, cmd_smpstress_str
+        call str_starts_with
+        jc .cmd_smpstress
+
         mov edi, cmd_ver_str
         call str_starts_with
         jc .cmd_ver
@@ -2334,6 +2358,19 @@ shell_dispatch_core:
 
 .cmd_acpi:
         call acpi_dump
+        ret
+
+.cmd_bootlog:
+        call bootlog_show
+        ret
+
+.cmd_drivers:
+        call driver_show
+        ret
+
+.cmd_smpstress:
+        call skip_spaces
+        call cmd_smpstress
         ret
 
 .cmd_ver:
@@ -5070,26 +5107,17 @@ cmd_shutdown:
         call vga_print
         call vga_reset_color
 
-        ; Flush filesystem (write bitmap back to disk)
+        ; Put everything that is only in memory onto the disk before the power
+        ; goes: the directory, the bitmap, the superblock, then the drive's own
+        ; write cache.
         mov esi, msg_shutdown_sync
         call vga_print
-        mov eax, HBFS_BITMAP_START
-        mov ecx, HBFS_BITMAP_SECTS
-        mov esi, hbfs_bitmap_buf
-        call ata_write_sectors
-
-        ; Flush ATA write cache
-        mov dx, ATA_CMD
-        mov al, 0xE7            ; FLUSH CACHE command
-        out dx, al
-        mov ecx, 0xFFFFF
-.flush_wait:
-        in al, dx
-        test al, 0x80           ; BSY?
-        jz .flush_ok
-        dec ecx
-        jnz .flush_wait
-.flush_ok:
+        call hbfs_sync
+        test eax, eax
+        jz .sync_ok
+        mov esi, msg_shutdown_sync_failed
+        call vga_print
+.sync_ok:
 
         mov esi, msg_shutdown_done
         call vga_print
@@ -5100,27 +5128,9 @@ cmd_shutdown:
         dec ecx
         jnz .delay
 
-        ; Print halt message before attempting shutdown
-        mov esi, msg_halt
-        call vga_print
-
-        ; Another small delay so user can read the message
-        mov ecx, 0x1FFFFFF
-.delay2:
-        dec ecx
-        jnz .delay2
-
-        ; Try ACPI shutdown (works on QEMU and Bochs)
-        ; QEMU PIIX4 PM: port 0x604, value 0x2000 = S5 (power off)
-        cli
-        mov dx, 0x604
-        mov ax, 0x2000
-        out dx, ax
-
-        ; If ACPI didn't work, halt the CPU
-.halt_loop:
-        hlt
-        jmp .halt_loop
+        ; S5 through the machine's own ACPI description. This never returns:
+        ; either the power goes, or acpi_poweroff says why and halts.
+        call acpi_poweroff
 
 ;---------------------------------------
 ; Command: reboot - Warm reboot the system
@@ -5143,7 +5153,12 @@ cmd_reboot:
         dec ecx
         jnz .reboot_delay
 
+        ; Flush what is only in memory before the machine goes away, then ask
+        ; the FADT for the reset register: on a machine that publishes one that
+        ; is the only reset that is guaranteed to work.
+        call hbfs_sync
         cli
+        call acpi_pm_reset
 
         ; Method 1: 8042 keyboard controller pulse reset.
         ; Wait until input buffer is clear before writing command 0xFE.
@@ -10373,3 +10388,127 @@ cmd_shift:
         call shell_count_args
         popad
         ret
+
+;---------------------------------------
+; Command: smpstress - mixed load on every processor
+;
+; The wave's exit test in compressed form: queue allocator work for every
+; application processor, run a user program beside it on this one, and report
+; what each processor actually did. A machine that survives this for a minute
+; is the same machine that has to survive a day.
+;---------------------------------------
+cmd_smpstress:
+        pushad
+        ; Parse the argument first: every print below clobbers ESI, which is
+        ; where the rest of the command line lives.
+        call parse_decimal
+        test eax, eax
+        jz .sst_default
+        jmp .sst_have
+.sst_default:
+        mov eax, 32
+.sst_have:
+        mov [.sst_jobs], eax
+
+        mov esi, msg_smpstress_head
+        call vga_print
+
+        mov esi, msg_smpstress_aps
+        call vga_print
+        mov eax, [smp_ap_online]
+        call vga_print_dec
+        mov esi, msg_smpstress_jobs
+        call vga_print
+        mov eax, [.sst_jobs]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Mixed load: a user program on this processor while the others are
+        ; inside the allocator. The child is waited for, so the load is
+        ; genuinely concurrent rather than sequential.
+        mov eax, [.sst_jobs]
+        mov [smp_stress_want], eax
+        call smp_spread_stress
+        mov [.sst_queued], eax
+
+        mov esi, msg_smpstress_result
+        call vga_print
+        mov eax, [.sst_queued]
+        call vga_print_dec
+        mov esi, msg_smpstress_done
+        call vga_print
+        mov eax, [smp_jobs_run]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
+        ; Per-processor counters: proof that every processor took part, not
+        ; just that the queue drained.
+        xor ecx, ecx
+.sst_cpu_loop:
+        cmp ecx, SMP_MAX_CPUS
+        jae .sst_cpu_done
+        mov eax, ecx
+        shl eax, 6
+        lea edi, [cpu_blocks + eax]
+        cmp dword [edi + CPU_ONLINE], 0
+        je .sst_cpu_next
+        mov esi, msg_smpstress_cpu
+        call vga_print
+        mov eax, ecx
+        call vga_print_dec
+        mov esi, msg_smpstress_ran
+        call vga_print
+        mov eax, [edi + CPU_JOBS]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+.sst_cpu_next:
+        inc ecx
+        jmp .sst_cpu_loop
+.sst_cpu_done:
+
+        mov esi, msg_smpstress_errors
+        call vga_print
+        mov eax, [smp_stress_errors]
+        call vga_print_dec
+        mov esi, msg_smpstress_frames
+        call vga_print
+        mov eax, [smp_stress_frames]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+
+        mov esi, msg_smp_stress_ok
+        cmp dword [smp_stress_errors], 0
+        je .sst_verdict
+        mov esi, msg_smp_stress_bad
+.sst_verdict:
+        call vga_print
+
+        ; The same verdict on COM1. A soak harness watches the serial console
+        ; from outside the guest and cannot read the screen, so a test whose
+        ; only verdict is on the screen cannot be run unattended.
+        mov esi, msg_smp_serial
+        call serial_print
+        mov eax, [.sst_queued]
+        call serial_print_dec
+        mov esi, msg_smp_serial_errors
+        call serial_print
+        mov eax, [smp_stress_errors]
+        call serial_print_dec
+        mov esi, msg_smp_serial_jobs
+        call serial_print
+        mov eax, [smp_jobs_run]
+        call serial_print_dec
+        mov esi, msg_smp_serial_ok
+        cmp dword [smp_stress_errors], 0
+        je .sst_serial_verdict
+        mov esi, msg_smp_serial_bad
+.sst_serial_verdict:
+        call serial_print
+        popad
+        ret
+.sst_jobs:   dd 0
+.sst_queued: dd 0

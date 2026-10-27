@@ -52,6 +52,64 @@ MADT_TYPE_IRQ_OVR   equ 2                ; interrupt source override
 MADT_TYPE_LAPIC_OVR equ 5              ; 64-bit local APIC address
 MADT_TYPE_X2APIC    equ 9
 
+; FADT (the "FACP"): the fixed description of the machine's power hardware.
+; Offsets are the ACPI 1.0 layout, which every later revision keeps for these
+; fields; the 64-bit GAS blocks that ACPI 2.0 appended start at FACP_X_FIRMWARE.
+FACP_FIRMWARE_CTRL  equ 36             ; dword: FACS address
+FACP_DSDT           equ 40             ; 32-bit DSDT address
+FACP_SCI_INT        equ 46             ; word: the interrupt the SCI is wired to
+FACP_SMI_CMD        equ 48             ; dword: I/O port that speaks to the SMM
+FACP_ACPI_ENABLE    equ 52             ; byte written to SMI_CMD to take ownership
+FACP_ACPI_DISABLE   equ 53
+FACP_PM1A_EVT       equ 56             ; dword: PM1a status/enable block
+FACP_PM1B_EVT       equ 60
+FACP_PM1A_CNT       equ 64             ; dword: PM1a control block
+FACP_PM1B_CNT       equ 68
+FACP_PM2_CNT        equ 72
+FACP_PM_TMR         equ 76
+FACP_GPE0           equ 80
+FACP_GPE1           equ 84
+FACP_PM1_EVT_LEN    equ 88
+FACP_PM1_CNT_LEN    equ 89
+FACP_PM2_CNT_LEN    equ 90
+FACP_PM_TMR_LEN     equ 91
+FACP_GPE0_LEN       equ 92
+FACP_GPE1_LEN       equ 93
+FACP_GPE1_BASE      equ 94
+FACP_DAY_ALRM       equ 106            ; byte: the RTC's day-of-month alarm
+FACP_MON_ALRM       equ 107
+FACP_CENTURY        equ 108
+FACP_IAPC_BOOT_ARCH equ 109            ; word
+FACP_FLAGS          equ 112            ; dword: WBINVD, RTC_S4, RESET_REG_SUP ...
+FACP_RESET_REG      equ 116            ; 12-byte GAS: the reset register
+FACP_RESET_VALUE    equ 128
+FACP_X_FIRMWARE     equ 132            ; 8-byte FACS address (revision >= 2)
+FACP_X_DSDT         equ 140
+FACP_X_PM1A_EVT     equ 148            ; 12-byte GAS blocks from here on
+FACP_X_PM1A_CNT     equ 172
+FACP_MIN_LEN        equ 116            ; up to and including FLAGS
+
+; FACP flags worth naming
+FACP_FLAG_WBINVD    equ (1 << 0)
+FACP_FLAG_RESET_REG equ (1 << 10)      ; RESET_REG holds a usable reset register
+
+; PM1 control register bits
+PM1_SCI_EN          equ (1 << 0)
+PM1_SLP_TYP_SHIFT   equ 10
+PM1_SLP_EN          equ (1 << 13)
+
+; PM1 status bits. The status register is write-one-to-clear.
+PM1_TMR_STS         equ (1 << 0)
+PM1_PWRBTN_STS      equ (1 << 8)
+PM1_RTC_STS         equ (1 << 10)
+PM1_WAK_STS         equ (1 << 15)
+; PM1 enable bits, same positions as the status bits they arm
+PM1_PWRBTN_EN       equ (1 << 8)
+
+; GAS address-space identifiers
+GAS_SYSTEM_MEMORY   equ 0
+GAS_SYSTEM_IO       equ 1
+
 ACPI_EBDA_PTR       equ 0x040E         ; word: EBDA segment
 ACPI_BIOS_ROM_START equ 0xE0000
 ACPI_BIOS_ROM_END   equ 0x100000
@@ -72,6 +130,38 @@ acpi_cpu_count:     dd 0
 acpi_lapic_addr:    dd 0
 acpi_ioapic_count:  dd 0
 acpi_ioapic_addr:   dd 0               ; the first one, for a readable summary
+
+; The FADT's power hardware. A zero block address means the machine does not
+; have it - firmware says so by leaving the field empty, and a write to port 0
+; is not a harmless way to find out.
+acpi_pm_ready:      db 0               ; FADT read and a PM1a control block found
+acpi_sci_en:        db 0               ; SCI_EN: firmware handed ACPI over to us
+acpi_dsdt_addr:     dd 0
+acpi_facs_addr:     dd 0
+acpi_sci_irq:       dd 0               ; from the FADT, not guessed
+acpi_smi_cmd:       dd 0
+acpi_acpi_enable:   db 0
+acpi_acpi_disable:  db 0
+acpi_pm1a_evt:      dd 0
+acpi_pm1b_evt:      dd 0
+acpi_pm1a_cnt:      dd 0
+acpi_pm1b_cnt:      dd 0
+acpi_pm2_cnt:       dd 0
+acpi_pm_tmr:        dd 0
+acpi_gpe0:          dd 0
+acpi_gpe1:          dd 0
+acpi_pm1_evt_len:   db 0
+acpi_pm1_cnt_len:   db 0
+acpi_pm_tmr_len:    db 0
+acpi_pm_flags:      dd 0
+acpi_reset_value:   db 0
+acpi_reset_space:   db 0               ; GAS address space of RESET_REG (0 = none)
+acpi_reset_addr:    dd 0
+acpi_rtc_century:   db 0               ; RTC register holding the century, or 0
+acpi_slp_typa:      times 8 db 0xFF    ; SLP_TYP per state, 0xFF = not in the DSDT
+acpi_slp_typb:      times 8 db 0xFF
+acpi_pwrbtn_count:  dd 0               ; power-button presses seen
+acpi_pwrbtn_seen:   db 0               ; set by the SCI, acted on by deferred work
 
 ; ISA IRQ -> global system interrupt, from the MADT's interrupt source
 ; overrides. Identity until an override says otherwise, which is why the PIT
@@ -466,6 +556,7 @@ acpi_init:
         mov ebx, ACPI_SIG_FACP
         call acpi_find_table
         mov [acpi_facp_addr], eax
+        call acpi_parse_fadt
 
         mov ebx, ACPI_SIG_MADT
         call acpi_find_table
@@ -482,6 +573,582 @@ acpi_init:
         pop edx
         pop ecx
         pop esi
+        ret
+
+;=======================================================================
+; The fixed ACPI description: power hardware, and taking it over
+;
+; The MADT says what the machine has; the FADT says how to turn it off. The
+; fields read here are the ones a machine needs to sleep, wake and die:
+;
+;   PM1a/PM1b status    - what happened (the power button is bit 8)
+;   PM1a/PM1b control   - SCI_EN (firmware has handed ACPI over) and the
+;                         sleep-type/enable bits a shutdown writes
+;   SMI_CMD + ENABLE    - the port that asks the firmware to hand ACPI over
+;   SCI_INT             - which interrupt the science of all this arrives on
+;   RESET_REG           - how to reset when the keyboard controller will not
+;
+; Nothing here is assumed: a zero block address means the field was empty, and
+; a machine whose FADT does not describe a PM1a control block cannot be powered
+; off by ACPI at all. That is worth knowing before writing to a port.
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; acpi_parse_fadt - read the FADT into named state
+;
+; Called once, from acpi_init, as soon as the FACP is located. The DSDT is
+; scanned for the sleep-type packages here rather than at first use, because a
+; scan of a firmware table is not something to do inside interrupt context.
+;-----------------------------------------------------------------------
+acpi_parse_fadt:
+        pushad
+        mov eax, [acpi_facp_addr]
+        test eax, eax
+        jz .apf_done
+        call acpi_map
+
+        mov esi, [acpi_facp_addr]
+        mov eax, [esi + SDT_LENGTH]
+        cmp eax, FACP_MIN_LEN
+        jb .apf_done                      ; too short to trust: leave it alone
+
+        mov eax, [esi + FACP_DSDT]
+        test eax, eax
+        jnz .apf_dsdt
+        ; ACPI 2.0 moved the DSDT into a 64-bit field; take the low half
+        cmp dword [esi + SDT_LENGTH], FACP_X_DSDT + 8
+        jb .apf_no_dsdt
+        mov eax, [esi + FACP_X_DSDT]
+        test eax, eax
+        jz .apf_no_dsdt
+        call acpi_map
+        mov esi, [acpi_facp_addr]
+        mov eax, [esi + FACP_X_DSDT]
+        jmp .apf_dsdt_store
+.apf_no_dsdt:
+        xor eax, eax
+        jmp .apf_dsdt_store
+.apf_dsdt:
+        call acpi_map                     ; a DSDT above the identity map
+        mov esi, [acpi_facp_addr]
+        mov eax, [esi + FACP_DSDT]
+.apf_dsdt_store:
+        mov [acpi_dsdt_addr], eax
+
+        mov eax, [esi + FACP_PM1A_CNT]
+        mov [acpi_pm1a_cnt], eax
+        mov eax, [esi + FACP_PM1A_EVT]
+        mov [acpi_pm1a_evt], eax
+        mov eax, [esi + FACP_PM1B_EVT]
+        mov [acpi_pm1b_evt], eax
+        mov eax, [esi + FACP_PM1B_CNT]
+        mov [acpi_pm1b_cnt], eax
+        mov eax, [esi + FACP_PM2_CNT]
+        mov [acpi_pm2_cnt], eax
+        mov eax, [esi + FACP_PM_TMR]
+        mov [acpi_pm_tmr], eax
+        mov eax, [esi + FACP_GPE0]
+        mov [acpi_gpe0], eax
+        mov eax, [esi + FACP_GPE1]
+        mov [acpi_gpe1], eax
+
+        mov al, [esi + FACP_PM1_EVT_LEN]
+        mov [acpi_pm1_evt_len], al
+        mov al, [esi + FACP_PM1_CNT_LEN]
+        mov [acpi_pm1_cnt_len], al
+        mov al, [esi + FACP_PM_TMR_LEN]
+        mov [acpi_pm_tmr_len], al
+        mov al, [esi + FACP_CENTURY]
+        mov [acpi_rtc_century], al
+        movzx eax, word [esi + FACP_SCI_INT]
+        mov [acpi_sci_irq], eax
+        mov eax, [esi + FACP_SMI_CMD]
+        mov [acpi_smi_cmd], eax
+        mov al, [esi + FACP_ACPI_ENABLE]
+        mov [acpi_acpi_enable], al
+        mov al, [esi + FACP_ACPI_DISABLE]
+        mov [acpi_acpi_disable], al
+        mov eax, [esi + FACP_FLAGS]
+        mov [acpi_pm_flags], eax
+        mov al, [esi + FACP_RESET_VALUE]
+        mov [acpi_reset_value], al
+
+        ; RESET_REG is a 12-byte GAS: address space, bit width, bit offset,
+        ; access size, then the 64-bit address (low half on this machine).
+        ; Only believed when the FADT's own flag says it is implemented - the
+        ; field is otherwise reserved space that firmware fills with rubbish.
+        test dword [esi + FACP_FLAGS], FACP_FLAG_RESET_REG
+        jz .apf_no_reset
+        mov al, [esi + FACP_RESET_REG]
+        mov [acpi_reset_space], al
+        mov eax, [esi + FACP_RESET_REG + 4]
+        mov [acpi_reset_addr], eax
+        jmp .apf_reset_done
+.apf_no_reset:
+        mov byte [acpi_reset_space], 0
+        mov dword [acpi_reset_addr], 0
+.apf_reset_done:
+
+        ; The FACS carries the firmware waking vector a resume would use. This
+        ; kernel does not implement resume, but knowing whether the address is
+        ; there is part of reporting the machine honestly.
+        cmp dword [esi + SDT_LENGTH], FACP_X_FIRMWARE + 8
+        jb .apf_legacy_facs
+        mov eax, [esi + FACP_X_FIRMWARE]
+        test eax, eax
+        jnz .apf_facs_store
+.apf_legacy_facs:
+        mov eax, [esi + FACP_FIRMWARE_CTRL]
+.apf_facs_store:
+        mov [acpi_facs_addr], eax
+
+        ; Is ACPI already ours? SCI_EN says the firmware has stepped aside.
+        cmp dword [acpi_pm1a_cnt], 0
+        je .apf_not_ready
+        mov dx, word [acpi_pm1a_cnt]
+        in ax, dx
+        test ax, PM1_SCI_EN
+        jz .apf_no_sci_en
+        mov byte [acpi_sci_en], 1
+.apf_no_sci_en:
+        mov byte [acpi_pm_ready], 1
+.apf_not_ready:
+
+        ; Sleep types live in the DSDT as the packages \_S1, \_S3 and \_S5.
+        mov al, 1
+        call acpi_aml_sleep_typ
+        jc .apf_s1_done
+        call acpi_store_slp
+.apf_s1_done:
+        mov al, 3
+        call acpi_aml_sleep_typ
+        jc .apf_s3_done
+        call acpi_store_slp
+.apf_s3_done:
+        mov al, 5
+        call acpi_aml_sleep_typ
+        jc .apf_s5_done
+        call acpi_store_slp
+.apf_s5_done:
+.apf_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; acpi_store_slp - keep the SLP_TYP values acpi_aml_sleep_typ just found
+;   In : AL = state, EAX above it = SLP_TYPa, EDX = SLP_TYPb
+;
+; acpi_aml_sleep_typ returns the two types in EAX and EDX; the state it was
+; asked about is kept in acpi_aml_last_state by that routine.
+;-----------------------------------------------------------------------
+acpi_store_slp:
+        push ebx
+        push ecx
+        movzx ecx, byte [acpi_aml_last_state]
+        cmp ecx, 8
+        jae .ass_done
+        mov ebx, acpi_slp_typa
+        mov [ebx + ecx], al
+        mov ebx, acpi_slp_typb
+        mov [ebx + ecx], dl
+.ass_done:
+        pop ecx
+        pop ebx
+        ret
+
+;-----------------------------------------------------------------------
+; acpi_aml_sleep_typ - find \_S<n>'s SLP_TYP values in the DSDT
+;   In : AL = state number (1, 3, 4, 5)
+;   Out: EAX = SLP_TYPa, EDX = SLP_TYPb, CF = 0 found / 1 not found
+;
+; The values are not architecture: every machine chooses its own encoding, and
+; the only place it is written down is the AML in the DSDT, as
+;
+;     Name (_S5, Package (0x02) { 0x00, 0x00 })
+;
+; That is a NameOp (0x08), the four-character name, a PackageOp (0x12), a
+; package length, a count, then integer elements. Integers appear as ZeroOp
+; (0x00), OneOp (0x01), BytePrefix (0x0A d), WordPrefix (0x0B dw) or
+; DWordPrefix (0x0C dd), so a scanner that understands exactly those decodes
+; the package without interpreting a single line of AML.
+;
+; A full AML interpreter is not what this needs to be: the search is for one
+; known object at the top level of the definition block, and anything it does
+; not understand it skips a byte at a time.
+;-----------------------------------------------------------------------
+acpi_aml_sleep_typ:
+        push ebx
+        push ecx
+        push esi
+        push edi
+        push ebp
+
+        mov [acpi_aml_last_state], al
+
+        ; The name as it sits in memory: '_', 'S', digit, '_'.
+        movzx eax, al
+        add eax, '0'
+        shl eax, 16
+        or eax, '_' | ('S' << 8)
+        or eax, ('_' << 24)
+        mov [.ast_name], eax
+
+        mov esi, [acpi_dsdt_addr]
+        test esi, esi
+        jz .ast_fail
+        mov ecx, [esi + SDT_LENGTH]
+        cmp ecx, SDT_HEADER_SIZE + 8
+        jb .ast_fail
+        sub ecx, SDT_HEADER_SIZE
+        add esi, SDT_HEADER_SIZE
+
+.ast_scan:
+        cmp ecx, 7                        ; opcode + name + package opcode + length
+        jb .ast_fail
+        cmp byte [esi], 0x08              ; NameOp
+        jne .ast_next
+        mov eax, [esi + 1]
+        cmp eax, [.ast_name]
+        jne .ast_next
+        cmp byte [esi + 5], 0x12          ; PackageOp
+        jne .ast_next
+
+        lea edi, [esi + 6]
+        call acpi_aml_skip_pkglen         ; EDI past the length, no elements left
+        cmp byte [edi], 2
+        jb .ast_next                      ; fewer than two elements: not a sleep package
+        inc edi
+        call acpi_aml_int
+        jc .ast_next
+        mov ebx, eax                      ; SLP_TYPa
+        call acpi_aml_int
+        jc .ast_fail_one                  ; a one-element package: typb = typa
+        mov edx, eax
+        mov eax, ebx
+        clc
+        jmp .ast_out
+.ast_fail_one:
+        mov eax, ebx
+        mov edx, ebx
+        clc
+        jmp .ast_out
+.ast_next:
+        inc esi
+        dec ecx
+        jmp .ast_scan
+
+.ast_fail:
+        stc
+        jmp .ast_out
+.ast_out:
+        pop ebp
+        pop edi
+        pop esi
+        pop ecx
+        pop ebx
+        ret
+.ast_name:  dd 0
+
+acpi_aml_last_state: db 0
+
+;-----------------------------------------------------------------------
+; acpi_aml_skip_pkglen - step over a package's length field
+;   In : EDI = first byte of the length
+;   Out: EDI = first byte after it
+;
+; The top two bits of the first byte say how many bytes follow it, 0 to 3, so
+; the field is 1 to 4 bytes long. The value itself is not needed: the elements
+; are decoded in order and the count says when to stop.
+;-----------------------------------------------------------------------
+acpi_aml_skip_pkglen:
+        push eax
+        movzx eax, byte [edi]
+        shr eax, 6
+        inc eax
+        add edi, eax
+        pop eax
+        ret
+
+;-----------------------------------------------------------------------
+; acpi_aml_int - decode one AML integer element
+;   In : EDI = element
+;   Out: EAX = value, EDI advanced past it; CF = 1 if this is not an integer
+;-----------------------------------------------------------------------
+acpi_aml_int:
+        movzx eax, byte [edi]
+        cmp al, 0x00                      ; ZeroOp
+        je .ai_zero
+        cmp al, 0x01                      ; OneOp
+        je .ai_one
+        cmp al, 0x0A                      ; BytePrefix
+        je .ai_byte
+        cmp al, 0x0B                      ; WordPrefix
+        je .ai_word
+        cmp al, 0x0C                      ; DWordPrefix
+        je .ai_dword
+        stc
+        ret
+.ai_zero:
+        xor eax, eax
+        inc edi
+        clc
+        ret
+.ai_one:
+        mov eax, 1
+        inc edi
+        clc
+        ret
+.ai_byte:
+        movzx eax, byte [edi + 1]
+        add edi, 2
+        clc
+        ret
+.ai_word:
+        movzx eax, word [edi + 1]
+        add edi, 3
+        clc
+        ret
+.ai_dword:
+        mov eax, [edi + 1]
+        add edi, 5
+        clc
+        ret
+
+;-----------------------------------------------------------------------
+; acpi_pm_own - make ACPI this operating system's
+;   Out: EAX = 0 when the PM1a control block is ours to write, -1 when not
+;
+; ACPI is the firmware's until the OS asks for it: writing ACPI_ENABLE to
+; SMI_CMD makes the SMM hand the PM registers over and set SCI_EN in PM1
+; control. A machine that is already handed over (firmware did it, or an
+; earlier boot) says so by having SCI_EN set, and needs nothing.
+;-----------------------------------------------------------------------
+acpi_pm_own:
+        pushad
+        call acpi_init
+        test eax, eax
+        jnz .apo_fail
+        cmp byte [acpi_pm_ready], 1
+        jne .apo_fail
+        cmp byte [acpi_sci_en], 1
+        je .apo_ok
+        cmp dword [acpi_smi_cmd], 0
+        je .apo_fail                      ; nothing to ask: cannot take over
+        cmp byte [acpi_acpi_enable], 0
+        je .apo_fail
+
+        mov dx, word [acpi_smi_cmd]
+        mov al, [acpi_acpi_enable]
+        out dx, al
+
+        ; The handover is asynchronous: the SMM does it between instructions.
+        ; Poll SCI_EN for a while before deciding the firmware refused.
+        mov ebx, 40
+.apo_wait:
+        mov ecx, 5
+        call smp_delay_ms
+        mov dx, word [acpi_pm1a_cnt]
+        in ax, dx
+        test ax, PM1_SCI_EN
+        jnz .apo_got_it
+        dec ebx
+        jnz .apo_wait
+        jmp .apo_fail
+.apo_got_it:
+        mov byte [acpi_sci_en], 1
+.apo_ok:
+        xor eax, eax
+        jmp .apo_out
+.apo_fail:
+        mov eax, -1
+.apo_out:
+        mov [esp + 28], eax               ; EAX of the pushad frame
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; acpi_poweroff - S5, or the best this machine can do instead
+;
+; SLP_TYPa comes from the DSDT: it is the machine's own encoding for "state 5",
+; and there is no architectural value to guess. With no ACPI control block to
+; write, or firmware that will not hand over, the ladder ends at a QEMU/Bochs
+; chipset port and then at a halt - and it says which rung it reached, because
+; a machine that will not power off is a bug report, not a mystery.
+;-----------------------------------------------------------------------
+acpi_poweroff:
+        call acpi_pm_own
+        test eax, eax
+        jnz .apo_halt
+
+        movzx eax, byte [acpi_slp_typa + 5]
+        cmp eax, 0xFF
+        jne .apo_have_typ
+        xor eax, eax                      ; not in the DSDT: the common encoding
+.apo_have_typ:
+        shl eax, PM1_SLP_TYP_SHIFT
+        or eax, PM1_SLP_EN
+        mov ebx, eax
+        mov dx, word [acpi_pm1a_cnt]
+        out dx, ax
+
+        cmp dword [acpi_pm1b_cnt], 0
+        je .apo_settle
+        movzx eax, byte [acpi_slp_typb + 5]
+        cmp eax, 0xFF
+        jne .apo_have_typb
+        movzx eax, byte [acpi_slp_typa + 5]
+        cmp eax, 0xFF
+        jne .apo_have_typb
+        xor eax, eax
+.apo_have_typb:
+        shl eax, PM1_SLP_TYP_SHIFT
+        or eax, PM1_SLP_EN
+        mov dx, word [acpi_pm1b_cnt]
+        out dx, ax
+
+.apo_settle:
+        ; Power does not drop within an instruction. Give the chipset a moment,
+        ; then assume the ACPI write was not the way on this machine.
+        mov ecx, 60
+        call smp_delay_ms
+
+        ; QEMU's PIIX4 and Bochs both treat a write of S5 to this port as a
+        ; shutdown request without needing SCI_EN. It is the last automated
+        ; rung before halting.
+        mov dx, 0x604
+        mov ax, 0x2000
+        out dx, ax
+        mov ecx, 60
+        call smp_delay_ms
+
+.apo_halt:
+        mov esi, msg_acpi_off_failed
+        call vga_print
+        call serial_print
+        cli
+.apo_hang:
+        hlt
+        jmp .apo_hang
+
+;-----------------------------------------------------------------------
+; acpi_pm_reset - reset the machine through the FADT, if it says how
+;   Out: returns only when the FADT describes no usable reset register
+;-----------------------------------------------------------------------
+acpi_pm_reset:
+        call acpi_pm_own
+        cmp byte [acpi_reset_space], GAS_SYSTEM_IO
+        jne .apr_none
+        cmp dword [acpi_reset_addr], 0
+        je .apr_none
+        mov dx, word [acpi_reset_addr]
+        mov al, [acpi_reset_value]
+        out dx, al
+        mov ecx, 100
+        call smp_delay_ms
+.apr_none:
+        ret
+
+;-----------------------------------------------------------------------
+; irq_sci - the system control interrupt
+;
+; Fixed events arrive here: the power button is the one worth acting on. The
+; status register is write-one-to-clear, so the bit is written back before the
+; handler returns or the interrupt will fire forever.
+;
+; The work itself is deferred: a clean shutdown flushes a filesystem, and doing
+; that between the interrupt gate's cli and iretd is the wrong place for it.
+;-----------------------------------------------------------------------
+irq_sci:
+        pushad
+        cmp dword [acpi_pm1a_evt], 0
+        je .isci_eoi
+        mov dx, word [acpi_pm1a_evt]
+        in ax, dx
+        test ax, PM1_PWRBTN_STS
+        jz .isci_other
+        mov bx, ax
+        mov ax, PM1_PWRBTN_STS            ; write-one-to-clear, only this bit
+        out dx, ax
+        lock inc dword [acpi_pwrbtn_count]
+        mov byte [acpi_pwrbtn_seen], 1
+        mov eax, acpi_power_button_dpc
+        call dpc_queue
+.isci_other:
+.isci_eoi:
+        movzx eax, word [acpi_sci_irq]    ; irq_eoi acknowledges a slave line too
+        call irq_eoi
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; acpi_power_button_dpc - a power button press, acted on outside the handler
+;
+; Windows 2000 asks; a single-user machine with no session to ask is better
+; served by shutting down cleanly than by ignoring the button. The filesystem
+; is synced first, because the alternative is losing the last writes.
+;-----------------------------------------------------------------------
+acpi_power_button_dpc:
+        pushad
+        mov byte [acpi_pwrbtn_seen], 0
+        mov esi, msg_acpi_pwrbtn
+        call vga_print
+        call serial_print
+        call hbfs_sync
+        call acpi_poweroff
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; acpi_install_sci - route the SCI and arm the power button
+;   Out: EAX = 0 when installed, -1 when the machine has no SCI
+;
+; Called once, after the interrupt controller is up: the SCI is a level line
+; and cannot be enabled before there is something to acknowledge it with.
+;-----------------------------------------------------------------------
+acpi_install_sci:
+        push ebx
+        push ecx
+        push edx
+        call acpi_pm_own                 ; the PM registers must be ours to arm
+        cmp byte [acpi_pm_ready], 1
+        jne .ais_fail
+        mov eax, [acpi_sci_irq]
+        cmp eax, 16
+        jae .ais_fail                    ; not a line this machine routes
+
+        ; The gate first: enabling the line before a handler exists is an
+        ; interrupt into the default stub, which acknowledges nothing.
+        mov ecx, eax
+        add ecx, IRQ_VECTOR_BASE
+        mov eax, irq_sci
+        call idt_set_gate
+
+        ; Arm the fixed event: PM1 enable, at the status block's second half.
+        cmp dword [acpi_pm1a_evt], 0
+        je .ais_no_arm
+        movzx ebx, byte [acpi_pm1_evt_len]
+        shr ebx, 1                        ; status block length = enable offset
+        test ebx, ebx
+        jnz .ais_have_off
+        mov ebx, 2
+.ais_have_off:
+        mov dx, word [acpi_pm1a_evt]
+        add dx, bx
+        in ax, dx
+        or ax, PM1_PWRBTN_EN
+        out dx, ax
+.ais_no_arm:
+        movzx eax, word [acpi_sci_irq]
+        call irq_enable
+
+        xor eax, eax
+        jmp .ais_out
+.ais_fail:
+        mov eax, -1
+.ais_out:
+        pop edx
+        pop ecx
+        pop ebx
         ret
 
 ;-----------------------------------------------------------------------
@@ -527,7 +1194,7 @@ acpi_dump:
         mov esi, msg_acpi_tables
         call vga_print
         mov eax, [acpi_table_count]
-        call vga_print_hex
+        call vga_print_dec
         mov al, 0x0A
         call vga_putchar
 
@@ -568,6 +1235,68 @@ acpi_dump:
 .ad_list_done:
         mov al, 0x0A
         call vga_putchar
+
+        ; Power: what the machine can be told to do.
+        mov esi, msg_acpi_pm
+        call vga_print
+        cmp byte [acpi_pm_ready], 0
+        jne .ad_pm_have
+        mov esi, msg_acpi_pm_none
+        call vga_print
+        jmp .ad_pm_done
+.ad_pm_have:
+        mov esi, msg_acpi_pm_cnt
+        call vga_print
+        mov eax, [acpi_pm1a_cnt]
+        call vga_print_hex
+        mov esi, msg_acpi_pm_evt
+        call vga_print
+        mov eax, [acpi_pm1a_evt]
+        call vga_print_hex
+        mov esi, msg_acpi_pm_sci
+        call vga_print
+        mov eax, [acpi_sci_irq]
+        call vga_print_dec
+        mov esi, msg_acpi_pm_en
+        call vga_print
+        cmp byte [acpi_sci_en], 1
+        jne .ad_pm_off
+        mov esi, msg_acpi_pm_on
+        jmp .ad_pm_en_named
+.ad_pm_off:
+        mov esi, msg_acpi_pm_fw
+.ad_pm_en_named:
+        call vga_print
+
+        mov esi, msg_acpi_pm_s5
+        call vga_print
+        movzx eax, byte [acpi_slp_typa + 5]
+        cmp eax, 0xFF
+        jne .ad_pm_s5_have
+        mov esi, msg_acpi_pm_s5_none
+        call vga_print
+        jmp .ad_pm_s3
+.ad_pm_s5_have:
+        call vga_print_dec
+.ad_pm_s3:
+        mov esi, msg_acpi_pm_s3
+        call vga_print
+        movzx eax, byte [acpi_slp_typa + 3]
+        cmp eax, 0xFF
+        jne .ad_pm_s3_have
+        mov esi, msg_acpi_pm_s5_none
+        call vga_print
+        jmp .ad_pm_btn
+.ad_pm_s3_have:
+        call vga_print_dec
+.ad_pm_btn:
+        mov esi, msg_acpi_pm_btn
+        call vga_print
+        mov eax, [acpi_pwrbtn_count]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+.ad_pm_done:
 
         ; The MADT: what the machine is actually made of.
         mov eax, [acpi_madt_addr]
@@ -895,7 +1624,7 @@ msg_acpi_rsdp:    db "ACPI: RSDP at 0x", 0
 msg_acpi_rev:     db " rev 0x", 0
 msg_acpi_root:    db "ACPI: ", 0
 msg_acpi_at:      db " at 0x", 0
-msg_acpi_tables:  db " tables 0x", 0
+msg_acpi_tables:  db " tables ", 0
 msg_acpi_list:    db "ACPI: ", 0
 msg_acpi_madt:    db "ACPI: MADT at 0x", 0
 msg_acpi_cpus:    db "ACPI: CPUs: ", 0
@@ -915,4 +1644,18 @@ msg_acpi_irq_mode: db "ACPI: interrupts: ", 0
 msg_acpi_irq_apic: db "I/O APIC (8259 masked)", 10, 0
 msg_acpi_irq_pic:  db "8259 (no usable local APIC)", 10, 0
 msg_acpi_none:    db "ACPI: MADT: none", 10, 0
+msg_acpi_pm:      db "ACPI: power: ", 0
+msg_acpi_pm_none: db "the FADT describes no PM1 control block", 10, 0
+msg_acpi_pm_cnt:  db "PM1a_CNT 0x", 0
+msg_acpi_pm_evt:  db "  PM1a_EVT 0x", 0
+msg_acpi_pm_sci:  db "  SCI ", 0
+msg_acpi_pm_en:   db "  ACPI ", 0
+msg_acpi_pm_on:   db "enabled (SCI_EN)", 10, 0
+msg_acpi_pm_fw:   db "still the firmware's", 10, 0
+msg_acpi_pm_s5:   db "ACPI: S5 sleep type: ", 0
+msg_acpi_pm_s5_none: db "not in the DSDT", 0
+msg_acpi_pm_s3:   db "  S3 type: ", 0
+msg_acpi_pm_btn:  db "  power button presses: ", 0
+msg_acpi_off_failed: db "POWER: ACPI could not power the machine off; halted", 10, 0
+msg_acpi_pwrbtn:  db "POWER: button pressed, syncing and shutting down", 10, 0
 msg_acpi_no_rsdp: db "ACPI: no RSDP found - this machine describes nothing", 10, 0

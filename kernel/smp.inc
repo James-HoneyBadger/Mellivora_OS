@@ -130,6 +130,22 @@ smp_ap_main:
         ; The stack is already this processor's own - the trampoline claimed a
         ; slot and switched to it before calling here.
         xor ebp, ebp
+
+        ; Per-CPU state first: everything below addresses this processor's own
+        ; block through GS, and the blocks are what make "the current task" and
+        ; "how many jobs have I run" questions with an answer per processor.
+        call lock_self_ipi
+        call cpu_local_init
+
+        ; The trampoline brought a flat GDT of its own and no interrupt table.
+        ; The kernel's gates are shared - one table, one set of handlers - so
+        ; loading the descriptor is all an AP needs.
+        lidt [idt_descriptor]
+
+        ; Turn on this processor's local APIC: a halted processor whose LAPIC
+        ; is disabled cannot be woken by an inter-processor interrupt.
+        call apic_enable_this
+
         lock inc dword [smp_ap_online]
 
         ; A processor that only parks proves delivery. This proves the kernel
@@ -138,10 +154,8 @@ smp_ap_main:
         call smp_stress_round
         lock inc dword [smp_work_done]
 
-.sam_park:
-        cli
-        hlt
-        jmp .sam_park
+        ; Then earn its keep: run queued kernel work until the machine stops.
+        jmp smp_ap_idle
 
 ;-----------------------------------------------------------------------
 ; smp_stress_round - hammer the frame allocator from this processor

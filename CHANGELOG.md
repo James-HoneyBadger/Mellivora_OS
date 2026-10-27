@@ -1,5 +1,69 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M2: the machine answers for itself
+
+- **ACPI is taken over, and the machine can be stopped.** The FADT is parsed -
+  PM1a/PM1b event and control blocks, PM_TMR, SCI_INT, SMI_CMD, RESET_REG, FACS -
+  and the kernel asks the firmware to hand ACPI over by writing `ACPI_ENABLE` to
+  `SMI_CMD` and polling `SCI_EN`, rather than assuming. `shutdown` writes the
+  machine's own S5 encoding to PM1a control, so it powers off instead of halting
+  with the message "ACPI could not power the machine off"; `reboot` uses the
+  FADT's reset register first and falls back to the keyboard controller.
+- **The S5 encoding comes out of the DSDT, not out of a table of guesses.** It is
+  per-machine, and the only place it is written down is AML: `Name (_S5,
+  Package (0x02) { 0x00, 0x00 })`. A scanner that understands `NameOp`,
+  `PackageOp`, the length field and the five integer encodings decodes it - 120
+  lines, no interpreter. On the profile machine it reports `S5 sleep type: 0`,
+  which is what the write to port 0x604 then uses.
+- **The power button works.** The SCI from the FADT is routed through whichever
+  interrupt controller is active, `PWRBTN_EN` is set in PM1 enable, and a press
+  acknowledges the fixed event, queues deferred work, syncs the filesystem and
+  powers off. `programs/`-free test: the harness presses the button with
+  `system_powerdown` and requires QEMU itself to exit.
+- **The desktop shuts down.** "Shut Down..." opens the Windows 2000 dialog -
+  Shut down, Restart, Command prompt, Cancel - and the first two go through the
+  same ACPI paths as the shell. Ctrl+Esc opens the Start menu, arrows and Enter
+  work through it, and a fly-out no longer traps the arrow keys (which is what
+  made the last item unreachable from the keyboard).
+- **A boot log, because a machine that fails to enumerate has to say why.** A
+  256-record ring of level, processor, tick and text, mirrored to COM1 once the
+  serial port is up, readable with `bootlog`. It takes no blocking lock: a
+  writer that finds the ring busy drops the record and counts it, because a
+  diagnostic that can deadlock the machine it is diagnosing is worse than one
+  that loses a line.
+- **The driver model.** Drivers are records with a match table, attach, detach,
+  power and an order, registered through a validated module header, matched
+  against a device tree built from PCI enumeration and the platform, with
+  resource arbitration (I/O, memory windows, interrupt lines), two binding
+  phases around the frame allocator and PCI enumeration, and a `drivers` command
+  that says which driver owns which device and what it was refused. All thirteen
+  in-tree drivers are behind it; nothing in the boot path calls a driver
+  directly any more.
+- **Per-CPU state, and application processors that work.** Each processor gets a
+  block behind GS (`IA32_GS_BASE`) with its index, idle flag, job count and
+  interrupt count; APs load the kernel's IDT, enable their own local APIC and
+  leave the old park loop for a work loop fed by a ranked-lock queue and an
+  inter-processor interrupt. `smpstress` queues allocator work and reports what
+  each processor ran: 32 jobs spread 11/11/10 over three APs, 14 195 frames
+  churned through the shared allocator, zero errors. The block cache gained its
+  ranked lock, which makes the "static local" scratch slots in its read path safe
+  again.
+- **Three SMP bugs, all of them real, all found by the harness:**
+  - the driver record was declared 48 bytes and had 40, so every record after
+    the first was misaligned - a triple fault on the first boot with the model;
+  - PCI interrupt lines were refused as duplicates, which would have starved
+    three of four drivers sharing IRQ 11. A level-triggered PCI pin is shared by
+    design; an ISA edge is not;
+  - the AP idle loop lost wakeups: an IPI arriving between "queue is empty" and
+    `hlt` was consumed by a handler that did nothing, leaving a halted processor
+    with work queued behind it. The check and the halt are now indivisible
+    (`cli` around the check, then the `sti; hlt` pair).
+- **Known gap, recorded rather than closed:** `make check-smp` (the one-minute
+  soak) still stalls intermittently - a round of `smpstress` occasionally waits
+  for jobs that never arrive, with every AP halted. A `SMP_WORK_STALL` line names
+  the queue state when it happens. M2 is not marked closed until that gate is
+  green and the 24-hour soak has run.
+
 ## Unreleased - M1: objects are counted, capped and visible
 
 - **A process may hold 256 live objects, and the refusal is a refusal.** The

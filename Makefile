@@ -617,6 +617,15 @@ check-perf:
 check-perf-update:
 	@bash tests/bench_guest.sh --update
 
+# The wave's exit test in compressed form: four processors under mixed load,
+# with the machine required to still answer afterwards. `make soak` with
+# SOAK_MINUTES set is the real thing - the gate form runs for a minute.
+check-smp:
+	@SOAK_MINUTES=1 SOAK_ALLOW_SKIP=1 bash tests/soak.sh
+
+soak:
+	@SOAK_MINUTES=$${SOAK_MINUTES:-1} bash tests/soak.sh
+
 # Report which 32-bit C toolchain the build will use. The build itself now
 # requires one (the kernel carries a C module and user programs are compiled
 # from C), so this exists to explain a failure, not to predict one.

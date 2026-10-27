@@ -167,6 +167,8 @@ version_text:
         db "  Security:      Raw disk access denied to ring 3", 0x0A, 0
 
 shell_prompt_pre:  db "Lair:", 0
+shell_announced:   db 0
+msg_shell_ready:   db "SHELL_READY", 10, 0
 shell_prompt_post: db "> ", 0
 default_path:      db "PATH=/bin:/games:/Burrows", 0
 path_env_name:     db "PATH", 0
@@ -175,6 +177,26 @@ path_env_name:     db "PATH", 0
 cmd_help_str:   db "help", 0
 cmd_ver_str:    db "ver", 0
 cmd_acpi_str:   db "acpi", 0
+cmd_bootlog_str: db "bootlog", 0
+cmd_drivers_str: db "drivers", 0
+cmd_smpstress_str: db "smpstress", 0
+
+msg_smpstress_head:   db 0x0A, "Mixed load across every processor", 0x0A, 0
+msg_smpstress_aps:    db "  application processors online: ", 0
+msg_smpstress_jobs:   db "   jobs queued: ", 0
+msg_smpstress_result: db "  queued ", 0
+msg_smpstress_done:   db " jobs, finished: ", 0
+msg_smpstress_cpu:    db "  cpu", 0
+msg_smpstress_ran:    db " ran ", 0
+msg_smpstress_errors: db "  allocation errors: ", 0
+msg_smpstress_frames: db "   frames churned: ", 0
+msg_smp_stress_ok:    db "  SMP_STRESS_OK", 0x0A, 0
+msg_smp_serial:        db "SMP_STRESS queued=", 0
+msg_smp_serial_errors: db " errors=", 0
+msg_smp_serial_jobs:   db " jobs=", 0
+msg_smp_serial_ok:     db " SMP_STRESS_OK", 10, 0
+msg_smp_serial_bad:    db " SMP_STRESS_FAIL", 10, 0
+msg_smp_stress_bad:   db "  SMP_STRESS_FAIL", 0x0A, 0
 cmd_locks_str:  db "locks", 0
 cmd_objects_str: db "objects", 0
 cmd_handles_str: db "handles", 0
@@ -357,6 +379,7 @@ msg_shutdown_bar: db "==========================================================
 msg_shutdown:   db "  Shutting down Mellivora OS...", 0x0A, 0
 msg_halt:       db "  System halted. You may power off now.", 0x0A, 0
 msg_shutdown_sync: db "  Syncing filesystem...", 0x0A, 0
+msg_shutdown_sync_failed: db "  WARNING: the sync reported an error; data may be lost", 0x0A, 0
 msg_shutdown_done: db "  Filesystem synced. Powering off...", 0x0A, 0
 msg_reboot:     db "  Rebooting Mellivora OS...", 0x0A, 0
 msg_mb:         db " MB", 0x0A, 0

@@ -264,7 +264,7 @@ that have not run yet, and is written down in
 other types arrive with the wave that owns each one, and a file becomes a
 handle when the VFS wave replaces the frozen fd path.
 
-### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks)
+### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks) — **landed, soak gate open**
 
 Where Mellivora trails a 2000 machine most visibly: it cannot use a second CPU,
 sleep, or switch itself off.
@@ -311,6 +311,17 @@ sleep, or switch itself off.
   PIT's line is masked afterwards so the clock is not counted twice. This is
   also the prerequisite for per-CPU timers when application processors start.
 
+- **Power is real (landed).** The FADT is parsed - PM1a/PM1b event and control
+  blocks, PM_TMR, SCI_INT, SMI_CMD, RESET_REG, FACS - and ACPI is taken over by
+  writing `ACPI_ENABLE` to `SMI_CMD` and polling `SCI_EN`, not assumed. The S5
+  encoding is read out of the DSDT's `\_S5` package by a scanner that understands
+  the AML it needs and skips everything else, because the encoding is
+  per-machine and there is no architectural value to guess. `shutdown` powers
+  the machine off, `reboot` uses the FADT's reset register, the power button is a
+  fixed ACPI event on the SCI that syncs and powers off, and the desktop's
+  "Shut Down..." dialog reaches the same paths. Thermal zones and batteries are
+  still only enumerable, because reading them needs an AML interpreter - that is
+  not part of this wave's exit and is listed below.
 - ACPI: RSDP/RSDT/XSDT discovery, MADT, FADT, the SCI interrupt, the power button,
   sleep states and soft-off, thermal and battery where present.
 - Local APIC timer taking over the tick from the PIT; I/O APIC routing input;
@@ -318,13 +329,35 @@ sleep, or switch itself off.
 - **SMP bring-up**: application-processor start, per-CPU state behind a segment
   base, scheduler and allocator locking, and lock-order validation that finds a
   deadlock before two CPUs do.
-- **Loadable driver model**: modules with an export table, probe/attach/detach,
-  a device tree, resource arbitration (I/O ports, MMIO, IRQ, DMA), and power
-  callbacks. Every existing driver is converted with no behaviour change.
-- Structured boot logging, so a machine that fails to enumerate says why.
+- **The driver model (landed).** A driver is a record - name, match table,
+  attach, detach, power, order - registered through a validated module header
+  and bound by a manager against a device tree built from PCI enumeration and
+  the platform devices. I/O ranges, memory windows and interrupt lines are
+  arbitrated (PCI lines share by design, ISA edges do not), a claimed window is
+  mapped for the driver, and binding happens in two phases around the frame
+  allocator and PCI. All thirteen in-tree drivers are behind it, nothing in the
+  boot path calls one directly, and `drivers` prints what each is bound to or
+  what it was refused. What remains - relocatable modules, device stacks, IRPs,
+  filters, per-device power objects - is written down in
+  [DRIVERS.md](spec/DRIVERS.md#11-as-built-the-gap).
+- **Per-CPU state and application processors that work (landed).** Each
+  processor has a block behind GS with its index, idle state, job and interrupt
+  counters; APs load the kernel's IDT, enable their own local APIC and run a
+  work queue fed by a ranked lock and an IPI. `smpstress` is the compressed exit
+  test and reports per-processor work.
+- Structured boot logging, so a machine that fails to enumerate says why
+  (landed: a 256-record ring with level, processor and tick, mirrored to COM1,
+  readable with `bootlog`).
 
 **Exit:** four vCPUs under 24 hours of mixed load with no panic; sleep and soft-off
 work from the shell and from the desktop; every driver loads as a module.
+
+Soft-off works from the shell and from the desktop, and every driver is behind
+the model. The first criterion is not met yet: `make check-smp` stalls
+intermittently - a round of `smpstress` occasionally waits for jobs that never
+arrive while every AP is halted - so the wave stays open with a `SMP_WORK_STALL`
+diagnostic naming the queue state, and the 24-hour soak (`make soak`) is a run
+that has not happened.
 
 ### M3 · Storage: HBFS v5 (12–18 weeks)
 

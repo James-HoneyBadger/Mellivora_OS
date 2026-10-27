@@ -26,6 +26,19 @@ Options:
                       (default $MV_PROFILE, else p4)
   --smp N             give the guest N CPUs (default: QEMU's, i.e. 1); used to
                       prove a reported CPU count is read, not assumed
+  --wait-for TEXT     before pressing --keys or --monitor commands, wait for
+                      TEXT to appear on the serial console (e.g. the desktop's
+                      own "up" marker); a keystroke sent into a machine that has
+                      not finished starting lands on nothing
+  --keys LIST         comma-separated QEMU key names pressed after the shell
+                      command (sendkey), e.g. "ctrl-esc,down,down,ret"
+  --monitor CMD       send a raw QEMU monitor command after the shell command
+                      (repeatable), e.g. system_powerdown to press the ACPI
+                      power button or system_wakeup to wake a suspended machine
+  --exit-wait N       require QEMU itself to terminate within N seconds of the
+                      command, i.e. the guest powered the machine off. Used for
+                      the ACPI shutdown and power-button cases, where a machine
+                      that stays up is the failure
 
 Exit: 0 on success, 1 if a CPU exception occurred, an --expect text was missing,
       an --reject text appeared, or the boot marker never showed up.
@@ -118,6 +131,12 @@ class Monitor:
             out = self.cmd(f"sendkey {key}", delay)
             if "unknown key" in out.lower() or "invalid" in out.lower():
                 raise SystemExit(f"monitor rejected sendkey {key!r}: {out.strip()[:200]}")
+
+    def send_key(self, key: str, delay: float = 0.3) -> None:
+        """Press and release one key by QEMU's name (see --keys)."""
+        out = self.cmd(f"sendkey {key}", delay)
+        if "unknown key" in out.lower() or "invalid" in out.lower():
+            raise SystemExit(f"monitor rejected sendkey {key!r}: {out.strip()[:200]}")
 
     def send_mouse(self, dx: int, dy: int) -> str:
         """Move the guest pointer: a relative PS/2 packet, exactly what a hand
@@ -252,18 +271,45 @@ def _opt_all(args, name):
     return out
 
 
-def _after_last(text: str, needle: str) -> str:
-    """Return the text after the last occurrence of *needle*.
+def _after_command(serial: str, mark: int, command: str) -> str:
+    """The serial output produced by the command.
 
-    The shell echoes the command line (on both VGA and the serial console), so
+    The console echoes what was typed without a newline of its own, so the text
+    after *mark* starts with the command itself; drop exactly that echo and keep
+    the rest. A console that has not echoed yet (or an input transport that does
+    not echo) leaves the text untouched.
+    """
+    tail = serial[mark:]
+    if tail.startswith(command):
+        tail = tail[len(command):]
+    return tail.lstrip("\r\n")
+
+
+def _after_last(text: str, needle: str) -> str:
+    """Return the text after the last *echo of the command line*.
+
+    The shell echoes what was typed (on both VGA and the serial console), so
     matching an expected string against the raw screen would succeed even if the
-    command never ran. Anchoring on the last echo makes --expect test the
-    command's *output*.
+    command never ran. Anchoring on the echo makes --expect test the command's
+    output.
+
+    The anchor is a whole line that *is* the command, or a prompt followed by
+    it, not the last place the word appears anywhere: a command like `burrows`
+    also appears in its own output ([burrows] desktop up), and anchoring on that
+    would throw away everything the command printed.
     """
     if not needle:
         return text
-    pos = text.rfind(needle)
-    return text[pos + len(needle):] if pos >= 0 else text
+    lines = text.splitlines(keepends=True)
+    start = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == needle or stripped.endswith("> " + needle):
+            start = index
+    if start is None:
+        pos = text.rfind(needle)
+        return text[pos + len(needle):] if pos >= 0 else text
+    return "".join(lines[start + 1:])
 
 
 def main() -> int:
@@ -310,8 +356,10 @@ def main() -> int:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     ser = None
+    serial_mark = 0
     screen = slog = regs = ""
     failure = None
+    powered_off = False
     try:
         ser = SerialConsole(ser_path)
         if not ser.wait_for("MELLIVORA_BOOT_OK", timeout, proc):
@@ -319,6 +367,13 @@ def main() -> int:
         else:
             time.sleep(0.3)
             mon_ctl = Monitor(mon_path)
+
+            # Remember where the console's output stood before the command was
+            # typed. Everything after that point is what the command did, which
+            # is exactly what --expect should look at - and unlike anchoring on
+            # the command's text, it survives a command whose own output repeats
+            # its name (`burrows` prints [burrows] markers).
+            serial_mark = len(ser.text())
 
             if transport == "serial":
                 ser.send_line(command)
@@ -343,8 +398,36 @@ def main() -> int:
                     mon_ctl.cmd("sendkey ret", 0.3)
                 time.sleep(3.0)
 
-            screen = mon_ctl.screen()
-            slog = ser.text()
+            wait_for_text = _opt(args, "--wait-for", "")
+            if wait_for_text and not ser.wait_for(wait_for_text, timeout, proc):
+                failure = f"{wait_for_text!r} never appeared"
+
+            keys = _opt(args, "--keys", "")
+            if keys:
+                for key in [k.strip() for k in keys.split(",") if k.strip()]:
+                    mon_ctl.send_key(key, 0.4)
+                    time.sleep(0.25)
+
+            for mon_cmd in _opt_all(args, "--monitor"):
+                mon_ctl.cmd(mon_cmd, 1.0)
+
+            exit_wait = _opt(args, "--exit-wait", None)
+            if exit_wait:
+                # A machine that powers itself off takes the monitor socket with
+                # it, so there is no screen to read afterwards: wait for the
+                # process to go and read whatever serial arrived before it did.
+                deadline = time.time() + float(exit_wait)
+                while time.time() < deadline and proc.poll() is None:
+                    time.sleep(0.2)
+                slog = ser.text()
+                if proc.poll() is None:
+                    failure = "QEMU was still running: the machine did not power off"
+                else:
+                    powered_off = True
+                screen = ""
+            else:
+                screen = mon_ctl.screen()
+                slog = ser.text()
 
             # A command that does real work (metadata-heavy tests, for
             # instance) can take seconds. Poll for the expected text instead of
@@ -353,7 +436,7 @@ def main() -> int:
             deadline = time.time() + wait_s
             while expects and time.time() < deadline:
                 hay = (_after_last(screen, command) + "\n"
-                       + _after_last(slog, command))
+                       + _after_command(slog, serial_mark, command))
                 if all(e in hay for e in expects):
                     break
                 time.sleep(0.25)
@@ -377,7 +460,7 @@ def main() -> int:
     # --expect is checked against output after the echoed command line;
     # --reject and fault detection scan the whole transcript.
     expect_haystack = (_after_last(screen, command) + "\n"
-                       + _after_last(slog, command))
+                       + _after_command(slog, serial_mark, command))
     combined = slog + "\n" + screen
 
     faults = re.search(r"CPU EXCEPTION|double fault|triple fault", slog, re.I)
@@ -397,6 +480,7 @@ def main() -> int:
     if want_json:
         print(json.dumps({
             "ok": ok,
+            "powered_off": powered_off,
             "failure": failure,
             "fault": faults.group(0) if faults else None,
             "missing_expect": missing,

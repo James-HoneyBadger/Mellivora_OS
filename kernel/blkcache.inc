@@ -23,6 +23,26 @@
 BLK_CACHE_ENTRIES  equ 32                       ; 32 x 4 KB = 128 KB
 BLK_CACHE_SECTORS  equ HBFS_SECTORS_PER_BLK     ; one block per entry
 
+; One lock for tags, data, the hand and the device behind them. The scan, the
+; fill and the flush are one critical section each: two processors filling the
+; same entry would leave one of them reading a block that is being overwritten,
+; and the device itself has one command port, so two reads in flight is not a
+; cache problem to be solved - it is a reason to serialise the path.
+;
+; The lock is held across the ATA read on a miss, which is a disk access. That
+; is deliberate: the alternative is a per-entry state machine, and the cache
+; exists to make the common path one memory copy. The rank is what keeps it
+; safe - the block cache may take the frame allocator's lock or the VFS's, and
+; never the other way round.
+align 16
+blk_cache_lock:
+        dd 0                            ; LK_LOCKED
+        dd RANK_BLOCKCACHE
+        dd -1
+        dd blk_cache_lock_name
+blk_cache_lock_name: db "block cache", 0
+blk_cache_waits:    dd 0
+
 ;-----------------------------------------------------------------------
 ; blk_cache_read - read sectors, using the cache for whole blocks
 ;   In : EAX = LBA, ECX = sector count, EDI = destination
@@ -33,6 +53,13 @@ BLK_CACHE_SECTORS  equ HBFS_SECTORS_PER_BLK     ; one block per entry
 blk_cache_read:
         pushad
         mov [.bcr_lba], eax
+        push edi
+        mov edi, blk_cache_lock
+        call spin_lock
+        pop edi
+        test eax, eax
+        jnz .bcr_locked_out
+
         mov [.bcr_dst], edi
         cmp ecx, BLK_CACHE_SECTORS
         jne .bcr_passthru
@@ -79,6 +106,8 @@ blk_cache_read:
         mov ecx, HBFS_BLOCK_SIZE / 4
         cld
         rep movsd
+        mov edi, blk_cache_lock
+        call spin_unlock
         popad
         clc
         ret
@@ -89,11 +118,24 @@ blk_cache_read:
         mov edi, [esp + 0]              ; EDI slot
         call ata_read_sectors
         jc .bcr_fail
+        mov edi, blk_cache_lock
+        call spin_unlock
         popad
         clc
         ret
 
 .bcr_fail:
+        mov edi, blk_cache_lock
+        call spin_unlock
+        popad
+        stc
+        ret
+
+.bcr_locked_out:
+        ; The rank gate refused the lock (only possible with the gate disarmed,
+        ; in its own self-test): report an I/O error rather than corrupting the
+        ; cache.
+        inc dword [blk_cache_waits]
         popad
         stc
         ret
@@ -109,11 +151,18 @@ blk_cache_flush:
         push eax
         push ecx
         push edi
+        mov edi, blk_cache_lock
+        call spin_lock
+        test eax, eax
+        jnz .bcf_out
         mov edi, blk_cache_tags
         xor eax, eax
         mov ecx, BLK_CACHE_ENTRIES
         cld
         rep stosd
+        mov edi, blk_cache_lock
+        call spin_unlock
+.bcf_out:
         pop edi
         pop ecx
         pop eax
@@ -125,3 +174,10 @@ blk_cache_flush:
 blk_cache_init:
         mov dword [blk_cache_hand], 0
         jmp blk_cache_flush
+
+;-----------------------------------------------------------------------
+; The cache's own index is only touched under the lock, so the "static local"
+; slots in blk_cache_read are safe again: two processors can no longer be
+; inside it at once. Before the lock they were a corruption waiting for a
+; second processor - the exact bug the stress harness was written to find.
+;-----------------------------------------------------------------------

@@ -198,13 +198,26 @@ M2 does not close until:
 
 ## 11. As built (the gap)
 
+The registry, the device tree, the arbitration and the ordering exist. The
+device stack, the IRP path and replacement at runtime do not.
+
 | Contract | Tree today |
 |---|---|
-| Loadable modules | Every driver is compiled into `kernel.bin` |
-| IRP, device stack, filters | Direct function calls from `syscall.inc` and `vfs.inc` into `ata.inc`, `e1000.inc`, … |
-| Resources and PnP | PCI enumeration and fixed addresses; no arbitration |
-| Per-device power | None |
-| Unload | Impossible |
-| Driver counters | Per-subsystem ad-hoc, no common surface |
+| A driver is a record, not a call site | `kernel/driver.inc` registers records: name, a match table, attach, detach, power, order. `kernel/driver_table.inc` is the table of the thirteen in-tree drivers. Nothing in `kernel.asm` calls `ata_init`, `net_init`, `e1000_init` … any more |
+| Registration goes through a module header | `driver_module_register` validates magic, version, count and table pointer before reading a record. The in-tree drivers are one module with an export table (`irq_enable`, `pci_find_config`, `pmm_alloc_page`, `bootlog_write`, …) |
+| Device tree | `dev_table`: one node per PCI function (vendor, device, class, BDF, IRQ, BAR0 with its *real* length measured by the write-all-ones method) plus the eight platform devices a PC has without being asked (8259, PIT, PS/2, IDE, DMA, SB16 ports, COM1, VGA) |
+| Match tables | `MT_PCI_ID`, `MT_PCI_CLASS`, `MT_VENDOR`, `MT_PLATFORM`, terminated by a zero entry. A driver with four device IDs and one with a class rule are the same shape, and no matching lives in code |
+| Resource arbitration | I/O ranges and memory windows are refused on intersection; interrupt lines are refused on duplicate **unless the device is on PCI**, where one level-triggered pin is shared by design. Claims are recorded, and a claimed memory window is also mapped into the master and active page directories, so a driver that binds after paging is up can touch its registers |
+| Binding order | Two phases by `DR_ORDER`: the interrupt controller, clock, keyboard controller and serial before the frame allocator exists; everything else after PCI enumeration. Registration order does not decide binding order |
+| States, and why they are states | `bound`, `absent`, `claimed`, `failed`, `skipped`. A driver that found no device has *not* failed, and `drivers` says so, with the reason |
+| Boot log | Every bind and every absence is a record in the boot-log ring at INFO or DEBUG, so a machine that did not start a driver says which and why |
+| Power callbacks | `driver_power(state)` walks bound drivers. The disk syncs on `OFF`; the others keep no state the kernel would have to save |
+| Per-device power objects | None: power is a callback, not an object in a device stack |
+| IRP path, device stacks, filters | None: drivers still expose direct calls (`ata_read_sectors`, `net_send`) to their subsystem. This is the seam the VFS and network waves plug into |
+| Load and unload at runtime | None: the module header is real and validated, but the image is linked in, so "load" means "register what is already there". Relocatable modules need a symbol table and a base-relative fixup pass — the export table is the half that exists |
+| Driver counters | Per-processor job counters (`cpu_blocks`) and the registry's own states; no per-device I/O statistics yet |
+| Conformance | `drivers` in `make check-runtime`: 13 registered, 10 bound, 0 conflicts on the profile machine; `rtl8139 bound pci` names the device it took |
 
-The devices work; it is the boundary around them that this document replaces.
+The devices work and now have a boundary around them. What that boundary still
+lacks is the half that needs a device stack: filters, per-device power, and
+replacement without a rebuild.

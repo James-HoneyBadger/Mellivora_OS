@@ -31,6 +31,9 @@ MAX_HELD_LOCKS  equ 8                  ; nesting depth per processor
 ; placed between two existing ones without renumbering either. The frame
 ; allocator sits at the top because almost every subsystem may need a frame
 ; while holding its own; nothing it does takes a lock, so it can be last.
+RANK_SMP_WORK   equ 50                 ; the work queue: taken by a pusher
+                                       ; with nothing else held, and never by a
+                                       ; job it just handed out
 RANK_BLOCKCACHE equ 100                ; block cache and its device
 RANK_VFS        equ 200                ; virtual filesystem tables
 RANK_SCHED      equ 300                ; run queue and task table

@@ -3815,6 +3815,67 @@ hbfs_find_entry:
         ret
 
 ;-----------------------------------------------------------------------
+; hbfs_sync — put everything that is only in memory onto the disk
+;   Out: EAX = 0 when the volume is consistent on disk, -1 otherwise
+;
+; Called before anything that stops the machine: a power button, a shutdown, a
+; reset. The order matters - the bitmap and the superblock describe allocations
+; the directory already references, so the directory goes first, and the
+; journal commits last so a machine that dies mid-sync still replays to a
+; consistent volume.
+;
+; A drive with a write cache can still be holding sectors that were accepted,
+; so the cache is flushed whether or not anything needed writing.
+;-----------------------------------------------------------------------
+hbfs_sync:
+        pushad
+        mov dword [.hs_status], 0
+        cmp dword [hbfs_mounted], 0
+        je .hs_flush                    ; nothing mounted: just the drive cache
+        cmp dword [hbfs_read_only], 0
+        jne .hs_flush
+
+        call hbfs_save_root_dir
+        jc .hs_failed
+
+        mov eax, HBFS_BITMAP_START
+        mov ecx, HBFS_BITMAP_SECTS
+        mov esi, hbfs_bitmap_buf
+        call hbfs_meta_write
+        jc .hs_failed
+
+        mov eax, HBFS_SUPERBLOCK_LBA
+        mov ecx, 1
+        mov esi, hbfs_super_buf
+        call hbfs_meta_write
+        jc .hs_failed
+
+        call hbfs_journal_commit        ; its own failures surface on the next mount
+
+.hs_flush:
+        mov dx, ATA_CMD
+        mov al, 0xE7                    ; FLUSH CACHE
+        out dx, al
+        mov ecx, 0xFFFFF
+.hs_wait:
+        in al, dx
+        test al, 0x80                   ; BSY?
+        jz .hs_done
+        dec ecx
+        jnz .hs_wait
+        jmp .hs_failed
+.hs_done:
+        jmp .hs_out
+.hs_failed:
+        mov dword [.hs_status], -1
+.hs_out:
+        mov eax, [.hs_status]
+        mov [esp + 28], eax
+        popad
+        ret
+.hs_status: dd 0
+
+;-----------------------------------------------------------------------
 ; hbfs_flush_dir_entry — write a single directory entry back to disk
 ;   In : EDI = pointer to entry in hbfs_dir_buf
 ;        EAX = entry index (0-based)

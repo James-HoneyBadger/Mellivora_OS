@@ -6094,7 +6094,7 @@ gui_menu_select:
         cmp eax, 5
         je .ms_run
         cmp eax, 6
-        je .ms_exit
+        je .ms_shutdown
 .ms_ret:
         popad
         ret
@@ -6108,9 +6108,9 @@ gui_menu_select:
         popad
         call gui_applet_about
         ret
-.ms_exit:
-        mov byte [gui_exit_flag], 1
+.ms_shutdown:
         popad
+        call gui_applet_shutdown
         ret
 
 ;---------------------------------------
@@ -6532,6 +6532,8 @@ gui_handle_input:
         je .hi_ws3
         cmp al, 0x94           ; Ctrl+Alt+4
         je .hi_ws4
+        cmp al, 0x95           ; Ctrl+Esc: open the Start menu
+        je .hi_start_key
         ; Arrow keys navigate an open Start menu.
         cmp byte [gui_menu_open], 1
         jne .hi_no_arrows
@@ -6548,6 +6550,23 @@ gui_handle_input:
         je .hi_launcher
         cmp al, 0x85           ; F2 — open a terminal
         je .hi_bterm
+        jmp .hi_done
+
+.hi_start_key:
+        ; The keyboard's way into the Start menu, and the only one a headless
+        ; test can drive: the first item is highlighted so the arrows and Enter
+        ; behave the way they do on the real thing.
+        cmp byte [gui_menu_open], 1
+        jne .hi_start_open
+        mov byte [gui_menu_open], 0
+        mov dword [gui_menu_sub], -1
+        mov dword [gui_menu_sel], -1
+        jmp .hi_done
+.hi_start_open:
+        mov byte [gui_menu_open], 1
+        mov dword [gui_menu_sub], -1
+        mov dword [gui_menu_sub_sel], -1
+        mov dword [gui_menu_sel], 0
         jmp .hi_done
 
 .hi_launcher:
@@ -6581,7 +6600,12 @@ gui_handle_input:
         mov eax, GUI_MENU_ITEMS - 1
 .hi_md_main_store:
         mov [gui_menu_sel], eax
-        call gui_menu_sync_sub
+        ; Moving through the main list does not open a fly-out: on the real
+        ; thing the submenu opens on Right, Enter or hover, and opening it on
+        ; every move traps the arrow keys inside it so the later items of the
+        ; main list cannot be reached from the keyboard at all.
+        mov dword [gui_menu_sub], -1
+        mov dword [gui_menu_sub_sel], -1
         jmp .hi_done
 
 .hi_menu_up:
@@ -6603,7 +6627,8 @@ gui_handle_input:
         xor eax, eax
 .hi_mu_main_store:
         mov [gui_menu_sel], eax
-        call gui_menu_sync_sub
+        mov dword [gui_menu_sub], -1
+        mov dword [gui_menu_sub_sel], -1
         jmp .hi_done
 
 .hi_menu_right:
@@ -7472,6 +7497,249 @@ gui_applet_about:
         popad
         ret
 .abt_win: dd 0
+
+;---------------------------------------
+; gui_applet_shutdown - Shut Down Windows
+;
+; The desktop's own power menu. Until now "Shut Down..." only left the desktop
+; for the command prompt, which is not what the words say: this offers the four
+; things a Windows 2000 machine offers, and the two that stop the machine go
+; through the same ACPI paths the shell uses, so the filesystem is synced and
+; the power comes off rather than the kernel halting with unsaved writes.
+;---------------------------------------
+SD_BTN_W        equ 180
+SD_BTN_H        equ 26
+SD_BTN_X        equ 60
+SD_BTN_Y0       equ 44
+SD_BTN_GAP      equ 34
+
+gui_applet_shutdown:
+        pushad
+        mov eax, 170
+        mov ebx, 120
+        mov ecx, 300
+        mov edx, 236
+        mov esi, gui_str_shutdown
+        call gui_create_window
+        cmp eax, -1
+        je .sd_ret
+        mov [.sd_win], eax
+        mov dword [.sd_sel], 0          ; "Shut down" is the default, as in 2000
+        pushad
+        mov esi, burrows_log_sd_dialog
+        call serial_print
+        popad
+
+.sd_loop:
+        call gui_draw_background
+        call gui_draw_all_windows
+
+        mov eax, [.sd_win]
+        imul eax, WIN_STRUCT_SIZE
+        lea ebp, [gui_win_table + eax]
+
+        mov esi, gui_str_sd_prompt
+        mov eax, [ebp + WIN_X]
+        add eax, 20
+        mov ebx, [ebp + WIN_Y]
+        add ebx, 18
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        ; Four buttons, each its own label
+        xor edi, edi                    ; index
+.sd_buttons:
+        cmp edi, 4
+        jae .sd_flip
+        mov eax, [ebp + WIN_X]
+        add eax, SD_BTN_X
+        mov ebx, [ebp + WIN_Y]
+        add ebx, SD_BTN_Y0
+        mov ecx, edi
+        imul ecx, SD_BTN_GAP
+        add ebx, ecx
+        mov ecx, SD_BTN_W
+        mov edx, SD_BTN_H
+        mov esi, [gui_theme + THEME_BUTTON_BG]
+        cmp edi, [.sd_sel]
+        jne .sd_face
+        mov esi, [gui_theme + THEME_ACCENT]
+.sd_face:
+        call gui_bb_button_3d
+        ; Label, left-aligned inside the button
+        mov eax, [ebp + WIN_X]
+        add eax, SD_BTN_X + 10
+        mov ebx, [ebp + WIN_Y]
+        add ebx, SD_BTN_Y0 + 7
+        mov ecx, edi
+        imul ecx, SD_BTN_GAP
+        add ebx, ecx
+        mov esi, [gui_sd_labels + edi*4]
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+        inc edi
+        jmp .sd_buttons
+
+.sd_flip:
+        call gui_draw_taskbar
+        call gui_draw_cursor
+        call gui_flip
+
+        call kb_pollchar
+        cmp al, 27                      ; Esc cancels
+        je .sd_close
+        cmp al, 0x80                    ; Up
+        je .sd_up
+        cmp al, 0x81                    ; Down
+        je .sd_down
+        cmp al, 13                      ; Enter activates the highlighted button
+        je .sd_enter
+        cmp al, 0
+        je .sd_mouse
+        jmp .sd_loop
+
+.sd_up:
+        mov eax, [.sd_sel]
+        test eax, eax
+        jz .sd_loop
+        dec dword [.sd_sel]
+        jmp .sd_loop
+.sd_down:
+        mov eax, [.sd_sel]
+        inc eax
+        cmp eax, 4
+        jae .sd_loop
+        mov [.sd_sel], eax
+        jmp .sd_loop
+.sd_enter:
+        mov eax, [.sd_sel]
+        call .sd_activate
+        jmp .sd_close
+
+.sd_mouse:
+        movzx eax, byte [mouse_buttons]
+        test eax, 0x01
+        jz .sd_loop
+
+        ; Relative to the window (EBP is reloaded: the drawing calls in the
+        ; loop above do not have to preserve it)
+        mov eax, [.sd_win]
+        imul eax, WIN_STRUCT_SIZE
+        lea ebp, [gui_win_table + eax]
+        mov eax, [ebp + WIN_X]
+        mov ebx, [mouse_x]
+        sub ebx, eax
+        mov eax, [ebp + WIN_Y]
+        mov ecx, [mouse_y]
+        sub ecx, eax
+
+        cmp ebx, SD_BTN_X
+        jl .sd_close_check
+        mov eax, SD_BTN_X + SD_BTN_W
+        cmp ebx, eax
+        jg .sd_close_check
+        mov eax, SD_BTN_Y0
+        cmp ecx, eax
+        jl .sd_close_check
+
+        ; Which button? (ecx - Y0) / GAP
+        sub ecx, SD_BTN_Y0
+        mov eax, ecx
+        xor edx, edx
+        mov ecx, SD_BTN_GAP
+        div ecx
+        cmp eax, 4
+        jae .sd_close_check
+        ; A click in the gap below a button still selects it only if it is
+        ; inside the button's own height.
+        mov ecx, edx                    ; offset within the gap
+        cmp ecx, SD_BTN_H
+        jg .sd_close_check
+        mov [.sd_sel], eax
+        call .sd_activate
+        jmp .sd_close
+
+.sd_close_check:
+        ; The title bar's close button cancels, like any other window.
+        mov eax, [.sd_win]
+        imul eax, WIN_STRUCT_SIZE
+        lea eax, [gui_win_table + eax]
+        mov ebx, [eax + WIN_X]
+        add ebx, [eax + WIN_W]
+        add ebx, BORDER_W
+        sub ebx, CLOSE_BTN_SIZE + 4
+        cmp dword [mouse_x], ebx
+        jl .sd_loop
+        add ebx, CLOSE_BTN_SIZE
+        cmp dword [mouse_x], ebx
+        jg .sd_loop
+        mov ecx, [eax + WIN_Y]
+        sub ecx, TITLEBAR_H
+        add ecx, 3
+        cmp dword [mouse_y], ecx
+        jl .sd_loop
+        add ecx, CLOSE_BTN_SIZE
+        cmp dword [mouse_y], ecx
+        jg .sd_loop
+
+.sd_close:
+.sd_rel:
+        movzx eax, byte [mouse_buttons]
+        test eax, 0x01
+        jnz .sd_rel
+        mov eax, [.sd_win]
+        call gui_destroy_window_n
+.sd_ret:
+        popad
+        ret
+
+; .sd_activate - run the chosen action. EAX = button index.
+;   0 shut down, 1 restart, 2 command prompt, 3 cancel
+.sd_activate:
+        cmp eax, 0
+        je .sda_off
+        cmp eax, 1
+        je .sda_reset
+        cmp eax, 2
+        je .sda_shell
+        ret
+.sda_off:
+        call hbfs_sync
+        call acpi_poweroff              ; does not return
+        ret
+.sda_reset:
+        call hbfs_sync
+        cli
+        call acpi_pm_reset
+        ; acpi_pm_reset returns only when the FADT has no reset register: fall
+        ; back to the keyboard controller, as the shell's reboot does.
+        mov ecx, 0x20000
+.sda_kbc:
+        in al, 0x64
+        test al, 0x02
+        jz .sda_kbc_send
+        dec ecx
+        jnz .sda_kbc
+        jmp .sda_triple
+.sda_kbc_send:
+        mov al, 0xFE
+        out 0x64, al
+.sda_triple:
+        ; Nothing answered: a null IDT turns the next interrupt into a triple
+        ; fault, which resets the machine.
+        lidt [sda_null_idt]
+        int 3
+        hlt
+        ret
+.sda_shell:
+        mov byte [gui_exit_flag], 1
+        ret
+.sd_win: dd 0
+.sd_sel: dd 0
+
+sda_null_idt:
+        dw 0
+        dd 0
 
 ;---------------------------------------
 ; gui_applet_clock - Digital clock
@@ -10314,6 +10582,18 @@ gui_str_m_search:    db "Search", 0
 gui_str_m_help:      db "Help", 0
 gui_str_m_run:       db "Run...", 0
 gui_str_m_shutdown:  db "Shut Down...", 0
+gui_str_shutdown:    db "Shut Down Windows", 0
+gui_str_sd_prompt:   db "What do you want the computer to do?", 0
+gui_str_sd_off:      db "Shut down", 0
+gui_str_sd_restart:  db "Restart", 0
+gui_str_sd_shell:    db "Command prompt", 0
+gui_str_sd_cancel:   db "Cancel", 0
+burrows_log_sd_dialog: db "[burrows] shutdown dialog", 10, 0
+gui_sd_labels:
+        dd gui_str_sd_off
+        dd gui_str_sd_restart
+        dd gui_str_sd_shell
+        dd gui_str_sd_cancel
 
 ; Main item -> icon index (see gui_draw_icon16)
 gui_menu_icon_map:

@@ -52,6 +52,9 @@ cmd_table:
         CMDENT cmd_sleep_str, CAT_SYSTEM, sum_sleep, det_sleep
         CMDENT cmd_time_str, CAT_SYSTEM, sum_time, det_time
         CMDENT cmd_acpi_str, CAT_SYSTEM, sum_acpi, det_acpi
+        CMDENT cmd_bootlog_str, CAT_SYSTEM, sum_bootlog, det_bootlog
+        CMDENT cmd_drivers_str, CAT_SYSTEM, sum_drivers, det_drivers
+        CMDENT cmd_smpstress_str, CAT_SYSTEM, sum_smpstress, det_smpstress
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
         CMDENT cmd_objects_str, CAT_SYSTEM, sum_objects, det_objects
         CMDENT cmd_handles_str, CAT_SYSTEM, sum_handles, det_handles
@@ -265,12 +268,38 @@ det_cmod:
         db "  is handed the host table, and it checks the freestanding runtime and", 0x0A
         db "  the C-to-assembly call before printing CMOD_OK. An image built", 0x0A
         db "  without a C toolchain says CMOD_ABSENT instead.", 0x0A, 0
-sum_acpi: db "The machine's own description: CPUs, APICs, table of contents", 0
+sum_acpi: db "The machine's own description: CPUs, APICs, power, tables", 0
 det_acpi:
         db "acpi", 0x0A
-        db "  Find the RSDP, walk the RSDT/XSDT and read the MADT, then report how", 0x0A
-        db "  many processors the firmware describes, where the local APIC is and", 0x0A
-        db "  which I/O APICs exist. Read-only: nothing is programmed.", 0x0A, 0
+        db "  Find the RSDP, walk the RSDT/XSDT and read the MADT and FADT: how", 0x0A
+        db "  many processors the firmware describes, where the local APIC is,", 0x0A
+        db "  which I/O APICs exist, and the power hardware - the PM1 blocks, the", 0x0A
+        db "  interrupt the SCI arrives on, and the S5 encoding read out of the", 0x0A
+        db "  DSDT that shutdown writes. ACPI is taken over at boot, so those", 0x0A
+        db "  registers are this kernel's, not the firmware's.", 0x0A, 0
+sum_smpstress: db "Mixed kernel load on every processor, and what each one did", 0
+det_smpstress:
+        db "smpstress [JOBS]", 0x0A
+        db "  Queue JOBS units of allocator work for the application processors", 0x0A
+        db "  and wait for them, then report what each processor ran. This is the", 0x0A
+        db "  compressed form of the wave's exit test: a machine that survives it", 0x0A
+        db "  for a minute is the machine that has to survive a day.", 0x0A, 0
+sum_drivers: db "Which driver owns which device, and what it was refused", 0
+det_drivers:
+        db "drivers", 0x0A
+        db "  The device tree the machine built from PCI and the platform, and", 0x0A
+        db "  the driver bound to each. A driver that found nothing says so; one", 0x0A
+        db "  refused a resource names the conflict. Drivers are registered as a", 0x0A
+        db "  module and bound in two phases: the interrupt controller, clock,", 0x0A
+        db "  keyboard and serial before the frame allocator exists, everything", 0x0A
+        db "  else after PCI enumeration.", 0x0A, 0
+sum_bootlog: db "What the machine did on the way up, in order", 0
+det_bootlog:
+        db "bootlog", 0x0A
+        db "  Print the boot log: one line per event with the processor that", 0x0A
+        db "  reported it and its level (E error, W warning, I info, D debug).", 0x0A
+        db "  Records are kept in a ring and mirrored to COM1 as they happen, so", 0x0A
+        db "  a machine that fails to enumerate can be asked why afterwards.", 0x0A, 0
 sum_append: db "Append text to a file", 0
 det_append:
         db "append FILE TEXT", 0x0A
