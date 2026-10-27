@@ -219,6 +219,35 @@ Usage is recomputed by a scrub pass (`chkdsk --quotas`) and the recomputed value
 is what the tree is corrected to, so a crash between an allocation and its
 accounting cannot leave a permanent discrepancy.
 
+## 9a. Access control lists
+
+A file may carry an ACL. Where one is present it **decides**, and the mode word
+is no longer consulted; where none is present the mode word answers exactly as
+it always has.
+
+| ACE | Key | Value | Meaning |
+|---|---|---|---|
+| Named user | `acl:u<uid>` | `0`-`7` | one user's permissions |
+| Named group | `acl:g<gid>` | `0`-`7` | one group's permissions |
+| Mask | `acl:m` | `0`-`7` | narrows the named-user and group ACEs |
+| Other | `acl:o` | `0`-`7` | everyone else |
+
+`acl:o` is what makes an ACL present: writing it is what turns a file from
+mode-word access into ACL access. The ACEs live in the file's existing xattr
+block, one entry each, so no on-disk structure changed to add them and a file
+carrying an ACL is still a valid v3 file to an older reader.
+
+Evaluation is POSIX's, without inheritance:
+
+1. root is granted everything before any ACL is read;
+2. the owner, through `acl:u<owner>` when present, else the owner triplet;
+3. a named user ACE for the caller, narrowed by `acl:m`;
+4. the caller's group ACE, narrowed by `acl:m`;
+5. `acl:o`.
+
+The mode word is left alone: `chmod` on an ACL'd file changes what a tool that
+only reads the mode word sees, and does not rewrite the ACEs.
+
 ## 10. Snapshots
 
 A snapshot is a **copy-on-write block tree**: a snapshot holds a read-only root
@@ -296,7 +325,7 @@ M3 does not close until:
 |---|---|
 | 64-bit block numbers, 2^62 volume | 32-bit, 2 GB |
 | B+tree directories, 65 535 entries | Linear directory blocks, 224 entries per subdirectory |
-| ACLs, streams, compression, encryption, snapshots | Mode bits and one owner; no streams or snapshots |
+| ACLs, streams, compression, encryption, snapshots | **ACLs: yes**, as ACEs in the xattr block (`acl:u<id>`, `acl:g<id>`, `acl:m`, `acl:o`), evaluated by `acl_perm` before the mode word and settable from the shell with `acl set`; conformance in `acl_test`. No inheritance and no group-class unions yet. Streams, compression, encryption and snapshots: none |
 | Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it |
 | Journal with redo records | Undo journal: before-images replayed backwards |
 | One unified cache | A block cache and a page cache that agree by construction |

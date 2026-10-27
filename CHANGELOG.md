@@ -1,5 +1,76 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M3: an ACL decides where the mode word cannot
+
+The v3 permission word answers one question per file: owner, group, world. That
+is not enough to hand one file to one other user without handing it to their
+whole group, so a file may now carry an **access control list**, and where one is
+present the ACL decides and the mode word is not consulted:
+
+```text
+acl set report.txt u2000 7    a named user may read and write
+acl set report.txt other 0    nobody else may
+acl set report.txt mask 7     and the mask does not narrow it
+acl show report.txt
+acl:u2000 = 7
+acl:o = 0
+acl:m = 7
+```
+
+- An ACE is one entry in the file's existing xattr block - `acl:u<uid>`,
+  `acl:g<gid>`, `acl:m`, `acl:o`, each holding a permission digit - so no
+  on-disk structure changed to add ACLs, and a file carrying one is still a v3
+  file to a reader that knows nothing about them. `acl:o` is what makes an ACL
+  present.
+- `acl_perm` runs inside `hbfs_check_access` before the mode word, in POSIX's
+  order: root, the owner (through their ACE when they have one, else the owner
+  triplet), a named user, the caller's group, then `acl:o`; the mask narrows the
+  named-user and group cases only. A corrupt ACE value denies rather than
+  grants.
+- `programs/acl_test.asm` is the conformance suite, and it has to fork: a
+  process cannot setuid its way back up, so each question is asked by a child
+  that drops to the uid in question. It proves a named user writes a 0600 file
+  the mode word makes read-only for them, that the mask narrows the grant
+  without touching the ACE, that the owner is held to their own ACE, that a
+  stranger falls to `acl:o`, and that root still passes.
+
+Inheritance and group-class unions are the ACL work that remains.
+
+## Unreleased - the shell learns that a path is a name plus a place
+
+`touch /overq` was fixed to stop creating an entry whose *name* was the whole
+path. Probing the rest of the family showed the same mistake in more places, and
+a worse one behind it:
+
+- `mkdir /dir/name` created an entry named `/dir/name` - findable by nothing;
+- `ls`/`dir` ignored their argument and always listed the current directory, so
+  the only way to look inside a directory was to `cd` into it;
+- `cd /dir` could not enter a directory that `mkdir /dir` had made, because the
+  name it had made was not the name `cd` was looking for;
+- `del` matched names in the current directory only, and `del -v name` deleted
+  nothing at all: `parse_flags` records the flags but restores its input
+  pointer, so the first word it saw was still the flag.
+
+One path splitter (`path_split`) now separates a path into its directory part
+and its final component; `path_enter`/`path_leave` wrap a command in a change of
+directory and always restore it, and `skip_flag_words` steps over flags for the
+commands that also take an argument. `touch`, `mkdir`, `ls`/`dir` and `del`
+(`-v` and wildcards included) all go through it.
+
+Two bugs surfaced on the way:
+
+- a failed directory read left the block cache's tag naming the directory it had
+  just failed to read, so the *next* load "hit" and returned an empty directory -
+  every file appeared to have vanished. The tag is now invalidated on both error
+  paths;
+- entering a virtual directory (`/tmp`, `/proc`, `/dev`) and touching an entry
+  there meant a block read at LBA `0xFFFFFFFF`. Those locations are read-only and
+  now say so: `mkdir /tmp/x` answers "Virtual directories are read-only".
+
+`tests/test_runtime.sh` covers each of these: a create through a path, a listing
+of one, a flagged delete through one, the virtual-directory refusal, and a
+volume that is still intact after that refusal.
+
 ## Unreleased - the durability gate was failing on a correct volume
 
 `make check` started failing at `check-durability`, intermittently, at
@@ -23,7 +94,8 @@ inside a transaction. It now asserts the two things that are actually true:
 `touch` also learned that a path is not a name: `touch /overq` used to create an
 entry whose *name* was "/overq" - a file no other command could find, and an fsck
 warning that would have survived every rebuild. It now places the last component
-in the current directory.
+in the current directory (and, once the path splitter landed, in the directory
+the path names).
 
 ## Unreleased - M2 closes: the SMP stall was a job that went missing
 

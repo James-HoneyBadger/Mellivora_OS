@@ -337,6 +337,21 @@ run_case "every described CPU comes online" "acpi"             "processors onlin
 run_case "SMP machine serves network" "dhcp"                  "ANSWER SECTION"     "dig example.com" "CPU EXCEPTION" "" 2
 run_case "HBFS metadata writes"      "fs_meta_test"          "FS_META_OK"         "" "CPU EXCEPTION|FS_META_FAIL"
 run_case "HBFS metadata churn"       "fs_mkdir_test"         "CRASH_LOOP_OK"      "" "CPU EXCEPTION|CRASH_LOOP_FAIL"
+# A path is a name plus a place. `touch /dir/name` must land in /dir - taking
+# the whole string as the name once created entries nothing could look up.
+run_case "touch writes into a path"  "mkdir /pt_paths"       "Saved."             "touch /pt_paths/a.txt" "CPU EXCEPTION|No such directory"
+run_case "ls takes a path"           "ls /pt_paths"          "a.txt"               "" "CPU EXCEPTION|No such directory"
+run_case "del takes a path and keeps flags" "touch /pt_paths/a.txt" "deleted: a.txt" "del -v /pt_paths/a.txt" "CPU EXCEPTION|No such directory"
+# Virtual directories have no blocks behind them; acting on an entry there has
+# to be refused, and the refusal must not disturb the mounted volume's cache.
+run_case "virtual dirs refuse writes" "mkdir /tmp/nope"      "Virtual directories are read-only" "" "CPU EXCEPTION"
+run_case "a refused path leaves the volume intact" "del /tmp/*.log" "Virtual directories are read-only" "ls /pt_paths" "CPU EXCEPTION|No such directory"
+run_case "del takes a plain path"    "touch /pt_paths/b.txt"  "Deleted."           "del /pt_paths/b.txt" "CPU EXCEPTION|No such directory"
+# An ACL, where a file has one, decides instead of the mode word: a named user
+# writes a 0600 file, the mask narrows that grant, the owner is held to their
+# own ACE, and root still passes. Self-cleaning: it deletes its fixture.
+run_case "access control list conformance" "acl_test"          "ACL_OK"             "" "CPU EXCEPTION|ACL_FAIL"
+run_case "acl command reports its usage"   "acl"               "acl show <file>"    "" "CPU EXCEPTION"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"

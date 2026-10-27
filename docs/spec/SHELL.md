@@ -44,6 +44,7 @@ and the associations all agree on.
 |---|---|
 | One parser | The shell, the file dialogs and the file-system API resolve a path through the same code ([S8](README.md#decisions-this-set-records)) |
 | Path forms | A namespace path (`\Computer\C:\Users\…`) and a legacy path (`C:\Users\…`, `/Users/…`); the legacy forms are aliases resolved by the same parser, so the shell and a POSIX-style program agree |
+| Path arguments | A command that names an object takes a path, not just a bare name: the directory part is resolved by the same parser `cd` uses, the last component is the name acted on, and the command returns to where its user was. A virtual directory has no blocks behind it, so a command that would write into one says so instead |
 | Long names | 32 767 code units, 255 per component ([ABI.md](ABI.md#8-text-and-names)) |
 | Virtual folders | `Computer`, `Network`, `Devices`, `Control Panel` enumerate objects that are not files; an application asks the same "what is in here" question and gets the right answer for each |
 | Recycle Bin | A delete to the bin is a move, not a copy; restore returns the object to its original path with its attributes; a delete that bypasses the bin says so |
@@ -126,6 +127,7 @@ M6 does not close until:
 | Contract | Tree today |
 |---|---|
 | Shell namespace | File-system paths and a few virtual names; no `Computer`, `Network` or `Devices` view |
+| Path arguments | `touch`, `mkdir`, `ls`/`dir` and `del` resolve `dir/name` (flags included) and restore the working directory; the interactive editors (`write`, `append`) still name a file only |
 | Associations | None; a program is run by name |
 | Drag and drop | None |
 | Clipboard | Text and bitmap, no format listener, no cross-session rule |

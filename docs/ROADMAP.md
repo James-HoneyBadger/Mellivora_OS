@@ -408,14 +408,24 @@ quotas, snapshots, compression.
   (0 = unlimited), refused before a write allocates anything, and returned to
   the file's owner on delete. The ledger is derived from the tree at every
   mount and by `quota rebuild`, which is why it cannot drift.
+- **Access control lists (landed).** Where a file carries one, its ACEs decide
+  and the mode word is not consulted: named users and groups (`acl:u<id>`,
+  `acl:g<id>`), a mask that narrows them, and `acl:o` for everyone else, stored
+  one ACE per entry in the file's existing xattr block - so no on-disk
+  structure changed and an ACL'd file is still a v3 file to an older reader.
+  `acl set`/`acl show` place and inspect them from the shell; `acl_test` is the
+  conformance suite: a named user writes a 0600 file the mode word makes
+  read-only for them, the mask narrows that grant without touching the ACE, the
+  owner is held to their own ACE, a stranger falls to `acl:o`, and root passes.
+  Inheritance and group-class unions are the remaining ACL work.
 
 **Exit:** 10 000 power-cut iterations clean; a quota and an access-control
 conformance suite; a deliberately corrupted volume repaired from the recovery
 console; an encrypted volume round-trips with its key held in the store.
 
-Of those, the power-cut harness and the quota suite's quota half are in place;
-ACLs, compression, encryption, snapshots, the redirector seam and repair at fsck
-parity are the wave's remaining work, and `make crash-soak` with 10 000
+Of those, the power-cut harness and the quota and ACL conformance suites are in
+place; compression, encryption, snapshots, the redirector seam and repair at
+fsck parity are the wave's remaining work, and `make crash-soak` with 10 000
 iterations is a run that has not happened.
 
 ### M4 · Configuration and services (9–13 weeks)

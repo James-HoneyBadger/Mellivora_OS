@@ -1214,6 +1214,11 @@ hbfs_load_root_dir:
         clc
         ret
 .hlrd_err:
+        ; A failed read left the buffer zeroed but the cache tag still naming
+        ; this directory: the next load would "hit" and hand back an empty
+        ; directory, which reads as every file having vanished. Invalidate it.
+        mov eax, 0xFFFFFFFE
+        mov [dir_cache_lba], eax
         mov esi, msg_hbfs_dir_read_err
         call vga_print
         popad
@@ -1228,6 +1233,8 @@ hbfs_load_root_dir:
         mov  ecx, HBFS_ROOT_DIR_SIZE / 4
         xor  eax, eax
         rep  stosd
+        mov  eax, 0xFFFFFFFE        ; and do not let the tag claim a hit
+        mov  [dir_cache_lba], eax
         popad
         mov esi, msg_hbfs_dir_crc_err
         call vga_print
@@ -3241,6 +3248,15 @@ hbfs_check_access:
         test ecx, ecx
         jz .hca_ok
 
+        ; An ACL, where present, decides instead of the mode word. EDI is still
+        ; the entry here; the mode-bit path below overwrites it.
+        call acl_perm                   ; EAX = perms, or -1 without an ACL
+        cmp eax, -1
+        je .hca_mode_word
+        mov esi, eax
+        jmp .hca_test
+
+.hca_mode_word:
         movzx eax, word [edi + HBFS_DE_MODE]
         movzx esi, word [edi + HBFS_DE_UID]
         movzx edi, word [edi + HBFS_DE_GID]   ; NOTE: overwrites EDI!

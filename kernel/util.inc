@@ -4988,32 +4988,212 @@ batch_check_if:
         stc
         ret
 
-cmd_mkdir:
+; Skip leading flag words in a command tail.
+; parse_flags() records the flags but restores its input pointer, so a command
+; that also takes an argument has to step over the flags itself.
+;   In : ESI = command tail (may start with spaces and "-x" words)
+;   Out: ESI = first non-flag word, or the terminating NUL
+skip_flag_words:
+        push eax
+        push ecx
+.sfw_space:
+        cmp byte [esi], ' '
+        jne .sfw_check
+        inc esi
+        jmp .sfw_space
+.sfw_check:
+        cmp byte [esi], '-'
+        jne .sfw_done
+        cmp byte [esi + 1], 0           ; a lone '-' is not a flag
+        je .sfw_done
+        cmp byte [esi + 1], ' '
+        je .sfw_done
+.sfw_word:
+        cmp byte [esi], 0
+        je .sfw_done
+        cmp byte [esi], ' '
+        je .sfw_space
+        inc esi
+        jmp .sfw_word
+.sfw_done:
+        pop ecx
+        pop eax
+        ret
+
+;-----------------------------------------------------------------------
+; Path splitting for commands that act on a name inside a directory
+;
+; `touch /a/b` and `mkdir /a/b` name a file inside /a, not a file whose name
+; is the whole string. Splitting here lets such a command enter the directory
+; and then work on a bare name, so the entry it creates can be found again.
+;
+;   In : ESI = path (the command tail)
+;   Out: path_dir_buf  = directory part ("" = current dir, "/" = root)
+;        path_base_buf = final component
+;-----------------------------------------------------------------------
+path_split:
         pushad
-        mov edi, filename_buf
+        mov edi, path_base_buf
         mov ecx, 255
         call copy_word_n
-        mov esi, filename_buf
-        cmp byte [esi], 0
-        je .mk_nospace
-        call hbfs_mkdir
-        jc .mk_fail
-        mov esi, msg_dir_created
-        call vga_print
+
+        ; A trailing slash names the directory itself: "a/" -> "a"
+.ps_strip:
+        mov esi, path_base_buf
+        xor ecx, ecx
+.ps_strip_len:
+        cmp byte [esi + ecx], 0
+        je .ps_strip_have
+        inc ecx
+        jmp .ps_strip_len
+.ps_strip_have:
+        cmp ecx, 1
+        jbe .ps_split
+        cmp byte [esi + ecx - 1], '/'
+        jne .ps_split
+        dec ecx
+        mov byte [esi + ecx], 0
+        jmp .ps_strip
+
+.ps_split:
+        ; Last '/' separates the directory from the name
+        xor ebx, ebx                    ; EBX = path length
+.ps_len:
+        cmp byte [esi + ebx], 0
+        je .ps_find_slash
+        inc ebx
+        jmp .ps_len
+.ps_find_slash:
+        mov ecx, ebx
+        mov edx, -1                     ; EDX = index of last '/'
+.ps_scan:
+        test ecx, ecx
+        jz .ps_have_slash
+        dec ecx
+        cmp byte [esi + ecx], '/'
+        jne .ps_scan
+        mov edx, ecx
+.ps_have_slash:
+        cmp edx, -1
+        je .ps_no_dir
+
+        mov ecx, edx
+        test ecx, ecx
+        jnz .ps_copy_dir
+        ; "/name": the directory part is the root
+        mov byte [path_dir_buf], '/'
+        mov byte [path_dir_buf + 1], 0
+        jmp .ps_move_name
+.ps_copy_dir:
+        mov esi, path_base_buf
+        mov edi, path_dir_buf
+        rep movsb
+        mov byte [edi], 0
+.ps_move_name:
+        mov esi, path_base_buf
+        add esi, edx
+        inc esi
+        mov edi, path_base_buf
+        call str_copy
         popad
         ret
-.mk_fail:
-        ; Check if it already exists
-        mov esi, filename_buf
-        call hbfs_load_root_dir
-        call hbfs_find_file
-        jc .mk_nospace
+
+.ps_no_dir:
+        mov byte [path_dir_buf], 0
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Enter the directory path_split found, remembering the caller's directory.
+; Pair with path_leave. path_enter leaves the cwd untouched when the path
+; had no directory part.
+;   Out: EAX = 0 entered (or nothing to enter), -1 not a directory,
+;             -2 not enterable for this purpose (a virtual read-only dir)
+;-----------------------------------------------------------------------
+path_enter:
+        pushad
+        call path_save_cwd
+        cmp byte [path_dir_buf], 0
+        je .pe_ok
+        mov esi, path_dir_buf
+        call cmd_cd_internal
+        cmp eax, 0
+        jne .pe_failed
+        ; Virtual directories (proc/dev/tmp) have no HBFS blocks behind them:
+        ; a command that would act on an entry there has nothing to act on.
+        cmp dword [current_dir_lba], 0xFFFFFFFF
+        jne .pe_ok
+        call path_restore_cwd
+        mov dword [esp + 28], -2
+        popad
+        ret
+.pe_failed:
+        ; A failed multi-component cd can sit in a half-entered directory
+        call path_restore_cwd
+        mov dword [esp + 28], -1
+        popad
+        ret
+.pe_ok:
+        mov dword [esp + 28], 0
+        popad
+        ret
+
+path_leave:
+        call path_restore_cwd
+        ret
+
+; Report why path_enter failed. EAX = the value it returned.
+path_enter_report:
+        pushad
+        mov ebx, eax
         call vga_set_error
-        mov esi, msg_already_exists
+        cmp ebx, -2
+        jne .per_missing
+        mov esi, msg_path_virtual
+        jmp .per_print
+.per_missing:
+        mov esi, msg_no_such_dir
+.per_print:
         call vga_print
         call vga_reset_color
         popad
         ret
+
+cmd_mkdir:
+        pushad
+        call path_split
+        cmp byte [path_base_buf], 0
+        je .mk_nospace
+        call path_enter
+        cmp eax, 0
+        jne .mk_no_dir
+        mov esi, path_base_buf
+        call hbfs_mkdir
+        jc .mk_fail
+        mov esi, msg_dir_created
+        call vga_print
+        call path_leave
+        popad
+        ret
+.mk_fail:
+        ; Check if it already exists
+        mov esi, path_base_buf
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .mk_nospace_leave
+        call vga_set_error
+        mov esi, msg_already_exists
+        call vga_print
+        call vga_reset_color
+        call path_leave
+        popad
+        ret
+.mk_no_dir:
+        call path_enter_report
+        popad
+        ret
+.mk_nospace_leave:
+        call path_leave
 .mk_nospace:
         call vga_set_error
         mov esi, msg_write_err

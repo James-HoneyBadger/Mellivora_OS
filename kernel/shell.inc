@@ -2199,6 +2199,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_chmod
 
+        mov edi, cmd_acl_str
+        call str_starts_with
+        jc .cmd_acl
+
         mov edi, cmd_chown_str
         call str_starts_with
         jc .cmd_chown
@@ -2748,6 +2752,10 @@ shell_dispatch_core:
 
 .cmd_ln:
         call cmd_ln
+        ret
+
+.cmd_acl:
+        call acl_command
         ret
 
 .cmd_chmod:
@@ -4431,6 +4439,43 @@ cmd_mouse_status:
 ;---------------------------------------
 cmd_list_dir:
         pushad
+        ; `ls path` / `dir path` list the named directory. The listing code
+        ; below only ever looks at the current directory, so enter the path,
+        ; list, and come back. Flags are already in cmd_flags, but ESI still
+        ; points at them.
+        mov ebx, esi                    ; keep the tail for the listing body
+        call skip_flag_words
+        cmp byte [esi], 0
+        je .cld_wrap_body
+        mov edi, list_arg_buf
+        mov ecx, 255
+        call copy_word_n
+        call path_save_cwd
+        mov esi, list_arg_buf
+        call cmd_cd_internal
+        test eax, eax
+        js .cld_wrap_missing
+        mov esi, ebx
+        call cmd_list_dir_body
+        call path_restore_cwd
+        popad
+        ret
+.cld_wrap_missing:
+        call path_restore_cwd
+        call vga_set_error
+        mov esi, msg_no_such_dir
+        call vga_print
+        call vga_reset_color
+        popad
+        ret
+.cld_wrap_body:
+        mov esi, ebx
+        call cmd_list_dir_body
+        popad
+        ret
+
+cmd_list_dir_body:
+        pushad
         ; VFS virtual directories (proc/dev/tmp): bypass HBFS listing
         cmp dword [current_dir_lba], 0xFFFFFFFF
         jne .cld_hbfs_ok
@@ -5011,21 +5056,26 @@ cmd_list_dir:
 ;---------------------------------------
 cmd_delete_file:
         pushad
-        ; Parse filename/pattern argument
-        mov edi, filename_buf
-        call copy_word
-        cmp byte [filename_buf], 0
+        ; The argument may be a path: `del /a/b` deletes b from /a, and a
+        ; wildcard path (`del /tmp/*.log`) expands inside the named directory.
+        ; Flags are already recorded; step over them first.
+        call skip_flag_words
+        call path_split
+        cmp byte [path_base_buf], 0
         je .not_found
+        call path_enter
+        cmp eax, 0
+        jne .del_no_dir
 
         ; Wildcard mode?
-        mov esi, filename_buf
+        mov esi, path_base_buf
         call str_has_wildcards
         jc .wildcard
 
         ; Exact filename delete
-        mov esi, filename_buf
+        mov esi, path_base_buf
         call hbfs_find_file_global
-        jc .not_found
+        jc .not_found_leave
         ; -v: print name before delete
         mov eax, 21            ; 'v' - 'a'
         call test_flag
@@ -5047,8 +5097,18 @@ cmd_delete_file:
 .del_no_restore:
         mov esi, msg_deleted
         call vga_print
+        call path_leave
         popad
         ret
+
+.del_no_dir:
+        call path_enter_report
+        popad
+        ret
+
+.not_found_leave:
+        call path_leave
+        jmp .not_found
 
 .wildcard:
         call hbfs_load_root_dir
@@ -5065,7 +5125,7 @@ cmd_delete_file:
 
         push ecx
         push edi
-        mov esi, filename_buf           ; pattern
+        mov esi, path_base_buf          ; pattern
         call wildcard_match
         pop edi
         pop ecx
@@ -5094,11 +5154,15 @@ cmd_delete_file:
 
 .wc_done:
         cmp ebx, 0
-        je .not_found
+        je .wc_none
         mov esi, msg_deleted
         call vga_print
+        call path_leave
         popad
         ret
+.wc_none:
+        call path_leave
+        jmp .not_found
 
 .not_found:
         call vga_set_error
@@ -5705,46 +5769,18 @@ cmd_write_file:
 ;---------------------------------------
 cmd_touch_file:
         pushad
-        mov edi, filename_buf
-        call copy_word
-        cmp byte [filename_buf], 0
+        ; A path is a name plus a place: split it so the file lands in the
+        ; named directory instead of being stored under its whole path.
+        call path_split
+        cmp byte [path_base_buf], 0
         je .touch_usage
 
-        ; A path is a name plus a place, and this command has no way to place a
-        ; file outside the current directory. Taking the whole path as the name
-        ; made `touch /overq` an entry whose name *is* "/overq" - a file no
-        ; other command can find, and a warning from fsck for years. Use the
-        ; last component and say where it went.
-        mov esi, filename_buf
-        xor ebx, ebx                    ; EBX = last '/' seen, 0 = none
-        mov ecx, esi
-.touch_scan:
-        mov al, [ecx]
-        test al, al
-        jz .touch_scanned
-        cmp al, '/'
-        jne .touch_scan_next
-        mov ebx, ecx
-.touch_scan_next:
-        inc ecx
-        jmp .touch_scan
-.touch_scanned:
-        test ebx, ebx
-        jz .touch_name_ok
-        inc ebx                         ; EBX = the name after the slash
-        cmp byte [ebx], 0
-        je .touch_usage                  ; a trailing slash names nothing
-        mov esi, ebx
-        mov edi, filename_buf
-.touch_copy_name:
-        lodsb
-        stosb
-        test al, al
-        jnz .touch_copy_name
-.touch_name_ok:
+        call path_enter
+        cmp eax, 0
+        jne .touch_no_dir
 
         ; Create empty file
-        mov esi, filename_buf
+        mov esi, path_base_buf
         mov edi, PROGRAM_BASE
         mov ecx, 0              ; Empty file
         mov edx, FTYPE_TEXT     ; Default to text
@@ -5753,6 +5789,7 @@ cmd_touch_file:
         jc .touch_err
         mov esi, msg_saved
         call vga_print
+        call path_leave
         jmp .touch_done
 
 .touch_usage:
@@ -5760,9 +5797,14 @@ cmd_touch_file:
         call vga_print
         jmp .touch_done
 
+.touch_no_dir:
+        call path_enter_report
+        jmp .touch_done
+
 .touch_err:
         mov esi, msg_write_err
         call vga_print
+        call path_leave
 
 .touch_done:
         popad
