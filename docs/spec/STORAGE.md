@@ -300,8 +300,10 @@ M3 does not close until:
 | Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it |
 | Journal with redo records | Undo journal: before-images replayed backwards |
 | One unified cache | A block cache and a page cache that agree by construction |
-| Mount points | Drive letters and one volume |
+| Partition table | Read: MBR's four primary entries, or GPT behind a protective MBR, with each volume's start, length, type, GUID and UTF-16 name in `vol_table`. The filesystem is *probed* (the superblock LBA must fall inside a volume) rather than assumed |
+| Mount points | One volume, mounted from `vol_base_lba`; labels and multiple mounts are the remaining volume-model work |
 | Removable safe ejection | None |
+| Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write and requires fsck to see entirely-old or entirely-new metadata. `CRASH_ITERS=10000 make crash-soak` is the exit test, not yet run |
 
 The v4 guarantees — verified metadata, a writable journalled volume, extents, a
 refusal instead of a format — are real and tested, and this document keeps every

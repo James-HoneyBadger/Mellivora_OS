@@ -60,6 +60,11 @@ blk_cache_read:
         test eax, eax
         jnz .bcr_locked_out
 
+        ; The lock returned its status in EAX, which was the caller's LBA.
+        ; Recovering it from the saved copy is not tidiness: taking the status
+        ; for a block number makes every read address block zero, and the bug
+        ; looks like corrupt files rather than like a locking mistake.
+        mov eax, [.bcr_lba]
         mov [.bcr_dst], edi
         cmp ecx, BLK_CACHE_SECTORS
         jne .bcr_passthru
