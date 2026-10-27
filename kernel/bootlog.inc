@@ -215,27 +215,31 @@ bootlog_show:
         imul eax, BOOTLOG_SIZE
         lea esi, [bootlog_ring + eax]
 
-        ; "  cpuN Lt: text"
+        ; "  cpuN Lt: text", on the screen and on COM1. The screen scrolls, and
+        ; a ring with more records than a screen has lines would leave the early
+        ; ones unreadable from outside the guest; the serial transcript does not
+        ; scroll, so the same line goes to both.
+        mov edi, bootlog_line
         mov al, ' '
-        call vga_putchar
+        stosb
         mov al, ' '
-        call vga_putchar
+        stosb
         mov al, 'c'
-        call vga_putchar
+        stosb
         mov al, 'p'
-        call vga_putchar
+        stosb
         mov al, 'u'
-        call vga_putchar
+        stosb
         movzx eax, byte [esi + BL_CPU]
-        add eax, '0'
-        call vga_putchar
+        add al, '0'
+        stosb
         mov al, ' '
-        call vga_putchar
+        stosb
         movzx eax, byte [esi + BL_LEVEL]
         mov al, [bootlog_levels + eax]
-        call vga_putchar
+        stosb
         mov al, ' '
-        call vga_putchar
+        stosb
 
         push esi
         add esi, BL_TEXT
@@ -243,12 +247,21 @@ bootlog_show:
         lodsb
         test al, al
         jz .bls_text_done
-        call vga_putchar
+        stosb
         jmp .bls_text
 .bls_text_done:
         pop esi
         mov al, 0x0A
-        call vga_putchar
+        stosb
+        mov byte [edi], 0
+
+        ; The line is built; say it twice.
+        push esi
+        mov esi, bootlog_line
+        call vga_print
+        mov esi, bootlog_line
+        call serial_print
+        pop esi
 
         inc dword [.bls_index]
         cmp dword [.bls_index], BOOTLOG_MAX

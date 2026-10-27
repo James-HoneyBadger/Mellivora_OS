@@ -292,10 +292,10 @@ run_case "the driver model binds the machine" "drivers" "10 bound, 0 conflicts" 
 run_case "a driver names its device" "drivers" "rtl8139     bound pci" "" "CPU EXCEPTION"
 # The boot log keeps what the boot path said, in order, with the processor.
 run_case "the boot log records the stages" "bootlog" "drv ata: bound" "" "CPU EXCEPTION"
-# The ring holds more than a screen, so the case asks for a record near the end
-# of the boot rather than the first one, which has scrolled away by the time the
-# command has printed everything.
-run_case "the boot log has the early phases" "bootlog" "drv serial: bound" "" "CPU EXCEPTION"
+# The ring holds more than a screen. `bootlog` says each line on the screen and
+# on COM1, so the early records are readable from outside the guest even though
+# the screen has scrolled past them.
+run_case "the boot log has the early phases" "bootlog" "cpu0 I drv serial: bound" "" "CPU EXCEPTION"
 # The desktop reaches the same power paths: Ctrl+Esc, six items down to "Shut
 # Down...", Enter. The dialog is a window like any other, so opening it is
 # visible and cancelling it leaves the machine running.
