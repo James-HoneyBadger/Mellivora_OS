@@ -274,6 +274,10 @@ run_case "shutdown powers the machine off" "shutdown" "" "" "CPU EXCEPTION" "" "
 # The power button is a fixed ACPI event on the SCI: the monitor presses the
 # same button a hand would, and the machine has to notice and shut down.
 run_case "the power button shuts down" "help" "POWER: button pressed" "" "CPU EXCEPTION" "" "" "" "" "" "system_powerdown" 25
+# The volume manager reads the partition table instead of assuming where the
+# filesystem starts, and probes the volume it finds for a superblock.
+run_case "the volume manager reads the table" "volumes" "Volumes: 1  table: MBR" "" "CPU EXCEPTION"
+run_case "a volume reports its filesystem" "volumes" "HBFS at +4096" "" "CPU EXCEPTION|no filesystem"
 # The driver model: every driver registered, bound to the device it serves, and
 # the ones this machine does not have reported as absent rather than silent.
 run_case "the driver model binds the machine" "drivers" "10 bound, 0 conflicts" "" "CPU EXCEPTION"
