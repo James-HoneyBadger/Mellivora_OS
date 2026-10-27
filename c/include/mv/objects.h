@@ -58,7 +58,8 @@ struct mv_object_header {
 #define MV_OBJ_TOKEN     5u
 #define MV_OBJ_PROCESS   6u
 #define MV_OBJ_SYMLINK   7u
-#define MV_OBJ_TYPE_COUNT 8u
+#define MV_OBJ_FILE      8u
+#define MV_OBJ_TYPE_COUNT 9u
 
 /* Generic rights (ABI.md §6, OBJECTS.md §4). MV_RIGHTS_ALL is a request the
  * type maps, not a mask a handle ever holds. */

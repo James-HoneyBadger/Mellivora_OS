@@ -112,7 +112,8 @@ OBJ_T_TIMER     equ 4
 OBJ_T_TOKEN     equ 5
 OBJ_T_PROCESS   equ 6
 OBJ_T_SYMLINK   equ 7
-OBJ_T_COUNT     equ 8
+OBJ_T_FILE      equ 8
+OBJ_T_COUNT     equ 9
 
 ; Type body layouts, after the 16 bytes of namespace links.
 EV_MANUAL       equ NS_RESERVED + 0      ; dd non-zero = manual reset
@@ -175,6 +176,34 @@ MV_STATUS_ACCESS_DENIED     equ 0xC0000022
 MV_STATUS_NO_MEMORY         equ 0xC0000017
 MV_STATUS_BUFFER_TOO_SMALL  equ 0xC0000023
 MV_STATUS_NOT_SUPPORTED     equ 0xC00000BB
+MV_STATUS_QUOTA_EXCEEDED    equ 0xC0000035
+
+;-----------------------------------------------------------------------
+; The per-owner object quota.
+;
+; Every object is charged to the process that created it (OBJ_OWNER_PID), and a
+; process may hold OBJ_QUOTA_PER_PROCESS live objects at a time. Without a limit
+; a program that creates events in a loop takes the machine down by exhausting
+; the slab, slowly enough that the caller looks innocent: the failure lands on
+; whatever allocates next.
+;
+; The count is kept per TCB slot rather than per PID, because a PID is a slot
+; index and a freed slot must not hand its old count to the next task that lands
+; in it. Objects created with no TCB (the shell and boot) are not limited: there
+; is one such creator and it cannot loop.
+;-----------------------------------------------------------------------
+OBJ_QUOTA_PER_PROCESS equ 256     ; 128 KB of object body at OBJ_SIZE. Small
+                                  ; enough that a test can reach the ceiling and
+                                  ; prove it bites, and still far more than any
+                                  ; program in the tree uses.
+                                  ;
+                                  ; The number is also bounded by a cost this
+                                  ; wave found and did not fix: creating a named
+                                  ; object costs about 90 ms (a linear namespace
+                                  ; insert, measured by objquota_test's dots), so
+                                  ; a four-figure quota would be a four-minute
+                                  ; gate. The create path is the thing to speed
+                                  ; up; the ceiling can rise after that.
 
 OBJ_MAX_DEPTH   equ 32          ; namespace depth limit
 SYMLINK_MAX     equ 32          ; symlink follow limit
@@ -242,6 +271,21 @@ obj_alloc:
         mov edx, [eax + TCB_PID]
         mov edi, [.oa_obj]
         mov [edi + OBJ_OWNER_PID], edx
+
+        ; Refuse past the per-process ceiling. Checked before the counters are
+        ; bumped so a refused create leaves nothing behind.
+        cmp edx, MAX_TASKS
+        jae .oa_nopid                   ; not a task slot: kernel-owned
+        cmp dword [obj_owner_live + edx*4], OBJ_QUOTA_PER_PROCESS
+        jb .oa_charge
+        ; Over quota: give the slab entry back and fail the way any other
+        ; allocation failure does, so every caller already handles it.
+        mov eax, [cache_object]
+        mov ebx, [.oa_obj]
+        call kmem_free
+        jmp .oa_fail
+.oa_charge:
+        inc dword [obj_owner_live + edx*4]
 .oa_nopid:
         mov edi, [.oa_obj]
         mov dword [edi + OBJ_QUOTA], OBJ_SIZE
@@ -269,6 +313,40 @@ obj_alloc:
         ret
 .oa_type: dd 0
 .oa_obj:  dd 0
+
+;-----------------------------------------------------------------------
+; obj_name_set - give an object a name directly
+;   In : EAX = object, EBX = NUL-terminated name (kernel pointer)
+;
+; Used by the VFS when it types an open file: the name comes from the path the
+; caller opened, and the object does not live in the object namespace, because
+; the filesystem is still the authority on where that file is.
+;-----------------------------------------------------------------------
+obj_name_set:
+        pushad
+        test eax, eax
+        jz .ons_done
+        mov [.ons_obj], eax
+        lea edi, [eax + OBJ_NAME]
+        mov esi, ebx
+        xor ecx, ecx
+.ons_loop:
+        cmp ecx, OBJ_NAME_MAX
+        jae .ons_term
+        mov al, [esi + ecx]
+        test al, al
+        jz .ons_term
+        mov [edi + ecx], al
+        inc ecx
+        jmp .ons_loop
+.ons_term:
+        mov byte [edi + ecx], 0
+        mov eax, [.ons_obj]
+        mov [eax + OBJ_NAME_LEN], cx
+.ons_done:
+        popad
+        ret
+.ons_obj: dd 0
 
 ;-----------------------------------------------------------------------
 ; obj_ref - take a pointer reference
@@ -374,6 +452,16 @@ obj_destroy:
         je .odesc_nototal
         dec dword [obj_total_live]
 .odesc_nototal:
+
+        ; The owner's quota is returned here, not at close: an object that is
+        ; still referenced by a handle is still the owner's.
+        mov eax, [edi + OBJ_OWNER_PID]
+        cmp eax, MAX_TASKS
+        jae .odesc_noquota
+        cmp dword [obj_owner_live + eax*4], 0
+        je .odesc_noquota
+        dec dword [obj_owner_live + eax*4]
+.odesc_noquota:
 
         mov eax, [cache_object]
         mov ebx, [.od_obj]
@@ -2242,6 +2330,151 @@ obj_yield_cpu:
         iret
 .oyc_me: dd 0
 
+
+;=======================================================================
+; The shell's view
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; obj_show_objects - the `objects` command
+;
+; Live and peak counts per type, straight from the counters obj_alloc and
+; obj_destroy maintain, plus the per-process ceiling. This is the command the
+; spec named and the tree lacked: the numbers existed (SYS_OBJECT_STATS reads
+; them) and nothing printed them.
+;
+; Types with nothing live are skipped: a table of eleven zeroes is noise, and a
+; type that suddenly appears is the interesting event.
+;-----------------------------------------------------------------------
+obj_show_objects:
+        pushad
+        mov esi, msg_objs_head
+        call vga_print
+        mov eax, [obj_total_live]
+        call vga_print_dec
+        mov esi, msg_objs_live
+        call vga_print
+        mov eax, OBJ_QUOTA_PER_PROCESS
+        call vga_print_dec
+        mov esi, msg_objs_per_proc
+        call vga_print
+
+        xor ebx, ebx                    ; type index
+.oso_loop:
+        cmp ebx, OBJ_T_COUNT
+        jae .oso_done
+        cmp dword [obj_type_live + ebx*4], 0
+        je .oso_next
+        mov eax, ebx
+        call obj_type_desc
+        mov esi, [eax + TT_NAME]
+        call vga_print
+        ; pad the name to a fixed column so the numbers line up
+        mov eax, ebx
+        call obj_type_desc
+        mov esi, [eax + TT_NAME]
+        xor ecx, ecx
+.oso_namelen:
+        cmp byte [esi + ecx], 0
+        je .oso_pad
+        inc ecx
+        jmp .oso_namelen
+.oso_pad:
+        cmp ecx, 14
+        jae .oso_cols
+        push ecx
+        mov eax, ' '
+        call vga_putchar
+        pop ecx
+        inc ecx
+        jmp .oso_pad
+.oso_cols:
+        mov eax, [obj_type_live + ebx*4]
+        call vga_print_dec
+        mov esi, msg_objs_slash
+        call vga_print
+        mov eax, [obj_type_peak + ebx*4]
+        call vga_print_dec
+        mov esi, msg_objs_nl
+        call vga_print
+.oso_next:
+        inc ebx
+        jmp .oso_loop
+.oso_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; obj_show_handles - the `handles` command
+;
+; Live handles per task, from TCB_HCOUNT. The shell itself is not a task: it
+; owns the console between jobs and has no handle table, which is why the
+; table starts at the first task slot rather than describing "this process".
+;-----------------------------------------------------------------------
+obj_show_handles:
+        pushad
+        mov esi, msg_hand_head
+        call vga_print
+
+        mov edi, task_table
+        xor ecx, ecx
+        xor ebx, ebx                    ; total across tasks
+        xor edx, edx                    ; tasks with a handle table
+.osh_loop:
+        cmp ecx, MAX_TASKS
+        jae .osh_done
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .osh_next
+        mov eax, [edi + TCB_HCOUNT]
+        add ebx, eax
+        test eax, eax
+        jz .osh_next
+        inc edx
+        push edx
+        push ecx
+        push edi
+        mov esi, msg_hand_pid
+        call vga_print
+        mov eax, [edi + TCB_PID]
+        call vga_print_dec
+        mov esi, msg_hand_count
+        call vga_print
+        mov eax, [edi + TCB_HCOUNT]
+        call vga_print_dec
+        mov esi, msg_objs_nl
+        call vga_print
+        pop edi
+        pop ecx
+        pop edx
+.osh_next:
+        add edi, TCB_SIZE
+        inc ecx
+        jmp .osh_loop
+.osh_done:
+        mov esi, msg_hand_total
+        call vga_print
+        mov eax, ebx
+        call vga_print_dec
+        mov esi, msg_hand_tasks
+        call vga_print
+        mov eax, edx
+        call vga_print_dec
+        mov esi, msg_hand_tasks_end
+        call vga_print
+        popad
+        ret
+
+msg_objs_head:      db 0x0A, "Objects: ", 0
+msg_objs_live:      db " live, quota ", 0
+msg_objs_per_proc:  db " per process", 0x0A, 0
+msg_objs_slash:     db " / ", 0
+msg_objs_nl:        db 0x0A, 0
+msg_hand_head:      db 0x0A, "Handles per task:", 0x0A, 0
+msg_hand_pid:       db "  pid ", 0
+msg_hand_count:     db "   ", 0
+msg_hand_total:     db 0x0A, "  total ", 0
+msg_hand_tasks:     db " held across ", 0
+msg_hand_tasks_end: db " tasks", 0x0A, 0
 
 ;=======================================================================
 ; Initialisation

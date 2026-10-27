@@ -247,7 +247,8 @@ OBJ_TYPE_TIMER      equ 4
 OBJ_TYPE_TOKEN      equ 5
 OBJ_TYPE_PROCESS    equ 6
 OBJ_TYPE_SYMLINK    equ 7
-OBJ_TYPE_COUNT      equ 8
+OBJ_TYPE_FILE       equ 8
+OBJ_TYPE_COUNT      equ 9
 
 ; Generic rights. MV_RIGHTS_ALL is a flag on the desired-rights argument, not
 ; a mask: the type maps it to the rights it actually defines.

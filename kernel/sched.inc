@@ -586,6 +586,14 @@ sched_create_task:
         mov [edi + TCB_WAITR],     dword 0
         mov [edi + TCB_PROCOBJ],   dword 0
         mov [edi + TCB_WAITSET],   dword 0
+        ; The object charge is per slot, and a recycled slot must start at zero:
+        ; otherwise a new task inherits the previous occupant's count and is
+        ; refused creates it never made.
+        mov eax, edx
+        cmp eax, MAX_TASKS
+        jae .ct_no_quota
+        mov dword [obj_owner_live + eax*4], 0
+.ct_no_quota:
 
         ; Allocate a private fd table page and inherit the launcher's fd view.
         ; A new task sees the stdin/stdout redirections that were active when it
@@ -611,6 +619,9 @@ sched_create_task:
         pop edi
         pop eax
         mov [edi + TCB_FD_TABLE_PTR], eax
+        ; The copy inherited the creator's descriptors, so it owes a reference
+        ; per File object in it.
+        call vfs_ref_all
         jmp .fd_page_done
 .no_fd_page:
         mov [edi + TCB_FD_TABLE_PTR], dword 0
@@ -712,6 +723,8 @@ sched_free_ready_task:
         call pmm_free_page
         mov dword [edi + TCB_KSTACK], 0
 .sfr_fd:
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        call vfs_release_all
         mov ecx, [edi + TCB_PID]
         call vm_free_table
         mov eax, [edi + TCB_PID]
@@ -967,10 +980,18 @@ sched_exit_task:
         mov [pd_deferred_free], eax
 .exit_no_pd:
 
-        ; Free the private fd table page if allocated
+        ; Free the private fd table page if allocated. The File objects the
+        ; descriptors owned have to be dropped first: the page is only the
+        ; table, and an object outlives it.
         mov eax, [edi + TCB_FD_TABLE_PTR]
         test eax, eax
         jz .exit_no_fd_page
+        call vfs_save_page              ; the page is stale: this task has not
+                                        ; switched out, so only the live tables
+                                        ; know what it closed
+        mov eax, [edi + TCB_FD_TABLE_PTR]
+        call vfs_release_all
+        mov eax, [edi + TCB_FD_TABLE_PTR]
         call pmm_free_page
         mov [edi + TCB_FD_TABLE_PTR], dword 0
 .exit_no_fd_page:
@@ -3285,6 +3306,13 @@ sys_fork:
         ; carries the parent's stack top, which the copy-on-write share below
         ; makes correct for the child.
         mov  dword [edi + TCB_SIG_PEND],  0  ; clear pending signals for child
+        ; Same reason as sched_create_task: the child's slot may be recycled, and
+        ; the objects the fork inherits stay charged to whoever created them.
+        mov  eax, [fork_child_pid_slot]
+        cmp  eax, MAX_TASKS
+        jae  .fork_no_quota
+        mov  dword [obj_owner_live + eax*4], 0
+.fork_no_quota:
         mov  dword [edi + TCB_ALARM],     0  ; no alarm inherited by child
         mov  dword [edi + TCB_SIG_HAND],  0  ; v11: child starts with no signal handlers
         ; v12: reset child's itimers and sigsuspend saved mask
@@ -3404,6 +3432,10 @@ sys_fork:
         pop  edi
         pop  eax
         mov  [edi + TCB_FD_TABLE_PTR], eax
+        ; The copy inherits the descriptors, not the objects' references: give
+        ; the child's table a reference per entry so a close on either side
+        ; drops exactly one.
+        call vfs_ref_all
 .fork_fd_done:
 
         inc  dword [task_count]

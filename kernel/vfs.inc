@@ -76,6 +76,7 @@ VFD_REAL_FD     equ 8    ; dword: underlying fd in the concrete FS (or index)
 VFD_POS         equ 12   ; dword: current position / byte offset
 VFD_FLAGS       equ 16   ; dword: open flags
 VFD_RIGHTS      equ 20   ; dword: rights granted *by this handle*
+VFD_OBJ         equ 24   ; dword: the File object this handle owns (0 = none)
 VFD_SIZE        equ 32
 
 ; Handle rights. A handle carries the rights it was opened with, and the
@@ -324,6 +325,11 @@ vfs_alloc_fd:
         inc ecx
         jmp .vaf_loop
 .vaf_found:
+        ; Clear the slot here rather than in each allocator: a stale VFD_OBJ in a
+        ; reused slot is a dereference of whatever the previous owner left, and
+        ; there are five allocators (file, socket, pipe, proc, tmp) of which only
+        ; some would remember to do it.
+        mov dword [edi + VFD_OBJ], 0
         mov eax, ecx
         pop edi
         pop ecx
@@ -372,6 +378,7 @@ vfd_alloc_sock:
         mov dword [edi + VFD_POS], 0
         mov dword [edi + VFD_FLAGS], FD_FLAG_READ | FD_FLAG_WRITE
         mov dword [edi + VFD_RIGHTS], RIGHT_ALL
+        mov dword [edi + VFD_OBJ], 0
 .vas_done:
         mov [esp + 28], eax
         popad
@@ -1943,9 +1950,13 @@ vfs_tmp_close:
 ;   In : EBX = path (null-terminated), ECX = open flags
 ;   Out: EAX = vfd (0..VFS_MAX_FDS-1) or -1 on failure
 ;=======================================================================
+vfs_open_path:  dd 0            ; path of the open in flight, for the File name
+vfd_new_ent:    dd 0
+
 vfs_open:
         push edi
         push ecx                ; keep the flags: they become the handle rights
+        mov  [vfs_open_path], ebx   ; the File object is named after it
         call vfs_route          ; EAX = mount table entry pointer
         test eax, eax
         jz  .vo_fail
@@ -1968,6 +1979,29 @@ vfs_open:
         mov  ebx, eax
         call vfs_fd_ptr         ; EDI → VFD entry
         mov  [edi + VFD_RIGHTS], ecx
+        mov  [vfd_new_ent], edi
+        pop  ebx
+        pop  eax
+
+        ; Type the open file as an object. The frozen fd path is untouched:
+        ; this is the compatibility alias OBJECTS.md describes, where the
+        ; resource becomes an object while the syscalls that use it stay the
+        ; ones they always were. A failure here is not fatal to the open - a
+        ; file that cannot be typed is still a working fd, and refusing the open
+        ; would turn a bookkeeping limit into a broken system call.
+        push eax
+        push ebx
+        mov  eax, OBJ_T_FILE
+        call obj_alloc
+        test eax, eax
+        jz   .vo_no_obj
+        push eax
+        mov  ebx, [vfs_open_path]
+        call obj_name_set               ; named after the path it was opened by
+        pop  edi
+        mov  ebx, [vfd_new_ent]
+        mov  [ebx + VFD_OBJ], edi
+.vo_no_obj:
         pop  ebx
         pop  eax
 .vo_done:
@@ -1978,6 +2012,97 @@ vfs_open:
         pop  ecx
         pop  edi
         mov  eax, -1
+        ret
+
+;=======================================================================
+; vfs_save_page — flush the live fd tables into a task's private page
+;   In : EAX = the page (0 = none)
+;
+; The live tables are a cache of the running task's view; a task giving up the
+; CPU writes them back (see sched_swap_fd_tables). A task exiting never gives
+; up the CPU, so without this its page still holds the descriptors as they were
+; when it was scheduled in - and vfs_release_all would then drop references for
+; handles the task already closed, freeing objects someone else still holds.
+;=======================================================================
+vfs_save_page:
+        pushad
+        test eax, eax
+        jz .vsp_done
+        mov edi, eax
+        mov esi, fd_table
+        mov ecx, (FD_MAX * FD_ENTRY_SIZE) / 4
+        cld
+        rep movsd
+        mov esi, vfs_fd_table
+        mov ecx, FD_PAGE_VFD_BYTES / 4
+        rep movsd
+.vsp_done:
+        popad
+        ret
+
+;=======================================================================
+; vfs_ref_all — take a reference for every File object in an fd table page
+;   In : EAX = the page (0 = none)
+;
+; A fork copies the parent's fd table page, descriptors and all. Each entry owns
+; one reference to its File object, so the copy owes one per entry: without this
+; the parent and the child both close the same object and it is freed twice,
+; which the refcount reports as OBJ_UNDERFLOW and which would otherwise be a
+; use-after-free. Called from sys_fork right after the page is filled.
+;=======================================================================
+vfs_ref_all:
+        pushad
+        test eax, eax
+        jz .vfa_done
+        add eax, FD_PAGE_VFD_OFS
+        mov edi, eax
+        mov ebx, VFS_MAX_FDS
+.vfa_loop:
+        test ebx, ebx
+        jz .vfa_done
+        mov eax, [edi + VFD_OBJ]
+        test eax, eax
+        jz .vfa_next
+        call obj_ref
+.vfa_next:
+        add edi, VFD_SIZE
+        dec ebx
+        jmp .vfa_loop
+.vfa_done:
+        popad
+        ret
+
+;=======================================================================
+; vfs_release_all — drop the File objects held by a dying task
+;   In : EAX = the task's private fd page (0 = none allocated)
+;
+; A task that exits with files open takes its process object down with it and
+; its fd page is freed. The File objects those descriptors owned are separate
+; allocations with their own references, so freeing the page without walking it
+; leaks one object per open file - visible in `objects` as a File count that
+; only ever rises. Called from both places sched.inc frees the page.
+;=======================================================================
+vfs_release_all:
+        pushad
+        test eax, eax
+        jz .vra_done
+        add eax, FD_PAGE_VFD_OFS
+        mov edi, eax
+        mov ebx, VFS_MAX_FDS
+.vra_loop:
+        test ebx, ebx
+        jz .vra_done
+        mov eax, [edi + VFD_OBJ]
+        test eax, eax
+        jz .vra_next
+        mov dword [edi + VFD_OBJ], 0
+        call obj_deref
+.vra_next:
+        add edi, VFD_SIZE
+        dec ebx
+        jmp .vra_loop
+.vra_done:
+        popad
         ret
 
 ;=======================================================================
@@ -2095,6 +2220,16 @@ vfs_close:
         call vfs_fd_ptr
         cmp  dword [edi + VFD_STATE], VFD_OPEN
         jne  .vcl_bad
+
+        ; Drop the File object's reference before the slot is released. The
+        ; object outlives the fd if a dup still holds it, which is the point of
+        ; counting it at all.
+        mov  eax, [edi + VFD_OBJ]
+        test eax, eax
+        jz   .vcl_no_obj
+        mov  dword [edi + VFD_OBJ], 0
+        call obj_deref
+.vcl_no_obj:
 
         mov  eax, [edi + VFD_FS_TYPE]
         pop  ebx

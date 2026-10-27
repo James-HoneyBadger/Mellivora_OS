@@ -266,11 +266,11 @@ offset so the C and assembly views cannot drift.
 
 | Contract | Tree today |
 |---|---|
-| Typed objects, one 512-byte body with the §2 header | Yes, for the eight types below. A type is a record in a table - name, rights mask, flags, close routine - not a switch |
+| Typed objects, one 512-byte body with the §2 header | Yes, for the nine types below. A type is a record in a table - name, rights mask, flags, close routine - not a switch |
 | Handles with rights and generations | Yes: `(generation << 18) \| (index << 2)`, a per-process table grown from the PMM in 4096-entry steps, rights enforced at the operation |
 | One namespace | `\`, `\KernelObjects`, `\Devices`, `\RpcControl`, `\Sessions\0` and `\Sessions\1` with `BaseNamedObjects` under each; case-insensitive longest-match lookup, traverse on every directory crossed, absolute symlinks with a depth limit |
 | WaitOne / WaitAny / WaitAll | Yes, with poll (timeout 0) and blocking (timeout n), FIFO per object, a 64-handle limit, and auto-reset consumption |
-| Reference counting and rundown | Yes: `obj_ref`/`obj_deref`, a deleting flag that refuses new references, and an underflow that stops the machine naming the type |
+| Reference counting and rundown | Yes: `obj_ref`/`obj_deref`, a deleting flag that refuses new references, and an underflow that stops the machine naming the type. Every descriptor table entry owns exactly one reference, which is why `fork` and task creation take one per inherited entry (`vfs_ref_all`) instead of copying a pointer |
 | Deferred procedure calls | `dpc_queue`/`dpc_drain`; the timer's wait sweep is the first user, and a boot self-test proves order |
 | Sessions | The namespace enforces the boundary; `SE_SESSION_CROSS` (uid 0) crosses it |
 
@@ -286,6 +286,7 @@ Types, and what each can do:
 | `Token` | no | no | a view over the TCB's identity, so `setuid` cannot disagree with it |
 | `Process` | yes | no | wraps the TCB; the type exists and is counted, and waiting on it is not yet wired |
 | `Symlink` | no | yes | absolute targets only |
+| `File` | no | yes | created by `SYS_OPEN` for every successful open, named after the path, released by `SYS_CLOSE` and by task exit; the frozen fd path is untouched, which is the compatibility alias §2 asks for |
 
 The conformance §11 names: `handle_test` and `hostile_test` pass, `object_test`
 covers §11's items 3 and 5 and adds the two security refusals, `wait_test`
@@ -313,18 +314,34 @@ them visible while every wait was satisfied by the task that asked for it:
   number) instead of an exit code, and only when the task had slept first.
   Both ends now clear the field.
 
+Handing an object to another task means the reference count follows the
+handles, not the memory the handles live in. Two places had to learn that, both
+found by the first test that forked with a file open: a task that exits never
+switches out, so its private descriptor page still held the handles it closed
+during its life and draining that stale page freed objects other tasks still
+pointed at (`vfs_save_page` flushes the live tables into the page first), and a
+new task inherits a copy of its creator's descriptors, so it owes a reference
+per File object in the copy (`vfs_ref_all`).
+
+Quotas are enforced: a process may hold `OBJ_QUOTA_PER_PROCESS` (256) live
+objects, the create fails as a refusal rather than starving the slab, and a
+close returns the charge - `objquota_test` proves the ceiling, the refusal, the
+recovery and the return to baseline. The shell has the two commands the spec
+asks for: `objects` prints live and peak counts per type with the ceiling, and
+`handles` prints live handles per task.
+
 Stated plainly, and to be removed as the waves land:
-- **A file is not yet an object.** `SYS_OPEN` and its friends keep the frozen
-  fd path; typing files means the VFS rewrite, which is its own wave. The
-  compatibility aliases §2 of the roadmap describes therefore do not exist yet.
-- **The remaining ten types** in §3 - section, job, port, key, device, driver,
+- **A file is an object, but only as far as the frozen fd path goes.** Every
+  successful `SYS_OPEN` allocates a `File` object, named after the path and
+  reference-counted by the descriptor, and task exit drops the ones it still
+  holds. What is *not* done is the other direction: opening a file does not hand
+  out a handle, and `SYS_READ`/`SYS_WRITE` still take the descriptor, because
+  the handle-based file calls are the VFS wave's. A file object is therefore
+  visible and accounted for, and cannot yet be waited on, duplicated into a
+  handle, or secured per open.
+- **The remaining nine types** in §3 - section, job, port, key, device, driver,
   socket, eventlog, service - arrive with the waves that own them.
 - **`MV_RIGHTS_ALL` mapping is one table entry per type**, checked by
   `object_test` for events and by construction for the rest.
-- **Quotas are charged and not enforced.** An object records its body size
-  against its creator; no job or process limit reads that yet.
-- **`objects` and `handles` are not shell commands.** `SYS_OBJECT_STATS`
-  returns the per-type live and peak counts and is what `object_test` uses; the
-  commands that print them belong with the rest of the shell work.
 - **Alertable waits** return `MV_USER_APC` when a signal is pending; there are
   no queued user APCs to run yet, so that is the whole of the behaviour.

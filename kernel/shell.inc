@@ -1875,6 +1875,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_locks
 
+        mov edi, cmd_objects_str
+        call str_starts_with
+        jc .cmd_objects
+
+        mov edi, cmd_handles_str
+        call str_starts_with
+        jc .cmd_handles
+
         mov edi, cmd_cmod_str
         call str_starts_with
         jc .cmd_cmod
@@ -2306,6 +2314,14 @@ shell_dispatch_core:
 
 .cmd_locks:
         call lock_selftest
+        ret
+
+.cmd_objects:
+        call obj_show_objects
+        ret
+
+.cmd_handles:
+        call obj_show_handles
         ret
 
 .cmd_cmod:

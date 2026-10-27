@@ -244,8 +244,21 @@ instead of the wait set (a kernel fault the first time a signal completed
 somebody else's wait), `obj_yield_cpu` turned "no task ready" into an instant
 timeout even when the signaller was merely asleep, and `sys_waitpid` inherited
 an expired `TCB_WAKEUP` and returned its own syscall number instead of an exit
-code. `crosswait_test` proves both directions in `make check-runtime`. What M1
-still has not finished is written down in
+code. `crosswait_test` proves both directions in `make check-runtime`.
+
+**Objects are accounted for as well as built.** A process may hold 256 live
+objects, the ceiling is a refusal that costs nothing rather than a starved slab,
+and a close returns the charge - `objquota_test` is the gate. Every successful
+`SYS_OPEN` is a `File` object named after its path, owned by the descriptor,
+released by the close and by task exit; `fileobj_test` proves it and
+`fd_isolate_test` proves an object survives one task closing a number another
+still holds. Getting that right meant teaching the refcount that it follows the
+handle: a task exiting never switches out, so its private descriptor page is
+stale and had to be flushed before draining, and a new task inherits a copy of
+its creator's descriptors and therefore owes a reference per entry. The shell
+gained the two commands the spec asked for, `objects` and `handles`.
+
+What M1 still has not finished is written down in
 [OBJECTS.md](spec/OBJECTS.md#12-as-built) rather than left implied.
 
 ### M2 · The machine: ACPI, APIC, SMP, PnP and drivers (14–20 weeks)

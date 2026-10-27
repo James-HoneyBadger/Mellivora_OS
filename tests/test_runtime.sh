@@ -212,6 +212,18 @@ run_case "wait sets"                "wait_test"   "WAIT_OK"  "" "CPU EXCEPTION|W
 # finds the object by name because a fork starts with an empty handle table, so
 # this also proves the namespace is shared rather than per process.
 run_case "cross-task wake, both ways" "crosswait_test"    "XWAIT_OK"           "" "CPU EXCEPTION|XWAIT_FAIL|PAGE FAULT" "" "" "" 15
+# An open file is a typed object, not only a descriptor: SYS_OPEN papers over
+# the object model exactly as OBJECTS.md §2 describes, and the counts prove the
+# object is created, named after its path and released on close.
+run_case "an open file is an object" "fileobj_test"        "FILEOBJ_OK"         "" "CPU EXCEPTION|FILEOBJ_FAIL"
+# Quotas: creating objects in a loop stops at the ceiling instead of starving
+# the slab, a close returns the charge, and the live count comes back.
+run_case "object quota is enforced"  "objquota_test"       "QUOTA_OK"           "" "CPU EXCEPTION|QUOTA_FAIL" "" "" "" 150
+# The two commands the object manager's spec names. Both read counters the
+# kernel already keeps: `objects` the per-type live/peak counts plus the
+# per-process ceiling, `handles` the per-task handle count.
+run_case "objects command reports the table" "objects"   "quota 256 per process" "" "CPU EXCEPTION|Unknown command"
+run_case "handles command reports totals"    "handles"   "Handles per task:"     "" "CPU EXCEPTION|Unknown command"
 # A handle carries its own rights: a read-only handle cannot write back, a
 # write-only one cannot be read, even as root where the mode allows both.
 run_case "handle rights are enforced" "handle_test"           "HANDLE_OK"          "" "CPU EXCEPTION|HANDLE_FAIL"

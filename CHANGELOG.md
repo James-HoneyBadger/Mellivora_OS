@@ -1,5 +1,42 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M1: objects are counted, capped and visible
+
+- **A process may hold 256 live objects, and the refusal is a refusal.** The
+  slab had one global size and no accounting, so one task in a loop could take
+  every descriptor in the machine and every later create failed with an
+  unrelated status. `obj_alloc` now charges the creating process and `obj_destroy`
+  returns the charge; at the ceiling the create fails cleanly and the slab entry
+  it had already taken is returned first, so a refusal costs nothing.
+  `programs/objquota_test.asm` proves the ceiling, the refusal, and that closing
+  brings the count back. 256 rather than 4096 because a *named* object costs
+  about 90 ms to create (a linear insert into the namespace) - that is a defect
+  of the namespace, recorded in [OBJECTS.md](docs/spec/OBJECTS.md#12-as-built),
+  not a reason to make the gate a four-minute test.
+- **`objects` and `handles`, the two commands §12 asked for.** `objects` prints
+  live and peak counts per type plus the per-process ceiling, `handles` prints
+  live handles per task and a total. Both read counters the kernel already kept.
+- **A file is an object.** Every successful `SYS_OPEN` now allocates a `File`
+  object named after the path, and the descriptor owns the reference; a
+  `SYS_CLOSE` drops it and task exit drops the rest. The frozen fd path is
+  untouched - `SYS_READ`/`SYS_WRITE` still take a descriptor - which is the
+  compatibility alias the objects spec describes. `programs/fileobj_test.asm`
+  is the gate.
+- **The reference count follows the handle, not the memory the handle lives in**,
+  and the first test to fork with a file open found both places it did not:
+  - A task that exits never switches out, so its private descriptor page still
+    held the handles it had closed during its life. Draining that stale page
+    dropped references for handles already gone and freed objects another task
+    still held - which surfaced as `OBJ_UNDERFLOW` in the parent's close, and
+    would have been a use-after-free anywhere objects were shared. `vfs_save_page`
+    flushes the live tables into the page before the exit path drains it.
+  - A new task is created with a copy of its creator's descriptor tables, so it
+    owes a reference per File object in the copy. `vfs_ref_all` takes them, and
+    `fork` calls it too; without it a child closing an inherited descriptor
+    destroyed the parent's file.
+  - `fd_isolate_test` now passes: the parent's descriptor survives the child
+    closing the same number, and the object is destroyed exactly once.
+
 ## Unreleased - M1: a wait can be completed by another task
 
 - **The cross-task wake works, after three fixes it exposed.** This was the one

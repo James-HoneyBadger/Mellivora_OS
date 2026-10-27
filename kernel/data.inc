@@ -176,6 +176,8 @@ cmd_help_str:   db "help", 0
 cmd_ver_str:    db "ver", 0
 cmd_acpi_str:   db "acpi", 0
 cmd_locks_str:  db "locks", 0
+cmd_objects_str: db "objects", 0
+cmd_handles_str: db "handles", 0
 cmd_cmod_str:   db "cmod", 0
 cmd_fpu_str:    db "fpu", 0
 cmd_clear_str:  db "clear", 0
@@ -615,6 +617,13 @@ obj_type_table:
         dd RIGHT_QUERY_STATE | RIGHT_READ_DATA | RIGHT_WRITE_DATA | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR
         dd TF_NAMED | TF_SECURED
         dd 0
+        ; A file opened through the frozen SYS_OPEN path. Not waitable (a file
+        ; has no signalled state) and named, so `objects` and the audit log can
+        ; say which file a leaked object was.
+        dd obj_tn_file
+        dd RIGHT_QUERY_STATE | RIGHT_READ_DATA | RIGHT_WRITE_DATA | RIGHT_DELETE | RIGHT_READ_ATTR | RIGHT_WRITE_ATTR
+        dd TF_NAMED | TF_SECURED
+        dd 0
 
 obj_tn_directory:   db "Directory", 0
 obj_tn_event:       db "Event", 0
@@ -624,6 +633,7 @@ obj_tn_timer:       db "Timer", 0
 obj_tn_token:       db "Token", 0
 obj_tn_process:     db "Process", 0
 obj_tn_symlink:     db "Symlink", 0
+obj_tn_file:        db "File", 0
 
 ; { name pointer, address of the global that should remember it or 0 }
 obj_init_dirs:
@@ -1301,6 +1311,7 @@ obj_base0:          dd 0
 obj_lobby:          dd 0
 
 obj_total_live:     dd 0
+obj_owner_live:     resd MAX_TASKS    ; live objects charged to each task slot
 obj_type_live:      times OBJ_T_COUNT dd 0
 obj_type_peak:      times OBJ_T_COUNT dd 0
 obj_audit_last:     dd 0

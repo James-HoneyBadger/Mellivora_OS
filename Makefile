@@ -241,7 +241,7 @@ KERNEL_MAX_BYTES = 2097152
 #      blob, and refuses to assemble if the address has gone stale.
 $(C_OBJ_DIR)/kernel-probe.bin: $(KERNEL_SRC) $(KERNEL_INCS)
 	@mkdir -p $(dir $@)
-	$(NASM) -f bin -O0 -w-zeroing -DCMOD_ABSENT -o $@ $(KERNEL_SRC)
+	$(NASM) -f bin -O0 -w-zeroing -w-label-redef-late -DCMOD_ABSENT -o $@ $(KERNEL_SRC)
 
 $(C_OBJ_DIR)/kmod.addr: $(C_OBJ_DIR)/kernel-probe.bin
 	@SIZE=$$(wc -c < $<); \
@@ -250,7 +250,7 @@ $(C_OBJ_DIR)/kmod.addr: $(C_OBJ_DIR)/kernel-probe.bin
 	echo "  [c] C module slot at $$(cat $@)"
 
 $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS) $(CMOD_BLOB)
-	$(NASM) -f bin -O0 -w-zeroing -DCMOD_ADDR=`cat $(C_OBJ_DIR)/kmod.addr` -o $@ -l $(@:.bin=.lst) $<
+	$(NASM) -f bin -O0 -w-zeroing -w-label-redef-late -DCMOD_ADDR=`cat $(C_OBJ_DIR)/kmod.addr` -o $@ -l $(@:.bin=.lst) $<
 	@SIZE=$$(wc -c < $@); \
 	if [ $$SIZE -gt $(KERNEL_MAX_BYTES) ]; then \
 		echo "  ERROR: $@ is $$SIZE bytes (limit $(KERNEL_MAX_BYTES)):"; \
@@ -266,7 +266,7 @@ $(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_INCS) $(CMOD_BLOB)
 # The C module slot is left out: it carries no symbols, and nothing in the
 # kernel sits after it.
 $(KERNEL_ELF): $(KERNEL_SRC) $(KERNEL_INCS)
-	$(NASM) -f elf32 -dKERNEL_ELF -DCMOD_ABSENT -O0 -w-zeroing -o $@ $<
+	$(NASM) -f elf32 -dKERNEL_ELF -DCMOD_ABSENT -O0 -w-zeroing -w-label-redef-late -o $@ $<
 
 symbols: $(KERNEL_ELF)
 	@echo "  Symbols: $(KERNEL_ELF) (load base 0x00100000)"

@@ -53,6 +53,8 @@ cmd_table:
         CMDENT cmd_time_str, CAT_SYSTEM, sum_time, det_time
         CMDENT cmd_acpi_str, CAT_SYSTEM, sum_acpi, det_acpi
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
+        CMDENT cmd_objects_str, CAT_SYSTEM, sum_objects, det_objects
+        CMDENT cmd_handles_str, CAT_SYSTEM, sum_handles, det_handles
         CMDENT cmd_cmod_str, CAT_SYSTEM, sum_cmod, det_cmod
         CMDENT cmd_fpu_str, CAT_SYSTEM, sum_fpu, det_fpu
         CMDENT cmd_ver_str, CAT_SYSTEM, sum_ver, det_ver
@@ -232,6 +234,18 @@ sum_whoami: db "Current user and uid", 0
 det_whoami:
         db "whoami", 0x0A
         db "  Print the name and uid the shell is running as.", 0x0A, 0
+sum_objects: db "Show live and peak object counts per type", 0
+det_objects:
+        db "objects", 0x0A
+        db "  Print the objects alive now and the highest count reached, per", 0x0A
+        db "  type, with the per-process ceiling. Types with nothing live are", 0x0A
+        db "  skipped: a type appearing is the interesting event.", 0x0A, 0
+sum_handles: db "Show live handles per task", 0
+det_handles:
+        db "handles", 0x0A
+        db "  Print the handles each task holds and the total. A task with none", 0x0A
+        db "  is skipped. The shell has no handle table of its own - it is not a", 0x0A
+        db "  task - so the table starts at the first task slot.", 0x0A, 0
 sum_locks: db "Exercise the lock-order gate", 0
 det_locks:
         db "locks", 0x0A
