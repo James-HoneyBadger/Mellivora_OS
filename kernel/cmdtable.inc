@@ -56,6 +56,7 @@ cmd_table:
         CMDENT cmd_drivers_str, CAT_SYSTEM, sum_drivers, det_drivers
         CMDENT cmd_smpstress_str, CAT_SYSTEM, sum_smpstress, det_smpstress
         CMDENT cmd_volumes_str, CAT_SYSTEM, sum_volumes, det_volumes
+        CMDENT cmd_quota_str, CAT_SYSTEM, sum_quota, det_quota
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
         CMDENT cmd_objects_str, CAT_SYSTEM, sum_objects, det_objects
         CMDENT cmd_handles_str, CAT_SYSTEM, sum_handles, det_handles
@@ -278,6 +279,14 @@ det_acpi:
         db "  interrupt the SCI arrives on, and the S5 encoding read out of the", 0x0A
         db "  DSDT that shutdown writes. ACPI is taken over at boot, so those", 0x0A
         db "  registers are this kernel's, not the firmware's.", 0x0A, 0
+sum_quota: db "How much disk each user holds, and what the ceiling is", 0
+det_quota:
+        db "quota [set UID BLOCKS | rebuild]", 0x0A
+        db "  Show the per-user accounting: blocks held and the ceiling,", 0x0A
+        db "  where 0 blocks means unlimited. 'quota set' changes a ceiling;", 0x0A
+        db "  'quota rebuild' rederives the ledger from the tree, which is", 0x0A
+        db "  also what happens at every mount - so a power cut cannot leave", 0x0A
+        db "  the numbers disagreeing with the disk.", 0x0A, 0
 sum_volumes: db "The partitions on the disk, and which one holds the filesystem", 0
 det_volumes:
         db "volumes", 0x0A

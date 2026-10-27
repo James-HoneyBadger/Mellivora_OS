@@ -186,6 +186,11 @@ hbfs_init:
         call hbfs_load_root_dir
         jc .root_error
 
+        ; The quota ledger is derived from the tree, not stored: a power cut
+        ; cannot leave it disagreeing with the disk, because the next mount
+        ; recomputes it from the entries themselves.
+        call quota_build
+
         popad
         ret
 
@@ -279,6 +284,11 @@ hbfs_init:
         mov  dword [hbfs_mounted], 1
         call hbfs_load_root_dir
         jc  .v4_root_bad
+
+        ; The quota ledger is derived from the tree, not stored: a power cut
+        ; cannot leave it disagreeing with the disk, because the next mount
+        ; recomputes it from the entries themselves.
+        call quota_build
 
         cmp  dword [hbfs_read_only], 0
         jne  .v4_report_ro
@@ -1803,6 +1813,16 @@ hbfs_create_file:
 .has_data:
         mov [.save_blocks], ecx
 
+        ; A write is the moment a quota is either kept or broken, so it is the
+        ; moment to ask. The refusal happens before anything is allocated, so a
+        ; refused write leaves no half-created file behind.
+        pushad
+        call quota_uid_of_current
+        mov ecx, [.save_blocks]
+        call quota_allow
+        popad
+        jc .quota_denied
+
         ; Allocate contiguous blocks. If the volume has no run that big, a v4
         ; volume stores the file as a run list instead of failing.
         mov ecx, [.save_blocks]
@@ -1822,6 +1842,14 @@ hbfs_create_file:
         mov [edi + 256], ecx            ; File size
         mov ecx, [.save_blocks]
         mov [edi + 264], ecx            ; Block count
+
+        ; Accounted once the blocks are the file's: the owner is whoever wrote
+        ; it, which is the uid the allowance was checked against.
+        pushad
+        call quota_uid_of_current
+        mov ecx, [.save_blocks]
+        call quota_charge
+        popad
         call rtc_get_timestamp
         mov [edi + 268], eax            ; Created timestamp (RTC packed)
         mov [edi + 272], eax            ; Modified timestamp (RTC packed)
@@ -1856,6 +1884,16 @@ hbfs_create_file:
         call hbfs_journal_commit
         popad
         clc
+        ret
+
+.quota_denied:
+        ; Nothing has been allocated and nothing journaled, so the volume is
+        ; exactly as it was; the caller sees a refusal, not a short file.
+        mov esi, msg_hbfs_quota
+        call serial_print
+        call hbfs_journal_abort
+        popad
+        stc
         ret
 
 .alloc_fail:
@@ -2215,6 +2253,17 @@ hbfs_delete_file_entry:
         pushad
         call hbfs_require_writable
         jc .hdfe_refuse
+
+        ; Give the blocks back to the user who owns the file, not to whoever is
+        ; deleting it: root deleting a user's file must lower that user's
+        ; account, or the ledger drifts every time an administrator tidies up.
+        movzx eax, word [edi + 278]
+        mov ecx, [edi + 264]
+        test ecx, ecx
+        jz .hdfe_no_release
+        call quota_release
+.hdfe_no_release:
+
         call hbfs_journal_begin
         ; An extent entry names runs, not one range: walk its list. A v3 (or
         ; one-run) entry frees `start` .. `start+count-1` as before.

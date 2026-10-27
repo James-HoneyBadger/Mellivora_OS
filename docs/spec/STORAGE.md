@@ -296,7 +296,8 @@ M3 does not close until:
 |---|---|
 | 64-bit block numbers, 2^62 volume | 32-bit, 2 GB |
 | B+tree directories, 65 535 entries | Linear directory blocks, 224 entries per subdirectory |
-| ACLs, streams, quotas, compression, encryption, snapshots | Mode bits and one owner; no streams, quotas or snapshots |
+| ACLs, streams, compression, encryption, snapshots | Mode bits and one owner; no streams or snapshots |
+| Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it |
 | Journal with redo records | Undo journal: before-images replayed backwards |
 | One unified cache | A block cache and a page cache that agree by construction |
 | Mount points | Drive letters and one volume |

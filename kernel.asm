@@ -855,6 +855,7 @@ kernel_entry:
 %include "kernel/pagecache.inc"
 %include "kernel/hbfs.inc"
 %include "kernel/volume.inc"
+%include "kernel/quota.inc"
 %include "kernel/vfs.inc"
 %include "kernel/filesearch.inc"
 %include "kernel/isr.inc"

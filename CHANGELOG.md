@@ -1,5 +1,33 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M3: the disk has a partition table, and quotas that cannot drift
+
+- **The volume manager.** HBFS was assumed to start at LBA 4096 and the volume
+  holding it was never looked at. `kernel/volume.inc` reads the table instead -
+  the MBR's four primary entries, or the GPT header and entry array behind a
+  protective MBR - and records each volume's start, length, type, GUID and
+  UTF-16 name. The filesystem is *probed*, not assumed: the superblock LBA is
+  checked to fall inside a volume before a sector is read, so a probe cannot
+  touch somebody else's sectors. `volumes` prints the table and says which
+  volume the filesystem came from. On the profile image: one MBR partition at
+  LBA 1, 131 071 sectors, type 0x83, with HBFS at +4096.
+  Worth knowing before the v5 work: `populate.py` writes **v3** volumes, so the
+  v4 reader path is exercised by tests that format one, not by the image.
+- **Per-user quotas, derived rather than stored.** Blocks are accounted per uid
+  with a ceiling (0 = unlimited), checked before a write allocates anything so a
+  refusal leaves no half-created file, charged when the blocks become the file's,
+  and returned to the file's *owner* on delete rather than to whoever deleted it.
+  The ledger is recomputed from the tree at every mount and by `quota rebuild`,
+  which is why a power cut cannot leave the numbers disagreeing with the disk:
+  there is no second copy to disagree with.
+  Threshold: `quota set 0 1` then `touch /overq` fails with "Write error!",
+  `quota` counts the refusal, `quota set 0 4000` lets the same write through, and
+  `del` returns the block - all four are runtime cases.
+- **Two bugs the work found:** the first walk read subdirectories at their raw
+  entry block number, which is *data-area relative*, so it walked the boot sector
+  as if it were a directory and filled the ledger with nonsense; and the ledger's
+  own first build ran only on the v4 mount path, so a v3 volume reported nothing.
+
 ## Unreleased - M2: the machine answers for itself
 
 - **ACPI is taken over, and the machine can be stopped.** The FADT is parsed -

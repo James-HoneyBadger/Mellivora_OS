@@ -181,6 +181,7 @@ cmd_bootlog_str: db "bootlog", 0
 cmd_drivers_str: db "drivers", 0
 cmd_smpstress_str: db "smpstress", 0
 cmd_volumes_str: db "volumes", 0
+cmd_quota_str: db "quota", 0
 
 msg_smpstress_head:   db 0x0A, "Mixed load across every processor", 0x0A, 0
 msg_smpstress_aps:    db "  application processors online: ", 0
@@ -426,6 +427,7 @@ msg_hbfs_root_err:   db "  Filesystem:    Root directory unreadable; not mounted
 msg_hbfs_format_err: db "  Filesystem:    Format failed; not mounted", 0x0A, 0
 msg_hbfs_v4_ro:      db "  Filesystem:    HBFS v4 detected (read-only)", 0x0A, 0
 msg_hbfs_v4_rw:      db "  Filesystem:    HBFS v4 detected (journalled)", 0x0A, 0
+msg_hbfs_quota:      db "HBFS: quota refused a write", 10, 0
 msg_hbfs_bad_checksum: db "  Filesystem:    Metadata checksum failed; not mounted", 0x0A, 0
 msg_hbfs_v4_journal: db "  Filesystem:    HBFS v4 journal needs recovery; not mounted", 0x0A, 0
 msg_hbfs_dir_crc_err: db "HBFS: directory checksum failed", 0x0A, 0

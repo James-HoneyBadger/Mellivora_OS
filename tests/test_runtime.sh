@@ -274,6 +274,14 @@ run_case "shutdown powers the machine off" "shutdown" "" "" "CPU EXCEPTION" "" "
 # The power button is a fixed ACPI event on the SCI: the monitor presses the
 # same button a hand would, and the machine has to notice and shut down.
 run_case "the power button shuts down" "help" "POWER: button pressed" "" "CPU EXCEPTION" "" "" "" "" "" "system_powerdown" 25
+# Quotas: the ledger is derived from the tree at mount, a write past the
+# ceiling is refused, and raising the ceiling lets it through. The numbers come
+# from the image, so the cases use the extreme (a ceiling of one block) rather
+# than reciting a figure that changes whenever a program is added.
+run_case "the quota ledger is derived from the tree" "quota" "QUOTA_OK" "" "CPU EXCEPTION"
+run_case "a quota refuses a write at the ceiling" "quota set 0 1" "Write error" "" "CPU EXCEPTION|Saved." "touch /overq"
+run_case "raising the ceiling allows the write" "quota set 0 4000" "Saved." "" "CPU EXCEPTION|Write error" "touch /overq"
+run_case "the ledger rebuilds on demand" "quota rebuild" "ledger rebuilt" "" "CPU EXCEPTION"
 # The volume manager reads the partition table instead of assuming where the
 # filesystem starts, and probes the volume it finds for a superblock.
 run_case "the volume manager reads the table" "volumes" "Volumes: 1  table: MBR" "" "CPU EXCEPTION"

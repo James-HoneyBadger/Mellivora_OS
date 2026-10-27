@@ -1919,6 +1919,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_volumes
 
+        mov edi, cmd_quota_str
+        call str_starts_with
+        jc .cmd_quota
+
         mov edi, cmd_smpstress_str
         call str_starts_with
         jc .cmd_smpstress
@@ -2374,6 +2378,10 @@ shell_dispatch_core:
 
 .cmd_volumes:
         call vol_show
+        ret
+
+.cmd_quota:
+        call quota_command
         ret
 
 .cmd_smpstress:
