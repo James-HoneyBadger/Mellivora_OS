@@ -103,15 +103,15 @@ repair_entry:
         je .re_bad
         inc ecx
         cmp ecx, HBFS_MAX_FILENAME
-        jb .re_name
+        jbe .re_name                    ; the terminator may sit in the last byte
         jmp .re_bad                       ; no terminator within the field
 .re_name_ok:
 
         movzx eax, byte [edi + HBFS_DE_TYPE]
         cmp eax, FTYPE_TEXT
-        jb .re_bad
+        jb .re_bad_type
         cmp eax, FTYPE_LINK
-        ja .re_bad
+        ja .re_bad_type
         mov [.re_type], eax
 
         ; The entry's data blocks
@@ -130,7 +130,7 @@ repair_entry:
         cmp dword [edi + HBFS_DE_XATTR_LBA], 0
         je .re_no_xattr
         cmp word [edi + HBFS_DE_XATTR_COUNT], HBFS_XATTR_PER_BLOCK
-        ja .re_bad
+        ja .re_bad_xattr
         mov eax, [edi + HBFS_DE_XATTR_LBA]
         sub eax, HBFS_DATA_START
         jb .re_bad
@@ -149,6 +149,12 @@ repair_entry:
         mov ecx, [edi + HBFS_DE_BLKCNT]
         test ecx, ecx
         jz .re_out
+        ; A directory that claims more blocks than the directory buffer holds
+        ; cannot be walked: reading it would overrun the buffer and hand the
+        ; rest of the kernel whatever followed. Believe the tree's shape only
+        ; up to what a directory can be.
+        cmp ecx, HBFS_ROOT_DIR_BLOCKS
+        ja .re_bad
         mov eax, [edi + HBFS_DE_BLOCK]
         shl ecx, 3                         ; blocks -> sectors
         imul eax, eax, HBFS_SECTORS_PER_BLK
@@ -156,6 +162,9 @@ repair_entry:
         mov [.re_child_lba], eax
         mov [.re_child_sects], ecx
         jmp .re_out
+.re_bad_type:
+        jmp .re_bad
+.re_bad_xattr:
 .re_bad:
         inc dword [repair_bad]
 .re_out:
@@ -174,80 +183,84 @@ repair_entry:
 ;-----------------------------------------------------------------------
 ; repair_walk - walk one directory and everything under it
 ;   In : EBX = directory start LBA, ECX = sectors, EDX = depth
+;
+; Every value this frame needs lives on its own stack frame - the directory's
+; LBA, its sector count, the depth, the slot count and the slot index - because
+; the recursion reuses every register it touches. Keeping any of it in a static
+; is what made the first version walk the first subdirectory and stop: the
+; child overwrote the parent's index and the loop thought it was finished.
 ;-----------------------------------------------------------------------
 repair_walk:
         pushad
+        push edx                        ; [esp + 8] = depth
+        push ebx                        ; [esp + 4] = this directory's LBA
+        push ecx                        ; [esp + 0] = this directory's sectors
         cmp edx, REPAIR_MAX_DEPTH
         ja .rw_too_deep
-        mov [.rw_lba], ebx
-        mov [.rw_sects], ecx
-        mov [.rw_depth], edx
-        push dword [current_dir_lba]
-        push dword [current_dir_sects]
-        mov [current_dir_lba], ebx
-        mov [current_dir_sects], ecx
-        mov dword [dir_cache_lba], 0xFFFFFFFE
-        call hbfs_load_root_dir
-        jc .rw_unreadable
+        test ecx, ecx
+        jz .rw_unreadable               ; a zero-sector read is not a read
+
+        mov ecx, [esp]                  ; sectors
+        mov eax, [esp + 4]              ; LBA
         mov edi, hbfs_dir_buf
-        call hbfs_get_max_entries
-        mov [.rw_max], eax
-        mov dword [.rw_index], 0
+        call ata_read_sectors
+        jc .rw_unreadable
+        ; The walk only reads. Keep every directory it touches out of the
+        ; shell's cached view of one, or the next command lists a directory the
+        ; operator never entered.
+        mov dword [dir_cache_lba], 0xFFFFFFFE
+
+        mov eax, [esp]
+        shl eax, 9                      ; sectors -> bytes
+        xor edx, edx
+        push ecx
+        mov ecx, HBFS_DIR_ENTRY_SIZE
+        div ecx                         ; bytes / 288 = slots
+        pop ecx
+        mov ebp, eax                    ; EBP = slots
+        xor esi, esi                    ; ESI = slot index
 
 .rw_loop:
-        mov eax, [.rw_index]
-        cmp eax, [.rw_max]
+        cmp esi, ebp
         jge .rw_done
-        imul edi, eax, HBFS_DIR_ENTRY_SIZE
-        add edi, hbfs_dir_buf
+        mov eax, esi
+        imul eax, HBFS_DIR_ENTRY_SIZE
+        lea edi, [hbfs_dir_buf + eax]
         cmp byte [edi + HBFS_DE_TYPE], FTYPE_FREE
         je .rw_next
-        call repair_entry
+        call repair_entry               ; EAX = child LBA, ECX = its sectors
         test eax, eax
         jz .rw_next
-        ; This walk's own state lives in statics, and the child is about to use
-        ; the same ones: keep a copy across the call or the loop resumes with
-        ; the child's index and stops at the first subdirectory.
-        push dword [.rw_max]
-        push dword [.rw_index]
-        push dword [.rw_lba]
-        push dword [.rw_sects]
-        mov ebx, eax
-        mov edx, [.rw_depth]
+        mov edx, [esp + 8]              ; this frame's depth
         inc edx
-        call repair_walk                   ; clobbers hbfs_dir_buf
-        pop dword [.rw_sects]
-        pop dword [.rw_lba]
-        pop dword [.rw_index]
-        pop dword [.rw_max]
-        mov eax, [.rw_lba]
-        mov [current_dir_lba], eax
-        mov eax, [.rw_sects]
-        mov [current_dir_sects], eax
-        mov dword [dir_cache_lba], 0xFFFFFFFE
-        call hbfs_load_root_dir            ; the parent again, for the next index
+        push ebp
+        push esi
+        mov ebx, eax
+        call repair_walk
+        pop esi
+        pop ebp
+        ; The child owned hbfs_dir_buf: read this directory again before the
+        ; next slot is examined.
+        mov eax, [esp + 4]
+        mov ecx, [esp]
+        mov edi, hbfs_dir_buf
+        call ata_read_sectors
         jc .rw_unreadable
 .rw_next:
-        inc dword [.rw_index]
+        inc esi
         jmp .rw_loop
 
 .rw_too_deep:
         inc dword [repair_bad]
-        jmp .rw_done
+        jmp .rw_exit
 .rw_unreadable:
         inc dword [repair_bad]
+        jmp .rw_exit
 .rw_done:
-        pop dword [current_dir_sects]
-        pop dword [current_dir_lba]
-        mov dword [dir_cache_lba], 0xFFFFFFFE
+.rw_exit:
+        add esp, 12
         popad
         ret
-
-.rw_lba:    dd 0
-.rw_sects:  dd 0
-.rw_depth:  dd 0
-.rw_max:    dd 0
-.rw_index:  dd 0
 
 ;-----------------------------------------------------------------------
 ; repair_popcount - how many blocks the resident bitmap says are taken
@@ -329,6 +342,12 @@ repair_scan:
 .rs_shared_ok:
         mov [repair_shared], edx
 
+        ; A check-only run stops here: the walk has cleared referenced bits in
+        ; the resident bitmap, which the cache invalidation below throws away,
+        ; so rebuilding it would be a second half of the work for nothing.
+        cmp dword [repair_fix_wanted], 0
+        je .rs_checked
+
         ; The bits still set are the leaks, and they have to go: zero the
         ; bitmap and let the rebuild put back exactly what the tree claims.
         mov edi, hbfs_bitmap_buf
@@ -341,6 +360,7 @@ repair_scan:
         call repair_pass
         call repair_popcount
         mov [repair_expected], eax
+.rs_checked:
         mov dword [hbfs_bitmap_valid], 0    ; RAM no longer matches the disk
         xor eax, eax
         ret

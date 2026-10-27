@@ -80,7 +80,7 @@ expect() {   # expect <text> <file>
 
 out="$work/check.txt"
 printf '  %-34s ' "the check finds the damage"
-python3 "$DRIVE" "$copy" "repair" --wait 30 --out "$out" >/dev/null 2>&1 \
+python3 "$DRIVE" "$copy" "repair" --wait 40 --expect REPAIR_ --out "$out" >/dev/null 2>&1 \
     || fail "repair did not run"
 expect "REPAIR_ISSUES" "$out"
 expect "leaks 1" "$out"
@@ -89,7 +89,7 @@ echo PASS
 
 out="$work/fix.txt"
 printf '  %-34s ' "the fix repairs it"
-python3 "$DRIVE" "$copy" "repair fix" --wait 30 --out "$out" >/dev/null 2>&1 \
+python3 "$DRIVE" "$copy" "repair fix" --wait 40 --expect REPAIR_ --out "$out" >/dev/null 2>&1 \
     || fail "repair fix did not run"
 expect "REPAIR_FIXED" "$out"
 echo PASS
@@ -98,7 +98,7 @@ echo PASS
 # has to persist, so a second boot's check is the assertion.
 out="$work/again.txt"
 printf '  %-34s ' "the repair survives a reboot"
-python3 "$DRIVE" "$copy" "repair" --wait 30 --out "$out" >/dev/null 2>&1 \
+python3 "$DRIVE" "$copy" "repair" --wait 40 --expect REPAIR_ --out "$out" >/dev/null 2>&1 \
     || fail "the volume does not boot after the repair"
 expect "REPAIR_CLEAN" "$out"
 expect "leaks 0" "$out"
