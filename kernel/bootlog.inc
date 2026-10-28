@@ -307,6 +307,7 @@ log_vfs:         db "vfs: file tables ready", 0
 log_locks:       db "selftest: lock order gate refuses the wrong order", 0
 log_pmmtest:     db "selftest: frame allocator preserves registers", 0
 log_fputest:     db "selftest: x87 and SSE state round trip", 0
+log_aestest:     db "selftest: AES-256 XTS known answer", 0
 log_cmod:        db "cmod: C module loaded", 0
 log_boot_done:   db "boot: ready for the shell", 0
 log_core_devices: db "drivers: interrupt controller, clock, keyboard, serial bound", 0

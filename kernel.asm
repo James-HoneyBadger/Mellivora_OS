@@ -816,6 +816,12 @@ kernel_entry:
         call fpu_selftest_boot
         LOGBOOT LOG_INFO, log_fputest
 
+        ; The volume cipher, against the FIPS-197 vector and its own inverse. A
+        ; wrong S-box or a tweak that does not advance still "encrypts", so the
+        ; known answer is what says the cipher is AES and not something else.
+        call aes_selftest
+        LOGBOOT LOG_INFO, log_aestest
+
         ; Bring the C-built module up once. A module that is linked in and
         ; refuses the host table can only get worse, so the refusal is
         ; reported here; a successful load is silent and `cmod` proves it.
@@ -865,6 +871,7 @@ kernel_entry:
 %include "kernel/ata.inc"
 %include "kernel/blkcache.inc"
 %include "kernel/pagecache.inc"
+%include "kernel/aes.inc"
 %include "kernel/hbfs.inc"
 %include "kernel/volume.inc"
 %include "kernel/quota.inc"

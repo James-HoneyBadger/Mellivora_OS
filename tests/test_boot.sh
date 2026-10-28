@@ -41,12 +41,14 @@ FAULT_RE='CPU EXCEPTION|double fault|triple fault'
 #   - the CPU the profile promises (family/model/stepping and SSE2),
 #   - the lock-order gate,
 #   - the allocator's register and accounting contract,
-#   - the per-task x87/SSE image.
+#   - the per-task x87/SSE image,
+#   - the volume cipher, against its FIPS-197 vector.
 REQUIRED_RES=(
     "${BOOT_CPU_RE:-CPU_P4 .*family=15 model=2 step=7 fxsr=1 sse=1 sse2=1}"
     'LOCK_SELFTEST_OK'
     'PMM_SELFTEST_OK'
     'FPU_SELFTEST_OK'
+    'AES_SELFTEST_OK'
 )
 
 LOG_DIR="$ROOT/.build"
