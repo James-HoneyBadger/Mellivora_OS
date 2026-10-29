@@ -20,6 +20,12 @@
 # Env:
 #   RUNTIME_ALLOW_SKIP=1   exit 0 instead of failing when QEMU is missing
 #   RUNTIME_TIMEOUT=90     per-case timeout in seconds (default 90)
+#   RUNTIME_FSCK=1         run tools/fsck_hbfs.py on the volume after every case
+#                          and stop at the first case that leaves it damaged,
+#                          naming that case. A full run with this on is the slow
+#                          way to find which workload corrupts the filesystem;
+#                          one damaged volume then costs one bisect, not one
+#                          investigation.
 #
 # Exits 0 on success, 1 on failure.
 
@@ -154,6 +160,29 @@ run_case() {
         echo "FAIL  (output: $log)"
         failures=$((failures + 1))
     fi
+    fsck_after_case "$name" "$log"
+}
+
+# fsck_after_case NAME LOG - with RUNTIME_FSCK=1, prove the volume survived.
+# The case that damaged the filesystem is the useful answer, so this stops on
+# the first one and keeps what that case printed.
+fsck_after_case() {
+    [ "${RUNTIME_FSCK:-0}" = "1" ] || return 0
+    local name="$1" log="$2" out
+    out="$(mktemp)"
+    if python3 "$ROOT/tools/fsck_hbfs.py" "$IMAGE" >"$out" 2>&1; then
+        rm -f "$out"
+        return 0
+    fi
+    {
+        echo "  ################################################################"
+        echo "  # VOLUME DAMAGED AFTER CASE: $name"
+        echo "  ################################################################"
+        tail -12 "$out"
+    } >&2
+    cp "$log" /tmp/corrupting_case.log 2>/dev/null
+    rm -f "$out"
+    exit 3
 }
 
 # run_varying_case NAME CMD PATTERN RUNS
@@ -184,6 +213,7 @@ run_varying_case() {
             failures=$((failures + 1))
         fi
     fi
+    fsck_after_case "$name" "$out"
     rm -f "$out"
 }
 
