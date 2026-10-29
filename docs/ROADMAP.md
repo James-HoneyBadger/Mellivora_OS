@@ -485,11 +485,14 @@ a new streak once a service has run clean, and a start timeout that turns a
 service which never appears into a counted failure with its action run. Passwords
 are Argon2id (version 1.3, one lane, three passes, 1 MiB - RFC 9106's 64 MiB does
 not fit a 128 MB guest), with a scheme number in the account record so a store
-written by another function is refused and re-set rather than compared. What is
-still open: a hive is one image rather than section 5's cell format, and the
-stop-timeout kill, the crashed-logon-screen lock and the profile lifecycle gate
-are named in SERVICES.md section 6 but not yet gated. CONFIG.md section 11 and
-SERVICES.md section 7 name the rest.
+written by another function is refused and re-set rather than compared. A locked
+session runs `unlock` and nothing else, so a logon screen that dies leaves the
+session locked, and a hive that is damaged on disk is refused by name and offset
+with the last known good generation loaded instead. What is still open: a hive is
+one image rather than section 5's cell format; the stop-timeout kill and the
+profile lifecycle gate are named in SERVICES.md section 6 but not yet gated, and
+the Sett's crash-at-every-phase and migration gates in CONFIG.md section 10 are
+not built. CONFIG.md section 11 and SERVICES.md section 7 name the rest.
 
 ### M5 · Runtime and binaries (16–22 weeks)
 
