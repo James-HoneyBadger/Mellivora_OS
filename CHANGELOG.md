@@ -1,5 +1,58 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: a relocatable image is mapped where it cannot be predicted
+
+EXEC.md section 4 asks for a randomised main image base. The first slice put an
+HBX image in the fixed window; this one moves it out of the window entirely and
+lets the page tables put it wherever the launch says.
+
+```text
+Lair:/> hbx_aslr
+HBX_ASLR 0x2D854082
+Lair:/> hbx_aslr
+HBX_ASLR 0x25FF3082
+Lair:/> hbx_aslr
+HBX_ASLR 0x2CEC0082
+```
+
+- **Mapped, not copied.** A relocatable HBX image is mapped into the task's own
+  page directory at a random 64 KB-aligned address in the demand zone, one page
+  at a time: the frame is allocated, the file's bytes for that page are copied
+  in, the tail the file does not reach is zeroed, and the page is mapped with
+  the protection its section asks for - writable for a writable section,
+  read-only for everything else. There is no execute bit on this page table, so
+  read-only is how "code cannot be rewritten" is enforced.
+- **Nothing is mapped into the master directory.** A mapping made there would be
+  inherited by every task created after it and would collide with the next
+  launch, so the loader writes into the new task's directory through its CR3
+  before the task runs.
+- **The relocation table is applied to the frames.** The delta is
+  `random_base - image_base`, and every RVA in the table - including the
+  displacement of an instruction, not just a data pointer - is fixed through
+  the frame each one lands in. The aslr fixture's table lists four fixups for
+  that reason: an earlier version listed two and printed the address the image
+  was built for.
+- **One area record covers the image**, so `fork` copies it copy-on-write and
+  exit releases its frames with every other mapping. `vm_record_for_pid` records
+  a mapping for a task that is created but not running yet.
+- **A pointer above the boot map is valid if the task maps it.** A mapped image
+  can sit above `USER_PTR_MAX` (512 MB), where `validate_user_ptr` refused every
+  string and buffer it owned - the program ran, printed nothing and exited
+  cleanly. Both pointer checks now accept any address inside one of the task's
+  vm areas, which is the contract an `mmap`'d buffer already needed.
+- **A fixed-base image keeps its base and says so**: `hbx: not relocatable,
+  loaded at 0x00500000`. Nothing is randomised quietly.
+- **A mapping that cannot be made falls back to the window**, with the new
+  task's saved EIP moved to match, so an out-of-frames or out-of-area-records
+  launch still runs the program instead of failing it. Background launches -
+  which copy the whole window to a private slot - always take that road.
+- `make check-loader` gains the aslr case: six launches in one boot, six
+  different base addresses.
+
+What this is not: the stack, heap and `sbrk` are still the window's, the image
+is eagerly populated rather than file-backed, and there is no execute bit, no
+shared library base and no section object to map. EXEC.md section 11 names each.
+
 ## Unreleased - M5: the loader reads a header
 
 EXEC.md opens M5 with what an executable is. Until now a program was a flat

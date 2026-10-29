@@ -102,6 +102,17 @@ A failed load unwinds every step: sections unmapped, imports dereferenced,
 handle table discarded. A half-created process is never left for the SCM or the
 shell to find.
 
+**As built.** There is no section object yet, so steps 2 and 3 are done with
+frames: the image is mapped into the task's own directory one page at a time,
+the bytes are copied from the file for each page, every page the file does not
+reach is zeroed (the BSS tail), and the mapping is recorded as one vm area so
+fork copies it copy-on-write and exit releases its frames. A page covered by a
+writable section is mapped writable and every other page read-only; on a 32-bit
+non-PAE page table there is no execute bit, so read-only is how "code cannot be
+rewritten" is enforced. An image built for `PROGRAM_BASE` still takes the older
+road - a copy into the window - because that is where the flat and ELF32
+loaders put their programs, and the stack and heap still live there.
+
 ## 4. Address space randomisation
 
 | Thing | Randomised | Range |
@@ -117,6 +128,18 @@ The random seed comes from the platform's entropy at boot and per process, and
 is available to a debugger with `SE_DEBUG` so a crash can be reproduced. An
 image that is not relocatable keeps its base and says so in its audit record —
 "this program cannot be randomised" is information the user is entitled to.
+
+**As built.** A relocatable image is placed by `hbx_choose_base`: a random
+64 KB-aligned address in the first 256 MB of the demand zone
+(`[user_demand_base, USER_DEMAND_MAX)`), which is the only range this tree can
+map a user page in. Every launch draws again, so the same image does not repeat
+its base; the delta between that address and the image's preferred base is
+applied to every RVA in its relocation table. An image without relocations is
+copied into the program window as before, and the loader says so on the console
+- `hbx: not relocatable, loaded at 0x00500000` - rather than pretending it was
+randomised. `make check-loader` launches the aslr fixture six times in one boot
+and requires six different base addresses; the 1 000-launch form of this check
+is not a gate yet.
 
 ## 5. Process creation
 
@@ -218,9 +241,9 @@ M5 does not close until:
 2. `loader_test` loads an image at a random base, one at a fixed base, and one
    with a relocated import, and refuses a writable-executable section, a bad
    checksum and a 64-bit image — each with its own status. (**As built:**
-   `make check-loader` proves the fixed base, a relocated image, and every
-   refusal in section 8; the random base waits for section-based mapping (§4)
-   and the relocated import waits for libraries (§6).)
+   `make check-loader` proves the fixed base, a relocated image, the randomised
+   base, and every refusal in section 8; the relocated import waits for
+   libraries (§6).)
 3. A program and a library built from the SDK samples load, call across the
    boundary, use TLS in two threads, and unload in the right order.
 4. ASLR: 1 000 launches of the same image produce 1 000 distinct main-image
@@ -234,12 +257,12 @@ M5 does not close until:
 
 | Contract | Tree today |
 |---|---|
-| HBX images | Read and enforced: `MVBX` header, CRC-32C, sections, relocations and entry point. The image is copied into the window, not mapped. |
+| HBX images | Read and enforced: `MVBX` header, CRC-32C, sections, relocations and entry point. A relocatable image is mapped at a random base; a fixed-base one is copied into the window. |
 | PE32 images | Not built. The loader dispatches on the header, so adding the format is one branch, not one per caller. |
 | Shared libraries | None |
 | TLS per module | A kernel-managed thread-local area for one module |
-| ASLR | Per-launch randomised heap and stack top only |
-| Section-based mapping | Sections are bounds-checked, a writable-and-executable one is refused, and the bytes are copied. Per-page protections need mapping |
+| ASLR | The main image base for a relocatable HBX image, and per-launch randomised heap and stack top. Shared libraries, thread stacks and section views have nothing to randomise yet |
+| Section-based mapping | Frames are mapped into the task's directory page by page and a page in a writable section is mapped writable; a writable-and-executable section is refused. There is no section object and no execute bit on this page table |
 | Imports/exports | An import table is parsed and a missing module fails the load naming `module!symbol`; there is no library to resolve against, and exports are not written |
 | Mitigations | DEP and W^X exist ([VMM.md](VMM.md)); no SEH-analogue |
 | env/argv block | A flat command-line buffer and `getargs` |

@@ -6623,6 +6623,22 @@ cmd_exec_program:
         ; and Ctrl+Z signal the terminal's foreground process group. A task's
         ; PGID starts as its own PID, which is the id sched_create_task returned.
         mov [tty_fg_pgid], eax
+        ; An HBX image with relocations is mapped at its randomised base in
+        ; this task's directory; a flat, ELF or fixed-base image was already
+        ; copied into the window and there is nothing to do. A mapping that
+        ; cannot be made (out of frames, no area record) falls back to the
+        ; window copy, with the task's saved EIP moved to match.
+        push eax
+        mov edi, eax
+        call hbx_map_task_image
+        cmp eax, -1
+        jne .exec_fore_mapped
+        pop eax
+        push eax
+        mov edi, eax
+        call hbx_fallback_window
+.exec_fore_mapped:
+        pop eax
         ; Give the task a guarded, demand-grown stack before it runs. The
         ; unmapping has to happen in the task's own directory, so switch to it
         ; and back; sched_start_task installs it again when the task is entered.
@@ -6652,6 +6668,26 @@ cmd_exec_program:
         mov [eax + TCB_BRK], ecx
 .exec_no_brk_reset:
         pop eax
+        ; exec replaces the image in the running task, so a prepared image is
+        ; mapped into that task's own directory (exec has already released the
+        ; old image's areas). With no task - the legacy direct launch - there
+        ; is nowhere private to put it, and the window copy is used instead.
+        cmp byte [hbx_map_pending], 0
+        je .exec_inplace_ready
+        call sched_get_current_task
+        test eax, eax
+        jz .exec_inplace_window
+        mov edi, [eax + TCB_PID]
+        call hbx_map_task_image
+        cmp eax, -1
+        jne .exec_inplace_ready
+        mov edi, -1
+        call hbx_fallback_window
+        jmp .exec_inplace_ready
+.exec_inplace_window:
+        mov edi, -1
+        call hbx_fallback_window
+.exec_inplace_ready:
         ; When an existing task execs, its own kernel stack must stay installed as
         ; TSS ESP0; using KERNEL_STACK here would let the next syscall overwrite
         ; the shell's stack underneath it.
@@ -6699,6 +6735,18 @@ cmd_exec_program:
         call sched_set_task_args
         mov [tty_fg_pgid], eax
 
+        push eax                        ; keep the id across the mapping call
+        mov edi, eax
+        call hbx_map_task_image
+        cmp eax, -1
+        jne .exec_gui_mapped
+        pop eax
+        push eax
+        mov edi, eax
+        call hbx_fallback_window
+.exec_gui_mapped:
+        pop eax                         ; task id
+
         push eax                        ; save task id across CR3 switches
         imul eax, TCB_SIZE
         add eax, task_table
@@ -6739,6 +6787,14 @@ cmd_exec_program:
         ; Launch program as a background scheduler task
         ; Clear foreground program_running flag (bg tasks don't block the shell)
         mov byte [program_running], 0
+        ; A background launch copies the window to its own 1 MB slot and moves
+        ; the entry by the difference, so the image has to be in the window:
+        ; a prepared HBX image is copied in now, and stays where it lands.
+        cmp byte [hbx_map_pending], 0
+        je .exec_bg_loaded
+        mov edi, -1
+        call hbx_fallback_window
+.exec_bg_loaded:
         ; 1. Allocate memory for a copy of the program (1MB = 256 pages)
         mov ecx, BG_PROG_PAGES
         call pmm_alloc_pages

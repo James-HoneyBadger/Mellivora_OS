@@ -520,10 +520,18 @@ another base is relocated by the delta. `image_load_program` is now the one
 door: the shell (root and `PATH`) and the service manager no longer each
 compare the first dword against `ELF_MAGIC`, and the flat and ELF32 loaders
 keep working unchanged. `tools/mkhbx.py` builds an image from a flat payload and
-`make check-loader` proves every row of the refusal table. What is still open
-in this wave: PE32, shared libraries and per-module TLS, imports that resolve
-to something, mapping at an arbitrary base (so ASLR of the image), Unicode, the
-C runtime and the interface layer.
+`make check-loader` proves every row of the refusal table. Then the image moved out of the
+fixed window: a relocatable HBX image is mapped into the task's own directory at
+a random 64 KB-aligned address in the demand zone, one page per section
+protection, with every absolute address in its relocation table fixed by the
+delta - and an image without relocations is copied into the window as before
+and says that it could not be randomised. Because a mapped image can sit above
+the RAM ceiling, the syscall pointer checks now accept any address the task
+actually maps instead of only the window, which is the contract mmap'd buffers
+already needed. `make check-loader` launches the aslr fixture six times and
+requires six different bases. What is still open in this wave: PE32, shared
+libraries and per-module TLS, imports that resolve to something, Unicode, the C
+runtime and the interface layer.
 
 ### M6 · Shell and user experience (12–16 weeks)
 

@@ -23,11 +23,47 @@ SYSCALL_MAX     equ 512
 EFLAGS_USER_MASK equ 0x00240FD7
 
 ; --- Phase 1.2 v9.0: user pointer validation --------------------------------
-; A valid user pointer must lie in [PROGRAM_BASE, USER_PTR_MAX).
+; A user pointer is valid when the calling task can actually reach it:
+;
+;   [PROGRAM_BASE, USER_PTR_MAX)   the program window, and everything the boot
+;                                  map already covers
+;   a mapped vm area               an mmap, a shared file mapping - or an HBX
+;                                  image mapped at its randomised base, which
+;                                  is why the area check exists: an image above
+;                                  the RAM ceiling has to be able to pass its
+;                                  own strings and buffers to a syscall
+;
+; Anything else is refused rather than dereferenced in ring 0, where an
+; unmapped address is a kernel fault and not a bad argument.
+;
 ;   PROGRAM_BASE  = 0x00500000  rejects NULL, real-mode IVT/BDA, kernel image
-;   USER_PTR_MAX  = 0x20000000  512 MB — covers the 128 MB identity-mapped zone
-;                               PLUS the 384 MB v9.0 demand-paged extension.
+;   USER_PTR_MAX  = 0x20000000  512 MB — the highest address the boot map covers
 USER_PTR_MAX    equ 0x20000000
+
+; user_ptr_ok - may a ring-3 caller hand the kernel this address?
+;   In : EAX = address
+;   Out: CF=0 valid, CF=1 invalid; all GPRs preserved (only EFLAGS changes).
+user_ptr_ok:
+        push ebx
+        push eax
+        cmp eax, PROGRAM_BASE
+        jb .upo_bad
+        cmp eax, USER_PTR_MAX
+        jb .upo_ok
+        mov ebx, eax
+        call vm_find_area               ; a mapping this task owns
+        test eax, eax
+        jz .upo_bad
+.upo_ok:
+        pop eax
+        pop ebx
+        clc
+        ret
+.upo_bad:
+        pop eax
+        pop ebx
+        stc
+        ret
 
 ; validate_user_ptr - sanity-check a single user pointer.
 ;   In : EAX = pointer
@@ -35,19 +71,11 @@ USER_PTR_MAX    equ 0x20000000
 validate_user_ptr:
         ; A ring-0 caller (the shell) legitimately passes pointers to its own
         ; buffers, which live in the kernel image below PROGRAM_BASE. Only a
-        ; ring-3 caller has to stay inside the user window. syscall_ring is set
-        ; from the caller's CS at the single INT 0x80 entry point.
+        ; ring-3 caller has to be checked. syscall_ring is set from the caller's
+        ; CS at the single INT 0x80 entry point.
         cmp byte [syscall_ring], 0
         je  .vup_ok
-        cmp eax, PROGRAM_BASE
-        jb  .vup_bad
-        cmp eax, USER_PTR_MAX
-        jae .vup_bad
-        clc
-        ret
-.vup_bad:
-        stc
-        ret
+        jmp user_ptr_ok
 .vup_ok:
         clc
         ret
@@ -62,25 +90,44 @@ validate_user_ptr:
 user_range_ok:
         cmp byte [syscall_ring], 0
         je  .uro_ok
+        push ebx
+        push esi
         push edx
         test ecx, ecx
-        jz   .uro_ok                    ; nothing to copy
+        jz   .uro_ok_pop                ; nothing to copy
         cmp  eax, PROGRAM_BASE
         jb   .uro_bad
-        cmp  eax, USER_PTR_MAX
-        jae  .uro_bad
         mov  edx, eax
         add  edx, ecx
         jc   .uro_bad                   ; end wrapped past 2^32
+        cmp  eax, USER_PTR_MAX
+        jae  .uro_area
         cmp  edx, USER_PTR_MAX
-        jbe  .uro_ok                    ; end may equal the limit
+        jbe  .uro_ok_pop                ; end may equal the limit
+        jmp  .uro_bad
+.uro_area:
+        ; Above the boot map: the whole range has to sit inside one mapping,
+        ; or a length-checked copy runs off the end of it.
+        mov  esi, eax
+        mov  ebx, eax
+        call vm_find_area
+        test eax, eax
+        jz   .uro_bad
+        mov  eax, [eax + VMA_END]
+        cmp  edx, eax
+        ja   .uro_bad
+.uro_ok_pop:
+        pop  edx
+        pop  esi
+        pop  ebx
+.uro_ok:
+        clc
+        ret
 .uro_bad:
         pop  edx
+        pop  esi
+        pop  ebx
         stc
-        ret
-.uro_ok:
-        pop  edx
-        clc
         ret
 
 ; copy_to_user - copy kernel memory to a validated ring-3 buffer

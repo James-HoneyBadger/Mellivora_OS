@@ -1639,18 +1639,27 @@ switch point. Both syscalls now save and restore those registers.
 `image_load_program` (`kernel/hbx.inc`) reads the first dword at `PROGRAM_BASE` and
 picks the loader; the extension is never consulted (EXEC.md section 1):
 
-- **HBX:** `hbx_load_program` verifies the `MVBX` header, the CRC-32C checksum, the
-  section table (bounds, and no writable-and-executable section) and that the entry
-  point lies in an executable section. An image built for another base is relocated
-  by the delta; an image that cannot be relocated is refused. Imports are parsed and
-  a missing module fails the load naming `module!symbol`. Nothing is written into the
-  window until every check has passed
+- **HBX:** `hbx_verify` checks the `MVBX` header, the CRC-32C checksum, the section
+  table (bounds, and no writable-and-executable section), that the entry point lies
+  in an executable section, and the relocation and import tables - all before a byte
+  is written anywhere. A relocatable image is then mapped into the task's own
+  directory at a random 64 KB-aligned base in the demand zone (`hbx_map_task_image`),
+  one page per section protection, with the load delta applied to every entry in its
+  relocation table; a fixed-base image is copied into the window by
+  `hbx_load_window` and announced as not relocatable. Imports are parsed and a
+  missing module fails the load naming `module!symbol`
 - **ELF:** `elf_load_program` validates ELF32 little-endian, iterates program headers,
   loads `PT_LOAD` segments (copies file data + zeroes BSS), returns entry point
 - **Flat binary:** Entry point = `PROGRAM_BASE` directly
 
 `tools/mkhbx.py` builds an HBX image from a flat payload, and `make check-loader`
-runs the fixtures in `programs/hbx/` through every refusal in EXEC.md section 8.
+runs the fixtures in `programs/hbx/` through every refusal in EXEC.md section 8,
+plus the randomised base (`hbx_aslr`).
+
+A mapped image can live above the 512 MB the boot page tables cover, so the two
+syscall pointer checks (`validate_user_ptr`, `user_range_ok`) accept an address
+either inside the program window or inside one of the calling task's vm areas;
+anything else is still refused rather than dereferenced in ring 0.
 
 ### Ring 3 Execution
 

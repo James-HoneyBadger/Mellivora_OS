@@ -615,6 +615,16 @@ svc_launch_image:
         mov [.sli_pid], eax
         call sched_set_task_args
 
+        ; Map a relocatable HBX image into the service's own directory, or fall
+        ; back to the window copy the loader already made.
+        mov edi, [.sli_pid]
+        call hbx_map_task_image
+        cmp eax, -1
+        jne .sli_mapped
+        mov edi, [.sli_pid]
+        call hbx_fallback_window
+.sli_mapped:
+
         ; Give the task its own copy of the window and its stack, exactly as a
         ; desktop launch does.
         mov eax, [.sli_pid]

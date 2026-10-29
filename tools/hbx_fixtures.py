@@ -10,6 +10,7 @@ The payloads are assembled by the Makefile into .build/hbx/:
     ok.bin      prints HBX_OK and exits, built for 0x00500000
     reloc.bin   prints HBX_RELOC_OK through a relocated pointer, built for
                 0x00400000 and carrying its own HBM1 relocation table
+    aslr.bin    prints its own load address in hex, built the same way
 
 Usage: hbx_fixtures.py [--build .build/hbx] [--out programs]
 """
@@ -40,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ok = (args.build / "ok.bin").read_bytes()
     reloc = (args.build / "reloc.bin").read_bytes()
+    aslr = (args.build / "aslr.bin").read_bytes()
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
 
@@ -51,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     # Built for 0x00400000 and loaded at 0x00500000: only a loader that applies
     # the base relocations reaches the string it prints.
     images["hbx_reloc.bin"] = build_image(reloc, image_base=OTHER_BASE, sections=[text(reloc)])
+
+    # Prints the address it was loaded at: two launches that print the same
+    # number did not randomise anything.
+    images["hbx_aslr.bin"] = build_image(aslr, image_base=OTHER_BASE, sections=[text(aslr)])
 
     # One byte changed after the checksum was stamped.
     damaged = bytearray(images["hbx_ok.bin"])

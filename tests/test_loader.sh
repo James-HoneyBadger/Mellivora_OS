@@ -87,6 +87,36 @@ run_case() {
     fi
 }
 
+# run_varying_case NAME CMD PATTERN RUNS
+# Launches CMD RUNS times in one boot and requires the text matched by PATTERN
+# to take at least two different values: one launch cannot show a randomised
+# address.
+run_varying_case() {
+    local name="$1" cmd="$2" pattern="$3" runs="${4:-4}"
+    local out i
+    out="$(mktemp)"
+    local args=("$IMAGE" "$cmd" --reject "CPU EXCEPTION|PAGE FAULT")
+    for ((i = 1; i < runs; i++)); do
+        args+=(--then "$cmd")
+    done
+    args+=(--out "$out" --wait 20)
+    printf '  %-42s ' "$name"
+    if ! timeout $((CASE_TIMEOUT * 2)) python3 "$DRIVE" "${args[@]}" >/dev/null 2>&1; then
+        echo "FAIL"
+        failures=$((failures + 1))
+    else
+        local -a seen
+        mapfile -t seen < <(grep -o "$pattern" "$out" | sort -u)
+        if [ "${#seen[@]}" -ge 2 ]; then
+            echo "PASS"
+        else
+            echo "FAIL  (every launch used the same address)"
+            failures=$((failures + 1))
+        fi
+    fi
+    rm -f "$out"
+}
+
 echo "  loader tests: $(basename "$IMAGE"), ${CASE_TIMEOUT}s per case"
 
 # The images that must load.
@@ -101,6 +131,9 @@ run_case "a 64-bit image is refused"          "hbx_64"     "hbx: this system is 
 run_case "an image that cannot be moved"      "hbx_noreloc" "hbx: cannot load at 0x00400000: no relocations" "hbx_ok"
 run_case "an entry point outside code"        "hbx_entry"  "hbx: entry 0x" "hbx_ok"
 run_case "a missing import names both names"  "hbx_import" "hbx: nosuch.dll!missing not found" "hbx_ok"
+
+# Section 4: the image base is chosen per launch, not built in.
+run_varying_case "the image base is randomised" "hbx_aslr" "HBX_ASLR 0x[0-9A-F]\{8\}" 6
 
 # The formats M5 has to keep working.
 run_case "a flat binary still runs"           "hello"      "Hello, World!"

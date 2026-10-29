@@ -374,8 +374,8 @@ $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_
 # programs, and populate.py looks there when it asks what a binary came from.
 HBX_DIR = $(PROG_DIR)/hbx
 HBX_BUILD = .build/hbx
-HBX_PAYLOADS = $(HBX_BUILD)/ok.bin $(HBX_BUILD)/reloc.bin
-HBX_BINS = $(PROG_DIR)/hbx_ok.bin $(PROG_DIR)/hbx_reloc.bin \
+HBX_PAYLOADS = $(HBX_BUILD)/ok.bin $(HBX_BUILD)/reloc.bin $(HBX_BUILD)/aslr.bin
+HBX_BINS = $(PROG_DIR)/hbx_ok.bin $(PROG_DIR)/hbx_reloc.bin $(PROG_DIR)/hbx_aslr.bin \
            $(PROG_DIR)/hbx_badsum.bin $(PROG_DIR)/hbx_wx.bin \
            $(PROG_DIR)/hbx_64.bin $(PROG_DIR)/hbx_noreloc.bin \
            $(PROG_DIR)/hbx_entry.bin $(PROG_DIR)/hbx_import.bin
@@ -387,6 +387,10 @@ $(HBX_BUILD)/ok.bin: $(HBX_DIR)/hbx_ok.asm $(HBX_DIR)/payload_ok.inc $(PROG_DIR)
 # Built for another base on purpose: the loader loads it at PROGRAM_BASE and has
 # to relocate it, which is the only way to prove the relocation path is real.
 $(HBX_BUILD)/reloc.bin: $(HBX_DIR)/hbx_reloc.asm $(PROG_DIR)/syscalls.inc
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -DPROGRAM_ORG=0x00400000 -I$(PROG_DIR)/ -o $@ $<
+
+$(HBX_BUILD)/aslr.bin: $(HBX_DIR)/hbx_aslr.asm $(PROG_DIR)/syscalls.inc
 	@mkdir -p $(HBX_BUILD)
 	$(NASM) -f bin -DPROGRAM_ORG=0x00400000 -I$(PROG_DIR)/ -o $@ $<
 

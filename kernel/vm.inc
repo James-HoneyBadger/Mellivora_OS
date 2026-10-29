@@ -871,44 +871,98 @@ vm_release_all:
 ;   Out: EAX = area record, or 0 when the table is full
 ;---------------------------------------
 vm_record_anon:
+        pushad
+        call sched_get_current_task
+        test eax, eax
+        jz .vrec_none
+        mov edi, [eax + TCB_PID]
+        mov eax, [esp + 28]                 ; base
+        mov ecx, [esp + 24]                 ; pages
+        mov edx, [esp + 20]                 ; prot
+        call vm_record_for_pid
+        mov [esp + 28], eax
+        jmp .vrec_done
+.vrec_none:
+        mov dword [esp + 28], 0
+.vrec_done:
+        popad
+        ret
+
+;---------------------------------------
+; vm_free_slot_for - next free area record in a task's table
+;   In : EDI = task id
+;   Out: EAX = record address, or 0 when the table is full
+;---------------------------------------
+vm_free_slot_for:
+        push ecx
+        push esi
+        mov ecx, edi
+        call vm_area_base
+        test eax, eax
+        jz .vfsf_none
+        mov esi, eax
+        mov ecx, VM_AREAS_PER_TASK
+.vfsf_loop:
+        cmp dword [esi + VMA_START], 0
+        je .vfsf_found
+        add esi, VM_AREA_SIZE
+        dec ecx
+        jnz .vfsf_loop
+.vfsf_none:
+        xor eax, eax
+        jmp .vfsf_done
+.vfsf_found:
+        mov eax, esi
+.vfsf_done:
+        pop esi
+        pop ecx
+        ret
+
+;---------------------------------------
+; vm_record_for_pid - record an anonymous area for a named task
+;   In : EAX = base, ECX = pages, EDX = prot, EDI = task id
+;   Out: EAX = record address, or 0
+;
+; The loader maps an image into a task that is created but not yet running, so
+; the record has to name the owner instead of asking who is current.
+;---------------------------------------
+vm_record_for_pid:
         push ecx
         push edx
         push esi
-        push edi
-        mov [.vrec_base], eax
-        mov [.vrec_pages], ecx
-        mov [.vrec_prot], edx
-        call vm_free_slot
+        mov [.vrf_base], eax
+        mov [.vrf_pages], ecx
+        mov [.vrf_prot], edx
+        call vm_free_slot_for
         test eax, eax
-        jz .vrec_none
-        mov edi, eax
-        mov ecx, [.vrec_base]
-        mov [edi + VMA_START], ecx
-        mov ecx, [.vrec_pages]
-        mov [edi + VMA_PAGES], ecx
-        mov ecx, [.vrec_prot]
-        mov [edi + VMA_PROT], ecx
-        mov dword [edi + VMA_SECTOR], 0     ; anonymous: demand-zero frames
-        mov dword [edi + VMA_BLOCKS], 0
-        mov dword [edi + VMA_FLAGS], 0
-        mov edx, [.vrec_base]
-        mov ecx, [.vrec_pages]
+        jz .vrf_none
+        mov esi, eax
+        mov ecx, [.vrf_base]
+        mov [esi + VMA_START], ecx
+        mov ecx, [.vrf_pages]
+        mov [esi + VMA_PAGES], ecx
+        mov ecx, [.vrf_prot]
+        mov [esi + VMA_PROT], ecx
+        mov dword [esi + VMA_SECTOR], 0
+        mov dword [esi + VMA_BLOCKS], 0
+        mov dword [esi + VMA_FLAGS], 0
+        mov edx, [.vrf_base]
+        mov ecx, [.vrf_pages]
         shl ecx, 12
         add edx, ecx
-        mov [edi + VMA_END], edx
-        mov eax, edi
-        jmp .vrec_done
-.vrec_none:
+        mov [esi + VMA_END], edx
+        mov eax, esi
+        jmp .vrf_done
+.vrf_none:
         xor eax, eax
-.vrec_done:
-        pop edi
+.vrf_done:
         pop esi
         pop edx
         pop ecx
         ret
-.vrec_base:  dd 0
-.vrec_pages: dd 0
-.vrec_prot:  dd 0
+.vrf_base:  dd 0
+.vrf_pages: dd 0
+.vrf_prot:  dd 0
 
 ;---------------------------------------
 ; vm_map_anon - create an anonymous demand-zero area for the current task

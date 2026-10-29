@@ -11,6 +11,13 @@
 ; first dword against ELF_MAGIC itself, so the shell and the service manager
 ; each had their own copy of the decision; a third format would have meant a
 ; third branch in each.
+;
+; An HBX image takes one of two roads. An image built for the program window
+; is copied into it, which is what a flat binary does. An image that carries
+; relocations is instead mapped at a random base in the demand zone, one page
+; per section protection, when its task is launched - sections 3 and 4. The
+; choice is made here, but the mapping itself happens at the launch site
+; because it needs the task's page directory.
 ;=======================================================================
 
 ;-----------------------------------------------------------------------
@@ -19,6 +26,8 @@
 ;   Out: EAX = entry address, CF clear
 ;        EAX = mv_status,   CF set - the refusal is already reported
 ;   Sets program_size and program_brk_init so the heap starts after the image.
+;   When hbx_map_pending is set the image has not been copied: the launch site
+;   must call hbx_map_task_image before the task runs.
 ;-----------------------------------------------------------------------
 image_load_program:
         push ebx
@@ -53,7 +62,8 @@ image_load_program:
         jmp .ilp_out
 
 .ilp_hbx:
-        call hbx_load_program           ; EAX = entry, CF on refusal
+        mov byte [hbx_map_pending], 0
+        call hbx_prepare                ; EAX = entry, CF on refusal
         jc .ilp_fail
         mov [program_entry], eax
         clc
@@ -68,27 +78,26 @@ image_load_program:
         ret
 
 ;=======================================================================
-; HBX LOADER - docs/spec/EXEC.md sections 2, 3 and 8
+; HBX LOADER - docs/spec/EXEC.md sections 2, 3, 4 and 8
 ;
-; Order matters: every refusal that can be made without touching the window is
+; Order matters: every refusal that can be made without touching memory is
 ; made first, so a refused image never leaves half of itself behind. The copy
 ; is the first write, and it only runs once the header, the checksum, the
-; sections and the entry point have all been accepted.
+; sections, the entry point and the imports have all been accepted.
 ;=======================================================================
 
 ;-----------------------------------------------------------------------
-; hbx_load_program - verify and load an HBX image at PROGRAM_BASE
+; hbx_verify - check an HBX image in the window before anything is written
 ;   In : EAX = bytes read into PROGRAM_BASE
-;   Out: EAX = entry address, CF clear
-;        EAX = mv_status,   CF set - the reason is on the console
+;   Out: CF clear, and the statics below describe the image
+;        CF set - the reason is on the console and EAX is an mv_status
 ;
-; The image is loaded at PROGRAM_BASE, not at its preferred base: the program
-; window is one fixed megabyte (the layout in kernel.asm), so an image that
-; asks for another base is relocated by the difference, and an image that
-; cannot be relocated is refused by name. ASLR needs mapping at an arbitrary
-; base and arrives with section-based mapping.
+; Every check runs against the file as it lies in the window: the header, the
+; 32-bit halves, the checksum, the section table, the entry point, the
+; relocation table's bounds and the import table (whose RVAs are read through
+; header_size, because the image bytes have not been moved yet).
 ;-----------------------------------------------------------------------
-hbx_load_program:
+hbx_verify:
         pushad
         mov [hbx_file_len], eax
 
@@ -153,8 +162,9 @@ hbx_load_program:
         cmp eax, ecx
         jne .bad_checksum
 
-        ; The image is copied down onto the header's own address, so every
-        ; field the loader still needs after the copy is taken now.
+        ; The image is copied down onto the header's own address (or mapped
+        ; elsewhere), so every field the loader still needs afterwards is taken
+        ; now.
         mov eax, [ebx + HBX_OFF_ENTRY]
         mov [hbx_entry], eax
         mov eax, [ebx + HBX_OFF_RELOC]
@@ -211,111 +221,69 @@ hbx_load_program:
         jae .entry_not_exec
 
 .base_ok:
-        ; ---- the delta between where it was built and where it is going ----
-        mov eax, PROGRAM_BASE
-        sub eax, [hbx_image_base]
-        mov [hbx_delta], eax
-        test eax, eax
-        jz .have_base
-        cmp dword [hbx_reloc_rva], 0
-        je .noreloc
+        ; ---- the relocation table and the import table are inside the image ----
+        mov ebp, PROGRAM_BASE
+        add ebp, [hbx_hdr_size]         ; where RVA 0 lives in the file
 
-.have_base:
-        ; An import table has to be somewhere; a count without an RVA is a
-        ; header the loader cannot act on.
-        cmp dword [hbx_import_count], 0
-        je .copy
-        cmp dword [hbx_import_rva], 0
-        je .bad_header
-
-.copy:
-        ; The image bytes follow the header in the file and start at RVA 0.
-        ; They are already in the window, so the copy walks downwards: the
-        ; destination is always header_size bytes below the source.
-        mov esi, ebx
-        add esi, [hbx_hdr_size]
-        mov edi, PROGRAM_BASE
-        mov ecx, [hbx_payload_len]
-        cld
-        rep movsb
-        mov ecx, [hbx_img_size]
-        sub ecx, [hbx_payload_len]
-        xor al, al
-        rep stosb
-
-        ; ---- relocations, only when the delta is not zero ----
-        mov eax, [hbx_delta]
-        test eax, eax
-        jz .imports
-        mov esi, [hbx_reloc_rva]
-        mov eax, esi
-        add eax, 4                      ; count, then that many u32 RVAs
-        jc .bad_reloc
-        cmp eax, [hbx_img_size]
-        ja .bad_reloc
-        mov ecx, [PROGRAM_BASE + esi]
-        cmp ecx, PROGRAM_MAX_SIZE / 4
-        ja .bad_reloc
-        mov edx, ecx
-        shl edx, 2
-        add edx, eax
-        cmp edx, [hbx_img_size]
-        ja .bad_reloc
-        add esi, 4
-.rel_loop:
+        mov ecx, [hbx_reloc_rva]
         test ecx, ecx
-        jz .imports
-        mov edx, [PROGRAM_BASE + esi]
-        mov eax, edx
+        jz .no_relocs
+        mov eax, ecx
         add eax, 4
         jc .bad_reloc
         cmp eax, [hbx_img_size]
         ja .bad_reloc
-        mov eax, [PROGRAM_BASE + edx]
-        add eax, [hbx_delta]
-        mov [PROGRAM_BASE + edx], eax
-        add esi, 4
-        dec ecx
-        jmp .rel_loop
+        mov edx, [ebp + ecx]            ; count, then that many u32 RVAs
+        cmp edx, PROGRAM_MAX_SIZE / 4
+        ja .bad_reloc
+        mov eax, edx
+        shl eax, 2
+        add eax, ecx
+        add eax, 4
+        cmp eax, [hbx_img_size]
+        ja .bad_reloc
+.no_relocs:
 
-.imports:
-        ; No library is loadable yet, so every import is missing. The contract
-        ; that matters now is the one in section 8: name the module and the
-        ; symbol, and leave nothing behind - which is why this runs before the
-        ; process exists. A resolver replaces the refusal when libraries land.
+        ; An import table has to be somewhere; a count without an RVA is a
+        ; header the loader cannot act on.
         mov ecx, [hbx_import_count]
         test ecx, ecx
-        jz .loaded
+        jz .verified
         mov esi, [hbx_import_rva]
+        test esi, esi
+        jz .bad_header
         mov eax, esi
         add eax, 12
         jc .bad_reloc
         cmp eax, [hbx_img_size]
         ja .bad_reloc
-        mov edi, [PROGRAM_BASE + esi]           ; module name RVA
+        mov edi, [ebp + esi]                    ; module name RVA
         cmp edi, [hbx_img_size]
         jae .bad_reloc
-        mov ebp, [PROGRAM_BASE + esi + 4]       ; thunk array RVA
-        mov eax, ebp
+        mov edx, [ebp + esi + 4]                ; thunk array RVA
+        mov eax, edx
         add eax, 8
         jc .bad_reloc
         cmp eax, [hbx_img_size]
         ja .bad_reloc
-        mov edx, [PROGRAM_BASE + ebp]           ; first symbol name RVA
-        cmp edx, [hbx_img_size]
+        mov ecx, [ebp + edx]                    ; first symbol name RVA
+        cmp ecx, [hbx_img_size]
         jae .bad_reloc
+
+        ; No library is loadable yet, so every import is missing. The contract
+        ; that matters now is the one in section 8: name the module and the
+        ; symbol, and leave nothing behind - which is why this runs before the
+        ; process exists. A resolver replaces the refusal when libraries land.
         mov esi, msg_hbx_prefix
         call vga_print
-        mov eax, PROGRAM_BASE
-        add eax, edi
-        mov esi, eax
+        mov esi, ebp
+        add esi, edi
         call hbx_print_name
         jc .bad_header
         mov esi, msg_hbx_bang
         call vga_print
-        mov eax, PROGRAM_BASE
-        add eax, edx
-        mov esi, eax
+        mov esi, ebp
+        add esi, ecx
         call hbx_print_name
         jc .bad_header
         mov esi, msg_hbx_import_tail
@@ -323,14 +291,7 @@ hbx_load_program:
         mov eax, MV_DLL_NOT_FOUND
         jmp .fail
 
-.loaded:
-        mov eax, [hbx_img_size]
-        mov [program_size], eax
-        add eax, PROGRAM_BASE
-        call set_program_brk_init
-        mov eax, [hbx_entry]
-        add eax, PROGRAM_BASE
-        mov [esp + 28], eax
+.verified:
         popad
         clc
         ret
@@ -378,15 +339,6 @@ hbx_load_program:
         call vga_print
         jmp .bad_image
 
-.noreloc:
-        mov esi, msg_hbx_cannot_load
-        call vga_print
-        mov eax, [hbx_image_base]
-        call vga_print_hex
-        mov esi, msg_hbx_noreloc_tail
-        call vga_print
-        jmp .bad_image
-
 .entry_not_exec:
         mov esi, msg_hbx_entry
         call vga_print
@@ -412,6 +364,418 @@ hbx_load_program:
         ret
 
 ;-----------------------------------------------------------------------
+; hbx_prepare - verify, then choose the road this image takes
+;   In : EAX = bytes read into PROGRAM_BASE
+;   Out: EAX = entry address, CF clear
+;        EAX = mv_status,   CF set - the refusal is already reported
+;
+; An image built for PROGRAM_BASE is copied into the window, as an HBX image
+; always had been. An image that carries relocations is mapped at a random base
+; when its task is launched (section 4), so nothing is copied here and the file
+; stays in the window until then. An image built elsewhere that cannot be
+; relocated has no legal home, and section 8 says to say so.
+;-----------------------------------------------------------------------
+hbx_prepare:
+        pushad
+        mov [hbx_map_pending], 0
+        call hbx_verify
+        jc .hp_refused
+
+        mov eax, [hbx_image_base]
+        cmp eax, PROGRAM_BASE
+        je .hp_window
+        cmp dword [hbx_reloc_rva], 0
+        je .hp_noreloc
+
+        ; A relocatable image: pick where it will live and let the launch site
+        ; map it. The heap still starts after the file in the window, which is
+        ; where sbrk grows it; the image itself is elsewhere.
+        call hbx_choose_base
+        mov eax, [hbx_map_base]
+        sub eax, [hbx_image_base]
+        mov [hbx_map_delta], eax
+        mov eax, [hbx_map_base]
+        add eax, [hbx_entry]
+        mov [hbx_map_entry], eax
+        mov byte [hbx_map_pending], 1
+        mov eax, [hbx_file_len]
+        mov [program_size], eax
+        add eax, PROGRAM_BASE
+        call set_program_brk_init
+        mov eax, [hbx_map_entry]
+        clc
+        jmp .hp_out
+
+.hp_window:
+        ; Built for the window. If it cannot be relocated it keeps its base, and
+        ; section 4 says the user is entitled to know that.
+        cmp dword [hbx_reloc_rva], 0
+        jne .hp_window_load
+        mov esi, msg_hbx_fixed
+        call vga_print
+        mov eax, [hbx_image_base]
+        call vga_print_hex
+        call vga_newline
+.hp_window_load:
+        call hbx_load_window
+        clc
+        jmp .hp_out
+
+.hp_noreloc:
+        mov esi, msg_hbx_cannot_load
+        call vga_print
+        mov eax, [hbx_image_base]
+        call vga_print_hex
+        mov esi, msg_hbx_noreloc_tail
+        call vga_print
+        mov eax, MV_BAD_IMAGE
+        jmp .hp_fail
+
+.hp_refused:
+        ; hbx_verify already reported it; EAX carries its status.
+.hp_fail:
+        stc
+.hp_out:
+        mov [esp + 28], eax
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; hbx_load_window - copy a verified image into the program window
+;   In : the statics hbx_verify filled, the file at PROGRAM_BASE
+;   Out: EAX = entry address; program_entry, program_size and the break set
+;-----------------------------------------------------------------------
+hbx_load_window:
+        pushad
+        mov ebx, PROGRAM_BASE
+
+        ; The image bytes follow the header in the file and start at RVA 0.
+        ; They are already in the window, so the copy walks downwards: the
+        ; destination is always header_size bytes below the source.
+        mov esi, ebx
+        add esi, [hbx_hdr_size]
+        mov edi, PROGRAM_BASE
+        mov ecx, [hbx_payload_len]
+        cld
+        rep movsb
+        mov ecx, [hbx_img_size]
+        sub ecx, [hbx_payload_len]
+        xor al, al
+        rep stosb
+
+        ; ---- relocations, when the image was built for another base ----
+        mov eax, PROGRAM_BASE
+        sub eax, [hbx_image_base]
+        mov [hbx_delta], eax
+        test eax, eax
+        jz .loaded
+        mov esi, [hbx_reloc_rva]
+        mov ecx, [PROGRAM_BASE + esi]
+        add esi, 4
+.rel_loop:
+        test ecx, ecx
+        jz .loaded
+        mov edx, [PROGRAM_BASE + esi]
+        mov eax, [PROGRAM_BASE + edx]
+        add eax, [hbx_delta]
+        mov [PROGRAM_BASE + edx], eax
+        add esi, 4
+        dec ecx
+        jmp .rel_loop
+
+.loaded:
+        mov eax, [hbx_img_size]
+        mov [program_size], eax
+        add eax, PROGRAM_BASE
+        call set_program_brk_init
+        mov eax, [hbx_entry]
+        add eax, PROGRAM_BASE
+        mov [program_entry], eax
+        mov [esp + 28], eax
+        popad
+        ret
+
+;=======================================================================
+; MAPPING AT A RANDOM BASE - EXEC.md sections 3 and 4
+;
+; The image is mapped into the task's own directory, page by page, from the
+; file still sitting in the shell's window. Nothing is mapped into the master
+; directory: a mapping there would be inherited by every task created after it
+; and would collide with the next launch.
+;
+; A page covered by a writable section is mapped writable; every other page is
+; read-only. On a 32-bit non-PAE page table there is no execute bit, so
+; read-only is how "code cannot be rewritten" is enforced - which is the half
+; of W^X this format can hold.
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; hbx_choose_base - pick this launch's image base
+;   Out: EAX = base; hbx_map_base is set
+;
+; The demand zone is the only place user mappings may live (VMM.md), so the
+; spread is applied there: a random 64 KB-aligned address in the first 256 MB
+; of the zone - the alignment VMM.md 2.1 asks of a main image - with the whole
+; image kept below the top of the zone.
+;-----------------------------------------------------------------------
+hbx_choose_base:
+        push edx
+        call vm_rand
+        and eax, 0x0FFF0000
+        add eax, [user_demand_base]
+        mov edx, eax
+        add edx, [hbx_img_size]
+        cmp edx, USER_DEMAND_MAX
+        jb .hcb_ok
+        mov eax, [user_demand_base]
+.hcb_ok:
+        mov [hbx_map_base], eax
+        pop edx
+        ret
+
+;-----------------------------------------------------------------------
+; hbx_page_writable - does a writable section cover this page?
+;   In : EAX = page index     Out: EAX = 1 or 0
+;-----------------------------------------------------------------------
+hbx_page_writable:
+        push ebx
+        push ecx
+        push edx
+        push esi
+        push edi
+        mov edi, eax
+        shl edi, 12                     ; page start RVA
+        mov esi, PROGRAM_BASE
+        add esi, HBX_HDR_SIZE
+        mov ecx, [hbx_sec_count]
+        xor ebx, ebx
+.hpw_loop:
+        test ecx, ecx
+        jz .hpw_done
+        test dword [esi + HBX_SCN_OFF_CHARS], HBX_SCN_WRITE
+        jz .hpw_next
+        mov eax, [esi + HBX_SCN_OFF_RVA]
+        mov edx, [esi + HBX_SCN_OFF_SIZE]
+        add edx, eax                    ; section end, exclusive
+        cmp edx, edi
+        jbe .hpw_next                   ; ends at or before this page
+        lea eax, [edi + 4096]           ; this page's end
+        cmp eax, [esi + HBX_SCN_OFF_RVA]
+        jbe .hpw_next                   ; starts at or after this page
+        mov ebx, 1
+.hpw_next:
+        add esi, HBX_SECTION_SIZE
+        dec ecx
+        jmp .hpw_loop
+.hpw_done:
+        mov eax, ebx
+        pop edi
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+
+;-----------------------------------------------------------------------
+; hbx_map_task_image - map a prepared image into a task
+;   In : EDI = task id
+;   Out: EAX = 1  mapped; program_entry already names the mapped entry
+;        EAX = 0  nothing to map (not a relocatable HBX image)
+;        EAX = -1 failed; whatever was mapped has been released, and the caller
+;                 must call hbx_fallback_window
+;-----------------------------------------------------------------------
+hbx_map_task_image:
+        pushad
+        mov dword [hbx_map_ret], 0
+        cmp byte [hbx_map_pending], 0
+        jne .hmt_map
+        jmp .hmt_out
+
+.hmt_map:
+        mov [hbx_map_pid], edi
+        mov eax, edi
+        cmp eax, MAX_TASKS
+        jae .hmt_fail
+        imul eax, TCB_SIZE
+        add eax, task_table
+        mov eax, [eax + TCB_CR3]
+        test eax, eax
+        jz .hmt_fail
+        mov [hbx_map_pd], eax
+        mov eax, [hbx_img_size]
+        add eax, 0xFFF
+        shr eax, 12
+        mov [hbx_map_pages], eax
+        mov dword [hbx_map_idx], 0
+
+.hmt_page:
+        mov eax, [hbx_map_idx]
+        cmp eax, [hbx_map_pages]
+        jae .hmt_relocs
+        call pmm_alloc_page
+        test eax, eax
+        jz .hmt_fail
+        mov [hbx_map_frame], eax
+        ; A fresh frame is not zeroed by the allocator, and the tail of the
+        ; image is BSS: every byte of it is written here.
+        mov edi, eax
+        xor eax, eax
+        mov ecx, 1024
+        cld
+        rep stosd
+
+        mov eax, [hbx_map_idx]
+        shl eax, 12                     ; offset into the image
+        mov ecx, [hbx_payload_len]
+        sub ecx, eax
+        jbe .hmt_flags                  ; past the file: zeros only
+        cmp ecx, 4096
+        jbe .hmt_copy
+        mov ecx, 4096
+.hmt_copy:
+        mov esi, PROGRAM_BASE
+        add esi, [hbx_hdr_size]
+        add esi, eax
+        mov edi, [hbx_map_frame]
+        rep movsb
+
+.hmt_flags:
+        mov eax, [hbx_map_idx]
+        call hbx_page_writable
+        mov ecx, PG_PRESENT | PG_USER
+        test eax, eax
+        jz .hmt_map_now
+        or ecx, PG_WRITABLE
+.hmt_map_now:
+        mov eax, [hbx_map_idx]
+        shl eax, 12
+        add eax, [hbx_map_base]
+        mov ebx, [hbx_map_frame]
+        mov edi, [hbx_map_pd]
+        call paging_map_page_at
+        inc dword [hbx_map_idx]
+        jmp .hmt_page
+
+.hmt_relocs:
+        mov eax, [hbx_map_delta]
+        test eax, eax
+        jz .hmt_record
+        mov esi, PROGRAM_BASE
+        add esi, [hbx_hdr_size]
+        add esi, [hbx_reloc_rva]
+        mov ecx, [esi]
+        add esi, 4
+.hmt_rel_loop:
+        test ecx, ecx
+        jz .hmt_record
+        mov [hbx_rel_count], ecx
+        mov [hbx_rel_ptr], esi
+        mov edx, [esi]                  ; RVA of the dword to fix
+        add edx, [hbx_map_base]         ; where it is now
+        mov eax, edx
+        and eax, 0xFFF
+        mov [hbx_rel_off], eax
+        mov eax, [hbx_map_pd]
+        mov ebx, edx
+        and ebx, ~0xFFF
+        call vm_pte_phys
+        test eax, eax
+        jz .hmt_fail
+        add eax, [hbx_rel_off]          ; the frame is identity-mapped
+        mov ebx, [eax]
+        add ebx, [hbx_map_delta]
+        mov [eax], ebx
+        mov esi, [hbx_rel_ptr]
+        add esi, 4
+        mov ecx, [hbx_rel_count]
+        dec ecx
+        jmp .hmt_rel_loop
+
+.hmt_record:
+        ; One area covers the image, so fork copies it copy-on-write and exit
+        ; releases its frames with every other mapping.
+        mov eax, [hbx_map_base]
+        mov ecx, [hbx_map_pages]
+        mov edx, PROT_READ | PROT_WRITE
+        mov edi, [hbx_map_pid]
+        call vm_record_for_pid
+        test eax, eax
+        jz .hmt_fail
+        mov byte [hbx_map_pending], 0
+        mov dword [hbx_map_ret], 1
+        jmp .hmt_out
+
+.hmt_fail:
+        call hbx_unmap_partial
+        mov byte [hbx_map_pending], 0
+        mov dword [hbx_map_ret], -1
+.hmt_out:
+        mov eax, [hbx_map_ret]
+        mov [esp + 28], eax
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; hbx_unmap_partial - release the pages hbx_map_task_image already mapped
+;-----------------------------------------------------------------------
+hbx_unmap_partial:
+        pushad
+        mov ecx, [hbx_map_idx]
+        test ecx, ecx
+        jz .hup_done
+        mov [hbx_unmap_left], ecx
+        mov dword [hbx_unmap_i], 0
+.hup_loop:
+        mov eax, [hbx_unmap_i]
+        shl eax, 12
+        add eax, [hbx_map_base]
+        mov [hbx_unmap_va], eax
+        mov ebx, eax
+        mov eax, [hbx_map_pd]
+        call vm_pte_phys
+        test eax, eax
+        jz .hup_clear
+        call pmm_free_page
+.hup_clear:
+        mov eax, [hbx_map_pd]
+        mov ebx, [hbx_unmap_va]
+        call vm_clear_pte
+        inc dword [hbx_unmap_i]
+        dec dword [hbx_unmap_left]
+        jnz .hup_loop
+.hup_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; hbx_fallback_window - load the window copy of a prepared image
+;   In : EDI = task id whose entry must be repointed, or -1 for none
+;
+; Called when a task exists but its image could not be mapped: the file is
+; still untouched in the window, so the ordinary copy is made and the task's
+; saved EIP moves with it.
+;-----------------------------------------------------------------------
+hbx_fallback_window:
+        pushad
+        mov [hbx_fb_pid], edi
+        mov byte [hbx_map_pending], 0
+        call hbx_load_window            ; EAX = entry, sets program_entry
+        cmp dword [hbx_fb_pid], -1
+        je .hfw_done
+        mov eax, [hbx_fb_pid]
+        cmp eax, MAX_TASKS
+        jae .hfw_done
+        imul eax, TCB_SIZE
+        add eax, task_table
+        mov ebx, [program_entry]
+        mov [eax + TCB_ENTRY], ebx
+        mov ecx, [eax + TCB_ESP]
+        mov [ecx + 32], ebx             ; EIP in the initial iretd frame
+.hfw_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
 ; hbx_print_name - print a NUL-terminated name from inside the image
 ;   In : ESI = name
 ;   Out: CF set when the NUL is not inside the image (a torn header)
@@ -420,7 +784,7 @@ hbx_print_name:
         pushad
         mov edi, esi
         mov ecx, PROGRAM_BASE
-        add ecx, [hbx_img_size]
+        add ecx, [hbx_file_len]
         sub ecx, edi
         jbe .hpn_fail
         xor edx, edx
@@ -472,11 +836,29 @@ hbx_sec_count:      dd 0
 hbx_stored_crc:     dd 0
 hbx_calc_crc:       dd 0
 hbx_sec_ptr:        dd 0
+hbx_bad_off:        dd 0
 hbx_reloc_rva:      dd 0
 hbx_import_count:   dd 0
 hbx_import_rva:     dd 0
-hbx_bad_off:        dd 0
 hbx_name_buf:       times (HBX_SCN_NAME_LEN + 1) db 0
+
+hbx_map_pending:    db 0
+hbx_map_base:       dd 0
+hbx_map_entry:      dd 0
+hbx_map_delta:      dd 0
+hbx_map_pages:      dd 0
+hbx_map_idx:        dd 0
+hbx_map_frame:      dd 0
+hbx_map_pd:         dd 0
+hbx_map_pid:        dd 0
+hbx_map_ret:        dd 0
+hbx_unmap_left:     dd 0
+hbx_unmap_i:        dd 0
+hbx_unmap_va:       dd 0
+hbx_rel_ptr:        dd 0
+hbx_rel_count:      dd 0
+hbx_rel_off:        dd 0
+hbx_fb_pid:         dd 0
 
 msg_hbx_bad_header:     db "hbx: bad image in the header", 0x0A, 0
 msg_hbx_version:        db "hbx: unsupported header version ", 0
@@ -487,6 +869,7 @@ msg_hbx_section:        db "hbx: section ", 0
 msg_hbx_wx_tail:        db " is writable and executable", 0x0A, 0
 msg_hbx_cannot_load:    db "hbx: cannot load at 0x", 0
 msg_hbx_noreloc_tail:   db ": no relocations", 0x0A, 0
+msg_hbx_fixed:          db "hbx: not relocatable, loaded at 0x", 0
 msg_hbx_entry:          db "hbx: entry 0x", 0
 msg_hbx_entry_tail:     db " is not executable", 0x0A, 0
 msg_hbx_32bit:          db "hbx: this system is 32-bit", 0x0A, 0
