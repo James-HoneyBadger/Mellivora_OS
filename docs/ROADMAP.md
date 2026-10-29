@@ -488,11 +488,13 @@ not fit a 128 MB guest), with a scheme number in the account record so a store
 written by another function is refused and re-set rather than compared. A locked
 session runs `unlock` and nothing else, so a logon screen that dies leaves the
 session locked, and a hive that is damaged on disk is refused by name and offset
-with the last known good generation loaded instead. What is still open: a hive is
-one image rather than section 5's cell format; the stop-timeout kill and the
-profile lifecycle gate are named in SERVICES.md section 6 but not yet gated, and
-the Sett's crash-at-every-phase and migration gates in CONFIG.md section 10 are
-not built. CONFIG.md section 11 and SERVICES.md section 7 name the rest.
+with the last known good generation loaded instead. A stop is a request the
+service answers through its own record, and one that never answers is killed at
+its stop timeout with the kill in the Chronicle. What is still open: a hive is
+one image rather than section 5's cell format; the profile lifecycle gate in
+SERVICES.md section 6 is not gated, and the Sett's crash-at-every-phase and
+migration gates in CONFIG.md section 10 are not built. CONFIG.md section 11 and
+SERVICES.md section 7 name the rest.
 
 ### M5 · Runtime and binaries (16–22 weeks)
 
