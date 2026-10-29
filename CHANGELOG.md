@@ -1,5 +1,48 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M4: the password function is Argon2id
+
+SERVICES.md section 2 says passwords are checked against Argon2id, and until now
+they were not: the store held a salted, iterated AES-256 construction, which is a
+one-way function but not a memory-hard one. It is now the real function.
+
+```text
+Lair:/> account add alice correct-horse
+account: added alice
+Lair:/> logon alice correct-horse
+logon: welcome, alice (session 1)
+```
+
+- **Argon2id, version 1.3, in the kernel.** `kernel/argon2.inc` carries BLAKE2b
+  (init, update, final, compress), `H'` (blake2b_long), the BlaMka G, the block
+  permutation, Argon2id's address-block generation, `index_alpha`, and the tag.
+  One lane, three passes, 32-byte tag, 8-byte salt.
+- **1 MiB of memory, not 64.** RFC 9106's own parameters ask for 64 MiB; a guest
+  here may have 128 MB in total and still has to log a user on. The deviation is
+  named in SERVICES.md section 7 rather than left to be discovered. The memory is
+  one page-allocator allocation, taken for the duration of a hash and given back.
+- **The first half of the first pass is data-independent.** Argon2id is not
+  Argon2d with a header: the reference indices for pass 0, slices 0 and 1 come
+  from an address block built by hashing a zero block, and the rest come from the
+  previous block. Implementing only the second half produces a hash that is
+  self-consistent and wrong, so the boot gate pins three published vectors:
+  m=8/t=1, m=64/t=3 (the XOR-on-later-passes path) and m=1024/t=3 (what a logon
+  actually computes). BLAKE2b-512("abc") is checked first, so a failure under
+  Argon2id is not blamed on the hash it is built from.
+- **The account record carries a scheme number.** `Algo = 1` sits beside `Uid`,
+  `Salt` and `Hash`. A record without it cannot be verified by this function, so
+  logon refuses it instead of comparing against the wrong thing, and `account
+  add` re-sets such a record under its existing uid rather than reporting a
+  duplicate - otherwise a name from before this change would be unusable.
+- **Hashing is not silent about failure.** If the memory cannot be had, the hash
+  fails and logon refuses; a caller never treats a failure as a mismatch.
+
+Two bugs the gate caught while this landed, both worth naming because both were
+invisible from the output: the final-block flag XORed only the low half of the
+64-bit counter word (BLAKE2b still hashed, just not BLAKE2b), and the column half
+of the block permutation copied one 64-bit word per row instead of two, which
+made the permutation a different function.
+
 ## Unreleased - M5: a relocatable image is mapped where it cannot be predicted
 
 EXEC.md section 4 asks for a randomised main image base. The first slice put an

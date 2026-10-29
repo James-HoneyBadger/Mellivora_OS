@@ -482,10 +482,14 @@ not two composited desktops. A task scheduler landed with `boot`, `logon`,
 A service's recovery policy is stored and run, not assumed: three actions taken
 in order (`restart`, `run:IMAGE`, `reboot`, `none`), a reset period that begins
 a new streak once a service has run clean, and a start timeout that turns a
-service which never appears into a counted failure with its action run. What is
-still open: the password function is not Argon2id, and a hive is one image
-rather than section 5's cell format. CONFIG.md section 11 and SERVICES.md
-section 7 name the rest.
+service which never appears into a counted failure with its action run. Passwords
+are Argon2id (version 1.3, one lane, three passes, 1 MiB - RFC 9106's 64 MiB does
+not fit a 128 MB guest), with a scheme number in the account record so a store
+written by another function is refused and re-set rather than compared. What is
+still open: a hive is one image rather than section 5's cell format, and the
+stop-timeout kill, the crashed-logon-screen lock and the profile lifecycle gate
+are named in SERVICES.md section 6 but not yet gated. CONFIG.md section 11 and
+SERVICES.md section 7 name the rest.
 
 ### M5 · Runtime and binaries (16–22 weeks)
 

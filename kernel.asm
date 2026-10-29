@@ -876,6 +876,11 @@ kernel_entry:
         call aes_selftest
         LOGBOOT LOG_INFO, log_aestest
 
+        ; The password function, against a tag the reference implementation
+        ; produced. A KDF that is self-consistent and wrong would otherwise be
+        ; discovered by a user whose password no longer works.
+        call argon2_selftest
+
         ; Bring the C-built module up once. A module that is linked in and
         ; refuses the host table can only get worse, so the refusal is
         ; reported here; a successful load is silent and `cmod` proves it.
@@ -936,6 +941,7 @@ kernel_entry:
 %include "kernel/blkcache.inc"
 %include "kernel/pagecache.inc"
 %include "kernel/aes.inc"
+%include "kernel/argon2.inc"
 %include "kernel/hbfs.inc"
 %include "kernel/keystore.inc"
 %include "kernel/crypt.inc"

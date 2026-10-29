@@ -40,6 +40,9 @@ RANK_BLOCKCRYPT equ 90                 ; the volume cipher's shared AES state.
                                        ; it drops the cache, which takes the
                                        ; cache lock.
 RANK_BLOCKCACHE equ 100                ; block cache and its device
+RANK_ARGON2     equ 150                ; the password function's shared state
+                                       ; and block buffers. Below the VFS: a
+                                       ; logon hashes before it reads a hive
 RANK_VFS        equ 200                ; virtual filesystem tables
 RANK_SCHED      equ 300                ; run queue and task table
 RANK_PMM        equ 400                ; frame allocator

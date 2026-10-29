@@ -15,13 +15,11 @@
 ;     session without SE_SESSION_CROSS, so "switch user" is a real boundary and
 ;     not a redraw.
 ;
-; The password hash is a salted, iterated AES-256 construction: the salt and
-; password form the key material, and 256 AES applications per half make the
-; function expensive in the only currency this kernel has. It is NOT Argon2id,
-; and SERVICES.md section 2 says Argon2id; neither the memory-hard part nor the
-; parallelism is here, and a store made by this will be re-hashed when the real
-; KDF lands. It is still a salted, slow, one-way function, which is a different
-; thing from storing the password.
+; The password hash is Argon2id (kernel/argon2.inc) with the parameters in
+; that file, one lane, and the account's eight-byte salt. The record carries a
+; scheme number next to the hash: a record written by an older or different
+; function is refused rather than compared against the wrong one, and
+; `account add` re-sets such a record instead of reporting a duplicate.
 ;=======================================================================
 
 SESS_MAX         equ 4
@@ -44,6 +42,13 @@ ACC_VAL_UID      db "Uid", 0
 ACC_VAL_SALT     db "Salt", 0
 ACC_VAL_HASH     db "Hash", 0
 ACC_VAL_FLAGS    db "Flags", 0
+ACC_VAL_ALGO     db "Algo", 0
+
+; The scheme number a stored hash is tagged with. Any change to the Argon2id
+; parameters or to a2_lock's shape makes this a new number.
+SESS_KDF_SCHEME  equ 1
+SESS_PW_MAX      equ 48          ; longer passwords are taken at this length
+SESS_KDF_PAGES   equ (A2_M_KIB * 1024) / 4096
 
 USER_PREFIX      db "\Registry\User", 0
 SESS_OBJECTS     db "Sessions", 0
@@ -182,94 +187,72 @@ sess_chunk8:
         ret
 
 ; ESI = password, EDI = 8-byte salt, EBX = 32-byte output
-; Salted, iterated AES-256; see the file header for what it is not.
+; Argon2id, one lane, the parameters in argon2.inc. The memory cost is taken
+; from the page allocator for the duration of the hash and given back after,
+; so a logon is the only moment a MiB is held. CF set when the memory cannot
+; be had or the parameters are refused - a caller must not treat a failure as
+; a hash.
 sess_hash_password:
         pushad
         mov [.shp_pw], esi
         mov [.shp_salt], edi
         mov [.shp_out], ebx
-
-        ; Key material: salt, then the password truncated or zero-padded.
-        lea edi, [acct_key_material]
-        mov esi, [.shp_salt]
-        mov ecx, 8
-        cld
-        rep movsb
-        mov esi, [.shp_pw]
-        mov ecx, 24
-.shp_pwcopy:
-        test ecx, ecx
-        jz .shp_expand
-        mov al, [esi]
-        mov [edi], al
-        inc edi
-        test al, al
-        jz .shp_pad
-        inc esi
-        dec ecx
-        jmp .shp_pwcopy
-.shp_pad:
-        xor eax, eax
-        rep stosb
-.shp_expand:
-        lea esi, [acct_key_material]
-        lea edi, [acct_key_expanded]
-        call aes_expand_256
-
-        ; Block A: salt then the first eight password bytes; block B: salt then
-        ; the next eight. Both are zero-padded, so a short password cannot read
-        ; whatever the buffer held before it.
-        lea edi, [acct_block_a]
-        mov esi, [.shp_salt]
-        mov ecx, 8
-        cld
-        rep movsb
-        mov esi, [.shp_pw]
         xor edx, edx
-        call sess_chunk8
-        lea edi, [acct_block_b]
-        mov esi, [.shp_salt]
-        mov ecx, 8
-        rep movsb
-        mov esi, [.shp_pw]
-        mov edx, 8
-        call sess_chunk8
+.shp_scan:
+        cmp edx, SESS_PW_MAX
+        jae .shp_have_len
+        cmp byte [esi + edx], 0
+        je .shp_have_len
+        inc edx
+        jmp .shp_scan
+.shp_have_len:
+        mov [.shp_len], edx
 
-        ; Iterate each half. The count is small because one AES block costs
-        ; about a tenth of a second in the emulated target this tree runs on;
-        ; Argon2id's memory-hard parameters are the real answer and are the
-        ; documented gap in SERVICES.md section 2.
-        mov dword [.shp_i], 8
-.shp_loopa:
-        lea esi, [acct_block_a]
-        lea edi, [acct_block_a]
-        lea ebx, [acct_key_expanded]
-        call aes_encrypt_block
-        dec dword [.shp_i]
-        jnz .shp_loopa
-        mov dword [.shp_i], 8
-.shp_loopb:
-        lea esi, [acct_block_b]
-        lea edi, [acct_block_b]
-        lea ebx, [acct_key_expanded]
-        call aes_encrypt_block
-        dec dword [.shp_i]
-        jnz .shp_loopb
+        mov ecx, SESS_KDF_PAGES          ; pages for the memory cost
+        call pmm_alloc_pages
+        test eax, eax
+        jz .shp_fail
+        mov [.shp_mem], eax
 
-        mov edi, [.shp_out]
-        lea esi, [acct_block_a]
-        mov ecx, 16
-        cld
-        rep movsb
-        lea esi, [acct_block_b]
-        mov ecx, 16
-        rep movsb
+        lea ebx, [sess_kdf_par]
+        mov eax, [.shp_pw]
+        mov [ebx + A2P_PWD], eax
+        mov eax, [.shp_len]
+        mov [ebx + A2P_PWDLEN], eax
+        mov eax, [.shp_salt]
+        mov [ebx + A2P_SALT], eax
+        mov dword [ebx + A2P_SALTLEN], 8
+        mov eax, [.shp_out]
+        mov [ebx + A2P_OUT], eax
+        mov dword [ebx + A2P_OUTLEN], A2_TAGLEN
+        mov dword [ebx + A2P_MKIB], A2_M_KIB
+        mov dword [ebx + A2P_TCOST], A2_T_COST
+        mov eax, [.shp_mem]
+        mov [ebx + A2P_MEM], eax
+        mov eax, ebx
+        call argon2id_hash
+        mov [.shp_status], eax
+
+        mov eax, [.shp_mem]
+        mov ecx, SESS_KDF_PAGES
+        call pmm_free_pages
+        cmp dword [.shp_status], 0
+        jne .shp_fail
         popad
+        clc
         ret
-.shp_pw:   dd 0
-.shp_salt: dd 0
-.shp_out:  dd 0
-.shp_i:    dd 0
+.shp_fail:
+        popad
+        stc
+        ret
+.shp_pw:     dd 0
+.shp_salt:   dd 0
+.shp_out:    dd 0
+.shp_len:    dd 0
+.shp_mem:    dd 0
+.shp_status: dd 0
+
+sess_kdf_par: times A2P_SIZE db 0
 
 ;=======================================================================
 ; Accounts
@@ -287,6 +270,13 @@ sess_load_account:
         call sett_kv_get_u32
         jc .sla_no
         mov [sess_uid_buf], eax
+        ; A record from another scheme cannot be verified by this one.
+        mov edi, [.sla_path]
+        mov esi, ACC_VAL_ALGO
+        call sett_kv_get_u32
+        jc .sla_no
+        cmp eax, SESS_KDF_SCHEME
+        jne .sla_no
         mov edi, [.sla_path]
         mov esi, ACC_VAL_SALT
         call sett_kv_lookup
@@ -344,6 +334,7 @@ sess_verify:
         mov esi, [.sv_pw]
         lea edi, [sess_salt_buf]
         call sess_calc
+        jc .sv_no
         ; compare the two 32-byte hashes
         lea esi, [sess_calc_buf]
         lea edi, [sess_hash_buf]
@@ -827,15 +818,29 @@ sess_account_command:
         mov edx, 31
         call sett_word
         jc .usage
-        ; Refuse a duplicate.
+        ; Refuse a duplicate, unless the record was written by another scheme:
+        ; that one cannot be verified any more, so `account add` re-sets it
+        ; under the same uid rather than leaving a name nobody can log on with.
         lea esi, [sess_name_buf]
         call sess_path_of_account
         mov edi, esi
         mov esi, ACC_VAL_UID
         call sett_kv_get_u32
-        jnc .add_dup
+        jc .add_new
+        mov [.uid], eax
+        mov edi, esi
+        mov esi, ACC_VAL_ALGO
+        call sett_kv_get_u32
+        jnc .add_have_algo
+        jmp .add_stale
+.add_have_algo:
+        cmp eax, SESS_KDF_SCHEME
+        jne .add_stale
+        jmp .add_dup
+.add_new:
         call sess_uid_alloc
         mov [.uid], eax
+.add_stale:
         ; Salt from the clock: the tick and the RTC's second, twice, so two
         ; accounts made in the same second still differ.
         mov eax, [tick_count]
@@ -848,13 +853,21 @@ sess_account_command:
         lea edi, [sess_salt_buf]
         lea ebx, [sess_calc_buf]
         call sess_hash_password
-        ; Write uid, salt and hash.
+        jc .add_fail
+        ; sess_uid_alloc walks the account keys and that walk shares
+        ; sess_path_buf, so the path is taken again before anything is written.
         lea esi, [sess_name_buf]
         call sess_path_of_account
         mov [.path], esi
+        ; Write uid, scheme, salt and hash.
         mov edi, [.path]
         mov esi, ACC_VAL_UID
         mov ebx, [.uid]
+        call sett_kv_set_u32
+        jc .add_fail
+        mov edi, [.path]
+        mov esi, ACC_VAL_ALGO
+        mov ebx, SESS_KDF_SCHEME
         call sett_kv_set_u32
         jc .add_fail
         mov edi, [.path]
