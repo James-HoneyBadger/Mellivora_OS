@@ -103,6 +103,8 @@ TCB_WAITKIND    equ 680     ; M1: WAITK_* — one, any or all
 TCB_WAITR       equ 684     ; M1: wait reason, for a hung-system report
 TCB_PROCOBJ     equ 688     ; M1: the process object wrapping this TCB
 TCB_WAITSET     equ 692     ; M1: this task's wait set (allocated on first use)
+TCB_SVC         equ 696     ; M4: the service record this task runs (-1 = none)
+TCB_SESS        equ 700     ; M4: the logon session this task belongs to
 
 TCB_SIZE        equ 704     ; Bytes per TCB: 144 + 512 + 40, 16-byte aligned
 
@@ -586,6 +588,9 @@ sched_create_task:
         mov [edi + TCB_WAITR],     dword 0
         mov [edi + TCB_PROCOBJ],   dword 0
         mov [edi + TCB_WAITSET],   dword 0
+        mov [edi + TCB_SVC],       dword -1
+        mov eax, [sess_current]
+        mov [edi + TCB_SESS], eax
         ; The object charge is per slot, and a recycled slot must start at zero:
         ; otherwise a new task inherits the previous occupant's count and is
         ; refused creates it never made.
@@ -902,6 +907,15 @@ sched_exit_task:
         jmp .exit_find
 
 .exit_found:
+        ; A service's task dying is a service failure the SCM has to see, and
+        ; it must see it before the slot is recycled.
+        cmp dword [edi + TCB_SVC], -1
+        je .exit_not_service
+        mov eax, [edi + TCB_SVC]
+        mov ebx, [bg_exit_code]
+        call svc_on_exit
+.exit_not_service:
+
         ; Reap any windows this task owned before the TCB is recycled.
         mov eax, [edi + TCB_PID]
         call gui_cleanup_pid
@@ -2454,9 +2468,23 @@ sys_sleep:
         dec ecx
         jnz .sleep_scan
 
-        ; No other task — unblock self immediately (can't sleep)
+        ; No other task. A foreground program keeps the CPU and sleeps in the
+        ; HLT fallback, which is what it has always done. A service is a
+        ; background task that never owns the console: it stays blocked and the
+        ; shell gets the machine back, because a service that sleeps in ring 3
+        ; would starve the prompt it is supposed to run behind.
+        cmp dword [edi + TCB_SVC], -1
+        jne .sleep_service_home
         mov dword [edi + TCB_STATE], TASK_RUNNING
         jmp .sleep_abort
+
+.sleep_service_home:
+        xor eax, eax
+        call sched_apply_cr3
+        call sched_restore_shell_fds
+        mov dword [tss_struct + 4], KERNEL_STACK
+        mov esp, KERNEL_STACK
+        jmp shell_main
 
 .sleep_switch:
         ; EDI = outgoing task TCB, EBX = incoming task TCB

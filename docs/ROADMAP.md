@@ -470,6 +470,23 @@ iterations is a run that has not happened.
 are logged on at once with separate desktops; every kernel log line is a Chronicle
 record, and the boot log is readable from the log viewer.
 
+**As built.** Chronicle landed (source and severity filters, retention counted).
+The Sett landed with typed values, a snapshot transaction, a generation and a
+checksum, `/sett.bak` rollback, change notification, per-key descriptors, `SECRET`
+values in the credential store, hives, export and import. The Watch landed with
+records in the Sett, start types, dependencies and cycle refusal, and restart
+recovery counted out to `FAILED`. Accounts, logon, lock/unlock, switch and the
+session boundary landed; "separate desktops" means separate session namespaces,
+not two composited desktops. A task scheduler landed with `boot`, `logon`,
+`every:SECONDS` and `daily:HH:MM` triggers and a `skip`/`run` missed-run policy.
+A service's recovery policy is stored and run, not assumed: three actions taken
+in order (`restart`, `run:IMAGE`, `reboot`, `none`), a reset period that begins
+a new streak once a service has run clean, and a start timeout that turns a
+service which never appears into a counted failure with its action run. What is
+still open: the password function is not Argon2id, and a hive is one image
+rather than section 5's cell format. CONFIG.md section 11 and SERVICES.md
+section 7 name the rest.
+
 ### M5 · Runtime and binaries (16–22 weeks)
 
 The largest single lift, and the one that makes "an operating system you develop

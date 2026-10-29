@@ -178,6 +178,7 @@ cmd_help_str:   db "help", 0
 cmd_ver_str:    db "ver", 0
 cmd_acpi_str:   db "acpi", 0
 cmd_bootlog_str: db "bootlog", 0
+cmd_chronicle_str: db "chronicle", 0
 cmd_drivers_str: db "drivers", 0
 cmd_smpstress_str: db "smpstress", 0
 cmd_volumes_str: db "volumes", 0
@@ -240,6 +241,7 @@ cmd_popd_str:   db "popd", 0
 cmd_dirs_str:   db "dirs", 0
 cmd_touch_str:  db "touch", 0
 cmd_set_str:    db "set", 0
+cmd_sett_str:   db "sett", 0
 cmd_unset_str:  db "unset", 0
 cmd_shutdown_str: db "shutdown", 0
 cmd_reboot_str: db "reboot", 0
@@ -267,6 +269,15 @@ cmd_dhcp_str:   db "dhcp", 0
 cmd_arp_str:    db "arp", 0
 cmd_scrsaver_str: db "scrsaver", 0
 cmd_whoami_str: db "whoami", 0
+cmd_sc_str:     db "sc", 0
+cmd_account_str: db "account", 0
+cmd_logon_str:  db "logon", 0
+cmd_logoff_str: db "logoff", 0
+cmd_sessions_str: db "sessions", 0
+cmd_lock_str:   db "lock", 0
+cmd_unlock_str: db "unlock", 0
+cmd_switch_str: db "switch", 0
+cmd_tasks_str:  db "tasks", 0
 cmd_stat_str:   db "stat", 0
 cmd_fsck_str:   db "fsck", 0
 cmd_ln_str:     db "ln", 0

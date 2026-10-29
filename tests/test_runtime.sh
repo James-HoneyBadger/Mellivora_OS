@@ -309,6 +309,14 @@ run_case "the boot log records the stages" "bootlog" "drv ata: bound" "" "CPU EX
 # on COM1, so the early records are readable from outside the guest even though
 # the screen has scrolled past them.
 run_case "the boot log has the early phases" "bootlog" "cpu0 I drv serial: bound" "" "CPU EXCEPTION"
+# Chronicle is the same ring asked a narrower question: a source and a
+# severity floor, with the retention counters said out loud.
+run_case "the chronicle filters by source" \
+    "chronicle -s hbfs" "overwritten by age" "" "CPU EXCEPTION|is not a Sett"
+run_case "the chronicle filters by severity" \
+    "chronicle -l i" "cpu0 core I core:" "" "CPU EXCEPTION"
+run_case "the chronicle refuses an unknown flag" \
+    "chronicle -l z" "[-s SOURCE]" "" "CPU EXCEPTION"
 # The desktop reaches the same power paths: Ctrl+Esc, six items down to "Shut
 # Down...", Enter. The dialog is a window like any other, so opening it is
 # visible and cancelling it leaves the machine running.
@@ -362,11 +370,130 @@ run_case "del takes a path and keeps flags" "touch /pt_paths/a.txt" "deleted: a.
 run_case "virtual dirs refuse writes" "mkdir /tmp/nope"      "Virtual dirs are read-only" "" "CPU EXCEPTION"
 run_case "a refused path leaves the volume intact" "del /tmp/*.log" "Virtual dirs are read-only" "ls /pt_paths" "CPU EXCEPTION|No such dir"
 run_case "del takes a plain path"    "touch /pt_paths/b.txt"  "Deleted."           "del /pt_paths/b.txt" "CPU EXCEPTION|No such dir"
+# The volume cipher's fixture: three whole 4 KiB blocks written in one call,
+# which is the one request shape the block layer hands to the transform. It
+# stays a plain-volume case because `crypt format` destroys the volume it is
+# given; the encrypted half is its own gate (`make check-crypt`, on a copy).
+run_case "a multi-block file round-trips" "del cryptfile.bin" "CRYPT_CREATED_OK" "crypt_test" "CPU EXCEPTION|CRYPT_FAIL"
 # An ACL, where a file has one, decides instead of the mode word: a named user
 # writes a 0600 file, the mask narrows that grant, the owner is held to their
 # own ACE, and root still passes. Self-cleaning: it deletes its fixture.
 run_case "access control list conformance" "acl_test"          "ACL_OK"             "" "CPU EXCEPTION|ACL_FAIL" "" "" "" 30
 run_case "acl command reports its usage"   "acl"               "acl show <f>"    "" "CPU EXCEPTION"
+# The Sett (M4, CONFIG.md): keys and typed values, the save/load file, and the
+# environment view that conformance item 6 names. Newlines inside the command
+# are typed one line at a time by the driver, so a case can drive a sequence.
+run_case "the Sett stores and returns typed values" \
+    $'sett set \\Registry\\Machine\\Gate Keep str kept across commands\nsett set \\Registry\\Machine\\Gate Num u32 4242\nsett set \\Registry\\Machine\\Gate Blob bin DEADBEEF\nsett get \\Registry\\Machine\\Gate Keep' \
+    "= kept across commands" "" "CPU EXCEPTION|no such|tree is full|bad value"
+run_case "the Sett keeps the tree across save and load" \
+    $'sett set \\Registry\\Machine\\Gate Saved str round trip\nsett save\nsett load\nsett get \\Registry\\Machine\\Gate Saved' \
+    "= round trip" "" "CPU EXCEPTION|no such|no /sett|not a Sett image|could not write"
+run_case "the Sett bridges the environment both ways" \
+    $'sett env import\nsett get \\Registry\\Machine\\Environment PATH\nset SETTGATE=before\nsett set \\Registry\\Machine\\Environment SETTGATE str after\nsett env apply\nset' \
+    "SETTGATE=after" "" "CPU EXCEPTION|no such|tree is full"
+# M4, CONFIG.md section 3: a transaction is all or nothing. The abort case sets
+# a value inside the transaction over one that already exists and then asks for
+# it after the abort: the store has to be wholly old, not partly new. (The key
+# cannot have come from anywhere else - the case before it never writes `Txn`.)
+# CONFIG.md section 3: a value that outgrows its slot is moved within the arena.
+# The compaction that runs on save used to copy in slot order, so a moved value
+# could overwrite the source of the value that comes after it and the neighbour
+# came back holding the grown value's tail.
+run_case "a grown value leaves its neighbour whole" \
+    $'sett set \\Registry\\Machine\\Grow A str xxxxx\nsett set \\Registry\\Machine\\Grow B str yyyyy\nsett set \\Registry\\Machine\\Grow A str averylongvaluehere\nsett save\nsett get \\Registry\\Machine\\Grow B' \
+    "= yyyyy" "" "CPU EXCEPTION|no such"
+run_case "the Sett aborts a transaction whole" \
+    $'sett set \\Registry\\Machine\\Txn A u32 7\nsett begin\nsett set \\Registry\\Machine\\Txn A u32 1\nsett abort\nsett get \\Registry\\Machine\\Txn A' \
+    "= 7" "" "CPU EXCEPTION|tree is full|no such"
+run_case "the Sett commits a transaction once" \
+    $'sett begin\nsett set \\Registry\\Machine\\Txn B u32 2\nsett commit\nsett gen' \
+    "committed" "" "CPU EXCEPTION|tree is full|no transaction"
+# Section 7: the last-known-good generation. Two saves make /sett.bak the K=1
+# generation; the rollback must bring that one back, not the file just written.
+run_case "the Sett rolls back a bad generation" \
+    $'sett set \\Registry\\Machine\\Rb K u32 1\nsett save\nsett set \\Registry\\Machine\\Rb K u32 2\nsett save\nsett rollback\nsett get \\Registry\\Machine\\Rb K' \
+    "= 1" "" "CPU EXCEPTION|no last-known-good|no such"
+# Section 8: a SECRET is held by the credential store, and reading it back is an
+# audit record rather than a value.
+run_case "a SECRET is never read back" \
+    $'sett set \\Registry\\Machine\\Sec S secret 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F\nsett get \\Registry\\Machine\\Sec S\nchronicle -s sett' \
+    "a SECRET value was read back" "" "CPU EXCEPTION|tree is full|refused"
+# Section 5: a hive carries a subtree to its own file and merges it back.
+run_case "a hive holds a subtree" \
+    $'sett set \\Registry\\User\\Hive K str v\nsett hive save \\Registry\\User\\Hive hive.hiv\nsett delkey \\Registry\\User\\Hive\nsett hive load hive.hiv\nsett get \\Registry\\User\\Hive K' \
+    "= v" "" "CPU EXCEPTION|refused|hive"
+# Section 3: a watcher created after the change still learns the state, and the
+# change that follows it is reported in order.
+run_case "the Sett notifies a watcher in order" \
+    $'sett set \\Registry\\Machine\\Nt V u32 1\nsett watch \\Registry\\Machine\\Nt\nsett set \\Registry\\Machine\\Nt V u32 2\nsett events' \
+    "state \\Registry\\Machine\\Nt" "" "CPU EXCEPTION|no events"
+# M4, SERVICES.md section 1: a service record is created, started and reported.
+run_case "the service manager starts a service" \
+    $'sc create t1 /bin/svcrun manual\nsc start t1\nsc query t1' \
+    "RUNNING" "" "CPU EXCEPTION|could not start"
+# A cycle is refused when the record is written, with the two ends named.
+run_case "a dependency cycle is refused" \
+    $'sc create c1 /bin/svcrun manual c2\nsc create c2 /bin/svcrun manual c1' \
+    "dependency cycle" "" "CPU EXCEPTION|could not write"
+# Recovery: a service that exits non-zero restarts after the backoff, and after
+# the attempt count is spent it is FAILED with the count. The sleeps give the
+# SCM the prompt iterations it needs to run each retry.
+run_case "a crash-loop is counted out" \
+    $'sc create cf /bin/svcfail manual\nsc start cf\nsleep 12\nsc list\nsleep 12\nsc list\nsleep 12\nsc list' \
+    "FAILED after 3" "" "CPU EXCEPTION|could not start" "" "" "" 90
+# SERVICES.md section 1.3: the recovery action is stored in the record and shown
+# by `query`, and with no action given `sc failure` reports rather than changes.
+run_case "the recovery policy is stored and shown" \
+    $'sc create rp /bin/svcfail manual\nsc failure rp run:/bin/svcok\nsc query rp\nsc failure rp\nsc delete rp' \
+    "onfail=run:/bin/svcok" "" "CPU EXCEPTION|an action is|no such service"
+# The action that is not a restart: the named program runs in place of one, and
+# because the service is not brought back it is FAILED with the attempt counted.
+# This is the half section 1.3 named as missing.
+run_case "a failed service runs its recovery program" \
+    $'sc create rq /bin/svcfail manual\nsc failure rq run:/bin/svcok\nsc start rq\nsleep 3\nsc query rq\nsc delete rq' \
+    "svcok: done" "" "CPU EXCEPTION|PAGE FAULT|an action is" "" "" "" 40
+# A start that never appears is that service's failure, not a silent stop: the
+# image does not exist, the attempt is counted, and the policy's program runs.
+run_case "a start that never appears runs its program" \
+    $'sc create rn /bin/nosuchimage manual\nsc failure rn run:/bin/svcok\nsc start rn\nsleep 3\nsc delete rn' \
+    "did not appear" "" "CPU EXCEPTION|PAGE FAULT"
+# The reset period: two failures then a service that stays up. With the reset
+# period still running the streak is kept and `query` shows it; this case is the
+# one the next depends on, because a streak that never resets is a crash loop.
+run_case "the failure streak is kept before the reset period" \
+    $'del flaky.cnt\nsc create rk /bin/svcflaky manual\nsc reset rk 60\nsc start rk\nsleep 20\nsc query rk' \
+    "fails=2" "" "CPU EXCEPTION|PAGE FAULT|an action is" "" "" "" 60
+# The same service, with the period shortened once it is already up: it has run
+# clean that long, so the streak begins again and the failures are forgotten.
+# Shortening it after the failures rather than before is deliberate - a failing
+# run on this emulated disk can take longer than a short period, and the case
+# has to be about the reset and not about how fast the disk is.
+run_case "the reset period begins a new streak" \
+    $'del flaky.cnt\nsc create rm /bin/svcflaky manual\nsc reset rm 60\nsc start rm\nsleep 25\nsc reset rm 2\nsleep 8\nsc query rm' \
+    "fails=0" "" "CPU EXCEPTION|PAGE FAULT|an action is" "" "" "" 80
+# A boot service runs before there is a session to log on to: the record is left
+# in the image and the next case sees the start in the boot log.
+run_case "a boot service is created" \
+    $'sc create bsvc /bin/svcok boot\nsc list' \
+    "bsvc" "" "CPU EXCEPTION|could not write"
+run_case "a service starts before logon" \
+    $'sc query bsvc\nsessions\nchronicle -s scm\nsc delete bsvc' \
+    "scm: a service started" "" "CPU EXCEPTION|PAGE FAULT"
+# The task scheduler: a record with an `every:` trigger runs while the shell
+# sleeps, which is where the SCM tick gives it the machine.
+run_case "a scheduled task runs on its trigger" \
+    $'tasks add tj /bin/svcok every:1\nsleep 4\ntasks list' \
+    "tasks: ran tj" "" "CPU EXCEPTION|the table is full|bad trigger"
+# SERVICES.md sections 2-4: an account, a logon that makes a session, and the
+# identity the console reports afterwards.
+run_case "an account logs on to its own session" \
+    $'account del m4user\naccount add m4user m4pw\nlogon m4user m4pw\nwhoami\nsessions' \
+    "session=1" "" "CPU EXCEPTION|wrong" "" "" "" 60
+# Two accounts, two sessions: the second logon does not disturb the first.
+run_case "two users share the machine" \
+    $'account add m4b m4pb\nlogon m4user m4pw\nlogon m4b m4pb\nsessions\nswitch 1\nwhoami' \
+    "name=m4b" "" "CPU EXCEPTION|wrong" "" "" "" 60
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"

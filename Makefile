@@ -128,7 +128,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
 
@@ -367,6 +367,13 @@ programs:
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
 
+# A program that jumps forward over more than 127 bytes needs -O0: NASM's
+# default sizing assumes a short jump on the first pass, and the labels after
+# it then move on the second. crypt_test carries 36 KB of buffers and two long
+# branches past them.
+$(PROG_DIR)/crypt_test.bin: $(PROG_DIR)/crypt_test.asm $(PROG_DIR)/syscalls.inc
+	$(NASM) -f bin -O0 -w-zeroing -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
+
 programs/blauncher.bin: programs/generated_app_catalog.inc
 
 programs/generated_app_catalog.inc: docs/app-catalog.json tools/generate_launcher_catalog.py
@@ -543,6 +550,14 @@ check-boot: $(POPULATE_STAMP)
 check-runtime: $(POPULATE_STAMP)
 	@RUNTIME_ALLOW_SKIP=1 bash tests/test_runtime.sh $(IMAGE)
 
+# The volume-encryption gate: format a *copy* with AES-256-XTS, prove the file
+# is ciphertext on the raw image, then prove a reboot without the key refuses
+# the volume, a wrong key leaves it byte-identical, and the right key reads the
+# file back. It copies the image because `crypt format` destroys the volume it
+# is given; running it in place once tombstoned every program in the image.
+check-crypt: $(POPULATE_STAMP)
+	@CRYPT_ALLOW_SKIP=1 bash tests/test_crypt.sh $(IMAGE)
+
 # P1 exit gate: a 100 MB heap workload. Twenty 5 MB demand-zero blocks are
 # written page by page, read back, freed and re-checked, which needs most of a
 # 128 MB guest. Skipped when QEMU is unavailable, like the other QEMU gates.
@@ -606,7 +621,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -865,6 +880,7 @@ help:
 	@echo "    make check-desktop Run the Burrows desktop QEMU test"
 	@echo "    make crash-test   Kill QEMU at random points and require fsck to pass (HBFS journal)"
 	@echo "    make check-faults Inject OOM / disk-full / frame drops and require clean errors"
+	@echo "    make check-crypt  Prove an AES-256-XTS volume round-trips and refuses a wrong key"
 	@echo "    make lint         Run contract and NASM source lint checks"
 	@echo "    make validate-version Validate repo version strings for the current release"
 	@echo "    make check-toolchain Report which 32-bit C toolchain the build uses"

@@ -1414,7 +1414,7 @@ fd_write:
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, hbfs_block_buf
-        call ata_write_sectors
+        call blk_cache_write
         jc .fwr_ioerr
 
         ; Update file position and size
@@ -2201,7 +2201,7 @@ cmd_cd_internal:
         mov eax, [current_dir_lba]
         mov ecx, [current_dir_sects]
         mov edi, hbfs_dir_buf
-        call ata_read_sectors
+        call blk_cache_read
         clc
         ret
 

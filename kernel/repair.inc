@@ -203,7 +203,7 @@ repair_walk:
         mov ecx, [esp]                  ; sectors
         mov eax, [esp + 4]              ; LBA
         mov edi, hbfs_dir_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc .rw_unreadable
         ; The walk only reads. Keep every directory it touches out of the
         ; shell's cached view of one, or the next command lists a directory the
@@ -244,7 +244,7 @@ repair_walk:
         mov eax, [esp + 4]
         mov ecx, [esp]
         mov edi, hbfs_dir_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc .rw_unreadable
 .rw_next:
         inc esi

@@ -590,7 +590,7 @@ vm_writeback_page:
         add eax, edx
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, [.wbp_dst]
-        call ata_write_sectors          ; also drops the block cache
+        call blk_cache_write            ; also drops the block cache
         jc .wbp_none
         mov dword [esp + 28], 1
         popad

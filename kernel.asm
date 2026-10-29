@@ -847,6 +847,16 @@ kernel_entry:
         call serial_print
 .obj_ready:
 
+        ; M4: the machine hive is read before anything reads a setting from it,
+        ; session 0 exists before anything logs on, and the service manager
+        ; starts the boot and system services before the shell is a prompt.
+        call sett_load
+        call sess_boot
+        LOGBOOT LOG_INFO, log_sessions
+        call svc_boot
+        LOGBOOT LOG_INFO, log_services
+        call taskq_boot
+
         ; Enter the command shell
         jmp shell_main
 
@@ -873,6 +883,8 @@ kernel_entry:
 %include "kernel/pagecache.inc"
 %include "kernel/aes.inc"
 %include "kernel/hbfs.inc"
+%include "kernel/keystore.inc"
+%include "kernel/crypt.inc"
 %include "kernel/volume.inc"
 %include "kernel/quota.inc"
 %include "kernel/acl.inc"
@@ -907,6 +919,11 @@ kernel_entry:
 %include "kernel/screensaver.inc"
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
+%include "kernel/sett.inc"
+%include "kernel/settx.inc"
+%include "kernel/service.inc"
+%include "kernel/session.inc"
+%include "kernel/tasks.inc"
 %include "kernel/syscall.inc"
 %include "kernel/cmdtable.inc"
 %include "kernel/cmod.inc"

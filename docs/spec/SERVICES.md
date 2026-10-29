@@ -65,7 +65,7 @@ it and records the refusal.
 | Exit non-zero | The configured action, after a backoff of 1 s, 5 s, 30 s |
 | Start timeout | The configured action, with the attempt counted |
 | Crash of a shared host | Every service in the host restarts; the failure is attributed to the host, not to an innocent service |
-| Repeated failure | After the reset period's worth of consecutive failures, the SCM stops retrying and reports `FAILED` with the count |
+| Repeated failure | After the attempt count's worth of consecutive failures the SCM stops retrying and reports `FAILED` with the count. The reset period is what makes them *consecutive*: a service that runs on without failing for that long begins a new streak, so a failure hours later is the first of the new one |
 
 Every start, stop, failure and recovery action is an audit record
 ([SECURITY.md](SECURITY.md#7-audit)).
@@ -171,11 +171,20 @@ M4 does not close until:
 
 | Contract | Tree today |
 |---|---|
-| Services, dependencies, recovery | None |
-| Logon, tokens, sessions | A shell running as uid 0 |
-| Profiles | None |
-| Switch user, lock, disconnect | None |
-| Service management surface | None |
+| Services, dependencies, recovery | **Yes.** A record is a key under `\Registry\Machine\System\Services\<name>` (`Image`, `Start`, `DependOn`, `Attempts`, `Failure1..3`, `Reset`, `StartTimeout`); `sc create/delete/start/stop/query/list/dep/failure/reset/timeout/attempts`. A dependency is started first and a missing one fails the dependant by name; a cycle is refused when the record is written. Exit zero is a clean stop |
+| Start sequence | **Yes for boot and system.** Boot services start at boot, system services after them, auto services at logon; the boot log names each start, and `sessions` shows session 0 with nobody logged on. `StartTimeout` (30 s by default, `0` = no deadline) bounds the launch: a start that misses it, or that cannot produce a task at all, is a failure with the attempt counted and the policy's action run, not a service that silently stops |
+| Recovery actions | **Yes.** Three stored actions, taken in order as the failures accumulate: `restart` (after 1 s, 5 s, 30 s), `run:IMAGE` (the named program runs in place of a restart), `reboot`, and `none`. `sc failure NAME [A1 [A2 [A3]]]` sets them and prints them when given no action, `sc reset NAME SECS` sets the period (60 s) after which a service that has run clean begins a new streak, and `sc attempts NAME N` the cap that ends one. A `run:` or `reboot` action is recorded by the failure and carried out by the SCM tick: a failure is noticed inside the dying task's own address space, and loading a program there would build the image under that task's page directory. Neither action restarts the service, so both leave it `FAILED` |
+| Shared host processes, service privileges | **None.** Every service is its own task, and the token is the launcher's: session 0, SYSTEM |
+| Logon, tokens, sessions | **Yes.** `account add/del/list`, `logon`, `logoff`, `lock`, `unlock`, `switch`, `sessions`. Accounts live in the Sett with a uid, a salt and a hash; a logon verifies the password, makes a session, creates `/Users/<name>`, loads `<name>.hiv` into `\Registry\User\<name>` and starts the auto services. `TCB_SESS` carries the session, and `\Sessions\<n>\` is refused to another session without `SE_SESSION_CROSS` |
+| Profiles | **Partly.** A directory and a hive file per account, created at logon and saved at logoff. The default-profile copy, `AppData\Local` and `AppData\Roaming` are not created |
+| Switch user, lock, disconnect | **Partly.** `switch` moves the console between live sessions and `lock`/`unlock` re-authenticate the current one. A session has a namespace but no window station of its own, so "separate desktops" means separate session namespaces, not two composited desktops; `disconnect` is not a command |
+| Service management surface | `sc` and `sessions`/`whoami` in the shell. There is no management console application (SHELL.md) and no remote surface (NETWORK.md) |
+| Password hashing | A salted, iterated AES-256 construction, eight applications per half. It is not Argon2id, it is not memory-hard, and section 2 says Argon2id: a real KDF re-hashes these stores when it lands |
 
-Everything in this document except the audit ring buffer and the identity fields
-in the TCB is new in M4.
+`make check-runtime` carries the gates: a service is created and started, a
+cycle is refused with both ends named, a crash-loop is counted out to `FAILED`,
+the policy is stored and shown by `query`, a failed service runs its recovery
+program, a start that never appears runs its program too, a failure streak is
+kept until the reset period passes and forgotten after it, a boot service is
+seen in the boot log before any session exists, one account logs on to session
+1, and two accounts hold sessions 1 and 2 at once.

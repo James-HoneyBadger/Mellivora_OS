@@ -250,7 +250,7 @@ acl_show_entry:
         jz .ase_done
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc .ase_done
 
         mov edi, hbfs_block_buf

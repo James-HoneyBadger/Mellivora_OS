@@ -189,7 +189,7 @@ hbfs_read_file:
         add eax, HBFS_DATA_START
         shl ecx, 3
         mov edi, [.save_dest]
-        call ata_read_sectors
+        call blk_cache_read
         jc .path_read_fail
         jmp .path_read_ok
 
@@ -215,7 +215,7 @@ hbfs_read_file:
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc  .path_read_fail
         mov ecx, HBFS_BLOCK_SIZE
         cmp ecx, [.save_remain]

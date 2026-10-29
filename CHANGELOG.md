@@ -1,5 +1,219 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M4: a session is a boundary, and a service is a record
+
+SERVICES.md asked for the two things that make a machine shared: services that
+start before anybody logs on, and two users logged on at once without a reboot.
+
+```text
+Lair:/> sc create t1 /bin/svcrun manual
+sc: created t1
+Lair:/> sc start t1
+sc: started t1
+Lair:/> scm: service 'cf' exited non-zero; restart number 1
+Lair:/> scm: service 'cf' is FAILED after 3
+Lair:/> account add alice pw1
+account: added alice
+Lair:/> logon alice pw1
+logon: welcome, alice (session 1)
+Lair:/> sessions
+0 name=SYSTEM uid=0 state=active
+1 name=alice uid=1000 state=active console
+```
+
+- **The Watch.** `sc create NAME IMAGE [boot|system|auto|manual|disabled] [DEP]`,
+  `sc start/stop/query/list/delete/dep`. A record is a key under
+  `\Registry\Machine\System\Services\<name>`, so a definition survives a reboot
+  without a binary format of its own.
+- **The start order is the point.** Boot services run before there is a session
+  to log on to, system services after them, and auto services when somebody
+  logs on. A dependency is started first; a dependency that is not defined
+  fails the dependant with its name. A cycle is refused when the record is
+  written, with both ends printed.
+- **Recovery is a policy, not a constant.** A record carries three actions taken
+  in order as the failures accumulate - `restart` (after 1 s, 5 s, 30 s),
+  `run:IMAGE` (the named program runs in place of a restart), `reboot`, and
+  `none` - plus the period after which a service that has run clean begins a new
+  streak (60 s) and the start timeout that decides a service never appeared
+  (30 s). `sc failure NAME [A1 [A2 [A3]]]`, `sc reset NAME SECS`,
+  `sc timeout NAME SECS` and `sc attempts NAME N`; `sc query` shows the policy.
+  The default - three restarts then `FAILED` - is exactly what this tree did
+  before the policy existed. After the attempt count the service is `FAILED` and
+  the count is reported. Exit zero is a clean stop and is not a failure.
+- **An action that is not a restart is carried out by the tick.** A failure is
+  noticed inside the dying task's own address space (`svc_on_exit` runs from
+  `sched_exit_task`), so starting the recovery program there built the image
+  under that task's page directory and page-faulted. The failure records the
+  action and the SCM tick - which always runs where the kernel is executing with
+  the master directory - runs it. `run:` and `reboot` do not restart the
+  service, so both leave it `FAILED`.
+- **A start that never appears is a failure.** A missing image or a task that
+  could not be made used to mark the service `FAILED` on the spot, outside the
+  policy; it is now the same counted failure a crash is, so the action runs.
+  The SCM is a tick, not a thread: it runs at the prompt and inside `sleep`,
+  never in an interrupt.
+- **Accounts and logon.** `account add NAME PASSWORD`, `logon`, `logoff`,
+  `lock`, `unlock`, `switch`, `sessions`. The store keeps a uid, a salt and a
+  hash - never the password. A logon makes a session, creates `\Users\<name>`,
+  loads the user's hive under `\Registry\User\<name>` and starts the auto
+  services.
+- **Session 0 is services, and a session is a real boundary.** A task carries
+  the session it was launched in (`TCB_SESS`), and the object namespace already
+  refuses `\Sessions\<n>\` to another session without `SE_SESSION_CROSS`. Two
+  accounts can be logged on at once (`session 1` and `session 2`), and `switch`
+  moves the console between them without a reboot.
+- **A service that sleeps gives the machine back.** SYS_SLEEP's fallback used to
+  hold the CPU in ring 3 until the timer woke it, which starved the prompt as
+  soon as a service idled. A service now stays blocked and the shell resumes;
+  foreground programs keep the old behaviour.
+- **A task scheduler.** `tasks add NAME IMAGE boot|logon|every:SECONDS|daily:HH:MM
+  [skip|run]`, `tasks list`, `tasks run NAME`, `tasks del NAME`. Records live in
+  the Sett, `boot` and `logon` tasks run at those points, and the last word is
+  the missed-run policy: a window that passed while the machine was off is
+  skipped by default and run once with `run`.
+- Sixteen cases in `make check-runtime`: transactions and rollback, a SECRET and
+  its audit record, hives, notification, a started service, a refused cycle, a
+  crash-loop counted out to `FAILED`, the policy stored and shown, a failed
+  service running its recovery program, a start that never appears running one
+  too, a streak kept until the reset period and forgotten after it, a boot
+  service seen in the log before any session exists, and one and two accounts
+  logged on.
+
+What this is not: `svcrun`/`svcfail`/`svcok`/`svcflaky` are fixtures, a `reboot`
+recovery action resets the machine through the same path the `reboot` command
+uses and is not exercised by a gate, the password function is a salted iterated
+AES-256 construction and not Argon2id, and a session's "desktop" is its
+namespace rather than a window station. SERVICES.md section 7 names each of
+those as the remaining gap.
+
+## Unreleased - M4: the Sett commits, watches and rolls back
+
+The rest of CONFIG.md: a transaction, a generation, a watcher, a descriptor and
+a secret.
+
+```text
+Lair:/> sett begin
+sett: transaction open
+Lair:/> sett set \Registry\Machine\Gate A u32 1
+sett: stored
+Lair:/> sett abort
+sett: changes discarded
+Lair:/> sett get \Registry\Machine\Gate A
+sett: no such value
+Lair:/> sett rollback
+sett: rolled back to the last known good generation
+```
+
+- **`sett begin` / `commit` / `abort`.** A transaction is a snapshot of the
+  tables; abort puts it back and commit writes once. The tree is capped at 64
+  keys, so a snapshot is cheaper than an undo log that has to replay in order.
+- **A generation and a checksum.** The image carries both, a torn write is
+  refused by the load instead of half trusted, and every commit copies the
+  previous file to `/sett.bak` first; `sett rollback` reads that back.
+- **Change notification.** `sett watch PATH` and `sett events`: one bounded ring
+  of key/set/del events in commit order, consecutive duplicates coalesced, and a
+  watch created after a change emits the current state.
+- **A descriptor per key.** `sett acl PATH [OWNER MODE]`; a caller that is not
+  SYSTEM is held to the owner and world bits before it may change a key.
+- **A SECRET never comes back.** `sett set PATH NAME secret HEX` puts the
+  plaintext in the credential store and the entry's name in the tree; `sett get`
+  refuses and writes a Chronicle record, and `sett tree` shows `secret`.
+- **Hives.** `sett hive save PREFIX FILE` and `sett hive load FILE`: a subtree in
+  its own file and merged back, which is what a per-user hive is at logon.
+- **Text export and import.** `sett export [PATH]` and `sett import FILE` over
+  `path|type|name|value`, one value per line.
+- **A value that grows no longer takes its neighbour with it.** A value that
+  outgrows its slot in the arena is moved to the end, which leaves the slots'
+  offsets out of order. The compaction that save runs walked the values in slot
+  order, so copying the moved value down could read a source an earlier copy had
+  already overwritten; the neighbour came back holding the grown value's tail.
+  The pack now goes through a scratch buffer, so the order cannot matter.
+- Seven cases in `make check-runtime`: abort is whole, commit bumps a generation,
+  rollback returns the older value, a grown value leaves its neighbour whole, a
+  SECRET is refused and audited, a hive round-trips a subtree, and a watcher
+  sees the state and then the change.
+
+Still not here, and named so the slice is not mistaken for the whole: the
+cell-based on-disk hive of section 5 (this is one file with a header), migration
+with `Version`, and UTF-16 names (M5 owns Unicode). Section 11 says so.
+
+## Unreleased - M4: Chronicle answers "which source, and how bad"
+
+The boot ring already kept level, processor, tick and text. Chronicle adds the
+two things a log is actually read with - a source and a severity floor - and
+counts the records retention takes away.
+
+```text
+Lair:/> chronicle -s hbfs
+Chronicle: 31 records, 0 overwritten by age, 0 dropped (ring busy)
+  cpu0 hbfs I hbfs: volume mounted
+Lair:/> chronicle -l e
+Chronicle: 31 records, 0 overwritten by age, 0 dropped (ring busy)
+  (nothing matches)
+```
+
+- **The source is derived, not demanded.** Every record already passes through
+  one writer, so the source is taken there: the word before the first `:` in the
+  message. `hbfs: volume mounted` is `hbfs`; `drv ata: bound` is `ata`; a line
+  with no colon is `kernel`. A hundred call sites keep working untouched, and
+  the day a caller wants to name its own source the field is already in the
+  record.
+- **`chronicle [-s SOURCE] [-l E|W|I|D] [-n COUNT]`** - no filter shows
+  everything, oldest first. `E`, `W`, `I`, `D` or the words `error`, `warn`,
+  `info`, `debug`.
+- **Retention is counted.** The ring keeps 256 records and overwrites the oldest;
+  `chronicle` reports how many went that way beside the contention drops, because
+  a log that loses lines silently reads as a machine that did nothing.
+- `bootlog` is unchanged - same records, same line format - so nothing that
+  already read it had to change.
+- Three cases in `make check-runtime`: the source filter, the severity filter,
+  and a refusal for an unknown flag.
+
+## Unreleased - M4: the Sett holds the settings the environment used to
+
+CONFIG.md's first thing: one tree of keys with typed values, reachable from the
+shell, kept in one file, and wired to the variable table the existing programs
+already read.
+
+```text
+Lair:/> sett set \Registry\Machine\Demo Greeting str hello world
+sett: stored
+Lair:/> sett get \Registry\Machine\Demo Greeting
+\Registry\Machine\Demo = hello world
+Lair:/> sett set \Registry\Machine\Demo Count u32 42
+Lair:/> sett tree
+\Registry
+  \Registry\Machine
+  \Registry\Machine\Demo
+    Greeting = hello world
+    Count = 42
+```
+
+- **The tree** - keys with `U32`, `STRING` and `BINARY` values, paths separated
+  by `\\`, names compared without regard to case and stored as typed. Paths are
+  canonicalised on the way in, so `A\B\` and `\A\B` are one key.
+- **`sett set/get/del/delkey/tree`** - `delkey` takes the key, everything below
+  it, and their values, rebuilding both tables in order with the parent indices
+  remapped so a compacted slot never leaves a child pointing at a stranger.
+- **`sett save` / `sett load`** - the tree is written to `/sett.bin` whole from
+  the root, whatever the shell's current directory, and read back through the
+  descriptor layer with the length checked against the header, the parent of
+  every key checked, and every value's type, range and name terminator checked
+  before anything is trusted. A file that fails is refused by name rather than
+  half-loaded, and the tree is left empty instead of mixed.
+- **The environment view** - `sett env import` copies the shell's variables into
+  `\Registry\Machine\Environment` as `STRING` values; `sett env apply` writes
+  them back. That is CONFIG.md conformance item 6's compatibility layer, and
+  `make check-runtime` asserts it in both directions.
+- Three cases in `make check-runtime`: typed values round-trip, the tree
+  survives `save` and `load`, and a variable set in the tree comes back through
+  `apply`.
+
+What is not here is the rest of M4 and section 11 says so: the journaled
+multi-value commit, per-user hives and logon, key ACLs, change notification,
+migration, rollback, text export and `SECRET` values. Strings are UTF-8 for now;
+UTF-16 arrives with M5's Unicode work.
+
 ## Unreleased - M3: a corrupted volume can be repaired from the shell
 
 The wave's recovery-console criterion now has its tool and its gate. `repair`

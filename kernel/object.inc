@@ -1005,7 +1005,7 @@ obj_identity:
         mov edi, eax
         mov eax, [edi + TCB_EUID]
         mov ebx, [edi + TCB_EGID]
-        mov ecx, [edi + TCB_SID]
+        mov ecx, [edi + TCB_SESS]
         mov edx, INTEGRITY_MEDIUM
         test eax, eax                    ; uid 0 is Administrators + system
         jnz .oi_user

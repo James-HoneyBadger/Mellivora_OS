@@ -156,8 +156,14 @@ hbfs_init:
         ; A feature bit this kernel does not implement changes how the volume
         ; must be read and written; mounting it read-write would corrupt it.
         mov eax, [hbfs_super_buf + HBFS_SB_FEATURES]
-        test eax, ~(HBFS_FEAT_PERMS | HBFS_FEAT_XATTR)
+        test eax, ~(HBFS_FEAT_PERMS | HBFS_FEAT_XATTR | HBFS_FEAT_CRYPT)
         jnz .bad_features
+
+        ; An encrypted volume needs its key before anything in the data area
+        ; is read. A refusal here is not a format: the volume stays intact and
+        ; `crypt unlock` can open it once the key is in the store.
+        call hbfs_crypt_load
+        jc .locked_volume
 
         ; Filesystem exists
         mov esi, msg_hbfs_found
@@ -326,6 +332,15 @@ hbfs_init:
 .bad_features:
         mov esi, msg_hbfs_bad_features
         jmp .refuse
+.locked_volume:
+        ; hbfs_crypt_load has already said why. Nothing may be read or written
+        ; against a volume whose cipher is not open.
+        mov dword [hbfs_mounted], 0
+        mov dword [hbfs_read_only], 0
+        mov dword [hbfs_total_blocks], 0
+        popad
+        ret
+
 .root_error:
         ; hbfs_load_root_dir has already said the read failed.
         mov dword [hbfs_mounted], 0
@@ -379,7 +394,11 @@ hbfs_require_writable:
 hbfs_format:
         pushad
 
-        ; A formatted volume is v4. This used to write version 2 with no
+        ; A formatted volume is v4, unless it is being made encrypted: an
+        ; encrypted volume is written through the block layer on the way out,
+        ; and this build mounts v3 read-write while v4 is read-only, so a crypt
+        ; volume is v3 with the crypt feature bit set.
+        ; (see hbfs_format_crypt below) This used to write version 2 with no
         ; feature word: the volume a user created in the OS was older than the
         ; one the builder ships, carried no checksums, and had to be upgraded
         ; before permissions or xattrs worked.
@@ -389,8 +408,6 @@ hbfs_format:
         rep stosd
 
         mov edi, hbfs_super_buf
-        mov dword [edi + 0], HBFS4_MAGIC
-        mov dword [edi + 4], HBFS4_VERSION
         mov dword [edi + 8], HBFS_TOTAL_BLOCKS
         ; The journal area is marked allocated below, so it is not free.
         mov dword [edi + 12], HBFS_TOTAL_BLOCKS - HBFS_JOURNAL_BLOCKS
@@ -401,10 +418,20 @@ hbfs_format:
         mov dword [edi + HBFS_SB_JRNL_STATE], 0
         mov dword [edi + HBFS_SB_JRNL_PTR],   0
         mov dword [edi + HBFS_SB_JRNL_EPOCH], 0
-        mov dword [edi + HBFS4_OFF_FEATURES], HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL
         mov dword [edi + HBFS4_OFF_GENERATION], 0
         mov dword [edi + HBFS4_OFF_BLOCKS_HI], 0
         mov dword [edi + HBFS4_OFF_DATA_HI],   0
+        cmp dword [hbfs_format_crypt], 0
+        je  .fmt_v4_header
+        mov dword [edi + 0], HBFS_MAGIC
+        mov dword [edi + 4], HBFS_VERSION_V3
+        mov dword [edi + HBFS_SB_FEATURES], HBFS_FEAT_PERMS | HBFS_FEAT_XATTR | HBFS_FEAT_CRYPT
+        jmp .fmt_header_done
+.fmt_v4_header:
+        mov dword [edi + 0], HBFS4_MAGIC
+        mov dword [edi + 4], HBFS4_VERSION
+        mov dword [edi + HBFS4_OFF_FEATURES], HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL
+.fmt_header_done:
         call hbfs_write_superblock          ; stamp the CRC, then write
         jc .fmt_fail
 
@@ -489,7 +516,13 @@ hbfs_format:
         mov  edi, hbfs_block_buf
         call ata_read_sectors
         jc   .fmt_fail
+        cmp  dword [hbfs_format_crypt], 0
+        je   .fmt_check_v4
+        cmp  dword [hbfs_block_buf], HBFS_MAGIC
+        jmp  .fmt_checked
+.fmt_check_v4:
         cmp  dword [hbfs_block_buf], HBFS4_MAGIC
+.fmt_checked:
         jne  .fmt_fail
 
         ; A fresh volume has an empty root: any working directory, cached
@@ -730,7 +763,7 @@ hbfs_map_extent:
         add  eax, HBFS_DATA_START
         mov  ecx, HBFS_SECTORS_PER_BLK
         mov  edi, hbfs_extent_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc   .hmw_fail
         mov  eax, hbfs_extent_buf
         mov  ecx, HBFS_BLOCK_SIZE
@@ -1884,7 +1917,7 @@ hbfs_create_file:
         add eax, HBFS_DATA_START ; + data area start = LBA
         shl ecx, 3              ; blocks * 8 = total sectors
         mov esi, [.save_data]
-        call ata_write_sectors
+        call blk_cache_write
         jc .write_fail
 .hcf_write_done:
 
@@ -2025,7 +2058,7 @@ hbfs_extent_write:
         add  eax, HBFS_DATA_START
         shl  ecx, 3                     ; sectors
         mov  esi, [.hew_src]
-        call ata_write_sectors
+        call blk_cache_write
         jc   .hew_fail
         mov  eax, [.hew_idx]
         imul eax, HBFS4_EXTENT_RECORD
@@ -2074,7 +2107,7 @@ hbfs_truncate_extent:
         add  eax, HBFS_DATA_START
         mov  ecx, HBFS_SECTORS_PER_BLK
         mov  edi, hbfs_extent_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc   .hte_fail
         mov  eax, hbfs_extent_buf
         mov  ecx, HBFS_BLOCK_SIZE
@@ -2205,7 +2238,7 @@ hbfs_free_extent:
         add  eax, HBFS_DATA_START
         mov  ecx, HBFS_SECTORS_PER_BLK
         mov  edi, hbfs_extent_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc   .hfe_fail
         mov  eax, hbfs_extent_buf
         mov  ecx, HBFS_BLOCK_SIZE
@@ -2363,7 +2396,7 @@ hbfs_mkdir:
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, hbfs_block_buf
-        call ata_write_sectors
+        call blk_cache_write
         pop ebx
         pop eax
         inc eax
@@ -2570,7 +2603,7 @@ sys_readlink:
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
-        call ata_read_sectors
+        call blk_cache_read
         pop edx                 ; EDX = size
         pop edi                 ; EDI = output buffer
         jc .readlink_fail
@@ -2714,7 +2747,7 @@ sys_rmdir:
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc .srd_fail
 
         mov edi, hbfs_block_buf
@@ -3087,25 +3120,26 @@ sys_defrag:
 .sdf_copy:
         cmp  dword [.sdf_sects], 0
         je   .sdf_copy_done
-        ; Read one sector from source
+        ; One whole block at a time. A sector at a time was enough when the
+        ; disk was the only thing between the copy and the data; with a volume
+        ; cipher in the path, part of a block is not a thing that can be read
+        ; or written, and the move has to be block-granular to be encrypted
+        ; under the destination's number anyway.
         mov  eax, [.sdf_src_lba]
-        mov  ecx, 1
+        mov  ecx, HBFS_SECTORS_PER_BLK
         mov  edi, hbfs_block_buf
-        call ata_read_sectors
-        jnc  .sdf_cp_rd_ok
-        jmp  .sdf_next          ; read error: abort this file
-.sdf_cp_rd_ok:
-        ; Write to destination
+        call blk_cache_read
+        jc   .sdf_next          ; read error: abort this file
+
         mov  eax, [.sdf_dst_lba]
-        mov  ecx, 1
+        mov  ecx, HBFS_SECTORS_PER_BLK
         mov  esi, hbfs_block_buf
-        call ata_write_sectors
-        jnc  .sdf_cp_wr_ok
-        jmp  .sdf_next          ; write error: abort this file
-.sdf_cp_wr_ok:
-        inc  dword [.sdf_src_lba]
-        inc  dword [.sdf_dst_lba]
-        dec  dword [.sdf_sects]
+        call blk_cache_write
+        jc   .sdf_next          ; write error: abort this file
+
+        add  dword [.sdf_src_lba], HBFS_SECTORS_PER_BLK
+        add  dword [.sdf_dst_lba], HBFS_SECTORS_PER_BLK
+        sub  dword [.sdf_sects], HBFS_SECTORS_PER_BLK
         jmp  .sdf_copy
 
 .sdf_copy_done:
@@ -3398,7 +3432,7 @@ hbfs_cwd_access_current:
         mov dword [dir_cache_lba], 0xFFFFFFFF
         mov edi, hbfs_dir_buf
         mov eax, ebx
-        call ata_read_sectors
+        call blk_cache_read
         jc .hcc_deny                        ; cannot read it: refuse
 
         mov eax, [.hcc_sects]
@@ -3623,7 +3657,7 @@ hbfs_xattr_get:
 
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, hbfs_block_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc .hxg_notfound
 
         mov edi, hbfs_block_buf
@@ -3725,7 +3759,7 @@ hbfs_xattr_set:
         mov eax, edi
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, hbfs_block_buf
-        call ata_write_sectors
+        call blk_cache_write
         pop edi
         jc .hxs_fail_pop
 
@@ -3793,7 +3827,7 @@ hbfs_xattr_set:
         mov eax, edi
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, hbfs_block_buf
-        call ata_write_sectors
+        call blk_cache_write
         jc .hxs_fail
         mov dword [esp + 28], 0
         popad
@@ -3910,6 +3944,14 @@ hbfs_sync:
         jne .hs_flush
 
         call hbfs_save_root_dir
+        jc .hs_failed
+
+        ; The bitmap is written below, so it has to be the one on the disk. A
+        ; v3 mount does not read it - it is loaded on the first allocation -
+        ; and a boot that never allocated a block (a bare `shutdown`) would
+        ; otherwise write 64 KiB of zeros over the free-space map and hand
+        ; every allocated block back to the allocator.
+        call hbfs_load_bitmap
         jc .hs_failed
 
         mov eax, HBFS_BITMAP_START

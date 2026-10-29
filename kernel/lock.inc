@@ -34,6 +34,11 @@ MAX_HELD_LOCKS  equ 8                  ; nesting depth per processor
 RANK_SMP_WORK   equ 50                 ; the work queue: taken by a pusher
                                        ; with nothing else held, and never by a
                                        ; job it just handed out
+RANK_BLOCKCRYPT equ 90                 ; the volume cipher's shared AES state.
+                                       ; Below the cache on purpose: a write
+                                       ; holds it and the device write beneath
+                                       ; it drops the cache, which takes the
+                                       ; cache lock.
 RANK_BLOCKCACHE equ 100                ; block cache and its device
 RANK_VFS        equ 200                ; virtual filesystem tables
 RANK_SCHED      equ 300                ; run queue and task table

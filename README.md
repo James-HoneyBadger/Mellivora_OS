@@ -43,6 +43,53 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **Filesystem mount** — HBFS detection and validation; a volume that fails the checks is refused and never reformatted (`format` creates one explicitly)
 - **Shell handoff** — drops into HB Lair interactive prompt after init completes
 
+### Chronicle (M4)
+
+- **A structured event log** — every kernel log line is a record with a source,
+  a severity, the processor and the tick; 256 are kept and the oldest overwrite
+- **`chronicle [-s SOURCE] [-l E|W|I|D] [-n COUNT]`** — read it the way a log is
+  read: one source, or a severity floor
+
+### The Sett (M4)
+
+- **One configuration tree** — `\Registry\Machine` and `\Registry\User\<name>`
+  keys with `U32`, `STRING`, `BINARY` and `SECRET` values, reachable from the
+  shell with `sett set/get/del/delkey/tree`
+- **Transactions** — `sett begin` snapshots the tree, `sett abort` puts it back,
+  `sett commit` writes once
+- **A generation, a checksum and a rollback** — the image carries both, a torn
+  write is refused by the load, every commit keeps the previous file in
+  `/sett.bak`, and `sett rollback` reads it back
+- **Change notification** — `sett watch PATH` / `sett events`, one bounded ring
+  in commit order with consecutive duplicates coalesced
+- **A descriptor per key** — `sett acl PATH [OWNER MODE]`
+- **`SECRET` values** — the plaintext lives in the credential store, `sett get`
+  refuses and audits the attempt
+- **Hives, export and import** — `sett hive save|load`, `sett export|import`
+- **The environment as a view** — `sett env import` seeds the tree from the
+  shell's variables and `sett env apply` writes them back
+
+### Services and sessions (M4)
+
+- **The Watch** — service records in the Sett,
+  `sc create/delete/start/stop/query/list/dep/failure/reset/timeout/attempts`,
+  start types (`boot`, `system`, `auto`, `manual`, `disabled`), dependencies
+  with cycle refusal at install, and recovery: three actions taken in order
+  (`restart` after 1 s, 5 s, 30 s, `run:IMAGE`, `reboot`, `none`), a reset
+  period, a start timeout, and `FAILED` with the attempt count when the streak
+  is spent
+- **Before logon** — boot and system services start at boot, and the boot log
+  names each start; auto services start when somebody logs on
+- **Accounts and logon** — `account add/del/list`, `logon`, `logoff`, `lock`,
+  `unlock`, `switch`, `sessions`; a salted hash in the Sett, a profile directory,
+  and a per-user hive loaded at logon and saved at logoff
+- **Sessions are a boundary** — session 0 is services, a task carries the session
+  it was launched in, and `\Sessions\<n>\` refuses another session without
+  `SE_SESSION_CROSS`; two accounts hold sessions 1 and 2 at once
+- **The task scheduler** — `tasks add NAME IMAGE boot|logon|every:SECONDS|daily:HH:MM [skip|run]`,
+  `tasks list`, `tasks run`, `tasks del`; the last word is the missed-run policy,
+  so a window that passed while the machine was off is skipped by default
+
 ### HB Lair Shell (v3.0)
 
 - **90+ built-in shell commands** with aliases: file management, text processing, system info, process control

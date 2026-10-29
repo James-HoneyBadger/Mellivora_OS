@@ -53,10 +53,14 @@ cmd_table:
         CMDENT cmd_time_str, CAT_SYSTEM, sum_time, det_time
         CMDENT cmd_acpi_str, CAT_SYSTEM, sum_acpi, det_acpi
         CMDENT cmd_bootlog_str, CAT_SYSTEM, sum_bootlog, det_bootlog
+        CMDENT cmd_chronicle_str, CAT_SYSTEM, sum_chronicle, det_chronicle
         CMDENT cmd_drivers_str, CAT_SYSTEM, sum_drivers, det_drivers
         CMDENT cmd_smpstress_str, CAT_SYSTEM, sum_smpstress, det_smpstress
         CMDENT cmd_volumes_str, CAT_SYSTEM, sum_volumes, det_volumes
         CMDENT cmd_quota_str, CAT_SYSTEM, sum_quota, det_quota
+        CMDENT cmd_key_str, CAT_SYSTEM, sum_key, det_key
+        CMDENT cmd_crypt_str, CAT_SYSTEM, sum_crypt, det_crypt
+        CMDENT cmd_sett_str, CAT_SYSTEM, sum_sett, det_sett
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
         CMDENT cmd_objects_str, CAT_SYSTEM, sum_objects, det_objects
         CMDENT cmd_handles_str, CAT_SYSTEM, sum_handles, det_handles
@@ -66,10 +70,20 @@ cmd_table:
         CMDENT cmd_watch_str, CAT_SYSTEM, sum_watch, det_watch
         CMDENT cmd_which_str, CAT_SYSTEM, sum_which, det_which
         CMDENT cmd_whoami_str, CAT_SYSTEM, sum_whoami, det_whoami
+        CMDENT cmd_account_str, CAT_SYSTEM, sum_account, det_account
+        CMDENT cmd_logon_str, CAT_SYSTEM, sum_logon, det_logon
+        CMDENT cmd_logoff_str, CAT_SYSTEM, sum_logoff, det_logoff
+        CMDENT cmd_sessions_str, CAT_SYSTEM, sum_sessions, det_sessions
+        CMDENT cmd_lock_str, CAT_SYSTEM, sum_lock, det_lock
+        CMDENT cmd_unlock_str, CAT_SYSTEM, sum_unlock, det_unlock
+        CMDENT cmd_switch_str, CAT_SYSTEM, sum_switch, det_switch
+        CMDENT cmd_sc_str, CAT_SYSTEM, sum_sc, det_sc
+        CMDENT cmd_tasks_str, CAT_SYSTEM, sum_tasks, det_tasks
         CMDENT cmd_append_str, CAT_FILES, sum_append, det_append
         CMDENT cmd_cat_str, CAT_FILES, sum_cat, det_cat
         CMDENT cmd_cd_str, CAT_FILES, sum_cd, det_cd
         CMDENT cmd_chmod_str, CAT_FILES, sum_chmod, det_chmod
+        CMDENT cmd_acl_str, CAT_FILES, sum_acl, det_acl
         CMDENT cmd_chown_str, CAT_FILES, sum_chown, det_chown
         CMDENT cmd_copy_str, CAT_FILES, sum_copy, det_copy
         CMDENT cmd_del_str, CAT_FILES, sum_del, det_del
@@ -236,6 +250,54 @@ sum_which: db "Locate a command", 0
 det_which:
         db "which NAME", 0x0A
         db "  Say whether NAME is a shell built-in, or where it is found on PATH.", 0x0A, 0
+sum_account: db "Accounts: add, delete and list the local identities", 0
+sum_logon: db "Log on as an account and make a session", 0
+sum_logoff: db "Save the profile, unload the hive and end the session", 0
+sum_sessions: db "Which sessions exist, who owns them and which has the console", 0
+sum_lock: db "Lock the current session", 0
+sum_unlock: db "Re-authenticate and unlock the current session", 0
+sum_switch: db "Give the console to another session", 0
+sum_tasks: db "Scheduled jobs: on boot, on logon, every N seconds or daily", 0
+det_tasks:
+        db "tasks add NAME IMAGE TRIGGER [skip|run] | tasks del NAME", 0x0A
+        db "tasks run NAME | tasks list", 0x0A
+        db "  TRIGGER is boot, logon, every:SECONDS or daily:HH:MM.", 0x0A
+        db "  The last word is the missed-run policy: skip (default) means a", 0x0A
+        db "  window that passed while the machine was off is not run late.", 0x0A, 0
+sum_sc: db "The service manager: define, start, stop and inspect services", 0
+det_account:
+        db "account add NAME PASSWORD | account del NAME | account list", 0x0A
+        db "  The store holds a uid, a salt and a hash - never the password.", 0x0A
+        db 0
+det_logon:
+        db "logon NAME PASSWORD", 0x0A
+        db "  Verifies the password, makes a session, loads the user's hive", 0x0A
+        db "  and starts the auto services.", 0x0A, 0
+det_logoff:
+        db "logoff [ID]", 0x0A
+        db "  Saves the hive, removes the user's keys and frees the session.", 0x0A, 0
+det_sessions:
+        db "sessions", 0x0A
+        db "  Session 0 is services; a logged-on user gets 1, 2 or 3.", 0x0A, 0
+det_lock:
+        db "lock", 0x0A
+        db "  The session keeps its objects and its programs, but is locked.", 0x0A, 0
+det_unlock:
+        db "unlock PASSWORD", 0x0A
+        db "  Only the same account can unlock; a different one does not.", 0x0A, 0
+det_switch:
+        db "switch ID", 0x0A
+        db "  The outgoing session stays alive; the console changes hands.", 0x0A, 0
+det_sc:
+        db "sc list | sc create NAME IMAGE [boot|system|auto|manual|disabled] [DEP]", 0x0A
+        db "sc start NAME | sc stop NAME | sc query [NAME] | sc delete NAME", 0x0A
+        db "sc dep | sc failure NAME [restart|reboot|run:IMAGE|none] ...", 0x0A
+        db "sc reset NAME SECS | sc timeout NAME SECS | sc attempts NAME COUNT", 0x0A
+        db "  A dependency cycle is refused at create, naming both ends. The", 0x0A
+        db "  recovery policy is up to three actions taken in order as the", 0x0A
+        db "  failures accumulate; the default restarts after 1 s, 5 s and", 0x0A
+        db "  30 s, then reports FAILED with its attempt count. A service", 0x0A
+        db "  that runs clean for the reset period begins a new streak.", 0x0A, 0
 sum_whoami: db "Current user and uid", 0
 det_whoami:
         db "whoami", 0x0A
@@ -281,6 +343,32 @@ det_acpi:
         db "  DSDT that shutdown writes. ACPI is taken over at boot, so those", 0x0A
         db "  registers are this kernel's, not the firmware's.", 0x0A, 0
 sum_quota: db "How much disk each user holds, and what the ceiling is", 0
+sum_key: db "Named secrets the volume cipher reads: add, list, delete", 0
+sum_crypt: db "Encrypt the volume (AES-256-XTS) and open it with a stored key", 0
+sum_sett: db "The configuration store: typed values under \Registry", 0
+det_sett:
+        db "sett set PATH NAME u32 N|str TEXT|bin HEX|secret HEX", 0x0A
+        db "sett get PATH NAME | sett del PATH NAME | sett delkey PATH", 0x0A
+        db "sett tree [PATH] | sett save | sett load | sett rollback | sett gen", 0x0A
+        db "sett begin | sett commit | sett abort", 0x0A
+        db "sett watch PATH | sett events | sett acl PATH [UID MODE]", 0x0A
+        db "sett hive save PATH FILE | sett hive load FILE", 0x0A
+        db "sett export [PATH] | sett import FILE | sett env import|apply", 0x0A
+        db "  Keys are \ separated and compared without regard to case.", 0x0A
+        db "  A transaction writes once; a commit keeps the previous file as", 0x0A
+        db "  /sett.bak; a SECRET is held by the credential store, never here.", 0x0A
+        db 0
+det_key:
+        db "key add NAME 64-HEX | key list | key del NAME", 0x0A
+        db "  The store holds named 32-byte secrets in kernel memory; they", 0x0A
+        db "  are forgotten at reboot. A secret is never printed back.", 0x0A
+        db 0
+det_crypt:
+        db "crypt status | crypt format KEY confirm | crypt unlock KEY", 0x0A
+        db "  format destroys the volume and stamps it with KEY from the store;", 0x0A
+        db "  every 4 KiB block from the end of the journal up is AES-256-XTS.", 0x0A
+        db "  A volume whose key is missing is refused, not formatted.", 0x0A
+        db 0
 det_quota:
         db "quota [set UID BLOCKS | rebuild]", 0x0A
         db "  Show the per-user accounting: blocks held and the ceiling,", 0x0A
@@ -311,6 +399,12 @@ det_drivers:
         db "  module and bound in two phases: the interrupt controller, clock,", 0x0A
         db "  keyboard and serial before the frame allocator exists, everything", 0x0A
         db "  else after PCI enumeration.", 0x0A, 0
+sum_chronicle: db "The event log, filtered by source and severity", 0
+det_chronicle:
+        db "chronicle [-s SOURCE] [-l E|W|I|D] [-n COUNT]", 0x0A
+        db "  The same records as bootlog, asked a narrower question.", 0x0A
+        db "  The source is the word before the first ':' in the message.", 0x0A
+        db 0
 sum_bootlog: db "What the machine did on the way up, in order", 0
 det_bootlog:
         db "bootlog", 0x0A
@@ -318,6 +412,10 @@ det_bootlog:
         db "  reported it and its level (E error, W warning, I info, D debug).", 0x0A
         db "  Records are kept in a ring and mirrored to COM1 as they happen, so", 0x0A
         db "  a machine that fails to enumerate can be asked why afterwards.", 0x0A, 0
+sum_acl: db "Named-user access control lists on a file", 0
+det_acl:
+        db "acl show FILE | acl set FILE u<id>|g<id>|mask|other <0-7>", 0x0A
+        db "  An ACL, where a file has one, decides instead of the mode word.", 0x0A, 0
 sum_append: db "Append text to a file", 0
 det_append:
         db "append FILE TEXT", 0x0A

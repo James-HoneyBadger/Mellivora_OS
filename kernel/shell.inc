@@ -212,6 +212,7 @@ shell_main:
         jne .read_wait
         cmp dword [line_len], 0
         jne .read_wait
+        call svc_tick
         call sched_start_ready
 .read_wait:
         call kb_getchar
@@ -1911,6 +1912,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_bootlog
 
+        mov edi, cmd_chronicle_str
+        call str_starts_with
+        jc .cmd_chronicle
+
         mov edi, cmd_drivers_str
         call str_starts_with
         jc .cmd_drivers
@@ -2179,6 +2184,42 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_scrsaver
 
+        mov edi, cmd_sc_str
+        call str_starts_with
+        jc .cmd_sc
+
+        mov edi, cmd_tasks_str
+        call str_starts_with
+        jc .cmd_tasks
+
+        mov edi, cmd_account_str
+        call str_starts_with
+        jc .cmd_account
+
+        mov edi, cmd_logon_str
+        call str_starts_with
+        jc .cmd_logon
+
+        mov edi, cmd_logoff_str
+        call str_starts_with
+        jc .cmd_logoff
+
+        mov edi, cmd_sessions_str
+        call str_starts_with
+        jc .cmd_sessions
+
+        mov edi, cmd_lock_str
+        call str_starts_with
+        jc .cmd_lock
+
+        mov edi, cmd_unlock_str
+        call str_starts_with
+        jc .cmd_unlock
+
+        mov edi, cmd_switch_str
+        call str_starts_with
+        jc .cmd_switch
+
         mov edi, cmd_whoami_str
         call str_starts_with
         jc .cmd_whoami
@@ -2206,6 +2247,18 @@ shell_dispatch_core:
         mov edi, cmd_acl_str
         call str_starts_with
         jc .cmd_acl
+
+        mov edi, cmd_key_str
+        call str_starts_with
+        jc .cmd_key
+
+        mov edi, cmd_crypt_str
+        call str_starts_with
+        jc .cmd_crypt
+
+        mov edi, cmd_sett_str
+        call str_starts_with
+        jc .cmd_sett
 
         mov edi, cmd_chown_str
         call str_starts_with
@@ -2378,6 +2431,10 @@ shell_dispatch_core:
 
 .cmd_bootlog:
         call bootlog_show
+        ret
+
+.cmd_chronicle:
+        call chronicle_command
         ret
 
 .cmd_drivers:
@@ -2733,18 +2790,44 @@ shell_dispatch_core:
         ret
 
 .cmd_whoami:
-        cmp byte [login_authenticated], 1
-        je .whoami_show
-        mov esi, .whoami_none
-        call vga_print
+        call sess_whoami
         ret
-.whoami_show:
-        mov esi, login_current_user
-        call vga_print
-        mov al, 0x0A
-        call vga_putchar
+
+.cmd_sc:
+        call svc_command
         ret
-.whoami_none: db "Not logged in", 0x0A, 0
+
+.cmd_tasks:
+        call taskq_command
+        ret
+
+.cmd_account:
+        call sess_account_command
+        ret
+
+.cmd_logon:
+        call sess_logon_command
+        ret
+
+.cmd_logoff:
+        call sess_logoff_command
+        ret
+
+.cmd_sessions:
+        call sess_sessions_command
+        ret
+
+.cmd_lock:
+        call sess_lock_command
+        ret
+
+.cmd_unlock:
+        call sess_unlock_command
+        ret
+
+.cmd_switch:
+        call sess_switch_command
+        ret
 
 .cmd_stat:
         call cmd_stat
@@ -2766,6 +2849,18 @@ shell_dispatch_core:
 
 .cmd_acl:
         call acl_command
+        ret
+
+.cmd_key:
+        call key_command
+        ret
+
+.cmd_crypt:
+        call crypt_command
+        ret
+
+.cmd_sett:
+        call sett_command
         ret
 
 .cmd_chmod:
@@ -4014,6 +4109,7 @@ cmd_sleep:
         add ebx, eax
 .sleep_wait:
         hlt
+        call svc_tick
         cmp byte [ctrl_c_flag], 0
         jne .sleep_abort
         mov eax, [tick_count]
@@ -6353,7 +6449,7 @@ cmd_exec_program:
         add eax, HBFS_DATA_START
         shl ecx, 3
         mov edi, PROGRAM_BASE
-        call ata_read_sectors
+        call blk_cache_read
         jc .path_cd_fail
         jmp .path_loaded
 
@@ -6376,7 +6472,7 @@ cmd_exec_program:
         add eax, HBFS_DATA_START
         mov ecx, HBFS_SECTORS_PER_BLK
         mov edi, [.path_ext_dest]
-        call ata_read_sectors
+        call blk_cache_read
         jc  .path_cd_fail
         add dword [.path_ext_dest], HBFS_BLOCK_SIZE
         inc dword [.path_ext_index]
@@ -7893,10 +7989,11 @@ cmd_stat:
         mov eax, [edi + DIRENT_START_BLOCK]
         shl eax, 3
         add eax, HBFS_DATA_START
-        mov ecx, 1             ; 1 sector is enough for a path
+        mov ecx, HBFS_SECTORS_PER_BLK  ; a whole block: one sector of it would
+                                       ; be ciphertext on an encrypted volume
         push edi
         mov edi, .ln_read_buf
-        call ata_read_sectors
+        call blk_cache_read
         pop edi
         jc .stat_done
         mov esi, .ln_read_buf
@@ -8024,7 +8121,7 @@ cmd_stat:
 .stat_usage_s:      db "Usage: stat <filename>", 0x0A, 0
 .stat_lbl_target:   db "  Target: ", 0
 .stat_rwx_buf:      times 10 db 0
-.ln_read_buf:       times 256 db 0
+.ln_read_buf:       times HBFS_BLOCK_SIZE db 0
 
 ;---------------------------------------
 ; Command: fsck

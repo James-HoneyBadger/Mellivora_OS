@@ -285,7 +285,7 @@ quota_build:
         pop ecx
         mov eax, [.qb_lba]
         mov edi, hbfs_dir_buf
-        call ata_read_sectors
+        call blk_cache_read
         jc .qb_done
 
         ; Entries: (sectors * 512) / HBFS_DIR_ENTRY_SIZE of them.

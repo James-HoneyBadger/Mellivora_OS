@@ -199,11 +199,21 @@ M4 does not close until:
 
 | Contract | Tree today |
 |---|---|
-| One hierarchical store | Environment variables, compile-time constants and ad-hoc files |
-| Transactions | None |
-| Change notification | None |
-| Key ACLs | None |
-| Hives | None |
-| Boot configuration | A boot information block only |
+| One hierarchical store | **Yes.** `sett set/get/del/delkey/tree` over a key tree with `U32`, `STRING`, `BINARY` and `SECRET` values, names compared case-insensitively and stored as typed. `\Registry\Machine\...` is the machine hive; `\Registry\User\<name>` holds a user's keys while that user is logged on |
+| Persistence | One file, `/sett.bin`, replaced whole on a commit. It carries a generation and a CRC-32C, and a load refuses a torn or corrupted image by name rather than half trusting it |
+| Transactions | **Yes, snapshot-based.** `sett begin` copies the tables, `sett abort` puts them back, `sett commit` writes once. The tree is capped at 64 keys, which is what makes a snapshot cheaper than an undo log |
+| Change notification | **Yes.** `sett watch PATH` / `sett events`: one bounded ring, commit order, consecutive duplicates coalesced, and a registration emits the current state |
+| Key ACLs | **Yes.** Each key carries `(mode << 24) | owner`; a caller that is not SYSTEM is held to the owner and world bits before a change |
+| Hives | **Partly.** `sett hive save PREFIX FILE` / `sett hive load FILE` carry a subtree to its own file and merge it back; a logon loads `\Registry\User\<name>` from `<name>.hiv`. The file is one image with a header, not section 5's cell format, and it is not mapped |
+| Boot configuration | A boot information block only; the machine hive is read at boot before the shell |
+| Environment view | **Yes, both ways.** `sett env import` copies the shell's variables into `\Registry\Machine\Environment` as `STRING` values and `sett env apply` writes them back, which is conformance item 6's layer |
+| Rollback | **Yes.** Every commit copies the previous `/sett.bin` to `/sett.bak` first, and `sett rollback` loads it |
+| Migration, text export | Export and import are text (`path|type|name|value`, one value per line). A *migration* - read the old version, write the new one, `Version` last - is not built; the generation and the rollback are not the same thing and section 7 says so |
+| `SECRET` values | **Yes.** `sett set PATH NAME secret HEX` puts the plaintext in the credential store; the tree keeps the store entry's name, `sett get` refuses, `sett tree` says `secret`, and every refusal is a Chronicle record |
+| Strings | UTF-8 bytes. Section 2 says UTF-16; the kernel has none yet and M5 owns "Unicode end to end", so this is the gap rather than a decision |
 
-Nothing in this document exists yet; it is the first thing M4 builds.
+`make check-runtime` carries the Sett's gates: typed values round-trip, the tree
+survives `save`/`load`, the environment crosses into the tree and back, an abort
+is whole, a commit bumps the generation, a rollback returns the older value, a
+value that grows leaves its neighbour whole, a SECRET is refused and audited, a
+hive carries a subtree, and a watcher sees the state and then the change.
