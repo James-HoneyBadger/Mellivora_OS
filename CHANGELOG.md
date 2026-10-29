@@ -1,5 +1,35 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M4: a locked session is a boundary, not a line of output
+
+SERVICES.md section 6 item 6 asks that a crashed logon screen does not let
+anybody in. The tree could already mark a session locked, but nothing consulted
+the mark: `lock` printed a line and the shell carried on.
+
+```text
+Lair:/> lock
+lock: the session is locked
+Lair:/> whoami
+locked: unlock PASSWORD
+Lair:/> unlock correct-horse
+unlock: the session is active again
+Lair:/> whoami
+user=alice uid=1001 session=1 groups=Users1001 privileges=SE_SHUTDOWN
+```
+
+- **The refusal is in the dispatch path.** Every line, built-in or program, asks
+  `sess_command_allowed` before the command table is consulted, so a command
+  added later cannot forget to ask. The one line a locked session accepts is
+  `unlock PASSWORD`.
+- **The state belongs to the session, not to the task that asked.** A logon
+  screen or shell that dies while the session is locked leaves it locked, which
+  is the conformance item: there is no task to crash back to that would carry
+  the right to read that session's files.
+- **The gate is two cases.** One proves a locked session refuses `whoami` and
+  takes `unlock`; the other starts `crashdiv` (a fixture that divides by zero),
+  locks the session, unlocks it and shows the session still there - the fault
+  kills a task, not the lock.
+
 ## Unreleased - M4: a damaged hive says where it stopped being an image
 
 CONFIG.md section 10 item 5 asks that a hive with a corrupted bin is refused by

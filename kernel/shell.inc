@@ -1879,6 +1879,17 @@ shell_dispatch_core:
 .alias_skip_nofix:
         mov byte [alias_expanding], 0  ; Reset for next command
 
+        ; A locked session runs one command, `unlock PASSWORD`, and nothing
+        ; else - built-in or program. The refusal is here, before the table, so
+        ; a command added later cannot forget to ask.
+        call sess_command_allowed
+        jnc .dispatch_unlocked
+        mov esi, msg_sess_lockedcmd
+        call vga_print
+        mov dword [shell_last_status], 1
+        ret
+.dispatch_unlocked:
+
         ; Compare against known commands
         mov edi, cmd_help_str
         call str_starts_with

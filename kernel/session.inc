@@ -1024,6 +1024,42 @@ sess_sessions_command:
         popad
         ret
 
+;-----------------------------------------------------------------------
+; sess_command_allowed - may the console run this line at all?
+;   In : ESI = the command line
+;   Out: CF set when the current session is locked and the line is not the
+;        command that unlocks it.
+;
+; A locked session accepts `unlock' and nothing else. The test is on the
+; session's state in the table, not on the task that asked, so a logon screen or
+; a shell that dies while the session is locked leaves it locked: there is no
+; task to crash back to that would carry the right to read the session's files.
+;-----------------------------------------------------------------------
+sess_command_allowed:
+        push eax
+        push ebx
+        push edi
+        push esi                         ; str_starts_with leaves ESI past the word
+        mov eax, [sess_current]
+        test eax, eax
+        jz .sca_yes
+        call sess_slot
+        cmp dword [edi + SESS_F_STATE], SESS_LOCKED
+        jne .sca_yes
+        mov edi, cmd_unlock_str
+        call str_starts_with
+        jc .sca_yes
+        stc
+        jmp .sca_out
+.sca_yes:
+        clc
+.sca_out:
+        pop esi
+        pop edi
+        pop ebx
+        pop eax
+        ret
+
 ; `lock`
 sess_lock_command:
         pushad
@@ -1175,6 +1211,7 @@ msg_sess_nosession: db "sessions: nobody is logged on", 0x0A, 0
 msg_sess_nosuch:  db "switch: no such session", 0x0A, 0
 msg_sess_switched: db "switch: the console belongs to session ", 0
 msg_sess_locked:  db "lock: the session is locked", 0x0A, 0
+msg_sess_lockedcmd: db "locked: unlock PASSWORD", 0x0A, 0
 msg_sess_unlocked: db "unlock: the session is active again", 0x0A, 0
 msg_sess_notlocked: db "unlock: the session is not locked", 0x0A, 0
 msg_who_system:   db "SYSTEM uid=0 session=0 groups=Administrators privileges=all", 0x0A, 0

@@ -177,7 +177,7 @@ M4 does not close until:
 | Shared host processes, service privileges | **None.** Every service is its own task, and the token is the launcher's: session 0, SYSTEM |
 | Logon, tokens, sessions | **Yes.** `account add/del/list`, `logon`, `logoff`, `lock`, `unlock`, `switch`, `sessions`. Accounts live in the Sett with a uid, a salt and a hash; a logon verifies the password, makes a session, creates `/Users/<name>`, loads `<name>.hiv` into `\Registry\User\<name>` and starts the auto services. `TCB_SESS` carries the session, and `\Sessions\<n>\` is refused to another session without `SE_SESSION_CROSS` |
 | Profiles | **Partly.** A directory and a hive file per account, created at logon and saved at logoff. The default-profile copy, `AppData\Local` and `AppData\Roaming` are not created |
-| Switch user, lock, disconnect | **Partly.** `switch` moves the console between live sessions and `lock`/`unlock` re-authenticate the current one. A session has a namespace but no window station of its own, so "separate desktops" means separate session namespaces, not two composited desktops; `disconnect` is not a command |
+| Switch user, lock, disconnect | **Partly.** `switch` moves the console between live sessions and `lock`/`unlock` re-authenticate the current one: a locked session runs `unlock PASSWORD` and nothing else, refused in the dispatch path so a command added later cannot forget to ask, and the state is the session's rather than the asking task's, so a logon screen that dies leaves the session locked. A session has a namespace but no window station of its own, so "separate desktops" means separate session namespaces, not two composited desktops; `disconnect` is not a command |
 | Service management surface | `sc` and `sessions`/`whoami` in the shell. There is no management console application (SHELL.md) and no remote surface (NETWORK.md) |
 | Password hashing | **Yes, with a smaller memory cost than RFC 9106 asks for.** `kernel/argon2.inc` is Argon2id v1.3, one lane, salt 8 bytes, tag 32 bytes, three passes and 1 MiB of memory - RFC 9106's own parameters are 64 MiB, which a guest with 128 MB of RAM cannot spend per logon. The memory is a page-allocator allocation held for the duration of the hash. The account record carries `Algo = 1` beside `Uid`, `Salt` and `Hash`; a record without that scheme number is refused, and `account add` re-sets such a record under its existing uid instead of reporting a duplicate. `make check-runtime` covers logon, and the boot gate checks BLAKE2b-512("abc") and three Argon2id vectors (m=8/t=1, m=64/t=3, and the m=1024/t=3 a logon uses) |
 
@@ -187,4 +187,6 @@ the policy is stored and shown by `query`, a failed service runs its recovery
 program, a start that never appears runs its program too, a failure streak is
 kept until the reset period passes and forgotten after it, a boot service is
 seen in the boot log before any session exists, one account logs on to session
-1, and two accounts hold sessions 1 and 2 at once.
+1, two accounts hold sessions 1 and 2 at once, a locked session refuses every
+command but `unlock`, and a task that faults while the session is locked does
+not unlock it.

@@ -504,6 +504,17 @@ run_case "an account logs on to its own session" \
 run_case "two users share the machine" \
     $'account add m4b m4pb\nlogon m4user m4pw\nlogon m4b m4pb\nsessions\nswitch 1\nwhoami' \
     "name=m4b" "" "CPU EXCEPTION|wrong" "" "" "" 60
+# SERVICES.md section 6 item 6: a locked session runs one command. The refusal
+# is what makes the lock a boundary rather than a line of output, and it is in
+# the dispatch path, so a command added later cannot forget to ask.
+run_case "a locked session runs only unlock" \
+    $'account del m4lock\naccount add m4lock m4pw\nlogon m4lock m4pw\nlock\nwhoami\nunlock m4pw' \
+    "locked: unlock PASSWORD" "" "CPU EXCEPTION"
+# The same lock survives a task that dies: the state is the session's, so a
+# faulted logon screen leaves nobody holding a way in.
+run_case "a task that dies does not unlock the session" \
+    $'logon m4lock m4pw\ncrashdiv &\nsleep 1\nlock\nunlock m4pw\nwhoami' \
+    "user=m4lock uid=" "" "CPU EXCEPTION"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"
