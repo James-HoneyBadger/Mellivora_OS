@@ -892,6 +892,7 @@ batch_cmp_str2:   resb 256               ; if "str1"=="str2" right operand
 
 ; Program execution state
 program_running: resb 1          ; 1 = user program is executing
+program_refused: resb 1          ; 1 = found, but the loader refused the image
 bg_launch_flag:  resb 1          ; 1 = next exec should launch as background task
 last_bg_pid:     resd 1          ; PID of the most recently launched background task
 prog_name_buf:   resb 256        ; Parsed program name from command line

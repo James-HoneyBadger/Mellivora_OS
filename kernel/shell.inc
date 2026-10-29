@@ -2373,6 +2373,12 @@ shell_dispatch_core:
 
 .unknown:
         call shell_status_fail
+        cmp byte [program_refused], 0
+        je .unknown_report
+        mov byte [program_refused], 0
+        call vga_reset_color
+        ret
+.unknown_report:
         call vga_set_error
         mov esi, msg_unknown_pre
         call vga_print
@@ -6325,6 +6331,7 @@ cmd_df_info:
 ;---------------------------------------
 cmd_exec_program:
         pushad
+        mov byte [program_refused], 0
 
         ; Parse program name (up to first space or null)
         mov edi, prog_name_buf
@@ -6374,11 +6381,11 @@ cmd_exec_program:
         mov edi, PROGRAM_BASE
         call hbfs_read_file
         jc .try_path_search
-        ; ECX = image size: the heap starts after it, not at the window end.
-        mov [program_size], ecx
+        ; The header decides the format; the loader also places the heap.
         mov eax, ecx
-        add eax, PROGRAM_BASE
-        call set_program_brk_init
+        call image_load_program
+        jc .refused
+        mov [program_entry], eax
 
         jmp .found_program
 
@@ -6483,11 +6490,10 @@ cmd_exec_program:
         ; Restore user's cwd before execution
         call path_restore_cwd
         pop esi                 ; clean up PATH string pointer
-        mov ecx, [.path_fsize]
-        mov [program_size], ecx
-        add ecx, PROGRAM_BASE
-        mov eax, ecx
-        call set_program_brk_init
+        mov eax, [.path_fsize]
+        call image_load_program
+        jc .refused
+        mov [program_entry], eax
         jmp .found_program
 
 .path_cd_fail:
@@ -6530,21 +6536,8 @@ cmd_exec_program:
         mov byte [ctrl_c_flag], 0
         mov dword [program_exit_code], 0
 
-        ; Check for ELF magic
-        cmp dword [PROGRAM_BASE], ELF_MAGIC
-        jne .try_flat
-
-        ; ELF binary - parse and load
-        call elf_load_program
-        jc .not_found           ; ELF parse error
-        ; EAX = entry point from ELF
-        mov [program_entry], eax
-        jmp .exec_program
-
-.try_flat:
-        ; Flat binary at PROGRAM_BASE
-        mov dword [program_entry], PROGRAM_BASE
-
+        ; program_entry was set by image_load_program, which picked flat, ELF
+        ; or HBX from the header.
 .exec_program:
         ; A launch either creates a task or - when a program calls SYS_EXEC -
         ; replaces the running one in place. Pick the stack top first, because
@@ -6857,6 +6850,10 @@ cmd_exec_program:
 .path_ext_dest:  dd 0          ; Where the next block lands in the program window
 .dir_candidate: dd 0            ; 1 when the typed name is a directory here
 
+.refused:
+        ; The file was found and the loader refused it, and has already printed
+        ; the reason; the dispatcher must not call it an unknown command.
+        mov byte [program_refused], 1
 .not_found:
         call shell_status_fail
         popad

@@ -35,19 +35,50 @@ mv_image_header
   u32 section_count
   u32 import_count
   u32 export_count
+  u32 import_rva       RVA of the import table, 0 if none
+  u32 export_rva       RVA of the export table, 0 if none
   u32 tls_index        RVA of the TLS directory, 0 if none
   u32 reloc_rva        RVA of the relocation table
   u32 resource_rva     RVA of the manifest and version resources
-  u64 checksum         CRC-32C over the image with this field zeroed
+  u64 checksum         CRC-32C over the file with this field zeroed
   u32 subsystem        console, windows, driver
   u32 stack_reserve, stack_commit
   u32 heap_reserve
 ```
 
+The header is not part of the image: `header_size` is where the image bytes
+begin and every RVA is measured from the first of them. An image therefore
+carries its headers in front of itself, and loading at RVA 0 means skipping
+`header_size` bytes - which is what lets a flat payload be wrapped without
+being reassembled.
+
 Sections declare `{name, rva, size, characteristics}` with the same
 characteristics vocabulary the loader enforces: read, write, execute,
 discardable, shared. **The loader refuses an image that asks for a section that
 is both writable and executable** ([SECURITY.md](SECURITY.md#8-kernel-self-protection)).
+
+**As built** (`kernel/hbx.inc`, `tools/mkhbx.py`). The fixed header is 96 bytes
+and the section table follows it at offset 96, so `header_size` is at least
+`96 + 20 x section_count`; a section entry is
+`{name[8], rva u32, size u32, characteristics u32}`. The `u64` fields are
+32-bit values whose high half must be zero - a high half that is not is a 64-bit
+image, whatever the flags say. The bits:
+
+| Field | Values |
+|---|---|
+| `flags` | `01` executable, `02` dll, `04` driver, `08` 32-bit-only, `10` 64-bit |
+| section `characteristics` | `01` read, `02` write, `04` execute, `08` discardable, `10` shared |
+
+The relocation table is a `u32` count followed by that many `u32` RVAs, each
+naming a dword inside the image to which the load delta is added - a code
+displacement is such a dword as much as a data pointer is. The import table is
+an array of `{module_rva u32, thunk_rva u32, thunk_count u32}`; each thunk is
+`{name_rva u32, iat_rva u32}` and the IAT slot starts at zero. Names are
+NUL-terminated inside the image.
+
+The checksum covers the whole file - header, section table and image bytes -
+with the checksum field read as zero, which is why `header_size` has to be
+known before it can be verified.
 
 ## 3. Loading
 
@@ -186,7 +217,10 @@ M5 does not close until:
    block layout, including a zero-argument and a 4 096-argument case.
 2. `loader_test` loads an image at a random base, one at a fixed base, and one
    with a relocated import, and refuses a writable-executable section, a bad
-   checksum and a 64-bit image — each with its own status.
+   checksum and a 64-bit image — each with its own status. (**As built:**
+   `make check-loader` proves the fixed base, a relocated image, and every
+   refusal in section 8; the random base waits for section-based mapping (§4)
+   and the relocated import waits for libraries (§6).)
 3. A program and a library built from the SDK samples load, call across the
    boundary, use TLS in two threads, and unload in the right order.
 4. ASLR: 1 000 launches of the same image produce 1 000 distinct main-image
@@ -200,12 +234,13 @@ M5 does not close until:
 
 | Contract | Tree today |
 |---|---|
-| HBX and PE32 images | Flat binaries at a fixed address, no headers |
+| HBX images | Read and enforced: `MVBX` header, CRC-32C, sections, relocations and entry point. The image is copied into the window, not mapped. |
+| PE32 images | Not built. The loader dispatches on the header, so adding the format is one branch, not one per caller. |
 | Shared libraries | None |
 | TLS per module | A kernel-managed thread-local area for one module |
 | ASLR | Per-launch randomised heap and stack top only |
-| Section-based mapping | The loader copies bytes into the program window |
-| Imports/exports | None |
+| Section-based mapping | Sections are bounds-checked, a writable-and-executable one is refused, and the bytes are copied. Per-page protections need mapping |
+| Imports/exports | An import table is parsed and a missing module fails the load naming `module!symbol`; there is no library to resolve against, and exports are not written |
 | Mitigations | DEP and W^X exist ([VMM.md](VMM.md)); no SEH-analogue |
 | env/argv block | A flat command-line buffer and `getargs` |
 

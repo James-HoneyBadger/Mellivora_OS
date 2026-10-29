@@ -1121,6 +1121,14 @@ tss_init:
 
 ;=======================================================================
 ; ELF32 LOADER
+;
+; Development images only (docs/spec/EXEC.md section 1), kept so the host
+; toolchain's output keeps running. Segments are linked at their absolute
+; addresses, so this loader cannot move an image.
+;
+;   In : the file at PROGRAM_BASE
+;   Out: EAX = entry point, EDX = first free byte after the image
+;        CF set when the header is not 32-bit little-endian ELF
 ;=======================================================================
 
 elf_load_program:
@@ -1176,7 +1184,7 @@ elf_load_program:
 
 .elf_ok:
         mov eax, [.elf_max]
-        call set_program_brk_init
+        mov [esp + 20], eax             ; out: EDX = first free byte
         mov eax, [.elf_entry]
         mov [esp + 28], eax
         popad

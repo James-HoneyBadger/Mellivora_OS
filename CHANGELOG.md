@@ -1,5 +1,70 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: the loader reads a header
+
+EXEC.md opens M5 with what an executable is. Until now a program was a flat
+binary at a fixed address with no metadata at all, so "flat" was the only answer
+the loader had. It now has a second: an HBX image, `MVBX`, with a header, a
+section table, a checksum and - when it needs them - a relocation table and an
+import table.
+
+```text
+Lair:/> hbx_ok
+HBX_OK
+Lair:/> hbx_reloc
+HBX_RELOC_OK
+Lair:/> hbx_wx
+hbx: section .rwx is writable and executable
+Lair:/> hbx_noreloc
+hbx: cannot load at 0x00400000: no relocations
+Lair:/> hbx_import
+hbx: nosuch.dll!missing not found
+```
+
+- **One door.** `image_load_program` decides from the header: `MVBX`, then
+  `ELF_MAGIC`, then flat. The shell (in the current directory and along `PATH`)
+  and the service manager used to compare the first dword themselves; a third
+  format would have meant a third copy of that decision in each. The flat and
+  ELF32 loaders are unchanged, so all 264 programs keep working.
+- **The refusal table is the contract.** A bad checksum names both values, a
+  writable and executable section names the section, a 64-bit image says this
+  system is 32-bit, an image that asks for a base it cannot be moved to names
+  the base, an entry point outside an executable section is refused as
+  `MV_ENTRYPOINT_NOT_FOUND`, and a missing import names `module!symbol`. Each is
+  a status (`MV_BAD_IMAGE`, `MV_DLL_NOT_FOUND`, `MV_ENTRYPOINT_NOT_FOUND`) and
+  not a crash.
+- **The image is verified before it is touched.** Header, version, 32-bit
+  halves, checksum, section bounds and the entry point are all checked before
+  the first byte is written into the window, so a refused image leaves nothing
+  behind. And the copy is why the ordinal fields matter: the image lands on the
+  header's own address, so anything the loader still needs after the copy
+  (relocation RVA, import count, import RVA) is read out first. The first
+  version read them afterwards and refused every good image with a "bad image"
+  it had invented from program bytes.
+- **Relocation is real, not a stub.** An image built for `0x00400000` loads at
+  `PROGRAM_BASE` with a `+0x100000` delta applied to every RVA in its relocation
+  table - including the displacement of an instruction, which is where the first
+  attempt faulted: the table listed the data pointer but not the `mov ebx,
+  [ptr]` that reads it.
+- **A refused command is not an unknown one.** The shell used to answer every
+  failed launch with "Unknown command"; a file that was found and refused now
+  leaves the loader's own line as the whole answer.
+- **The header is not the image.** The bytes at `header_size` are RVA 0, so a
+  flat payload can be wrapped without reassembling it, and `tools/mkhbx.py` does
+  exactly that: it writes the header, the section table, the checksum and an
+  import table from the command line. Payloads that carry absolute addresses
+  declare their own fixups with an `HBM1` marker (`label - $$`, so one source
+  works at any ORG), which the tool lifts into `reloc_rva`.
+- Nine cases in `make check-loader`: the two images that must load (fixed base
+  and relocated), all six refusals, each followed by a program that must still
+  run, and a flat binary that must still run too.
+
+What this is not: PE32, shared libraries and per-module TLS are still ahead in
+this wave, an import can only fail today because there is no library to resolve
+one against, exports are not written, and the image is copied into the program
+window rather than mapped - so per-section page protections and ASLR of the
+image base wait for section-based mapping. EXEC.md section 11 names each.
+
 ## Unreleased - M4: a session is a boundary, and a service is a record
 
 SERVICES.md asked for the two things that make a machine shared: services that

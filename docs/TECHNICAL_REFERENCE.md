@@ -1634,13 +1634,23 @@ switch point. Both syscalls now save and restore those registers.
 2. Attempts to load file via `hbfs_read_file` to `PROGRAM_BASE` (0x500000)
 3. If not found in current directory, searches PATH directories
 
-### ELF vs Flat Binary Detection
+### Image Format Detection
 
-The kernel checks for `ELF_MAGIC` (`0x464C457F`) at `PROGRAM_BASE`:
+`image_load_program` (`kernel/hbx.inc`) reads the first dword at `PROGRAM_BASE` and
+picks the loader; the extension is never consulted (EXEC.md section 1):
 
+- **HBX:** `hbx_load_program` verifies the `MVBX` header, the CRC-32C checksum, the
+  section table (bounds, and no writable-and-executable section) and that the entry
+  point lies in an executable section. An image built for another base is relocated
+  by the delta; an image that cannot be relocated is refused. Imports are parsed and
+  a missing module fails the load naming `module!symbol`. Nothing is written into the
+  window until every check has passed
 - **ELF:** `elf_load_program` validates ELF32 little-endian, iterates program headers,
   loads `PT_LOAD` segments (copies file data + zeroes BSS), returns entry point
 - **Flat binary:** Entry point = `PROGRAM_BASE` directly
+
+`tools/mkhbx.py` builds an HBX image from a flat payload, and `make check-loader`
+runs the fixtures in `programs/hbx/` through every refusal in EXEC.md section 8.
 
 ### Ring 3 Execution
 

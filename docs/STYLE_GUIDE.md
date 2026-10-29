@@ -37,6 +37,13 @@ a second `[ORG]` is an assembly error. The load address is `0x00500000`, which i
 `PROGRAM_BASE` in `kernel.asm`; if that constant ever moves, every program must
 be re-linked, so never hard-code the number in a program.
 
+An **HBX image** ([EXEC.md](spec/EXEC.md)) is the other shape a program can take:
+a header, a section table and a checksum in front of the same payload, which the
+loader verifies before it runs anything. Nothing in `programs/` ships as one
+except the loader fixtures in `programs/hbx/`; `tools/mkhbx.py` wraps a flat
+payload in the header, and a payload assembled for a base other than
+`PROGRAM_BASE` passes `-DPROGRAM_ORG=<base>` to NASM.
+
 ### 1.2 The flat-binary BSS rule
 
 NASM `section .bss` in `-f bin` mode places `.bss` labels **past the end of

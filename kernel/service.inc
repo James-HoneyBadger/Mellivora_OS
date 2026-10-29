@@ -580,19 +580,12 @@ svc_launch_image:
         mov edi, PROGRAM_BASE
         call hbfs_read_file
         jc .sli_restore_fail
-        mov [program_size], ecx
+        ; A service image is a program like any other: the header decides.
         mov eax, ecx
-        add eax, PROGRAM_BASE
-        call set_program_brk_init
-
-        cmp dword [PROGRAM_BASE], ELF_MAGIC
-        jne .sli_flat
-        call elf_load_program
+        call image_load_program
         jc .sli_fail
         mov [program_entry], eax
-        jmp .sli_entry
-.sli_flat:
-        mov dword [program_entry], PROGRAM_BASE
+
 .sli_entry:
         ; The launch owns the whole window above its image.
         mov edi, [program_brk_init]

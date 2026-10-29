@@ -509,6 +509,22 @@ for" true.
 the Sett for configuration and Chronicle for logging is built with the SDK and
 the in-OS toolchain, and runs.
 
+**As built (in progress).** The image format and the loader that reads it
+landed first, because everything else in the wave sits on them. HBX images
+carry a 96-byte header, a section table, a CRC-32C checksum over the file, a
+relocation table and an import table; `kernel/hbx.inc` refuses a writable and
+executable section, a 64-bit image, a checksum that does not match, an image
+that asks for a base it cannot be moved to, and an entry point outside an
+executable section, each with its own message and status. An image built for
+another base is relocated by the delta. `image_load_program` is now the one
+door: the shell (root and `PATH`) and the service manager no longer each
+compare the first dword against `ELF_MAGIC`, and the flat and ELF32 loaders
+keep working unchanged. `tools/mkhbx.py` builds an image from a flat payload and
+`make check-loader` proves every row of the refusal table. What is still open
+in this wave: PE32, shared libraries and per-module TLS, imports that resolve
+to something, mapping at an arbitrary base (so ASLR of the image), Unicode, the
+C runtime and the interface layer.
+
 ### M6 · Shell and user experience (12–16 weeks)
 
 - Burrows grows into an Explorer-class shell: a file manager with copy, move,

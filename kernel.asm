@@ -623,11 +623,65 @@ FD_FLAG_WRITE       equ 2
 FD_PAGE_VFD_OFS     equ (FD_MAX * FD_ENTRY_SIZE)
 FD_PAGE_VFD_BYTES   equ 2048
 
-; ELF constants
+; ELF constants (development images only - docs/spec/EXEC.md section 1)
 ELF_MAGIC           equ 0x464C457F
 ELF_PT_LOAD         equ 1
 ELF_EHDR_SIZE       equ 52
 ELF_PHDR_SIZE       equ 32
+
+; HBX image constants - the native format, docs/spec/EXEC.md section 2.
+; The header is fixed-size and the section table follows it; image bytes begin
+; at header_size and every RVA is measured from the start of those bytes.
+HBX_MAGIC           equ 0x5842564D      ; 'MVBX'
+HBX_VERSION         equ 1
+HBX_HDR_SIZE        equ 96              ; fixed header, section table follows
+HBX_SECTION_SIZE    equ 20              ; name[8], rva, size, characteristics
+HBX_MAX_SECTIONS    equ 64
+
+HBX_FLAG_EXEC       equ 0x01
+HBX_FLAG_DLL        equ 0x02
+HBX_FLAG_DRIVER     equ 0x04
+HBX_FLAG_32ONLY     equ 0x08
+HBX_FLAG_64BIT      equ 0x10            ; refused: this system is 32-bit
+
+HBX_SCN_READ        equ 0x01
+HBX_SCN_WRITE       equ 0x02
+HBX_SCN_EXEC        equ 0x04
+HBX_SCN_DISCARD     equ 0x08
+HBX_SCN_SHARED      equ 0x10
+
+HBX_OFF_MAGIC       equ 0
+HBX_OFF_VERSION     equ 4
+HBX_OFF_HDRSIZE     equ 8
+HBX_OFF_FLAGS       equ 12
+HBX_OFF_ENTRY       equ 16              ; u64, RVA of the entry point
+HBX_OFF_IMAGE_BASE  equ 24              ; u64, preferred load address
+HBX_OFF_IMAGE_SIZE  equ 32              ; u64, including the zero-filled tail
+HBX_OFF_SECTIONS    equ 40
+HBX_OFF_IMPORTS     equ 44
+HBX_OFF_EXPORTS     equ 48
+HBX_OFF_IMPORT_RVA  equ 52
+HBX_OFF_EXPORT_RVA  equ 56
+HBX_OFF_TLS         equ 60
+HBX_OFF_RELOC       equ 64
+HBX_OFF_RESOURCE    equ 68
+HBX_OFF_CHECKSUM    equ 72              ; u64, CRC-32C over the file
+HBX_OFF_SUBSYSTEM   equ 80
+HBX_OFF_STACK_RES   equ 84
+HBX_OFF_STACK_COM   equ 88
+HBX_OFF_HEAP_RES    equ 92
+
+HBX_SCN_OFF_RVA     equ 8
+HBX_SCN_OFF_SIZE    equ 12
+HBX_SCN_OFF_CHARS   equ 16
+
+HBX_SCN_NAME_LEN    equ 8
+
+; Image status codes - docs/spec/ABI.md section 5, the same numbers a parity
+; target's loader returns, so a caller's existing tests keep their meaning.
+MV_BAD_IMAGE           equ 0xC000007B
+MV_DLL_NOT_FOUND       equ 0xC0000135
+MV_ENTRYPOINT_NOT_FOUND equ 0xC0000139
 
 ; Environment
 ENV_MAX             equ 32
@@ -919,6 +973,7 @@ kernel_entry:
 %include "kernel/screensaver.inc"
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
+%include "kernel/hbx.inc"
 %include "kernel/sett.inc"
 %include "kernel/settx.inc"
 %include "kernel/service.inc"

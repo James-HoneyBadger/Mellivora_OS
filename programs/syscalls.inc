@@ -7,7 +7,15 @@
 
 ; Program header
 [BITS 32]
-[ORG 0x00500000]
+
+; A flat binary is assembled for the address it will be loaded at. The default
+; is the program window; an HBX payload that is built for another base (so the
+; loader has something to relocate) passes PROGRAM_ORG on the assembler command
+; line - see programs/hbx/reloc.asm.
+%ifndef PROGRAM_ORG
+%define PROGRAM_ORG 0x00500000
+%endif
+[ORG PROGRAM_ORG]
 
 ; Jump past shared code to program entry point
 jmp start

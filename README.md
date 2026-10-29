@@ -31,7 +31,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD; W^X sigreturn trampoline at 0x1FFFF000
 - **Per-task errno** (v12.1) — `TCB_ERRNO` in the TCB; read via `SYS_GETERRNO`
 - **Process groups** — PGID and SID support for job control
-- **ELF32 loader** — supports flat binaries and ELF executables
+- **Image loader** — HBX (`MVBX`) images with checksum, sections, base relocations and imports; flat binaries; ELF32 development images
 - **Physical memory manager** with buddy allocator (order 0–11; malloc/free/realloc for user programs)
 - **VBE/BGA graphics driver** — high-resolution framebuffer modes (640×480, 800×600, 1024×768 at 32 bpp) with double buffering
 - **Compositor surface IPC** — kernel-managed pixel buffers with z-order and dirty-rect compositing (SYS_SURFACE_CREATE/COMMIT/DESTROY/MOVE/RESIZE)

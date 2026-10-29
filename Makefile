@@ -128,7 +128,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
 
@@ -362,10 +362,41 @@ gdb: check-qemu $(IMAGE) $(KERNEL_ELF)
 
 # Build all sample programs (parallel by default)
 programs:
-	$(MAKE) -j$(NPROC) $(PROG_BINS)
+	$(MAKE) -j$(NPROC) $(PROG_BINS) $(HBX_BINS)
 
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
+
+# HBX loader fixtures (docs/spec/EXEC.md). A payload is assembled flat into the
+# build tree - it is not a program in its own right - and tools/hbx_fixtures.py
+# wraps it into one image per row of the section 8 refusal table. The fixture
+# sources live in programs/hbx/ so the wildcard above does not turn them into
+# programs, and populate.py looks there when it asks what a binary came from.
+HBX_DIR = $(PROG_DIR)/hbx
+HBX_BUILD = .build/hbx
+HBX_PAYLOADS = $(HBX_BUILD)/ok.bin $(HBX_BUILD)/reloc.bin
+HBX_BINS = $(PROG_DIR)/hbx_ok.bin $(PROG_DIR)/hbx_reloc.bin \
+           $(PROG_DIR)/hbx_badsum.bin $(PROG_DIR)/hbx_wx.bin \
+           $(PROG_DIR)/hbx_64.bin $(PROG_DIR)/hbx_noreloc.bin \
+           $(PROG_DIR)/hbx_entry.bin $(PROG_DIR)/hbx_import.bin
+
+$(HBX_BUILD)/ok.bin: $(HBX_DIR)/hbx_ok.asm $(HBX_DIR)/payload_ok.inc $(PROG_DIR)/syscalls.inc
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -I$(PROG_DIR)/ -I$(HBX_DIR)/ -o $@ $<
+
+# Built for another base on purpose: the loader loads it at PROGRAM_BASE and has
+# to relocate it, which is the only way to prove the relocation path is real.
+$(HBX_BUILD)/reloc.bin: $(HBX_DIR)/hbx_reloc.asm $(PROG_DIR)/syscalls.inc
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -DPROGRAM_ORG=0x00400000 -I$(PROG_DIR)/ -o $@ $<
+
+$(HBX_BUILD)/fixtures.stamp: $(HBX_PAYLOADS) tools/mkhbx.py tools/hbx_fixtures.py
+	@mkdir -p $(HBX_BUILD)
+	python3 tools/hbx_fixtures.py --build $(HBX_BUILD) --out $(PROG_DIR)
+	@touch $@
+
+$(HBX_BINS): $(HBX_BUILD)/fixtures.stamp
+	@test -f $@ || { rm -f $(HBX_BUILD)/fixtures.stamp; $(MAKE) $(HBX_BUILD)/fixtures.stamp; }
 
 # A program that jumps forward over more than 127 bytes needs -O0: NASM's
 # default sizing assumes a short jump on the first pass, and the labels after
@@ -384,7 +415,7 @@ programs/generated_app_catalog.inc: docs/app-catalog.json tools/generate_launche
 # `make -j check` cannot test an image whose population step is still running
 # (or was never run).
 POPULATE_STAMP = .build/populated.stamp
-POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) populate.py
+POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) populate.py
 
 $(POPULATE_STAMP): $(POPULATE_DEPS)
 	@mkdir -p $(dir $@)
@@ -465,7 +496,7 @@ define build_iso_image
 	$(POPULATE) $(1) $(PROG_DIR)
 endef
 
-ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) populate.py
+ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) populate.py
 
 # populate.py derives the HBFS block count from the size of the file it writes,
 # so an image is only correct for the size it was built at. These stamps record
@@ -550,6 +581,11 @@ check-boot: $(POPULATE_STAMP)
 check-runtime: $(POPULATE_STAMP)
 	@RUNTIME_ALLOW_SKIP=1 bash tests/test_runtime.sh $(IMAGE)
 
+# The HBX loader gate: the images that must load, every refusal in EXEC.md
+# section 8, and the flat path that must keep working (§10 item 2).
+check-loader: $(POPULATE_STAMP)
+	@LOADER_ALLOW_SKIP=1 bash tests/test_loader.sh $(IMAGE)
+
 # The volume-encryption gate: format a *copy* with AES-256-XTS, prove the file
 # is ciphertext on the raw image, then prove a reboot without the key refuses
 # the volume, a wrong key leaves it byte-identical, and the right key reads the
@@ -621,7 +657,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-loader check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
