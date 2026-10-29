@@ -72,6 +72,8 @@ sett_hive_arena:  dd 0
 sett_hive_hdr:    dd SETT_HEADER
 sett_hive_keep:   times SETT_MAX_KEYS db 0
 sett_hive_map:    times SETT_MAX_KEYS dd 0
+sett_hive_bak_name: times 96 db 0
+sett_hive_bak_ext:  db ".bak", 0
 sett_secname:     times 16 db 0
 sett_hexword:     times 80 db 0
 sett_expline:     times 256 db 0
@@ -623,9 +625,29 @@ sett_secret_store:
 ; Image validation (used by hive load)
 ;=======================================================================
 
+; Where the last refused image went wrong: the byte offset in the image and a
+; reason index (sett_img_reason_*). A store that refuses an image without
+; saying where is a store that cannot be repaired, so both travel with the CF.
+sett_image_bad_off:  dd 0
+sett_image_bad_why:  dd 0
+
+SETT_REASON_MAGIC    equ 0
+SETT_REASON_VERSION  equ 1
+SETT_REASON_SHORT    equ 2
+SETT_REASON_CHECKSUM equ 3
+SETT_REASON_COUNT    equ 4
+SETT_REASON_ARENA    equ 5
+SETT_REASON_SIZE     equ 6
+SETT_REASON_KEYPATH  equ 7
+SETT_REASON_PARENT   equ 8
+SETT_REASON_VALKEY   equ 9
+SETT_REASON_VALTYPE  equ 10
+SETT_REASON_VALOFF   equ 11
+SETT_REASON_VALNAME  equ 12
+
 ; Validate the image in sett_image with length sett_image_len.
 ;   Out: CF set when it is not a Sett image; otherwise sett_hive_hdr/keys/vals/
-;        arena describe it.
+;        arena describe it. On CF, sett_image_bad_off/why say where and why.
 sett_image_check:
         push eax
         push ebx
@@ -634,20 +656,21 @@ sett_image_check:
         push esi
         push edi
         cmp dword [sett_image_len], SETT_HEADER_V1
-        jb .sic_no
+        jb .sic_short
+        xor eax, eax
         cmp dword [sett_image], SETT_MAGIC
-        jne .sic_no
+        jne .sic_magic
         mov eax, [sett_image + 4]
         cmp eax, SETT_VERSION
         je .sic_v2
         cmp eax, SETT_VERSION_1
-        jne .sic_no
+        jne .sic_version
         mov dword [sett_hive_hdr], SETT_HEADER_V1
         jmp .sic_header
 .sic_v2:
         mov dword [sett_hive_hdr], SETT_HEADER
         cmp dword [sett_image_len], SETT_HEADER
-        jb .sic_no
+        jb .sic_short
         mov eax, [sett_image + SETT_HDR_SUM]
         mov [.sic_sum], eax
         mov dword [sett_image + SETT_HDR_SUM], 0
@@ -657,19 +680,19 @@ sett_image_check:
         mov edx, [sett_image + SETT_HDR_SUM]
         mov [sett_image + SETT_HDR_SUM], edx
         cmp eax, [.sic_sum]
-        jne .sic_no
+        jne .sic_checksum
 .sic_header:
         mov eax, [sett_image + SETT_HDR_KEYS]
         cmp eax, SETT_MAX_KEYS
-        ja .sic_no
+        ja .sic_count
         mov [sett_hive_keys], eax
         mov eax, [sett_image + SETT_HDR_VALS]
         cmp eax, SETT_MAX_VALUES
-        ja .sic_no
+        ja .sic_count
         mov [sett_hive_vals], eax
         mov eax, [sett_image + SETT_HDR_ARENA]
         cmp eax, SETT_ARENA
-        ja .sic_no
+        ja .sic_arena
         mov [sett_hive_arena], eax
 
         mov eax, [sett_hive_keys]
@@ -680,7 +703,7 @@ sett_image_check:
         add eax, edx
         add eax, [sett_hive_arena]
         cmp eax, [sett_image_len]
-        jne .sic_no
+        jne .sic_size
 
         xor ecx, ecx
 .sic_key_loop:
@@ -691,12 +714,12 @@ sett_image_check:
         add eax, [sett_hive_hdr]
         add eax, sett_image
         cmp byte [eax + 4 + SETT_KEY_PATH - 1], 0
-        jne .sic_no
+        jne .sic_keypath
         mov edx, [eax]
         cmp edx, -1
         je .sic_key_next
         cmp edx, [sett_hive_keys]
-        jae .sic_no
+        jae .sic_parent
 .sic_key_next:
         inc ecx
         jmp .sic_key_loop
@@ -715,19 +738,19 @@ sett_image_check:
         add eax, sett_image
         mov edx, [eax]
         cmp edx, [sett_hive_keys]
-        jae .sic_no
+        jae .sic_valkey
         mov edx, [eax + 4]
         cmp edx, SETT_T_U32
-        jb .sic_no
+        jb .sic_valtype
         cmp edx, SETT_T_SECRET
-        ja .sic_no
+        ja .sic_valtype
         mov edx, [eax + 8]
         add edx, [eax + 12]
-        jc .sic_no
+        jc .sic_valoff
         cmp edx, [sett_hive_arena]
-        ja .sic_no
+        ja .sic_valoff
         cmp byte [eax + 16 + SETT_VAL_NAME - 1], 0
-        jne .sic_no
+        jne .sic_valname
         inc ecx
         jmp .sic_val_loop
 .sic_yes:
@@ -739,7 +762,58 @@ sett_image_check:
         pop eax
         clc
         ret
-.sic_no:
+.sic_short:
+        xor eax, eax
+        mov ecx, SETT_REASON_SHORT
+        jmp .sic_bad
+.sic_magic:
+        xor eax, eax
+        mov ecx, SETT_REASON_MAGIC
+        jmp .sic_bad
+.sic_version:
+        mov eax, 4
+        mov ecx, SETT_REASON_VERSION
+        jmp .sic_bad
+.sic_checksum:
+        mov eax, SETT_HDR_SUM
+        mov ecx, SETT_REASON_CHECKSUM
+        jmp .sic_bad
+.sic_count:
+        mov eax, SETT_HDR_KEYS
+        mov ecx, SETT_REASON_COUNT
+        jmp .sic_bad
+.sic_arena:
+        mov eax, SETT_HDR_ARENA
+        mov ecx, SETT_REASON_ARENA
+        jmp .sic_bad
+.sic_size:
+        xor eax, eax
+        mov ecx, SETT_REASON_SIZE
+        jmp .sic_bad
+.sic_keypath:
+        mov ecx, SETT_REASON_KEYPATH
+        jmp .sic_bad_off
+.sic_parent:
+        mov ecx, SETT_REASON_PARENT
+        jmp .sic_bad_off
+.sic_valkey:
+        mov ecx, SETT_REASON_VALKEY
+        jmp .sic_bad_off
+.sic_valtype:
+        mov ecx, SETT_REASON_VALTYPE
+        jmp .sic_bad_off
+.sic_valoff:
+        mov ecx, SETT_REASON_VALOFF
+        jmp .sic_bad_off
+.sic_valname:
+        mov ecx, SETT_REASON_VALNAME
+        jmp .sic_bad_off
+.sic_bad_off:
+        ; EAX is the address of the entry; turn it into an offset in the image
+        sub eax, sett_image
+.sic_bad:
+        mov [sett_image_bad_off], eax
+        mov [sett_image_bad_why], ecx
         pop edi
         pop esi
         pop edx
@@ -753,6 +827,63 @@ sett_image_check:
 ;=======================================================================
 ; Hives: a subtree in its own file, merged back
 ;=======================================================================
+
+; EDI = file name -> the previous contents kept in <name>.bak, CF set when the
+; name cannot carry a backup. A file that is not there yet has nothing to keep.
+; The root is pinned and the cwd saved by the caller.
+sett_hive_backup:
+        pushad
+        mov [.shb_file], edi
+        mov esi, edi
+        lea edi, [sett_hive_bak_name]
+        mov ecx, 88
+.shb_copy:
+        lodsb
+        stosb
+        test al, al
+        jz .shb_ext
+        loop .shb_copy
+        jmp .shb_fail
+.shb_ext:
+        dec edi
+        lea esi, [sett_hive_bak_ext]
+        mov ecx, 5
+        cld
+        rep movsb
+        mov esi, [.shb_file]
+        mov ecx, FD_FLAG_READ
+        call fd_open
+        cmp eax, -1
+        je .shb_done                     ; nothing to keep
+        mov [.shb_fd], eax
+        mov ebx, eax
+        mov ecx, sett_backup_buf
+        mov edx, SETT_IMAGE_SIZE
+        call fd_read
+        mov [.shb_len], eax
+        mov ebx, [.shb_fd]
+        call fd_close
+        cmp dword [.shb_len], 0
+        jle .shb_done
+        lea esi, [sett_hive_bak_name]
+        mov edi, sett_backup_buf
+        mov ecx, [.shb_len]
+        mov edx, FTYPE_FILE
+        call hbfs_create_file
+        jc .shb_fail
+.shb_done:
+        mov dword [dir_cache_lba], 0xFFFFFFFF
+        popad
+        clc
+        ret
+.shb_fail:
+        mov dword [dir_cache_lba], 0xFFFFFFFF
+        popad
+        stc
+        ret
+.shb_file: dd 0
+.shb_fd:   dd 0
+.shb_len:  dd 0
 
 ; ESI = prefix (as typed), EDI = file name -> CF set on failure
 sett_hive_save:
@@ -920,6 +1051,8 @@ sett_hive_save:
 
         call file_save_cwd
         call sett_pin_root
+        mov edi, [.hsv_file]
+        call sett_hive_backup
         mov esi, [.hsv_file]
         mov ecx, [sett_image_len]
         call sett_write_named_pinned
@@ -949,6 +1082,7 @@ sett_hive_save:
 sett_hive_load:
         pushad
         mov [.hld_file], esi
+        mov dword [sett_image_bad_why], -1
         call file_save_cwd
         call sett_pin_root
         mov esi, [.hld_file]
@@ -1752,7 +1886,14 @@ sett_ext_command:
         jc .usage
         lea esi, [sett_hive_file]
         call sett_hive_load
-        jc .hivefail
+        jnc .hive_loaded
+        ; Refused. The refusal names the file and the offset it stopped being an
+        ; image at, and the last known good generation is used when it is there.
+        lea esi, [sett_hive_file]
+        call sett_hive_load_or_backup
+        jnc .done
+        jmp .hivefail
+.hive_loaded:
         mov esi, msg_sett_hiveloaded
         call vga_print
         jmp .done
@@ -1952,3 +2093,95 @@ sett_child_name:
 .schn_prefix: dd 0
 .schn_plen:   dd 0
 .schn_seen:   dd 0
+
+; The reasons sett_image_check can refuse an image for, indexed by
+; sett_image_bad_why. A refusal names the file and the byte offset, because a
+; corrupt store that cannot be pointed at cannot be repaired.
+sett_img_reasons:
+        dd sett_img_r0, sett_img_r1, sett_img_r2, sett_img_r3
+        dd sett_img_r4, sett_img_r5, sett_img_r6, sett_img_r7
+        dd sett_img_r8, sett_img_r9, sett_img_r10, sett_img_r11
+        dd sett_img_r12
+sett_img_r0:  db "not a Sett image (bad magic)", 0
+sett_img_r1:  db "unknown image version", 0
+sett_img_r2:  db "shorter than a header", 0
+sett_img_r3:  db "checksum mismatch", 0
+sett_img_r4:  db "key or value count out of range", 0
+sett_img_r5:  db "arena size out of range", 0
+sett_img_r6:  db "length does not match the counts", 0
+sett_img_r7:  db "key path is not terminated", 0
+sett_img_r8:  db "key parent index out of range", 0
+sett_img_r9:  db "value's key index out of range", 0
+sett_img_r10: db "value type out of range", 0
+sett_img_r11: db "value offset and length out of range", 0
+sett_img_r12: db "value name is not terminated", 0
+
+msg_sett_hive_refused: db "sett: refused ", 0
+msg_sett_hive_at:      db " at offset ", 0
+msg_sett_hive_bakused: db "sett: used the last known good ", 0
+msg_sett_hive_nobak:   db "sett: no last known good image", 0x0A, 0
+
+; Report the refusal recorded by sett_image_check, then try <file>.bak.
+;   ESI = file name -> CF set when no last-known-good image could be loaded
+sett_hive_load_or_backup:
+        pushad
+        mov [.hlb_file], esi
+        cmp dword [sett_image_bad_why], -1
+        je .hlb_refused_plain
+        mov esi, msg_sett_hive_refused
+        call vga_print
+        mov esi, [.hlb_file]
+        call vga_print
+        mov al, ':'
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        mov eax, [sett_image_bad_why]
+        mov esi, [sett_img_reasons + eax*4]
+        call vga_print
+        mov esi, msg_sett_hive_at
+        call vga_print
+        mov eax, [sett_image_bad_off]
+        call vga_print_dec
+        call vga_newline
+        jmp .hlb_try_bak
+.hlb_refused_plain:
+        mov esi, msg_sett_hivefail
+        call vga_print
+.hlb_try_bak:
+        ; <file>.bak beside it
+        mov esi, [.hlb_file]
+        lea edi, [sett_hive_bak_name]
+        mov ecx, 88
+.hlb_copy:
+        lodsb
+        stosb
+        test al, al
+        jz .hlb_ext
+        loop .hlb_copy
+        jmp .hlb_nobak
+.hlb_ext:
+        dec edi
+        lea esi, [sett_hive_bak_ext]
+        mov ecx, 5
+        cld
+        rep movsb
+        lea esi, [sett_hive_bak_name]
+        call sett_hive_load
+        jnc .hlb_used
+.hlb_nobak:
+        mov esi, msg_sett_hive_nobak
+        call vga_print
+        popad
+        stc
+        ret
+.hlb_used:
+        mov esi, msg_sett_hive_bakused
+        call vga_print
+        lea esi, [sett_hive_bak_name]
+        call vga_print
+        call vga_newline
+        popad
+        clc
+        ret
+.hlb_file: dd 0

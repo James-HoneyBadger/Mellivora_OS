@@ -1,5 +1,37 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M4: a damaged hive says where it stopped being an image
+
+CONFIG.md section 10 item 5 asks that a hive with a corrupted bin is refused by
+name and offset, and that the last-known-good generation is used when it is
+there. Refusing was already the behaviour; saying *where* was not.
+
+```text
+Lair:/> sett hive load hive.hiv
+sett: refused hive.hiv: not a Sett image (bad magic) at offset 0
+sett: used the last known good hive.hiv.bak
+Lair:/> sett get \Registry\User\Dam K
+\Registry\User\Dam = first
+```
+
+- **A refusal carries a reason and a byte offset.** `sett_image_check` sets
+  `sett_image_bad_off` and `sett_image_bad_why` on its way out, with thirteen
+  distinct reasons - magic, version, a short image, the checksum, the counts,
+  the arena size, a length that does not match the counts, and the five
+  per-entry ones (an unterminated key path, a parent index, a value's key index,
+  its type, its offset and length, its name). "Not a Sett image" for all of them
+  is a message that cannot be acted on.
+- **A save keeps the generation it replaces.** `sett hive save` copies the
+  existing file to `<FILE>.bak` before writing, the same way a `/sett.bin`
+  commit keeps `/sett.bak`.
+- **A refused load falls back.** `sett hive load` reports the refusal, then
+  loads `<FILE>.bak` when it is there and says so; when it is not, it says that
+  too rather than leaving the caller to guess whether the tree changed.
+- **The gate pokes a real file.** `programs/hivepoke.asm` exists to damage one:
+  it seeks to zero in `hive.hiv` and writes over the magic. Nothing in the shell
+  writes raw bytes, and a store that can only be corrupted by hand is a store
+  whose corruption path is never run.
+
 ## Unreleased - M4: the password function is Argon2id
 
 SERVICES.md section 2 says passwords are checked against Argon2id, and until now

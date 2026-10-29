@@ -423,6 +423,16 @@ run_case "a SECRET is never read back" \
 run_case "a hive holds a subtree" \
     $'sett set \\Registry\\User\\Hive K str v\nsett hive save \\Registry\\User\\Hive hive.hiv\nsett delkey \\Registry\\User\\Hive\nsett hive load hive.hiv\nsett get \\Registry\\User\\Hive K' \
     "= v" "" "CPU EXCEPTION|refused|hive"
+# Section 10 item 5: a hive whose bin is damaged is refused by name and offset,
+# and the last known good generation beside it is loaded instead. Two saves put
+# the first generation in hive.hiv.bak; hivepoke writes over the magic of the
+# second, and the older value is what comes back.
+run_case "a damaged hive is refused by name and offset" \
+    $'sett set \\Registry\\User\\Dam K str first\nsett hive save \\Registry\\User\\Dam hive.hiv\nsett set \\Registry\\User\\Dam K str second\nsett hive save \\Registry\\User\\Dam hive.hiv\nsett delkey \\Registry\\User\\Dam\nhivepoke\nsett hive load hive.hiv' \
+    "hive.hiv: not a Sett image (bad magic) at offset 0" "" "CPU EXCEPTION"
+run_case "the last known good hive is loaded instead" \
+    $'sett set \\Registry\\User\\Dam K str first\nsett hive save \\Registry\\User\\Dam hive.hiv\nsett set \\Registry\\User\\Dam K str second\nsett hive save \\Registry\\User\\Dam hive.hiv\nsett delkey \\Registry\\User\\Dam\nhivepoke\nsett hive load hive.hiv\nsett get \\Registry\\User\\Dam K' \
+    "= first" "" "CPU EXCEPTION"
 # Section 3: a watcher created after the change still learns the state, and the
 # change that follows it is reported in order.
 run_case "the Sett notifies a watcher in order" \
