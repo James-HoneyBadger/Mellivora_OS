@@ -33,6 +33,13 @@ SVC_RUNNING      equ 1
 SVC_FAILED       equ 2
 SVC_RETRY        equ 3                  ; waiting out a backoff
 SVC_RECOVER      equ 4                  ; an action is owed to the tick
+SVC_STOPPING     equ 5                  ; asked to stop, not yet stopped
+
+; The control flag a service reads: a U32 value in its own record, so what the
+; SCM asked and what the service answered are both visible to `sett get'.
+SVC_CTL_RUN      equ 0
+SVC_CTL_STOP     equ 1                  ; the SCM asks the service to stop
+SVC_CTL_STOPPED  equ 2                  ; the service says it has stopped
 
 SVC_PEND_RUN     equ 1
 SVC_PEND_REBOOT  equ 2
@@ -45,7 +52,7 @@ SVC_DISABLED     equ 4
 
 SVC_ACT_LEN      equ 32                 ; one stored recovery action, verbatim
 
-SVC_ENTRY        equ 244
+SVC_ENTRY        equ 252
 SVC_F_NAME       equ 0
 SVC_F_IMAGE      equ 24
 SVC_F_START      equ 72
@@ -63,6 +70,8 @@ SVC_F_RESET      equ 228                ; quiet seconds before the streak is for
 SVC_F_TIMEOUT    equ 232                ; seconds a start may take to appear
 SVC_F_LASTFAIL   equ 236                ; tick of the last failure
 SVC_F_PEND       equ 240                ; SVC_PEND_*: the action the tick owes
+SVC_F_STOPDL     equ 244                ; tick an unhonoured stop becomes a kill
+SVC_F_STOPTO     equ 248                ; seconds a stop may take (0 = no deadline)
 
 svc_prefix:      db "\Registry\Machine\System\Services", 0
 svc_val_image:   db "Image", 0
@@ -74,6 +83,8 @@ svc_val_act2:    db "Failure2", 0
 svc_val_act3:    db "Failure3", 0
 svc_val_reset:   db "Reset", 0
 svc_val_timeout: db "StartTimeout", 0
+svc_val_stoptimeout: db "StopTimeout", 0
+svc_val_control: db "Control", 0
 
 svc_act_restart: db "restart", 0
 svc_act_reboot:  db "reboot", 0
@@ -184,6 +195,7 @@ svc_clear:
         mov dword [edi + SVC_F_LASTCODE], -1
         mov dword [edi + SVC_F_RESET], 60
         mov dword [edi + SVC_F_TIMEOUT], 30
+        mov dword [edi + SVC_F_STOPTO], 30
         ; The default recovery is the one this tree had before it was a policy:
         ; the service is restarted, and the attempt count ends the streak.
         mov edi, [.sc_rec]
@@ -820,21 +832,96 @@ svc_start:
 .sst_pid:  dd 0
 .sst_t0:   dd 0
 
-; EAX = index -> CF set when the service was not running
+; Write the Control value of a service record.
+;   In : ESI = the service path (svc_path_buf), EBX = SVC_CTL_*
+svc_ctl_set:
+        push edi
+        push esi
+        mov edi, esi
+        mov esi, svc_val_control
+        call sett_kv_set_u32
+        pop esi
+        pop edi
+        ret
+
+; Read the Control value of a service record.
+;   In : ESI = the service path (svc_path_buf) -> EAX = the value, 0 when unset
+svc_ctl_get:
+        push edi
+        push esi
+        mov edi, esi
+        mov esi, svc_val_control
+        call sett_kv_get_u32
+        jnc .scg_out
+        xor eax, eax
+.scg_out:
+        pop esi
+        pop edi
+        ret
+
+; Put a stopped service's record back to rest, whichever way it stopped.
+;   In : EDI = record
+svc_stop_done:
+        push eax
+        push esi
+        mov dword [edi + SVC_F_STATE], SVC_STOPPED
+        mov dword [edi + SVC_F_PID], -1
+        mov dword [edi + SVC_F_FAILS], 0
+        mov dword [edi + SVC_F_STOPDL], 0
+        mov [.ssd_rec], edi
+        lea esi, [edi + SVC_F_NAME]
+        call svc_build_path
+        xor ebx, ebx                     ; back to "run" for the next start
+        call svc_ctl_set
+        mov edi, [.ssd_rec]
+        pop esi
+        pop eax
+        ret
+.ssd_rec: dd 0
+
+; EAX = index -> CF set when the service was not running.
+; Stopping is a request first: the record's Control value says STOP, and the
+; service is expected to read it and leave. A service that does not is killed
+; when its stop timeout passes, by svc_tick, and the kill is a log record rather
+; than something the caller has to be told about later.
 svc_stop:
         pushad
         mov [.sstp_ix], eax
         call svc_slot
         mov [.sstp_rec], edi
-        cmp dword [edi + SVC_F_STATE], SVC_RUNNING
-        jne .sstp_no
+        mov eax, [edi + SVC_F_STATE]
+        cmp eax, SVC_RUNNING
+        je .sstp_running
+        cmp eax, SVC_STOPPING
+        je .sstp_no                     ; already asked; the tick is on it
+        jmp .sstp_no
+.sstp_running:
         mov eax, [edi + SVC_F_PID]
         call svc_task_pid
         cmp eax, -1
         je .sstp_clean                  ; the task is already gone
-        mov ebx, eax
-        mov ecx, SIGKILL
-        call sys_kill
+        ; Ask, and start the clock.
+        mov edi, [.sstp_rec]
+        lea esi, [edi + SVC_F_NAME]
+        call svc_build_path
+        mov ebx, SVC_CTL_STOP
+        call svc_ctl_set
+        mov edi, [.sstp_rec]
+        mov dword [edi + SVC_F_STATE], SVC_STOPPING
+        mov eax, [edi + SVC_F_STOPTO]
+        test eax, eax
+        jz .sstp_nodeadline
+        imul eax, PIT_HZ
+        add eax, [tick_count]
+        mov [edi + SVC_F_STOPDL], eax
+        jmp .sstp_asked
+.sstp_nodeadline:
+        mov dword [edi + SVC_F_STOPDL], 0
+.sstp_asked:
+        LOGBOOT LOG_INFO, msg_svc_stopasked
+        popad
+        clc
+        ret
 .sstp_clean:
         mov edi, [.sstp_rec]
         mov dword [edi + SVC_F_STATE], SVC_STOPPED
@@ -865,6 +952,8 @@ svc_tick:
         je .skt_recover
         cmp dword [edi + SVC_F_STATE], SVC_RETRY
         je .skt_due
+        cmp dword [edi + SVC_F_STATE], SVC_STOPPING
+        je .skt_stopping
         ; The reset period (section 1.3): a service that has run on without
         ; failing for long enough begins a new streak, so a failure hours later
         ; is the first of the new one and not the fourth of the old one.
@@ -880,6 +969,49 @@ svc_tick:
         jb .skt_next
         mov dword [edi + SVC_F_FAILS], 0
         jmp .skt_next
+.skt_stopping:
+        ; A stop was asked for. The service is heard from through its Control
+        ; value, and the task's own death is heard too: either means stopped.
+        mov eax, [edi + SVC_F_PID]
+        call svc_task_pid
+        cmp eax, -1
+        je .skt_stop_done
+        mov edi, [.skt_rec]
+        lea esi, [edi + SVC_F_NAME]
+        call svc_build_path
+        call svc_ctl_get
+        cmp eax, SVC_CTL_STOPPED
+        je .skt_stop_done
+        ; Still running and still not stopped: has its time run out?
+        mov edi, [.skt_rec]
+        mov eax, [edi + SVC_F_STOPDL]
+        test eax, eax
+        jz .skt_next                     ; no deadline was set
+        cmp [tick_count], eax
+        jb .skt_next
+        ; The stop timeout. The kill is the SCM's, not the service's, and it is
+        ; recorded: a service that vanishes quietly cannot be told apart from
+        ; one that was never asked to stop. The record is written and the
+        ; service is marked stopped *before* the kill, so the audit trail and
+        ; the record agree even if killing a task takes the tick's context with
+        ; it.
+        mov eax, [edi + SVC_F_PID]
+        call svc_task_pid
+        cmp eax, -1
+        je .skt_stop_done
+        mov [.skt_pid], eax
+        mov edi, [.skt_rec]
+        call svc_stop_done
+        LOGBOOT LOG_WARN, msg_svc_stopkill
+        mov ebx, [.skt_pid]
+        mov ecx, SIGKILL
+        call sys_kill
+        jmp .skt_next
+.skt_stop_done:
+        mov edi, [.skt_rec]
+        call svc_stop_done
+        jmp .skt_next
+
 .skt_recover:
         ; An action that svc_fail could not take in the failing task's context.
         ; The service is not restarted by either action, so both end FAILED.
@@ -929,6 +1061,7 @@ svc_tick:
         popad
         call taskq_tick
         ret
+.skt_pid: dd 0
 .skt_i:   dd 0
 .skt_rec: dd 0
 .skt_img: dd 0
@@ -1288,10 +1421,15 @@ svc_state_name:
         je .ssn_retry
         cmp eax, SVC_RECOVER
         je .ssn_recover
+        cmp eax, SVC_STOPPING
+        je .ssn_stopping
         mov esi, msg_svc_stopped
         ret
 .ssn_run:
         mov esi, msg_svc_running
+        ret
+.ssn_stopping:
+        mov esi, msg_svc_stoppingword
         ret
 .ssn_fail:
         mov esi, msg_svc_failedword
@@ -1366,6 +1504,11 @@ svc_print_policy:
         call vga_print
         mov edi, [.spp_rec]
         mov eax, [edi + SVC_F_TIMEOUT]
+        call vga_print_dec
+        mov esi, msg_svc_stopword
+        call vga_print
+        mov edi, [.spp_rec]
+        mov eax, [edi + SVC_F_STOPTO]
         call vga_print_dec
         mov esi, msg_svc_timeoutword
         call vga_print
@@ -1504,6 +1647,10 @@ svc_command:
         call sett_ci_equal
         jc .reset
         mov esi, svc_tok
+        mov edi, svc_word_stoptimeout
+        call sett_ci_equal
+        jc .stoptimeout
+
         mov edi, svc_word_timeout
         call sett_ci_equal
         jc .timeout
@@ -1659,6 +1806,8 @@ svc_command:
         call svc_slot
         cmp dword [edi + SVC_F_STATE], SVC_RUNNING
         je .delete_running
+        cmp dword [edi + SVC_F_STATE], SVC_STOPPING
+        je .delete_running               ; still holds a task, still not gone
         ; Remove the key from the Sett, then rebuild the table from it.
         lea esi, [edi + SVC_F_NAME]
         call svc_build_path
@@ -1843,6 +1992,32 @@ svc_command:
         mov [edi + SVC_F_TIMEOUT], eax
         jmp .policy_go
 
+;--- stoptimeout NAME SECS ---------------------------------------------
+.stoptimeout:
+        mov esi, [svc_argp]
+        mov edi, svc_arg1
+        mov edx, SVC_NAME_LEN - 1
+        call sett_word
+        jc .usage
+        mov [.next], esi
+        lea esi, [svc_arg1]
+        call svc_find
+        jc .nosuch
+        mov [.ix], eax
+        call svc_slot
+        mov [.rec], edi
+        mov esi, [.next]
+        mov edi, svc_tok
+        mov edx, 15
+        call sett_word
+        jc .usage
+        mov esi, svc_tok
+        call svc_parse_u32
+        jc .badnum
+        mov edi, [.rec]
+        mov [edi + SVC_F_STOPTO], eax
+        jmp .policy_go
+
 ;--- attempts NAME COUNT -----------------------------------------------
 .attempts:
         mov esi, [svc_argp]
@@ -1963,6 +2138,7 @@ svc_word_query:    db "query", 0
 svc_word_dep:      db "dep", 0
 svc_word_failure:  db "failure", 0
 svc_word_reset:    db "reset", 0
+svc_word_stoptimeout: db "stoptimeout", 0
 svc_word_timeout:  db "timeout", 0
 svc_word_attempts: db "attempts", 0
 svc_word_boot:     db "boot", 0
@@ -1973,6 +2149,8 @@ svc_word_disabled: db "disabled", 0
 
 msg_sli_fail_task:  db "scm: the program could not be started as a task", 0x0A, 0
 msg_sli_fail_read:  db "scm: the image could not be read", 0x0A, 0
+msg_svc_stopasked:  db "scm: stop requested", 0x0A, 0
+msg_svc_stopkill:   db "scm: the service ignored STOP and was killed after its stop timeout", 0x0A, 0
 msg_svc_started:    db "scm: a service started", 0
 msg_svc_restart:    db "scm: service '", 0
 msg_svc_restart2:   db "' exited non-zero; restart number ", 0
@@ -1987,6 +2165,7 @@ msg_svc_disabled:   db "sc: the service is disabled", 0x0A, 0
 msg_svc_cycle:      db "sc: dependency cycle: ", 0
 msg_svc_arrow:      db " -> ", 0
 msg_svc_running:    db "RUNNING", 0
+msg_svc_stoppingword: db "STOPPING", 0
 msg_svc_stopped:    db "STOPPED", 0
 msg_svc_failedword: db "FAILED", 0
 msg_svc_retryword:  db "RESTARTING", 0
@@ -2005,7 +2184,7 @@ msg_svc_iowrite:    db "sc: could not write the record", 0x0A, 0
 msg_svc_delete_running: db "sc: delete is refused while the service runs", 0x0A, 0
 msg_svc_started_user: db "sc: started ", 0
 msg_svc_startfail:  db "sc: could not start ", 0
-msg_svc_stopped_user: db "sc: stopped", 0x0A, 0
+msg_svc_stopped_user: db "sc: stop requested", 0x0A, 0
 msg_svc_stopfail:   db "sc: the service was not running", 0x0A, 0
 msg_svc_nosuch:     db "sc: no such service", 0x0A, 0
 msg_svc_needs:      db " needs ", 0
@@ -2038,5 +2217,6 @@ msg_svc_reboot2:     db "' recovery: restarting the machine", 0x0A, 0
 msg_svc_reboot_log:  db "scm: a service recovery action rebooted the machine", 0
 msg_svc_recovery:    db "recovery: reset=", 0
 msg_svc_resetword:   db "s timeout=", 0
+msg_svc_stopword:   db "s stop=", 0
 msg_svc_timeoutword: db "s tries=", 0
 msg_svc_attemptsword: db " onfail=", 0

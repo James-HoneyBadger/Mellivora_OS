@@ -292,7 +292,8 @@ det_sc:
         db "sc list | sc create NAME IMAGE [boot|system|auto|manual|disabled] [DEP]", 0x0A
         db "sc start NAME | sc stop NAME | sc query [NAME] | sc delete NAME", 0x0A
         db "sc dep | sc failure NAME [restart|reboot|run:IMAGE|none] ...", 0x0A
-        db "sc reset NAME SECS | sc timeout NAME SECS | sc attempts NAME COUNT", 0x0A
+        db "sc reset NAME SECS | sc timeout NAME SECS | sc stoptimeout NAME SECS", 0x0A
+        db "sc attempts NAME COUNT", 0x0A
         db "  A dependency cycle is refused at create, naming both ends. The", 0x0A
         db "  recovery policy is up to three actions taken in order as the", 0x0A
         db "  failures accumulate; the default restarts after 1 s, 5 s and", 0x0A

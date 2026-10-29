@@ -245,6 +245,7 @@ SYS_MUTANT_RELEASE  equ 197     ; mutant_release(handle) -> 0/-1
 SYS_SEMAPHORE_RELEASE equ 198   ; semaphore_release(handle, count) -> 0/-1
 SYS_OBJECT_STATS    equ 199     ; object_stats(buf, len) -> bytes/-1
 SYS_TOKEN_QUERY     equ 200     ; token_query(buf) -> 0/-1
+SYS_SVC_CONTROL     equ 201     ; svc_control(op) -> 0/1/2, -1 if not a service
 
 ; Object types
 OBJ_TYPE_DIRECTORY  equ 0

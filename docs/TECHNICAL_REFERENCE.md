@@ -2155,8 +2155,10 @@ length, which also rejects a range that wraps past 2^32):
 | 180 | `SYS_TCFLUSH` | EBX=fd, ECX=queue | EAX=0 |
 | 181 | `SYS_GETERRNO` | — | EAX=per-task errno |
 | 186 | `SYS_FAULTINJECT` | EBX=op, ECX=count | EAX=0/-1; see [Fault Injection](#fault-injection-p10) |
+| 200 | `SYS_TOKEN_QUERY` | EBX=buffer | EAX=0/-1 |
+| 201 | `SYS_SVC_CONTROL` | EBX=op (0 ask, 1 stopped, 2 refuse) | EAX=0/1/2, -1 if not a service |
 
-**Total: 201 syscalls defined (0–200, no gaps).**
+**Total: 202 syscalls defined (0–201, no gaps).**
 
 ---
 

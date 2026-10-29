@@ -100,7 +100,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 201 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
+- 202 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
   in-OS C compiler, `hbpkg`, and a C-built kernel module with a freestanding C
   runtime behind it.
 

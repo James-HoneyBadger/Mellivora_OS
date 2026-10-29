@@ -48,7 +48,7 @@ boot drivers -> system drivers -> SCM -> boot services -> system services
 | Call | Contract |
 |---|---|
 | `Start` | SCM creates the token, starts the image, waits for `RUNNING` or `START_PENDING` then `RUNNING` |
-| `Stop` | Sends `STOP`; if the service does not report `STOPPED` within its timeout, the SCM kills the process and records the kill |
+| `Stop` | Sends `STOP`; if the service does not report `STOPPED` within its timeout, the SCM kills the process and records the kill. As built: `STOP` is the `Control` value in the service's own record, written by `sc stop`, and the service answers by writing it back with `svc_control`; `sc stoptimeout NAME SECS` sets the deadline (30 s by default, `0` = wait forever) |
 | `Pause` / `Continue` | Optional; a service that does not support them says so |
 | `Interrogate` | Reports the current state, exit code and checkpoint |
 | `Configure` | Changes start type, account or recovery; audited |
@@ -172,6 +172,7 @@ M4 does not close until:
 | Contract | Tree today |
 |---|---|
 | Services, dependencies, recovery | **Yes.** A record is a key under `\Registry\Machine\System\Services\<name>` (`Image`, `Start`, `DependOn`, `Attempts`, `Failure1..3`, `Reset`, `StartTimeout`); `sc create/delete/start/stop/query/list/dep/failure/reset/timeout/attempts`. A dependency is started first and a missing one fails the dependant by name; a cycle is refused when the record is written. Exit zero is a clean stop |
+| Stop, and a stop that is ignored | **Yes.** `sc stop` writes `STOP` into the service's record (`Control`), the service answers with `svc_control` when it is ready to leave, and the SCM tick finishes the stop when the task is gone or the answer has arrived. A service that does neither is killed when its stop timeout passes, and the kill is a `scm` warn record naming it - a service that disappears quietly cannot be told apart from one that was never asked |
 | Start sequence | **Yes for boot and system.** Boot services start at boot, system services after them, auto services at logon; the boot log names each start, and `sessions` shows session 0 with nobody logged on. `StartTimeout` (30 s by default, `0` = no deadline) bounds the launch: a start that misses it, or that cannot produce a task at all, is a failure with the attempt counted and the policy's action run, not a service that silently stops |
 | Recovery actions | **Yes.** Three stored actions, taken in order as the failures accumulate: `restart` (after 1 s, 5 s, 30 s), `run:IMAGE` (the named program runs in place of a restart), `reboot`, and `none`. `sc failure NAME [A1 [A2 [A3]]]` sets them and prints them when given no action, `sc reset NAME SECS` sets the period (60 s) after which a service that has run clean begins a new streak, and `sc attempts NAME N` the cap that ends one. A `run:` or `reboot` action is recorded by the failure and carried out by the SCM tick: a failure is noticed inside the dying task's own address space, and loading a program there would build the image under that task's page directory. Neither action restarts the service, so both leave it `FAILED` |
 | Shared host processes, service privileges | **None.** Every service is its own task, and the token is the launcher's: session 0, SYSTEM |
@@ -188,5 +189,6 @@ program, a start that never appears runs its program too, a failure streak is
 kept until the reset period passes and forgotten after it, a boot service is
 seen in the boot log before any session exists, one account logs on to session
 1, two accounts hold sessions 1 and 2 at once, a locked session refuses every
-command but `unlock`, and a task that faults while the session is locked does
-not unlock it.
+command but `unlock`, a task that faults while the session is locked does not
+unlock it, a service stops when it is asked, and a service that ignores `STOP` is
+killed at its timeout with the kill in the Chronicle.

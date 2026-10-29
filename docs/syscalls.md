@@ -4,7 +4,7 @@ This file is generated from programs/syscalls.inc.
 Do not edit manually; run: python3 tools/generate_syscalls_json.py
 
 - Source: programs/syscalls.inc
-- Syscall count: 201
+- Syscall count: 202
 
 | Number | Name | Summary |
 | ---: | --- | --- |
@@ -209,3 +209,4 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 198 | SYS_SEMAPHORE_RELEASE | semaphore_release(handle, count) -> 0/-1 |
 | 199 | SYS_OBJECT_STATS | object_stats(buf, len) -> bytes/-1 |
 | 200 | SYS_TOKEN_QUERY | token_query(buf) -> 0/-1 |
+| 201 | SYS_SVC_CONTROL | svc_control(op) -> 0/1/2, -1 if not a service |

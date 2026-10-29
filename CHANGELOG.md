@@ -1,5 +1,39 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M4: STOP is a request, and a service that ignores it is killed
+
+SERVICES.md section 1.2 says `Stop` sends `STOP` and that a service which does
+not report `STOPPED` within its timeout is killed and the kill recorded;
+section 6 item 3 is the same promise as a gate. `svc_stop` used to SIGKILL
+outright, so there was never a stop to ignore.
+
+```text
+Lair:/> sc stoptimeout svcstub 1
+sc: policy changed for svcstub
+Lair:/> sc stop svcstub
+sc: stop requested
+Lair:/> sleep 3
+Lair:/> chronicle -s scm
+  cpu0 scm W scm: the service ignored STOP and was killed after its stop timeout
+```
+
+- **The protocol is state in the store, not a private channel.** `sc stop`
+  writes `Control = 1` in the service's own record; the service answers by
+  writing it back through `SYS_SVC_CONTROL`, a new syscall that refuses a caller
+  whose TCB is not a service task rather than answering "no stop requested".
+  `sett get ... Control` shows both halves of the conversation afterwards.
+- **The SCM finishes the stop.** A new `STOPPING` state is a tick's work: the
+  task's death, or the service's answer, ends it; a deadline set from a new
+  `StopTimeout` (30 s by default, `0` = no deadline, `sc stoptimeout NAME SECS`)
+  turns into a kill, and the kill is a `scm` warn record. The record and the
+  state are written *before* the kill, so a tick whose context does not come
+  back still leaves an audit trail and a consistent record.
+- **A stop in progress is not a delete.** `sc delete` refuses `STOPPING` as well
+  as `RUNNING`: the service still holds a task.
+- **Two fixtures, two behaviours.** `svcgood` polls its Control value, reports
+  `STOPPED` and leaves with the value on record; `svcstub` sleeps in a loop and
+  answers nothing, which is what reaches the end of the SCM's patience.
+
 ## Unreleased - M4: a locked session is a boundary, not a line of output
 
 SERVICES.md section 6 item 6 asks that a crashed logon screen does not let

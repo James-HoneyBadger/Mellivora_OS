@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 201,
-  "highest_syscall_number": 200,
+  "syscall_count": 202,
+  "highest_syscall_number": 201,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -1007,6 +1007,11 @@
       "name": "SYS_TOKEN_QUERY",
       "number": 200,
       "summary": "token_query(buf) -> 0/-1"
+    },
+    {
+      "name": "SYS_SVC_CONTROL",
+      "number": 201,
+      "summary": "svc_control(op) -> 0/1/2, -1 if not a service"
     }
   ]
 }

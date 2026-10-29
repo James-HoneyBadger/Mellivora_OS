@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, " HBFS v3/4 ", 0xF9, "  201 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
+        db 0xBA, " HBFS v3/4 ", 0xF9, "  202 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -151,7 +151,7 @@ version_text:
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (201 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (202 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
         db "  Scheduler:     Priority-based preemptive (128 tasks, 4 levels)", 0x0A

@@ -461,12 +461,73 @@ syscall_table:
         dd sys_semaphore_release; 198 SYS_SEMAPHORE_RELEASE
         dd sys_object_stats     ; 199 SYS_OBJECT_STATS
         dd sys_token_query      ; 200 SYS_TOKEN_QUERY
-        ; Reserved / unimplemented (201..511)
-        times (SYSCALL_MAX - 201) dd syscall_handler.syscall_bad
+        dd sys_svc_control      ; 201 SYS_SVC_CONTROL
+        ; Reserved / unimplemented (202..511)
+        times (SYSCALL_MAX - 202) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)
 ;=======================================================================
+
+
+;-----------------------------------------------------------------------
+; sys_svc_control (201) - talk to the service manager about this task
+;   In : EBX = operation
+;          0  what was I asked?  -> EAX = 0 run, 1 stop requested, 2 stopped
+;          1  I have stopped     -> EAX = 0 (the SCM notices on its next tick)
+;          2  I refuse to stop   -> EAX = 0 (TOLD, not obeyed: the SCM still
+;                                 kills a service that overruns its timeout)
+;   Out: EAX = -1 when the caller is not a service task
+;
+; The answer lives in the service's own record, as the `Control` value, so what
+; the SCM asked and what the service answered can both be read back with
+; `sett get` - the stop protocol is state in the store, not a private channel.
+; A service task is one whose TCB_SVC names a record; anything else is refused
+; rather than given a default, because "not a service" must not look like "no
+; stop requested".
+;-----------------------------------------------------------------------
+sys_svc_control:
+        push ebx
+        push ecx
+        push edx
+        push esi
+        push edi
+        call sched_get_current_task
+        test eax, eax
+        jz .sscv_no
+        mov edi, [eax + TCB_SVC]
+        cmp edi, -1
+        je .sscv_no
+        cmp edi, [svc_count]
+        jae .sscv_no
+        mov eax, edi
+        call svc_slot                    ; EDI = record
+        lea esi, [edi + SVC_F_NAME]
+        call svc_build_path              ; ESI = svc_path_buf
+        cmp ebx, 0
+        je .sscv_read
+        cmp ebx, 1
+        je .sscv_stopped
+        cmp ebx, 2
+        je .sscv_stopped                 ; a refusal is recorded as the answer
+        jmp .sscv_no
+.sscv_read:
+        call svc_ctl_get
+        jmp .sscv_out
+.sscv_stopped:
+        mov ebx, SVC_CTL_STOPPED
+        call svc_ctl_set
+        xor eax, eax
+        jmp .sscv_out
+.sscv_no:
+        mov eax, -1
+.sscv_out:
+        pop edi
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
 
 ;-----------------------------------------------------------------------
 ; sys_alarm (140) — schedule SIGALRM delivery after N seconds
