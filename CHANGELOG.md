@@ -1,5 +1,63 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: a C library, and paths that resolve
+
+The tree had a runtime, not a library: eight functions in `string.c`, a formatter
+with no precision, and no streams at all. `c/rt/` is a C library now, and writing
+it found three kernel bugs that no assembly program in the tree had ever hit.
+
+```text
+Lair:/> libctest
+LIBC_OK
+```
+
+- **Ten headers, standard names.** `<string.h>`, `<strings.h>`, `<stdlib.h>`,
+  `<stdio.h>`, `<ctype.h>`, `<errno.h>`, `<limits.h>`, `<stddef.h>`,
+  `<assert.h>` and `<locale.h>`. The `<mv/...>` spellings this tree was written
+  against still work and now forward to them, so nothing had to be rewritten to
+  gain what the library gained.
+- **Strings and memory, complete.** `memchr`, `strnlen`, `strcpy`/`strncpy`
+  (with C's NUL padding), `strcat`/`strncat`, `strchr`/`strrchr`, `strstr` with
+  the empty-needle rule, `strspn`/`strcspn`/`strpbrk`, `strtok`/`strtok_r`,
+  `strcasecmp`/`strncasecmp`, `strdup`/`strndup` and `strerror` with a number in
+  the message it does not recognise.
+- **Conversions, searching and sorting.** `strtol` honouring `0x`, a leading `0`
+  and `endptr`, `strtoul`, `atol`/`atoll`, `abs`/`labs`/`llabs`, `div`/`ldiv`,
+  `bsearch`, and a `qsort` that is a bottom-up merge: equal elements keep the
+  order they arrived in, which is what a tool sorting by one column needs.
+  `rand`/`srand`, `atexit` (run newest first by `exit`), `abort`.
+- **Streams.** `fopen`/`fclose`/`fread`/`fwrite`/`fgetc`/`ungetc`/`fgets`/
+  `fputs`/`fseek`/`ftell`/`feof`/`ferror`/`fflush`/`remove`/`rename`/`perror`,
+  `getline`/`getdelim`, and `stdin`/`stdout`/`stderr`. Writes collect and are
+  handed over at flush time, and reads copy the file in: HBFS is a whole-file
+  filesystem, and pretending otherwise would have meant a write path that
+  cannot grow a file.
+- **A formatter worth the name.** Precision, the `+`, space and `#` flags, `*`
+  for width and precision, `%o`, and length modifiers accepted because this
+  target has one integer width. Floating point is still refused with the
+  conversion's own text rather than rounded.
+- **`getopt`.** POSIX's: `-n5`, `-n 5`, `--`, option clustering, the `+` prefix
+  that stops at the first operand, and reordering so `sort file -r` means what
+  `sort -r file` does. It is the front end every HB utility below needs.
+
+**What it found.** Nothing in this tree had ever opened a file by absolute path,
+because the shell does its own path work and every program that read a file used
+`SYS_FREAD`, which takes a name.
+
+- **`open("/docs/notes.txt")` returned ENOENT for a file that exists.** The HBFS
+  lookup searched the current directory and compared the whole path against the
+  entry names, so only a bare name could ever match. `fd_open` now splits the
+  path, enters the directory, and reads the entry there - and so do `unlink` and
+  `SYS_FWRITE`, which had the same hole and used to store an entry called
+  `/docs/notes.txt` in whatever directory happened to be current.
+- **`O_CREAT`, `O_TRUNC` and `O_APPEND` were not flags at all.** They are the
+  kernel's now: a create makes the file, a truncate empties it, an append seeks
+  to the end, and `open(path, "w")` is one call instead of a two-step dance
+  through `SYS_FWRITE` that only worked for bare names.
+- **`SYS_READ` on an open HBFS file is still not right.** Streams avoid it (they
+  copy the file in), the POSIX `read()` shim exposes it, and docs/POSIX.md
+  records it as the next thing to fix rather than something that works.
+
 ## Unreleased - M5: a POSIX program's calls mean what POSIX says they mean
 
 The syscalls were always shaped like POSIX; nothing could call them that way. There

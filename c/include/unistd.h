@@ -47,6 +47,12 @@ int pipe(int fds[2]);
 int isatty(int fd);
 int fcntl(int fd, int cmd, int arg);
 
+/* getopt: the option parser every utility starts with. POSIX's, including the
+ * "+" and "-" optstring prefixes and the reordering of non-options. */
+extern char *optarg;
+extern int   optind, opterr, optopt;
+int getopt(int argc, char *const argv[], const char *optstring);
+
 pid_t fork(void);
 int execve(const char *path, char *const argv[], char *const envp[]);
 int execl(const char *path, const char *arg, ...);

@@ -207,8 +207,13 @@ void *realloc(void *ptr, u32 size)
     return fresh;
 }
 
+/* Declared rather than included: stdlib.h is the public header and this is the
+ * one internal hook between the heap's exit and the handler table. */
+void mv_run_atexit(void);
+
 void exit(int status)
 {
+    mv_run_atexit();
     mv_exit(status);
     for (;;)
         ;                       /* the kernel does not return from SYS_EXIT */

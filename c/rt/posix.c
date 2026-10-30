@@ -9,12 +9,10 @@
  *
  * Two things are deliberately not lies:
  *
- *   * `open()` has no create flag to pass, so O_CREAT is served here: a failed
- *     open of a missing name is followed by SYS_FWRITE with no data - which is
- *     the kernel's create-or-overwrite door - and then by a second open. The
- *     cost of doing it in two steps is that creating truncates an existing
- *     file, which is what O_TRUNC asked for anyway; the cost of not doing it is
- *     that a POSIX program could not write a file at all.
+ *   * `open()` passes O_CREAT, O_TRUNC and O_APPEND straight to the kernel,
+ *     which settles them before it hands back a descriptor. It did not always:
+ *     the flags were ignored and creating was a SYS_FWRITE with no data, which
+ *     only understood a bare name.
  *   * `struct stat` is twelve bytes because the VFS fills twelve. Fields POSIX
  *     has and this does not - mode, uid, inode - are absent, so code that uses
  *     them fails to compile.
@@ -23,6 +21,9 @@
 
 #include <mv/types.h>
 #include <mv/syscall.h>
+
+#include <stdio.h>
+#include <string.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -55,19 +56,6 @@ void __errno_from_kernel(void)
 /* Descriptors                                                         */
 /* ------------------------------------------------------------------ */
 
-/* SYS_FWRITE's file types (programs/syscalls.inc). Text is the only one a
- * POSIX open has any business making. */
-#define MV_FTYPE_TEXT 1
-
-static int posix_write_empty(const char *path)
-{
-    static const char empty = 0;
-
-    /* Zero bytes with a valid pointer: the kernel's create-or-overwrite door
-     * never reads the buffer, because it copies nothing. */
-    return mv_syscall(SYS_FWRITE, (u32)path, (u32)&empty, 0, MV_FTYPE_TEXT, 0);
-}
-
 int open(const char *path, int oflag, ...)
 {
     i32 fd;
@@ -77,29 +65,11 @@ int open(const char *path, int oflag, ...)
         return -1;
     }
 
+    /* O_CREAT, O_TRUNC and O_APPEND are the kernel's now: SYS_OPEN settles them
+     * before it hands back a descriptor, so this is the whole of the call. The
+     * two-step version that made the file with SYS_FWRITE first only worked for
+     * names in the current directory, which is exactly what a path is not. */
     fd = mv_syscall(SYS_OPEN, (u32)path, (u32)oflag, 0, 0, 0);
-
-    if ((oflag & (O_CREAT | O_TRUNC)) != 0) {
-        int missing = (fd < 0);
-
-        if (missing && (oflag & O_CREAT) == 0) {
-            errno = ENOENT;
-            return -1;
-        }
-        if (!missing && (oflag & O_TRUNC) != 0) {
-            mv_syscall(SYS_CLOSE, (u32)fd, 0, 0, 0, 0);
-            fd = -1;
-        }
-        if (fd < 0) {
-            if (posix_write_empty(path) < 0) {
-                errno = EACCES;
-                return -1;
-            }
-            fd = mv_syscall(SYS_OPEN, (u32)path,
-                            (u32)(oflag & ~(O_CREAT | O_TRUNC)), 0, 0, 0);
-        }
-    }
-
     if (fd < 0) {
         __errno_from_kernel();
         if (errno == 0) {
@@ -107,14 +77,6 @@ int open(const char *path, int oflag, ...)
         }
         return -1;
     }
-
-    if ((oflag & O_APPEND) != 0) {
-        /* Position at the end now. This is not atomic against another writer
-         * the way a kernel-side O_APPEND would be; nothing here shares a file
-         * between tasks concurrently yet. */
-        mv_syscall(SYS_SEEK, (u32)fd, 0, SEEK_END, 0, 0);
-    }
-
     return fd;
 }
 
@@ -436,6 +398,114 @@ uid_t geteuid(void)
 gid_t getgid(void)
 {
     return (gid_t)mv_syscall(SYS_GETGID, 0, 0, 0, 0, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* getopt                                                              */
+/* ------------------------------------------------------------------ */
+
+char *optarg;
+int   optind = 1;
+int   opterr = 1;
+int   optopt;
+
+int getopt(int argc, char *const argv[], const char *optstring)
+{
+    static int scanned;         /* index being scanned in the current word */
+    char **v = (char **)argv;   /* permutation writes through this: the standard
+                                 * declares argv const for the callee's benefit,
+                                 * but GNU's own getopt reorders it too */
+    int stop_at_operand = 0;
+
+    optarg = 0;
+    if (optstring[0] == '+') {
+        stop_at_operand = 1;    /* POSIXLY_CORRECT: -a f -b stops at "f" */
+        optstring++;
+    }
+    if (optstring[0] == '-') {
+        optstring++;            /* "-" mode is not implemented; see POSIX.md */
+    }
+
+    for (;;) {
+        if (scanned == 0) {
+            /* Find the next word that starts an option and bring it to
+             * optind, which is what lets "sort file -r" mean the same as
+             * "sort -r file". */
+            int i;
+
+            while (optind < argc) {
+                const char *w = v[optind];
+
+                if (w[0] == '-' && w[1] != '\0') {
+                    if (w[1] == '-' && w[2] == '\0') {
+                        optind++;   /* "--" ends the options */
+                        return -1;
+                    }
+                    break;
+                }
+                if (stop_at_operand)
+                    return -1;
+                for (i = optind + 1; i < argc; i++) {
+                    if (v[i][0] == '-' && v[i][1] != '\0')
+                        break;
+                }
+                if (i >= argc)
+                    return -1;
+                {
+                    char *word = v[i];
+
+                    while (i > optind) {
+                        v[i] = v[i - 1];
+                        i--;
+                    }
+                    v[optind] = word;
+                }
+                break;
+            }
+            if (optind >= argc)
+                return -1;
+            scanned = 1;
+        }
+
+        {
+            char option = v[optind][scanned];
+            const char *spec = strchr(optstring, option);
+            int last_char = (v[optind][scanned + 1] == '\0');
+
+            if (last_char) {
+                optind++;
+                scanned = 0;
+            } else {
+                scanned++;
+            }
+
+            if (spec == 0 || option == ':') {
+                optopt = (u8)option;
+                if (opterr && option != ':') {
+                    fprintf(stderr, "%s: invalid option -- '%c'\n",
+                            argv[0], option);
+                }
+                return '?';
+            }
+            if (spec[1] == ':') {
+                if (!last_char) {
+                    /* -ofile: the rest of the word is the argument */
+                    optarg = &v[optind - 1][scanned];
+                    scanned = 0;
+                } else if (optind < argc) {
+                    optarg = v[optind++];
+                } else {
+                    if (opterr) {
+                        fprintf(stderr,
+                                "%s: option requires an argument -- '%c'\n",
+                                argv[0], option);
+                    }
+                    return (optstring[0] == ':') ? ':' : '?';
+                }
+            }
+            return (u8)option;
+        }
+    }
 }
 
 unsigned sleep(unsigned seconds)

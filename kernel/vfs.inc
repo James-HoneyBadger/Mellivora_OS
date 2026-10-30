@@ -861,28 +861,39 @@ vfs_hbfs_mkdir:
         mov eax, -1
         ret
 
+;-----------------------------------------------------------------------
+; vfs_hbfs_unlink - remove a file, by path
+;   In : EBX = path
+;   Out: EAX = 0, or -1
+;
+; The name may carry a directory: hbfs_find_file_global searches the directory
+; the shell is in, so "rm /docs/notes.txt" used to look for a file called
+; "/docs/notes.txt" and find nothing. Split the path, enter the directory, and
+; work on the final component - the same shape the shell's own commands use.
+;-----------------------------------------------------------------------
 vfs_hbfs_unlink:
-        ; EBX=path -> EAX=0/-1
         push esi
         push edi
-        mov esi, ebx
-        call hbfs_find_file_global  ; CF on fail, EDI=dir_entry_ptr on success
-        jc .vhu_fail
+        call hbfs_enter_path        ; EBX = path -> path_base_buf + entered dir
+        test eax, eax
+        jnz .vhu_fail
+
+        mov esi, path_base_buf
+        call hbfs_find_file         ; CF on fail, EDI = dir entry
+        jc .vhu_fail_leave
         ; Removing a file is a write to it: the stored write bit decides.
         mov ebx, HBFS_ACC_WRITE
         call hbfs_access_current
         test eax, eax
-        jnz .vhu_fail
-        call hbfs_delete_file_entry ; EDI=dir_entry_ptr
-        ; Restore CWD if global search changed directories
-        cmp dword [hbfs_find_file_global.gff_moved], 1
-        jne .vhu_done
-        call gff_restore_cwd
-.vhu_done:
+        jnz .vhu_fail_leave
+        call hbfs_delete_file_entry ; EDI = dir entry
+        call path_leave
         pop edi
         pop esi
         xor eax, eax
         ret
+.vhu_fail_leave:
+        call path_leave
 .vhu_fail:
         pop edi
         pop esi

@@ -1217,10 +1217,19 @@ fd_open:
         inc ebx
         jmp .find_fd
 .got_fd:
+        ; The path may name a directory: enter it, look the final component up
+        ; there, and leave once the entry's fields have been copied into the fd.
+        push esi
+        mov  ebx, esi
+        call hbfs_enter_path
+        pop  esi
+        test eax, eax
+        jnz  .no_fd
         push ebx
-        call hbfs_find_file_global
-        pop ebx
-        jc .no_fd
+        mov  esi, path_base_buf
+        call hbfs_find_file
+        pop  ebx
+        jc   .no_fd_leave
 
         ; Permissions are enforced here because every open funnels through
         ; this point: the legacy syscall, the VFS backends and the loader.
@@ -1264,14 +1273,14 @@ fd_open:
         mov [fd_table + eax + 20], ecx
         mov ecx, [current_dir_sects]
         mov [fd_table + eax + 24], ecx
-        ; Restore CWD if global search changed it
-        cmp dword [hbfs_find_file_global.gff_moved], 1
-        jne .fd_no_restore
-        call gff_restore_cwd
-.fd_no_restore:
+        ; Leave the directory the path named, now that the fd holds the entry's
+        ; own numbers rather than a pointer into the directory buffer.
+        call path_leave
         mov [esp + 28], ebx
         popad
         ret
+.no_fd_leave:
+        call path_leave
 .no_fd:
         popad
         mov eax, -1
@@ -2915,12 +2924,28 @@ sys_fwrite:
         popad
         iretd
 .fwrite_new:
-        ; Create new file with specified type
-        mov esi, [.fw_name]     ; filename
+        ; Create new file with specified type. A path is a name plus a place:
+        ; split it, enter the directory, and create the final component there,
+        ; so "write /docs/x.txt" lands in /docs rather than storing an entry
+        ; called "/docs/x.txt" in whatever directory was already current.
+        push esi
+        push edi
+        push ecx
+        mov  ebx, [.fw_name]
+        call hbfs_enter_path
+        pop  ecx
+        pop  edi
+        pop  esi
+        test eax, eax
+        jnz  .fwrite_err
+        mov esi, path_base_buf  ; filename
         mov edi, [.fw_buf]      ; data buffer
         mov ecx, [.fw_size]     ; size
         mov edx, [.fw_type]
         call hbfs_create_file
+        pushfd
+        call path_leave
+        popfd
         jc .fwrite_err
         mov dword [esp + 28], 0 ; set EAX = 0 in pushad frame
         popad
@@ -2939,11 +2964,69 @@ sys_fwrite:
 .fw_size: dd 0
 .fw_type: dd 0
 
+OPEN_O_CREAT    equ 0x0040              ; the POSIX numbers, so a program that
+OPEN_O_TRUNC    equ 0x0200              ; includes <fcntl.h> passes them through
+OPEN_O_APPEND   equ 0x0400
+
+open_oflag: dd 0
+
 sys_open_fd:
         ; SYS_OPEN  (5): EBX=path, ECX=O_* flags → EAX=vfd or -1
         ; The fd layer speaks FD_FLAG_* bits, and they do not line up with the
         ; POSIX numbers (O_WRONLY is 1, FD_FLAG_READ is 1), so the mapping
         ; happens here, once, and everything below sees the same convention.
+        ;
+        ; O_CREAT and O_TRUNC are settled before the descriptor exists: a create
+        ; makes the file and a truncate empties it, and the open that follows
+        ; then opens what is there. Both used to be left to the caller, and the
+        ; only door that made a file was SYS_FWRITE, which understood a bare
+        ; name - so open("w") on a path failed and created an entry called
+        ; "/a/b.txt" when it did not.
+        mov  [open_oflag], ecx
+
+        test ecx, OPEN_O_CREAT | OPEN_O_TRUNC
+        jz   .sof_map
+        push esi
+        push edi
+        push ebx                        ; the path has to survive the backends
+        mov  eax, ebx
+        call validate_user_ptr
+        jc   .sof_create_bad
+        call vfs_route                  ; EBX=path -> EAX = mount entry, or 0
+        test eax, eax
+        jz   .sof_create_done
+        cmp  byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        jne  .sof_create_mount
+        mov  ecx, [open_oflag]
+        mov  edx, FTYPE_TEXT
+        test ecx, OPEN_O_TRUNC
+        jz   .sof_hbfs_create
+        call hbfs_truncate_path
+        jmp  .sof_create_done
+.sof_hbfs_create:
+        test ecx, OPEN_O_CREAT
+        jz   .sof_create_done
+        call hbfs_create_path
+        jmp  .sof_create_done
+.sof_create_mount:
+        ; Every other backend answers unlink, and the write-open below recreates
+        ; what it removed (tmpfs). A missing name fails there harmlessly and the
+        ; open reports it.
+        call vfs_unlink
+.sof_create_done:
+        pop  ebx
+        pop  edi
+        pop  esi
+        jmp  .sof_map
+.sof_create_bad:
+        pop  ebx
+        pop  edi
+        pop  esi
+        mov  eax, -1
+        iretd
+
+.sof_map:
+        mov  ecx, [open_oflag]
         test ecx, 2                     ; O_RDWR
         jnz .sof_map_rw
         test ecx, 1                     ; O_WRONLY
@@ -2962,6 +3045,18 @@ sys_open_fd:
         call validate_user_ptr
         jc .sof_bad
         call vfs_open
+        cmp  eax, -1
+        je   .sof_done
+        mov  ecx, [open_oflag]
+        test ecx, OPEN_O_APPEND
+        jz   .sof_done
+        push eax
+        mov  ebx, eax
+        xor  ecx, ecx
+        mov  edx, 2                     ; SEEK_END
+        call vfs_seek
+        pop  eax
+.sof_done:
         pop edi
         pop esi
         iretd
@@ -5148,6 +5243,131 @@ path_enter:
 
 path_leave:
         call path_restore_cwd
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_create_path - create an empty file at a virtual path
+;   In : EBX = path, EDX = file type (FTYPE_*)
+;   Out: EAX = 0 on success, -1 on failure
+;
+; hbfs_create_file only knows a name in the current directory, which is why
+; "touch /a/b.txt" used to store an entry called "/a/b.txt" in whatever
+; directory it was already in - a name nothing could then open. This splits the
+; path, enters the directory the way the shell's own commands do, and creates
+; the last component there.
+;
+; An existing name is left alone: this is the create half of open(O_CREAT), and
+; open over an existing file is not an error.
+;-----------------------------------------------------------------------
+hbfs_create_path:
+        pushad
+        mov [.hcp_type], edx
+        mov esi, ebx
+        call path_split
+        cmp byte [path_base_buf], 0
+        je .hcp_fail
+        call path_enter
+        test eax, eax
+        jnz .hcp_fail
+
+        mov esi, path_base_buf
+        call hbfs_find_file
+        jnc .hcp_exists                 ; there already: nothing to create
+
+        mov esi, path_base_buf
+        mov edi, PROGRAM_BASE           ; a real buffer, as the shell passes
+        xor ecx, ecx                    ; empty
+        mov edx, [.hcp_type]
+        call hbfs_create_file
+        pushfd
+        call path_leave
+        popfd
+        jc .hcp_fail
+        mov dword [esp + 28], 0
+        popad
+        ret
+.hcp_exists:
+        call path_leave
+        mov dword [esp + 28], 0
+        popad
+        ret
+.hcp_fail:
+        call path_leave
+        mov dword [esp + 28], -1
+        popad
+        ret
+.hcp_type: dd 0
+
+
+;-----------------------------------------------------------------------
+; hbfs_truncate_path - empty a file at a virtual path, creating it if needed
+;   In : EBX = path, EDX = file type
+;   Out: EAX = 0 on success, -1 on failure
+;-----------------------------------------------------------------------
+hbfs_truncate_path:
+        pushad
+        mov [.htp_type], edx
+        mov esi, ebx
+        call path_split
+        cmp byte [path_base_buf], 0
+        je .htp_fail
+        call path_enter
+        test eax, eax
+        jnz .htp_fail
+
+        mov esi, path_base_buf
+        call hbfs_find_file
+        jc .htp_create
+        call hbfs_delete_file_entry
+.htp_create:
+        mov  esi, path_base_buf
+        mov  edi, PROGRAM_BASE
+        xor  ecx, ecx
+        mov  edx, [.htp_type]
+        call hbfs_create_file
+        pushfd
+        popfd
+        jc .htp_fail
+        mov dword [esp + 28], 0
+        popad
+        ret
+.htp_fail:
+        call path_leave
+        mov dword [esp + 28], -1
+        popad
+        ret
+.htp_type: dd 0
+
+
+;-----------------------------------------------------------------------
+; hbfs_enter_path - enter the directory part of a virtual path
+;   In : EBX = path
+;   Out: EAX = 0 and path_base_buf holds the final component; the caller must
+;        call path_leave when it is done with the directory.
+;        EAX = -1 on failure (nothing entered).
+;
+; This is the missing half of every file call. hbfs_find_file_global searches
+; the directory the shell is in (its comment says so), so "libc.txt" worked and
+; "/libc.txt" did not - even when the file was in the root. The shell's own
+; commands split the path and enter it themselves; a syscall had no way to, so
+; open()/creat() on any absolute path failed with ENOENT on a file that was
+; right there.
+;-----------------------------------------------------------------------
+hbfs_enter_path:
+        pushad
+        mov esi, ebx
+        call path_split
+        cmp byte [path_base_buf], 0
+        je .hep_fail
+        call path_enter
+        test eax, eax
+        jnz .hep_fail
+        mov dword [esp + 28], 0
+        popad
+        ret
+.hep_fail:
+        mov dword [esp + 28], -1
+        popad
         ret
 
 ; Report why path_enter failed. EAX = the value it returned.

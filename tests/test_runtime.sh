@@ -285,6 +285,14 @@ run_case "Unicode: UTF-8 rendered, UTF-16 converted" \
     $'unicodedemo' \
     "UNICODE_OK|café naïve Über|αβγ π ΣΩ" \
     "" "CPU EXCEPTION|UNICODE_FAIL"
+# The C library's gate: the string and memory functions at their edges, the
+# conversions refusing what they cannot convert, a stable qsort, bsearch, the
+# formatter's flags and precision, and a stream that writes a file and reads it
+# back - absolute path and all, which no HBFS call could resolve until this wave.
+run_case "the C library: strings, sorting, streams" \
+    $'libctest' \
+    "LIBC_OK" \
+    "" "CPU EXCEPTION|LIBC_FAIL|PAGE FAULT"
 # docs/POSIX.md's gate: a program built against c/include/'s POSIX headers and
 # nothing else - no <mv/...> include at all - opens, writes, seeks, stats,
 # duplicates and unlinks a file, forks, waits for the child and reads its exit

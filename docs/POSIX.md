@@ -31,6 +31,7 @@ it prints `POSIX_OK` only when every check below holds.
 | `ctype.h` | `isdigit`, `isalpha`, `isalnum`, `isspace`, `isupper`, `islower`, `isprint`, `iscntrl`, `isxdigit`, `ispunct`, `toupper`, `tolower` |
 | `locale.h` | `setlocale`, `localeconv` — the C locale, and only the C locale |
 | `limits.h` | `NAME_MAX` 252, `PATH_MAX` 512, `ARG_MAX` 512, `OPEN_MAX` 64, `INT_MAX`, `INT_MIN` |
+| `stdio.h`, `stdlib.h`, `string.h`, `strings.h`, `stddef.h`, `assert.h` | The C library proper: streams, `qsort`/`bsearch`, the conversions, the string families, `getline`, `perror`. See the CHANGELOG's C-library entry for what each provides |
 
 Whatever is not in that list is not declared, which makes it a compile error
 rather than a call that returns a plausible lie. `socket`, `mmap`,
@@ -44,7 +45,8 @@ Verified by `posixtest` on every `make check-runtime` run:
 | Behaviour | Why it holds |
 |---|---|
 | `open` of a name that is not there fails, `errno` = `ENOENT` | The VFS asks the mount, and the mount no longer creates names it was only asked to read |
-| `open(O_CREAT\|O_TRUNC)` creates, or empties an existing file | Served by `SYS_FWRITE` with no data, then a second open: the kernel has no create flag, so the shim uses the create door it has |
+| `open(O_CREAT\|O_TRUNC)` creates, or empties an existing file | `SYS_OPEN` settles both before it hands back a descriptor |
+| An absolute path reaches the file it names | The kernel splits the path, enters the directory and looks the final component up there — until this wave only a bare name could be found |
 | `O_APPEND` positions at the end before returning | A seek to `SEEK_END` on the returned descriptor |
 | `read`/`write` return the count, `-1` with `errno` otherwise | `SYS_READ`/`SYS_WRITE`, which validate the buffer range before copying |
 | `lseek` returns the new offset | `SYS_SEEK` |
@@ -74,6 +76,7 @@ closed; the rest are here so a port knows what to expect.
 | `struct stat` is 12 bytes: size, type, modification time | No `st_mode`, `st_uid`, `st_gid`, `st_ino`, `st_nlink`, `st_dev` | The filesystem stores a mode word per entry but the VFS stat does not report it; the honest fix is a larger stat structure, not a filled-in lie |
 | No permission bits in `stat`; `access` is the only check | A program cannot decide access from the stat it took | `SYS_ACCESS` exists and enforces; the stat structure has to grow first |
 | `dup` copies the file position instead of sharing it | Two handles read independently | Sharing needs one open-file-description object behind both descriptors; today each descriptor carries its own offset |
+| `read()` on an open HBFS file returns nothing useful | A port that streams a file with `read` fails where `fread` (which copies the file in) works | The VFS backend hands the legacy `fd_read` a descriptor whose position it does not keep in step with the VFS's own; fixing it is the next kernel job, and `SYS_FREAD`/`SYS_FWRITE` are what the tree's own tools use |
 | `O_EXCL` is ignored | `open(O_CREAT\|O_EXCL)` does not fail on an existing file | No create-and-fail atomically; the create path is a whole-file write |
 | `pipe()` fails with `ENOSYS` | A port that pipes between processes or threads cannot | `SYS_PIPE2` allocates a pipe and two descriptors, but nothing in the VFS reads or writes a pipe: the first use reached the HBFS backend with a descriptor it had never seen. It now refuses instead of faulting, and the descriptor backend over `ipc_pipe_*` is the work it waits for |
 | `socket`, `poll`, `select` are not in the POSIX surface | A port that needs them cannot build | The kernel has sockets, but through its own calls; wrapping them is a separate increment |
