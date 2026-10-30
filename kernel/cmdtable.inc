@@ -152,6 +152,7 @@ cmd_table:
         CMDENT nm_while, CAT_SCRIPT, sum_while, det_while   ; dispatches cmd_while_str
         CMDENT cmd_beep_str, CAT_DISPLAY, sum_beep, det_beep
         CMDENT cmd_gui_str, CAT_DISPLAY, sum_gui, det_gui
+        CMDENT cmd_gfx_str, CAT_DISPLAY, sum_gfx, det_gfx
         CMDENT cmd_mouse_str, CAT_DISPLAY, sum_mouse, det_mouse
         CMDENT cmd_scrsaver_str, CAT_DISPLAY, sum_scrsaver, det_scrsaver
         CMDENT cmd_arp_str, CAT_NETWORK, sum_arp, det_arp
@@ -690,6 +691,14 @@ det_beep:
         db "beep", 0x0A
         db "  Sound the PC speaker briefly.", 0x0A, 0
 sum_gui: db "Enter the graphical desktop", 0
+sum_gfx: db "Report the display engine and prove it", 0
+det_gfx:
+        db "gfx", 0x0A
+        db "  Prints the mode, the clip rectangle and the cursor state, then", 0x0A
+        db "  runs the engine's own test: every pixel format it claims (32, 24,", 0x0A
+        db "  16 and 8 bpp) is drawn into a scratch page - fill, rectangle,", 0x0A
+        db "  colour-keyed blit, clip, gamma and line - and the pixels are read", 0x0A
+        db "  back and compared. Prints GFX_SELFTEST_OK or GFX_SELFTEST_FAIL.", 0x0A, 0
 det_gui:
         db "burrows", 0x0A
         db "  Start the Burrows desktop. Ctrl+C returns to the text shell.", 0x0A, 0

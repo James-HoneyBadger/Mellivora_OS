@@ -2175,6 +2175,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_gui
 
+        mov edi, cmd_gfx_str
+        call str_starts_with
+        jc .cmd_gfx
+
         mov edi, cmd_ping_str
         call str_starts_with
         jc .cmd_ping
@@ -2799,6 +2803,10 @@ shell_dispatch_core:
 
 .cmd_mouse:
         call cmd_mouse_status
+        ret
+
+.cmd_gfx:
+        call gfx_report
         ret
 
 .cmd_gui:

@@ -285,6 +285,15 @@ run_case "Unicode: UTF-8 rendered, UTF-16 converted" \
     $'unicodedemo' \
     "UNICODE_OK|café naïve Über|αβγ π ΣΩ" \
     "" "CPU EXCEPTION|UNICODE_FAIL"
+# The display engine, proved rather than assumed. Every pixel format the engine
+# claims - 32, 24, 16 and 8 bpp - is drawn into a scratch page with a fill, a
+# rectangle, a colour-keyed blit, a clip rectangle, a gamma ramp and a line, and
+# the pixels are read back and compared. The adapter's own mode is not touched,
+# which is the only way to test a format the machine is not currently in.
+run_case "display engine: every pixel format" \
+    $'gfx' \
+    "GFX_SELFTEST_OK" \
+    "" "CPU EXCEPTION|GFX_SELFTEST_FAIL"
 # The C library's gate: the string and memory functions at their edges, the
 # conversions refusing what they cannot convert, a stable qsort, bsearch, the
 # formatter's flags and precision, and a stream that writes a file and reads it

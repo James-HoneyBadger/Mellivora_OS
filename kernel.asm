@@ -886,6 +886,11 @@ kernel_entry:
         call aes_selftest
         LOGBOOT LOG_INFO, log_aestest
 
+        ; The display engine, proved on a scratch page in every pixel format it
+        ; claims. The adapter's mode is not touched: a format that packs wrongly
+        ; would otherwise only be found by someone choosing that mode.
+        call gfx_selftest
+
         ; The password function, against a tag the reference implementation
         ; produced. A KDF that is self-consistent and wrong would otherwise be
         ; discovered by a user whose password no longer works.
@@ -975,6 +980,7 @@ kernel_entry:
 %include "kernel/vm.inc"
 %include "kernel/mouse.inc"
 %include "kernel/sb16.inc"
+%include "kernel/gfx.inc"
 %include "kernel/vbe.inc"
 %include "kernel/pci.inc"
 %include "kernel/driver.inc"

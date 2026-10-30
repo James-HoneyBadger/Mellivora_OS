@@ -263,6 +263,7 @@ cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
 cmd_mouse_str:  db "mouse", 0
 cmd_gui_str:    db "burrows", 0
+cmd_gfx_str:    db "gfx", 0
 cmd_ping_str:   db "ping", 0
 cmd_ifconfig_str: db "ifconfig", 0
 cmd_dhcp_str:   db "dhcp", 0

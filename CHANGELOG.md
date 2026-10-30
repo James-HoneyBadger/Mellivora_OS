@@ -1,5 +1,51 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: a display engine that knows what format it is drawing in
+
+The framebuffer had one drawing rule: store 32 bits at `y * pitch + x * 4`. That
+is why every mode was 32bpp in practice - a 16bpp or 24bpp mode drew garbage -
+and why nothing could be clipped except to the screen.
+
+```text
+Lair:/> gfx
+display engine
+  no surface: no graphics mode is set
+  testing every pixel format on a scratch page...
+GFX_SELFTEST_OK
+```
+
+- **`kernel/gfx.inc` is the engine**, and everything that draws now goes through
+  it: `vbe_putpixel`, `vbe_fill_rect`, `vbe_sprite_blit` and `vbe_draw_line`
+  are one-line delegations, so the desktop, the shell's GUI and every program
+  that uses `SYS_BLIT`/`SYS_DRAW_LINE` get all of this without an ABI change.
+- **Four pixel formats**, converted in one place (`gfx_pack`): 8bpp 3-3-2,
+  16bpp 5-6-5, 24bpp packed and 32bpp XRGB. A format works exactly when that
+  switch supports it, which is what the test checks rather than assumes.
+- **A clip rectangle**, honoured by every primitive - fills clip the rectangle,
+  not the pixel. The desktop used to test every pixel against the screen.
+- **Colour-key blitting**, the 2000-era transparency: a sprite carries one
+  colour meaning "nothing here" and the blitter skips it. Alpha blending is not
+  claimed; that was the next generation of card.
+- **Gamma**, a per-channel table applied where a VGA's RAMDAC applied it, with
+  `gfx_gamma_brightness` as a linear ramp and the identity as the default. It is
+  a brightness scaler, not a tone curve, and says so.
+- **A save-under software cursor** - define a shape with a key colour, move it,
+  hide it - which is the shape a hardware cursor took on the cards of the time.
+  The emulated adapter has no cursor engine, so this is memory.
+- **The vertical retrace** (`gfx_vsync`, port 0x3DA bit 3), bounded so a machine
+  with no VGA there draws a frame late rather than hanging.
+- **`gfx` prints the surface, the clip rectangle, the gamma and cursor state,
+  then runs the test**: every format is drawn into a scratch page and read back
+  - fill, rectangle, keyed blit, clip, gamma and line - and prints
+  `GFX_SELFTEST_OK` or `GFX_SELFTEST_FAIL`. The same test runs at boot, so a
+  format that packs wrongly is caught before anyone chooses that mode.
+
+Not here, and why: hardware 2D acceleration (the emulated adapter has no
+blitter; this is a software engine with the API a driver would implement),
+register page-flipping (the shadow buffer is copied), and EDID/DDC and DPMS -
+both are VBE BIOS calls and this kernel has no real-mode thunk to make them
+from.
+
 ## Unreleased - M5: a C library, and paths that resolve
 
 The tree had a runtime, not a library: eight functions in `string.c`, a formatter

@@ -286,6 +286,31 @@ vbe_set_mode:
         mov ecx, [vbe_shadow_pages]
         call paging_map_phys_user
 .shadow_not_mapped:
+        call vbe_gfx_target
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; vbe_gfx_target - hand the display engine the surface everything draws into
+;
+; The engine works on whatever it is told: the shadow buffer when there is one,
+; the linear framebuffer otherwise. That is what lets the same primitives draw
+; into a program's own surface, and what lets the selftest point it at a page of
+; RAM to prove a pixel format the adapter is not currently in.
+;-----------------------------------------------------------------------
+vbe_gfx_target:
+        pushad
+        mov eax, [vbe_shadow_buf]
+        test eax, eax
+        jnz .vgt_have
+        mov eax, [vbe_lfb_addr]
+.vgt_have:
+        mov ebx, [vbe_pitch]
+        mov ecx, [vbe_width]
+        mov edx, [vbe_height]
+        mov esi, [vbe_bpp]
+        call gfx_set_target
+        call gfx_clip_full
         popad
         ret
 
@@ -645,141 +670,26 @@ vbe_ac_mode3:
 ; EAX = x, EBX = y, ECX = colour (32-bit ARGB)
 ; Silently clipped to current framebuffer bounds.
 ;---------------------------------------
+;---------------------------------------
+; vbe_putpixel - Draw a pixel
+; EAX = x, EBX = y, ECX = colour (32-bit ARGB)
+;
+; The engine packs the colour for the mode's real pixel format and clips to the
+; clip rectangle. This used to store a dword here whatever the mode said, which
+; is why a 16bpp or 24bpp mode drew garbage and every mode was 32bpp in practice.
+;---------------------------------------
 vbe_putpixel:
-        pushad
-        ; Reject negative coords (signed compare) and coords >= dim
-        cmp eax, 0
-        jl .pp_clip
-        cmp eax, [vbe_width]
-        jge .pp_clip
-        cmp ebx, 0
-        jl .pp_clip
-        cmp ebx, [vbe_height]
-        jge .pp_clip
-        ; offset = y * pitch + x * Bpp
-        imul ebx, [vbe_pitch]
-        imul eax, [vbe_Bpp]
-        add ebx, eax
-        ; Write to shadow buffer if one is allocated; otherwise write directly
-        ; to the LFB.  This makes all draw primitives (draw_line, fill_triangle,
-        ; sprite_blit, etc.) honour double-buffering automatically.
-        mov eax, [vbe_shadow_buf]
-        test eax, eax
-        jnz .pp_use_buf
-        mov eax, [vbe_lfb_addr]
-.pp_use_buf:
-        add ebx, eax
-        mov [ebx], ecx
-        popad
-        ret
-.pp_clip:
-        popad
-        ret
+        jmp gfx_pixel
 
 ;---------------------------------------
 ; vbe_fill_rect - Fill a rectangle with colour
 ; EAX = x, EBX = y, ECX = width, EDX = height, ESI = colour
-; Rect is clipped to framebuffer bounds; out-of-bounds rects become no-ops.
-; Prevents y*pitch overflow that previously caused page faults.
+;
+; The engine clips to the framebuffer and to the clip rectangle, and writes in
+; the mode's own pixel size (a dword, word or byte store per row).
 ;---------------------------------------
 vbe_fill_rect:
-        pushad
-        ; --- Clip to framebuffer bounds ---
-        ; Reject if rect entirely outside (x>=w or y>=h or x+w<=0 or y+h<=0)
-        cmp byte [vbe_active], 0
-        je .fr_skip
-        cmp dword [vbe_width], 0
-        je .fr_skip
-        cmp dword [vbe_height], 0
-        je .fr_skip
-        ; If width/height <= 0 nothing to do (treat as unsigned)
-        cmp ecx, 0
-        jle .fr_skip
-        cmp edx, 0
-        jle .fr_skip
-        ; Clip left: if eax<0, shift width and set eax=0
-        cmp eax, 0
-        jge .fr_no_clip_left
-        add ecx, eax            ; width += x (x is negative)
-        jle .fr_skip
-        xor eax, eax
-.fr_no_clip_left:
-        ; Clip top: if ebx<0, shift height and set ebx=0
-        cmp ebx, 0
-        jge .fr_no_clip_top
-        add edx, ebx            ; height += y (y is negative)
-        jle .fr_skip
-        xor ebx, ebx
-.fr_no_clip_top:
-        ; Clip right: if x+w > width, w = width - x
-        push eax
-        add eax, ecx            ; eax = x + w
-        cmp eax, [vbe_width]
-        jle .fr_no_clip_right
-        mov ecx, [vbe_width]
-        sub ecx, [esp]          ; ecx = width - x
-        jle .fr_skip_pop
-.fr_no_clip_right:
-        pop eax
-        ; Clip bottom: if y+h > height, h = height - y
-        push ebx
-        add ebx, edx
-        cmp ebx, [vbe_height]
-        jle .fr_no_clip_bottom
-        mov edx, [vbe_height]
-        sub edx, [esp]
-        jle .fr_skip_pop2
-.fr_no_clip_bottom:
-        pop ebx
-        ; Final sanity: x in [0,width), y in [0,height), w>0, h>0
-        cmp eax, [vbe_width]
-        jge .fr_skip
-        cmp ebx, [vbe_height]
-        jge .fr_skip
-        cmp ecx, 0
-        jle .fr_skip
-        cmp edx, 0
-        jle .fr_skip
-        mov [.fr_x], eax
-        mov [.fr_w], ecx
-        mov [.fr_color], esi
-        jmp .fr_row
-.fr_skip_pop2:
-        add esp, 4              ; drop saved ebx
-.fr_skip_pop:
-        add esp, 4              ; drop saved eax
-.fr_skip:
-        popad
-        ret
-.fr_row:
-        cmp edx, 0
-        je .fr_done
-        mov ecx, [.fr_w]
-        mov eax, [.fr_x]
-.fr_col:
-        cmp ecx, 0
-        je .fr_next_row
-        push ebx
-        push ecx
-        push edx
-        mov ecx, [.fr_color]
-        call vbe_putpixel
-        pop edx
-        pop ecx
-        pop ebx
-        inc eax
-        dec ecx
-        jmp .fr_col
-.fr_next_row:
-        inc ebx
-        dec edx
-        jmp .fr_row
-.fr_done:
-        popad
-        ret
-.fr_x: dd 0
-.fr_w: dd 0
-.fr_color: dd 0
+        jmp gfx_fill
 
 ;---------------------------------------
 ; vbe_clear - Clear screen to a colour
@@ -1189,75 +1099,7 @@ vbe_dirty_reset:
 ; EAX=x0, EBX=y0, ECX=x1, EDX=y1, ESI=color
 ;---------------------------------------
 vbe_draw_line:
-        pushad
-        mov [.x0], eax
-        mov [.y0], ebx
-        mov [.x1], ecx
-        mov [.y1], edx
-        mov [.color], esi
-        ; adx = abs(x1-x0), sx = sign
-        sub ecx, eax
-        jge .l_sxp
-        neg ecx
-        mov dword [.sx], -1
-        jmp .l_sxd
-.l_sxp: mov dword [.sx], 1
-.l_sxd: mov [.adx], ecx
-        ; ady = abs(y1-y0), sy = sign
-        mov edx, [.y1]
-        sub edx, ebx
-        jge .l_syp
-        neg edx
-        mov dword [.sy], -1
-        jmp .l_syd
-.l_syp: mov dword [.sy], 1
-.l_syd: mov [.ady], edx
-        ; err = adx - ady
-        mov eax, [.adx]
-        sub eax, [.ady]
-        mov [.err], eax
-        mov eax, [.x0]
-        mov ebx, [.y0]
-.l_loop:
-        mov ecx, [.color]
-        call vbe_putpixel
-        ; expand dirty rect
-        mov edx, ebx
-        call _vbe_dirty_expand
-        cmp eax, [.x1]
-        jne .l_cont
-        cmp ebx, [.y1]
-        je  .l_done
-.l_cont:
-        mov esi, [.err]
-        lea edi, [esi * 2]
-        mov ecx, [.ady]
-        neg ecx
-        cmp edi, ecx
-        jle .l_skx
-        sub esi, [.ady]
-        add eax, [.sx]
-.l_skx:
-        cmp edi, [.adx]
-        jge .l_sky
-        add esi, [.adx]
-        add ebx, [.sy]
-.l_sky:
-        mov [.err], esi
-        jmp .l_loop
-.l_done:
-        popad
-        ret
-.x0: dd 0
-.y0: dd 0
-.x1: dd 0
-.y1: dd 0
-.sx: dd 0
-.sy: dd 0
-.adx: dd 0
-.ady: dd 0
-.err: dd 0
-.color: dd 0
+        jmp gfx_line
 
 ;---------------------------------------
 ; vbe_fill_triangle - Filled triangle (scanline rasterizer)
@@ -1412,71 +1254,31 @@ vbe_fill_triangle:
 ; Color key is read from [sys_blit.bl_key] (set by sys_blit before calling)
 ; color_key = -1 to disable transparency
 ;---------------------------------------
+;---------------------------------------
+; vbe_sprite_blit - EBX=src(ARGB), ECX=dx, EDX=dy, ESI=w, EDI=h
+;
+; SYS_BLIT has already put the colour key in sys_blit.bl_key; the engine skips
+; those pixels, clips the whole rectangle, and writes the mode's pixel size.
+; The old loop called putpixel once per pixel with the clip test repeated here,
+; which is why drawing a window was slow.
+;---------------------------------------
 vbe_sprite_blit:
         pushad
         cmp byte [vbe_active], 0
         je  .vsb_done
-        mov [.sb_src], ebx
-        mov [.sb_dx],  ecx
-        mov [.sb_dy],  edx
-        mov [.sb_w],   esi
-        mov [.sb_h],   edi
-        ; Row loop
-        xor edi, edi            ; row counter
-.vsb_row:
-        cmp edi, [.sb_h]
-        jge .vsb_done
-        xor esi, esi            ; col counter
-.vsb_col:
-        cmp esi, [.sb_w]
-        jge .vsb_next_row
-        ; Load source pixel (32bpp ARGB or XRGB)
-        mov eax, [.sb_src]
-        mov ecx, edi
-        imul ecx, [.sb_w]
-        add  ecx, esi
-        mov  eax, [eax + ecx * 4]
-        and  eax, 0x00FFFFFF    ; strip alpha
-        ; Color key check
-        cmp dword [sys_blit.bl_key], -1
-        je  .vsb_draw
-        cmp eax, [sys_blit.bl_key]
-        je  .vsb_skip_px
-.vsb_draw:
-        push eax
-        mov eax, [.sb_dx]
-        add eax, esi
-        mov ebx, [.sb_dy]
-        add ebx, edi
-        cmp eax, 0
-        jl  .vsb_skip2
-        cmp eax, [vbe_width]
-        jge .vsb_skip2
-        cmp ebx, 0
-        jl  .vsb_skip2
-        cmp ebx, [vbe_height]
-        jge .vsb_skip2
-        mov ecx, [esp]          ; restore pixel color
-        call vbe_putpixel
-        mov edx, ebx
-        call _vbe_dirty_expand
-.vsb_skip2:
-        pop eax
-.vsb_skip_px:
-        inc esi
-        jmp .vsb_col
-.vsb_next_row:
-        inc edi
-        jmp .vsb_row
+        mov eax, [esp + 16]             ; EBX = source
+        mov ebx, [esp + 4]              ; ESI = width, and sprites are packed
+        mov ecx, [esp + 24]             ; ECX = dest x
+        mov edx, [esp + 20]             ; EDX = dest y
+        mov esi, [esp + 4]              ; width
+        mov edi, [esp + 0]              ; height
+        shl edi, 16
+        or  esi, edi                    ; width | height << 16
+        mov edi, [sys_blit.bl_key]
+        call gfx_blit
 .vsb_done:
         popad
         ret
-
-.sb_src: dd 0
-.sb_dx:  dd 0
-.sb_dy:  dd 0
-.sb_w:   dd 0
-.sb_h:   dd 0
 
 ;---------------------------------------
 ; vbe_dirty_present - Blit shadow -> LFB (full blit, resets dirty rect)

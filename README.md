@@ -36,7 +36,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **Process groups** — PGID and SID support for job control
 - **Image loader** — HBX (`MVBX`) images with checksum, sections, base relocations, imports and per-module thread-local storage; shared libraries (a `dll` image is bound into a program's IAT at load and mapped per process); PE32 images (i386, no imports yet) with a refusal for every rule they break; flat binaries; ELF32 development images
 - **Physical memory manager** with buddy allocator (order 0–11; malloc/free/realloc for user programs)
-- **VBE/BGA graphics driver** — high-resolution framebuffer modes (640×480, 800×600, 1024×768 at 32 bpp) with double buffering
+- **VBE/BGA graphics driver** — framebuffer modes with double buffering, and a display engine over them: 8/16/24/32 bpp pixel formats, a clip rectangle, colour-key blitting, per-channel gamma, a save-under software cursor and the vertical retrace, all proved at boot and by the `gfx` command (`GFX_SELFTEST_OK`)
 - **Compositor surface IPC** — kernel-managed pixel buffers with z-order and dirty-rect compositing (SYS_SURFACE_CREATE/COMMIT/DESTROY/MOVE/RESIZE)
 - **Three-stage BIOS boot**: MBR → Stage 2 (A20, memory map, protected mode) → Kernel
 
