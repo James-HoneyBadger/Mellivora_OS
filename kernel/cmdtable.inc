@@ -71,6 +71,7 @@ cmd_table:
         CMDENT cmd_which_str, CAT_SYSTEM, sum_which, det_which
         CMDENT cmd_whoami_str, CAT_SYSTEM, sum_whoami, det_whoami
         CMDENT cmd_account_str, CAT_SYSTEM, sum_account, det_account
+        CMDENT cmd_profile_str, CAT_SYSTEM, sum_profile, det_profile
         CMDENT cmd_logon_str, CAT_SYSTEM, sum_logon, det_logon
         CMDENT cmd_logoff_str, CAT_SYSTEM, sum_logoff, det_logoff
         CMDENT cmd_sessions_str, CAT_SYSTEM, sum_sessions, det_sessions
@@ -251,6 +252,7 @@ det_which:
         db "which NAME", 0x0A
         db "  Say whether NAME is a shell built-in, or where it is found on PATH.", 0x0A, 0
 sum_account: db "Accounts: add, delete and list the local identities", 0
+sum_profile: db "Profiles: list them, or delete one and its hive", 0
 sum_logon: db "Log on as an account and make a session", 0
 sum_logoff: db "Save the profile, unload the hive and end the session", 0
 sum_sessions: db "Which sessions exist, who owns them and which has the console", 0
@@ -269,6 +271,11 @@ det_account:
         db "account add NAME PASSWORD | account del NAME | account list", 0x0A
         db "  The store holds a uid, a salt and a hash - never the password.", 0x0A
         db 0
+det_profile:
+        db "profile list | profile delete NAME", 0x0A
+        db "  A profile is /Users/NAME with its own directories and NAME.hiv.", 0x0A
+        db "  Deleting one needs it logged off, and either removes the whole", 0x0A
+        db "  tree or nothing at all.", 0x0A, 0
 det_logon:
         db "logon NAME PASSWORD", 0x0A
         db "  Verifies the password, makes a session, loads the user's hive", 0x0A

@@ -271,6 +271,7 @@ cmd_scrsaver_str: db "scrsaver", 0
 cmd_whoami_str: db "whoami", 0
 cmd_sc_str:     db "sc", 0
 cmd_account_str: db "account", 0
+cmd_profile_str: db "profile", 0
 cmd_logon_str:  db "logon", 0
 cmd_logoff_str: db "logoff", 0
 cmd_sessions_str: db "sessions", 0
@@ -773,6 +774,11 @@ hbfs_journal_n_logged: resd 1
 ; It must NOT alias hbfs_block_buf: callers log the very buffer they are about
 ; to write, so logging through a shared scratch page would destroy the payload.
 hbfs_jrnl_buf:      resb 1024
+; What the last hbfs_delete_tree removed, and how deep a walk is.
+hbfs_dt_files:      resd 1
+hbfs_dt_blocks:     resd 1
+hbfs_dt_depth:      resd 1
+hbfs_dt_atomic:     resd 1      ; 1 = one transaction for the whole tree
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE

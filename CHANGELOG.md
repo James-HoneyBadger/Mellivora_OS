@@ -1,5 +1,102 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M4: a profile has a lifecycle, and deleting one is a gate
+
+SERVICES.md section 3 says a profile is `/Users/<name>` with the directories it
+lists and a hive file, and section 6 item 7 makes the lifecycle a gate: created,
+used, logged off and deleted with no leaked handle and no leaked file. The tree
+created a directory, put nothing in it, and had no way to remove one.
+
+```text
+Lair:/> logon alice correct-horse
+logon: welcome, alice (session 1)
+Lair:/> dir /Users/alice
+Documents       Desktop         Downloads       AppData
+  4 file(s)
+Lair:/> profile delete alice
+profile: alice is in use; log that session off first
+Lair:/> logoff
+logoff: profile saved and hive unloaded
+Lair:/> profile delete alice
+profile: deleted alice (9 entries, 114 blocks)
+Lair:/> repair
+repair entries 384  blocks 2776  leaks 0  shared 0  bad 0  lost 0
+REPAIR_CLEAN
+```
+
+- **The profile was named after the slot that held its name.** `sess_logon`
+  passed `lea esi, [.slo_name]` - the address of the variable - to
+  `sess_profile_create`, so the directory it made was named from four bytes of
+  kernel address and no account ever had a profile that `dir /Users` could
+  find. It passes the name now.
+- **The directories section 3 lists exist at first logon.** `Documents`,
+  `Desktop`, `Downloads`, `AppData`, `AppData\Local` and `AppData\Roaming` are
+  created once and left alone afterwards, so a second logon does not care that
+  they are there.
+- **`profile list` and `profile delete NAME`.** The list prints each account,
+  its uid and whether it has a profile on disk. The delete refuses a live
+  session, refuses a shell standing inside the profile, and refuses an account
+  that does not exist - a typo must not "delete" nothing.
+- **The delete renames first and sweeps after.** The directory takes
+  `<name>.deleted` in one directory entry, which is one journal transaction:
+  the account either has a whole profile or none, never a half-empty one. The
+  renamed tree and the hive files then go entry by entry, because a 32-sector
+  undo log cannot hold a profile and its hive in one transaction - the first
+  version tried, and every delete of a real profile was rolled back as too
+  large. A sweep that stops names the path it could not remove and leaves the
+  rest whole; running the command again finishes it.
+- **`hbfs_delete_tree` and `hbfs_rename_entry`.** Removing a tree was not
+  possible before: `del` on a directory freed its blocks and left the children
+  in them. The new walk descends by directory LBA, deletes children first,
+  re-enters the parent by slot to clear an emptied directory, refuses a tree
+  that holds the caller's own directory, and reports `HBFS_DT_*` - missing, in
+  use, rolled back, read-only, or partial. `hbfs_dt_atomic` chooses one
+  transaction for the whole tree or one per entry.
+- **A failed free no longer zeroes the entry.** `hbfs_delete_file_entry`
+  ignored a refused or unlogged free and cleared the directory entry anyway,
+  which strands the blocks; a `create` then found the name free and added a
+  second entry for it. The free's verdict is propagated, the entry is left
+  alone, and `hbfs_create_file` refuses to add a second entry over one it could
+  not remove. `hbfs_free_blocks` also clears CF on success now - it used to
+  return whatever its last comparison left there.
+- **A rollback rewinds what the transaction changed in memory, too.**
+  `hbfs_journal_abort` re-reads the superblock's pre-image and invalidates the
+  resident bitmap after replaying the log. Without that, a rolled-back
+  transaction left the free list in memory saying "free" about blocks the disk
+  had just been told were allocated, and the next allocation handed out someone
+  else's block.
+
+## Unreleased - quota: the walk read file data where a directory should be
+
+`quota_build` derives the ledger from the tree at mount and on `quota rebuild`:
+for every subdirectory it queues that directory's LBA and reads it. A directory
+entry stores a *block* number in the data area, and the walk added
+`HBFS_DATA_START` to it without multiplying by the eight sectors in a block, so
+it read `DATA_START + N` instead of `DATA_START + N * 8`. Those sectors belong
+to files, and the walk parsed them as 288-byte directory entries.
+
+```text
+Lair:/> quota
+QUOTA users=16 used=3035611332 refusals=0 QUOTA_OK
+Lair:/> touch /x.txt
+HBFS: quota refused a write
+```
+
+- **The conversion is the one every reader uses**: blocks to sectors, then the
+  data area's start - what `cmd_cd_internal` and every `hbfs_map_block` caller
+  already do. On a volume with a few hundred files the ledger had claimed
+  sixteen users and three billion blocks out of a 523 179-block volume, so
+  uid 0's 4 096-block allowance looked spent and the shell could not write at
+  all. A fresh image hid it: the wrong sectors were mostly the zeroed journal,
+  which parsed as an empty directory and undercounted instead.
+- **A directory that claims more blocks than a directory buffer holds is not
+  walked**: its blocks are counted and the walk stays out of whatever those
+  sectors are, which is how `repair` treats the same entry.
+- Found by the profile gate: creating the directories a profile holds makes
+  this path run on every logon, and the first `touch` inside the profile is the
+  write that fails when the walk is wrong. `make check-runtime` now rebuilds the
+  ledger and requires one user and a write that works.
+
 ## Unreleased - M4: STOP is a request, and a service that ignores it is killed
 
 SERVICES.md section 1.2 says `Stop` sends `STOP` and that a service which does

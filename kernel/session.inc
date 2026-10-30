@@ -61,6 +61,12 @@ sess_count:      dd 0
 sess_current:    dd 0
 sess_name_buf:   times 24 db 0
 sess_scan_buf:   times 24 db 0
+sess_prof_buf:   times 96 db 0
+sess_quar_buf:   times 96 db 0
+sess_old_buf:    times 40 db 0
+sess_file_buf:   times 96 db 0
+sess_fail_path:  dd 0
+sess_msg_buf:    times 64 db 0
 sess_path_buf:   times SETT_KEY_PATH db 0
 sess_hive_buf:   times 32 db 0
 sess_pw_buf:     times 48 db 0
@@ -574,9 +580,12 @@ sess_logon:
         mov eax, [.slo_id]
         call sess_make_namespace
 
-        ; The profile: a directory under /Users, and a hive file for the user's
-        ; keys. A missing profile is created, and creating it is one write.
-        lea esi, [.slo_name]
+        ; The profile: a directory under /Users named for the account, and a
+        ; hive file for the user's keys. A missing profile is created. This
+        ; took the address of the slot holding the name, so every profile was
+        ; a directory named after four bytes of kernel address and `profile
+        ; list` could never find one.
+        mov esi, [.slo_name]
         call sess_profile_create
 
         ; Load the user's hive under \Registry\User\<name>.
@@ -671,8 +680,9 @@ sess_hive_exists:
         stc
         ret
 
-; ESI = user name: create /Users and /Users/<name>, leaving the hive file name
-; in sess_hive_buf.
+; ESI = user name: create /Users and /Users/<name> with the directories
+; SERVICES.md section 3 says a profile holds, leaving the hive file name in
+; sess_hive_buf.
 sess_profile_create:
         pushad
         mov [.spc_name], esi
@@ -686,11 +696,638 @@ sess_profile_create:
         jnz .spc_restore
         mov esi, [.spc_name]
         call hbfs_mkdir
+        mov esi, [.spc_name]
+        call cmd_cd_internal
+        test eax, eax
+        jnz .spc_restore
+        mov esi, prof_docs
+        call sess_profile_mkdir
+        mov esi, prof_desktop
+        call sess_profile_mkdir
+        mov esi, prof_downloads
+        call sess_profile_mkdir
+        mov esi, prof_appdata
+        call sess_profile_mkdir
+        mov esi, prof_appdata
+        call cmd_cd_internal
+        test eax, eax
+        jnz .spc_restore
+        mov esi, prof_appdata_local
+        call sess_profile_mkdir
+        mov esi, prof_appdata_roam
+        call sess_profile_mkdir
 .spc_restore:
         call path_restore_cwd
         popad
         ret
 .spc_name: dd 0
+
+prof_docs:         db "Documents", 0
+prof_desktop:      db "Desktop", 0
+prof_downloads:    db "Downloads", 0
+prof_appdata:      db "AppData", 0
+prof_appdata_local: db "Local", 0
+prof_appdata_roam: db "Roaming", 0
+
+; ESI = directory name: create it in the current directory unless an entry of
+; that name is already there. A second logon finds the profile it made.
+sess_profile_mkdir:
+        pushad
+        mov [.spm_name], esi
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jnc .spm_done
+        mov esi, [.spm_name]
+        call hbfs_mkdir
+.spm_done:
+        popad
+        ret
+.spm_name: dd 0
+
+; ESI = source, EDI = destination: copy the text, leaving EDI on the
+; terminator so the next piece can be appended over it.
+sess_put:
+        lodsb
+        test al, al
+        jz .sp_done
+        stosb
+        jmp sess_put
+.sp_done:
+        ret
+
+; ESI = account name -> sess_prof_buf = "/Users/<name>"
+sess_profile_path:
+        push eax
+        push esi
+        push edi
+        mov [.spp_name], esi
+        mov edi, sess_prof_buf
+        mov al, '/'
+        stosb
+        mov esi, PROFILE_DIR
+        call sess_put
+        mov al, '/'
+        stosb
+        mov esi, [.spp_name]
+        call sess_put
+        mov al, 0
+        stosb
+        pop edi
+        pop esi
+        pop eax
+        ret
+.spp_name: dd 0
+
+; ESI = account name, EDX = "" or ".bak" -> sess_file_buf = "/<name>.hiv<SUF>"
+sess_hive_path:
+        push eax
+        push ecx
+        push esi
+        push edi
+        mov [.shp_name], esi
+        mov [.shp_suffix], edx
+        mov edi, sess_file_buf
+        mov al, '/'
+        stosb
+        mov esi, [.shp_name]
+        call sess_put
+        mov al, '.'
+        stosb
+        mov esi, sess_hive_ext
+        call sess_put
+        mov esi, [.shp_suffix]
+        call sess_put
+        mov al, 0
+        stosb
+        pop edi
+        pop esi
+        pop ecx
+        pop eax
+        ret
+.shp_name: dd 0
+.shp_suffix: dd 0
+
+sess_hive_ext:  db "hiv", 0
+sess_bak_ext:   db ".bak", 0
+sess_no_ext:    db 0
+
+; ESI = path -> CF clear when an entry of that name is in its directory
+sess_path_exists:
+        pushad
+        call file_save_cwd
+        call path_split
+        cmp byte [path_base_buf], 0
+        je .spex_no
+        call path_enter
+        cmp eax, 0
+        jne .spex_no
+        mov esi, path_base_buf
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .spex_no_leave
+        call path_leave
+        popad
+        clc
+        ret
+.spex_no_leave:
+        call path_leave
+.spex_no:
+        call file_restore_cwd
+        popad
+        stc
+        ret
+
+; ESI = the path it has, EDI = the path it takes. Both must be in the same
+; directory, which is all `profile delete` needs: two names under /Users.
+sess_rename_path:
+        pushad
+        mov [.srp_old], esi
+        mov [.srp_new], edi
+        mov esi, [.srp_old]
+        call path_split
+        mov edi, sess_old_buf
+        mov esi, path_base_buf
+        call sess_put
+        mov al, 0
+        stosb
+        call path_enter
+        cmp eax, 0
+        jne .srp_no
+        mov esi, [.srp_new]
+        call path_split
+        mov esi, sess_old_buf
+        mov edi, path_base_buf
+        call hbfs_rename_entry
+        pushf
+        call path_leave
+        popf
+        popad
+        ret
+.srp_no:
+        popad
+        stc
+        ret
+.srp_old: dd 0
+.srp_new: dd 0
+
+; ESI = an absolute path -> CF set when the shell's directory is that path or
+; is inside it.
+sess_cwd_inside:
+        pushad
+        mov [.sci_path], esi
+        mov edi, path_search_buf
+        call build_cwd_path
+        mov esi, [.sci_path]
+        mov edi, path_search_buf
+        xor ecx, ecx
+.sci_loop:
+        mov al, [esi + ecx]
+        test al, al
+        jz .sci_end
+        cmp al, [edi + ecx]
+        jne .sci_no
+        inc ecx
+        jmp .sci_loop
+.sci_end:
+        mov al, [edi + ecx]
+        test al, al
+        jz .sci_yes
+        cmp al, '/'
+        je .sci_yes
+.sci_no:
+        popad
+        clc
+        ret
+.sci_yes:
+        popad
+        stc
+        ret
+.sci_path: dd 0
+
+; ESI = account name -> CF clear when /Users/<name> exists and is a directory
+sess_profile_exists:
+        pushad
+        mov [.spe_name], esi
+        call file_save_cwd
+        call sett_pin_root
+        mov esi, PROFILE_DIR
+        call cmd_cd_internal
+        test eax, eax
+        jnz .spe_no
+        mov esi, [.spe_name]
+        call hbfs_load_root_dir
+        call hbfs_find_file
+        jc .spe_no
+        cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        jne .spe_no
+        call file_restore_cwd
+        popad
+        clc
+        ret
+.spe_no:
+        call file_restore_cwd
+        popad
+        stc
+        ret
+.spe_name: dd 0
+
+; ESI = account name -> CF clear and EAX = session id when it has a live one
+sess_session_of:
+        pushad
+        mov [.sso_name], esi
+        xor ebx, ebx
+.sso_loop:
+        cmp ebx, SESS_MAX
+        jae .sso_none
+        mov eax, ebx
+        call sess_slot
+        cmp dword [edi + SESS_F_STATE], SESS_FREE
+        je .sso_next
+        lea esi, [edi + SESS_F_NAME]
+        mov edi, [.sso_name]
+        call str_compare
+        jz .sso_found
+.sso_next:
+        inc ebx
+        jmp .sso_loop
+.sso_found:
+        mov dword [esp + 28], ebx
+        popad
+        clc
+        ret
+.sso_none:
+        popad
+        stc
+        ret
+.sso_name: dd 0
+
+; ESI = path: remove it. CF=1 only when something other than "it is not there"
+; went wrong, because a profile and its hive backup are both optional.
+sess_delete_if_present:
+        pushad
+        call hbfs_delete_tree
+        jnc .sdip_out
+        cmp eax, HBFS_DT_MISSING
+        jne .sdip_keep
+        popad
+        clc
+        ret
+.sdip_keep:
+        mov [sess_fail_path], esi       ; name what is left for the report
+        mov [esp + 28], eax             ; the reason survives to the caller
+        popad
+        stc
+        ret
+.sdip_out:
+        popad
+        clc
+        ret
+
+; ESI = account name: drop \Registry\User\<name> from the live tree and write
+; the store. The hive file is already gone when this runs, so there is nothing
+; to save back.
+sess_hive_unload:
+        pushad
+        mov [.shu_name], esi
+        lea edi, [sess_path_buf]
+        mov esi, USER_PREFIX
+        call str_copy
+        dec edi
+        mov al, '\'
+        stosb
+        mov esi, [.shu_name]
+        call str_copy
+        lea edi, [sess_path_buf]
+        call sett_kv_delkey
+        jc .shu_out
+        call sett_save
+.shu_out:
+        popad
+        ret
+.shu_name: dd 0
+
+; ESI = account name. Remove the profile: SERVICES.md section 3 says the hive
+; unloads, the directory goes, and a failure leaves the profile intact and
+; reported rather than half deleted. The directory is renamed aside first - one
+; entry, one journal transaction - so the account either has a whole profile or
+; none, and the sweep that follows is entry by entry and can be run again.
+sess_profile_delete:
+        pushad
+        mov [.spd_name], esi
+
+        ; The account has to exist: a typo must not "delete" nothing.
+        mov esi, [.spd_name]
+        call sess_path_of_account
+        mov edi, esi
+        mov esi, ACC_VAL_UID
+        call sett_kv_get_u32
+        jc .spd_noacct
+
+        ; A live session holds the profile's hive and its files.
+        mov esi, [.spd_name]
+        call sess_session_of
+        jnc .spd_inuse
+
+        ; The two names the profile can be under: its own and the quarantine a
+        ; delete that could not finish leaves behind.
+        mov esi, [.spd_name]
+        call sess_profile_path
+        mov edi, sess_quar_buf
+        mov esi, sess_prof_buf
+        call sess_put
+        mov esi, msg_prof_suffix
+        call sess_put
+        mov al, 0
+        stosb
+
+        ; Deleting the directory the shell stands in would pull the floor out;
+        ; the walk refuses it too, so say so before anything moves.
+        mov esi, sess_prof_buf
+        call sess_cwd_inside
+        jc .spd_busy
+
+        ; Something has to be there: the directory, a quarantine left behind,
+        ; or the hive file.
+        mov esi, sess_prof_buf
+        call sess_path_exists
+        jnc .spd_some
+        mov esi, sess_quar_buf
+        call sess_path_exists
+        jnc .spd_some
+        mov esi, [.spd_name]
+        mov edx, sess_no_ext
+        call sess_hive_path
+        mov esi, sess_file_buf
+        call sess_path_exists
+        jnc .spd_some
+        mov esi, [.spd_name]
+        mov edx, sess_bak_ext
+        call sess_hive_path
+        mov esi, sess_file_buf
+        call sess_path_exists
+        jnc .spd_some
+        jmp .spd_noprofile
+
+.spd_some:
+        ; The directory takes its quarantine name first. One directory entry
+        ; is one journal transaction, so this is the point of no return: the
+        ; account either has a whole profile or none, never a half-empty one.
+        ; What follows is a sweep that can be run again.
+        mov esi, sess_prof_buf
+        call sess_path_exists
+        jc .spd_sweep
+        mov esi, sess_prof_buf
+        mov edi, sess_quar_buf
+        call sess_rename_path
+        jc .spd_untouched
+
+.spd_sweep:
+        mov dword [hbfs_dt_files], 0
+        mov dword [hbfs_dt_blocks], 0
+        ; Entry by entry: a 32-sector undo log cannot hold a profile and its
+        ; hive files at once, and a sweep that dies half way must leave what is
+        ; left whole rather than roll everything back forever.
+        mov dword [hbfs_dt_atomic], 0
+
+        mov esi, [.spd_name]
+        mov edx, sess_no_ext
+        call sess_hive_path
+        mov esi, sess_file_buf
+        call sess_delete_if_present
+        jc .spd_partial
+        mov esi, [.spd_name]
+        mov edx, sess_bak_ext
+        call sess_hive_path
+        mov esi, sess_file_buf
+        call sess_delete_if_present
+        jc .spd_partial
+        mov esi, sess_quar_buf
+        call sess_delete_if_present
+        jc .spd_partial
+        mov dword [hbfs_dt_atomic], 1
+
+        ; The user's keys leave the live tree once their file is gone.
+        mov esi, [.spd_name]
+        call sess_hive_unload
+
+        ; The audit record names the account: the ring keeps the first word
+        ; before the colon as the source, so this reads as `profile`.
+        lea edi, [sess_msg_buf]
+        mov esi, msg_prof_audit
+        call sess_put
+        mov esi, [.spd_name]
+        call sess_put
+        mov al, 0
+        stosb
+        mov al, LOG_INFO
+        lea esi, [sess_msg_buf]
+        call bootlog_write
+
+        mov esi, msg_prof_deleted
+        call vga_print
+        mov esi, [.spd_name]
+        call vga_print
+        mov esi, msg_prof_counts
+        call vga_print
+        mov eax, [hbfs_dt_files]
+        call vga_print_dec
+        mov esi, msg_prof_entries
+        call vga_print
+        mov eax, [hbfs_dt_blocks]
+        call vga_print_dec
+        mov esi, msg_prof_blocks
+        call vga_print
+        call vga_newline
+        jmp .spd_done
+
+.spd_partial:
+        mov dword [hbfs_dt_atomic], 1
+        mov [.spd_why], eax
+        mov esi, msg_prof_refused
+        call vga_print
+        mov esi, [.spd_name]
+        call vga_print
+        mov esi, msg_prof_partial
+        call vga_print
+        mov esi, [sess_fail_path]
+        call vga_print
+        mov esi, msg_prof_remains
+        call vga_print
+        ; The audit record carries the reason as a digit: a delete that stops
+        ; is the one thing an operator has to be able to look up afterwards.
+        lea edi, [sess_msg_buf]
+        mov esi, msg_prof_fail_audit
+        call sess_put
+        mov esi, [.spd_name]
+        call sess_put
+        mov esi, msg_prof_reason
+        call sess_put
+        mov eax, [.spd_why]
+        add al, '0'
+        stosb
+        mov al, 0
+        stosb
+        mov al, LOG_WARN
+        lea esi, [sess_msg_buf]
+        call bootlog_write
+        jmp .spd_done
+
+.spd_untouched:
+        mov esi, msg_prof_refused
+        call vga_print
+        mov esi, [.spd_name]
+        call vga_print
+        mov esi, msg_prof_untouched
+        call vga_print
+        jmp .spd_done
+.spd_busy:
+        mov esi, msg_prof_refused
+        call vga_print
+        mov esi, [.spd_name]
+        call vga_print
+        mov esi, msg_prof_busy
+        call vga_print
+        jmp .spd_done
+.spd_noacct:
+        mov esi, msg_prof_noacct
+        call vga_print
+        jmp .spd_done
+.spd_inuse:
+        mov esi, msg_prof_refused
+        call vga_print
+        mov esi, [.spd_name]
+        call vga_print
+        mov esi, msg_prof_inuse
+        call vga_print
+        jmp .spd_done
+.spd_noprofile:
+        mov esi, msg_prof_refused
+        call vga_print
+        mov esi, [.spd_name]
+        call vga_print
+        mov esi, msg_prof_none
+        call vga_print
+.spd_done:
+        popad
+        ret
+.spd_name: dd 0
+.spd_why:  dd 0
+
+; `profile list`
+sess_profile_list:
+        pushad
+        mov dword [.spl_i], 0
+        mov dword [.spl_n], 0
+.spl_loop:
+        mov eax, [.spl_i]
+        mov esi, ACC_PREFIX
+        lea edi, [sess_name_buf]
+        mov edx, 23
+        call sett_child_name
+        jc .spl_done
+        lea esi, [sess_name_buf]
+        call vga_print
+        lea esi, [sess_name_buf]
+        call sess_path_of_account
+        mov edi, esi
+        mov esi, ACC_VAL_UID
+        call sett_kv_get_u32
+        mov [.spl_uid], eax
+        mov esi, msg_acc_uid
+        call vga_print
+        mov eax, [.spl_uid]
+        call vga_print_dec
+        lea esi, [sess_name_buf]
+        call sess_profile_exists
+        jc .spl_none
+        mov esi, msg_prof_yes
+        call vga_print
+        jmp .spl_next
+.spl_none:
+        mov esi, msg_prof_no
+        call vga_print
+.spl_next:
+        call vga_newline
+        inc dword [.spl_n]
+        inc dword [.spl_i]
+        jmp .spl_loop
+.spl_done:
+        cmp dword [.spl_n], 0
+        jne .spl_out
+        mov esi, msg_prof_noacct
+        call vga_print
+.spl_out:
+        popad
+        ret
+.spl_i: dd 0
+.spl_n: dd 0
+.spl_uid: dd 0
+
+; `profile list` / `profile delete NAME`
+sess_profile_command:
+        pushad
+        mov esi, line_buffer
+        mov edi, cmd_profile_str
+        call str_starts_with
+        jc .have
+        jmp .usage
+.have:
+        mov edi, sess_name_buf
+        mov edx, 16
+        call sett_word
+        jc .usage
+        mov [.argp], esi
+        mov esi, sess_name_buf
+        mov edi, prof_word_list
+        call sett_ci_equal
+        jc .list
+        mov esi, sess_name_buf
+        mov edi, prof_word_delete
+        call sett_ci_equal
+        jc .delete
+        jmp .usage
+.list:
+        call sess_profile_list
+        jmp .done
+.delete:
+        mov esi, [.argp]
+        mov edi, sess_name_buf
+        mov edx, 15
+        call sett_word
+        jc .usage
+        lea esi, [sess_name_buf]
+        call sess_profile_delete
+        jmp .done
+.usage:
+        mov esi, msg_prof_usage
+        call vga_print
+.done:
+        popad
+        ret
+.argp: dd 0
+
+prof_word_list:   db "list", 0
+prof_word_delete: db "delete", 0
+
+msg_prof_deleted: db "profile: deleted ", 0
+msg_prof_counts:  db " (", 0
+msg_prof_entries: db " entries, ", 0
+msg_prof_blocks:  db " blocks)", 0x0A, 0
+msg_prof_audit:   db "profile: deleted and unloaded ", 0
+msg_prof_refused: db "profile: ", 0
+msg_prof_untouched: db " was not deleted; the profile is as it was", 0x0A, 0
+msg_prof_partial: db " was not removed completely; still there: ", 0
+msg_prof_remains: db 0x0A, 0
+msg_prof_fail_audit: db "profile: delete stopped for ", 0
+msg_prof_reason:  db " reason ", 0
+msg_prof_suffix:  db ".deleted", 0
+msg_prof_busy:    db " holds the directory you are in; leave it and try again", 0x0A, 0
+msg_prof_noacct:  db "profile: no such account", 0x0A, 0
+msg_prof_inuse:   db " is in use; log that session off first", 0x0A, 0
+msg_prof_none:    db " has no profile on disk", 0x0A, 0
+msg_prof_yes:     db " profile", 0
+msg_prof_no:      db " no-profile", 0
+msg_prof_usage:   db "profile list | profile delete NAME", 0x0A, 0
 
 ; Log the current session off: save and unload its hive, free the slot.
 sess_logoff:

@@ -2207,6 +2207,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_account
 
+        mov edi, cmd_profile_str
+        call str_starts_with
+        jc .cmd_profile
+
         mov edi, cmd_logon_str
         call str_starts_with
         jc .cmd_logon
@@ -2820,6 +2824,10 @@ shell_dispatch_core:
 
 .cmd_account:
         call sess_account_command
+        ret
+
+.cmd_profile:
+        call sess_profile_command
         ret
 
 .cmd_logon:

@@ -87,6 +87,10 @@ failures=0
 # slow because it does the work, and a window that is too small reports "not
 # found" for a program that is still running.
 #
+# EXPECT may name more than one string, separated by '|', and every one of them
+# has to appear: a case that ends with `repair` can assert the delete's own
+# verdict and the clean volume that follows it at once.
+#
 # KEYS is a comma-separated list of QEMU key names pressed after the shell
 # command, and WAIT_FOR is a serial marker to wait for before pressing them (the
 # desktop's own "up" marker, so a keystroke cannot land on a machine that is
@@ -123,7 +127,15 @@ run_case() {
         args+=(--wait "$wait_s")
     fi
     if [ -n "$expect" ]; then
-        args+=(--expect "$expect")
+        # EXPECT may list more than one string, separated by '|'. Every one of
+        # them has to appear, which lets a case assert the end of a chain (the
+        # delete's own verdict) and the state it left (a clean volume) at once.
+        local want was_ifs="$IFS"
+        IFS='|'
+        for want in $expect; do
+            [ -n "$want" ] && args+=(--expect "$want")
+        done
+        IFS="$was_ifs"
     fi
     if [ -n "$then" ]; then
         args+=(--then "$then")
@@ -325,6 +337,15 @@ run_case "the quota ledger is derived from the tree" "quota" "QUOTA_OK" "" "CPU 
 run_case "a quota refuses a write at the ceiling" "quota set 0 1" "Write error" "touch /overq" "CPU EXCEPTION|Saved."
 run_case "raising the ceiling allows the write" "quota set 0 4000" "Saved." "touch /overq" "CPU EXCEPTION|Write error"
 run_case "the ledger rebuilds on demand" "quota rebuild" "ledger rebuilt" "" "CPU EXCEPTION"
+# The rebuild has to read the directory a subdirectory entry names: its block
+# number times the eight sectors in a block, plus the data area's start. Adding
+# the start to the block number instead reads file data as 288-byte entries, and
+# on a volume with a few hundred files the ledger came out claiming sixteen
+# users and billions of blocks - with the shell's own writes refused. One user,
+# and a write that works, is what proves the walk landed on directories.
+run_case "the quota walk reads directories, not file data" \
+    $'quota rebuild\nquota\ntouch /qprobe.txt' \
+    "ledger rebuilt|QUOTA users=1|Saved." "" "CPU EXCEPTION" "" "" "" 30
 # The volume manager reads the partition table instead of assuming where the
 # filesystem starts, and probes the volume it finds for a superblock.
 run_case "the volume manager reads the table" "volumes" "Volumes: 1  table: MBR" "" "CPU EXCEPTION"
@@ -554,6 +575,38 @@ run_case "a service stops when it is asked" \
 run_case "a service that ignores STOP is killed and the kill audited" \
     $'sc delete svcstub\nsc create svcstub /bin/svcstub\nsc stoptimeout svcstub 1\nsc start svcstub\nsc stop svcstub\nsleep 3\nchronicle -s scm' \
     "ignored STOP and was killed" "" "CPU EXCEPTION"
+# SERVICES.md section 3: a profile is not just a name on disk. The first logon
+# makes /Users/<name> with the directories the section lists, so a program has
+# somewhere to write before the user has run one.
+run_case "a profile is created with its directories" \
+    $'account del m4prof\naccount add m4prof m4pw\nlogon m4prof m4pw\ndir /Users/m4prof\ndir /Users/m4prof/AppData' \
+    "Documents|Roaming" "" "CPU EXCEPTION|no-profile" "" "" "" 60
+# Section 3: deleting a profile is a transaction. A live session holds it, and
+# the refusal leaves it whole - the profile is still there afterwards.
+run_case "a profile is not deleted while it is in use" \
+    $'account del m4b2\naccount add m4b2 m4pw\nlogon m4b2 m4pw\nprofile delete m4b2\ndir /Users/m4b2' \
+    "is in use; log that session off first|Documents" "" "CPU EXCEPTION|was not deleted" "" "" "" 60
+# The shell's own directory is not deletable either: log off, `cd` there, ask,
+# and the profile is still there afterwards.
+run_case "a profile holding the shell's directory is not deleted" \
+    $'account del m4b5\naccount add m4b5 m4pw\nlogon m4b5 m4pw\nlogoff\ncd /Users/m4b5\nprofile delete m4b5\ncd /\ndir /Users/m4b5' \
+    "holds the directory you are in|Documents" "" "CPU EXCEPTION|was not deleted" "" "" "" 60
+# Section 6 item 7: created, used, logged off and deleted with no leaked handle
+# and no leaked file. The volume has to be clean before the gate means anything,
+# so `repair` runs twice: the first pass fixes an earlier case's drift, the
+# second proves there is none left. The delete then says what went; the `dir`
+# proves the directory is gone, and the closing `repair` proves the delete left
+# neither an orphan block nor a lost one.
+run_case "the volume is clean before the profile gate" \
+    $'repair\nrepair' \
+    "REPAIR_CLEAN" "" "CPU EXCEPTION|REPAIR_ISSUES|REPAIR_TROUBLE"
+run_case "a profile is used, logged off and deleted" \
+    $'account del m4b3\naccount add m4b3 m4pw\nlogon m4b3 m4pw\ntouch /Users/m4b3/Documents/note.txt\nlogoff\nprofile delete m4b3\ndir /Users/m4b3\nrepair' \
+    "profile: deleted m4b3|No such dir|REPAIR_CLEAN" "" "CPU EXCEPTION|was not deleted|was not removed|is in use" "" "" "" 90
+# Deleting a profile that is not there is reported, not invented.
+run_case "deleting a profile that is not there is refused" \
+    $'account del m4b4\naccount add m4b4 m4pw\nprofile delete m4b4' \
+    "has no profile on disk" "" "CPU EXCEPTION|profile: deleted"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"

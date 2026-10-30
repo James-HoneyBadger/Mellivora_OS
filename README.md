@@ -83,6 +83,12 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **Accounts and logon** — `account add/del/list`, `logon`, `logoff`, `lock`,
   `unlock`, `switch`, `sessions`; a salted hash in the Sett, a profile directory,
   and a per-user hive loaded at logon and saved at logoff
+- **Profiles** — `profile list`, `profile delete NAME`: the first logon makes
+  `/Users/<name>` with `Documents`, `Desktop`, `Downloads` and
+  `AppData\Local|Roaming`; a delete is refused while the account is logged on
+  or while the shell is standing in the profile, renames it aside first, and
+  then removes the tree and the hive file entry by entry, so a delete that
+  cannot finish leaves no half-empty profile behind
 - **Sessions are a boundary** — session 0 is services, a task carries the session
   it was launched in, and `\Sessions\<n>\` refuses another session without
   `SE_SESSION_CROSS`; two accounts hold sessions 1 and 2 at once

@@ -490,11 +490,17 @@ session runs `unlock` and nothing else, so a logon screen that dies leaves the
 session locked, and a hive that is damaged on disk is refused by name and offset
 with the last known good generation loaded instead. A stop is a request the
 service answers through its own record, and one that never answers is killed at
-its stop timeout with the kill in the Chronicle. What is still open: a hive is
-one image rather than section 5's cell format; the profile lifecycle gate in
-SERVICES.md section 6 is not gated, and the Sett's crash-at-every-phase and
-migration gates in CONFIG.md section 10 are not built. CONFIG.md section 11 and
-SERVICES.md section 7 name the rest.
+its stop timeout with the kill in the Chronicle. A profile is now the thing
+section 3 describes rather than a name: the first logon makes `/Users/<name>`
+with its five directories, `profile list` says which accounts have one, and
+`profile delete` renames the tree aside, then removes it and the hive file entry
+by entry so a delete that cannot finish never leaves a half-empty profile -
+section 6 item 7 is gated by `make check-runtime`, which ends the case with
+`repair` on a volume with no orphan block and no lost one. What is still open: a
+hive is one image rather than section 5's cell format; a profile is created from
+a fixed list of directories rather than copied from a default profile; and the
+Sett's crash-at-every-phase and migration gates in CONFIG.md section 10 are not
+built. CONFIG.md section 11 and SERVICES.md section 7 name the rest.
 
 ### M5 · Runtime and binaries (16–22 weeks)
 

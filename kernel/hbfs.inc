@@ -87,6 +87,15 @@ HBFS4_EXTENT_MAX       equ ((HBFS_BLOCK_SIZE - HBFS4_EXTENT_HDR - \
 ; tests/test_v4_mount.py fails the fsck if the constant is ever wrong.
 HBFS4_EMPTY_DIR_CRC     equ 0x72C0C4A4
 
+; hbfs_delete_tree's verdict, in EAX on failure.
+HBFS_DT_OK             equ 0
+HBFS_DT_MISSING        equ 1            ; no such file or directory
+HBFS_DT_INUSE          equ 2            ; the tree holds the caller's directory
+HBFS_DT_ROLLEDBACK     equ 3            ; did not fit the undo log, nothing removed
+HBFS_DT_READONLY       equ 4            ; the volume may not be written
+HBFS_DT_PARTIAL        equ 5            ; entry by entry: the rest is whole
+HBFS_DT_MAX_DEPTH      equ 16           ; a tree deeper than this is refused
+
 hbfs_init:
         pushad
 
@@ -97,6 +106,7 @@ hbfs_init:
         mov dword [hbfs_mounted], 0
         mov dword [hbfs_read_only], 0
         mov dword [hbfs_total_blocks], 0
+        mov dword [hbfs_dt_atomic], 1
 
         cmp byte [ata_present], 0
         je .no_disk
@@ -1073,10 +1083,28 @@ hbfs_journal_abort:
 
 .hja_replay:
         call hbfs_journal_recover
+        ; The rollback put the logged copies back on disk. The resident
+        ; superblock and bitmap still carry what the undone transaction did to
+        ; them - the freed blocks, the raised free count - so both are stale:
+        ; re-read the superblock (its pre-image was the logged copy) and force
+        ; the bitmap to be read again. Without this the next allocation would
+        ; believe a block the rollback restored is free.
+        mov  dword [hbfs_bitmap_valid], 0
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  edi, hbfs_super_buf
+        call ata_read_sectors
+        jc   .hja_stale
+        mov  eax, [hbfs_super_buf + HBFS_SB_JRNL_EPOCH]
+        mov  [hbfs_journal_epoch], eax
+.hja_stale:
         mov  dword [hbfs_journal_dirty],  0
         mov  dword [hbfs_journal_failed], 0
         mov  dword [hbfs_journal_ptr],    0
         mov  dword [hbfs_journal_n_logged], 0
+        mov  dword [hbfs_super_buf + HBFS_SB_JRNL_STATE], 0
+        mov  dword [hbfs_super_buf + HBFS_SB_JRNL_PTR], 0
+        call hbfs_write_superblock
         ; The in-memory directory no longer matches the disk: force a reload.
         mov  dword [dir_cache_lba], -1
         popad
@@ -1752,7 +1780,7 @@ hbfs_free_blocks:
         jc   .free_out
 
         call hbfs_journal_commit
-
+        clc
 .free_out:
         popad
         ret
@@ -1797,6 +1825,8 @@ hbfs_create_file:
         call hbfs_find_file
         jc .not_exists
         call hbfs_delete_file_entry
+        jc .hcf_denied          ; the old entry is still there: adding a
+                                ; second one would give the name two owners
 .not_exists:
 
         ; Reload directory (may have changed after delete)
@@ -2267,6 +2297,7 @@ hbfs_free_extent:
         test ecx, ecx
         jz   .hfe_fail
         call hbfs_free_blocks
+        jc   .hfe_fail
         add  dword [.hfe_off], HBFS4_EXTENT_RECORD
         dec  dword [.hfe_count]
         jmp  .hfe_run
@@ -2275,11 +2306,13 @@ hbfs_free_extent:
         mov  eax, [.hfe_block]
         mov  ecx, 1
         call hbfs_free_blocks
+        jc   .hfe_fail
         mov  dword [hbfs_extent_lba], 0
         popad
         clc
         ret
 .hfe_fail:
+        mov  dword [hbfs_extent_lba], 0
         popad
         stc
         ret
@@ -2314,9 +2347,11 @@ hbfs_delete_file_entry:
         cmp ecx, 0
         jle .skip_free
         call hbfs_free_blocks
+        jc  .hdfe_undone
         jmp .skip_free
 .hdfe_extent:
         call hbfs_free_extent
+        jc  .hdfe_undone
 .skip_free:
         ; The xattr block belongs to this file too. Freeing the data and
         ; leaving it allocated leaks a block per deleted file, and fsck reports
@@ -2326,6 +2361,7 @@ hbfs_delete_file_entry:
         jz .hdfe_no_xattr
         mov ecx, 1
         call hbfs_free_blocks
+        jc  .hdfe_undone
 .hdfe_no_xattr:
 
         ; Zero the directory entry
@@ -2336,8 +2372,18 @@ hbfs_delete_file_entry:
         pop edi
 
         call hbfs_save_root_dir
+        jc  .hdfe_undone
         call hbfs_journal_commit
+        clc
         popad
+        ret
+
+        ; A free that could not be logged rolled the whole transaction back:
+        ; the blocks are still allocated on disk, so clearing the entry now
+        ; would strand them. Leave the entry alone and say the delete failed.
+.hdfe_undone:
+        popad
+        stc
         ret
 
 .hdfe_refuse:
@@ -2345,11 +2391,337 @@ hbfs_delete_file_entry:
         stc
         ret
 
+;-----------------------------------------------------------------------
+; hbfs_rename_entry - give an entry in the current directory another name
+;   In : ESI = the name it has, EDI = the name it takes
+;   Out: CF = 0 renamed; CF = 1 nothing was written and EAX says why:
+;        EAX = 1 no such entry, 2 the new name is taken, 3 the write failed
+;
+; One directory sector is rewritten, so the rename is one journal
+; transaction: the old name is there or the new one is, never neither.
+;-----------------------------------------------------------------------
+hbfs_rename_entry:
+        pushad
+        call hbfs_require_writable
+        jc   .hre_failed
+        call hbfs_cwd_access_current
+        test eax, eax
+        jnz  .hre_denied
+        mov  [.hre_old], esi
+        mov  [.hre_new], edi
+
+        call hbfs_load_root_dir
+        jc   .hre_denied
+        mov  esi, [.hre_old]
+        call hbfs_find_file
+        jc   .hre_missing
+        mov  [.hre_entry], edi
+        mov  esi, [.hre_new]
+        call hbfs_find_file
+        jnc  .hre_taken
+
+        call hbfs_journal_begin
+        mov  edi, [.hre_entry]
+        mov  esi, [.hre_new]
+        xor  ecx, ecx
+.hre_copy:
+        cmp  ecx, HBFS_MAX_FILENAME
+        jge  .hre_truncate
+        lodsb
+        stosb
+        inc  ecx
+        test al, al
+        jnz  .hre_copy
+        jmp  .hre_named
+.hre_truncate:
+        mov  byte [edi], 0
+.hre_named:
+        mov  edi, [.hre_entry]
+        mov  eax, [tick_count]
+        mov  [edi + HBFS_DE_MTIME], eax
+        call hbfs_save_root_dir
+        jc   .hre_failed
+        call hbfs_journal_commit
+        popad
+        clc
+        ret
+.hre_missing:
+        mov  dword [esp + 28], 1
+        popad
+        stc
+        ret
+.hre_taken:
+        mov  dword [esp + 28], 2
+        popad
+        stc
+        ret
+.hre_denied:
+        mov  dword [esp + 28], 3
+        popad
+        stc
+        ret
+.hre_failed:
+        mov  dword [esp + 28], 3
+        popad
+        stc
+        ret
+.hre_old:   dd 0
+.hre_new:   dd 0
+.hre_entry: dd 0
+
+;-----------------------------------------------------------------------
+; hbfs_delete_tree - remove a file, or a directory and everything under it
+;   In : ESI = path (absolute, or relative to the current directory)
+;        [hbfs_dt_atomic] = 1 the whole tree is one journal transaction
+;                            (a failure leaves it whole)
+;                          = 0 each entry is its own transaction (a failure
+;                            leaves what is left whole, and the caller names
+;                            it and can run again)
+;        [hbfs_dt_files]/[hbfs_dt_blocks] accumulate across calls in one
+;        transaction; the caller zeroes them before the first call
+;   Out: CF = 0 removed; the counters name what went
+;        CF = 1 nothing (or, entry by entry, not everything) was removed,
+;              EAX = HBFS_DT_* saying why
+;
+; The whole tree moves through one journal transaction. A tree whose metadata
+; needs more than the undo log holds is refused whole - the log is replayed
+; and the tree is left as it was - because a partial tree is the one outcome
+; a caller cannot report honestly. While a subdirectory is being walked it
+; owns hbfs_dir_buf, so the parent is reloaded and the child found again by
+; slot before its entry is cleared.
+;-----------------------------------------------------------------------
+hbfs_delete_tree:
+        pushad
+        call hbfs_require_writable
+        jc   .hdt_readonly
+        mov  [.hdt_path], esi
+        mov  dword [hbfs_dt_depth], 0
+
+        mov  esi, [.hdt_path]
+        call path_split
+        cmp  byte [path_base_buf], 0
+        je   .hdt_missing
+        call path_enter
+        cmp  eax, 0
+        jne  .hdt_missing
+
+        mov  esi, path_base_buf
+        call hbfs_load_root_dir
+        jc   .hdt_missing_leave
+        call hbfs_find_file
+        jc   .hdt_missing_leave
+
+        ; Refuse a tree that holds the directory the caller is standing in:
+        ; the walk would delete the ground under its own feet mid-transaction.
+        mov  eax, [edi + HBFS_DE_BLOCK]
+        shl  eax, 3
+        add  eax, HBFS_DATA_START
+        cmp  eax, [path_save_lba]
+        je   .hdt_inuse
+        mov  ecx, [path_save_depth]
+        xor  edx, edx
+.hdt_ancestor:
+        cmp  edx, ecx
+        jae  .hdt_begin
+        imul esi, edx, DIR_STACK_ENTRY_SIZE
+        cmp  eax, [path_save_stack + esi]
+        je   .hdt_inuse
+        inc  edx
+        jmp  .hdt_ancestor
+
+.hdt_begin:
+        cmp  dword [hbfs_dt_atomic], 0
+        je   .hdt_walk
+        call hbfs_journal_begin
+.hdt_walk:
+        call hbfs_dt_entry              ; EDI still names the entry
+        jc   .hdt_undone
+        cmp  dword [hbfs_dt_atomic], 0
+        je   .hdt_clean
+        call hbfs_journal_commit
+.hdt_clean:
+        mov  dword [dir_cache_lba], -1
+        call path_leave
+        popad
+        clc
+        ret
+
+.hdt_undone:
+        ; One transaction: nothing was removed. Entry by entry: what is left is
+        ; whole, and the caller can name it and re-run.
+        cmp  dword [hbfs_dt_atomic], 0
+        je   .hdt_partial
+        mov  dword [hbfs_dt_files], 0
+        mov  dword [hbfs_dt_blocks], 0
+        mov  dword [dir_cache_lba], -1
+        call path_leave
+        mov  dword [esp + 28], HBFS_DT_ROLLEDBACK
+        popad
+        stc
+        ret
+.hdt_partial:
+        mov  dword [dir_cache_lba], -1
+        call path_leave
+        mov  dword [esp + 28], HBFS_DT_PARTIAL
+        popad
+        stc
+        ret
+
+.hdt_inuse:
+        call path_leave
+        mov  dword [esp + 28], HBFS_DT_INUSE
+        popad
+        stc
+        ret
+
+.hdt_missing_leave:
+        call path_leave
+.hdt_missing:
+        mov  dword [esp + 28], HBFS_DT_MISSING
+        popad
+        stc
+        ret
+
+.hdt_readonly:
+        mov  dword [esp + 28], HBFS_DT_READONLY
+        popad
+        stc
+        ret
+.hdt_path: dd 0
+
+;-----------------------------------------------------------------------
+; hbfs_dt_entry - remove one entry, descending into a directory
+;   In : EDI = entry in hbfs_dir_buf of the current directory
+;   Out: CF = 0 the entry and everything under it is gone
+;        CF = 1 the tree could not be removed; the transaction is over
+;
+; EBP frames the per-level state because the recursion reuses every register:
+;   [ebp-4]  the entry being removed
+;   [ebp-8]  the parent's LBA        [ebp-12] the parent's sector count
+;   [ebp-16] the child's slot count  [ebp-20] the child's slot index
+;   [ebp-24] the entry's slot in the parent
+;-----------------------------------------------------------------------
+hbfs_dt_entry:
+        pushad
+        push ebp
+        mov  ebp, esp
+        sub  esp, 24
+        mov  [ebp - 4], edi
+        inc  dword [hbfs_dt_depth]
+        cmp  dword [hbfs_dt_depth], HBFS_DT_MAX_DEPTH
+        ja   .de_fail
+
+        cmp  byte [edi + HBFS_DE_TYPE], FTYPE_DIR
+        jne  .de_file
+
+        mov  eax, [current_dir_lba]
+        mov  [ebp - 8], eax
+        mov  eax, [current_dir_sects]
+        mov  [ebp - 12], eax
+        mov  eax, [ebp - 4]
+        sub  eax, hbfs_dir_buf
+        xor  edx, edx
+        mov  ecx, HBFS_DIR_ENTRY_SIZE
+        div  ecx
+        mov  [ebp - 24], eax
+
+        ; The child's geometry, checked where repair checks it: a directory
+        ; claiming more than the directory buffer holds cannot be walked.
+        mov  edi, [ebp - 4]
+        mov  eax, [edi + HBFS_DE_BLOCK]
+        mov  ecx, [edi + HBFS_DE_BLKCNT]
+        test ecx, ecx
+        jz   .de_fail
+        cmp  ecx, HBFS_ROOT_DIR_BLOCKS
+        ja   .de_fail
+
+        imul eax, eax, HBFS_SECTORS_PER_BLK
+        add  eax, HBFS_DATA_START
+        shl  ecx, 3
+        mov  [current_dir_lba], eax
+        mov  [current_dir_sects], ecx
+        mov  dword [dir_cache_lba], -1
+        call hbfs_load_root_dir
+        jc   .de_fail
+
+        mov  eax, [current_dir_sects]
+        shl  eax, 9
+        xor  edx, edx
+        mov  ecx, HBFS_DIR_ENTRY_SIZE
+        div  ecx
+        mov  [ebp - 16], eax
+        mov  dword [ebp - 20], 0
+
+.de_slot:
+        mov  eax, [ebp - 20]
+        cmp  eax, [ebp - 16]
+        jae  .de_empty
+        imul eax, eax, HBFS_DIR_ENTRY_SIZE
+        lea  edi, [hbfs_dir_buf + eax]
+        cmp  byte [edi + HBFS_DE_TYPE], FTYPE_FREE
+        je   .de_next
+        call hbfs_dt_entry
+        jc   .de_fail
+.de_next:
+        inc  dword [ebp - 20]
+        jmp  .de_slot
+
+.de_empty:
+        ; The child is empty. Re-enter the parent, reload it, and clear the
+        ; child's entry by the slot it was found in.
+        mov  eax, [ebp - 8]
+        mov  [current_dir_lba], eax
+        mov  eax, [ebp - 12]
+        mov  [current_dir_sects], eax
+        mov  dword [dir_cache_lba], -1
+        call hbfs_load_root_dir
+        jc   .de_fail
+        mov  eax, [ebp - 24]
+        imul eax, eax, HBFS_DIR_ENTRY_SIZE
+        lea  edi, [hbfs_dir_buf + eax]
+        cmp  byte [edi + HBFS_DE_TYPE], FTYPE_FREE
+        je   .de_done
+        mov  eax, [edi + HBFS_DE_BLKCNT]
+        push eax
+        call hbfs_delete_file_entry
+        jc   .de_fail_pop
+        pop  ecx
+        inc  dword [hbfs_dt_files]
+        add  [hbfs_dt_blocks], ecx
+        jmp  .de_done
+
+.de_file:
+        mov  edi, [ebp - 4]
+        mov  eax, [edi + HBFS_DE_BLKCNT]
+        push eax
+        call hbfs_delete_file_entry
+        jc   .de_fail_pop
+        pop  ecx
+        inc  dword [hbfs_dt_files]
+        add  [hbfs_dt_blocks], ecx
+        jmp  .de_done
+
+.de_fail_pop:
+        pop  ecx
+.de_fail:
+        dec  dword [hbfs_dt_depth]
+        mov  esp, ebp
+        pop  ebp
+        popad
+        stc
+        ret
+.de_done:
+        dec  dword [hbfs_dt_depth]
+        mov  esp, ebp
+        pop  ebp
+        popad
+        clc
+        ret
+
 ; Create a subdirectory in the current directory
 ; ESI = directory name (null-terminated)
 ; Returns: CF=0 success, CF=1 error
-hbfs_mkdir:
-        pushad
+hbfs_mkdir:        pushad
         call hbfs_require_writable
         jc .hm_denied
         ; A subdirectory is an entry too: the parent's write bit governs it.

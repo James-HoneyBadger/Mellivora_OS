@@ -317,9 +317,20 @@ quota_build:
         ; its contents are counted when it is visited.
         cmp eax, FTYPE_DIR
         jne .qb_charge_entry
-        ; The entry stores a block number in the data area, not an LBA: every
-        ; reader adds HBFS_DATA_START, and so does this walk.
+        ; A directory claiming more blocks than a directory buffer holds is not
+        ; one this walk can read: count its blocks and do not descend into
+        ; whatever those sectors really are.
+        cmp ecx, HBFS_ROOT_DIR_BLOCKS
+        ja .qb_charge_entry
+        ; The entry stores a block number in the data area, not an LBA. Every
+        ; reader turns it into one the same way - blocks to sectors, then the
+        ; data area's start - and this walk used to add the start to the block
+        ; number itself. It then read whatever lived at DATA_START + N rather
+        ; than at the directory, which is file data: the ledger claimed
+        ; thousands of users and billions of blocks, and every write by the
+        ; first user was refused.
         mov edx, [esi + 260]
+        shl edx, 3                       ; blocks -> sectors
         add edx, HBFS_DATA_START
         mov eax, [esi + 264]
         shl eax, 3                       ; blocks -> sectors
