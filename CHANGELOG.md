@@ -32,6 +32,14 @@ POSIX_OK
   door to empty a file that does exist, and `O_APPEND` seeks to the end.
 - **`errno` is the lvalue POSIX promises**, a macro over `__errno_location()`,
   so a program compiled against any other C library finds the name it expects.
+- **`getcwd` answers `ERANGE` instead of overflowing.** The kernel builds the
+  path into its own 256-byte buffer and reports failure, so the length is known
+  before the caller's buffer is touched - a one-byte-short buffer is refused.
+- **`pipe()` reports `ENOSYS`, and that is the honest answer.** `SYS_PIPE2`
+  allocated a pipe and two descriptors that no VFS backend read or wrote; the
+  first `write` to one reached the HBFS writer with a descriptor it had never
+  seen and the process died inside the kernel. The call now refuses, and a
+  descriptor backend over `ipc_pipe_*` is the work it waits for.
 - **The gate includes no `<mv/...>` header at all.** `c/prog/posixtest.c` opens,
   writes, seeks, stats, duplicates and unlinks a file, forks, waits, unpacks the
   exit status, and checks `errno`, `getpid`, `signal`, `setlocale`, `toupper` and

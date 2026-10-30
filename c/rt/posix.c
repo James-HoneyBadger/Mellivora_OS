@@ -253,6 +253,56 @@ int chdir(const char *path)
     return 0;
 }
 
+char *getcwd(char *buf, unsigned size)
+{
+    static char kernel_path[256];
+
+    if (buf == NULL) {
+        errno = EFAULT;
+        return NULL;
+    }
+    if (mv_syscall(SYS_GETCWD, (u32)kernel_path, 0, 0, 0, 0) < 0) {
+        errno = ENOENT;
+        return NULL;
+    }
+    /* The kernel builds into its own 256-byte buffer and copies the exact
+     * range, so the length is known before the caller's buffer is touched -
+     * which is the only way to answer ERANGE without overflowing it. */
+    {
+        unsigned len = 0;
+        while (kernel_path[len] != '\0' && len < sizeof kernel_path) {
+            len++;
+        }
+        if (len + 1 > size) {
+            errno = ERANGE;
+            return NULL;
+        }
+        {
+            unsigned i;
+            for (i = 0; i <= len; i++) {
+                buf[i] = kernel_path[i];
+            }
+        }
+    }
+    return buf;
+}
+
+int pipe(int fds[2])
+{
+    if (fds == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    /* The kernel refuses this, and refuses it deliberately: SYS_PIPE2 used to
+     * hand out two descriptors that no VFS backend read or wrote. ENOSYS is
+     * what POSIX means by "not implemented", and docs/POSIX.md says so. */
+    if (mv_syscall(SYS_PIPE2, (u32)fds, 0, 0, 0, 0) < 0) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return 0;
+}
+
 int isatty(int fd)
 {
     return mv_syscall(SYS_ISATTY, (u32)fd, 0, 0, 0, 0) == 1;

@@ -3040,69 +3040,18 @@ access_stat_buf: times 12 db 0          ; access(): the backend's stat lands her
 ; Delegates to the existing kernel pipe primitives.
 ;-----------------------------------------------------------------------
 sys_pipe2:
+        ; SYS_PIPE2 (134): EBX = pipefd[2], ECX = flags -> EAX = 0 or -1
+        ;
+        ; Refused, and it used to do worse than refuse. It allocated a pipe id
+        ; and two VFDs, stored the id with bit 31 set in VFD_REAL_FD, and typed
+        ; both descriptors VFS_FS_HBFS - so the first read or write reached the
+        ; HBFS backend with a file descriptor it had never seen, and the process
+        ; died inside the kernel's own file code. Nothing in the VFS reads or
+        ; writes a pipe: the descriptor path needs read, write, close and the
+        ; wake-on-block handoff over ipc_pipe_*, and that is the work this call
+        ; is waiting for. A refusal a program can see is worth more than a
+        ; descriptor that faults on use.
         pushad
-        mov eax, ebx
-        call validate_user_ptr
-        jc .pipe2_fail
-        ; Allocate a pipe slot
-        call ipc_pipe_create    ; -> EAX = pipe_id or -1
-        cmp eax, -1
-        je .pipe2_fail
-        push eax                ; pipe_id
-        ; Allocate read fd
-        call vfs_alloc_fd
-        cmp eax, -1
-        je .pipe2_fail2
-        push eax                ; read_fd
-        ; Allocate write fd
-        call vfs_alloc_fd
-        cmp eax, -1
-        je .pipe2_fail3
-        ; Set up both fds
-        push eax                ; write_fd
-        mov ecx, eax
-        push ebx
-        mov ebx, ecx
-        call vfs_fd_ptr         ; edi -> write VFD
-        pop ebx
-        pop ecx                 ; write_fd
-        mov dword [edi + VFD_STATE],   VFD_OPEN
-        mov dword [edi + VFD_FS_TYPE], VFS_FS_HBFS  ; reuse HBFS fd type for pipe
-        mov eax, [esp]          ; pipe_id
-        or  eax, 0x80000000     ; flag as pipe (high bit)
-        mov [edi + VFD_REAL_FD], eax
-        mov dword [edi + VFD_FLAGS], O_WRONLY
-        mov dword [edi + VFD_RIGHTS], RIGHT_WRITE
-
-        pop eax                 ; read_fd
-        push eax
-        push ebx
-        mov ebx, eax
-        call vfs_fd_ptr         ; edi -> read VFD
-        pop ebx
-        pop eax
-        mov dword [edi + VFD_STATE],   VFD_OPEN
-        mov dword [edi + VFD_FS_TYPE], VFS_FS_HBFS
-        mov ecx, [esp]          ; pipe_id
-        or  ecx, 0x80000000
-        mov [edi + VFD_REAL_FD], ecx
-        mov dword [edi + VFD_FLAGS], O_RDONLY
-        mov dword [edi + VFD_RIGHTS], RIGHT_READ
-
-        ; Store fds into caller's pipefd[2]
-        pop ecx                 ; pipe_id (discard)
-        pop ecx                 ; read_fd
-        pop edx                 ; write_fd
-        mov [ebx + 0], ecx      ; pipefd[0] = read end
-        mov [ebx + 4], edx      ; pipefd[1] = write end
-        mov dword [esp + 28], 0
-        popad
-        iretd
-.pipe2_fail3:
-        pop eax                 ; discard read_fd
-.pipe2_fail2:
-        pop eax                 ; discard pipe_id
-.pipe2_fail:
         mov dword [esp + 28], -1
         popad
         iretd

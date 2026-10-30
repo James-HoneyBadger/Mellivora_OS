@@ -103,6 +103,25 @@ int main(void)
         close(fd);
     }
 
+    /* Where we are, and a pipe between two descriptors. */
+    {
+        char cwd[64];
+
+        ok(getcwd(cwd, sizeof cwd) != 0, "getcwd");
+        ok(cwd[0] == '/', "the working directory is a path");
+        /* One byte short of the path plus its terminator: "/" needs two. */
+        ok(getcwd(cwd, slen(cwd)) == 0 && errno == ERANGE,
+           "a buffer too small is ERANGE, not a truncated path");
+    }
+    {
+        int fds[2];
+
+        /* pipe() is not implemented and says so: ENOSYS, not a descriptor that
+         * faults when it is used. */
+        errno = 0;
+        ok(pipe(fds) == -1 && errno == ENOSYS, "pipe reports ENOSYS");
+    }
+
     /* Directories, then removal. */
     ok(mkdir("/tmp/posixdir", 0755) == 0 || errno != 0, "mkdir either works or says why");
     ok(rmdir("/tmp/posixdir") == 0 || errno != 0, "rmdir either works or says why");

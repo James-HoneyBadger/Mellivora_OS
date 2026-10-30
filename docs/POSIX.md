@@ -22,7 +22,7 @@ it prints `POSIX_OK` only when every check below holds.
 
 | Header | Contents |
 |---|---|
-| `unistd.h` | `read`, `write`, `close`, `lseek`, `dup`, `dup2`, `unlink`, `rmdir`, `access`, `chdir`, `isatty`, `fcntl`, `fork`, `execve`, `execl`, `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `sleep`; `pid_t`, `uid_t`, `gid_t`, `ssize_t`, `off_t`; `STD*_FILENO`, `SEEK_*`, `R_OK`/`W_OK`/`X_OK`/`F_OK` |
+| `unistd.h` | `read`, `write`, `close`, `lseek`, `dup`, `dup2`, `unlink`, `rmdir`, `access`, `chdir`, `getcwd`, `pipe`, `isatty`, `fcntl`, `fork`, `execve`, `execl`, `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `sleep`; `pid_t`, `uid_t`, `gid_t`, `ssize_t`, `off_t`; `STD*_FILENO`, `SEEK_*`, `R_OK`/`W_OK`/`X_OK`/`F_OK` |
 | `fcntl.h` | `open`, `creat`; `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_ACCMODE`, `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`; `F_*` commands |
 | `sys/stat.h` | `stat`, `fstat`, `mkdir`, `chmod`; `struct stat`; `S_ISDIR`, `S_ISREG` |
 | `sys/wait.h` | `wait`, `waitpid`; `WIFEXITED`, `WEXITSTATUS`, `WIFSIGNALED`, `WTERMSIG` |
@@ -33,7 +33,7 @@ it prints `POSIX_OK` only when every check below holds.
 | `limits.h` | `NAME_MAX` 252, `PATH_MAX` 512, `ARG_MAX` 512, `OPEN_MAX` 64, `INT_MAX`, `INT_MIN` |
 
 Whatever is not in that list is not declared, which makes it a compile error
-rather than a call that returns a plausible lie. `pipe`, `socket`, `mmap`,
+rather than a call that returns a plausible lie. `socket`, `mmap`,
 `wait`-with-options, `getrlimit`, `umask`, `readdir`, `symlink`, `tcsetattr` and
 the rest of the standard are absent.
 
@@ -54,6 +54,7 @@ Verified by `posixtest` on every `make check-runtime` run:
 | `execl`/`execve` reach a program with its arguments | `execl` builds the array; `SYS_EXECVE` flattens it for the loader |
 | `mkdir`, `chmod`, `unlink`, `rmdir` | `SYS_MKDIR`, `SYS_CHMOD`, `SYS_DELETE` |
 | `access(R_OK)` on a file that exists | `SYS_ACCESS`, which now asks the mount rather than assuming HBFS |
+| `getcwd` returns the path, or NULL with `ERANGE` for a buffer one byte short | The kernel builds into its own 256-byte buffer, so the length is known before the caller's buffer is touched |
 | `isatty` is false for a file, true for 0/1/2 | Descriptors are allocated from 3 up, so a file never takes the console's number |
 | `dup`/`dup2` give a working descriptor for a file | They operate on the descriptor table a program was actually handed |
 | `fork` returns the child's PID to the parent and 0 to the child | The child's PID is its slot, and PIDs start at 1 — PID 0 is the scheduler's |
@@ -74,7 +75,8 @@ closed; the rest are here so a port knows what to expect.
 | No permission bits in `stat`; `access` is the only check | A program cannot decide access from the stat it took | `SYS_ACCESS` exists and enforces; the stat structure has to grow first |
 | `dup` copies the file position instead of sharing it | Two handles read independently | Sharing needs one open-file-description object behind both descriptors; today each descriptor carries its own offset |
 | `O_EXCL` is ignored | `open(O_CREAT\|O_EXCL)` does not fail on an existing file | No create-and-fail atomically; the create path is a whole-file write |
-| `pipe`, `socket`, `poll`, `select` are not in the POSIX surface | A port that needs them cannot build | The kernel has sockets and pipes, but through its own calls; wrapping them is a separate increment |
+| `pipe()` fails with `ENOSYS` | A port that pipes between processes or threads cannot | `SYS_PIPE2` allocates a pipe and two descriptors, but nothing in the VFS reads or writes a pipe: the first use reached the HBFS backend with a descriptor it had never seen. It now refuses instead of faulting, and the descriptor backend over `ipc_pipe_*` is the work it waits for |
+| `socket`, `poll`, `select` are not in the POSIX surface | A port that needs them cannot build | The kernel has sockets, but through its own calls; wrapping them is a separate increment |
 | No `fork` with threads; no `pthread_*` | A threaded POSIX program cannot build | Threads exist at the syscall level and their TLS is per task; `pthread` needs per-thread TLS first |
 | `errno` is one variable per task, not per thread | A second thread shares it | The same TLS gap |
 | No `getrlimit`/`setrlimit`, no `umask`, no `nice` | Limits cannot be queried or changed | Nothing in the kernel exposes them yet |
@@ -97,7 +99,8 @@ In the order the cost rises:
    (`docs/spec/ABI.md` section 9) are what stand between them and `stat`.
 3. **One open-file description shared by `dup`.** So `dup`, `dup2` and `fcntl`
    share the offset the way the standard requires.
-4. **`pipe` and `socket` wrappers**, since the kernel has both.
+4. **A descriptor backend for pipes**, then the `pipe()` wrapper over it, and
+   the same for sockets.
 5. **`pthread` on top of per-thread TLS**, which needs the TLS index to be per
    thread rather than per task (EXEC.md section 6's open item).
 

@@ -42,6 +42,8 @@ int unlink(const char *path);
 int rmdir(const char *path);
 int access(const char *path, int mode);
 int chdir(const char *path);
+char *getcwd(char *buf, unsigned size);
+int pipe(int fds[2]);
 int isatty(int fd);
 int fcntl(int fd, int cmd, int arg);
 
