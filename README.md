@@ -31,7 +31,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **POSIX-style signals** — SIGINT, SIGKILL, SIGTERM, SIGTSTP, SIGCONT, SIGUSR1/2, SIGALRM, SIGCHLD; W^X sigreturn trampoline at 0x1FFFF000
 - **Per-task errno** (v12.1) — `TCB_ERRNO` in the TCB; read via `SYS_GETERRNO`
 - **Process groups** — PGID and SID support for job control
-- **Image loader** — HBX (`MVBX`) images with checksum, sections, base relocations and imports; flat binaries; ELF32 development images
+- **Image loader** — HBX (`MVBX`) images with checksum, sections, base relocations and imports; PE32 images (i386, no imports yet) with a refusal for every rule they break; flat binaries; ELF32 development images
 - **Physical memory manager** with buddy allocator (order 0–11; malloc/free/realloc for user programs)
 - **VBE/BGA graphics driver** — high-resolution framebuffer modes (640×480, 800×600, 1024×768 at 32 bpp) with double buffering
 - **Compositor surface IPC** — kernel-managed pixel buffers with z-order and dirty-rect compositing (SYS_SURFACE_CREATE/COMMIT/DESTROY/MOVE/RESIZE)
@@ -132,7 +132,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 ### HBFS Filesystem (v3)
 
 - **Honey Badger File System v3** — custom filesystem with 4 KB blocks and write-ahead journal
-- **455 entries** per root directory, **224 entries** per subdirectory (288-byte entries, 252-char max filename)
+- **455 entries** per directory, root or not (288-byte entries, 252-char max filename)
 - **File types**: text, executable, directory, batch script
 - **File permissions** — Unix-style 12-bit mode (`HBFS_DE_MODE`) with owner/group/other rwx; `SYS_ACCESS` enforces it via `hbfs_check_access` (`open` does not check yet)
 - **Extended attributes** — per-file xattr block; `hbfs_xattr_get` / `hbfs_xattr_set` kernel API
@@ -492,7 +492,7 @@ ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on A
 | Bundled samples | 37 (2 NASM + 18 C + 11 Perl + 6 BASIC) in `/samples` |
 | API libraries | 17 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |
-| HBFS root capacity | 455 files; 224 files per subdirectory |
+| HBFS directory capacity | 455 files, root or subdirectory |
 | Concurrent tasks | 128 (preemptive scheduler, 4 priority levels) |
 
 ---

@@ -537,9 +537,9 @@ with other mappings of that block until the cache has room.
 | `HBFS_ROOT_DIR_SECTS` | 256 (32 × 8) |
 | `HBFS_ROOT_DIR_SIZE` | 131,072 bytes (128 KB) |
 | `HBFS_MAX_FILES` | 455 (131,072 / 288) |
-| `HBFS_SUBDIR_BLOCKS` | 16 |
-| `HBFS_SUBDIR_SIZE` | 65,536 bytes (64 KB) |
-| `HBFS_SUBDIR_MAX_ENTRIES` | 224 (65,536 / 288) |
+| `HBFS_SUBDIR_BLOCKS` | 32 |
+| `HBFS_SUBDIR_SIZE` | 131,072 bytes (128 KB) |
+| `HBFS_SUBDIR_MAX_ENTRIES` | 455 (131,072 / 288) |
 | `HBFS_SUPERBLOCK_LBA` | 4096 |
 | `HBFS_BITMAP_START` | 4097 |
 | `HBFS_ROOT_DIR_START` | 4225 |
@@ -651,7 +651,7 @@ Every metadata write restamps the run it touches before the sectors go out:
 | Superblock | `hbfs_write_superblock` | All superblock writes funnel through it, so the journal state word is inside the checksum |
 | Bitmap | `hbfs_meta_write` | A partial write also journals and writes the sector holding the 4-byte trailer |
 | Directory | `hbfs_save_root_dir` | The run is stamped before the diff, so the trailer's sector is written with the entries that changed |
-| New subdirectory | `hbfs_mkdir` | A fresh subdirectory is 64 KB of zeros, so its CRC is the constant `HBFS4_EMPTY_DIR_CRC` (CRC-32C of 65 536 zero bytes), stamped into the last block |
+| New subdirectory | `hbfs_mkdir` | A fresh subdirectory is 128 KB of zeros, so its CRC is the constant `HBFS4_EMPTY_DIR_CRC` (CRC-32C of 131 072 zero bytes), stamped into the last block |
 
 An extent file is created when a v4 volume cannot supply one run large enough:
 `hbfs_extent_alloc` allocates the largest run it can repeatedly (down to one block),

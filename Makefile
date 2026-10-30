@@ -369,7 +369,7 @@ gdb: check-qemu $(IMAGE) $(KERNEL_ELF)
 
 # Build all sample programs (parallel by default)
 programs:
-	$(MAKE) -j$(NPROC) $(PROG_BINS) $(HBX_BINS)
+	$(MAKE) -j$(NPROC) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES)
 
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
@@ -409,6 +409,28 @@ $(HBX_BUILD)/fixtures.stamp: $(HBX_PAYLOADS) tools/mkhbx.py tools/hbx_fixtures.p
 $(HBX_BINS): $(HBX_BUILD)/fixtures.stamp
 	@test -f $@ || { rm -f $(HBX_BUILD)/fixtures.stamp; $(MAKE) $(HBX_BUILD)/fixtures.stamp; }
 
+# PE32 loader fixtures (docs/spec/EXEC.md section 1, section 2, section 8). The
+# same shape as the HBX fixtures: one flat payload, wrapped into one image per
+# rule the loader can refuse on, so tools/pe_fixtures.py reads as the refusal
+# table it tests.
+PE_PAYLOAD = $(HBX_BUILD)/pe.bin
+PE_FIXTURES = $(PROG_DIR)/pe_ok.bin $(PROG_DIR)/pe_64.bin \
+              $(PROG_DIR)/pe_base.bin $(PROG_DIR)/pe_entry.bin \
+              $(PROG_DIR)/pe_wx.bin $(PROG_DIR)/pe_import.bin \
+              $(PROG_DIR)/pe_nofit.bin
+
+$(PE_PAYLOAD): $(HBX_DIR)/pe_ok.asm $(HBX_DIR)/pe_payload.inc $(PROG_DIR)/syscalls.inc
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -I$(PROG_DIR)/ -I$(HBX_DIR)/ -o $@ $<
+
+$(HBX_BUILD)/pe_fixtures.stamp: $(PE_PAYLOAD) tools/mkpe.py tools/pe_fixtures.py
+	@mkdir -p $(HBX_BUILD)
+	python3 tools/pe_fixtures.py --build $(HBX_BUILD) --out $(PROG_DIR)
+	@touch $@
+
+$(PE_FIXTURES): $(HBX_BUILD)/pe_fixtures.stamp
+	@test -f $@ || { rm -f $(HBX_BUILD)/pe_fixtures.stamp; $(MAKE) $(HBX_BUILD)/pe_fixtures.stamp; }
+
 # A program that jumps forward over more than 127 bytes needs -O0: NASM's
 # default sizing assumes a short jump on the first pass, and the labels after
 # it then move on the second. crypt_test carries 36 KB of buffers and two long
@@ -426,7 +448,7 @@ programs/generated_app_catalog.inc: docs/app-catalog.json tools/generate_launche
 # `make -j check` cannot test an image whose population step is still running
 # (or was never run).
 POPULATE_STAMP = .build/populated.stamp
-POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) populate.py
+POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) populate.py
 
 $(POPULATE_STAMP): $(POPULATE_DEPS)
 	@mkdir -p $(dir $@)
@@ -507,7 +529,7 @@ define build_iso_image
 	$(POPULATE) $(1) $(PROG_DIR)
 endef
 
-ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) populate.py
+ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) populate.py
 
 # populate.py derives the HBFS block count from the size of the file it writes,
 # so an image is only correct for the size it was built at. These stamps record

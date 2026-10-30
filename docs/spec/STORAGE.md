@@ -345,7 +345,7 @@ M3 does not close until:
 | Contract | Tree today |
 |---|---|
 | 64-bit block numbers, 2^62 volume | 32-bit, 2 GB |
-| B+tree directories, 65 535 entries | Linear directory blocks, 224 entries per subdirectory |
+| B+tree directories, 65 535 entries | Linear directory blocks, 455 entries per directory |
 | ACLs, streams, compression, encryption, snapshots | **ACLs: yes**, as ACEs in the xattr block (`acl:u<id>`, `acl:g<id>`, `acl:m`, `acl:o`), evaluated by `acl_perm` before the mode word and settable from the shell with `acl set`; conformance in `acl_test`. No inheritance and no group-class unions yet. **Volume encryption: yes**, as AES-256-XTS over the 4 KiB units above the journal, with the key checked against the superblock before the mount and `crypt format`/`crypt unlock` as the only writers of the stamp; the store is kernel memory (`key add`), so the volume is refused after a reboot until the secret is put back, and there is no per-file layer yet. Streams, compression and snapshots: none |
 | Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it |
 | Journal with redo records | Undo journal: before-images replayed backwards |

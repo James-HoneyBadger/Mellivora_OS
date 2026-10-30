@@ -555,9 +555,23 @@ status. `c/prog/crtdemo.c` is the gate - checks over the conversions,
 allocation of the whole arena afterwards to prove the coalescing, and
 `calloc`/`realloc` - and `make check-runtime` runs it. `main` still takes no
 arguments: the kernel hands a program a flattened command line, not EXEC.md
-section 5.1's block, so `argv` waits for it. What is still open in this wave:
-PE32, shared libraries and per-module TLS, imports that resolve to something,
-Unicode, and the interface layer.
+section 5.1's block, so `argv` waits for it. Then the second format: the loader
+sees `MZ` and hands the file to `kernel/pe.inc`, which accepts the PE32 subset
+EXEC.md section 2.1 writes down - i386, magic 0x010B, the window's base, no
+imports, sections inside the file and the image, none writable and executable,
+an entry point inside code - and refuses everything else in its own words,
+because a program built for the parity target's ecosystem is what this wave is
+for. Loading is a copy, so the file is staged at the top of the window, the
+image area is cleared and the sections are copied down; copying in place would
+only work while raw data sat above the whole image, which no linker guarantees.
+`tools/mkpe.py` carries one keyword per rule, `tools/pe_fixtures.py` is the
+refusal table written as code, and `make check-loader` proves the image that
+loads and all seven refusals. Populating the image with seven more fixtures
+then filled `/bin` - 224 entries - and dropped programs silently, which is the
+ceiling docs/spec/README.md's S1 named, so a subdirectory is now the size of
+the root: 455 entries, one documented number instead of two. What is still open
+in this wave: shared libraries and per-module TLS, imports that resolve to
+something, Unicode, and the interface layer.
 
 ### M6 · Shell and user experience (12–16 weeks)
 

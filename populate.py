@@ -292,9 +292,11 @@ def create_dir_entry(filename, ftype, size, start_block,
     return entry
 
 
-HBFS_SUBDIR_BLOCKS = 16                 # Blocks per subdirectory
+# Blocks per subdirectory. As for the root: at 16 blocks (224 entries) /bin
+# filled up and the populator dropped programs without failing.
+HBFS_SUBDIR_BLOCKS = 32
 HBFS_SUBDIR_SIZE = HBFS_SUBDIR_BLOCKS * BLOCK_SIZE
-HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 224
+HBFS_SUBDIR_MAX_FILES = HBFS_SUBDIR_SIZE // HBFS_DIR_ENTRY_SIZE  # 455
 HBFS_BITMAP_SECTS = HBFS_BITMAP_BLOCKS * SECTORS_PER_BLOCK
 
 

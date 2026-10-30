@@ -58,7 +58,7 @@ named.
 | Physical memory | 512 MB tested; frames only below 512 MB, all of it identity-mapped | 64 GiB via PAE, PFN database over all of it | M2 |
 | Syscalls | 201, flat: 0–186 legacy and 187–200 the object manager (frozen by number) | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
 | Names | 63 bytes, 8-bit | 255 UTF-16 code units, resolved case-insensitively for the Windows-facing namespace | M1 |
-| Directory entries | 224 per subdirectory, 2 048 per root | 65 535 per directory, B+tree directories | M3 |
+| Directory entries | 455 per directory, root or subdirectory | 65 535 per directory, B+tree directories | M3 |
 | File size | 32-bit block numbers, 2 GB volume | 2^63 bytes per file, 2^62 bytes per volume, 64-bit block numbers | M3 |
 | Program image | 1 MB flat binary | 3 GiB image, PE32 or native, shared libraries | M5 |
 | Processors | 8 slots, APs parked | 64, every one scheduling | M2 |
@@ -75,7 +75,7 @@ the D-series in [the roadmap](../ROADMAP.md#architectural-decisions).
 
 | # | Decision | Rationale |
 |---|---|---|
-| S1 | **No accidental ceilings.** Any limit a caller can hit is either a documented policy limit (task count per job, quota) or derived from hardware. A compile-time array bound is not a limit, it is a bug with good manners. | Every ceiling above was found by hitting it: `/bin` at 224 entries dropped test programs silently, and a 2 MB kernel window is 95 % full. |
+| S1 | **No accidental ceilings.** Any limit a caller can hit is either a documented policy limit (task count per job, quota) or derived from hardware. A compile-time array bound is not a limit, it is a bug with good manners. | Every ceiling above was found by hitting it: `/bin` at 224 entries dropped test programs silently, and did it a second time, which is why a subdirectory is now the size of the root, and a 2 MB kernel window is 95 % full. |
 | S2 | **One object model, no second-class resources.** Files, processes, threads, sections, sockets, keys, devices, timers, jobs and ports are all objects with the same handle, rights, wait and naming rules. | A resource that is not an object cannot be secured, shared, waited on or remotely managed without special cases. |
 | S3 | **The old ABI never breaks.** The 187 existing syscalls keep their numbers and meanings forever, implemented over objects. New capability arrives as new calls. | 2 000+ programs and every test in the tree call them; "monumental" must not mean "rewrite userland". |
 | S4 | **Fixed-width types at every boundary.** `u8`/`u16`/`u32`/`u64` only; no `int`, no `long`, no pointer-sized field in a structure that is shared, stored or sent. | Keeps structures valid across a future 64-bit move without a flag day, and makes the ABI portable to a harness. |

@@ -80,6 +80,51 @@ The checksum covers the whole file - header, section table and image bytes -
 with the checksum field read as zero, which is why `header_size` has to be
 known before it can be verified.
 
+## 2.1 PE32
+
+PE32 is the reason M5 exists: an image built for the parity target's ecosystem
+has to run. The subset accepted here is the one that can be loaded correctly
+today, and everything outside it is refused by name rather than half loaded.
+
+| Field | Accepted |
+|---|---|
+| DOS header | `MZ`, with `e_lfanew` naming a `PE\0\0` signature inside the file |
+| Machine | `0x014C` (i386); anything else is refused by number |
+| Optional header magic | `0x010B` (PE32). `0x020B` is PE32+ and gets the 32-bit refusal |
+| ImageBase | exactly the program window's base ([VMM.md](VMM.md#21-user-space)); nothing relocates a PE32 image yet |
+| Data directories | the import directory must be empty; there are no libraries to resolve against (§6) |
+| Sections | inside the file and inside `SizeOfImage`, in increasing virtual address order without overlapping, and none both writable and executable |
+| Entry point | inside an executable section |
+| Size | image and file both inside the program window at once |
+
+The loader copies, it does not map: the file is moved to the top of the window,
+the image area is cleared and each section is copied down. Copying in place
+would work only while every section's raw data sat above the whole image, which
+is true of a wrapped flat payload and false of anything a linker emits.
+
+**As built** (`kernel/pe.inc`, `tools/mkpe.py`, `tools/pe_fixtures.py`). The
+branch is one comparison in `image_load_program` - `MZ` at the first two bytes
+- which is what the format-agnostic door was for; no caller changed. The
+refusals are the sentences the rest of this document already promised, said in
+the PE32 loader's own words:
+
+```text
+pe: bad image in the header
+pe: this system is 32-bit
+pe: machine 0x014D is not i386
+pe: cannot load at 0x00400000: no relocations
+pe: section .text is writable and executable
+pe: entry 0x00002010 is not executable
+pe: imports cannot be resolved yet
+pe: image and file do not both fit the window
+```
+
+`make check-loader` proves the image that loads (`pe_ok` prints `PE_OK`) and
+each refusal, every refusal followed by a program that still runs, so a
+half-built process cannot pass for a refusal. `tools/mkpe.py` carries one
+keyword per rule, and `tools/pe_fixtures.py` is the refusal table above written
+as code.
+
 ## 3. Loading
 
 ```text
@@ -220,7 +265,12 @@ handler is refused with the extension named.
 | Manifest requests an ungranted capability | Starts, then the first use is refused ([SECURITY.md](SECURITY.md#6-application-capability-manifests)) |
 
 Every refusal is a status the caller can act on, not a crash and not a generic
-"cannot execute".
+"cannot execute". The table is about behaviour, not about a header: the PE32
+loader answers it in its own words ([§2.1](#21-pe32)) - `pe: this system is
+32-bit`, `pe: cannot load at 0x00400000: no relocations`, `pe: section .text is
+writable and executable` - so a caller that reads the status rather than the
+sentence sees one loader, and a user reading the console sees which format
+disagreed with them.
 
 ## 9. Boot information
 
@@ -242,8 +292,8 @@ M5 does not close until:
    with a relocated import, and refuses a writable-executable section, a bad
    checksum and a 64-bit image — each with its own status. (**As built:**
    `make check-loader` proves the fixed base, a relocated image, the randomised
-   base, and every refusal in section 8; the relocated import waits for
-   libraries (§6).)
+   base, a PE32 image, and every refusal in section 8 in both formats; the
+   relocated import waits for libraries (§6).)
 3. A program and a library built from the SDK samples load, call across the
    boundary, use TLS in two threads, and unload in the right order.
 4. ASLR: 1 000 launches of the same image produce 1 000 distinct main-image
@@ -258,7 +308,7 @@ M5 does not close until:
 | Contract | Tree today |
 |---|---|
 | HBX images | Read and enforced: `MVBX` header, CRC-32C, sections, relocations and entry point. A relocatable image is mapped at a random base; a fixed-base one is copied into the window. |
-| PE32 images | Not built. The loader dispatches on the header, so adding the format is one branch, not one per caller. |
+| PE32 images | Read and enforced: the §2.1 subset, with one refusal per rule. A PE32 image is copied into the window like a fixed-base HBX image, so it is not randomised and cannot import; the unwrapping and the refusal set are what `make check-loader` proves. |
 | Shared libraries | None |
 | TLS per module | A kernel-managed thread-local area for one module |
 | ASLR | The main image base for a relocatable HBX image, and per-launch randomised heap and stack top. Shared libraries, thread stacks and section views have nothing to randomise yet |

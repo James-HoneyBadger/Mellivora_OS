@@ -82,10 +82,10 @@ HBFS4_EXTENT_MAX       equ ((HBFS_BLOCK_SIZE - HBFS4_EXTENT_HDR - \
                              HBFS4_RUN_CHECKSUM_BYTES) / HBFS4_EXTENT_RECORD)
 
 ; A freshly created subdirectory is HBFS_SUBDIR_BLOCKS zero blocks, so its run
-; checksum is always the CRC-32C of 65 536 zero bytes. Stamping the last block
-; with this value is cheaper than zeroing and checksumming 64 KB per mkdir, and
+; checksum is always the CRC-32C of 131 072 zero bytes. Stamping the last block
+; with this value is cheaper than zeroing and checksumming 128 KB per mkdir, and
 ; tests/test_v4_mount.py fails the fsck if the constant is ever wrong.
-HBFS4_EMPTY_DIR_CRC     equ 0x72C0C4A4
+HBFS4_EMPTY_DIR_CRC     equ 0x5D87814F
 
 ; hbfs_delete_tree's verdict, in EAX on failure.
 HBFS_DT_OK             equ 0
@@ -2755,7 +2755,7 @@ hbfs_mkdir:        pushad
         pop ebx
         pop eax
         ; v4: the subdirectory is one checksummed run. The last block carries
-        ; the CRC of the whole (still zero) 64 KB.
+        ; the CRC of the whole (still zero) 128 KB.
         cmp  dword [hbfs_super_buf], HBFS4_MAGIC
         jne  .hm_zero_write
         cmp  ebx, 1

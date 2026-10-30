@@ -1,0 +1,10 @@
+; pe_nofit.asm - the payload behind programs/pe_nofit.bin.
+;
+; The image itself is wrapped by tools/pe_fixtures.py out of one payload
+; (.build/hbx/pe.bin), which is where the header differs for each of the
+; loader's refusals (docs/spec/EXEC.md sections 1 and 8). This file exists so
+; populate.py can say what the binary came from, the same way the HBX fixture
+; stubs do. The fixture is an image that claims the whole program window, so
+; the file and the image cannot both be in it at once.
+%include "syscalls.inc"
+%include "pe_payload.inc"

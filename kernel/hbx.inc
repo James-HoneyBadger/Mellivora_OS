@@ -38,6 +38,8 @@ image_load_program:
         je .ilp_hbx
         cmp dword [PROGRAM_BASE], ELF_MAGIC
         je .ilp_elf
+        cmp word [PROGRAM_BASE], 0x5A4D  ; 'MZ'
+        je .ilp_pe
 
         ; A flat binary: the file is the image and its first byte is the entry.
         mov [program_size], eax
@@ -64,6 +66,13 @@ image_load_program:
 .ilp_hbx:
         mov byte [hbx_map_pending], 0
         call hbx_prepare                ; EAX = entry, CF on refusal
+        jc .ilp_fail
+        mov [program_entry], eax
+        clc
+        jmp .ilp_out
+
+.ilp_pe:
+        call pe_load_program            ; EAX = bytes read; entry out, CF on refusal
         jc .ilp_fail
         mov [program_entry], eax
         clc

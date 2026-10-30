@@ -211,7 +211,9 @@ HBFS_ROOT_DIR_BLOCKS equ 32            ; Root directory uses 32 blocks (supports
 HBFS_ROOT_DIR_SECTS  equ HBFS_ROOT_DIR_BLOCKS * HBFS_SECTORS_PER_BLK ; 256 sectors
 HBFS_ROOT_DIR_SIZE   equ HBFS_ROOT_DIR_BLOCKS * HBFS_BLOCK_SIZE      ; 131072 bytes
 HBFS_MAX_FILES       equ HBFS_ROOT_DIR_SIZE / HBFS_DIR_ENTRY_SIZE    ; 455 entries
-HBFS_SUBDIR_BLOCKS   equ 16           ; Subdirectories get 16 blocks (224 entries each)
+HBFS_SUBDIR_BLOCKS   equ 32            ; Subdirectories are the size of the root (455
+                                       ; entries each). At 16 blocks /bin filled up and
+                                       ; the populator started dropping programs.
 ; HBFS on-disk layout — all LBAs derived from HBFS_SUPERBLOCK_LBA.
 ; HBFS_SUPERBLOCK_LBA must be > (33 + KERNEL_SECTORS).
 ; KERNEL_SECTORS is generated into kernel_sectors.inc by the Makefile from the
@@ -980,6 +982,7 @@ kernel_entry:
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
 %include "kernel/hbx.inc"
+%include "kernel/pe.inc"
 %include "kernel/sett.inc"
 %include "kernel/settx.inc"
 %include "kernel/service.inc"

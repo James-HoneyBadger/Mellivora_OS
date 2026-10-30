@@ -1,5 +1,63 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: a PE32 image loads, and a subdirectory holds what a root does
+
+EXEC.md section 1 lists PE32 as the format that makes M5 worth doing: an image
+built for the parity target's ecosystem has to run. The loader dispatched on the
+header already, so the work was one branch and one more file - and a promise
+that every refusal stays a sentence rather than a crash.
+
+```text
+Lair:/> pe_ok
+Executing...
+PE_OK
+Lair:/> pe_64
+pe: this system is 32-bit
+Lair:/> pe_wx
+pe: section .text is writable and executable
+Lair:/> pe_nofit
+pe: image and file do not both fit the window
+```
+
+- **The subset is written down.** `kernel/pe.inc` accepts i386, optional header
+  magic 0x010B, an ImageBase equal to the program window's base, an empty import
+  directory, sections inside both the file and `SizeOfImage` in increasing
+  virtual address order without overlapping and none both writable and
+  executable, and an entry point inside code. Anything else is refused by name:
+  a PE32+ image gets the same "this system is 32-bit" a 64-bit HBX image does, a
+  machine number is quoted, a foreign base is refused because nothing relocates
+  a PE32 image yet, and imports are refused rather than started with an IAT full
+  of zeroes.
+- **Loading is a copy, so the file gets out of the way first.** The file is moved
+  to the top of the program window, the image area is cleared, and each section
+  is copied down from the moved copy. Copying in place would work only while
+  every section's raw data sat above the whole image - true of a wrapped flat
+  payload, false of anything a linker emits - and an image and file that cannot
+  both fit are refused rather than half copied.
+- **One door, unchanged.** `image_load_program` gained three instructions (`MZ`
+  at the first two bytes) and no caller changed; the flat, ELF32 and HBX paths
+  are the ones they were.
+- **Fixtures that are the refusal table.** `tools/mkpe.py` builds a PE32 image
+  with one keyword per rule; `tools/pe_fixtures.py` wraps one payload into one
+  image per rule, so the difference between the images that must load and the
+  images that must be refused is one file of code. `make check-loader` proves
+  the image that loads and all seven refusals, each refusal followed by a
+  program that still runs, so a half-built process cannot pass for a refusal.
+- **`/bin` hit its ceiling, again.** Seven more fixtures overflowed a
+  subdirectory at 224 entries and the populator dropped `whois` through `yes`
+  with a warning nobody would read. A subdirectory is now the size of the root -
+  32 blocks, 455 entries - so the tree has one documented directory capacity
+  instead of two, which is what S1 in docs/spec/README.md asks for. The empty
+  directory's run checksum moved with it (`HBFS4_EMPTY_DIR_CRC` is now the
+  CRC-32C of 128 KB of zeroes), `validate-constants` cross-checks the number in
+  the kernel, the populator and the tests, and a freshly created profile still
+  passes `repair` with no leaked and no lost block.
+
+`make check-loader` runs the positive case and the seven refusals; `make
+check-hbfs-v4`, `check-hbfs-journal`, `check-hbfs-checksum` and `check-hbfs-extents`
+were rerun over the wider directory, and `fsck_hbfs.py` reports the populated
+image consistent.
+
 ## Unreleased - M5: the C runtime formats, allocates and starts a program
 
 M5 asks for "a C runtime: string, memory, formatted I/O, allocation, and the

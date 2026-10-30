@@ -122,6 +122,7 @@ echo "  loader tests: $(basename "$IMAGE"), ${CASE_TIMEOUT}s per case"
 # The images that must load.
 run_case "a fixed-base HBX image runs"        "hbx_ok"     "HBX_OK"
 run_case "a relocated image runs"             "hbx_reloc"  "HBX_RELOC_OK"
+run_case "a PE32 image runs"                  "pe_ok"      "PE_OK"
 
 # The refusals, each followed by a program that has to still run: a half-built
 # process would have taken the shell's next command with it.
@@ -131,6 +132,14 @@ run_case "a 64-bit image is refused"          "hbx_64"     "hbx: this system is 
 run_case "an image that cannot be moved"      "hbx_noreloc" "hbx: cannot load at 0x00400000: no relocations" "hbx_ok"
 run_case "an entry point outside code"        "hbx_entry"  "hbx: entry 0x" "hbx_ok"
 run_case "a missing import names both names"  "hbx_import" "hbx: nosuch.dll!missing not found" "hbx_ok"
+
+# PE32's refusals are the same promises, made against a different header.
+run_case "a PE32+ image is refused"           "pe_64"      "pe: this system is 32-bit" "hbx_ok"
+run_case "a PE32 image built elsewhere"       "pe_base"    "pe: cannot load at 0x00400000: no relocations" "hbx_ok"
+run_case "a PE32 entry outside code"          "pe_entry"   "pe: entry 0x" "hbx_ok"
+run_case "a PE32 writable-executable section" "pe_wx"      "pe: section .text is writable and executable" "hbx_ok"
+run_case "PE32 imports are not resolved yet"  "pe_import"  "pe: imports cannot be resolved yet" "hbx_ok"
+run_case "a PE32 image larger than the window" "pe_nofit"   "pe: image and file do not both fit the window" "hbx_ok"
 
 # Section 4: the image base is chosen per launch, not built in.
 run_varying_case "the image base is randomised" "hbx_aslr" "HBX_ASLR 0x[0-9A-F]\{8\}" 6
