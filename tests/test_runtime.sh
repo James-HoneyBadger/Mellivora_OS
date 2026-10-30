@@ -292,6 +292,13 @@ run_case "M5 exit criterion: the application" \
     $'mvapp' \
     "MVAPP_OK" \
     "" "CPU EXCEPTION|MVAPP_FAIL|fault"
+# A C payload wrapped as an HBX image, importing mv_add from mvlib.hbl and
+# calling it through the import slot the loader patches: the SDK's link step
+# (tools/hbbuild.py) and the shared-library path, together, from C.
+run_case "C program imports from a shared library" \
+    $'mvprobe' \
+    "MVPROBE_OK" \
+    "" "CPU EXCEPTION|MVPROBE_FAIL|not found"
 # The display engine, proved rather than assumed. Every pixel format the engine
 # claims - 32, 24, 16 and 8 bpp - is drawn into a scratch page with a fill, a
 # rectangle, a colour-keyed blit, a clip rectangle, a gamma ramp and a line, and

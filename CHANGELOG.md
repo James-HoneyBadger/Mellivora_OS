@@ -45,11 +45,24 @@ MVAPP_OK runs=1
   map time, and a fixed-base image - which is never mapped - failed every
   library import with "not found" for a symbol that was exported.
 
+- **A C program can be an HBX image that imports from a shared library.**
+  `c/prog/mvprobe/` is that program: `tools/hbbuild.py` compiles it, links it at
+  `PROGRAM_BASE`, reads the import slot out of the symbol table and names it in
+  the image's import table; the loader patches the slot and the call reaches
+  `mv_add` in `mvlib.hbl`. Its statics and its writable array survive the
+  wrapper, which is what a C payload needed the test to show.
+
 **What this release does not contain**, so nobody has to read the roadmap to
 find out: the scalable font stack (the desktop still draws the bitmap face, so
 code points CP437 has no glyph for have none), threading and per-thread TLS
 (TLS is per task), and locale/collation/time-zone data. Those three are the M5
 remainder and are carried into M6 explicitly rather than being called done.
+
+One item is split rather than closed: the Sett, Chronicle, interfaces and
+Unicode live in `mvapp` (a flat image), and the library import lives in
+`mvprobe` (an HBX image). Both are verified, but a *single* image carrying both
+is not: the larger HBX payload faults at `eip=0x00500150` while the 32 KB probe
+does not, and that is the next thing to look at rather than something to claim.
 
 ## Unreleased - M5: a display engine that knows what format it is drawing in
 

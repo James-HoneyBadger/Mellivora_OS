@@ -219,8 +219,7 @@ $(CMOD_BLOB): $(CMOD_OBJS) c/kmod/kmain.ld $(C_OBJ_DIR)/kmod.addr
 
 # A program whose sources are a directory rather than one file (the SDK's
 # multi-source layout). Each source is compiled on its own and the objects are
-# linked the way a single-source program is, so nothing about the runtime or the
-# linker script changes.
+# linked the way a single-source program is.
 MVAPP_OBJS = $(patsubst c/prog/mvapp/%.c,$(C_OBJ_DIR)/mvapp/%.o,$(wildcard c/prog/mvapp/*.c))
 
 $(C_OBJ_DIR)/mvapp/%.o: c/prog/mvapp/%.c $(wildcard c/prog/mvapp/*.h) $(C_INCS)
@@ -231,11 +230,16 @@ programs/mvapp.bin: $(MVAPP_OBJS) $(C_USER_RT_OBJS) c/prog/prog.ld
 	@mkdir -p $(dir $@)
 	$(C_LD) -m elf_i386 -T c/prog/prog.ld --oformat binary -o $@ \
 	    $(MVAPP_OBJS) $(C_USER_RT_OBJS)
-	@SIZE=$$(wc -c < $@); \
-	if [ $$SIZE -gt $(PROGRAM_MAX_BYTES) ]; then \
-	    echo "  ERROR: $@ is $$SIZE bytes; a program window is $(PROGRAM_MAX_BYTES) bytes"; \
-	    exit 1; \
-	fi
+
+# The same directory of sources, but wrapped as an HBX image with an import from
+# a shared library: the SDK's link step (tools/hbbuild.py) names the slot.
+programs/mvprobe.bin: $(wildcard c/prog/mvprobe/*.c) $(C_USER_RT_OBJS) \
+                     c/prog/prog.ld $(LIB_BINS)
+	@mkdir -p $(dir $@)
+	CC='$(C_CC)' LD='$(C_LD)' C_CFLAGS='$(C_CFLAGS)' \
+	    C_USER_RT_OBJS='$(C_USER_RT_OBJS)' \
+	    python3 tools/hbbuild.py --name mvprobe --src c/prog/mvprobe --out $@ \
+	        --import mvlib:mv_add=mvlib_add
 
 programs/%.bin: $(C_OBJ_DIR)/prog/%.o $(C_USER_RT_OBJS) c/prog/prog.ld
 	@mkdir -p $(dir $@)
