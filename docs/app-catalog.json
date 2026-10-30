@@ -89,7 +89,7 @@
     {
       "id": "os.mellivora.bedit",
       "name": "Burrows Editor",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bedit",
       "category": "editor",
       "description": "Full-featured text editor with syntax hints, line numbers, and compile-run integration",
@@ -125,7 +125,7 @@
     {
       "id": "os.mellivora.bpaint",
       "name": "Burrows Paint",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bpaint",
       "category": "editor",
       "description": "Pixel drawing workspace for simple images and sketches",
@@ -161,7 +161,7 @@
     {
       "id": "os.mellivora.bhive",
       "name": "Burrows File Browser",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bhive",
       "category": "file",
       "description": "File browser for navigating and managing HBFS volumes",
@@ -197,7 +197,7 @@
     {
       "id": "os.mellivora.bforager",
       "name": "Burrows File Manager",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bforager",
       "category": "file",
       "description": "Graphical file manager with cut/copy/paste, rename, and dual-pane layout",
@@ -264,7 +264,7 @@
     {
       "id": "os.mellivora.blauncher",
       "name": "Burrows Launcher",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "blauncher",
       "category": "system",
       "description": "Desktop launcher, app switcher, and Burrows taskbar controller",
@@ -301,7 +301,7 @@
     {
       "id": "os.mellivora.bnotify",
       "name": "Burrows Notifications",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bnotify",
       "category": "system",
       "description": "Test and inspect desktop notification behavior",
@@ -336,7 +336,7 @@
     {
       "id": "os.mellivora.bsettings",
       "name": "Burrows Settings",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bsettings",
       "category": "system",
       "description": "Desktop settings for themes, preferences, and system behavior",
@@ -372,7 +372,7 @@
     {
       "id": "os.mellivora.bsysmon",
       "name": "Burrows System Monitor",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bsysmon",
       "category": "system",
       "description": "Live view of processes, memory, and system activity",
@@ -408,7 +408,7 @@
     {
       "id": "os.mellivora.bcrash",
       "name": "Crash Resilience Demo",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bfault",
       "category": "system",
       "description": "Deliberately faults to show the desktop contains application crashes",
@@ -439,7 +439,7 @@
     {
       "id": "os.mellivora.bterm",
       "name": "Burrows Terminal",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bterm",
       "category": "terminal",
       "description": "Graphical terminal for shell commands and interactive programs",
@@ -473,7 +473,7 @@
     {
       "id": "os.mellivora.bcalc",
       "name": "Burrows Calculator",
-      "version": "13.0.0",
+      "version": "14.0.0",
       "entry": "bcalc",
       "category": "utility",
       "description": "Desktop calculator for arithmetic and numeric expressions",

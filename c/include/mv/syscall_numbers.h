@@ -211,7 +211,9 @@
 #define SYS_OBJECT_STATS 199
 #define SYS_TOKEN_QUERY 200
 #define SYS_SVC_CONTROL 201
+#define SYS_LOG_WRITE 202
+#define SYS_SETT 203
 
-#define SYS_COUNT 202
+#define SYS_COUNT 204
 
 #endif /* MV_SYSCALL_NUMBERS_H */

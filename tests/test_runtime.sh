@@ -285,6 +285,13 @@ run_case "Unicode: UTF-8 rendered, UTF-16 converted" \
     $'unicodedemo' \
     "UNICODE_OK|café naïve Über|αβγ π ΣΩ" \
     "" "CPU EXCEPTION|UNICODE_FAIL"
+# M5's exit criterion, as one program: two source files, the Sett and Chronicle
+# reached through QueryInterface-shaped objects rather than syscall numbers, a
+# configuration value that survives the run, and Unicode text on the console.
+run_case "M5 exit criterion: the application" \
+    $'mvapp' \
+    "MVAPP_OK" \
+    "" "CPU EXCEPTION|MVAPP_FAIL|fault"
 # The display engine, proved rather than assumed. Every pixel format the engine
 # claims - 32, 24, 16 and 8 bpp - is drawn into a scratch page with a fill, a
 # rectangle, a colour-keyed blit, a clip rectangle, a gamma ramp and a line, and

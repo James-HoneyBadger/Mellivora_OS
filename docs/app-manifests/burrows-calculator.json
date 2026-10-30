@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bcalc",
   "name": "Burrows Calculator",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "entry": "bcalc",
   "category": "utility",
   "description": "Desktop calculator for arithmetic and numeric expressions",

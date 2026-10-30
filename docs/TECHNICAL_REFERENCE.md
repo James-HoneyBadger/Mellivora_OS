@@ -2158,7 +2158,7 @@ length, which also rejects a range that wraps past 2^32):
 | 200 | `SYS_TOKEN_QUERY` | EBX=buffer | EAX=0/-1 |
 | 201 | `SYS_SVC_CONTROL` | EBX=op (0 ask, 1 stopped, 2 refuse) | EAX=0/1/2, -1 if not a service |
 
-**Total: 202 syscalls defined (0–201, no gaps).**
+**Total: 204 syscalls defined (0–203, no gaps).**
 
 ---
 

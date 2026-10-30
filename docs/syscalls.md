@@ -4,7 +4,7 @@ This file is generated from programs/syscalls.inc.
 Do not edit manually; run: python3 tools/generate_syscalls_json.py
 
 - Source: programs/syscalls.inc
-- Syscall count: 202
+- Syscall count: 204
 
 | Number | Name | Summary |
 | ---: | --- | --- |
@@ -210,3 +210,5 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 199 | SYS_OBJECT_STATS | object_stats(buf, len) -> bytes/-1 |
 | 200 | SYS_TOKEN_QUERY | token_query(buf) -> 0/-1 |
 | 201 | SYS_SVC_CONTROL | svc_control(op) -> 0/1/2, -1 if not a service |
+| 202 | SYS_LOG_WRITE | Write to Chronicle: EBX=level(0..3) ECX=text -> EAX=0/-1 |
+| 203 | SYS_SETT | Config store: EBX=op(0 get,1 set) ECX=path EDX=buf ESI=size |

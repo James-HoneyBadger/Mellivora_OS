@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bhive",
   "name": "Burrows File Browser",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "entry": "bhive",
   "category": "file",
   "description": "File browser for navigating and managing HBFS volumes",

@@ -1183,11 +1183,15 @@ def main():
                 # beside it (c/prog/cprog.c, roadmap M0); without this it
                 # would be treated as an orphan and never installed.
                 c_src_path = os.path.join("c", "prog", fname[:-4] + ".c")
+                # A program built from a directory of sources (the SDK's
+                # multi-source layout, tools/hbbuild.py) has neither file.
+                c_dir_path = os.path.join("c", "prog", fname[:-4])
                 # The HBX loader fixtures are wrapped from a payload that lives
                 # in programs/hbx/ (tools/hbx_fixtures.py), so their source is
                 # there rather than beside the binary.
                 fixture_src = os.path.join(programs_dir, "hbx", fname[:-4] + ".asm")
                 if (not os.path.exists(src_path) and not os.path.exists(c_src_path)
+                        and not os.path.exists(c_dir_path)
                         and not os.path.exists(fixture_src)):
                     print(f"  [SKIP] orphaned binary without source: {fname}")
                     continue

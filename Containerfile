@@ -3,7 +3,7 @@ LABEL org.opencontainers.image.title="Mellivora OS"
 LABEL org.opencontainers.image.description="Mellivora OS - a bare-metal 32-bit x86 hobby OS in NASM assembly"
 LABEL org.opencontainers.image.source="https://github.com/James-HoneyBadger/Mellivora_OS"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.version="13.0.0"
+LABEL org.opencontainers.image.version="14.0.0"
 LABEL org.opencontainers.image.documentation="https://github.com/James-HoneyBadger/Mellivora_OS/blob/main/docs/INSTALL.md"
 # The payload is a complete Mellivora disk image (BIOS boot: sector 0, stage 2,
 # kernel, HBFS). The publish workflow builds it with

@@ -246,7 +246,8 @@ SYS_SEMAPHORE_RELEASE equ 198   ; semaphore_release(handle, count) -> 0/-1
 SYS_OBJECT_STATS    equ 199     ; object_stats(buf, len) -> bytes/-1
 SYS_TOKEN_QUERY     equ 200     ; token_query(buf) -> 0/-1
 SYS_SVC_CONTROL     equ 201     ; svc_control(op) -> 0/1/2, -1 if not a service
-
+SYS_LOG_WRITE     equ 202 ; Write to Chronicle: EBX=level(0..3) ECX=text -> EAX=0/-1
+SYS_SETT          equ 203 ; Config store: EBX=op(0 get,1 set) ECX=path EDX=buf ESI=size
 ; Object types
 OBJ_TYPE_DIRECTORY  equ 0
 OBJ_TYPE_EVENT      equ 1

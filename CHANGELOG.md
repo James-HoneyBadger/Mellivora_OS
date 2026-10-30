@@ -1,5 +1,56 @@
 # Mellivora OS - Changelog
 
+## v14.0.0 - M5 closed: interfaces, the exit criterion, and two new syscalls
+
+M5 asked for "a COM-flavoured typed dispatch layer on top of the Warren, so
+applications call interfaces instead of raw syscall numbers", and for an exit
+criterion: *a multi-source application using shared libraries, a Unicode
+interface, the Sett for configuration and Chronicle for logging is built with
+the SDK and the in-OS toolchain, and runs.*
+
+```text
+Lair:/> mvapp
+  ...
+   interfaces     chronicle + sett
+   configuration  Sett: run counter kept
+   chronicle      records written to the ring
+   Unicode        ...
+
+MVAPP_OK runs=1
+```
+
+- **Two syscalls make the system programmable.** `SYS_LOG_WRITE` (202) writes a
+  record into the ring the drivers write to, so `chronicle` shows an
+  application's records beside theirs. `SYS_SETT` (203) reads and writes a
+  string setting by path and persists it, so a program has a place to keep its
+  own configuration. Neither existed: a program could not log and could not
+  remember anything across a reboot.
+- **`c/include/mv/iface.h` is the interface layer** - objects are pointers to a
+  vtable whose first three slots are QueryInterface/AddRef/Release, identifiers
+  are four dwords, and `mv_iface_get("sett")` resolves a name to an object.
+  Reference counts are real: an interface released to zero stops being handed
+  out. Two objects exist (the chronicle and the Sett) and a third costs a vtable
+  and a table entry.
+- **`c/prog/mvapp/` is the exit-criterion application**: two translation units
+  (`main.c`, `report.c`), the Sett and Chronicle reached through the interface
+  layer, a run counter that survives the run, and Unicode on the console.
+  `make check-runtime` runs it and requires `MVAPP_OK`.
+- **`tools/hbbuild.py` is the SDK's link step**: it compiles every source in a
+  directory, links them against the runtime at `PROGRAM_BASE`, reads the import
+  slots out of the symbol table and wraps the payload with `tools/mkhbx.py`.
+  The Makefile builds a directory of sources the way it builds one file.
+- **`lib_find_export` now asks for the module's description first.** A library
+  export was looked up with `hbx_src_base` naming whatever the last restore had
+  put there; a relocatable program masked it by publishing the module again at
+  map time, and a fixed-base image - which is never mapped - failed every
+  library import with "not found" for a symbol that was exported.
+
+**What this release does not contain**, so nobody has to read the roadmap to
+find out: the scalable font stack (the desktop still draws the bitmap face, so
+code points CP437 has no glyph for have none), threading and per-thread TLS
+(TLS is per task), and locale/collation/time-zone data. Those three are the M5
+remainder and are carried into M6 explicitly rather than being called done.
+
 ## Unreleased - M5: a display engine that knows what format it is drawing in
 
 The framebuffer had one drawing rule: store 32 bits at `y * pitch + x * 4`. That

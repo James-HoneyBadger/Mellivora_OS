@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bcrash",
   "name": "Crash Resilience Demo",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "entry": "bfault",
   "category": "system",
   "description": "Deliberately faults to show the desktop contains application crashes",

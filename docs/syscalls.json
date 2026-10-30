@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 202,
-  "highest_syscall_number": 201,
+  "syscall_count": 204,
+  "highest_syscall_number": 203,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -1012,6 +1012,16 @@
       "name": "SYS_SVC_CONTROL",
       "number": 201,
       "summary": "svc_control(op) -> 0/1/2, -1 if not a service"
+    },
+    {
+      "name": "SYS_LOG_WRITE",
+      "number": 202,
+      "summary": "Write to Chronicle: EBX=level(0..3) ECX=text -> EAX=0/-1"
+    },
+    {
+      "name": "SYS_SETT",
+      "number": 203,
+      "summary": "Config store: EBX=op(0 get,1 set) ECX=path EDX=buf ESI=size"
     }
   ]
 }

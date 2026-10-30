@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bterm",
   "name": "Burrows Terminal",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "entry": "bterm",
   "category": "terminal",
   "description": "Graphical terminal for shell commands and interactive programs",

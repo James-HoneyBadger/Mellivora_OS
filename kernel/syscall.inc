@@ -462,8 +462,11 @@ syscall_table:
         dd sys_object_stats     ; 199 SYS_OBJECT_STATS
         dd sys_token_query      ; 200 SYS_TOKEN_QUERY
         dd sys_svc_control      ; 201 SYS_SVC_CONTROL
-        ; Reserved / unimplemented (202..511)
-        times (SYSCALL_MAX - 202) dd syscall_handler.syscall_bad
+        ; Interfaces over the Warren (202-203)
+        dd sys_log_write        ; 202 SYS_LOG_WRITE
+        dd sys_sett             ; 203 SYS_SETT
+        ; Reserved / unimplemented (204..511)
+        times (SYSCALL_MAX - 204) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)
@@ -3801,3 +3804,181 @@ sys_sbrk:
 ; resolves directly to the functions defined in ipc.inc.
 ; (No stubs needed — ipc.inc defines: sys_msgq_create, sys_msgq_send,
 ;  sys_msgq_recv, sys_msgq_close with full iretd handlers.)
+
+
+;-----------------------------------------------------------------------
+; sys_log_write (202) - write one record to Chronicle
+;   In : EBX = level (0 error, 1 warning, 2 info, 3 debug), ECX = text
+;   Out: EAX = 0, or -1 when the text is not a user pointer
+;
+; Chronicle was reachable only from the kernel: drivers logged, a program could
+; not. This is the door, and it is the same ring the boot messages go into, so
+; `chronicle` shows an application's records beside the drivers'.
+;-----------------------------------------------------------------------
+sys_log_write:
+        push esi
+        push edi
+        push ebx
+        mov  eax, ecx
+        call validate_user_ptr
+        jc   .slw_bad
+        mov  eax, ebx
+        cmp  eax, LOG_DEBUG
+        jbe  .slw_level_ok
+        mov  eax, LOG_INFO
+.slw_level_ok:
+        mov  esi, ecx
+        call bootlog_write              ; AL = level, ESI = text
+        pop  ebx
+        pop  edi
+        pop  esi
+        xor  eax, eax
+        iretd
+.slw_bad:
+        pop  ebx
+        pop  edi
+        pop  esi
+        mov  eax, -1
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_sett (203) - the configuration store, by path
+;   In : EBX = op (0 = get, 1 = set)
+;        ECX = path, "\\Registry\\...\\ValueName" (the last part is the value)
+;        EDX = destination buffer (get) or the new text (set)
+;        ESI = destination size (get)
+;   Out: EAX = 0, or -1
+;
+; Settings were a shell and Sett-UI affair: the store is in the kernel and a
+; program had no way to read one. This exposes the string values, which is what
+; an application's own configuration is made of.
+;-----------------------------------------------------------------------
+sys_sett:
+        pushad
+        mov  eax, ecx
+        call validate_user_ptr
+        jc   .ss_fail
+        mov  [.ss_op], ebx
+        mov  [.ss_buf], edx
+        mov  [.ss_size], esi
+        cmp  dword [.ss_op], 0
+        jne  .ss_check_set
+        ; a get needs somewhere to put the answer
+        test edx, edx
+        jz   .ss_fail
+        cmp  esi, 1
+        jl   .ss_fail
+        mov  eax, edx
+        mov  ecx, esi
+        call user_range_ok
+        jc   .ss_fail
+        jmp  .ss_split_path
+.ss_check_set:
+        test edx, edx
+        jz   .ss_fail
+        mov  eax, edx
+        call validate_user_ptr
+        jc   .ss_fail
+
+.ss_split_path:
+        ; copy the path, then cut it at the last separator: the part before is
+        ; the key, the part after is the value name.
+        mov  esi, [esp + 24]            ; ECX = path
+        mov  edi, sett_req_key
+        xor  edx, edx
+.ss_copy:
+        lodsb
+        test al, al
+        jz   .ss_copied
+        stosb
+        inc  edx
+        cmp  edx, 120
+        jb   .ss_copy
+.ss_copied:
+        mov  byte [edi], 0
+        mov  ecx, edx
+        dec  ecx
+        js   .ss_no_value
+        mov  ebx, sett_req_key
+.ss_scan:
+        cmp  byte [ebx + ecx], '\'
+        je   .ss_have_sep
+        dec  ecx
+        jns  .ss_scan
+        jmp  .ss_no_value
+.ss_have_sep:
+        lea  esi, [ebx + ecx + 1]
+        mov  edi, sett_req_val
+        push ecx
+        call str_copy
+        pop  ecx
+        mov  byte [ebx + ecx], 0
+        jmp  .ss_key
+.ss_no_value:
+        mov  byte [sett_req_val], 0     ; the whole path is the key, value name ""
+
+.ss_key:
+        lea  esi, [sett_req_key]
+        call sett_ensure_path           ; ESI = path -> EAX = key, CF on failure
+        jc   .ss_fail
+        mov  [.ss_keyidx], eax
+        cmp  dword [.ss_op], 1
+        je   .ss_set
+
+        ;---- get ----
+        mov  eax, [.ss_keyidx]
+        lea  esi, [sett_req_val]
+        call sett_value_find            ; EAX = value index, CF when absent
+        jc   .ss_fail
+        call sett_val_base              ; EAX = index -> EBX = record
+        cmp  dword [ebx + 4], SETT_T_STRING
+        jne  .ss_fail                   ; only text can be answered as text
+        mov  esi, sett_arena
+        add  esi, [ebx + 8]             ; the value's bytes
+        mov  ecx, [ebx + 12]            ; its length
+        mov  edi, [.ss_buf]
+        mov  eax, [.ss_size]
+        dec  eax                        ; keep room for the terminator
+        cmp  ecx, eax
+        jbe  .ss_copy_value
+        mov  ecx, eax
+.ss_copy_value:
+        cld
+        rep  movsb
+        mov  byte [edi], 0
+        mov  dword [esp + 28], 0
+        popad
+        iretd
+
+        ;---- set ----
+.ss_set:
+        mov  esi, [.ss_buf]
+        xor  ecx, ecx
+.ss_len:
+        cmp  byte [esi + ecx], 0
+        je   .ss_len_done
+        inc  ecx
+        jmp  .ss_len
+.ss_len_done:
+        mov  eax, [.ss_keyidx]
+        lea  esi, [sett_req_val]
+        mov  edx, SETT_T_STRING
+        mov  ebx, [.ss_buf]
+        call sett_value_set
+        jc   .ss_fail
+        call sett_save                  ; persisted, or it is lost at reboot
+        mov  dword [esp + 28], 0
+        popad
+        iretd
+.ss_fail:
+        mov  dword [esp + 28], -1
+        popad
+        iretd
+
+.ss_op:     dd 0
+.ss_buf:    dd 0
+.ss_size:   dd 0
+.ss_keyidx: dd 0
+
+sett_req_key: times 128 db 0
+sett_req_val: times 48 db 0

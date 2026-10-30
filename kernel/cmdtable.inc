@@ -754,7 +754,7 @@ det_shift:
 help_all_word: db "all", 0
 read_default_name: db "REPLY", 0
 msg_exit_hint: db "  exit ends a script or function; use shutdown or reboot to leave Mellivora.", 0x0A, 0
-help_title: db "HB Lair v13.0 commands:", 0x0A, 0
+help_title: db "HB Lair v14.0 commands:", 0x0A, 0
 msg_did_you_mean: db "  Did you mean '", 0
 msg_quote_end: db "'?", 0x0A, 0
 msg_unknown_pre: db "Unknown command '", 0

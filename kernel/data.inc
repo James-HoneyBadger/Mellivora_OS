@@ -105,11 +105,11 @@ banner_str:
         db 0xC9                                             ; ╔
         times 78 db 0xCD                                   ; ══...══
         db 0xBB                                             ; ╗
-        db 0xBA, "      Mellivora OS  v13.0.0          Honey Badger Operating System           ", " ", 0xBA
+        db 0xBA, "      Mellivora OS  v14.0.0          Honey Badger Operating System           ", " ", 0xBA
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, " HBFS v3/4 ", 0xF9, "  202 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
+        db 0xBA, " HBFS v3/4 ", 0xF9, "  204 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -127,10 +127,10 @@ msg_boot_suf:   db "s", 0x0A, 0
 msg_boot_ok:    db "MELLIVORA_BOOT_OK", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v13.0.0 - HBFS v3/v4, 187 Syscalls, VFS, Paging, Fork, IPv6", 0x0A
+        db "Mellivora OS v14.0.0 - HBFS v3/v4, 187 Syscalls, VFS, Paging, Fork, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
-        db "  Shell:         HB Lair v13.0 (Honey Badger Lair)", 0x0A
+        db "  Shell:         HB Lair v14.0 (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
         db "  Disk:          ATA PIO + Bus Master DMA + AHCI SATA, LBA48 (up to 128 PB)", 0x0A
@@ -151,7 +151,7 @@ version_text:
         db "  Audio:         Sound Blaster 16 (ISA DMA) + AC'97 (PCI DMA)", 0x0A
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
-        db "  Syscalls:      INT 0x80 (202 syscalls)", 0x0A
+        db "  Syscalls:      INT 0x80 (204 syscalls)", 0x0A
         db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
         db "  Scheduler:     Priority-based preemptive (128 tasks, 4 levels)", 0x0A

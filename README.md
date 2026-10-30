@@ -4,7 +4,7 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3/v4 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 202 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3/v4 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 204 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
 compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program sources (277 NASM and one C), and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
@@ -25,9 +25,11 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **32-bit protected mode** with a flat memory model, ring 0 / ring 3 separation, and one address space shared by every task
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
 - **A C library** — `c/rt/` is a real one: string and memory families, `qsort` (stable merge), `bsearch`, `strtol`/`strtoul`, streams (`fopen`/`fread`/`fwrite`/`fgets`/`fseek`/`getline`/`perror`), a formatter with precision and flags, `getopt`, `atexit`; ten standard headers in `c/include/`
+- **Interfaces over the Warren** — `mv/iface.h`: objects are vtables whose first three slots are QueryInterface/AddRef/Release, resolved by name (`mv_iface_get("sett")`), so a program calls interfaces instead of syscall numbers; the chronicle and the Sett are the first two objects
+- **Chronicle and the Sett are programmable** — `SYS_LOG_WRITE` writes into the same ring the drivers write to (`chronicle` shows both), `SYS_SETT` reads and writes a persisted string setting by path
 - **A POSIX C surface** — `c/include/` carries `unistd.h`, `fcntl.h`, `sys/stat.h`, `sys/wait.h`, `signal.h`, `errno.h`, `ctype.h`, `locale.h` and `limits.h`, each a thin shim over a syscall the kernel already had; `docs/POSIX.md` states what conforms, what does not and why (no conformance suite has been run)
 - **Unicode text** — UTF-8 decoded at the console and the desktop, mapped to the glyph the CP437 font has (Latin-1, Greek, box drawing, arrows); UTF-16 conversion at the C runtime boundary
-- **202 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
+- **204 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
 - **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 128 concurrent ring-3 tasks; blocking `waitpid`
 - **Per-task fd isolation** (v12.1) — each task has a private 4 KB fd table page; no cross-task aliasing
@@ -295,7 +297,7 @@ Mellivora_OS/
 ├── kernel.asm              Kernel entry + 30 modular includes in `kernel/`
 ├── Makefile                Build system (make full / make run / make debug)
 ├── populate.py             HBFS image populator with subdirectory support
-├── CHANGELOG.md            Version history (v1.0 → v13.0.0)
+├── CHANGELOG.md            Version history (v1.0 → v14.0.0)
 ├── README.md               This file
 ├── programs/               User-space assembly programs
 │   ├── syscalls.inc        Shared syscall constants and helpers

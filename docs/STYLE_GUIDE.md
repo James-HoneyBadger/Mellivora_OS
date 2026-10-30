@@ -1,6 +1,6 @@
 # Mellivora OS Style Guide
 
-**Version:** 1.1 (v13.0.0) **Status:** Authoritative
+**Version:** 1.1 (v14.0.0) **Status:** Authoritative
 
 This document is the single source of truth for cross-program conventions in
 Mellivora OS user-space programs. Anything new added to `programs/` MUST

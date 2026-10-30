@@ -661,6 +661,15 @@ lib_reload_module:
 ;-----------------------------------------------------------------------
 lib_find_export:
         pushad
+        ; Ask for the module's own description first. lib_load_module restores the
+        ; program's hbx_* on the way out (so the import walk can carry on), which
+        ; leaves hbx_src_base and hbx_hdr_size naming the *program* while
+        ; lib_export_rva names the library. For a relocatable program the library
+        ; is published again at map time and the two agree; a fixed-base image is
+        ; never mapped, so the export table was read at program-base + the
+        ; library's export RVA - nothing - and every import from a library failed
+        ; with "not found" for a symbol that was exported.
+        call lib_publish_record
         mov [lib_sym_ptr], esi
         mov ebx, [hbx_src_base]
         add ebx, [hbx_hdr_size]         ; RVA 0 of the library

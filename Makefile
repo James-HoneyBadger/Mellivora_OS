@@ -188,7 +188,8 @@ C_RT_OBJS      = $(C_OBJ_DIR)/rt/string.o
 C_USER_RT_OBJS = $(C_RT_OBJS) $(C_OBJ_DIR)/rt/stdlib.o \
                  $(C_OBJ_DIR)/rt/stdio.o $(C_OBJ_DIR)/rt/malloc.o \
                  $(C_OBJ_DIR)/rt/utf.o $(C_OBJ_DIR)/rt/posix.o \
-                 $(C_OBJ_DIR)/rt/args.o $(C_OBJ_DIR)/rt/start.o
+                 $(C_OBJ_DIR)/rt/iface.o $(C_OBJ_DIR)/rt/args.o \
+                 $(C_OBJ_DIR)/rt/start.o
 
 # The kernel module: a C subsystem linked at the cmod slot (kernel/data.inc).
 CMOD_OBJS = $(C_OBJ_DIR)/kmod/kmod.o $(C_RT_OBJS)
@@ -213,6 +214,26 @@ $(CMOD_BLOB): $(CMOD_OBJS) c/kmod/kmain.ld $(C_OBJ_DIR)/kmod.addr
 	@SIZE=$$(wc -c < $@); \
 	if [ $$SIZE -gt 32768 ]; then \
 	    echo "  ERROR: $@ is $$SIZE bytes; the slot is 32 KB (kernel/data.inc)"; \
+	    exit 1; \
+	fi
+
+# A program whose sources are a directory rather than one file (the SDK's
+# multi-source layout). Each source is compiled on its own and the objects are
+# linked the way a single-source program is, so nothing about the runtime or the
+# linker script changes.
+MVAPP_OBJS = $(patsubst c/prog/mvapp/%.c,$(C_OBJ_DIR)/mvapp/%.o,$(wildcard c/prog/mvapp/*.c))
+
+$(C_OBJ_DIR)/mvapp/%.o: c/prog/mvapp/%.c $(wildcard c/prog/mvapp/*.h) $(C_INCS)
+	@mkdir -p $(dir $@)
+	$(C_CC) $(C_CFLAGS) -Ic/prog/mvapp -o $@ $<
+
+programs/mvapp.bin: $(MVAPP_OBJS) $(C_USER_RT_OBJS) c/prog/prog.ld
+	@mkdir -p $(dir $@)
+	$(C_LD) -m elf_i386 -T c/prog/prog.ld --oformat binary -o $@ \
+	    $(MVAPP_OBJS) $(C_USER_RT_OBJS)
+	@SIZE=$$(wc -c < $@); \
+	if [ $$SIZE -gt $(PROGRAM_MAX_BYTES) ]; then \
+	    echo "  ERROR: $@ is $$SIZE bytes; a program window is $(PROGRAM_MAX_BYTES) bytes"; \
 	    exit 1; \
 	fi
 

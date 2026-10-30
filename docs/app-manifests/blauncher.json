@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.blauncher",
   "name": "Burrows Launcher",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "entry": "blauncher",
   "category": "system",
   "description": "Desktop launcher, app switcher, and Burrows taskbar controller",
