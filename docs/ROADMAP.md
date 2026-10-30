@@ -589,10 +589,24 @@ a TLS directory - the program is module 0, each library the next - gets a block
 of its own in every task, copied from its template and mapped into the task's
 own address space, with the index assigned at load and the base written at
 launch. `hbx_tls` runs twice and has to see the template both times, and the
-library's own counter starts at one. What is still open in this wave: a
-scalable font (and with it every code point CP437 has no glyph for), threading
-(so a second thread's TLS block has something to attach to), and the interface
-layer.
+library's own counter starts at one. The POSIX personality then got the half it
+was missing: the calls existed, and nothing could call them by name. `c/rt/posix.c`
+is a shim over syscalls the kernel already had, with ten headers in `c/include/`
+and `c/prog/posixtest.c` as the gate - a program that includes no `<mv/...>`
+header at all and opens, writes, seeks, stats, duplicates, unlinks, forks, waits
+and reads `errno`, `getpid`, `signal`, `setlocale` and `ctype`. Writing it was
+the cheapest way to find out what those calls did when a program made them, and
+five things did not survive: descriptors and PIDs were handed out from 0 (a file
+took `stdin`'s number, and a child in slot 0 gave its parent a `fork` return of
+0), `getpid` answered with whichever task sat lowest in the table, `dup` copied a
+descriptor table nobody used, `/tmp` created names it was only asked to read and
+its stat was a stub, and `access` did not know other mounts existed. All five now
+behave, and `docs/POSIX.md` writes down what conforms, what does not and why -
+including that nothing here has run a POSIX conformance suite, so the word
+"compatible" is still the document's opinion rather than a test result. What is
+still open in this wave: a scalable font (and with it every code point CP437 has
+no glyph for), threading (so a second thread's TLS block has something to attach
+to), and the interface layer.
 
 ### M6 · Shell and user experience (12–16 weeks)
 

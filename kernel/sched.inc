@@ -401,8 +401,9 @@ sched_init:
         mov dword [task_count], 0
         mov dword [task_current], 0
         mov dword [sched_tick], 0
-        ; No job owns the console yet. -1 rather than 0: PGIDs are task PIDs
-        ; and the task in slot 0 really does have PGID 0.
+        ; No job owns the console yet. -1 rather than 0: PGIDs are task PIDs,
+        ; and PID 0 is the scheduler's own - sched_create_task starts handing
+        ; out PIDs at 1.
         mov dword [tty_fg_pgid], -1
         mov dword [sched_kbd_tcb], 0
         mov dword [sched_sig_self], 0
@@ -438,9 +439,12 @@ sched_init:
 ;---------------------------------------
 sched_create_task:
         pushad
-        ; Find a free TCB slot
-        xor edx, edx               ; slot index
-        mov edi, task_table
+        ; Find a free TCB slot, starting at 1: the slot index is the task's PID,
+        ; and PID 0 belongs to the scheduler in every POSIX system - a program
+        ; whose getpid() answered 0 could not tell itself from a fork's child.
+        ; Slot 0 is never allocated, so it stays FREE and no scan can see it.
+        mov edx, 1                 ; slot index
+        mov edi, task_table + TCB_SIZE
 .find_slot:
         cmp edx, MAX_TASKS
         jge .create_fail
@@ -3172,10 +3176,28 @@ sched_apply_cr3:
 ;---------------------------------------
 ; sched_get_current_task - Find the TCB of the currently running task
 ; Returns: EAX = pointer to TCB, or 0 if no task is running
+;
+; task_current names the task the scheduler last switched to, so it is asked
+; first: scanning for the first TASK_RUNNING slot finds whichever task happens
+; to sit lowest in the table, and a slot that was switched away from without
+; being marked READY stays RUNNING. getpid used to answer with that task's PID,
+; so a program launched while another task was running in a lower slot was told
+; it was that task. The state is still checked before the slot is believed,
+; because task_current also holds the last task switched away from while the
+; shell runs in ring 0.
 ;---------------------------------------
 sched_get_current_task:
         push edi
         push edx
+        mov edx, [task_current]
+        cmp edx, MAX_TASKS
+        jae .scan
+        mov eax, edx
+        imul eax, TCB_SIZE
+        add eax, task_table
+        cmp dword [eax + TCB_STATE], TASK_RUNNING
+        je .have
+.scan:
         mov edi, task_table
         xor edx, edx
 .find_running:
@@ -3188,6 +3210,7 @@ sched_get_current_task:
         jmp .find_running
 .found:
         mov eax, edi
+.have:
         pop edx
         pop edi
         ret
@@ -3244,17 +3267,14 @@ sys_getppid:
 sys_fork:
         pushad
 
-        ;--- 1. Find the RUNNING task (parent) ---
-        mov  edi, task_table
-        xor  edx, edx
-.fork_find_parent:
-        cmp  edx, MAX_TASKS
-        jge  .fork_fail         ; Not inside a task (shell context)
-        cmp  dword [edi + TCB_STATE], TASK_RUNNING
-        je   .fork_have_parent
-        add  edi, TCB_SIZE
-        inc  edx
-        jmp  .fork_find_parent
+        ;--- 1. Find the running task (parent) ---
+        ; sched_get_current_task, not a scan for the first TASK_RUNNING slot:
+        ; the scan can land on a task that was switched away from, and then the
+        ; child's TCB_PPID names a stranger.
+        call sched_get_current_task
+        test eax, eax
+        jz   .fork_fail         ; Not inside a task (shell context)
+        mov  edi, eax
 
 .fork_have_parent:
         ; EDI = parent TCB; save key fields
@@ -3263,8 +3283,11 @@ sys_fork:
         mov  [fork_parent_tcb], edi
 
         ;--- 2. Find a free TCB slot for the child ---
-        mov  esi, task_table
-        xor  edx, edx
+        ; From 1, as sched_create_task does: the slot index is the child's PID,
+        ; and a child in slot 0 would get PID 0 - the value fork returns to say
+        ; "you are the child". The parent then could not tell itself from it.
+        mov  esi, task_table + TCB_SIZE
+        mov  edx, 1
 .fork_find_slot:
         cmp  edx, MAX_TASKS
         jge  .fork_fail

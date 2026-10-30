@@ -60,6 +60,11 @@ VFS_MT_SIZE     equ 48
 
 ; Virtual file descriptor table
 VFS_MAX_FDS     equ 64   ; total virtual FDs
+; 0, 1 and 2 are the console: SYS_ISATTY says so, and every POSIX program
+; assumes it. The allocator therefore starts at 3 - it used to hand out 0, so
+; the first file a program opened took stdin's number and reported itself as a
+; terminal.
+VFS_FD_FIRST    equ 3    ; first descriptor the allocator hands out
 VFD_FREE        equ 0
 VFD_OPEN        equ 1
 
@@ -109,6 +114,7 @@ DEV_FULL        equ 5    ; /dev/full (always ENOSPC on write)
 
 ; tmpfs limits
 TMPFS_MAX_FILES equ 64
+TMPFS_FILE_MAX  equ 4096  ; bytes a single tmpfs file may hold (one page)
 TMPFS_MAX_BYTES equ (4 * 1024 * 1024)   ; 4 MB total RAM for /tmp
 TMPFS_NAME_LEN  equ 64
 TMPFS_ENTRY_SIZE equ 96  ; name(64) + state(1) + pad(3) + size(4) + buf_ptr(4) + ctime(4) ...
@@ -314,8 +320,8 @@ str_prefix_match:
 vfs_alloc_fd:
         push ecx
         push edi
-        xor ecx, ecx
-        mov edi, vfs_fd_table
+        mov ecx, VFS_FD_FIRST
+        mov edi, vfs_fd_table + VFS_FD_FIRST * VFD_SIZE
 .vaf_loop:
         cmp ecx, VFS_MAX_FDS
         jge .vaf_fail
@@ -513,6 +519,105 @@ vfs_hbfs_open:
         pop  edx
         pop  ecx
         pop  ebx
+        ret
+
+;-----------------------------------------------------------------------
+; vfs_dup - duplicate a descriptor
+;   In : EBX = source descriptor
+;   Out: EAX = the new descriptor, or -1
+;
+; SYS_DUP and SYS_DUP2 used to work on the legacy fd_table, which is a
+; different namespace from the one SYS_OPEN hands out: open() returns a VFD, so
+; dup(3) copied whatever the legacy table held in slot 3 and returned slot 0 -
+; a descriptor that named nothing. Duplicating a VFD is the only thing that can
+; work for a descriptor a program was given.
+;
+; The copy carries the file position with it, so the two handles read
+; independently rather than sharing one offset. POSIX shares one offset across
+; a dup; this does not, and docs/POSIX.md records it.
+;-----------------------------------------------------------------------
+vfs_dup:
+        push esi
+        push edi
+        push ebx
+        call vfs_fd_ptr                 ; EBX = source -> EDI = VFD
+        cmp dword [edi + VFD_STATE], VFD_OPEN
+        jne .vd_fail
+        mov esi, edi                    ; ESI = source VFD
+        call vfs_alloc_fd               ; EAX = new descriptor
+        cmp eax, -1
+        je .vd_fail
+        push eax
+        mov  ebx, eax
+        call vfs_fd_ptr                 ; EDI = destination VFD
+        mov  ecx, VFD_SIZE / 4
+        cld
+        rep movsd                       ; copy the whole entry
+        sub  edi, VFD_SIZE              ; rep movsd left EDI past the entry
+        mov  dword [edi + VFD_OBJ], 0   ; the handle is shared, not the object
+        pop  eax
+        pop  ebx
+        pop  edi
+        pop  esi
+        ret
+.vd_fail:
+        mov eax, -1
+        pop ebx
+        pop edi
+        pop esi
+        ret
+
+;-----------------------------------------------------------------------
+; vfs_dup2 - make the source's open file appear as the destination
+;   In : EBX = source descriptor, ECX = destination descriptor
+;   Out: EAX = the destination, or -1
+;
+; The destination is overwritten rather than closed first: a descriptor that is
+; not open has nothing to close, and refusing an out-of-range destination is
+; what stops a program from reaching the console's slots.
+;-----------------------------------------------------------------------
+vfs_dup2:
+        push esi
+        push edi
+        push ebx
+        push ecx
+        cmp  ebx, ecx
+        je   .vd2_same
+        cmp  ecx, VFS_MAX_FDS
+        jae  .vd2_fail
+        cmp  ecx, VFS_FD_FIRST          ; 0, 1 and 2 are the console
+        jb   .vd2_fail
+        call vfs_fd_ptr                 ; EBX = source -> EDI = VFD
+        cmp  dword [edi + VFD_STATE], VFD_OPEN
+        jne  .vd2_fail
+        mov  esi, edi
+        mov  ebx, ecx
+        call vfs_fd_ptr                 ; EDI = destination VFD
+        mov  ecx, VFD_SIZE / 4
+        cld
+        rep movsd
+        ; The copied handle must not carry the source's object record: two
+        ; entries naming one object would release it twice.
+        pop  ecx                        ; destination number
+        mov  eax, ecx
+        imul eax, VFD_SIZE
+        mov  dword [vfs_fd_table + eax + VFD_OBJ], 0
+        pop  ebx
+        pop  edi
+        pop  esi
+        ret
+.vd2_same:
+        pop  eax
+        pop  ebx
+        pop  edi
+        pop  esi
+        ret
+.vd2_fail:
+        pop  ecx
+        mov  eax, -1
+        pop  ebx
+        pop  edi
+        pop  esi
         ret
 
 vfs_hbfs_read:
@@ -1395,16 +1500,27 @@ tmpfs_init:
 vfs_tmp_open:
         push esi
         push edx
+        push ecx
 
         ; Extract filename from path (last component after /tmp/)
         mov esi, ebx
         ; skip "/tmp/" prefix
         add esi, 5          ; "/tmp/" = 5 chars
 
-        ; Find or create entry in tmpfs_table
+        ; Opening for write is what makes a tmpfs file: this mount has no
+        ; separate create syscall, and SYS_FWRITE creates by opening for write.
+        ; A read-only open of a name that is not there is ENOENT - it used to
+        ; silently create the file, so `open()` of a missing /tmp path returned
+        ; a working descriptor for an empty file that had not existed before.
+        test ecx, FD_FLAG_WRITE
+        jz  .tmpo_find
         call tmpfs_find_or_create   ; ESI=name -> EAX=entry_index or -1
+        jmp .tmpo_looked
+.tmpo_find:
+        call tmpfs_find             ; ESI=name -> EAX=entry_index or -1
+.tmpo_looked:
         cmp eax, -1
-        je .tmpo_fail
+        je .tmpo_fail_ecx
 
         push eax            ; save entry index
 
@@ -1423,21 +1539,64 @@ vfs_tmp_open:
         mov dword [edi + VFD_FS_TYPE], VFS_FS_TMP
         mov dword [edi + VFD_POS],     0
 
-        pop eax             ; entry index
-        pop edx             ; (discard save)
-        push eax
-        mov [edi + VFD_REAL_FD], eax    ; entry index in tmpfs_table
-        pop eax
-        pop edx
-        pop esi
+        ; The stack holds the fd (pushed for vfs_fd_ptr below) above the entry
+        ; index. This stored the fd in VFD_REAL_FD, which only worked while the
+        ; allocator handed out descriptor 0 for the first file - the two numbers
+        ; then agreed by accident. Every read and write afterwards addressed the
+        ; wrong tmpfs entry instead of this one.
+        pop  eax                        ; the fd, which is what open returns
+        pop  edx                        ; entry index
+        mov  [edi + VFD_REAL_FD], edx   ; entry index in tmpfs_table
+        pop  ecx
+        pop  edx
+        pop  esi
         ret
 
 .tmpo_fail2:
         pop eax             ; discard entry index
-.tmpo_fail:
+.tmpo_fail_ecx:
         mov eax, -1
+.tmpo_fail:
+        pop ecx
         pop edx
         pop esi
+        ret
+
+; tmpfs_find  ESI=name -> EAX=entry_index or -1
+;
+; The find half of tmpfs_find_or_create, on its own: a read-only open and a
+; stat have no business creating the file they were asked about.
+tmpfs_find:
+        push ecx
+        push edi
+        xor ecx, ecx
+        mov edi, tmpfs_table
+.tf_loop:
+        cmp ecx, TMPFS_MAX_FILES
+        jge .tf_fail
+        cmp byte [edi + TMPF_STATE], 0
+        je .tf_next
+        push esi
+        push edi
+        add edi, TMPF_NAME
+        call str_cmp_esi_edi        ; ESI=name, EDI=entry name -> EAX=0 if equal
+        pop edi
+        pop esi
+        test eax, eax
+        jz .tf_found
+.tf_next:
+        add edi, TMPF_ESIZE
+        inc ecx
+        jmp .tf_loop
+.tf_found:
+        mov eax, ecx
+        pop edi
+        pop ecx
+        ret
+.tf_fail:
+        mov eax, -1
+        pop edi
+        pop ecx
         ret
 
 ; tmpfs_find_or_create  ESI=name -> EAX=entry_index or -1
@@ -1473,7 +1632,7 @@ tmpfs_find_or_create:
         push ecx
         push edi
         push esi
-        mov ebx, 4096
+        mov ebx, TMPFS_FILE_MAX
         call pmm_alloc_page    ; EAX = buffer address or 0
         pop esi
         pop edi
@@ -1537,201 +1696,109 @@ str_cmp_esi_edi:
         pop esi
         ret
 
-; vfs_tmp_read  EBX=vfd, ECX=buf, EDX=len -> EAX=bytes
+; vfs_tmp_read  EBX=vfd, ECX=buf, EDX=len -> EAX=bytes read or -1
+;
+; Rewritten rather than patched: it kept the caller's buffer and length in
+; registers that the fd lookup clobbers, re-derived the entry three times, and
+; read the size into EAX and then popped it away again, so the length a read
+; returned was whatever happened to be on the stack. A file read through it
+; could report six bytes and hand back someone else's memory.
 vfs_tmp_read:
         push esi
         push edi
-        push ecx
-        push edx
-        call vfs_fd_ptr             ; EDI -> VFD
+        push ecx                        ; caller buffer
+        push edx                        ; requested length
+        call vfs_fd_ptr                 ; EBX = vfd -> EDI = VFD
         cmp dword [edi + VFD_STATE], VFD_OPEN
         jne .tmpr_fail
 
-        mov eax, [edi + VFD_REAL_FD]   ; entry index
-        ; Get tmpfs entry pointer
-        push eax
-        mov eax, TMPF_ESIZE
-        imul eax, [edi + VFD_REAL_FD]
-        mov esi, tmpfs_table
-        add esi, eax
+        pop edx                         ; length
+        pop ecx                         ; buffer
 
-        mov eax, [esi + TMPF_SIZE]
-        mov ecx, [edi + VFD_POS]        ; current position
-        pop eax                         ; (unused; esi is set)
-
-        ; bytes_remaining = size - pos
-        sub eax, ecx
-        js .tmpr_eof
-        cmp eax, edx
-        jle .tmpr_copy
-        mov eax, edx                    ; clamp to max requested
-
-.tmpr_copy:
-        push eax                        ; save return count
-        mov edx, eax
-        mov esi, [esi + TMPF_PTR]
-        add esi, ecx                    ; src = buf + pos
-        pop edx
-        push edx
-        pop ecx                         ; count
-        push ecx
-        pop edx
-        ; edi needs to be caller buf
-        pop edx                         ; orig len
-        pop ecx                         ; caller buf
-        push ecx
-        push edx
-        mov edi, ecx                    ; dest = caller buf
-
-        ; final copy (eax = bytes to copy already in EAX before we overwrote)
-        ; Simpler: just use the stored values
-        pop edx
-        pop ecx
-        push ecx
-        push edx
-
-        ; Re-derive via edi (VFD ptr) which is still valid from call above
-        ; Note: call vfs_fd_ptr clobbers EDI, ECX
-        push ebx
-        call vfs_fd_ptr
-        pop ebx
         mov esi, [edi + VFD_REAL_FD]
-        mov eax, TMPF_ESIZE
-        imul eax, esi
-        add eax, tmpfs_table
-        mov esi, eax                    ; esi -> tmpfs entry
+        imul esi, TMPF_ESIZE
+        add esi, tmpfs_table            ; ESI -> entry
+
         mov eax, [esi + TMPF_SIZE]
-        mov ecx, [edi + VFD_POS]
-        sub eax, ecx
-        js .tmpr_eof2
-        pop edx
-        pop ecx
+        sub eax, [edi + VFD_POS]        ; bytes left after the position
+        jle .tmpr_eof
         cmp eax, edx
-        jle .tmpr_do_copy
-        mov eax, edx
-.tmpr_do_copy:
-        push eax
-        mov edx, eax
-        ; src = tmpfs_buf + pos
-        push esi
-        push edi
-        ; get edi back (re-call needed)
-        push ebx
-        call vfs_fd_ptr                 ; edi -> VFD
-        pop ebx
-        mov ebx, [edi + VFD_POS]
-        pop edi
-        pop esi
+        jbe .tmpr_have
+        mov eax, edx                    ; clamp to what was asked for
+.tmpr_have:
+        mov edx, [edi + VFD_POS]
+        add [edi + VFD_POS], eax        ; the position advances: a second read
+                                        ; continues instead of repeating
         mov esi, [esi + TMPF_PTR]
-        add esi, ebx                    ; src = buf + current_pos
-        mov edi, ecx                    ; dest = caller buf
-        mov ecx, edx
+        add esi, edx                    ; source = buffer + position
+        mov edi, ecx                    ; destination = caller's buffer
+        mov ecx, eax
+        cld
         rep movsb
-        ; Advance position
-        push ebx
-        call vfs_fd_ptr
-        pop ebx
-        add [edi + VFD_POS], edx
-        pop eax                         ; return count
-        pop edx
-        pop ecx
         pop edi
         pop esi
-        ret
+        ret                             ; EAX = bytes copied
 .tmpr_eof:
-.tmpr_eof2:
         xor eax, eax
-        pop edx
-        pop ecx
         pop edi
         pop esi
         ret
 .tmpr_fail:
-        mov eax, -1
         pop edx
         pop ecx
+        mov eax, -1
         pop edi
         pop esi
         ret
 
-; vfs_tmp_write  EBX=vfd, ECX=buf, EDX=len -> EAX=bytes
+; vfs_tmp_write  EBX=vfd, ECX=buf, EDX=len -> EAX=bytes written or -1
+;
+; Same rewrite as the read above, and the same class of bug: the size was
+; incremented by a length popped from the wrong stack slot, so a file written
+; through it said it was empty to the next stat.
 vfs_tmp_write:
         push esi
         push edi
-        push ecx
-        push edx
-        call vfs_fd_ptr
+        push ecx                        ; caller buffer
+        push edx                        ; length
+        call vfs_fd_ptr                 ; EBX = vfd -> EDI = VFD
         cmp dword [edi + VFD_STATE], VFD_OPEN
         jne .tmpw_fail
 
-        ; Get tmpfs entry
-        mov eax, [edi + VFD_REAL_FD]
-        imul eax, TMPF_ESIZE
-        add eax, tmpfs_table
-        mov esi, eax
+        pop edx                         ; length
+        pop ecx                         ; buffer
 
-        ; Check space
+        mov esi, [edi + VFD_REAL_FD]
+        imul esi, TMPF_ESIZE
+        add esi, tmpfs_table            ; ESI -> entry
+
         mov eax, [esi + TMPF_SIZE]
-        cmp eax, 4096               ; 4 KB per file limit
-        jge .tmpw_full
-
-        ; Copy bytes
+        mov edi, TMPFS_FILE_MAX
+        sub edi, eax                    ; room left in this file
+        cmp edx, edi
+        jbe .tmpw_room
+        mov edx, edi                    ; short write at the limit
+.tmpw_room:
+        test edx, edx
+        jz .tmpw_none
         mov edi, [esi + TMPF_PTR]
-        add edi, [esi + TMPF_SIZE]  ; append position
-        pop edx
-        pop ecx
-        push ecx
-        push edx
-        mov esi, ecx                ; src = caller buf
+        add edi, eax                    ; destination = buffer + size
+        push esi
+        mov esi, ecx                    ; source = caller's buffer
         mov ecx, edx
-        ; clamp to avoid overflow
-        push edi
-        call vfs_fd_ptr
-        pop edi
-        ; re-derive esi
-        push ebx
-        call vfs_fd_ptr
-        pop ebx
-        mov eax, [edi + VFD_REAL_FD]
-        imul eax, TMPF_ESIZE
-        add eax, tmpfs_table
-        push eax
-        mov edi, [eax + TMPF_PTR]
-        add edi, [eax + TMPF_SIZE]
-        pop eax
-        pop edx
-        pop ecx
-        push ecx
-        push edx
-        mov esi, ecx
-        mov ecx, edx
+        cld
         rep movsb
-
-        ; Update size
-        push ebx
-        call vfs_fd_ptr
-        pop ebx
-        mov eax, [edi + VFD_REAL_FD]
-        imul eax, TMPF_ESIZE
-        add eax, tmpfs_table
-        pop edx
-        pop ecx
-        add [eax + TMPF_SIZE], edx
+        pop esi
+        add [esi + TMPF_SIZE], edx      ; the file grew by what was written
+.tmpw_none:
         mov eax, edx
         pop edi
         pop esi
         ret
-.tmpw_full:
-        xor eax, eax
-        pop edx
-        pop ecx
-        pop edi
-        pop esi
-        ret
 .tmpw_fail:
-        mov eax, -1
         pop edx
         pop ecx
+        mov eax, -1
         pop edi
         pop esi
         ret
@@ -1783,8 +1850,41 @@ vfs_tmp_readdir:
         pop ecx
         ret
 
+;-----------------------------------------------------------------------
+; vfs_tmp_stat - the twelve bytes SYS_STAT asks for, for a tmpfs file
+;   In : EBX = path, ECX = stat_buf ({size, type, mtime})
+;   Out: EAX = 0, or -1 when the name is not there
+;
+; This used to be `xor eax, eax; ret`: every stat under /tmp reported success
+; and left the caller's buffer untouched, so a POSIX program could not tell a
+; missing file from an empty one. A tmpfs file has a size and is a file; it
+; keeps no timestamps, so mtime is reported as 0 rather than invented.
+;-----------------------------------------------------------------------
 vfs_tmp_stat:
-        xor eax, eax
+        push esi
+        push edi
+        push ecx
+        mov  esi, ebx
+        add  esi, 5                 ; skip "/tmp/"
+        call tmpfs_find             ; ESI=name -> EAX=entry_index or -1
+        cmp  eax, -1
+        je   .vts_fail
+        imul eax, TMPF_ESIZE
+        add  eax, tmpfs_table       ; EAX -> entry
+        pop  ecx                    ; ECX -> stat_buf
+        mov  edx, [eax + TMPF_SIZE]
+        mov  [ecx], edx             ; st_size
+        mov  dword [ecx + 4], FTYPE_TEXT   ; st_type
+        mov  dword [ecx + 8], 0     ; st_mtime: tmpfs keeps none
+        xor  eax, eax
+        pop  edi
+        pop  esi
+        ret
+.vts_fail:
+        pop  ecx
+        mov  eax, -1
+        pop  edi
+        pop  esi
         ret
 
 vfs_tmp_unlink:

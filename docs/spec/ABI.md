@@ -57,6 +57,8 @@ because the two spaces do not reach the kernel the same way:
 | `stdio.c` | user programs | `printf`, `snprintf`, `vsnprintf`, `puts`, `putchar`; one formatter, one sink for a buffer and one for the console |
 | `malloc.c` | user programs | `malloc`, `free`, `calloc`, `realloc`, `exit`, `atoi`; a first-fit free list over `SYS_SBRK` |
 | `start.c` | user programs | `_start`: calls `main` and passes its return value to `SYS_EXIT` |
+| `posix.c` | user programs | The POSIX names over the syscalls above: `open`, `read`, `write`, `close`, `lseek`, `stat`, `fork`, `waitpid`, `signal`, `errno` and the rest. No new ABI - every function is a shim, and [POSIX.md](../POSIX.md) records which of them conform and which do not |
+| `utf.c` | user programs | UTF-8 and UTF-16 conversion at the text boundary of section 8 |
 
 The formatter takes `d`, `i`, `u`, `x`, `X`, `s`, `c`, `p` and `%%`, with the
 `-` and `0` flags and a width. It refuses precision and floating point by

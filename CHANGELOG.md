@@ -1,5 +1,72 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: a POSIX program's calls mean what POSIX says they mean
+
+The syscalls were always shaped like POSIX; nothing could call them that way. There
+was no `unistd.h`, no `errno`, no `open` - a program that came from the parity
+target could not be compiled at all. `c/rt/posix.c` is that surface now, and
+`docs/POSIX.md` says exactly what it claims and what it does not.
+
+Writing it was the cheapest way to find out what those calls did when a
+*program*, rather than the shell, made them. Five things did not survive the
+first run, and they are fixed here too.
+
+```text
+Lair:/> posixtest
+POSIX_OK
+```
+
+- **Ten headers, and nothing else is declared.** `unistd.h`, `fcntl.h`,
+  `sys/stat.h`, `sys/wait.h`, `signal.h`, `errno.h`, `ctype.h`, `locale.h`,
+  `limits.h`: the calls each one names exist, and a call it does not name is a
+  compile error rather than a stub that returns a plausible lie. `pipe`,
+  `socket`, `getrlimit`, `readdir`, `umask` and the rest of the standard are
+  absent on purpose, and `docs/POSIX.md` lists them.
+- **Every function is a shim over a call the kernel already had.** Translate the
+  arguments, make the call, turn a negative result into `-1` with `errno` set
+  from the kernel's own record (`SYS_GETERRNO`). No new syscall was added for
+  this.
+- **`open(O_CREAT)` is two steps, because the kernel has no create flag.** A
+  failed open of a missing name is followed by `SYS_FWRITE` with no data - the
+  kernel's create-or-overwrite door - and a second open. `O_TRUNC` uses the same
+  door to empty a file that does exist, and `O_APPEND` seeks to the end.
+- **`errno` is the lvalue POSIX promises**, a macro over `__errno_location()`,
+  so a program compiled against any other C library finds the name it expects.
+- **The gate includes no `<mv/...>` header at all.** `c/prog/posixtest.c` opens,
+  writes, seeks, stats, duplicates and unlinks a file, forks, waits, unpacks the
+  exit status, and checks `errno`, `getpid`, `signal`, `setlocale`, `toupper` and
+  the limits. It prints `POSIX_FAIL` naming the step that did not hold, and
+  `make check-runtime` runs it.
+
+**What the first run found.** `posixtest` printed `POSIX_FAIL getpid` and went
+on to fail nine more checks; each of these was a different reason:
+
+- **A descriptor is not a name any more.** `open` hands out descriptors from 3 up,
+  so a file no longer takes `stdin`'s number, and `dup`/`dup2` now duplicate the
+  table a program was actually given - they used to copy the legacy fd table,
+  which SYS_OPEN does not use, and return a descriptor that named nothing.
+- **Which task is running is asked, not guessed.** `sched_get_current_task`
+  scanned for the first `TASK_RUNNING` slot, so `getpid` answered with whichever
+  task sat lowest in the table - a program launched while another task was still
+  marked running was told it was that task. It now asks `task_current` first and
+  keeps the scan as the fallback.
+- **PIDs start at 1.** The slot index is the PID, and the first slot was slot 0:
+  a program's `getpid()` answered 0, and a forked child landing in slot 0 got a
+  `fork` return value of 0 in its *parent* - the number that means "you are the
+  child". Both allocations now start at 1, and PID 0 stays the scheduler's.
+- **A missing file is missing.** A read-only open of a name that was not there
+  used to *create* it on `/tmp`, and `vfs_tmp_stat` was a stub that answered
+  success and wrote nothing, so a program could not tell a missing file from an
+  empty one. The mount now creates only when the open asks for write, and its
+  stat reports size, type and modification time.
+- **The tmpfs read and write paths were rewritten.** They kept the caller's
+  buffer and length in registers the fd lookup clobbers and read the file size
+  into a register it then popped away, so a read returned a length from the
+  stack. They also stored the *descriptor* where the tmpfs entry index belongs,
+  which worked only while the two numbers agreed by accident.
+- **`access` asks the mount.** It went to HBFS for every path, so `access(R_OK)`
+  on a file in `/tmp` - a file that exists - came back `EACCES`.
+
 ## Unreleased - M5: thread-local storage is per module and per task
 
 EXEC.md section 6 asks for "per-thread slots allocated at thread creation" and

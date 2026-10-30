@@ -178,7 +178,7 @@ C_CFLAGS = -c -O2 -std=c11 -ffreestanding -fno-builtin -fno-stack-protector \
            -march=pentium4 -mtune=pentium4 \
            -mno-sse -mno-mmx -msoft-float -Wall -Wextra -Ic/include
 
-C_INCS    = $(wildcard c/include/mv/*.h)
+C_INCS    = $(wildcard c/include/*.h c/include/*/*.h)
 C_OBJ_DIR = .build/c
 
 # The runtime split: string.c has no syscall in it and the kernel module links
@@ -187,7 +187,7 @@ C_OBJ_DIR = .build/c
 C_RT_OBJS      = $(C_OBJ_DIR)/rt/string.o
 C_USER_RT_OBJS = $(C_RT_OBJS) $(C_OBJ_DIR)/rt/stdio.o \
                  $(C_OBJ_DIR)/rt/malloc.o $(C_OBJ_DIR)/rt/utf.o \
-                 $(C_OBJ_DIR)/rt/start.o
+                 $(C_OBJ_DIR)/rt/posix.o $(C_OBJ_DIR)/rt/start.o
 
 # The kernel module: a C subsystem linked at the cmod slot (kernel/data.inc).
 CMOD_OBJS = $(C_OBJ_DIR)/kmod/kmod.o $(C_RT_OBJS)

@@ -2503,79 +2503,26 @@ sys_geterrno:
 
 
 sys_dup:
-        pushad
-        ; Validate source fd
-        cmp ebx, FD_MAX
-        jge .dup_fail
-        ; Find a free fd
-        xor ecx, ecx
-        mov edi, fd_table
-.dup_scan:
-        cmp ecx, FD_MAX
-        jge .dup_fail
-        cmp dword [edi + 0], FD_FLAG_CLOSED
-        je .dup_found
-        add edi, FD_ENTRY_SIZE
-        inc ecx
-        jmp .dup_scan
-.dup_found:
-        ; Copy source FD entry to new slot
-        mov esi, fd_table
-        mov eax, ebx
-        imul eax, FD_ENTRY_SIZE
-        add esi, eax            ; esi = source FD entry
-        mov ecx, FD_ENTRY_SIZE / 4
-        rep movsd               ; copy FD_ENTRY_SIZE bytes
-        mov [esp + 28], ecx     ; return new fd index
-        ; Actually return the index, not ECX
-        sub edi, fd_table
-        sub edi, FD_ENTRY_SIZE        ; edi was advanced by movsd
-        xor edx, edx
-        mov eax, edi
-        mov ecx, FD_ENTRY_SIZE
-        div ecx
-        mov [esp + 28], eax
-        popad
-        iretd
-.dup_fail:
-        mov dword [esp + 28], -1
-        popad
+        ; SYS_DUP (116): EBX = descriptor -> EAX = a new one, or -1
+        ; Descriptors a program holds come from SYS_OPEN, which returns a VFD;
+        ; the legacy fd table is a different namespace, so this has to work on
+        ; the VFD table or it duplicates a slot the program never held.
+        push esi
+        push edi
+        call vfs_dup
+        pop edi
+        pop esi
         iretd
 
 ;-----------------------------------------------------------------------
-; sys_dup2 (117) — duplicate fd to a specific destination fd
-;   In : EBX = src fd, ECX = dst fd
-;   Out: EAX = dst fd, or -1
+; SYS_DUP2 (117): EBX = source, ECX = destination → EAX = destination or -1
 ;-----------------------------------------------------------------------
 sys_dup2:
-        pushad
-        cmp ebx, FD_MAX
-        jge .dup2_fail
-        cmp ecx, FD_MAX
-        jge .dup2_fail
-        ; If src == dst, return dst
-        cmp ebx, ecx
-        je .dup2_ok
-        ; Copy src entry over dst entry
-        mov esi, fd_table
-        mov eax, ebx
-        imul eax, FD_ENTRY_SIZE
-        add esi, eax            ; esi = source
-        mov edi, fd_table
-        mov eax, ecx
-        imul eax, FD_ENTRY_SIZE
-        add edi, eax            ; edi = dest
-        push ecx
-        mov ecx, FD_ENTRY_SIZE / 4
-        rep movsd
-        pop ecx
-.dup2_ok:
-        mov [esp + 28], ecx     ; return dst fd
-        popad
-        iretd
-.dup2_fail:
-        mov dword [esp + 28], -1
-        popad
+        push esi
+        push edi
+        call vfs_dup2
+        pop edi
+        pop esi
         iretd
 
 ;-----------------------------------------------------------------------
@@ -3026,6 +2973,28 @@ sys_access:
         mov eax, ebx
         call validate_user_ptr
         jc .access_fail
+        ; A path on another mount is not HBFS's to answer for. This used to ask
+        ; HBFS only, so every access() to a /tmp file - a name that exists - came
+        ; back EACCES. Ask the backend whether it holds the name, and let the
+        ; mount's own rules decide the rest: tmpfs keeps no mode bits, so its
+        ; files are open to the tasks that can name them.
+        mov  ebx, [esp + 16]            ; EBX = the original path
+        call vfs_route
+        test eax, eax
+        jz   .access_hbfs
+        cmp  byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        je   .access_hbfs
+        mov  edi, eax                   ; EDI = mount entry
+        mov  ebx, [esp + 16]
+        mov  ecx, access_stat_buf
+        call [edi + VFS_MT_STAT]        ; EAX = 0 or -1
+        test eax, eax
+        js   .access_fail
+        mov  dword [esp + 28], 0
+        popad
+        iretd
+.access_hbfs:
+        mov  ebx, [esp + 16]            ; hbfs_find_entry expects EBX = path
         ; Load root directory into hbfs_dir_buf (required before hbfs_find_entry)
         call hbfs_load_root_dir
         ; Check existence via HBFS
@@ -3060,6 +3029,8 @@ sys_access:
         mov dword [esp + 28], -1
         popad
         iretd
+
+access_stat_buf: times 12 db 0          ; access(): the backend's stat lands here
 
 ;-----------------------------------------------------------------------
 ; sys_pipe2 (134) — create a pipe with optional flags

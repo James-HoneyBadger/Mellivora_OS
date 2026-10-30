@@ -285,6 +285,16 @@ run_case "Unicode: UTF-8 rendered, UTF-16 converted" \
     $'unicodedemo' \
     "UNICODE_OK|café naïve Über|αβγ π ΣΩ" \
     "" "CPU EXCEPTION|UNICODE_FAIL"
+# docs/POSIX.md's gate: a program built against c/include/'s POSIX headers and
+# nothing else - no <mv/...> include at all - opens, writes, seeks, stats,
+# duplicates and unlinks a file, forks, waits for the child and reads its exit
+# status, and gets errno, getpid, signal, setlocale and ctype right. It prints
+# POSIX_FAIL and names the step that did not hold, so a failure says what broke
+# rather than that something did.
+run_case "POSIX surface: calls by their POSIX names" \
+    $'posixtest' \
+    "POSIX_OK" \
+    "" "CPU EXCEPTION|POSIX_FAIL"
 # The stored mode has to deny, not decorate: root passes, the owner is held
 # to the owner bits, and a stranger to the world bits.
 run_case "permissions deny"           "perm_test"             "PERM_OK"            "" "CPU EXCEPTION|PERM_FAIL"
