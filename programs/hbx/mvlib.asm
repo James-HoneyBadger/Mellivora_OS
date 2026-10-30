@@ -26,8 +26,29 @@
 start:
         ret
 
+; mv_hello prints once per call and counts how many times *this task* has
+; called it, in the library's own thread-local storage - a block of its own,
+; separate from the program's. The count is 1 on the first call.
 mv_hello:
         pushad
+        db 0x8B, 0x1D                   ; mov ebx, [base_slot]
+mv_tls_slot:    dd mv_tls_base
+        inc dword [ebx]
+        push ebx
+        mov eax, SYS_PRINT
+        db 0xBB                         ; mov ebx, imm32
+tls_count_imm:  dd msg_tls
+        int 0x80
+        pop ebx
+        mov eax, [ebx]
+        add al, '0'
+        movzx ebx, al
+        mov eax, SYS_PUTCHAR
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 0x0A
+        int 0x80
+
         mov eax, SYS_SETCOLOR
         mov ebx, 0x0B                   ; light cyan
         int 0x80
@@ -53,6 +74,13 @@ mv_add:
 name_hello: db "mv_hello", 0
 name_add:   db "mv_add", 0
 msg_hello:  db "LIB_HELLO", 0x0A, 0
+msg_tls:    db "LIB_TLS ", 0
+
+; This library's thread-local storage: one dword, incremented per call.
+mv_tls_template: dd 0
+mv_tls_template_end:
+mv_tls_index:   dd 0                    ; the loader writes this module's index
+mv_tls_base:    dd 0                    ; the loader writes this thread's block
 
 align 4
 hbe_meta:   db "HBE1"                   ; cleared by the build tool
@@ -62,7 +90,14 @@ hbe_pairs:  dd name_hello - $$, mv_hello - $$
 hbe_count   equ ($ - hbe_pairs) / 8
 
 align 4
+tls_meta:   db "TLS1"                   ; cleared by the build tool
+            dd mv_tls_template_end - mv_tls_template
+            dd mv_tls_template - $$
+            dd mv_tls_index - $$
+            dd mv_tls_base - $$
+
+align 4
 hbm_meta:   db "HBM1"
             dd hbm_count
-hbm_relocs: dd hello_imm - $$
+hbm_relocs: dd hello_imm - $$, mv_tls_slot - $$, tls_count_imm - $$
 hbm_count   equ ($ - hbm_relocs) / 4

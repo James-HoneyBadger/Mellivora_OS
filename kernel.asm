@@ -992,6 +992,7 @@ kernel_entry:
 %include "kernel/utf8.inc"
 %include "kernel/hbx.inc"
 %include "kernel/lib.inc"
+%include "kernel/tls.inc"
 %include "kernel/pe.inc"
 %include "kernel/sett.inc"
 %include "kernel/settx.inc"

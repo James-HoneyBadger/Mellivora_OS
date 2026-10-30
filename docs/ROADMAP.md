@@ -584,8 +584,14 @@ box drawing, arrows and the arithmetic signs draw in both the console and the
 desktop - which now loads the adapter's 8x16 ROM font so it has 256 glyphs
 instead of 95 - and the UTF-16 half of ABI.md section 8 is a real conversion in
 `c/rt/utf.c`, surrogate pairs and all, with `unicodedemo` checking the
-crossings. What is still open in this wave: per-module TLS, a scalable font
-(and with it every code point CP437 has no glyph for), and the interface
+crossings. Thread-local storage closed the loader story: a module that declares
+a TLS directory - the program is module 0, each library the next - gets a block
+of its own in every task, copied from its template and mapped into the task's
+own address space, with the index assigned at load and the base written at
+launch. `hbx_tls` runs twice and has to see the template both times, and the
+library's own counter starts at one. What is still open in this wave: a
+scalable font (and with it every code point CP437 has no glyph for), threading
+(so a second thread's TLS block has something to attach to), and the interface
 layer.
 
 ### M6 · Shell and user experience (12–16 weeks)

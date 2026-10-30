@@ -51,7 +51,11 @@ LIB_MOD_PAYLOAD equ 52                  ; payload length
 LIB_MOD_IMG     equ 56                  ; image size
 LIB_MOD_RELOC   equ 60                  ; relocation table RVA
 LIB_MOD_EXPORT  equ 64                  ; export table RVA
-LIB_MOD_SIZE    equ 68
+LIB_MOD_TLS     equ 68                  ; TLS directory RVA, 0 if none
+LIB_MOD_TLS_SIZE equ 72                 ; initialised bytes in the template
+LIB_MOD_TLS_DATA equ 76                 ; template RVA
+LIB_MOD_TLS_BASE equ 80                 ; where this thread's block goes
+LIB_MOD_SIZE    equ 88
 
 ;-----------------------------------------------------------------------
 ; lib_resolve_imports - bind a program's imports to real library images
@@ -92,6 +96,14 @@ lib_resolve_imports:
         mov [lib_prog_exp_count], eax
         mov eax, [hbx_export_rva]
         mov [lib_prog_exp_rva], eax
+        mov eax, [hbx_tls_dir]
+        mov [hbx_main_tls_dir], eax
+        mov eax, [hbx_tls_size]
+        mov [hbx_main_tls_size], eax
+        mov eax, [hbx_tls_data]
+        mov [hbx_main_tls_data], eax
+        mov eax, [hbx_tls_base_rva]
+        mov [hbx_main_tls_base_rva], eax
 
         cmp dword [lib_prog_imp_count], 0
         jz .lri_out
@@ -582,6 +594,35 @@ lib_reload_module:
         call hbx_verify
         jc .lrm_fail                    ; the reason and status are already out
 
+        ; Its thread-local index is this module's slot, written into the copy
+        ; that is about to be mapped: the reload above started from the file,
+        ; so the index has to be written after it, not before.
+        mov eax, [hbx_tls_dir]
+        test eax, eax
+        jz .lrm_no_tls
+        mov ecx, [hbx_tls_index_rva]
+        add ecx, [hbx_hdr_size]
+        cmp ecx, [hbx_file_len]
+        jae .lrm_fail
+        mov ebx, [hbx_src_base]
+        mov edx, [lib_map_idx]
+        inc edx                         ; module 0 is the program itself
+        mov [ebx + ecx], edx
+        mov eax, [lib_rec]
+        mov ebx, [hbx_tls_dir]
+        mov [eax + LIB_MOD_TLS], ebx
+        mov ebx, [hbx_tls_size]
+        mov [eax + LIB_MOD_TLS_SIZE], ebx
+        mov ebx, [hbx_tls_data]
+        mov [eax + LIB_MOD_TLS_DATA], ebx
+        mov ebx, [hbx_tls_base_rva]
+        mov [eax + LIB_MOD_TLS_BASE], ebx
+        jmp .lrm_have_tls
+.lrm_no_tls:
+        mov eax, [lib_rec]
+        mov dword [eax + LIB_MOD_TLS], 0
+.lrm_have_tls:
+
         ; The base was drawn and the IAT patched in the resolve pass; the
         ; mapping has to land on that base or every resolved address is wrong.
         mov eax, [lib_rec]
@@ -826,6 +867,13 @@ lib_prog_ibase:     dd 0
 lib_prog_entry:     dd 0
 lib_prog_exp_count: dd 0
 lib_prog_exp_rva:   dd 0
+; What the program itself declared for thread-local storage. tls_setup_task
+; reads these after every library has overwritten hbx_tls_*.
+hbx_main_tls_dir:      dd 0
+hbx_main_tls_size:     dd 0
+hbx_main_tls_data:     dd 0
+hbx_main_tls_base_rva: dd 0
+hbx_main_base:         dd 0
 lib_name_buf:       times LIB_NAME_LEN db 0
 lib_symbol_buf:     times LIB_NAME_LEN db 0
 lib_path_buf:       times LIB_NAME_LEN + 16 db 0

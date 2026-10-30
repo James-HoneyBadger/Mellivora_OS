@@ -76,7 +76,9 @@ an array of `{module_rva u32, thunk_rva u32, thunk_count u32}`; each thunk is
 `{name_rva u32, iat_rva u32}` and the IAT slot starts at zero. The export table
 is a `u32` count followed by that many `{name_rva u32, rva u32}` entries - the
 same pair a thunk carries, so a resolver reads one shape in both directions.
-Names are NUL-terminated inside the image.
+The thread-local directory `tls_index` points at is four dwords:
+`{raw_size, data_rva, index_rva, base_rva}` - the initialised template, and the
+two slots the loader fills. Names are NUL-terminated inside the image.
 
 The checksum covers the whole file - header, section table and image bytes -
 with the checksum field read as zero, which is why `header_size` has to be
@@ -270,10 +272,22 @@ program window, and the window is cleared between loading and launching, so a
 module is read *again* at map time rather than trusting bytes that were true
 before the clear.
 
+**Thread-local storage** (`kernel/tls.inc`). A module that declares a TLS
+directory gets a block of its own in every task that loads it, and the two
+halves of the contract are filled where each can be known. The *index* is
+assigned while the image is still in the window - the program is module 0 and
+each library takes the next - so it travels with the file copy into both roads.
+The *block* needs the task, so it is made at launch: one page-rounded
+allocation per module, filled from the template and zeroed past it, mapped into
+the task's own address space from the top of the demand zone downwards (images
+are drawn in its first 256 MB, so the two cannot meet), recorded as a vm area
+so fork copies it copy-on-write, and its address written into `base_rva` -
+directly for a window image, through the page tables for a mapped one. A module
+reads `[base_rva]` once and keeps it; there is no per-access kernel call.
+
 What section 6 still asks for and this does not do: unloading (`FreeLibrary`
 and its reference count), delay loading, versioned exports, a library that
-imports another library, the `PROCESS_ATTACH`/`THREAD_ATTACH` notification, and
-per-module TLS. A module that cannot be mapped at launch (out of frames) is
+imports another library, and the `PROCESS_ATTACH`/`THREAD_ATTACH` notification. A module that cannot be mapped at launch (out of frames) is
 reported and skipped: its imports stay unresolved and the first call through
 one faults inside that one task, which the fault path contains.
 
@@ -344,7 +358,8 @@ M5 does not close until:
 | HBX images | Read and enforced: `MVBX` header, CRC-32C, sections, relocations and entry point. A relocatable image is mapped at a random base; a fixed-base one is copied into the window. |
 | PE32 images | Read and enforced: the §2.1 subset, with one refusal per rule. A PE32 image is copied into the window like a fixed-base HBX image, so it is not randomised and cannot import; the unwrapping and the refusal set are what `make check-loader` proves. |
 | Shared libraries | Loaded, bound and mapped: a `dll` image is found in `/lib`, its exports are matched against a program's imports, and it is mapped into the task's own address space. No unloading, no versioning, no delay loading; a library may not import another |
-| TLS per module | A kernel-managed thread-local area for one module |
+| TLS per module | A block per module per task, from the module's own template; a library's block is separate from its program's. One block per thread is all this tree has, because a process is one thread |
+| Threading | No `clone`/`CreateThread`: a task is a process and a thread at once, so a second thread's TLS block has nothing to attach to yet |
 | ASLR | The main image base for a relocatable HBX image, and per-launch randomised heap and stack top. Shared libraries, thread stacks and section views have nothing to randomise yet |
 | Section-based mapping | Frames are mapped into the task's directory page by page and a page in a writable section is mapped writable; a writable-and-executable section is refused. There is no section object and no execute bit on this page table |
 | Imports/exports | Both directions work: an import is resolved against a real export table, a missing module or symbol fails the load naming `module!symbol` before any process exists, and a module is loaded once however many descriptors name it |

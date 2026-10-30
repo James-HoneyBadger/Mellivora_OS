@@ -6659,10 +6659,19 @@ cmd_exec_program:
 .exec_fore_mapped:
         pop eax
         ; A library is mapped into this task's own directory, so it can only be
-        ; mapped now that the task has one (EXEC.md section 6).
+        ; mapped now that the task has one (EXEC.md section 6); its
+        ; thread-local blocks likewise.
         push eax
         mov edi, eax
         call lib_map_modules
+        pop eax
+        push eax
+        mov edi, eax
+        call tls_setup_task
+        pop eax
+        push eax
+        mov edi, eax
+        call tls_setup_task
         pop eax
         ; Give the task a guarded, demand-grown stack before it runs. The
         ; unmapping has to happen in the task's own directory, so switch to it
@@ -6715,7 +6724,12 @@ cmd_exec_program:
         push edi
 .exec_inplace_libs:
         pop edi
+        push edi
         call lib_map_modules
+        pop edi
+        push edi
+        call tls_setup_task
+        pop edi
         jmp .exec_inplace_ready
 .exec_inplace_window:
         mov edi, -1

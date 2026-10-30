@@ -1,5 +1,46 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: thread-local storage is per module and per task
+
+EXEC.md section 6 asks for "per-thread slots allocated at thread creation" and
+an index per module. The tree had neither - the gap table said a
+kernel-managed area existed, and it did not. Now a module that declares a
+thread-local directory gets a block of its own in every task that loads it.
+
+```text
+Lair:/> hbx_tls
+TLS_SEEN 0x00001234
+TLS_SET 0x0000002A
+TLS_TASK_OK
+Lair:/> hbx_tls
+TLS_SEEN 0x00001234
+TLS_SET 0x0000002A
+TLS_TASK_OK
+```
+
+- **The directory is four numbers, and the module writes them itself.**
+  `{raw_size, data_rva, index_rva, base_rva}`: the initialised template, and
+  the two slots the loader fills. A `TLS1` marker in the payload declares it
+  with `label - $$` RVAs, so the wrapper adds nothing a hand-written module has
+  to know about.
+- **Each half is filled where it can be known.** The *index* is assigned while
+  the image is still in the window - the program is module 0, each library the
+  next - so it travels with the file copy down both roads the loader has. The
+  *block* needs the task, so it is made at launch: one allocation per module,
+  filled from the template and zeroed past it, mapped into the task's own
+  address space, recorded as a vm area so fork copies it and exit releases it.
+- **A block cannot land on an image.** Blocks are placed from the top of the
+  demand zone downwards and images are drawn in its first 256 MB, so the two
+  regions cannot meet and two blocks cannot overlap - no retry loop, no
+  collision to reason about.
+- **The base is written where the module can read it**, directly for a window
+  image and through the page tables for a mapped one. That second path is what
+  a library needs, and `LIB_TLS 1` is the proof: the library's own counter,
+  in the library's own block, on the mapped copy in the demand zone.
+- **A gate that would notice if it were a global.** `hbx_tls` prints what its
+  block held *before* it wrote anything, and the case runs it twice: a second
+  launch that saw the first one's 42 fails. `make check-loader` is 20 cases.
+
 ## Unreleased - M5: Unicode renders, and UTF-16 crosses the boundary
 
 ABI.md section 8 says UTF-16 is the text type a program from the parity target

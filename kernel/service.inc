@@ -636,9 +636,12 @@ svc_launch_image:
         mov edi, [.sli_pid]
         call hbx_fallback_window
 .sli_mapped:
-        ; Its libraries go into the same task directory (EXEC.md section 6).
+        ; Its libraries go into the same task directory (EXEC.md section 6),
+        ; and so do its thread-local blocks.
         mov edi, [.sli_pid]
         call lib_map_modules
+        mov edi, [.sli_pid]
+        call tls_setup_task
 
         ; Give the task its own copy of the window and its stack, exactly as a
         ; desktop launch does.

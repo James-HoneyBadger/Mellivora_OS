@@ -437,7 +437,7 @@ $(PE_FIXTURES): $(HBX_BUILD)/pe_fixtures.stamp
 # loaded at - so every launch exercises the relocation path. hbx_dll is the
 # program that imports from it; its import table comes from the HBI1 marker in
 # the payload, because only the payload knows where its IAT slots are.
-LIB_BINS = $(PROG_DIR)/hbx_dll.bin $(PROG_DIR)/mvlib.hbl
+LIB_BINS = $(PROG_DIR)/hbx_dll.bin $(PROG_DIR)/mvlib.hbl $(PROG_DIR)/hbx_tls.bin
 
 $(HBX_BUILD)/mvlib.bin: $(HBX_DIR)/mvlib.asm $(PROG_DIR)/syscalls.inc
 	@mkdir -p $(HBX_BUILD)
@@ -445,6 +445,13 @@ $(HBX_BUILD)/mvlib.bin: $(HBX_DIR)/mvlib.asm $(PROG_DIR)/syscalls.inc
 
 $(PROG_DIR)/mvlib.hbl: $(HBX_BUILD)/mvlib.bin tools/mkhbx.py
 	python3 tools/mkhbx.py $< -o $@ --image-base 0x00700000 --flags dll
+
+# Thread-local storage (EXEC.md section 6): the payload carries a TLS1 marker,
+# so the image gets a TLS directory the loader fills at launch.
+$(PROG_DIR)/hbx_tls.bin: $(HBX_DIR)/hbx_tls.asm $(PROG_DIR)/syscalls.inc tools/mkhbx.py
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -O0 -I$(PROG_DIR)/ -I$(HBX_DIR)/ -o $(HBX_BUILD)/hbx_tls.bin $<
+	python3 tools/mkhbx.py $(HBX_BUILD)/hbx_tls.bin -o $@
 
 $(PROG_DIR)/hbx_dll.bin: $(HBX_DIR)/hbx_dll.asm $(PROG_DIR)/syscalls.inc tools/mkhbx.py
 	@mkdir -p $(HBX_BUILD)

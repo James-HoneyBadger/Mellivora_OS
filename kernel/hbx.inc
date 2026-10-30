@@ -264,6 +264,47 @@ hbx_verify:
         ja .bad_reloc
 .no_relocs:
 
+        ; ---- thread-local storage (EXEC.md section 6) ----
+        ; The directory is {raw_size, data_rva, index_rva, base_rva}: a template
+        ; inside the image, and two slots the loader fills - this module's
+        ; index, and this thread's block. Bounds are checked here; the block is
+        ; made once the task exists.
+        mov eax, [ebx + HBX_OFF_TLS]
+        mov [hbx_tls_dir], eax
+        mov dword [hbx_tls_size], 0
+        test eax, eax
+        jz .no_tls
+        mov edx, eax
+        add edx, 16
+        jc .bad_reloc
+        cmp edx, [hbx_img_size]
+        ja .bad_reloc
+        mov ebp, [hbx_src_base]
+        add ebp, [hbx_hdr_size]         ; RVA 0 of this image
+        mov ecx, [ebp + eax]            ; raw_size
+        test ecx, ecx
+        jz .bad_header                  ; a directory with nothing in it
+        mov [hbx_tls_size], ecx
+        mov edx, [ebp + eax + 4]        ; data_rva
+        mov [hbx_tls_data], edx
+        add edx, ecx
+        jc .bad_reloc
+        cmp edx, [hbx_img_size]
+        ja .bad_reloc
+        mov edx, [ebp + eax + 8]        ; index_rva
+        mov [hbx_tls_index_rva], edx
+        add edx, 4
+        jc .bad_reloc
+        cmp edx, [hbx_img_size]
+        ja .bad_reloc
+        mov edx, [ebp + eax + 12]       ; base_rva
+        mov [hbx_tls_base_rva], edx
+        add edx, 4
+        jc .bad_reloc
+        cmp edx, [hbx_img_size]
+        ja .bad_reloc
+.no_tls:
+
         ; ---- the export table, which is what a library is for ----
         ; A table is a u32 count and that many {name_rva, rva} pairs.
         mov ecx, [hbx_export_count]
@@ -397,6 +438,22 @@ hbx_prepare:
         call lib_resolve_imports        ; EAX = mv_status on refusal
         jc .hp_fail
 
+        ; The main image is module 0, so its thread-local index is written into
+        ; the file copy too: a module reads its own index, and the block it
+        ; points at is made once the task exists (kernel/tls.inc).
+        mov dword [hbx_tls_index], 0
+        mov eax, [hbx_tls_dir]
+        test eax, eax
+        jz .hp_no_tls
+        mov dword [hbx_tls_index], 0
+        mov ecx, [hbx_tls_index_rva]
+        add ecx, [hbx_hdr_size]
+        cmp ecx, [hbx_file_len]
+        jae .hp_fail
+        mov ebx, [hbx_src_base]
+        mov dword [ebx + ecx], 0
+.hp_no_tls:
+
         mov eax, [hbx_image_base]
         cmp eax, PROGRAM_BASE
         je .hp_window
@@ -414,6 +471,8 @@ hbx_prepare:
         add eax, [hbx_entry]
         mov [hbx_map_entry], eax
         mov byte [hbx_map_pending], 1
+        mov eax, [hbx_map_base]
+        mov [hbx_main_base], eax
         mov eax, [hbx_file_len]
         mov [program_size], eax
         add eax, PROGRAM_BASE
@@ -434,6 +493,7 @@ hbx_prepare:
         call vga_newline
 .hp_window_load:
         call hbx_load_window
+        mov dword [hbx_main_base], PROGRAM_BASE
         clc
         jmp .hp_out
 
@@ -846,6 +906,12 @@ hbx_print_section_name:
 ; HBX LOADER STATE AND MESSAGES
 ;=======================================================================
 hbx_src_base:       dd PROGRAM_BASE     ; where the file under test lies
+hbx_tls_dir:        dd 0                ; RVA of the TLS directory, 0 if none
+hbx_tls_size:       dd 0                ; initialised bytes in its template
+hbx_tls_data:       dd 0                ; RVA of the template
+hbx_tls_index:      dd 0                ; this module's index, assigned at load
+hbx_tls_index_rva:  dd 0
+hbx_tls_base_rva:   dd 0
 hbx_file_len:       dd 0
 hbx_export_count:   dd 0
 hbx_export_rva:     dd 0

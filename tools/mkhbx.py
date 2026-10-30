@@ -29,6 +29,10 @@ Options:
                           the IAT slot is the payload's own, without it one is
                           allocated after the thunks.
     --export SYMBOL:RVA   repeatable; appended as an export table (a library)
+
+A payload may also carry a TLS1 marker - `"TLS1"` followed by raw_size and the
+RVAs of the template, the index slot and the base slot - which becomes the
+image's thread-local storage directory (EXEC.md section 6).
     --stack-reserve N     bytes of stack to reserve (informational for now)
     --stack-commit N
     --heap-reserve N
@@ -52,6 +56,7 @@ SECTION_NAME_LEN = 8
 RELOC_MARKER = b"HBM1"
 IMPORT_MARKER = b"HBI1"
 EXPORT_MARKER = b"HBE1"
+TLS_MARKER = b"TLS1"
 
 FLAGS = {
     "exec": 0x01,
@@ -191,6 +196,24 @@ def find_imports(payload: bytes) -> tuple[list[tuple[str, str, int]], bytes]:
     return imports, cleared
 
 
+def find_tls(payload: bytes) -> tuple[tuple[int, int, int, int] | None, bytes]:
+    """Locate a TLS1 marker; return ((raw_size, data_rva, index_rva, base_rva), payload).
+
+    A module that wants thread-local storage describes it where it can see it:
+    the four numbers are `label - $$` RVAs into its own payload. The wrapper
+    appends the directory the loader reads and clears the marker, so the image
+    carries exactly one copy of the four numbers.
+    """
+    at = payload.find(TLS_MARKER)
+    if at < 0:
+        return None, payload
+    if at + 20 > len(payload):
+        raise ValueError("TLS1 marker is not followed by four dwords")
+    values = struct.unpack_from("<IIII", payload, at + 4)
+    cleared = payload[:at] + b"\0\0\0\0" + payload[at + 4 :]
+    return values, cleared
+
+
 def build_imports(
     payload_len: int, imports: list[tuple[str, str, int | None]]
 ) -> tuple[bytes, int, int]:
@@ -310,6 +333,17 @@ def build_image(
         export_count = len(exports)
         body += table
 
+    marked_tls, body = find_tls(body)
+    tls_rva = 0
+    if marked_tls is not None:
+        raw_size, data_rva, index_rva, base_rva = marked_tls
+        if raw_size == 0:
+            raise ValueError("TLS1 declares no initialised data")
+        if data_rva + raw_size > len(body):
+            raise ValueError("TLS1 template runs past the payload")
+        tls_rva = len(body)
+        body += struct.pack("<IIII", raw_size, data_rva, index_rva, base_rva)
+
     if image_size is None:
         image_size = len(body)
     if image_size < len(body):
@@ -345,7 +379,7 @@ def build_image(
     put32(48, export_count)
     put32(52, import_rva)
     put32(56, export_rva)
-    put32(60, 0)  # tls_index
+    put32(60, tls_rva)
     put32(64, reloc_rva or 0)
     put32(68, 0)  # resource_rva
     put64(72, 0)  # checksum

@@ -127,6 +127,16 @@ run_case "a PE32 image runs"                  "pe_ok"      "PE_OK"
 # into the window and the library is mapped into the task's own address space,
 # so this also proves a call can cross from one to the other.
 run_case "a program calls into a library"     "hbx_dll"    "HBX_DLL_OK" "hbx_ok"
+# A library gets its own thread-local block, separate from the program's, and
+# its base is written through the page tables into the mapping - so the count
+# it keeps starts at one on the first call.
+run_case "a library keeps its own thread-local count" "hbx_dll" "LIB_TLS 1" "hbx_ok"
+# EXEC.md section 6: thread-local storage is per module and per task. Each
+# launch gets a block copied from the template, so both runs report the
+# template's constant before they write; a run that saw the previous one's 42
+# would print TLS_TASK_FAIL, which the case rejects.
+run_case "thread-local storage starts fresh each launch" \
+    "hbx_tls" "TLS_TASK_OK" "hbx_tls" "CPU EXCEPTION|PAGE FAULT|TLS_TASK_FAIL"
 
 # The refusals, each followed by a program that has to still run: a half-built
 # process would have taken the shell's next command with it.
