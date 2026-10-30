@@ -81,8 +81,11 @@ static u32 check_arithmetic(void)
     return acc;
 }
 
-__attribute__((section(".text.entry"), used))
-void _start(void)
+/* main, not _start: c/rt/start.c is the start-up every C program links, and
+ * it is what hands this program's return value to the kernel as the exit
+ * status. A program that needs its own entry can still define _start, but it
+ * would then be doing the runtime's job as well. */
+int main(void)
 {
     i32 rc;
 
@@ -91,17 +94,17 @@ void _start(void)
         mv_print("C_PROG_FAIL: runtime ");
         print_num((u32)rc);
         mv_print("\r\n");
-        mv_exit(1);
+        return 1;
     }
 
     if (check_arithmetic() != 338350u) {
         mv_print("C_PROG_FAIL: arithmetic\r\n");
-        mv_exit(2);
+        return 2;
     }
 
     mv_print("C_PROG: C runtime and syscalls ok, pid ");
     print_num((u32)mv_getpid());
     mv_print("\r\n");
     mv_print(msg_ok);
-    mv_exit(0);
+    return 0;
 }

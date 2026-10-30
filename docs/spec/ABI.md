@@ -46,6 +46,39 @@ are built freestanding by a host compiler proved by
 | Vector state | off for kernel C (`-mno-sse -mno-mmx -msoft-float`) | XMM belongs to tasks, not to ring-0 C; see §7 |
 | Warnings | `-Wall -Wextra`, warnings are not errors | The tree carries historical assembly that is not C |
 
+### 2.1 The runtime, as built
+
+`c/rt/` is what a C build links against, and it is split by address space
+because the two spaces do not reach the kernel the same way:
+
+| File | Linked into | Provides |
+|---|---|---|
+| `string.c` | kernel module and user programs | `memcpy`, `memmove`, `memset`, `memcmp`, `strlen`, `strcmp`, `strncmp` - the four the compiler itself calls, plus what the tree keeps needing |
+| `stdio.c` | user programs | `printf`, `snprintf`, `vsnprintf`, `puts`, `putchar`; one formatter, one sink for a buffer and one for the console |
+| `malloc.c` | user programs | `malloc`, `free`, `calloc`, `realloc`, `exit`, `atoi`; a first-fit free list over `SYS_SBRK` |
+| `start.c` | user programs | `_start`: calls `main` and passes its return value to `SYS_EXIT` |
+
+The formatter takes `d`, `i`, `u`, `x`, `X`, `s`, `c`, `p` and `%%`, with the
+`-` and `0` flags and a width. It refuses precision and floating point by
+omission rather than by accident: a conversion it does not implement prints
+itself, so a `%f` shows up in the output instead of reading a `double` off a
+32-bit stack slot that never held one. `snprintf` follows C99 - it truncates,
+always NUL-terminates, and returns the length the output would have had.
+`printf` writes through `SYS_WRITE` on descriptor 1 and falls back to
+`SYS_PRINT` when no descriptor is open, and it is the console sink - not the
+buffer sink - that turns `\n` into `\r\n`.
+
+The heap is the program's own break: `malloc` grows it by at least a page and
+splits what it takes, `free` re-inserts sorted by address and coalesces with
+both neighbours, and a payload is 8-byte aligned. `realloc` returns the block
+when it already fits rather than copying, and `calloc` refuses a product that
+does not fit a `u32` instead of allocating a small block it could not zero.
+
+`main` takes no arguments yet. The kernel gives a program a flattened command
+line (`SYS_GETARGS`), not the argument and environment block
+[EXEC.md](EXEC.md#51-argument-and-environment-block) defines, so the start-up
+has no `argv` to pass; a program reads the buffer until that block lands.
+
 ## 3. Types
 
 | Type | Size | Alignment | Notes |

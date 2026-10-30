@@ -43,6 +43,19 @@ static inline i32 mv_write(i32 fd, const void *buf, u32 len)
     return mv_syscall(SYS_WRITE, (u32)fd, (u32)buf, len, 0, 0);
 }
 
+static inline i32 mv_sbrk(i32 increment)
+{
+    return mv_syscall(SYS_SBRK, (u32)increment, 0, 0, 0, 0);
+}
+
+/* The flattened command-line string (EXEC.md section 5.1's compatibility
+ * view): the arguments, space separated, with no argv[0]. */
+static inline i32 mv_getargs(char *buf, u32 size)
+{
+    (void)size;                 /* the kernel's buffer is 512 bytes; ask for 512 */
+    return mv_syscall(SYS_GETARGS, (u32)buf, 0, 0, 0, 0);
+}
+
 static inline i32 mv_getpid(void)
 {
     return mv_syscall(SYS_GETPID, 0, 0, 0, 0, 0);

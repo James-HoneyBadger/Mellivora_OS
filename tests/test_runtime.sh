@@ -267,6 +267,16 @@ run_case "C kernel module"            "cmod"                  "CMOD_OK"         
 # (not tcc), linked at the same 0x00500000 as every other program, using the
 # same runtime in ring 3.
 run_case "C user program"             "cprog"                 "C_PROG_OK"          "" "CPU EXCEPTION|C_PROG_FAIL"
+# M5's runtime: the start-up calls main and returns its status, printf renders
+# every conversion its format asks for, and the heap allocates, frees out of
+# order and reuses. The program checks twenty things and prints CRTDEMO_OK only
+# when all of them hold; the formatted line is asserted here as well, so a
+# formatter that quietly changes an output fails the case rather than the
+# program.
+run_case "C runtime: printf, heap and start-up" \
+    $'crtdemo' \
+    "CRT: printf -42 4000000000 deadbeef BEEF str z % [   42][42   ][00042]|CRT: heap|grown past a page|CRTDEMO_OK" \
+    "" "CPU EXCEPTION|CRTDEMO_FAIL"
 # The stored mode has to deny, not decorate: root passes, the owner is held
 # to the owner bits, and a stranger to the world bits.
 run_case "permissions deny"           "perm_test"             "PERM_OK"            "" "CPU EXCEPTION|PERM_FAIL"

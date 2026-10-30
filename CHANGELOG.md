@@ -1,5 +1,58 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: the C runtime formats, allocates and starts a program
+
+M5 asks for "a C runtime: string, memory, formatted I/O, allocation, and the
+start-up code a normal C program expects". `c/rt/` had one file. A C program
+carried its own `_start`, formatted numbers by hand, and had no heap at all.
+
+```text
+Lair:/> crtdemo
+CRT: start-up ran main
+CRT: printf -42 4000000000 deadbeef BEEF str z % [   42][42   ][00042]
+CRT: heap 3488 bytes in 64 blocks, coalesced and reused
+CRT: args ""
+CRTDEMO_OK
+```
+
+- **One formatter, two sinks.** `c/rt/stdio.c` renders `d i u x X s c p %%`
+  with the `-` and `0` flags and a width; `snprintf` copies into a buffer and
+  `printf` writes to the console, so the two cannot disagree about a number.
+  `snprintf` follows C99 - it truncates, always terminates, and returns what it
+  would have written - and a conversion the formatter does not implement prints
+  itself rather than reading the wrong argument off the stack. The console sink,
+  not the buffer sink, turns `\n` into `\r\n`, so a program that writes its own
+  file never finds stray CRs in it.
+- **A heap over `SYS_SBRK`.** `c/rt/malloc.c` keeps a free list sorted by
+  address: first fit, split when the tail is worth a header, coalesced with the
+  neighbour before and after on `free`. Payloads are 8-byte aligned, `realloc`
+  returns the block it already has when it fits, and `calloc` refuses a product
+  that does not fit a `u32` instead of allocating a small block it could not
+  zero. It grows by at least a page, so a program asking for twelve bytes does
+  not make a system call per allocation.
+- **A start-up.** `c/rt/start.c` is `_start` for every C program: it calls
+  `main` and hands the return value to `SYS_EXIT`, which is what makes a C
+  program one `main` and nothing else. `c/prog/cprog.c` - the M0 self-test -
+  became a `main` in the same change and still prints `C_PROG_OK`, so the
+  start-up is proved by the program that was already there.
+- **The runtime is split by address space.** `string.c` has no syscall in it
+  and the kernel module links it; stdio, the heap and the start-up reach the
+  kernel through `int 0x80`, so only user programs link those. The Makefile
+  builds every `c/prog/*.c` with a pattern rule, links it at `PROGRAM_BASE`
+  against the user runtime, and populate.py installs it because it already
+  knows a C-built binary has its source in `c/prog/`.
+- **What `main` does not get: `argv`.** The kernel hands a program a flattened
+  command line through `SYS_GETARGS`, not the argument and environment block
+  EXEC.md section 5.1 describes, so the start-up has nothing to pass. A program
+  reads the buffer with `mv_getargs()`; the day the block lands, `start.c` grows
+  the `argc`/`argv` form and `main`'s signature changes with it.
+
+`make check-runtime` runs `crtdemo`, which checks all of it and prints
+`CRTDEMO_OK` only when all of them hold: every conversion and both flags, the
+truncation contract, a refusal at size zero, 64 blocks allocated in uneven
+sizes, filled, half freed, refilled and verified, the whole arena taken in one
+allocation afterwards, and `calloc`/`realloc` keeping their bytes.
+
 ## Unreleased - M4: a profile has a lifecycle, and deleting one is a gate
 
 SERVICES.md section 3 says a profile is `/Users/<name>` with the directories it

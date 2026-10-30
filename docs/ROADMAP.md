@@ -544,9 +544,20 @@ and says that it could not be randomised. Because a mapped image can sit above
 the RAM ceiling, the syscall pointer checks now accept any address the task
 actually maps instead of only the window, which is the contract mmap'd buffers
 already needed. `make check-loader` launches the aslr fixture six times and
-requires six different bases. What is still open in this wave: PE32, shared
-libraries and per-module TLS, imports that resolve to something, Unicode, the C
-runtime and the interface layer.
+requires six different bases. The C runtime is now a runtime and not just
+`string.c`: `c/rt/stdio.c` renders `d i u x X s c p %%` with the `-` and `0`
+flags and a width, to a buffer (`snprintf`, C99 truncation and return value) or
+to the console; `c/rt/malloc.c` is a first-fit heap over `SYS_SBRK` that splits,
+frees sorted by address and coalesces with both neighbours; and `c/rt/start.c`
+is the start-up, so a C program is one `main` and its return value is the exit
+status. `c/prog/crtdemo.c` is the gate - checks over the conversions,
+`snprintf`'s contract, 64 blocks allocated and freed out of order, one
+allocation of the whole arena afterwards to prove the coalescing, and
+`calloc`/`realloc` - and `make check-runtime` runs it. `main` still takes no
+arguments: the kernel hands a program a flattened command line, not EXEC.md
+section 5.1's block, so `argv` waits for it. What is still open in this wave:
+PE32, shared libraries and per-module TLS, imports that resolve to something,
+Unicode, and the interface layer.
 
 ### M6 · Shell and user experience (12–16 weeks)
 

@@ -96,6 +96,21 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
   `tasks list`, `tasks run`, `tasks del`; the last word is the missed-run policy,
   so a window that passed while the machine was off is skipped by default
 
+### C runtime (M5)
+
+- **Formatted output** — `printf`, `snprintf`, `vsnprintf`, `puts`, `putchar`
+  from one formatter: `d i u x X s c p %%`, the `-` and `0` flags and a width,
+  with C99 truncation and return value; a conversion the formatter does not
+  know prints itself instead of misreading the argument
+- **A heap** — `malloc`, `free`, `calloc`, `realloc` over `SYS_SBRK`: first fit,
+  8-byte aligned payloads, freed blocks coalesced with both neighbours, and a
+  `calloc` that refuses a product too large for a `u32`
+- **A start-up** — `c/rt/start.c` calls `main` and hands its return value to
+  `SYS_EXIT`, so a C program is one `main` and nothing else
+- **One runtime for both spaces** — `c/rt/string.c` is linked into the kernel
+  module and into user programs; stdio, the heap and the start-up reach the
+  kernel through `int 0x80`, so they are user-only
+
 ### HB Lair Shell (v3.0)
 
 - **90+ built-in shell commands** with aliases: file management, text processing, system info, process control

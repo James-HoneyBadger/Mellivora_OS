@@ -100,7 +100,7 @@ QEMU_DEBUG_FLAGS = $(QEMU_FLAGS) \
 # Programs
 PROG_DIR = programs
 PROG_SRCS = $(wildcard $(PROG_DIR)/*.asm)
-PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS)) programs/cprog.bin
+PROG_BINS = $(patsubst %.asm,%.bin,$(PROG_SRCS) $(TEST_PROGS)) $(C_PROGS)
 
 TEST_PROGS = programs/sbrk_test.asm programs/hello_test.asm
 
@@ -180,15 +180,21 @@ C_CFLAGS = -c -O2 -std=c11 -ffreestanding -fno-builtin -fno-stack-protector \
 
 C_INCS    = $(wildcard c/include/mv/*.h)
 C_OBJ_DIR = .build/c
-C_RT_OBJS = $(C_OBJ_DIR)/rt/string.o
+
+# The runtime split: string.c has no syscall in it and the kernel module links
+# it too; stdio, malloc and the start-up reach the kernel through int 0x80, so
+# they belong to user programs only.
+C_RT_OBJS      = $(C_OBJ_DIR)/rt/string.o
+C_USER_RT_OBJS = $(C_RT_OBJS) $(C_OBJ_DIR)/rt/stdio.o \
+                 $(C_OBJ_DIR)/rt/malloc.o $(C_OBJ_DIR)/rt/start.o
 
 # The kernel module: a C subsystem linked at the cmod slot (kernel/data.inc).
 CMOD_OBJS = $(C_OBJ_DIR)/kmod/kmod.o $(C_RT_OBJS)
 CMOD_BLOB = c/build/kmod.bin
 
-# The user program: the same runtime, linked at PROGRAM_BASE instead.
-CPROG_OBJS = $(C_OBJ_DIR)/prog/cprog.o $(C_RT_OBJS)
-CPROG_BIN  = programs/cprog.bin
+# Every C program in c/prog is linked at PROGRAM_BASE against the user runtime
+# and the start-up in c/rt/start.c, so a program is one main() and no boilerplate.
+C_PROGS = $(patsubst c/prog/%.c,programs/%.bin,$(wildcard c/prog/*.c))
 
 $(C_OBJ_DIR)/%.o: c/%.c $(C_INCS)
 	@mkdir -p $(dir $@)
@@ -208,9 +214,10 @@ $(CMOD_BLOB): $(CMOD_OBJS) c/kmod/kmain.ld $(C_OBJ_DIR)/kmod.addr
 	    exit 1; \
 	fi
 
-$(CPROG_BIN): $(CPROG_OBJS) c/prog/prog.ld
+programs/%.bin: $(C_OBJ_DIR)/prog/%.o $(C_USER_RT_OBJS) c/prog/prog.ld
 	@mkdir -p $(dir $@)
-	$(C_LD) -m elf_i386 -T c/prog/prog.ld --oformat binary -o $@ $(CPROG_OBJS)
+	$(C_LD) -m elf_i386 -T c/prog/prog.ld --oformat binary -o $@ \
+	    $(C_OBJ_DIR)/prog/$*.o $(C_USER_RT_OBJS)
 	@SIZE=$$(wc -c < $@); \
 	if [ $$SIZE -gt $(PROGRAM_MAX_BYTES) ]; then \
 	    echo "  ERROR: $@ is $$SIZE bytes; a program window is $(PROGRAM_MAX_BYTES) bytes"; \
