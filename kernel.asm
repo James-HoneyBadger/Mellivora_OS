@@ -989,6 +989,7 @@ kernel_entry:
 %include "kernel/screensaver.inc"
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
+%include "kernel/utf8.inc"
 %include "kernel/hbx.inc"
 %include "kernel/lib.inc"
 %include "kernel/pe.inc"

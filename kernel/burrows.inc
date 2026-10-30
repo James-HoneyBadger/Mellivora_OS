@@ -146,6 +146,10 @@ GUI_SET_TITLE      equ 32      ; ECX=win_id ESI=title; retitle a window you own
 
 burrows_init:
         pushad
+        ; The font the desktop draws with: the adapter's own 256 glyphs when it
+        ; can be found, so a window can show Latin-1, Greek and box drawing
+        ; rather than 95 ASCII characters (ABI.md section 8).
+        call gui_font_load
         ; Copy default theme to runtime theme buffer
         mov esi, gui_theme_blue
         mov edi, gui_theme
@@ -3557,12 +3561,82 @@ gui_bb_tri_right:
 ; gui_bb_draw_char - Draw 8x16 character
 ; EAX = x, EBX = y, CL = char, EDX = color
 ;---------------------------------------
+;---------------------------------------
+; gui_font_load - take the adapter's own 8x16 font for the desktop
+;
+; VGA and EGA put a 256-glyph 8x16 font at F000:FA6E (physical 0x000FFA6E), and
+; it is the same font text mode draws with - Latin-1 letters, Greek, box
+; drawing, arrows and the arithmetic signs. Using it gives a window those
+; glyphs without storing a kilobyte of hand-drawn bitmaps for each, and it
+; keeps the desktop and the console showing the same shapes.
+;
+; It is accepted only if the glyph for 'A' matches the one in the built-in
+; table: a machine that puts something else at that address would otherwise
+; draw garbage for every word on the screen. When it is not accepted the
+; built-in ASCII glyphs are copied into the full table's own code points, so
+; one drawing path serves both cases.
+;---------------------------------------
+GUI_ROM_FONT equ 0x000FFA6E
+
+gui_font_load:
+        pushad
+        mov byte [gui_font_is_full], 0
+        mov edi, gui_font_full
+        xor eax, eax
+        mov ecx, 4096 / 4
+        cld
+        rep stosd
+
+        mov esi, GUI_ROM_FONT + 'A' * 16
+        mov edi, gui_font_8x16 + ('A' - FONT_FIRST_CHAR) * 16
+        mov ecx, 16
+.gfl_check:
+        mov al, [esi]
+        cmp al, [edi]
+        jne .gfl_fallback
+        inc esi
+        inc edi
+        dec ecx
+        jnz .gfl_check
+
+        mov esi, GUI_ROM_FONT
+        mov edi, gui_font_full
+        mov ecx, 4096 / 4
+        cld
+        rep movsd
+        mov byte [gui_font_is_full], 1
+        jmp .gfl_done
+
+.gfl_fallback:
+        mov esi, gui_font_8x16
+        mov edi, gui_font_full + FONT_FIRST_CHAR * 16
+        mov ecx, (FONT_LAST_CHAR - FONT_FIRST_CHAR + 1) * 16 / 4
+        cld
+        rep movsd
+.gfl_done:
+        popad
+        ret
+
+gui_font_full:      times 4096 db 0
+gui_font_is_full:   db 0
+
+;---------------------------------------
+; gui_bb_draw_char - Draw one character
+;---------------------------------------
 gui_bb_draw_char:
         pushad
         mov [.dc_x], eax
         mov [.dc_color], edx
 
-        ; Get glyph offset
+        ; Get glyph offset. With the ROM font loaded, every one of the font's
+        ; 256 glyphs is reachable; otherwise only the built-in ASCII range is.
+        cmp byte [gui_font_is_full], 0
+        je .dc_ascii_only
+        movzx esi, cl
+        shl esi, 4             ; * 16 bytes per glyph
+        add esi, gui_font_full
+        jmp .dc_have_glyph
+.dc_ascii_only:
         movzx esi, cl
         sub esi, FONT_FIRST_CHAR
         jb .dc_done
@@ -3570,6 +3644,7 @@ gui_bb_draw_char:
         ja .dc_done
         shl esi, 4             ; * 16 bytes per glyph
         add esi, gui_font_8x16
+.dc_have_glyph:
 
         mov ecx, FONT_H        ; 16 rows
 .dc_row:
@@ -3628,15 +3703,37 @@ gui_bb_draw_string:
         pushad
 .ds_loop:
         movzx ecx, byte [esi]
-        cmp cl, 0
-        je .ds_done
+        test cl, cl
+        jz .ds_done
+        test cl, 0x80
+        jz .ds_plain
+        ; UTF-8. EAX is the x coordinate and EDX the colour, so both survive
+        ; the decode: ECX still holds the byte for the CP437 fallback.
+        mov [gui_str_x], eax
+        call utf8_decode               ; EAX = code point, ESI advanced
+        jc .ds_restore
+        call unicode_to_glyph
+        mov ecx, eax
+.ds_restore:
+        mov eax, [gui_str_x]
+        ; Without the adapter font there is no glyph above 126, so a character
+        ; the map found would draw as nothing. Say so with a '?' instead.
+        cmp byte [gui_font_is_full], 0
+        jne .ds_draw
+        cmp cl, FONT_LAST_CHAR
+        jbe .ds_draw
+        mov cl, '?'
+        jmp .ds_draw
+.ds_plain:
+        inc esi
+.ds_draw:
         call gui_bb_draw_char
         add eax, FONT_W
-        inc esi
         jmp .ds_loop
 .ds_done:
         popad
         ret
+gui_str_x:  dd 0
 
 ;---------------------------------------
 ; gui_bb_draw_char_v - Draw one 8x16 character rotated 90° anticlockwise

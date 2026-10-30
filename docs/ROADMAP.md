@@ -577,8 +577,16 @@ own address space once the task exists - so `hbx_dll` prints `LIB_HELLO` from
 code that lives in another image, at an address no process shares. A library is
 an HBX image marked `dll` and installed in `/lib`; unloading, versioning,
 delay loading, a library that imports, and per-module TLS are the parts of
-section 6 that are still missing. What is still open in this wave: per-module
-TLS, Unicode, and the interface layer.
+section 6 that are still missing. Text then became Unicode end to end in the
+way this machine can hold it: UTF-8 is decoded, not passed through; each code
+point is mapped to the glyph the CP437 font actually has, so Latin-1, Greek,
+box drawing, arrows and the arithmetic signs draw in both the console and the
+desktop - which now loads the adapter's 8x16 ROM font so it has 256 glyphs
+instead of 95 - and the UTF-16 half of ABI.md section 8 is a real conversion in
+`c/rt/utf.c`, surrogate pairs and all, with `unicodedemo` checking the
+crossings. What is still open in this wave: per-module TLS, a scalable font
+(and with it every code point CP437 has no glyph for), and the interface
+layer.
 
 ### M6 · Shell and user experience (12–16 weeks)
 

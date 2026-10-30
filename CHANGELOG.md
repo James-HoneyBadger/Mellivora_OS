@@ -1,5 +1,49 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: Unicode renders, and UTF-16 crosses the boundary
+
+ABI.md section 8 says UTF-16 is the text type a program from the parity target
+sees and UTF-8 is what the system stores. Both halves exist now, and the console
+draws the result instead of mojibake.
+
+```text
+Lair:/> unicodedemo
+unicode: café naïve Über | αβγ π ΣΩ
+unicode: ┌─┼─┐ a → b ☺
+unicode: wide: éα─→
+UNICODE_OK
+```
+
+- **A real decoder, not a table of special cases.** `kernel/utf8.inc` decodes 1
+  to 4 bytes and rejects what UTF-8 cannot mean: overlong forms, surrogates, and
+  anything past U+10FFFF. A malformed sequence consumes one byte and yields
+  U+FFFD, so no string can stall a loop.
+- **The font decides how far Unicode goes, and the font is CP437.**
+  `unicode_to_glyph` maps a code point to the glyph the adapter actually has -
+  Latin-1 letters, Greek, box drawing, arrows, the arithmetic signs, card suits
+  - and anything else renders as `?`. Text mode uses the adapter's own font; the
+  desktop now loads the same 8x16 ROM font at start-up, so a window has 256
+  glyphs instead of 95. It is accepted only when its `A` matches the built-in
+  one, and a machine where it does not falls back to the ASCII set and draws
+  `?` for anything else rather than nothing.
+- **Words and pictures are printed differently on purpose.** `vga_print` decodes
+  UTF-8 (a byte that is not valid UTF-8 keeps its CP437 glyph, so a border of
+  0xC4 is still a line), and `vga_print_bytes` prints bytes exactly. The banner
+  uses the second: two CP437 bytes can form a valid UTF-8 sequence by accident,
+  which is exactly how hand-drawn borders turned into the wrong letters.
+- **The boundary converts properly.** `c/rt/utf.c` is `mv_utf8_to_utf16`,
+  `mv_utf16_to_utf8`, `mv_utf16_len`, `mv_printw` and `mv_putwc`: a code point
+  above the BMP becomes a surrogate pair and comes back as one code point, a
+  lone surrogate becomes U+FFFD rather than an unrepresentable sequence, and a
+  conversion that runs out of room never writes half a pair.
+- **A gate that checks the crossings, not just the output.**
+  `make check-runtime`'s `unicodedemo` verifies the decodes, the round trip, the
+  pair, the lone surrogate and the truncation, and prints `UNICODE_OK` only when
+  all of them hold.
+
+What is still missing is a scalable font: a code point outside CP437 has no
+glyph to draw until MEDIA.md's font stack lands.
+
 ## Unreleased - M5: a program calls into a shared library
 
 EXEC.md section 6 is the difference between an OS that runs programs and one

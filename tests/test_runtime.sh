@@ -277,6 +277,14 @@ run_case "C runtime: printf, heap and start-up" \
     $'crtdemo' \
     "CRT: printf -42 4000000000 deadbeef BEEF str z % [   42][42   ][00042]|CRT: heap|grown past a page|CRTDEMO_OK" \
     "" "CPU EXCEPTION|CRTDEMO_FAIL"
+# ABI.md section 8: UTF-16 at the boundary, UTF-8 underneath. The program
+# prints accented Latin, Greek, box drawing and an arrow, then converts
+# between the two encodings - including a surrogate pair, a lone surrogate and
+# a truncated buffer - and prints UNICODE_OK only when every conversion holds.
+run_case "Unicode: UTF-8 rendered, UTF-16 converted" \
+    $'unicodedemo' \
+    "UNICODE_OK|café naïve Über|αβγ π ΣΩ" \
+    "" "CPU EXCEPTION|UNICODE_FAIL"
 # The stored mode has to deny, not decorate: root passes, the owner is held
 # to the owner bits, and a stranger to the world bits.
 run_case "permissions deny"           "perm_test"             "PERM_OK"            "" "CPU EXCEPTION|PERM_FAIL"

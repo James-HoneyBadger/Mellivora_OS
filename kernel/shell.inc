@@ -114,7 +114,7 @@ shell_main:
         mov byte [boot_motd_shown], 1
         call vga_clear
         mov esi, banner_str
-        call vga_print_color
+        call vga_print_color_bytes
         call vga_set_info
         mov esi, motd_str
         call vga_print

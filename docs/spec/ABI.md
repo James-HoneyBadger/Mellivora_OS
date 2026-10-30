@@ -232,6 +232,21 @@ Consequences:
 - Invalid input is refused (`MV_INVALID_PARAMETER`); unpaired surrogates never
   reach a structure, because two different names must never be equal.
 
+**As built** (`c/rt/utf.c`, `kernel/utf8.inc`). The conversion is real in both
+directions: a code point above the BMP becomes a surrogate pair going out and
+one code point coming back, a lone surrogate becomes U+FFFD rather than an
+invalid sequence, and a decoder always consumes at least one byte so a
+malformed string cannot stall a loop. `mv_utf16_to_utf8`, `mv_utf8_to_utf16`,
+`mv_utf16_len` and `mv_printw` are the boundary a wide-character program calls
+(`c/include/mv/utf.h`).
+
+Rendering is bounded by the font, and the font is CP437: the adapter's own 256
+glyphs in text mode, and the same ROM font loaded into the desktop's 8x16 table
+at boot. So the console decodes UTF-8 and maps each code point to the glyph it
+has - Latin-1 letters, Greek, box drawing, arrows, the arithmetic signs - and
+anything else renders as `?`. A scalable font is a later wave
+([MEDIA.md](MEDIA.md)); what a terminal program actually needs, this draws.
+
 ## 9. System call encoding
 
 `int 0x80`, unchanged, because 2 000 programs and every sample in the tree use

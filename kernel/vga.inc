@@ -416,7 +416,22 @@ vga_newline:
         ret
 
 ; Print null-terminated string at ESI
+; Print a UTF-8 string at ESI. ASCII goes through byte for byte; a multi-byte
+; sequence becomes the glyph the font has, and a byte that is not UTF-8 keeps
+; the CP437 glyph it always had (see utf8_print).
 vga_print:
+        pushad
+        call utf8_print
+        popad
+        ret
+
+; Print a string of raw CP437 bytes at ESI, exactly as they are.
+;
+; Two kinds of text reach the screen: words, which are UTF-8, and pictures, which
+; are the adapter font's own bytes - a border of 0xC4 is a line, and decoding it
+; as UTF-8 can pair it with the next byte into a character nobody typed. A
+; caller that drew its own characters uses this one.
+vga_print_bytes:
         pushad
 .loop:
         lodsb
@@ -433,6 +448,13 @@ vga_print_color:
         lodsb                   ; First byte = color
         mov [vga_color], al
         call vga_print
+        ret
+
+; As vga_print_color, for text that is CP437 bytes rather than UTF-8.
+vga_print_color_bytes:
+        lodsb                   ; First byte = color
+        mov [vga_color], al
+        call vga_print_bytes
         ret
 
 ; Print 32-bit hex value in EAX

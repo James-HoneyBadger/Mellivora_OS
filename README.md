@@ -24,6 +24,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 
 - **32-bit protected mode** with a flat memory model, ring 0 / ring 3 separation, and one address space shared by every task
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
+- **Unicode text** — UTF-8 decoded at the console and the desktop, mapped to the glyph the CP437 font has (Latin-1, Greek, box drawing, arrows); UTF-16 conversion at the C runtime boundary
 - **202 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
 - **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 128 concurrent ring-3 tasks; blocking `waitpid`
