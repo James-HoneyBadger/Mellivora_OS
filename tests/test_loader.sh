@@ -123,6 +123,10 @@ echo "  loader tests: $(basename "$IMAGE"), ${CASE_TIMEOUT}s per case"
 run_case "a fixed-base HBX image runs"        "hbx_ok"     "HBX_OK"
 run_case "a relocated image runs"             "hbx_reloc"  "HBX_RELOC_OK"
 run_case "a PE32 image runs"                  "pe_ok"      "PE_OK"
+# EXEC.md section 6: a program calls into a shared library. The image is loaded
+# into the window and the library is mapped into the task's own address space,
+# so this also proves a call can cross from one to the other.
+run_case "a program calls into a library"     "hbx_dll"    "HBX_DLL_OK" "hbx_ok"
 
 # The refusals, each followed by a program that has to still run: a half-built
 # process would have taken the shell's next command with it.

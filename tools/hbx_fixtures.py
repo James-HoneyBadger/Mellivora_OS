@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     # An import from a module that does not exist: the loader has to name both
     # the module and the symbol, which is all an image can be told today.
     images["hbx_import.bin"] = build_image(
-        ok, image_base=BASE, imports=[("nosuch.dll", "missing")]
+        ok, image_base=BASE, imports=[("nosuch.dll", "missing", None)]
     )
 
     for name, image in images.items():

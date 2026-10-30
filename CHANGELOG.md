@@ -1,5 +1,58 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: a program calls into a shared library
+
+EXEC.md section 6 is the difference between an OS that runs programs and one
+that runs *software*: a program built against a library has to find it, bind to
+it and share it with no other process seeing its copy. Until now every program
+was a closed world - nothing dynamic linked, and an import table could only be
+refused.
+
+```text
+Lair:/> hbx_dll
+LIB_HELLO
+HBX_DLL_OK
+```
+
+- **A library is an HBX image marked `dll`, with an export table.**
+  `kernel/lib.inc` resolves a program's imports against it: an export table is
+  a `u32` count and that many `{name_rva, rva}` pairs, the same pair a thunk
+  already carries, so a resolver reads one shape in both directions.
+  `tools/mkhbx.py` grows `--export SYMBOL:RVA`, plus `HBE1` and `HBI1` markers
+  so a hand-written payload can declare its own exports and its own IAT slots -
+  the wrapper cannot guess where an assembly program put them.
+- **Three steps, each where it can happen.** *Resolve* runs during loading,
+  before a process exists, so a missing module or symbol is an ordinary loader
+  refusal naming `module!symbol` and nothing has to be unwound. *Patch* writes
+  the resolved address into the program's IAT in the file copy still sitting at
+  `PROGRAM_BASE`, so both roads out of the loader inherit the answer and no
+  page-table code is involved. *Map* puts each library into the task's own
+  address space at the base resolution chose, through the same
+  `hbx_map_task_image` the main image uses - same protections, same relocation
+  fixups, same vm-area lifetime. The call in the demo crosses from the window
+  into the demand zone.
+- **The file is the authority.** Staging slots live in the program window above
+  the image, and the window is cleared between loading and launching (a new
+  task must not see the last program's heap), so a module is read again at map
+  time rather than trusting bytes that were true a moment ago. This was found
+  the hard way: the first version mapped zeroes into the task and the program
+  died on its first call.
+- **One mapping per module per program.** Two descriptors naming one library
+  load it once, which is section 6's "one mapping per image per process" for
+  the case that can happen today.
+- **A program and its libraries share one description.** Loading a library runs
+  the same verifier, which overwrites the statics that describe the image being
+  loaded; the resolver saves the program's description on entry and hands it
+  back on the way out, because `hbx_prepare` is only half way through using it.
+- **What is not here**: unloading and its reference count, delay loading,
+  versioned exports, a library importing another library, `PROCESS_ATTACH`, and
+  per-module TLS. Each is written down in EXEC.md section 6 rather than
+  pretended.
+
+`make check-loader` runs 18 cases including the library call, and the missing
+import case still names the module and the symbol - now from the resolver
+rather than from the refusal it used to be.
+
 ## Unreleased - M5: a PE32 image loads, and a subdirectory holds what a root does
 
 EXEC.md section 1 lists PE32 as the format that makes M5 worth doing: an image

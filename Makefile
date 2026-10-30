@@ -369,7 +369,7 @@ gdb: check-qemu $(IMAGE) $(KERNEL_ELF)
 
 # Build all sample programs (parallel by default)
 programs:
-	$(MAKE) -j$(NPROC) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES)
+	$(MAKE) -j$(NPROC) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) $(LIB_BINS)
 
 $(PROG_DIR)/%.bin: $(PROG_DIR)/%.asm $(PROG_DIR)/syscalls.inc $(wildcard $(PROG_DIR)/lib/*.inc)
 	$(NASM) -f bin -I$(PROG_DIR)/ -o $@ -l $(@:.bin=.lst) $<
@@ -431,6 +431,25 @@ $(HBX_BUILD)/pe_fixtures.stamp: $(PE_PAYLOAD) tools/mkpe.py tools/pe_fixtures.py
 $(PE_FIXTURES): $(HBX_BUILD)/pe_fixtures.stamp
 	@test -f $@ || { rm -f $(HBX_BUILD)/pe_fixtures.stamp; $(MAKE) $(HBX_BUILD)/pe_fixtures.stamp; }
 
+# Shared libraries (docs/spec/EXEC.md section 6). mvlib.hbl is a relocatable
+# HBX image marked `dll`, assembled for 0x00700000 - a base it will never be
+# loaded at - so every launch exercises the relocation path. hbx_dll is the
+# program that imports from it; its import table comes from the HBI1 marker in
+# the payload, because only the payload knows where its IAT slots are.
+LIB_BINS = $(PROG_DIR)/hbx_dll.bin $(PROG_DIR)/mvlib.hbl
+
+$(HBX_BUILD)/mvlib.bin: $(HBX_DIR)/mvlib.asm $(PROG_DIR)/syscalls.inc
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -O0 -DPROGRAM_ORG=0x00700000 -I$(PROG_DIR)/ -I$(HBX_DIR)/ -o $@ $<
+
+$(PROG_DIR)/mvlib.hbl: $(HBX_BUILD)/mvlib.bin tools/mkhbx.py
+	python3 tools/mkhbx.py $< -o $@ --image-base 0x00700000 --flags dll
+
+$(PROG_DIR)/hbx_dll.bin: $(HBX_DIR)/hbx_dll.asm $(PROG_DIR)/syscalls.inc tools/mkhbx.py
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -O0 -I$(PROG_DIR)/ -I$(HBX_DIR)/ -o $(HBX_BUILD)/hbx_dll.bin $<
+	python3 tools/mkhbx.py $(HBX_BUILD)/hbx_dll.bin -o $@
+
 # A program that jumps forward over more than 127 bytes needs -O0: NASM's
 # default sizing assumes a short jump on the first pass, and the labels after
 # it then move on the second. crypt_test carries 36 KB of buffers and two long
@@ -448,7 +467,7 @@ programs/generated_app_catalog.inc: docs/app-catalog.json tools/generate_launche
 # `make -j check` cannot test an image whose population step is still running
 # (or was never run).
 POPULATE_STAMP = .build/populated.stamp
-POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) populate.py
+POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) $(LIB_BINS) populate.py
 
 $(POPULATE_STAMP): $(POPULATE_DEPS)
 	@mkdir -p $(dir $@)
@@ -529,7 +548,7 @@ define build_iso_image
 	$(POPULATE) $(1) $(PROG_DIR)
 endef
 
-ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) populate.py
+ISO_IMAGE_DEPS = $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) $(LIB_BINS) populate.py
 
 # populate.py derives the HBFS block count from the size of the file it writes,
 # so an image is only correct for the size it was built at. These stamps record

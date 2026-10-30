@@ -93,6 +93,14 @@ BG_STACK_PAGES      equ 16             ; Pages per background task user stack (6
 USER_STACK_MAX_PAGES  equ 64                                  ; 256 KB hard cap
 USER_STACK_INIT_PAGES equ 16                                  ; 64 KB mapped at exec
 USER_STACK_BASE       equ PROGRAM_END_ADDR - USER_STACK_MAX_PAGES * 4096
+; Where a program's shared libraries are staged while their imports are
+; resolved. A library lives in the task's own address space once it is mapped;
+; the file has to sit somewhere readable first, and the top of the window above
+; the program image is the only region free at that moment (the heap has not
+; grown yet and the stack is below). LIB_MAX_MODULES slots of LIB_SLOT_SIZE.
+LIB_MAX_MODULES       equ 4
+LIB_SLOT_SIZE         equ 32768                               ; 32 KB per module
+LIB_STAGE_BASE        equ USER_STACK_BASE - LIB_MAX_MODULES * LIB_SLOT_SIZE
 ; Stack ASLR: the stack top starts up to this many pages below the window top,
 ; and the trampoline and initial ESP move with it. It has to stay well under
 ; USER_STACK_MAX_PAGES - USER_STACK_INIT_PAGES so the stack can still grow.
@@ -982,6 +990,7 @@ kernel_entry:
 %include "kernel/shell.inc"
 %include "kernel/util.inc"
 %include "kernel/hbx.inc"
+%include "kernel/lib.inc"
 %include "kernel/pe.inc"
 %include "kernel/sett.inc"
 %include "kernel/settx.inc"

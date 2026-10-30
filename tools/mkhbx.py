@@ -24,8 +24,11 @@ Options:
                           repeatable; default: one .text over the whole payload
     --flags NAME[,NAME]   exec (default), dll, driver, 32only, 64bit
     --subsystem NAME      console (default), windows, driver
-    --import MODULE:SYMBOL
-                          repeatable; appended as an import table
+    --import MODULE:SYMBOL[@RVA]
+                          repeatable; appended as an import table. With @RVA
+                          the IAT slot is the payload's own, without it one is
+                          allocated after the thunks.
+    --export SYMBOL:RVA   repeatable; appended as an export table (a library)
     --stack-reserve N     bytes of stack to reserve (informational for now)
     --stack-commit N
     --heap-reserve N
@@ -47,6 +50,8 @@ FIXED_HEADER = 96
 SECTION_SIZE = 20
 SECTION_NAME_LEN = 8
 RELOC_MARKER = b"HBM1"
+IMPORT_MARKER = b"HBI1"
+EXPORT_MARKER = b"HBE1"
 
 FLAGS = {
     "exec": 0x01,
@@ -124,15 +129,83 @@ def find_relocations(payload: bytes) -> tuple[int | None, bytes]:
     return at + 4, cleared
 
 
-def build_imports(payload_len: int, imports: list[tuple[str, str]]) -> tuple[bytes, int, int]:
-    """Append an import table; return (bytes, import_rva, count_of_entries_used)."""
+def find_exports(payload: bytes) -> tuple[list[tuple[str, int]], bytes]:
+    """Locate an HBE1 table; return ([(name, rva)], payload with it cleared).
+
+    A payload that exports symbols describes them where it can see them - with
+    `label - $$`, which is an RVA at any ORG - so the wrapper never has to parse
+    an assembler listing. The marker is cleared afterwards so the table the tool
+    builds is the only one in the image.
+    """
+    at = payload.find(EXPORT_MARKER)
+    if at < 0:
+        return [], payload
+    if at + 8 > len(payload):
+        raise ValueError("HBE1 marker is not followed by a count")
+    count = struct.unpack_from("<I", payload, at + 4)[0]
+    end = at + 8 + 8 * count
+    if end > len(payload):
+        raise ValueError(f"HBE1 declares {count} exports, which do not fit the payload")
+    exports: list[tuple[str, int]] = []
+    for i in range(count):
+        name_rva, rva = struct.unpack_from("<II", payload, at + 8 + 8 * i)
+        if name_rva >= len(payload):
+            raise ValueError(f"export {i}: name RVA 0x{name_rva:x} is past the payload")
+        raw = payload[name_rva : payload.find(b"\0", name_rva)]
+        if not raw:
+            raise ValueError(f"export {i}: empty name")
+        exports.append((raw.decode("ascii"), rva))
+    cleared = payload[:at] + b"\0\0\0\0" + payload[at + 4 :]
+    return exports, cleared
+
+
+def find_imports(payload: bytes) -> tuple[list[tuple[str, str, int]], bytes]:
+    """Locate an HBI1 table; return ([(module, symbol, iat_rva)], payload cleared).
+
+    Hand-written assembly cannot know where the wrapper will put an import
+    address table, so an importer names its own slots: the marker carries the
+    module name RVA, a count, and that many (symbol_name_rva, iat_rva) pairs.
+    """
+    at = payload.find(IMPORT_MARKER)
+    if at < 0:
+        return [], payload
+    if at + 12 > len(payload):
+        raise ValueError("HBI1 marker is not followed by a module name and a count")
+    module_rva, count = struct.unpack_from("<II", payload, at + 4)
+    end = at + 12 + 8 * count
+    if end > len(payload):
+        raise ValueError(f"HBI1 declares {count} imports, which do not fit the payload")
+    if module_rva >= len(payload):
+        raise ValueError("import module name is past the payload")
+    module = payload[module_rva : payload.find(b"\0", module_rva)].decode("ascii")
+    imports: list[tuple[str, str, int]] = []
+    for i in range(count):
+        name_rva, iat_rva = struct.unpack_from("<II", payload, at + 12 + 8 * i)
+        if name_rva >= len(payload):
+            raise ValueError(f"import {i}: name RVA 0x{name_rva:x} is past the payload")
+        raw = payload[name_rva : payload.find(b"\0", name_rva)]
+        if not raw:
+            raise ValueError(f"import {i}: empty name")
+        imports.append((module, raw.decode("ascii"), iat_rva))
+    cleared = payload[:at] + b"\0\0\0\0" + payload[at + 4 :]
+    return imports, cleared
+
+
+def build_imports(
+    payload_len: int, imports: list[tuple[str, str, int | None]]
+) -> tuple[bytes, int, int]:
+    """Append an import table; return (bytes, import_rva, count_of_entries_used).
+
+    An import with an IAT RVA writes into a slot the payload already declared;
+    one without gets a slot allocated here, after the thunks.
+    """
     modules: list[str] = []
-    symbols: dict[str, list[str]] = {}
-    for module, symbol in imports:
+    symbols: dict[str, list[tuple[str, int | None]]] = {}
+    for module, symbol, iat in imports:
         if module not in symbols:
             modules.append(module)
             symbols[module] = []
-        symbols[module].append(symbol)
+        symbols[module].append((symbol, iat))
 
     strings = bytearray()
     module_rva: dict[str, int] = {}
@@ -142,7 +215,7 @@ def build_imports(payload_len: int, imports: list[tuple[str, str]]) -> tuple[byt
     symbol_rva: dict[str, list[int]] = {}
     for module in modules:
         symbol_rva[module] = []
-        for symbol in symbols[module]:
+        for symbol, _iat in symbols[module]:
             symbol_rva[module].append(payload_len + len(strings))
             strings += symbol.encode("ascii") + b"\0"
 
@@ -153,20 +226,42 @@ def build_imports(payload_len: int, imports: list[tuple[str, str]]) -> tuple[byt
         thunks[module] = at
         at += 8 * len(symbols[module])
     iat_base = at
-    at += 4 * sum(len(symbols[m]) for m in modules)
+    allocated = sum(1 for m in modules for _s, iat in symbols[m] if iat is None)
+    at += 4 * allocated
     desc_base = at
     at += 12 * len(modules)
 
     blob = bytearray(strings)
     iat = iat_base
     for module in modules:
-        for symbol, name_rva in zip(symbols[module], symbol_rva[module]):
-            blob += struct.pack("<II", name_rva, iat)
-            iat += 4
-    blob += b"\0" * (4 * sum(len(symbols[m]) for m in modules))
+        for (symbol, slot), name_rva in zip(symbols[module], symbol_rva[module]):
+            if slot is None:
+                slot = iat
+                iat += 4
+            blob += struct.pack("<II", name_rva, slot)
+    blob += b"\0" * (4 * allocated)
     for module in modules:
         blob += struct.pack("<III", module_rva[module], thunks[module], len(symbols[module]))
     return bytes(blob), desc_base, len(modules)
+
+
+def build_exports(payload_len: int, exports: list[tuple[str, int]]) -> tuple[bytes, int]:
+    """Append an export table; return (bytes, export_rva).
+
+    The table is a u32 count followed by that many {name_rva, rva} entries, the
+    same pair the import table's thunks use, so a resolver reads one shape.
+    """
+    strings = bytearray()
+    names: list[int] = []
+    for name, _rva in exports:
+        names.append(payload_len + len(strings))
+        strings += name.encode("ascii") + b"\0"
+    table_at = payload_len + len(strings)
+    blob = bytearray(strings)
+    blob += struct.pack("<I", len(exports))
+    for (name, rva), name_rva in zip(exports, names):
+        blob += struct.pack("<II", name_rva, rva)
+    return bytes(blob), table_at
 
 
 def build_image(
@@ -178,7 +273,8 @@ def build_image(
     sections: list[Section] | None = None,
     flags: int = FLAGS["exec"],
     subsystem: int = 1,
-    imports: list[tuple[str, str]] | None = None,
+    imports: list[tuple[str, str, int | None]] | None = None,
+    exports: list[tuple[str, int]] | None = None,
     stack_reserve: int = 0,
     stack_commit: int = 0,
     heap_reserve: int = 0,
@@ -191,10 +287,27 @@ def build_image(
     if reloc_rva is not None and reloc_rva >= len(body):
         raise ValueError("relocation table starts past the end of the payload")
 
+    # The payload's own declaration of what it imports and exports wins over
+    # the command line: hand-written assembly names its IAT slots and its entry
+    # points with `label - $$`, and only the payload knows those numbers.
+    marked_imports, body = find_imports(body)
+    if marked_imports:
+        imports = marked_imports
+    marked_exports, body = find_exports(body)
+    if marked_exports and not exports:
+        exports = marked_exports
+
     import_rva = 0
     import_count = 0
     if imports:
         table, import_rva, import_count = build_imports(len(body), imports)
+        body += table
+
+    export_rva = 0
+    export_count = 0
+    if exports:
+        table, export_rva = build_exports(len(body), exports)
+        export_count = len(exports)
         body += table
 
     if image_size is None:
@@ -229,9 +342,9 @@ def build_image(
     put64(32, image_size)
     put32(40, len(sections))
     put32(44, import_count)
-    put32(48, 0)  # exports: nothing exports yet
+    put32(48, export_count)
     put32(52, import_rva)
-    put32(56, 0)  # export_rva
+    put32(56, export_rva)
     put32(60, 0)  # tls_index
     put32(64, reloc_rva or 0)
     put32(68, 0)  # resource_rva
@@ -265,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--flags", default="exec")
     parser.add_argument("--subsystem", default="console")
     parser.add_argument("--import", dest="imports", action="append", default=[])
+    parser.add_argument("--export", dest="exports", action="append", default=[])
     parser.add_argument("--stack-reserve", default="0")
     parser.add_argument("--stack-commit", default="0")
     parser.add_argument("--heap-reserve", default="0")
@@ -282,9 +396,20 @@ def main(argv: list[str] | None = None) -> int:
     imports = []
     for spec in args.imports:
         if ":" not in spec:
-            parser.error(f"import {spec!r}: expected MODULE:SYMBOL")
+            parser.error(f"import {spec!r}: expected MODULE:SYMBOL[@IAT_RVA]")
         module, symbol = spec.split(":", 1)
-        imports.append((module, symbol))
+        slot: int | None = None
+        if "@" in symbol:
+            symbol, at = symbol.split("@", 1)
+            slot = int(at, 0)
+        imports.append((module, symbol, slot))
+
+    exports = []
+    for spec in args.exports:
+        if ":" not in spec:
+            parser.error(f"export {spec!r}: expected SYMBOL:RVA")
+        symbol, rva = spec.split(":", 1)
+        exports.append((symbol, int(rva, 0)))
 
     payload = args.payload.read_bytes()
     image = build_image(
@@ -296,6 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         flags=flags,
         subsystem=SUBSYSTEMS[args.subsystem],
         imports=imports,
+        exports=exports,
         stack_reserve=int(args.stack_reserve, 0),
         stack_commit=int(args.stack_commit, 0),
         heap_reserve=int(args.heap_reserve, 0),

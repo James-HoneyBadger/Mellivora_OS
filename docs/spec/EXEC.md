@@ -73,8 +73,10 @@ The relocation table is a `u32` count followed by that many `u32` RVAs, each
 naming a dword inside the image to which the load delta is added - a code
 displacement is such a dword as much as a data pointer is. The import table is
 an array of `{module_rva u32, thunk_rva u32, thunk_count u32}`; each thunk is
-`{name_rva u32, iat_rva u32}` and the IAT slot starts at zero. Names are
-NUL-terminated inside the image.
+`{name_rva u32, iat_rva u32}` and the IAT slot starts at zero. The export table
+is a `u32` count followed by that many `{name_rva u32, rva u32}` entries - the
+same pair a thunk carries, so a resolver reads one shape in both directions.
+Names are NUL-terminated inside the image.
 
 The checksum covers the whole file - header, section table and image bytes -
 with the checksum field read as zero, which is why `header_size` has to be
@@ -243,6 +245,38 @@ recorded, parent signalled.
 | Initialisation | A library's entry point runs once per process (`PROCESS_ATTACH`), once per thread (`THREAD_ATTACH`), and may fail the load |
 | Single instance | One mapping per image per process, regardless of how many modules import it |
 
+**As built** (`kernel/lib.inc`, `tools/mkhbx.py`, `tools/pe_fixtures.py`). A
+library is an HBX image with the `dll` flag and a relocation table; `mvlib.hbl`
+in the fixture set is built for `0x00700000` and never loaded there, so every
+launch exercises the relocation path. The three steps are separate because
+they can be:
+
+1. **Resolve**, during loading and before a process exists. The program's
+   import descriptors are read from the file still sitting in the window, each
+   module is read into a staging slot, verified by the same verifier a program
+   goes through, and each symbol is matched against its export table.
+2. **Patch** the program's IAT *in the file copy*, so the copy into the window
+   and the mapping at a random base both inherit the answer; no page-table code
+   is involved. A module the program names twice is loaded once.
+3. **Map** each library into the task's own address space, at the base step 1
+   chose, through the same `hbx_map_task_image` the main image uses - so a
+   library gets the same page protections, relocation fixups and vm-area
+   lifetime as a program. A call therefore crosses from the window into the
+   demand zone, which `make check-loader`'s `hbx_dll` case proves.
+
+Finding is `<name>.hbl` in `/lib`, then in the root; a program may import at
+most four modules, each at most 32 KB. The staging slots live at the top of the
+program window, and the window is cleared between loading and launching, so a
+module is read *again* at map time rather than trusting bytes that were true
+before the clear.
+
+What section 6 still asks for and this does not do: unloading (`FreeLibrary`
+and its reference count), delay loading, versioned exports, a library that
+imports another library, the `PROCESS_ATTACH`/`THREAD_ATTACH` notification, and
+per-module TLS. A module that cannot be mapped at launch (out of frames) is
+reported and skipped: its imports stay unresolved and the first call through
+one faults inside that one task, which the fault path contains.
+
 ## 7. Scripts and associations
 
 A script is a text file whose first line names its interpreter
@@ -292,8 +326,8 @@ M5 does not close until:
    with a relocated import, and refuses a writable-executable section, a bad
    checksum and a 64-bit image — each with its own status. (**As built:**
    `make check-loader` proves the fixed base, a relocated image, the randomised
-   base, a PE32 image, and every refusal in section 8 in both formats; the
-   relocated import waits for libraries (§6).)
+   base, a PE32 image, a program calling into a shared library (§6), and every
+   refusal in section 8 in both formats.)
 3. A program and a library built from the SDK samples load, call across the
    boundary, use TLS in two threads, and unload in the right order.
 4. ASLR: 1 000 launches of the same image produce 1 000 distinct main-image
@@ -309,11 +343,11 @@ M5 does not close until:
 |---|---|
 | HBX images | Read and enforced: `MVBX` header, CRC-32C, sections, relocations and entry point. A relocatable image is mapped at a random base; a fixed-base one is copied into the window. |
 | PE32 images | Read and enforced: the §2.1 subset, with one refusal per rule. A PE32 image is copied into the window like a fixed-base HBX image, so it is not randomised and cannot import; the unwrapping and the refusal set are what `make check-loader` proves. |
-| Shared libraries | None |
+| Shared libraries | Loaded, bound and mapped: a `dll` image is found in `/lib`, its exports are matched against a program's imports, and it is mapped into the task's own address space. No unloading, no versioning, no delay loading; a library may not import another |
 | TLS per module | A kernel-managed thread-local area for one module |
 | ASLR | The main image base for a relocatable HBX image, and per-launch randomised heap and stack top. Shared libraries, thread stacks and section views have nothing to randomise yet |
 | Section-based mapping | Frames are mapped into the task's directory page by page and a page in a writable section is mapped writable; a writable-and-executable section is refused. There is no section object and no execute bit on this page table |
-| Imports/exports | An import table is parsed and a missing module fails the load naming `module!symbol`; there is no library to resolve against, and exports are not written |
+| Imports/exports | Both directions work: an import is resolved against a real export table, a missing module or symbol fails the load naming `module!symbol` before any process exists, and a module is loaded once however many descriptors name it |
 | Mitigations | DEP and W^X exist ([VMM.md](VMM.md)); no SEH-analogue |
 | env/argv block | A flat command-line buffer and `getargs` |
 

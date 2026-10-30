@@ -6658,6 +6658,12 @@ cmd_exec_program:
         call hbx_fallback_window
 .exec_fore_mapped:
         pop eax
+        ; A library is mapped into this task's own directory, so it can only be
+        ; mapped now that the task has one (EXEC.md section 6).
+        push eax
+        mov edi, eax
+        call lib_map_modules
+        pop eax
         ; Give the task a guarded, demand-grown stack before it runs. The
         ; unmapping has to happen in the task's own directory, so switch to it
         ; and back; sched_start_task installs it again when the task is entered.
@@ -6697,11 +6703,19 @@ cmd_exec_program:
         test eax, eax
         jz .exec_inplace_window
         mov edi, [eax + TCB_PID]
+        push edi
         call hbx_map_task_image
         cmp eax, -1
-        jne .exec_inplace_ready
+        jne .exec_inplace_map
         mov edi, -1
         call hbx_fallback_window
+        jmp .exec_inplace_libs
+.exec_inplace_map:
+        pop edi
+        push edi
+.exec_inplace_libs:
+        pop edi
+        call lib_map_modules
         jmp .exec_inplace_ready
 .exec_inplace_window:
         mov edi, -1
@@ -6765,6 +6779,10 @@ cmd_exec_program:
         call hbx_fallback_window
 .exec_gui_mapped:
         pop eax                         ; task id
+        push eax
+        mov edi, eax
+        call lib_map_modules
+        pop eax
 
         push eax                        ; save task id across CR3 switches
         imul eax, TCB_SIZE

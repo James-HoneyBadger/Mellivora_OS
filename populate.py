@@ -1137,6 +1137,9 @@ def main():
     fs.create_subdir("Burrows")
     fs.create_subdir("samples")
     fs.create_subdir("docs")
+    # Shared libraries live where the loader looks first (EXEC.md section 6:
+    # the image's own directory, then the system directory).
+    fs.create_subdir("lib")
 
     managed_names = {
         fname[:-4] for fname in cache
@@ -1253,6 +1256,22 @@ def main():
                     # read the gap as a user deletion and tombstone a program
                     # that was never installed.
                     new_cache.pop(fname, None)
+
+    # Shared libraries: an .hbl is not a program - nothing runs it - so it is
+    # installed beside them in /lib rather than in /bin, and its source lives
+    # with the other loader fixtures in programs/hbx/.
+    for fname in sorted(os.listdir(programs_dir)):
+        if not fname.endswith(".hbl"):
+            continue
+        fpath = os.path.join(programs_dir, fname)
+        src_path = os.path.join(programs_dir, "hbx", fname[:-4] + ".asm")
+        if not os.path.exists(src_path):
+            print(f"  [SKIP] orphaned library without source: {fname}")
+            continue
+        with open(fpath, "rb") as f:
+            data = f.read()
+        if fs.add_file(fname, data, directory="lib"):
+            print(f"  [LIB] /lib/{fname}")
 
     if fs.preserve_mode:
         fs.cleanup_stale_subdir_entries(

@@ -34,6 +34,10 @@ image_load_program:
         push ecx
         push edx
 
+        ; Only an HBX image can import. Clearing the count here means a flat,
+        ; ELF32 or PE32 launch after an importing one cannot inherit its table.
+        mov dword [hbx_import_count], 0
+
         cmp dword [PROGRAM_BASE], HBX_MAGIC
         je .ilp_hbx
         cmp dword [PROGRAM_BASE], ELF_MAGIC
@@ -97,14 +101,17 @@ image_load_program:
 
 ;-----------------------------------------------------------------------
 ; hbx_verify - check an HBX image in the window before anything is written
-;   In : EAX = bytes read into PROGRAM_BASE
+;   In : EAX = bytes read, and the file at [hbx_src_base]
 ;   Out: CF clear, and the statics below describe the image
 ;        CF set - the reason is on the console and EAX is an mv_status
 ;
-; Every check runs against the file as it lies in the window: the header, the
+; Every check runs against the file as it lies in memory: the header, the
 ; 32-bit halves, the checksum, the section table, the entry point, the
 ; relocation table's bounds and the import table (whose RVAs are read through
 ; header_size, because the image bytes have not been moved yet).
+;
+; [hbx_src_base] is PROGRAM_BASE for a program and a staging slot for a shared
+; library, so one verifier checks both (EXEC.md sections 2 and 6).
 ;-----------------------------------------------------------------------
 hbx_verify:
         pushad
@@ -112,7 +119,7 @@ hbx_verify:
 
         cmp eax, HBX_HDR_SIZE
         jb .bad_header
-        mov ebx, PROGRAM_BASE
+        mov ebx, [hbx_src_base]
 
         cmp dword [ebx + HBX_OFF_VERSION], HBX_VERSION
         jne .bad_version
@@ -182,6 +189,10 @@ hbx_verify:
         mov [hbx_import_count], eax
         mov eax, [ebx + HBX_OFF_IMPORT_RVA]
         mov [hbx_import_rva], eax
+        mov eax, [ebx + HBX_OFF_EXPORTS]
+        mov [hbx_export_count], eax
+        mov eax, [ebx + HBX_OFF_EXPORT_RVA]
+        mov [hbx_export_rva], eax
 
         ; ---- sections: bounds, no writable-and-executable, entry inside one ----
         mov esi, ebx
@@ -231,7 +242,7 @@ hbx_verify:
 
 .base_ok:
         ; ---- the relocation table and the import table are inside the image ----
-        mov ebp, PROGRAM_BASE
+        mov ebp, [hbx_src_base]
         add ebp, [hbx_hdr_size]         ; where RVA 0 lives in the file
 
         mov ecx, [hbx_reloc_rva]
@@ -253,8 +264,29 @@ hbx_verify:
         ja .bad_reloc
 .no_relocs:
 
-        ; An import table has to be somewhere; a count without an RVA is a
-        ; header the loader cannot act on.
+        ; ---- the export table, which is what a library is for ----
+        ; A table is a u32 count and that many {name_rva, rva} pairs.
+        mov ecx, [hbx_export_count]
+        test ecx, ecx
+        jz .no_exports
+        mov esi, [hbx_export_rva]
+        test esi, esi
+        jz .bad_header
+        mov eax, ecx
+        shl eax, 3
+        add eax, 4
+        jc .bad_reloc
+        add eax, esi
+        jc .bad_reloc
+        cmp eax, [hbx_img_size]
+        ja .bad_reloc
+.no_exports:
+
+        ; An import table has to be somewhere, and the first descriptor has to
+        ; be inside the image; a count without an RVA is a header the loader
+        ; cannot act on. The symbols themselves are resolved against the real
+        ; libraries by lib_resolve_imports right after this returns (EXEC.md
+        ; sections 3 and 6), so nothing here refuses a named import.
         mov ecx, [hbx_import_count]
         test ecx, ecx
         jz .verified
@@ -266,39 +298,6 @@ hbx_verify:
         jc .bad_reloc
         cmp eax, [hbx_img_size]
         ja .bad_reloc
-        mov edi, [ebp + esi]                    ; module name RVA
-        cmp edi, [hbx_img_size]
-        jae .bad_reloc
-        mov edx, [ebp + esi + 4]                ; thunk array RVA
-        mov eax, edx
-        add eax, 8
-        jc .bad_reloc
-        cmp eax, [hbx_img_size]
-        ja .bad_reloc
-        mov ecx, [ebp + edx]                    ; first symbol name RVA
-        cmp ecx, [hbx_img_size]
-        jae .bad_reloc
-
-        ; No library is loadable yet, so every import is missing. The contract
-        ; that matters now is the one in section 8: name the module and the
-        ; symbol, and leave nothing behind - which is why this runs before the
-        ; process exists. A resolver replaces the refusal when libraries land.
-        mov esi, msg_hbx_prefix
-        call vga_print
-        mov esi, ebp
-        add esi, edi
-        call hbx_print_name
-        jc .bad_header
-        mov esi, msg_hbx_bang
-        call vga_print
-        mov esi, ebp
-        add esi, ecx
-        call hbx_print_name
-        jc .bad_header
-        mov esi, msg_hbx_import_tail
-        call vga_print
-        mov eax, MV_DLL_NOT_FOUND
-        jmp .fail
 
 .verified:
         popad
@@ -386,9 +385,17 @@ hbx_verify:
 ;-----------------------------------------------------------------------
 hbx_prepare:
         pushad
-        mov [hbx_map_pending], 0
+        mov byte [hbx_map_pending], 0
+        mov dword [hbx_src_base], PROGRAM_BASE
         call hbx_verify
         jc .hp_refused
+
+        ; Imports are resolved against real libraries before any of the image
+        ; moves, and the resolved addresses are written into the file copy's
+        ; import address table: both roads - the copy into the window and the
+        ; mapping at a random base - then inherit them for free.
+        call lib_resolve_imports        ; EAX = mv_status on refusal
+        jc .hp_fail
 
         mov eax, [hbx_image_base]
         cmp eax, PROGRAM_BASE
@@ -604,12 +611,12 @@ hbx_map_task_image:
         mov [hbx_map_pid], edi
         mov eax, edi
         cmp eax, MAX_TASKS
-        jae .hmt_fail
+        jae .hmt_fail_t
         imul eax, TCB_SIZE
         add eax, task_table
         mov eax, [eax + TCB_CR3]
         test eax, eax
-        jz .hmt_fail
+        jz .hmt_fail_c
         mov [hbx_map_pd], eax
         mov eax, [hbx_img_size]
         add eax, 0xFFF
@@ -623,7 +630,7 @@ hbx_map_task_image:
         jae .hmt_relocs
         call pmm_alloc_page
         test eax, eax
-        jz .hmt_fail
+        jz .hmt_fail_p
         mov [hbx_map_frame], eax
         ; A fresh frame is not zeroed by the allocator, and the tail of the
         ; image is BSS: every byte of it is written here.
@@ -642,7 +649,7 @@ hbx_map_task_image:
         jbe .hmt_copy
         mov ecx, 4096
 .hmt_copy:
-        mov esi, PROGRAM_BASE
+        mov esi, [hbx_src_base]
         add esi, [hbx_hdr_size]
         add esi, eax
         mov edi, [hbx_map_frame]
@@ -669,7 +676,7 @@ hbx_map_task_image:
         mov eax, [hbx_map_delta]
         test eax, eax
         jz .hmt_record
-        mov esi, PROGRAM_BASE
+        mov esi, [hbx_src_base]
         add esi, [hbx_hdr_size]
         add esi, [hbx_reloc_rva]
         mov ecx, [esi]
@@ -689,7 +696,7 @@ hbx_map_task_image:
         and ebx, ~0xFFF
         call vm_pte_phys
         test eax, eax
-        jz .hmt_fail
+        jz .hmt_fail_r
         add eax, [hbx_rel_off]          ; the frame is identity-mapped
         mov ebx, [eax]
         add ebx, [hbx_map_delta]
@@ -714,6 +721,10 @@ hbx_map_task_image:
         mov dword [hbx_map_ret], 1
         jmp .hmt_out
 
+.hmt_fail_t:
+.hmt_fail_c:
+.hmt_fail_p:
+.hmt_fail_r:
 .hmt_fail:
         call hbx_unmap_partial
         mov byte [hbx_map_pending], 0
@@ -834,7 +845,10 @@ hbx_print_section_name:
 ;=======================================================================
 ; HBX LOADER STATE AND MESSAGES
 ;=======================================================================
+hbx_src_base:       dd PROGRAM_BASE     ; where the file under test lies
 hbx_file_len:       dd 0
+hbx_export_count:   dd 0
+hbx_export_rva:     dd 0
 hbx_hdr_size:       dd 0
 hbx_payload_len:    dd 0
 hbx_img_size:       dd 0

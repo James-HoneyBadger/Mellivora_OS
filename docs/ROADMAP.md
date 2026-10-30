@@ -569,9 +569,16 @@ refusal table written as code, and `make check-loader` proves the image that
 loads and all seven refusals. Populating the image with seven more fixtures
 then filled `/bin` - 224 entries - and dropped programs silently, which is the
 ceiling docs/spec/README.md's S1 named, so a subdirectory is now the size of
-the root: 455 entries, one documented number instead of two. What is still open
-in this wave: shared libraries and per-module TLS, imports that resolve to
-something, Unicode, and the interface layer.
+the root: 455 entries, one documented number instead of two. Then dependencies
+became real: `kernel/lib.inc` resolves a program's imports against a shared
+library's export table, patches the resolved addresses into the program's IAT
+while the file is still in the window, and maps each library into the task's
+own address space once the task exists - so `hbx_dll` prints `LIB_HELLO` from
+code that lives in another image, at an address no process shares. A library is
+an HBX image marked `dll` and installed in `/lib`; unloading, versioning,
+delay loading, a library that imports, and per-module TLS are the parts of
+section 6 that are still missing. What is still open in this wave: per-module
+TLS, Unicode, and the interface layer.
 
 ### M6 · Shell and user experience (12–16 weeks)
 
