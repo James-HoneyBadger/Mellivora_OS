@@ -251,6 +251,29 @@ programs/%.bin: $(C_OBJ_DIR)/prog/%.o $(C_USER_RT_OBJS) c/prog/prog.ld
 	    exit 1; \
 	fi
 
+# The same sources, the same runtime, the same link address - but left as an
+# ELF32 executable instead of stripped to a flat image. The loader reads the
+# program headers and copies each PT_LOAD segment to the address in its own
+# header (kernel/util.inc), so an ELF image carries its own entry point and its
+# own .bss. These three are the ELF side of the tree: a format probe and two
+# utilities, which is what "a Linux-flavoured ELF runs here" has to mean when
+# the ABI underneath is Mellivora's own syscalls (docs/POSIX.md).
+#
+# The .bin suffix stays: the extension never decides what an image is, the
+# header does (docs/spec/EXEC.md section 1).
+ELF_PROGS = elfinfo elfcat elfwc
+
+$(patsubst %,programs/%.bin,$(ELF_PROGS)): programs/%.bin: \
+        $(C_OBJ_DIR)/prog/%.o $(C_USER_RT_OBJS) c/prog/prog.ld
+	@mkdir -p $(dir $@)
+	$(C_LD) -m elf_i386 -T c/prog/prog.ld -o $@ \
+	    $(C_OBJ_DIR)/prog/$*.o $(C_USER_RT_OBJS)
+	@SIZE=$$(wc -c < $@); \
+	if [ $$SIZE -gt $(PROGRAM_MAX_BYTES) ]; then \
+	    echo "  ERROR: $@ is $$SIZE bytes; a program window is $(PROGRAM_MAX_BYTES) bytes"; \
+	    exit 1; \
+	fi
+
 # Assemble stage 1 boot sector
 $(BOOT_BIN): $(BOOT_SRC)
 	$(NASM) -f bin -o $@ -l $(@:.bin=.lst) $<

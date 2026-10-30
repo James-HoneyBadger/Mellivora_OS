@@ -1,5 +1,62 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: an ELF32 image runs from its own program headers
+
+The loader has described a second container since M5 opened, but nothing had
+ever been built as one: the ELF32 path was written for the host toolchain's
+output and then never fed. Three utilities are now built that way, and feeding
+them found two bugs in the loader and two in the path layer that no flat
+program could reach.
+
+```text
+Lair:/> elfinfo
+elfinfo: /bin/elfinfo
+  class    ELF32
+  data     little-endian
+  type     EXEC (fixed address)
+  machine  i386
+  entry    0x00500000
+  phdrs    4 x 32 at 0x00000034
+  LOAD r-x vaddr 0x00500000 filesz 0x00005330 memsz 0x00005330
+  LOAD r-- vaddr 0x00505330 filesz 0x00000970 memsz 0x00000970
+  LOAD rw- vaddr 0x00505ca0 filesz 0x0000284c memsz 0x0000284c
+  3 loadable segments
+ELFINFO_OK
+```
+
+- **`ELF_PROGS` in the Makefile is the ELF side of the tree.** The same sources,
+  the same runtime, the same link address as every flat program - the link step
+  simply does not strip the image to a flat payload. `elfinfo` describes the
+  container it arrived in, `elfcat` is a numbered cat, and `elfwc` counts lines,
+  words and bytes; all three run in `/bin` beside the flat programs, and the
+  `.bin` suffix stays because the header decides what an image is, not the name.
+- **The loader reads the program header table before it copies anything.**
+  A normally linked image puts that table at file offset 52 and its first
+  `PT_LOAD` at offset 0x1000 with address 0x00500000, so the copy that places
+  the text lands on top of the table: walking it in place read whatever the copy
+  had just written. The table is snapshotted into the kernel image first (up to
+  16 headers; more is refused rather than half-loaded), and the entry point now
+  comes from `e_entry` - the old code read `program_entry`, which no ELF launch
+  had ever set, so the first ELF program started at address zero.
+- **`SYS_FREAD` resolves the path instead of handing it to the old reader.**
+  It passed the whole path to `hbfs_read_file`, whose own directory save/restore
+  is older than `path_enter`/`path_leave`; a read that failed half way through
+  left the shell's current directory inside the file's directory, so the next
+  call resolved its path from the wrong place. The syscall now splits the path
+  the way `open`, `stat` and `unlink` already do.
+- **`cd` into a subdirectory keeps the directory cache honest.** The subdirectory
+  branch of `cmd_cd_internal` read the new directory's blocks straight into
+  `hbfs_dir_buf`, leaving `dir_cache_lba` naming the *parent* - so the next load
+  found a "cache hit", kept the child's bytes, and searched them as if they were
+  the parent's. Every lookup after one `cd` into a subdirectory failed, which is
+  why a C program could not read a file in `/docs` or `/bin` at all: `position`
+  and `readme.txt` were there, and `fopen` returned an empty stream. The branch
+  now loads through `hbfs_load_root_dir`, which verifies the run, refreshes the
+  write shadow and moves the tag, and a directory that cannot be read is a `cd`
+  that fails rather than a directory that was entered.
+- **`make check-runtime` proves all three**, including a 43 KB read of the ELF
+  image itself - larger than one block and larger than the read loop's buffer.
+
 ## v14.0.0 - M5 closed: interfaces, the exit criterion, and two new syscalls
 
 M5 asked for "a COM-flavoured typed dispatch layer on top of the Warren, so

@@ -508,6 +508,11 @@ cues at the end of each round. Wired games include: `tetris`,
 
 ### Utilities (in /bin)
 
+`elfinfo`, `elfcat` and `elfwc` are built as ELF32 executables rather than flat
+binaries — same source, same runtime, different container; the loader places
+them from their own program headers (PROGRAMMING_GUIDE.md §19). Everything else
+in the table is a flat binary.
+
 | Program | Usage | Description |
 | --- | --- | --- |
 | `hello` | `hello` | Hello World — template program |
@@ -528,6 +533,9 @@ cues at the end of each round. Wired games include: `tetris`,
 | `tar` | `tar c\|x\|t ARCHIVE [FILES]` | HBTAR1.0 archive: create, extract, list (up to 64 files × 64 KB each) |
 | `top` | `top` | Real-time process monitor with memory bar (refreshes every second) |
 | `nm` | `nm FILE [FILE ...]` | ELF32 symbol table reader (address, type, name) |
+| `elfinfo` | `elfinfo [FILE]` | Describe an ELF32 image: class, machine, entry, `PT_LOAD` segments (default `/bin/elfinfo`) |
+| `elfcat` | `elfcat [-n] FILE...` | Print files, optionally numbered |
+| `elfwc` | `elfwc [-l] [-w] [-c] FILE...` | Count lines, words and bytes |
 | `pciinfo` | `pciinfo` | List all detected PCI devices with bus:device.function addresses |
 | `rev` | `rev [FILE]` | Reverse each line (chars in reverse order) |
 | `yes` | `yes [STRING]` | Output STRING repeatedly (default "y") until interrupted |

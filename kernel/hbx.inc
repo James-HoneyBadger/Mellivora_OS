@@ -58,6 +58,10 @@ image_load_program:
 .ilp_elf:
         call elf_load_program           ; EAX = entry, EDX = first free byte
         jc .ilp_fail
+        ; The entry comes from the image's own header, so it has to be recorded
+        ; here: program_entry is what the launch site reads, and an ELF image is
+        ; the one format whose entry is not simply PROGRAM_BASE.
+        mov [program_entry], eax
         mov ecx, edx
         sub ecx, PROGRAM_BASE
         mov [program_size], ecx

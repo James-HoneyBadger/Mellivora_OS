@@ -15,11 +15,23 @@ application ([S1](README.md#decisions-this-set-records)).
 |---|---|---|
 | **HBX** (native) | The system's own programs; the format this document defines | First-class |
 | **PE32** | Programs built for the parity target's ecosystem — the reason M5 exists | The subset in §2; PE32+ is out of scope ([S5](README.md#decisions-this-set-records)) |
-| **ELF32** | Development builds from the host toolchain | Development and tests only, not a supported user format |
+| **ELF32** | Development builds from the host toolchain, and the utilities built that way | Placed from its own program headers (§1.1); the ABI underneath is Mellivora's, not Linux's |
 | **Script** | A text file with a declared interpreter ([§7](#7-scripts-and-associations)) | First-class |
 
 A file's format is decided by its header, never by its extension. An extension
 that disagrees with the header is reported and the header wins.
+
+### 1.1 How an ELF32 image is placed
+
+An ELF32 image is not relocated: every `PT_LOAD` segment is copied to the address
+in its own program header, so its link address is its load address and its entry
+point is `e_entry` rather than the first byte of the file. The program header
+table is read into the kernel before any copy is made, because a normally linked
+image puts that table inside the first segment's destination - reading it in
+place would read whatever the copy had just written over it. Images with more
+than 16 program headers are refused rather than half-loaded. What this does not
+buy is Linux compatibility: the container is ELF32, the ABI beneath it is the
+system's own ([docs/POSIX.md](../POSIX.md)).
 
 ## 2. HBX
 

@@ -535,7 +535,15 @@ another base is relocated by the delta. `image_load_program` is now the one
 door: the shell (root and `PATH`) and the service manager no longer each
 compare the first dword against `ELF_MAGIC`, and the flat and ELF32 loaders
 keep working unchanged. `tools/mkhbx.py` builds an image from a flat payload and
-`make check-loader` proves every row of the refusal table. Then the image moved out of the
+`make check-loader` proves every row of the refusal table. The ELF32 side is
+now fed rather than only described: `ELF_PROGS` links the same sources and
+runtime as a flat program and leaves the image as an executable, the loader
+snapshots the program header table before copying a segment over it and takes
+the entry point from `e_entry`, and three utilities (`elfinfo`, `elfcat`,
+`elfwc`) ship that way. Feeding it found the two path bugs that had stopped a
+program reading a file in a subdirectory: `SYS_FREAD` now splits the path the
+way every other file call does, and entering a subdirectory moves the
+directory cache tag along with the bytes it read. Then the image moved out of the
 fixed window: a relocatable HBX image is mapped into the task's own directory at
 a random 64 KB-aligned address in the demand zone, one page per section
 protection, with every absolute address in its relocation table fixed by the

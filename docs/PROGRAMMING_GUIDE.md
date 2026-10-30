@@ -26,8 +26,9 @@ compiler.
 16. [Shared VBE UI Library (v6.1+)](#shared-vbe-ui-library-v61)
 17. [Building Assembly Programs](#building-assembly-programs)
 18. [C Programming with TCC](#c-programming-with-tcc)
-19. [Debugging Tips](#debugging-tips)
-20. [Complete Syscall Table](#complete-syscall-table)
+19. [C Programs Built with the Host Toolchain](#c-programs-built-with-the-host-toolchain)
+20. [Debugging Tips](#debugging-tips)
+21. [Complete Syscall Table](#complete-syscall-table)
 
 ---
 
@@ -1535,6 +1536,52 @@ The `/samples` directory contains ready-to-compile examples:
 | `echo.c` | Echo arguments |
 
 ---
+
+## C Programs Built with the Host Toolchain
+
+`make` compiles every `c/prog/*.c` against the user runtime in `c/rt/` and links
+it at `PROGRAM_BASE` (`0x00500000`). The link *address* is always the same; the
+*container* is not, and the loader picks by header, never by extension.
+
+| Container | How it is built | What the loader does |
+| --- | --- | --- |
+| flat binary | the default rule, `--oformat binary` | copies the file to `PROGRAM_BASE` and starts at its first byte |
+| ELF32 | a name in `ELF_PROGS` | copies each `PT_LOAD` segment to its own `p_vaddr` and starts at `e_entry` |
+| HBX | `tools/hbbuild.py` | verifies the header, resolves imports, then copies or maps the image |
+
+An ELF32 build is the same source and the same runtime as a flat one; the
+difference is that the image describes itself, so it carries its own entry point
+and its own `.bss`. To ship a program that way, add its name to `ELF_PROGS` in
+the `Makefile`:
+
+```make
+ELF_PROGS = elfinfo elfcat elfwc
+```
+
+Three programs are built that way today and live in `/bin` beside the flat ones:
+
+```text
+Lair:/> elfinfo /bin/elfcat
+elfinfo: /bin/elfcat
+  class    ELF32
+  data     little-endian
+  type     EXEC (fixed address)
+  machine  i386
+  entry    0x00500000
+  phdrs    4 x 32 at 0x00000034
+  LOAD r-x vaddr 0x00500000 filesz 0x00005220 memsz 0x00005220
+  ...
+ELFINFO_OK
+```
+
+`elfinfo` prints the header and the `PT_LOAD` segments of a file, `elfcat` is a
+`cat` with `-n`, and `elfwc` counts lines, words and bytes.
+
+> **ELF32 is the container, not the ABI.** These binaries are linked against
+> `c/rt/` and call Mellivora's syscall numbers through `int 0x80`, with
+> Mellivora's semantics. A binary built for Linux - glibc, Linux's own syscall
+> numbers - will load and will not run. `docs/POSIX.md` records exactly which
+> POSIX calls the C library covers and which semantics still differ.
 
 ## Debugging Tips
 

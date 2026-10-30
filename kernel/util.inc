@@ -1128,23 +1128,66 @@ tss_init:
 ;
 ;   In : the file at PROGRAM_BASE
 ;   Out: EAX = entry point, EDX = first free byte after the image
-;        CF set when the header is not 32-bit little-endian ELF
+;        CF set when the header is not a 32-bit little-endian ELF image this
+;        loader can place
+;
+; The program header table is snapshotted before a single byte is copied, and
+; it has to be. A normally linked image puts the table at file offset 52 and
+; its first PT_LOAD at file offset 0x1000 with address 0x00500000, so the copy
+; that places the text lands on top of the table - walking it in place would
+; read whatever the copy had just written over it. The snapshot is a fixed
+; table of ELF_MAX_PHDRS headers in the kernel image, and an image with more
+; than that is refused rather than half-loaded.
+;
+; Segments are copied in table order. That is safe because a linker never puts
+; a segment's file offset below the address it runs at (dest <= src), so no
+; copy overwrites a source a later one still has to read.
 ;=======================================================================
+
+ELF_MAX_PHDRS   equ 16
 
 elf_load_program:
         pushad
-        cmp byte [PROGRAM_BASE + 4], 1
+        cmp byte [PROGRAM_BASE + 4], 1          ; ELFCLASS32
         jne .elf_bad
-        cmp byte [PROGRAM_BASE + 5], 1
+        cmp byte [PROGRAM_BASE + 5], 1          ; ELFDATA2LSB
+        jne .elf_bad
+        cmp word [PROGRAM_BASE + 42], ELF_PHDR_SIZE     ; e_phentsize
         jne .elf_bad
 
-        movzx ecx, word [PROGRAM_BASE + 44]
-        mov ebx, [PROGRAM_BASE + 28]
-        mov edi, [PROGRAM_BASE + 24]
+        mov edi, [PROGRAM_BASE + 24]            ; e_entry
         mov [.elf_entry], edi
         mov dword [.elf_max], PROGRAM_BASE
 
-        add ebx, PROGRAM_BASE
+        movzx ecx, word [PROGRAM_BASE + 44]     ; e_phnum
+        cmp ecx, ELF_MAX_PHDRS
+        ja .elf_bad
+
+        ; The table has to fit inside the window the file was read into. The
+        ; offset is checked on its own first: an image is untrusted input, and
+        ; an offset near 4 GB would wrap the addition below past the bound.
+        mov esi, [PROGRAM_BASE + 28]            ; e_phoff
+        cmp esi, PROGRAM_MAX_SIZE
+        jae .elf_bad
+        mov ebx, ecx
+        imul ebx, ELF_PHDR_SIZE                 ; e_phnum * sizeof(Elf32_Phdr)
+        add esi, ebx                            ; one past the end of the table
+        cmp esi, PROGRAM_MAX_SIZE
+        ja .elf_bad
+
+        ; Snapshot the table: the first copy below lands on top of it.
+        test ecx, ecx
+        jz .elf_ok
+        push ecx
+        mov esi, [PROGRAM_BASE + 28]
+        add esi, PROGRAM_BASE
+        mov edi, elf_phdrs
+        imul ecx, ELF_PHDR_SIZE
+        cld
+        rep movsb
+        pop ecx
+
+        mov ebx, elf_phdrs
 .load_seg:
         cmp ecx, 0
         je .elf_ok
@@ -1153,19 +1196,25 @@ elf_load_program:
 
         push ecx
         mov esi, PROGRAM_BASE
-        add esi, [ebx + 4]
-        mov edi, [ebx + 8]
-        mov ecx, [ebx + 16]
-        cmp ecx, 0
-        je .zero_bss
+        add esi, [ebx + 4]                      ; p_offset: the file's copy
+        mov edi, [ebx + 8]                      ; p_vaddr: where it runs
+        mov edx, [ebx + 16]                     ; p_filesz
+        test edx, edx
+        jz .zero_bss
         cmp esi, edi
-        je .zero_bss
-        rep movsb
+        jne .seg_copy
+        add edi, edx                            ; already in place: loaded
+        jmp .zero_bss
+.seg_copy:
+        mov ecx, edx
+        cld
+        rep movsb                               ; EDI = p_vaddr + p_filesz
 .zero_bss:
-        mov ecx, [ebx + 20]
+        mov ecx, [ebx + 20]                     ; p_memsz - p_filesz
         sub ecx, [ebx + 16]
         jle .seg_ok
         xor al, al
+        cld
         rep stosb
 .seg_ok:
         ; Track the end of the last loaded segment so the heap starts there.
@@ -1198,6 +1247,7 @@ elf_load_program:
 
 .elf_entry: dd 0
 .elf_max:   dd 0
+elf_phdrs:  times (ELF_MAX_PHDRS * ELF_PHDR_SIZE) db 0
 
 ;=======================================================================
 ; FILE DESCRIPTOR TABLE
@@ -2214,12 +2264,15 @@ cmd_cd_internal:
         pop esi
         sti
 
-        ; Load the new directory contents
-        mov eax, [current_dir_lba]
-        mov ecx, [current_dir_sects]
-        mov edi, hbfs_dir_buf
-        call blk_cache_read
-        clc
+        ; Load the new directory through the one door that owns hbfs_dir_buf.
+        ; It verifies the run, refreshes the write shadow and, above all, moves
+        ; the directory cache tag. Reading the blocks straight into the buffer
+        ; left the tag naming the *parent*, so the next load hit the cache and
+        ; searched the parent's buffer as if it were the child: after one cd
+        ; into a subdirectory, every later lookup in that filesystem failed.
+        ; The load's CF is the caller's: a directory that cannot be read is not
+        ; a directory that was entered.
+        call hbfs_load_root_dir
         ret
 
 .cd_vname_proc: db "proc", 0
@@ -2824,13 +2877,25 @@ sys_fread:
         iretd
 
 .vfr_hbfs:
-        ; Fast path: use hbfs_read_file directly
-        ; hbfs_read_file: ESI=filename, EDI=dest; returns ECX=size, CF on error
-        mov  esi, ebx
-        mov  edi, ecx
-        call hbfs_read_file
+        ; The path is split here and the base name read from the directory it
+        ; entered, which is the shape every other file syscall uses. Handing the
+        ; whole path to hbfs_read_file instead would use that function's own,
+        ; older directory save/restore pair: a read that fails half way through
+        ; left the shell's current directory inside the file's directory, so the
+        ; next call resolved its path from the wrong place.
+        mov  [.vfr_dest], ecx           ; ECX = the caller's buffer
+        call hbfs_enter_path            ; EBX = path -> path_base_buf
+        test eax, eax
+        jnz  .vfr_fail
+        mov  esi, path_base_buf
+        mov  edi, [.vfr_dest]
+        call hbfs_read_file             ; ESI=name, EDI=dest -> ECX=size, CF on error
+        mov  [.vfr_len], ecx
+        pushfd
+        call path_leave
+        popfd
         jc   .vfr_fail
-        mov  eax, ecx           ; EAX = bytes read
+        mov  eax, [.vfr_len]            ; EAX = bytes read
         pop  edx
         pop  edi
         pop  esi
@@ -2843,7 +2908,9 @@ sys_fread:
         pop  esi
         xor  eax, eax
         iretd
-.vfr_buf: dd 0
+.vfr_buf:  dd 0
+.vfr_dest: dd 0
+.vfr_len:  dd 0
 
 ;--- Write entire file (create/overwrite) ---
 ; EBX = filename/path, ECX = buffer pointer, EDX = size

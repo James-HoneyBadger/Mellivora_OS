@@ -25,6 +25,12 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **32-bit protected mode** with a flat memory model, ring 0 / ring 3 separation, and one address space shared by every task
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
 - **A C library** — `c/rt/` is a real one: string and memory families, `qsort` (stable merge), `bsearch`, `strtol`/`strtoul`, streams (`fopen`/`fread`/`fwrite`/`fgets`/`fseek`/`getline`/`perror`), a formatter with precision and flags, `getopt`, `atexit`; ten standard headers in `c/include/`
+- **ELF32 programs, built and run** — `ELF_PROGS` in the Makefile links the same
+  sources and the same runtime as a flat program but leaves the image as an
+  ELF32 executable; the loader copies each `PT_LOAD` segment to its own address
+  and starts at `e_entry`, so the image carries its own entry point and `.bss`.
+  `elfinfo`, `elfcat` and `elfwc` ship that way. The container is ELF32; the ABI
+  underneath is Mellivora's own, which `docs/POSIX.md` states plainly
 - **Interfaces over the Warren** — `mv/iface.h`: objects are vtables whose first three slots are QueryInterface/AddRef/Release, resolved by name (`mv_iface_get("sett")`), so a program calls interfaces instead of syscall numbers; the chronicle and the Sett are the first two objects
 - **Chronicle and the Sett are programmable** — `SYS_LOG_WRITE` writes into the same ring the drivers write to (`chronicle` shows both), `SYS_SETT` reads and writes a persisted string setting by path
 - **A POSIX C surface** — `c/include/` carries `unistd.h`, `fcntl.h`, `sys/stat.h`, `sys/wait.h`, `signal.h`, `errno.h`, `ctype.h`, `locale.h` and `limits.h`, each a thin shim over a syscall the kernel already had; `docs/POSIX.md` states what conforms, what does not and why (no conformance suite has been run)

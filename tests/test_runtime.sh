@@ -299,6 +299,31 @@ run_case "C program imports from a shared library" \
     $'mvprobe' \
     "MVPROBE_OK" \
     "" "CPU EXCEPTION|MVPROBE_FAIL|not found"
+# The ELF side of the tree: the same runtime and the same link address as every
+# flat program, but left as an ELF32 executable. The loader reads the program
+# headers and copies each PT_LOAD segment to the address in its own header, so
+# an ELF image carries its own entry point and its own .bss. elfinfo reads a
+# file back and describes the container it arrived in, which also exercises a
+# whole-file read of something larger than one block.
+run_case "ELF32 program: header, segments, entry" \
+    $'elfinfo' \
+    "ELF32|EXEC (fixed address)|i386|entry    0x00500000|LOAD r-x|ELFINFO_OK" \
+    "" "CPU EXCEPTION|ELFINFO_FAIL|not an ELF image"
+# A file read, counted: lines, words and bytes of two files in a subdirectory.
+# Both byte counts are stable because both files are text the image always
+# carries; a read that resolves paths is the point - the first version of this
+# reached SYS_FREAD through a door that lost the current directory and returned
+# zeros, which a count of 0 for each file would have shown as a pass.
+run_case "ELF32 program: files counted" \
+    $'elfwc /docs/readme.txt /docs/notes.txt' \
+    "2676 3737 total" \
+    "" "CPU EXCEPTION|elfwc:"
+# And the same file printed, numbered: getopt, argv, and a read loop over
+# something bigger than the buffer it reads in.
+run_case "ELF32 program: a file printed, numbered" \
+    $'elfcat -n /docs/notes.txt' \
+    "     1  Mellivora OS Developer Notes|     2  ====" \
+    "" "CPU EXCEPTION|elfcat:"
 # The display engine, proved rather than assumed. Every pixel format the engine
 # claims - 32, 24, 16 and 8 bpp - is drawn into a scratch page with a fill, a
 # rectangle, a colour-keyed blit, a clip rectangle, a gamma ramp and a line, and
