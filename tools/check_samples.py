@@ -136,6 +136,13 @@ def check_shell_scripts(paths: list[Path]) -> int:
                             )
                         commands.append(words[1])
                     continue
+                # An explicit path to a program image is a launch, not a
+                # command name: the shell execs it. It cannot be in the command
+                # table because the program may not exist until the script
+                # builds it - samples/tcc_build.bat compiles and then runs one.
+                if first.endswith(".bin") and "/" in first:
+                    commands.append(first)
+                    continue
                 if not known(first):
                     raise ValueError(
                         f"{path.relative_to(ROOT)}:{number}: unknown command {first!r}"

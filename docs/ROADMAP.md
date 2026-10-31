@@ -55,7 +55,7 @@ person does, not an API that exists.
 | 13 | Administer remotely | Remote console, remote service and configuration management | No |
 | 14 | Play media | Mixed audio from several programs, video playback, a media framework | Partial — one audio stream per open, AC'97 and SB16 |
 
-Starting position: **1 pass, 7 partial, 6 fail**, reported by `make check-parity`
+Starting position: **2 pass, 9 partial, 3 fail**, reported by `make check-parity`
 from the tree rather than written down by hand.
 
 ## Gates
@@ -102,7 +102,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 206 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
+- 210 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
   in-OS C compiler, `hbpkg`, and a C-built kernel module with a freestanding C
   runtime behind it.
 
@@ -513,8 +513,10 @@ for" true.
   and import tables, per-process module lists, load-time and run-time binding.
   The existing flat and ELF32 loaders stay, so all 264 programs keep working.
 - **Unicode end to end**: UTF-16 at the ABI boundary, UTF-8 internally, locale and
-  time-zone data, collation, and a scalable font stack for the desktop rather than
-  the 5×7 VBE font.
+  time-zone data, collation, and a font stack that draws every code point the
+  system decodes rather than the 5×7 VBE face. A *scalable* (outline) font is
+  [MEDIA.md](spec/MEDIA.md)'s, as ABI.md §8 already says: what M5 owes is that
+  no character renders as `?`, not a rasteriser.
 - A C runtime: string, memory, formatted I/O, allocation, and the start-up code a
   normal C program expects.
 - An interface-over-objects model — a COM-flavoured typed dispatch layer on top of
@@ -626,9 +628,12 @@ shared image, so each thread's value is installed by the scheduler on every
 switch; `hbx_thread` proves two threads of one image see different blocks across
 eight switches, and `threadtest` runs four threads over one heap plus 64
 create/join cycles that would exhaust the task slots or the mapping records if
-either leaked. What is still open in this wave: a scalable font (and with it
-every code point CP437 has no glyph for), and detaching, cancelling and
-prioritising a thread.
+either leaked. The last two items closed the wave: `unicode_to_glyph` covers the
+typographic punctuation the tree writes (an em dash drew `?` for as long as the
+map lacked it, invisible to any test that reads COM1) and `font_selftest` walks
+those code points at boot; `SYS_THREAD_DETACH`/`SETPRIO`/`CANCEL`/`SYS_TESTCANCEL`
+give a thread the rest of what a program can ask of it, with cancellation defined
+as a request the thread observes rather than an interruption from outside.
 
 ### M6 · Shell and user experience (12–16 weeks)
 

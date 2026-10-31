@@ -1,5 +1,80 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5 closed: one image, one toolchain, and the last three debts
+
+M5 has been called closed since v14.0.0 while four things it claimed were true
+were not. The exit criterion was split across two programs and the combined one
+faulted; the in-OS compiler had no test that ran its output; an em dash drew `?`;
+and a thread could not be detached, cancelled or prioritised. All four are now
+gates rather than prose.
+
+```text
+Lair:/> mvapp
+...
+MVAPP_OK runs=1 sum=7
+
+Lair:/> source /samples/tcc_build.bat
+Success! Output: 58 bytes
+TCC_BUILD_OK
+
+Lair:/> threadmore
+THREAD_MORE_OK
+
+Lair:/> localetest
+LOCALE_OK
+```
+
+- **The exit criterion is one image, and it exists.** `programs/mvapp.bin` had a
+  rule and no dependents: it was never built, never reached the image, and
+  `make check-runtime` had been asking the shell to run a program that was not
+  there. It also linked flat, so "using shared libraries" was covered by a
+  second program with one source file. It is now built by `tools/hbbuild.py`
+  with `--import mvlib:mv_add=mvlib_add`, calls the library, and `MVAPP_OK`
+  carries `sum=7` - a program that only claimed the import would print 0.
+- **Why the combined image faulted.** A library carries a TLS directory, and
+  `hbx_verify` of a module overwrites the loader's statics - including
+  `hbx_tls_dir` and `hbx_tls_index_rva` - which `lib_restore_program` did not
+  put back. `hbx_prepare` reads both *after* resolution and writes the main
+  image's TLS index at that RVA, so an importing program had four bytes of its
+  own image zeroed at an offset the library chose. mvlib's index RVA is 0x134:
+  harmless in a 33 KB probe, fatal in mvapp, where it surfaced as a NULL read at
+  a plausible-looking EIP. The restore covers the TLS fields and the section
+  count now.
+- **The in-OS toolchain runs what it builds.** `tcc` has been in the tree with
+  nothing executing its output. `samples/tcc_build.bat` compiles a sample and
+  the shell runs the binary; the case requires the program's own line. Writing
+  it found that `/tmp` cannot be exec'd - a HBFS directory read failure and then
+  a kernel page fault - so the output goes beside its source.
+- **The font draws what the tree writes.** `unicode_to_glyph` had no em dash, so
+  every one in the tree's own text drew `?` while the bytes on COM1 stayed
+  correct UTF-8: invisible to any test that reads the serial port. The map now
+  covers the dashes, and `font_selftest` walks the code points the tree uses at
+  boot, which `make check-boot` requires. The scalable outline face stays M8,
+  where ABI.md §8 and MEDIA.md already put it.
+- **A thread can be detached, cancelled and prioritised.** `SYS_THREAD_DETACH`
+  (206) makes a thread unjoinable and its slot is reclaimed at the next
+  creation, the one moment nothing can be running on it; `SYS_THREAD_SETPRIO`
+  (207) returns the priority it replaced; `SYS_THREAD_CANCEL` (208) is a request
+  and `SYS_TESTCANCEL` (209) is the cancellation point, so a cancelled thread
+  exits with `MV_THREAD_CANCELED` and its joiner collects that rather than a
+  number nobody chose.
+- **A locale, a collation order and a time zone that are contracts.**
+  `<time.h>` exists (`time`, `gmtime`, `localtime`, `mktime`, `difftime`,
+  `strftime`); a time zone is an offset the administrator stores in the Sett,
+  read on every call, with no DST rule and no tzdata - which is why `%Z` prints
+  `UTC+02:00` and `tm_isdst` is always 0. `strcoll`/`strxfrm` are byte order,
+  as `locale.h` always claimed, and `localetest` proves both.
+
+The parity scorecard moves: "Develop for it" passes, because its probes named
+`pe_load` and `dll_load`, which nothing in the tree has ever been called, while
+`pe_load_program` and `lib_resolve_imports` were there. A wave that delivered
+the developer story was scored as if it had not.
+
+Still open, and named rather than carried silently: `/tmp` cannot be exec'd
+(the crash above is not fixed, only avoided), a scalable outline font and
+tzdata are later waves, and `DPC_SELFTEST` can fail on a boot where a timer tick
+lands between its `dpc_init` and its first drain.
+
 ## Unreleased - M5: a task is a thread, and TLS is per thread
 
 EXEC.md section 6 asks for thread-local storage per thread and a `clone`/

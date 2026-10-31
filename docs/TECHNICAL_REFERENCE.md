@@ -2157,8 +2157,12 @@ length, which also rejects a range that wraps past 2^32):
 | 201 | `SYS_SVC_CONTROL` | EBX=op (0 ask, 1 stopped, 2 refuse) | EAX=0/1/2, -1 if not a service |
 | 204 | `SYS_CLONE` | EBX=entry, ECX=user ESP, EDX=flags (0) | EAX=thread id in the caller, 0 in the thread, -1 on refusal |
 | 205 | `SYS_THREAD_EXIT` | EBX=status | does not return; the process keeps running |
+| 206 | `SYS_THREAD_DETACH` | EBX=thread id | EAX=0, or -1; the id is no longer joinable and its slot is reclaimed at the next creation |
+| 207 | `SYS_THREAD_SETPRIO` | EBX=thread id, ECX=priority (0..3) | EAX=the priority it had, or -1 |
+| 208 | `SYS_THREAD_CANCEL` | EBX=thread id | EAX=0, or -1; a request the thread observes, not an interruption |
+| 209 | `SYS_TESTCANCEL` | — | EAX=1 and the request is cleared, or 0; the cancellation point |
 
-**Total: 206 syscalls defined (0–205, no gaps).**
+**Total: 210 syscalls defined (0–209, no gaps).**
 
 ---
 

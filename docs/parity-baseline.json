@@ -14,12 +14,12 @@
     {
       "number": 3,
       "job": "Run services",
-      "status": "fail"
+      "status": "partial"
     },
     {
       "number": 4,
       "job": "Configure the machine",
-      "status": "fail"
+      "status": "partial"
     },
     {
       "number": 5,
@@ -59,7 +59,7 @@
     {
       "number": 12,
       "job": "Develop for it",
-      "status": "partial"
+      "status": "pass"
     },
     {
       "number": 13,

@@ -329,6 +329,19 @@ records if either leaked) and `make check-loader` runs `hbx_thread`, which is th
 TLS half: two threads of one image, each checking across eight switches that the
 base slot names its own block and that the block still holds its own value.
 
+**What a program can ask of a thread.** `SYS_THREAD_DETACH` (206) makes a thread
+unjoinable: its status is not kept, `waitpid` answers -1 for the id, and its slot
+is reclaimed at the next thread creation rather than at exit - a TCB cannot be
+recycled while its thread is still running on it. `SYS_THREAD_SETPRIO` (207) sets
+the priority the run queue already orders by and returns the value it replaced.
+`SYS_THREAD_CANCEL` (208) is a **request**, not an interruption: no instruction
+stream is stopped mid-way, because a task torn down inside a kernel call is where
+lifetime bugs come from. `SYS_TESTCANCEL` (209) is the cancellation point, and
+`c/rt/thread.c` turns a pending request into an exit with `MV_THREAD_CANCELED`,
+which is what the joiner collects. `make check-runtime` runs `threadmore`, which
+proves all three, and a thread's stack stays a mapping of the process until the
+process ends.
+
 What section 6 still asks for and this does not do: unloading (`FreeLibrary`
 and its reference count), delay loading, versioned exports, a library that
 imports another library, and the `PROCESS_ATTACH`/`THREAD_ATTACH` notification.

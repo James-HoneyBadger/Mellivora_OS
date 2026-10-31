@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """parity_scorecard.py - the Windows 2000 parity scorecard, as a test.
 
-docs/ROADMAP.md defines parity as fourteen user jobs rather than a list of APIs.
-This tool is the executable form of that table. Each row names the evidence that
-would make it pass, and the status is computed from the tree instead of being
-written down by hand:
+docs/ROADMAP.md defines parity as fourteen user jobs rather than a list of
+APIs. This tool is the executable form of that table. Each row names the
+evidence that would make it pass, and the status is computed from the tree
+instead of being written down by hand:
 
     pass      every required piece of evidence exists
     partial   some of it exists; the row lists what is still missing
     fail      none of it exists
 
-`--check` compares the result with docs/parity-baseline.json and fails when a row
-is worse than the recorded baseline, so losing a capability is caught the same
-way a broken build is. `--update-baseline` records the current answer, and is
-the only way a row may improve: the baseline is reviewed with the change that
-earns it.
+`--check` compares the result with docs/parity-baseline.json and fails when a
+row is worse than the recorded baseline, so losing a capability is caught the
+same way a broken build is. `--update-baseline` records the current answer,
+and is the only way a row may improve: the baseline is reviewed with the
+change that earns it.
 """
 
 from __future__ import annotations
@@ -53,22 +53,27 @@ class Tree:
 
     def syscalls(self) -> set[str]:
         if self._syscalls is None:
-            data = json.loads((self.root / "docs" / "syscalls.json").read_text(encoding="utf-8"))
+            path = self.root / "docs" / "syscalls.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
             self._syscalls = {entry["name"] for entry in data["syscalls"]}
         return self._syscalls
 
     def kernel(self) -> str:
         if self._kernel is None:
-            parts = [(self.root / "kernel.asm").read_text(encoding="utf-8", errors="replace")]
+            kernel = (self.root / "kernel.asm").read_text(
+                encoding="utf-8", errors="replace")
+            parts = [kernel]
             for path in sorted((self.root / "kernel").glob("*.inc")):
-                parts.append(path.read_text(encoding="utf-8", errors="replace"))
+                parts.append(
+                    path.read_text(encoding="utf-8", errors="replace"))
             self._kernel = "\n".join(parts)
         return self._kernel
 
     def file(self, name: str) -> str:
         if name not in self._files:
             path = self.root / name
-            self._files[name] = (path.read_text(encoding="utf-8", errors="replace")
+            self._files[name] = (path.read_text(
+                encoding="utf-8", errors="replace")
                                  if path.is_file() else "")
         return self._files[name]
 
@@ -89,7 +94,7 @@ def present(tree: Tree, probe: tuple) -> bool:
 
 
 def readable(pattern: str) -> str:
-    """Turn an alternation of word-anchored regexes into something a person reads."""
+    """Turn word-anchored regex alternatives into words a person reads."""
     parts = [re.sub(r"\\b", "", alt) for alt in pattern.split("|")]
     return " or ".join(part for part in parts if part)
 
@@ -113,31 +118,40 @@ def describe(probe: tuple) -> str:
 # exists in the tree.
 SCORECARD: list[Row] = [
     Row(1, "Log on",
-        "Logon screen, per-user profile and desktop, switch user without reboot",
+        "Logon screen, per-user profile and desktop, switch user without "
+        "reboot",
         required=[("kernel", r"\blogon_user\b"), ("syscall", "SYS_LOGON")],
         evidence=[("kernel", r"\bsession_id\b")]),
     Row(2, "Manage users",
-        "Accounts, groups, passwords, quotas and permissions edited from a GUI",
+        "Accounts, groups, passwords, quotas and permissions edited from a "
+        "GUI",
         required=[("syscall", "SYS_GETUID"), ("syscall", "SYS_CHMOD"),
                   ("kernel", r"\bacl_check\b|\baccess_check\b"),
                   ("kernel", r"\buser_account\b|\bpasswd_")],
         evidence=[("syscall", "SYS_GETUID"), ("syscall", "SYS_CHMOD"),
                   ("syscall", "SYS_SETUID")]),
     Row(3, "Run services",
-        "Services start before logon, have dependencies and restart on failure",
-        required=[("kernel", r"\bscm_start\b"), ("kernel", r"\bservice_depend\b")],
+        "Services start before logon, have dependencies and restart on "
+        "failure",
+        required=[("kernel", r"\bscm_start\b"),
+                  ("kernel", r"\bservice_depend\b")],
         evidence=[("kernel", r"\bsvc_\w+\b")]),
     Row(4, "Configure the machine",
-        "One hierarchical transactional store for kernel, service and user settings",
-        required=[("kernel", r"\bsett_open\b"), ("kernel", r"\bsett_commit\b")],
+        "One hierarchical transactional store for kernel, service and user "
+        "settings",
+        required=[("kernel", r"\bsett_open\b"),
+                  ("kernel", r"\bsett_commit\b")],
         evidence=[("kernel", r"\bsett_\w+\b")]),
     Row(5, "Install software",
-        "Install and uninstall with dependencies, registration and clean removal",
+        "Install and uninstall with dependencies, registration and clean "
+        "removal",
         required=[("file", "tools/hbpkg.c"), ("syscall", "SYS_PKG_INSTALL"),
                   ("program", "uninstall")],
-        evidence=[("file", "tools/hbpkg.c"), ("program", "pkg"), ("program", "pkginfo")]),
+        evidence=[("file", "tools/hbpkg.c"), ("program", "pkg"),
+                  ("program", "pkginfo")]),
     Row(6, "Use the desktop",
-        "Multi-app shell, taskbar, file manager, drag-drop, clipboard, associations",
+        "Multi-app shell, taskbar, file manager, drag-drop, clipboard, "
+        "associations",
         required=[("text", "kernel/burrows.inc", r"\btaskbar\b"),
                   ("syscall", "SYS_SURFACE_CREATE"),
                   ("syscall", "SYS_CLIPBOARD_COPY"),
@@ -145,10 +159,12 @@ SCORECARD: list[Row] = [
         evidence=[("text", "kernel/burrows.inc", r"\btaskbar\b"),
                   ("syscall", "SYS_SURFACE_CREATE")]),
     Row(7, "Multitask hard",
-        "Preemptive, protected, per-process memory; a hung app cannot take the machine down",
+        "Preemptive, protected, per-process memory; a hung app cannot take "
+        "the machine down",
         required=[("syscall", "SYS_MMAP"), ("syscall", "SYS_MPROTECT"),
                   ("syscall", "SYS_FORK"),
-                  ("text", "kernel/paging.inc", r"paging_clone_pd|paging_free_pd")],
+                  ("text", "kernel/paging.inc",
+                   r"paging_clone_pd|paging_free_pd")],
         evidence=[("syscall", "SYS_MMAP")]),
     Row(8, "Network",
         "TCP/IP, DHCP, DNS, and a shared folder another machine mounts",
@@ -157,7 +173,8 @@ SCORECARD: list[Row] = [
         evidence=[("syscall", "SYS_SOCKET"), ("kernel", r"\bdhcp_")]),
     Row(9, "Print",
         "Spooler with queued, cancellable jobs",
-        required=[("kernel", r"\bspool_enqueue\b"), ("kernel", r"\bspool_cancel\b")],
+        required=[("kernel", r"\bspool_enqueue\b"),
+                  ("kernel", r"\bspool_cancel\b")],
         evidence=[("kernel", r"\bspool_\w+\b")]),
     Row(10, "Detect hardware",
         "ACPI, PnP enumeration, power states, sleep and soft-off",
@@ -165,16 +182,23 @@ SCORECARD: list[Row] = [
                   ("kernel", r"\bpnp_")],
         evidence=[("kernel", r"\bpnp_\w+\b")]),
     Row(11, "Survive failure",
-        "Crash dump, safe mode, recovery console, filesystem repair and restore points",
+        "Crash dump, safe mode, recovery console, filesystem repair and "
+        "restore points",
         required=[("kernel", r"\bcrash_dump\b|\bkernel_dump\b"),
                   ("kernel", r"\bsafe_mode\b")],
         evidence=[("kernel", r"\bhbfs_journal\b|\bjournal_"),
                   ("file", "tools/crash_inject.py")]),
     Row(12, "Develop for it",
-        "Documented driver model and SDK, shared libraries, a C runtime, samples",
-        required=[("program", "tcc"), ("kernel", r"\bpe_load\b|\bIMAGE_DOS\b"),
-                  ("kernel", r"\bdll_load\b")],
-        evidence=[("program", "tcc"), ("text", "kernel.asm", r"ELF_MAGIC")]),
+        "Documented driver model and SDK, shared libraries, a C runtime, "
+        "samples",
+        # The names here are the tree's own. They used to be pe_load and
+        # dll_load, which nothing has ever been called: the row read "partial"
+        # through a whole wave that delivered the PE loader, the library loader
+        # and the SDK.
+        required=[("program", "tcc"), ("kernel", r"\bpe_load_program\b"),
+                  ("kernel", r"\blib_resolve_imports\b")],
+        evidence=[("program", "tcc"), ("text", "kernel.asm", r"ELF_MAGIC"),
+                  ("file", "tools/hbbuild.py")]),
     Row(13, "Administer remotely",
         "Remote console, remote service and configuration management",
         required=[("kernel", r"\bremote_admin\b"), ("kernel", r"\brpc_")],
@@ -183,7 +207,8 @@ SCORECARD: list[Row] = [
         "Mixed audio from several programs, video playback, a media framework",
         required=[("syscall", "SYS_AUDIO_OPEN"), ("kernel", r"\baudio_mix\b"),
                   ("kernel", r"\bvideo_play\b|\bvideo_decode\b")],
-        evidence=[("syscall", "SYS_AUDIO_OPEN"), ("syscall", "SYS_AUDIO_PLAY")]),
+        evidence=[("syscall", "SYS_AUDIO_OPEN"),
+                  ("syscall", "SYS_AUDIO_PLAY")]),
 ]
 
 
@@ -202,7 +227,8 @@ def score(tree: Tree) -> list[dict]:
     rows = []
     for row in SCORECARD:
         status, missing = evaluate(tree, row)
-        rows.append({"number": row.number, "job": row.job, "criteria": row.criteria,
+        rows.append({"number": row.number, "job": row.job,
+                     "criteria": row.criteria,
                      "status": status, "missing": missing})
     return rows
 
@@ -223,10 +249,12 @@ def print_table(rows: list[dict]) -> None:
     print(f"──  {'─' * width}  {'─' * 8}  {'─' * 40}")
     for row in rows:
         missing = "; ".join(row["missing"]) if row["missing"] else "-"
-        print(f"{row['number']:>2}  {row['job']:<{width}}  {row['status']:<8}  {missing}")
+        print(f"{row['number']:>2}  {row['job']:<{width}}  "
+              f"{row['status']:<8}  {missing}")
     counts = summarise(rows)
     print()
-    print(f"{counts['pass']} pass, {counts['partial']} partial, {counts['fail']} fail"
+    print(f"{counts['pass']} pass, {counts['partial']} partial, "
+          f"{counts['fail']} fail"
           f"  ({counts['total']} rows)")
 
 
@@ -247,7 +275,8 @@ def load_baseline() -> dict[int, str] | None:
 
 def write_baseline(rows: list[dict]) -> None:
     payload = {"generated_by": "tools/parity_scorecard.py --update-baseline",
-               "rows": [{"number": r["number"], "job": r["job"], "status": r["status"]}
+               "rows": [{"number": r["number"], "job": r["job"],
+                         "status": r["status"]}
                         for r in rows]}
     BASELINE.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {shown(BASELINE)}")
@@ -264,7 +293,8 @@ def check(rows: list[dict]) -> int:
     for row in rows:
         recorded = baseline.get(row["number"])
         if recorded is None:
-            problems.append(f"row {row['number']} ({row['job']}) is not in the baseline")
+            problems.append(
+                f"row {row['number']} ({row['job']}) is not in the baseline")
             continue
         if STATUS_RANK[row["status"]] < STATUS_RANK[recorded]:
             problems.append(
@@ -283,7 +313,8 @@ def check(rows: list[dict]) -> int:
         return 1
 
     counts = summarise(rows)
-    print(f"[parity] PASS  {counts['pass']} pass, {counts['partial']} partial, "
+    print(f"[parity] PASS  {counts['pass']} pass, "
+          f"{counts['partial']} partial, "
           f"{counts['fail']} fail ({counts['total']} rows)")
     return 0
 
@@ -291,10 +322,11 @@ def check(rows: list[dict]) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true",
-                        help="fail when a row is worse than docs/parity-baseline.json")
+                        help="fail when a row is worse than the baseline.json")
     parser.add_argument("--update-baseline", action="store_true",
                         help="record the current statuses as the baseline")
-    parser.add_argument("--json", action="store_true", help="print the scorecard as JSON")
+    parser.add_argument("--json", action="store_true",
+                        help="print the scorecard as JSON")
     args = parser.parse_args()
 
     rows = score(Tree())

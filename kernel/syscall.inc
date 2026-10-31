@@ -473,7 +473,7 @@ syscall_table:
         dd sys_thread_cancel    ; 208 SYS_THREAD_CANCEL
         dd sys_thread_testcancel ; 209 SYS_TESTCANCEL
         ; Reserved / unimplemented (206..511)
-        times (SYSCALL_MAX - 206) dd syscall_handler.syscall_bad
+        times (SYSCALL_MAX - 210) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)
