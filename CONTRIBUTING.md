@@ -338,6 +338,7 @@ filesystem code.
 
 After `make full` and `make run`, exercise the relevant code paths in the
 shell. For a new program, test:
+
 - Normal operation
 - Edge cases (empty input, large input, missing files)
 - Ctrl+C abort
@@ -352,6 +353,7 @@ unexpected exceptions or resets.
 ## Submitting a Pull Request
 
 1. **Fork** the repository and create a branch from `main`:
+
    ```bash
    git checkout -b feature/my-new-thing
    ```
@@ -359,13 +361,15 @@ unexpected exceptions or resets.
 2. **Make your changes** following the style guide and checklist above.
 
 3. **Run the full test suite:**
+
    ```bash
    make clean && make full && make check
    ```
 
 4. **Write a clear commit message.** Use the imperative mood and reference
    the relevant area:
-   ```
+
+   ```text
    programs: add myprog — short description
 
    Longer explanation if needed. Reference related issues or PRs.

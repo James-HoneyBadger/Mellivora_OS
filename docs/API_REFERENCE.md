@@ -28,6 +28,7 @@ All libraries live in `programs/lib/` and are included via NASM `%include` direc
 > conventions (calling rules, key bindings, color palette, layout zones,
 > the flat-binary BSS rule, and the per-commit code-quality checklist).
 
+```nasm
 start:
         ; Your code here
         mov eax, SYS_EXIT
@@ -813,7 +814,7 @@ Note frequency constants (`NOTE_C2` … `NOTE_C7`) and helpers built on
 `SYS_BEEP` (24). See [STYLE_GUIDE.md](STYLE_GUIDE.md) for usage rules.
 
 | Function | In | Out | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `audio_note` | `EBX`=Hz, `ECX`=ticks (10 ms each) | — | One beep, registers preserved |
 | `audio_rest` | `ECX`=ticks | — | Silence via `SYS_SLEEP` |
 | `audio_play_score` | `ESI`→ packed `(byte freq, byte ticks)`, term `NOTE_END` | — | For freqs ≤ 255 Hz |
@@ -833,7 +834,7 @@ little-endian dword. The `/scores` directory is auto-created on first
 write.
 
 | Function | In | Out | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `hs_load` | `ESI`=name | `EAX`=score (0 if missing) | Read-only |
 | `hs_save` | `ESI`=name, `EBX`=score | `EAX`=0 ok / -1 err | Always writes |
 | `hs_update` | `ESI`=name, `EBX`=candidate | `EAX`=new high after compare | Writes only if `candidate > old` |
@@ -842,4 +843,3 @@ Names should be short, lowercase, alphanumeric (e.g. `"tetris"`,
 `"snake"`). The library appends `/scores/` automatically. All entry
 points preserve every register via `pushad`/`popad` except the
 documented `EAX`.
-

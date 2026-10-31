@@ -132,9 +132,9 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 121 | SYS_MUNMAP | Munmap:    EBX=addr ECX=len -> EAX=0/-1 |
 | 122 | SYS_MPROTECT | Mprotect:  EBX=addr ECX=len EDX=prot -> EAX=0/-1 |
 | 123 | SYS_SELECT | Select:    EBX=nfds ECX=rfds EDX=wfds ESI=efds EDI=tv -> EAX=count |
-| 124 | SYS_CLOCK_GETTIME | ClkGetTime:EBX=clk ECX=timespec* -> EAX=0/-1 |
+| 124 | SYS_CLOCK_GETTIME | ClkGetTime:EBX=clk ECX=timespec\* -> EAX=0/-1 |
 | 125 | SYS_NANOSLEEP | Nanosleep: EBX=rqtp ECX=rmtp -> EAX=0/-1 |
-| 126 | SYS_GETTIMEOFDAY | Gtimeofday:EBX=timeval* ECX=tz* -> EAX=0 |
+| 126 | SYS_GETTIMEOFDAY | Gtimeofday:EBX=timeval\* ECX=tz\* -> EAX=0 |
 | 127 | SYS_GETUID | Getuid: -> EAX=uid |
 | 128 | SYS_SETUID | Setuid:    EBX=uid -> EAX=0/-1 |
 | 129 | SYS_GETGID | Getgid: -> EAX=gid |
@@ -162,17 +162,17 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 151 | SYS_ISATTY | isatty(fd) -> 1/0 |
 | 152 | SYS_SETSID | setsid() -> sid/-1 |
 | 153 | SYS_GETSID | getsid(pid) -> sid/-1 |
-| 154 | SYS_WAIT | wait(status*) -> pid/-1 |
+| 154 | SYS_WAIT | wait(status\*) -> pid/-1 |
 | 155 | SYS_PAUSE | pause() -> -1 |
 | 156 | SYS_UMASK | umask(mask) -> old_mask |
-| 157 | SYS_SIGPENDING | sigpending(set*) -> 0 |
-| 158 | SYS_SIGSUSPEND | sigsuspend(mask*) -> -1 |
-| 159 | SYS_SETITIMER | setitimer(which, new*, old*) -> 0/-1 |
-| 160 | SYS_GETITIMER | getitimer(which, cur*) -> 0/-1 |
+| 157 | SYS_SIGPENDING | sigpending(set\*) -> 0 |
+| 158 | SYS_SIGSUSPEND | sigsuspend(mask\*) -> -1 |
+| 159 | SYS_SETITIMER | setitimer(which, new\*, old\*) -> 0/-1 |
+| 160 | SYS_GETITIMER | getitimer(which, cur\*) -> 0/-1 |
 | 161 | SYS_SETENV | setenv(name, val, over) -> 0/-1 |
 | 162 | SYS_UNSETENV | unsetenv(name) -> 0 |
-| 163 | SYS_UNAME | uname(utsname*) -> 0/-1 |
-| 164 | SYS_UTIME | utime(path, utimbuf*) -> 0/-1 |
+| 163 | SYS_UNAME | uname(utsname\*) -> 0/-1 |
+| 164 | SYS_UTIME | utime(path, utimbuf\*) -> 0/-1 |
 | 165 | SYS_SYSCONF | sysconf(name) -> value/-1 |
 | 166 | SYS_SETEUID | seteuid(euid) -> 0/-1 |
 | 167 | SYS_SETEGID | setegid(egid) -> 0/-1 |
@@ -181,12 +181,12 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 170 | SYS_SENDTO | sendto(fd,buf,len,fl,addr) -> bytes/-1 |
 | 171 | SYS_RECVFROM | recvfrom(fd,buf,len,fl,from) -> bytes/-1 |
 | 172 | SYS_SETSOCKOPT | setsockopt(fd,lvl,opt,val,len) -> 0/-1 |
-| 173 | SYS_GETSOCKOPT | getsockopt(fd,lvl,opt,val*,len*) -> 0/-1 |
-| 174 | SYS_GETSOCKNAME | getsockname(fd,addr,len*) -> 0/-1 |
-| 175 | SYS_GETPEERNAME | getpeername(fd,addr,len*) -> 0/-1 |
+| 173 | SYS_GETSOCKOPT | getsockopt(fd,lvl,opt,val\*,len\*) -> 0/-1 |
+| 174 | SYS_GETSOCKNAME | getsockname(fd,addr,len\*) -> 0/-1 |
+| 175 | SYS_GETPEERNAME | getpeername(fd,addr,len\*) -> 0/-1 |
 | 176 | SYS_SHUTDOWN | shutdown(fd,how) -> 0/-1 |
-| 177 | SYS_TCGETATTR | tcgetattr(fd,termios*) -> 0/-1 |
-| 178 | SYS_TCSETATTR | tcsetattr(fd,act,termios*) -> 0/-1 |
+| 177 | SYS_TCGETATTR | tcgetattr(fd,termios\*) -> 0/-1 |
+| 178 | SYS_TCSETATTR | tcsetattr(fd,act,termios\*) -> 0/-1 |
 | 179 | SYS_TCDRAIN | tcdrain(fd) -> 0/-1 |
 | 180 | SYS_TCFLUSH | tcflush(fd,queue) -> 0/-1 |
 | 181 | SYS_GETERRNO | geterrno() -> EAX=per-task errno |

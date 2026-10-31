@@ -1840,9 +1840,9 @@ Quick reference for all 206 syscalls. See `programs/syscalls.inc` for the author
 | 121 | MUNMAP | addr | len | — | 0/-1 |
 | 122 | MPROTECT | addr | len | prot | 0/-1 |
 | 123 | SELECT | nfds | rfds | wfds | count/-1 |
-| 124 | CLOCK_GETTIME | clk_id | timespec* | — | 0/-1 |
+| 124 | CLOCK_GETTIME | clk_id | timespec\* | — | 0/-1 |
 | 125 | NANOSLEEP | rqtp | rmtp | — | 0/-1 |
-| 126 | GETTIMEOFDAY | timeval* | tz* | — | 0 |
+| 126 | GETTIMEOFDAY | timeval\* | tz\* | — | 0 |
 | 127 | GETUID | — | — | — | uid |
 | 128 | SETUID | uid | — | — | 0/-1 |
 | 129 | GETGID | — | — | — | gid |

@@ -183,7 +183,6 @@ This single command:
 | **Run (32-bit)** | `make run-32` | Alias for `make run` |
 | **Debug** | `make debug` | Launch in QEMU with monitor + debug logging |
 
-
 ### Build Outputs
 
 After a successful build:

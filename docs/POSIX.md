@@ -21,7 +21,7 @@ no `<mv/…>` header at all, so it compiles only if the POSIX names are enough, 
 it prints `POSIX_OK` only when every check below holds.
 
 | Header | Contents |
-|---|---|
+| --- | --- |
 | `unistd.h` | `read`, `write`, `close`, `lseek`, `dup`, `dup2`, `unlink`, `rmdir`, `access`, `chdir`, `getcwd`, `pipe`, `isatty`, `fcntl`, `fork`, `execve`, `execl`, `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `sleep`; `pid_t`, `uid_t`, `gid_t`, `ssize_t`, `off_t`; `STD*_FILENO`, `SEEK_*`, `R_OK`/`W_OK`/`X_OK`/`F_OK` |
 | `fcntl.h` | `open`, `creat`; `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_ACCMODE`, `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`; `F_*` commands |
 | `sys/stat.h` | `stat`, `fstat`, `mkdir`, `chmod`; `struct stat`; `S_ISDIR`, `S_ISREG` |
@@ -43,7 +43,7 @@ the rest of the standard are absent.
 Verified by `posixtest` on every `make check-runtime` run:
 
 | Behaviour | Why it holds |
-|---|---|
+| --- | --- |
 | `open` of a name that is not there fails, `errno` = `ENOENT` | The VFS asks the mount, and the mount no longer creates names it was only asked to read |
 | `open(O_CREAT\|O_TRUNC)` creates, or empties an existing file | `SYS_OPEN` settles both before it hands back a descriptor |
 | An absolute path reaches the file it names | The kernel splits the path, enters the directory and looks the final component up there — until this wave only a bare name could be found |
@@ -72,7 +72,7 @@ Each row is a decision, not an oversight. A row that could be closed cheaply was
 closed; the rest are here so a port knows what to expect.
 
 | Gap | Consequence | Why it stands |
-|---|---|---|
+| --- | --- | --- |
 | `struct stat` is 12 bytes: size, type, modification time | No `st_mode`, `st_uid`, `st_gid`, `st_ino`, `st_nlink`, `st_dev` | The filesystem stores a mode word per entry but the VFS stat does not report it; the honest fix is a larger stat structure, not a filled-in lie |
 | No permission bits in `stat`; `access` is the only check | A program cannot decide access from the stat it took | `SYS_ACCESS` exists and enforces; the stat structure has to grow first |
 | `dup` copies the file position instead of sharing it | Two handles read independently | Sharing needs one open-file-description object behind both descriptors; today each descriptor carries its own offset |

@@ -1284,7 +1284,7 @@ exist. So the layout above the kernel moved, deliberately, rather than the
 superblock being nudged:
 
 | | Was | Now |
-|---|---|---|
+| --- | --- | --- |
 | Kernel window | 1-3 MB | 1-5 MB (8192 sectors, guarded by `kernel_sectors.inc`) |
 | `PROGRAM_BASE` | `0x00300000` | `0x00500000` |
 | Page directory / 256 tables | `0x410000` / `0x411000` | `0x610000` / `0x611000` |
@@ -1636,7 +1636,7 @@ compressed gate plus the recorded long-run command.
   `cpu_require_pentium4` stops the boot with one legible line when FXSR, SSE or
   SSE2 is missing:
 
-  ```
+  ```text
   CPU_UNSUPPORTED: Mellivora needs a Pentium 4 or later (fxsr+sse+sse2); found family 4 model 8 - halting
   ```
 
@@ -3122,7 +3122,6 @@ routed by focus and the desktop never blocking on a child program.
 - Full-suite run after the change: **2093/2093** unit tests plus boot, runtime, desktop
   and fsck.
 
-
 - **New runtime case `sbrk heap growth`** — `sbrk_test` now grows the heap by 128 KB,
   writes and verifies both ends, checks the fresh pages read as zeroes, and shrinks back
   to the original break.
@@ -3925,7 +3924,6 @@ identity management, networking extensions, and terminal (termios) control.
 ## v10.0.0 - VFS layer, HBFS v3, compositor IPC, 140 syscalls, package manager
 
 ### Boot & architecture
-
 
 ### Virtual filesystem (`kernel/vfs.inc`)
 

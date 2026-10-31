@@ -7,28 +7,28 @@ Mellivora applications use JSON manifests to describe launch metadata, permissio
 1. Build the program source under `programs/<entry>.asm`.
 2. Create a manifest with the scaffold tool:
 
-```text
-python3 tools/new_app_manifest.py \\
-  --id os.mellivora.example \\
-  --name "Example App" \\
-  --entry example \\
-  --category utility \\
-  --description "A short launcher description" \\
-  --keywords example utility
-```
+    ```text
+    python3 tools/new_app_manifest.py \\
+      --id os.mellivora.example \\
+      --name "Example App" \\
+      --entry example \\
+      --category utility \\
+      --description "A short launcher description" \\
+      --keywords example utility
+    ```
 
 3. Validate the manifest:
 
-```text
-make validate-manifest
-```
+    ```text
+    make validate-manifest
+    ```
 
 4. Regenerate and verify the catalog:
 
-```text
-make app-catalog
-make check-app-catalog
-```
+    ```text
+    make app-catalog
+    make check-app-catalog
+    ```
 
 The manifest `entry` must map to an existing source file at `programs/<entry>.asm`. IDs and entries must be unique.
 

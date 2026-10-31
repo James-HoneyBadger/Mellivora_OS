@@ -110,7 +110,7 @@ CLI programs that didn't change the video mode just need:
 ### 2.1 Register usage
 
 | Reg | Role |
-|-----|------|
+| --- | --- |
 | `EAX` | Syscall number on input; return value on output |
 | `EBX, ECX, EDX, ESI, EDI` | Argument registers and secondary returns |
 | `EBP` | Free for use; not implicitly preserved |
@@ -160,7 +160,7 @@ established `lib/vbe.inc` style.
 ## 3. Syscall Conventions
 
 | Property | Rule |
-|----------|------|
+| --- | --- |
 | Invocation | `mov eax, SYS_*` then `int 0x80` |
 | Numbers | See [`programs/syscalls.inc`](../programs/syscalls.inc); never hard-code |
 | `SYS_BEEP` | **Zeroes EAX after returning** — always reload `EAX` before the next `int 0x80` in a sequence |
@@ -200,7 +200,7 @@ Key palette tones: `MV_BG_DARK`, `MV_BG_BAND`, `MV_FG_BRIGHT`, `MV_FG_DIM`,
 ### 4.3 Standard layout zones (1024 × 768)
 
 | Zone | Y range | Notes |
-|------|---------|-------|
+| --- | --- | --- |
 | Header band | `0..22` | `vbe_ui_header_bar` (title left, status right) |
 | Play area | `30..720` | Game-specific; center board horizontally |
 | Status bar | `750..768` | `vbe_ui_status_bar` (key hints, dim text) |
@@ -211,7 +211,7 @@ These bindings are **mandatory** unless a game has a deliberate, documented
 reason to override them.
 
 | Key | Action |
-|-----|--------|
+| --- | --- |
 | `Q` and `KEY_ESC` | Quit (both must work) |
 | Arrow keys | Primary movement / cursor navigation |
 | `W A S D` | Secondary movement (where arrows make sense) |
@@ -390,16 +390,16 @@ Always check before continuing.
 
 Before committing changes to a program, verify:
 
-- [ ] Builds: `nasm -f bin -Iprograms/ -o /tmp/x.bin programs/<name>.asm`
-- [ ] Variables read before being written are initialized via `dd 0` / `times N db 0` (not `resd`/`resb` in `.bss`)
-- [ ] All VBE strings are uppercase
-- [ ] Exit pattern restores text mode (VBE programs)
-- [ ] `Q` and `ESC` both quit (VBE games)
-- [ ] No hard-coded color hex literals (use `MV_*` constants)
-- [ ] Loop counters that conflict with `vbe_*` calls live in memory, not registers
-- [ ] `SYS_BEEP` followed by another syscall reloads `EAX` first
-- [ ] All shared-lib calls preserve registers (verify if writing new ones)
-- [ ] Game tested through one full play to win/lose/quit
+* [ ] Builds: `nasm -f bin -Iprograms/ -o /tmp/x.bin programs/<name>.asm`
+* [ ] Variables read before being written are initialized via `dd 0` / `times N db 0` (not `resd`/`resb` in `.bss`)
+* [ ] All VBE strings are uppercase
+* [ ] Exit pattern restores text mode (VBE programs)
+* [ ] `Q` and `ESC` both quit (VBE games)
+* [ ] No hard-coded color hex literals (use `MV_*` constants)
+* [ ] Loop counters that conflict with `vbe_*` calls live in memory, not registers
+* [ ] `SYS_BEEP` followed by another syscall reloads `EAX` first
+* [ ] All shared-lib calls preserve registers (verify if writing new ones)
+* [ ] Game tested through one full play to win/lose/quit
 
 ---
 
@@ -415,12 +415,12 @@ Before committing changes to a program, verify:
 
 ## 10. References
 
-- [API_REFERENCE.md](API_REFERENCE.md) — Library function signatures
-- [PROGRAMMING_GUIDE.md](PROGRAMMING_GUIDE.md) — How-to guide
-- [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md) — Kernel internals
-- [`programs/lib/palette.inc`](../programs/lib/palette.inc) — Color constants
-- [`programs/lib/vbe_ui.inc`](../programs/lib/vbe_ui.inc) — UI widgets
-- [`programs/syscalls.inc`](../programs/syscalls.inc) — Syscall numbers
+* [API_REFERENCE.md](API_REFERENCE.md) — Library function signatures
+* [PROGRAMMING_GUIDE.md](PROGRAMMING_GUIDE.md) — How-to guide
+* [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md) — Kernel internals
+* [`programs/lib/palette.inc`](../programs/lib/palette.inc) — Color constants
+* [`programs/lib/vbe_ui.inc`](../programs/lib/vbe_ui.inc) — UI widgets
+* [`programs/syscalls.inc`](../programs/syscalls.inc) — Syscall numbers
 
 ---
 

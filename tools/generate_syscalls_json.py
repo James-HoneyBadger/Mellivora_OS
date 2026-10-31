@@ -86,7 +86,9 @@ def render_markdown(syscalls: list[Syscall]) -> str:
 
     for item in syscalls:
         summary = item.summary if item.summary else "-"
-        summary = summary.replace("|", "\\|")
+        # Pointer markers (status*, new*, old*) would otherwise pair up as
+        # emphasis and swallow text mid-cell, so escape them like the pipes.
+        summary = summary.replace("|", "\\|").replace("*", "\\*")
         lines.append(f"| {item.number} | {item.name} | {summary} |")
 
     lines.append("")

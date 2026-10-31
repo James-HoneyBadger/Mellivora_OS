@@ -406,7 +406,7 @@ Every resource a program can name, hold, share, wait on or secure has the same
 [OBJECTS.md](spec/OBJECTS.md); this is the map of the code.
 
 | Routine | Does |
-|---|---|
+| --- | --- |
 | `obj_init` | builds the namespace skeleton at boot: `\`, `\KernelObjects`, `\Devices`, `\RpcControl`, `\Sessions\{0,1}\BaseNamedObjects`, and `\KernelObjects\Lobby`, whose DACL allows everybody everything while sitting at SYSTEM integrity |
 | `obj_alloc` / `obj_deref` | take a body from the `cache_object` slab and give it the creation reference; release a reference and destroy at zero, running the type's close routine first |
 | `obj_type_desc` | type id to type record. A type is data - name, rights mask, flags, close routine - so naming, securing, counting and closing are not switch statements |
@@ -1440,7 +1440,6 @@ Each task occupies **656 bytes** in the static `task_table` array
 | 144 | 512 | `TCB_FPU_AREA` | This task's `fxsave` image (or `fnsave` where the CPU has no FXSR) |
 | **656** | — | `TCB_SIZE` | Total TCB size (16-byte aligned, so the FPU image is too) |
 
-
 ### Per-task x87 and SSE state
 
 The x87 stack, MXCSR and the XMM registers belong to the CPU, not to a task, so
@@ -1806,7 +1805,6 @@ by `paging_free_pd`, which frees the directory **and** the page tables it privat
 PDE whose table address differs from the master's for the same slot is this directory's
 own, everything else is the shared template.
 
-
 ### Arguments and `execve`
 
 `program_args_buf` only holds the launch currently being set up, so each task gets a
@@ -1949,7 +1947,7 @@ All syscalls are invoked via `INT 0x80`. Register conventions:
 - **EBX, ECX, EDX, ESI, EDI** = arguments
 - **EAX** = return value
 
-#### Pointer arguments
+### Pointer arguments
 
 Every argument documented as a pointer is checked before the kernel dereferences
 it, with `validate_user_ptr` (one address) or `user_range_ok` (an address and a
@@ -2096,9 +2094,9 @@ length, which also rejects a range that wraps past 2^32):
 | 121 | `SYS_MUNMAP` | EBX=addr, ECX=len | EAX=0/-1 |
 | 122 | `SYS_MPROTECT` | EBX=addr, ECX=len, EDX=prot | EAX=0/-1 |
 | 123 | `SYS_SELECT` | EBX=nfds, ECX=rfds, EDX=wfds, ESI=efds, EDI=tv | EAX=count/-1 |
-| 124 | `SYS_CLOCK_GETTIME` | EBX=clk_id, ECX=timespec* | EAX=0/-1 |
+| 124 | `SYS_CLOCK_GETTIME` | EBX=clk_id, ECX=timespec\* | EAX=0/-1 |
 | 125 | `SYS_NANOSLEEP` | EBX=rqtp, ECX=rmtp | EAX=0/-1 |
-| 126 | `SYS_GETTIMEOFDAY` | EBX=timeval*, ECX=tz* | EAX=0 |
+| 126 | `SYS_GETTIMEOFDAY` | EBX=timeval\*, ECX=tz\* | EAX=0 |
 | 127 | `SYS_GETUID` | — | EAX=uid |
 | 128 | `SYS_SETUID` | EBX=uid | EAX=0/-1 |
 | 129 | `SYS_GETGID` | — | EAX=gid |

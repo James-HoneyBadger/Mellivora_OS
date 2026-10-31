@@ -19,7 +19,7 @@ today, not against a list of finished features.
 ## Architectural decisions
 
 | # | Decision | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | D1 | One 32-bit x86 target | The kernel, drivers and syscall ABI are 32-bit protected mode. There is one build and one image; PAE is the ceiling-raise if more than 4 GB is ever needed. |
 | D2 | NASM for the core, freestanding 32-bit C for new subsystems | The boot path, entry stubs, context switch and the existing modules are assembly and stay assembly. The executive, driver model, networking services and shell facilities in M1–M9 are too large to write by hand in asm at a maintainable rate. One calling convention (cdecl, packed structs, documented in `docs/spec/ABI.md`) is fixed at the boundary between the two. |
 | D3 | Everything is an object reachable through a handle | Resource access today is by raw number. Named, reference-counted, typeless objects with per-handle rights are what make sharing, waiting on, securing and remotely managing a resource possible at all. |
@@ -39,7 +39,7 @@ The scorecard is the definition of done for the whole plan. Each row is a job a
 person does, not an API that exists.
 
 | # | User job | Pass criteria | Today |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | Log on | Logon screen, per-user profile and desktop, switch user without reboot | No |
 | 2 | Manage users | Accounts, groups, passwords, quotas, permissions edited from a GUI | Partial — `uid`/`gid` and `chmod`/`chown` only |
 | 3 | Run services | Services start before logon, have dependencies, restart on failure | No |
@@ -63,7 +63,7 @@ from the tree rather than written down by hand.
 A wave does not close until these are measured and reported by `make check`:
 
 | Gate | Target |
-|---|---|
+| --- | --- |
 | Isolation | A hostile program cannot read, write, signal or open anything it was not granted |
 | Containment | A faulting user program is retired; the machine survives 24 hours of it |
 | Concurrency | 4 vCPUs under mixed load for 24 hours with no panic and no lost wakeup |
@@ -168,7 +168,7 @@ What the plan builds on, and must not regress:
 **Exit:** met.
 
 | Criterion | State |
-|---|---|
+| --- | --- |
 | The scorecard runs in CI and reports the true baseline; a row moves only by adding evidence | **Met** — `make check-parity` (13 checks), `make check-cmodule` |
 | A C-built kernel module and a C-built user program both run | **Met** — `cmod` prints `CMOD_OK`, `cprog` prints `C_PROG_OK` |
 | A floating-point workload across a context switch is correct under `make check` | **Met** — `fpu_test` (`FPU_OK`) and `sse_test` (`SSE_OK`) pass, the round trip is proven before any task exists, and since the CPU floor became a Pentium 4 it is also proven on every boot: `make check-boot` requires `FPU_SELFTEST_OK` rather than accepting a SKIP |
@@ -724,7 +724,7 @@ Named explicitly so the plan does not drift into them:
 ## Risks
 
 | Risk | Mitigation |
-|---|---|
+| --- | --- |
 | The C boundary becomes two systems in one tree | One calling convention, one ABI document, one build entry point per module, and a lint gate that rejects a module mixing the two without an entry stub |
 | Objects and security are retrofitted too late | They are wave M1, before any feature that would have to be reworked for them |
 | SMP destabilises the tree | AP start-up is a separate gate; the machine stays bootable single-CPU, and the 24-hour soak is the entry condition for M3 |
@@ -752,7 +752,7 @@ is marked **as built**. [docs/spec/README.md](spec/README.md) holds the index,
 the status vocabulary and the table of ceilings each wave removes.
 
 | Document | Governs | Normative from |
-|---|---|---|
+| --- | --- | --- |
 | [ABI](spec/ABI.md) | Calling convention, types, structure layout and versioning, status codes, handles, names, syscall encoding | M0 (C boundary), M1 (v2) |
 | [OBJECTS](spec/OBJECTS.md) | The object namespace: types, handles, rights, lifetime, waiting, sessions | M1 |
 | [SECURITY](spec/SECURITY.md) | Threat model, tokens, privileges, integrity, ACLs, the access check, audit | M1 |
