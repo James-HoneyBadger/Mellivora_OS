@@ -285,13 +285,16 @@ run_case "Unicode: UTF-8 rendered, UTF-16 converted" \
     $'unicodedemo' \
     "UNICODE_OK|café naïve Über|αβγ π ΣΩ" \
     "" "CPU EXCEPTION|UNICODE_FAIL"
-# M5's exit criterion, as one program: two source files, the Sett and Chronicle
-# reached through QueryInterface-shaped objects rather than syscall numbers, a
-# configuration value that survives the run, and Unicode text on the console.
+# M5's exit criterion, as one program and one image: two source files, an
+# import from mvlib.hbl that the call below proves by arithmetic, the Sett and
+# Chronicle reached through QueryInterface-shaped objects rather than syscall
+# numbers, a configuration value that survives the run, and Unicode text on the
+# console. "sum=7" is the shared library's answer: a program that only claimed
+# the import would print sum=0.
 run_case "M5 exit criterion: the application" \
     $'mvapp' \
-    "MVAPP_OK" \
-    "" "CPU EXCEPTION|MVAPP_FAIL|fault"
+    "MVAPP_OK runs=|sum=7" \
+    "" "CPU EXCEPTION|MVAPP_FAIL|fault|not found"
 # A C payload wrapped as an HBX image, importing mv_add from mvlib.hbl and
 # calling it through the import slot the loader patches: the SDK's link step
 # (tools/hbbuild.py) and the shared-library path, together, from C.

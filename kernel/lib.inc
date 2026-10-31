@@ -104,6 +104,15 @@ lib_resolve_imports:
         mov [hbx_main_tls_data], eax
         mov eax, [hbx_tls_base_rva]
         mov [hbx_main_tls_base_rva], eax
+        ; hbx_prepare reads these two *after* resolution, to write the main
+        ; image's thread-local index into its file copy. hbx_verify of a module
+        ; overwrites them with the module's own, and lib_restore_program has to
+        ; put the program's back or the write lands at an RVA taken from the
+        ; library - four bytes of the program's code or data, silently zeroed.
+        mov eax, [hbx_tls_index_rva]
+        mov [lib_prog_tls_index], eax
+        mov eax, [hbx_sec_count]
+        mov [lib_prog_sec_count], eax
 
         cmp dword [lib_prog_imp_count], 0
         jz .lri_out
@@ -274,6 +283,17 @@ lib_restore_program:
         mov [hbx_export_count], eax
         mov eax, [lib_prog_exp_rva]
         mov [hbx_export_rva], eax
+        ; The TLS directory and the section count are read again after
+        ; resolution - hbx_prepare writes the main image's TLS index into its
+        ; file copy, and the section walk bounds the image. Both were left
+        ; describing the last module verified, so an importing program had four
+        ; bytes of its own image zeroed at an RVA the library chose.
+        mov eax, [hbx_main_tls_dir]
+        mov [hbx_tls_dir], eax
+        mov eax, [lib_prog_tls_index]
+        mov [hbx_tls_index_rva], eax
+        mov eax, [lib_prog_sec_count]
+        mov [hbx_sec_count], eax
         pop eax
         ret
 
@@ -850,6 +870,8 @@ lib_thunk_ptr:      dd 0
 lib_thunk_left:     dd 0
 lib_iat_rva:        dd 0
 lib_ret:            dd 0
+lib_prog_tls_index: dd 0
+lib_prog_sec_count: dd 0
 lib_retry:          dd 0
 lib_rec:            dd 0
 lib_slot:           dd 0

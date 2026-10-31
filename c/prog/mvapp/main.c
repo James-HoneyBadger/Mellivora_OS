@@ -7,11 +7,9 @@
  * application, and it says so by name in the chronicle ring:
  *
  *   * multi-source   - main.c and report.c, two translation units
- *   * shared library - proved by `mvprobe`, the same C toolchain wrapped as an
- *                      HBX image: it imports mv_add from mvlib.hbl and calls it.
- *                      Combining that with this program in one image is the one
- *                      part of the criterion still open, and it is named as
- *                      open rather than claimed.
+ *   * shared library - this image imports mv_add from mvlib.hbl, and the call
+ *                      below goes through the slot the loader patched: 3 + 4
+ *                      has to come back 7, or the program fails.
  *   * Unicode        - box drawing and accented text on the console
  *   * the Sett       - a run counter kept in the configuration store
  *   * Chronicle      - the program writes its own records into the ring the
@@ -53,19 +51,23 @@ static void check(int cond, const char *what)
  * owns it. */
 static int call_mv_add(int a, int b)
 {
-    int result = -1;
+    int result;
+    int (*fn)(int, int) = mvlib_add;
 
-    if (mvlib_add == 0)
+    if (fn == 0)
         return -1;
+    /* The arguments go in from memory, not from a register operand: with "r"
+     * the compiler is free to put `a` in EBX, which makes the two moves below
+     * read the same value and returns a + a. Only the pointer may be a
+     * register, and it is never overwritten. */
     __asm__ volatile("pushl %%ebx\n\t"
                      "movl %1, %%ebx\n\t"
                      "movl %2, %%ecx\n\t"
                      "call *%3\n\t"
-                     "popl %%ebx\n\t"
-                     "movl %%eax, %0"
-                     : "=r"(result)
-                     : "r"(a), "r"(b), "r"(mvlib_add)
-                     : "eax", "ecx", "memory");
+                     "popl %%ebx"
+                     : "=a"(result)
+                     : "m"(a), "m"(b), "r"(fn)
+                     : "ebx", "ecx", "memory");
     return result;
 }
 
@@ -118,13 +120,16 @@ int main(void)
 
     /* The shared library: mv_add lives in mvlib.hbl and is reached through the
      * import slot the loader patched. Its convention is the library's own -
-     * EBX, ECX in, EAX out - so the call needs a thunk. */
-    sum = 0;                    /* see the note in report_row below */
+     * EBX, ECX in, EAX out - so the call needs a thunk. The result is checked
+     * rather than described: 3 + 4 is 7, and MVAPP_OK carries the number. */
+    sum = call_mv_add(3, 4);
+    check(sum == 7, "the shared library answers");
 
     /* The Unicode half: these are CP437 glyphs, written as UTF-8. */
     report_banner("Mellivora OS \xE2\x80\x94 M5 exit criterion");
     report_row("interfaces", chronicle != 0 && sett != 0 ? "chronicle + sett" : "missing");
-    report_row("shared library", "mvprobe: mv_add through the import slot");
+    snprintf(line, sizeof line, "mvlib.hbl: mv_add(3,4) = %d", sum);
+    report_row("shared library", line);
     report_row("configuration", runs > 0 ? "Sett: run counter kept" : "Sett: unavailable");
     report_row("chronicle", "records written to the ring");
     report_row("Unicode", "\xC3\xA9\xC3\xA8\xC3\xAA \xE2\x94\x80\xE2\x94\x80\xE2\x94\x80 \xE2\x94\x82 \xE2\x94\x8C\xE2\x94\x90 \xE2\x96\x88");

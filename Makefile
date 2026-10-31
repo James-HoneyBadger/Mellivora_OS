@@ -218,18 +218,21 @@ $(CMOD_BLOB): $(CMOD_OBJS) c/kmod/kmain.ld $(C_OBJ_DIR)/kmod.addr
 	fi
 
 # A program whose sources are a directory rather than one file (the SDK's
-# multi-source layout). Each source is compiled on its own and the objects are
-# linked the way a single-source program is.
-MVAPP_OBJS = $(patsubst c/prog/mvapp/%.c,$(C_OBJ_DIR)/mvapp/%.o,$(wildcard c/prog/mvapp/*.c))
-
-$(C_OBJ_DIR)/mvapp/%.o: c/prog/mvapp/%.c $(wildcard c/prog/mvapp/*.h) $(C_INCS)
+# multi-source layout). tools/hbbuild.py compiles each source itself, so there
+# is no per-source rule here - only the source list, so a change to either file
+# relinks the image.
+#
+# The M5 exit criterion as one image: two translation units linked by the SDK's
+# step, wrapped as an HBX image that imports mv_add from mvlib.hbl. It is an
+# image rather than a flat binary because the criterion says "using shared
+# libraries", and a flat binary cannot carry an import table.
+programs/mvapp.bin: $(wildcard c/prog/mvapp/*.c) $(wildcard c/prog/mvapp/*.h) \
+                    $(C_USER_RT_OBJS) c/prog/prog.ld $(LIB_BINS)
 	@mkdir -p $(dir $@)
-	$(C_CC) $(C_CFLAGS) -Ic/prog/mvapp -o $@ $<
-
-programs/mvapp.bin: $(MVAPP_OBJS) $(C_USER_RT_OBJS) c/prog/prog.ld
-	@mkdir -p $(dir $@)
-	$(C_LD) -m elf_i386 -T c/prog/prog.ld --oformat binary -o $@ \
-	    $(MVAPP_OBJS) $(C_USER_RT_OBJS)
+	CC='$(C_CC)' LD='$(C_LD)' C_CFLAGS='$(C_CFLAGS)' \
+	    C_USER_RT_OBJS='$(C_USER_RT_OBJS)' \
+	    python3 tools/hbbuild.py --name mvapp --src c/prog/mvapp --out $@ \
+	        --import mvlib:mv_add=mvlib_add
 
 # The same directory of sources, but wrapped as an HBX image with an import from
 # a shared library: the SDK's link step (tools/hbbuild.py) names the slot.
@@ -240,6 +243,13 @@ programs/mvprobe.bin: $(wildcard c/prog/mvprobe/*.c) $(C_USER_RT_OBJS) \
 	    C_USER_RT_OBJS='$(C_USER_RT_OBJS)' \
 	    python3 tools/hbbuild.py --name mvprobe --src c/prog/mvprobe --out $@ \
 	        --import mvlib:mv_add=mvlib_add
+
+# The two directory-of-sources programs are not in C_PROGS, which is one source
+# per binary. They were rules nobody depended on, so neither was ever built and
+# neither reached the image the runtime tests boot - which is how the M5 exit
+# criterion came to be called met while `mvapp` answered "Unknown command".
+SDK_BINS = $(PROG_DIR)/mvapp.bin $(PROG_DIR)/mvprobe.bin
+PROG_BINS += $(SDK_BINS)
 
 programs/%.bin: $(C_OBJ_DIR)/prog/%.o $(C_USER_RT_OBJS) c/prog/prog.ld
 	@mkdir -p $(dir $@)
