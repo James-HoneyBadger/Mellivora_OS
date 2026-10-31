@@ -34,7 +34,7 @@ the contract and the removal is listed in the table below.
 | [STORAGE.md](STORAGE.md) | HBFS v5 on-disk format, volumes, cache, repair, snapshots | M3 | `fsck`, power-cut harness, quota/ACL suites |
 | [CONFIG.md](CONFIG.md) | The Sett: key space, types, transactions, notifications, hives | M4 | transaction suite, migration tests |
 | [SERVICES.md](SERVICES.md) | Service control, dependencies, recovery, logon, sessions, profiles | M4 | logon and service suites |
-| [EXEC.md](EXEC.md) | Images, loader, shared libraries, TLS, ASLR, process creation | M5 | loader suite, `argv_test`, ASLR cases |
+| [EXEC.md](EXEC.md) | Images, loader, shared libraries, TLS, threads, ASLR, process creation | M5 | loader suite, `hbx_thread`, `threadtest`, ASLR cases |
 | [IPC.md](IPC.md) | Ports, messages, sections, waits, named pipes, quotas | M1 (sections), M5 (ports) | IPC suite, deadlock soak |
 | [NETWORK.md](NETWORK.md) | Socket objects, stack contracts, shares, RPC, remote administration | M7 | net suite, share mount case |
 | [MEDIA.md](MEDIA.md) | Audio graph, video, USB classes, print spooler | M8 | media suite |
@@ -56,7 +56,7 @@ named.
 | Kernel virtual space | ~2 MB image window at 1 MB, 8 MB reserve | 1 GiB at `0xC0000000`: image, heaps, page tables, cache | M1 |
 | User virtual space | ~1 MB program window plus a demand zone from the top of RAM to 1 GB | 3 GiB per process, ASLR across the whole range | M1 |
 | Physical memory | 512 MB tested; frames only below 512 MB, all of it identity-mapped | 64 GiB via PAE, PFN database over all of it | M2 |
-| Syscalls | 201, flat: 0–186 legacy and 187–200 the object manager (frozen by number) | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
+| Syscalls | 206, flat: 0–186 legacy, 187–201 the executive, 202–205 the interface and thread calls (frozen by number) | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
 | Names | 63 bytes, 8-bit | 255 UTF-16 code units, resolved case-insensitively for the Windows-facing namespace | M1 |
 | Directory entries | 455 per directory, root or subdirectory | 65 535 per directory, B+tree directories | M3 |
 | File size | 32-bit block numbers, 2 GB volume | 2^63 bytes per file, 2^62 bytes per volume, 64-bit block numbers | M3 |

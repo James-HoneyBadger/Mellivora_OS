@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 204,
-  "highest_syscall_number": 203,
+  "syscall_count": 206,
+  "highest_syscall_number": 205,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -1022,6 +1022,16 @@
       "name": "SYS_SETT",
       "number": 203,
       "summary": "Config store: EBX=op(0 get,1 set) ECX=path EDX=buf ESI=size"
+    },
+    {
+      "name": "SYS_CLONE",
+      "number": 204,
+      "summary": "clone(entry,stack,flags) -> tid in the caller, 0 in the thread"
+    },
+    {
+      "name": "SYS_THREAD_EXIT",
+      "number": 205,
+      "summary": "thread_exit(status) -> ends this thread, not the process"
     }
   ]
 }

@@ -77,9 +77,11 @@ A wave does not close until these are measured and reported by `make check`:
 
 What the plan builds on, and must not regress:
 
-- Preemptive four-level priority scheduler, `fork`/`exec`/`waitpid`, signals, pipes,
-  shared memory, message queues, semaphores, `mmap`/`mprotect`, copy-on-write fork
-  and per-task file descriptors — see [sched.inc](../kernel/sched.inc).
+- Preemptive four-level priority scheduler, `fork`/`exec`/`waitpid`, threads
+  (`SYS_CLONE`, sharing one address space and its own stack and TLS per thread),
+  per-thread signals, pipes, shared memory, message queues, semaphores,
+  `mmap`/`mprotect`, copy-on-write fork and per-task file descriptors — see
+  [sched.inc](../kernel/sched.inc).
 - Demand paging with file-backed mappings, a page cache with writeback and
   guarded demand-grown stacks — see [vm.inc](../kernel/vm.inc) and
   [paging.inc](../kernel/paging.inc).
@@ -100,7 +102,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 204 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
+- 206 syscalls, 97 shell built-ins, 278 program sources (277 NASM and one C), an
   in-OS C compiler, `hbpkg`, and a C-built kernel module with a freestanding C
   runtime behind it.
 
@@ -611,10 +613,22 @@ descriptor table nobody used, `/tmp` created names it was only asked to read and
 its stat was a stub, and `access` did not know other mounts existed. All five now
 behave, and `docs/POSIX.md` writes down what conforms, what does not and why -
 including that nothing here has run a POSIX conformance suite, so the word
-"compatible" is still the document's opinion rather than a test result. What is
-still open in this wave: a scalable font (and with it every code point CP437 has
-no glyph for), threading (so a second thread's TLS block has something to attach
-to), and the interface layer.
+"compatible" is still the document's opinion rather than a test result. Then the
+interfaces and the exit criterion landed: `SYS_LOG_WRITE` and `SYS_SETT`, the
+QueryInterface-shaped objects in `c/include/mv/iface.h`, and `mvapp`, two source
+files built by the SDK's link step. Threads came next and closed the TLS story:
+`SYS_CLONE` makes a second task in the calling process - the same address space,
+descriptors, handles and vm areas, with a kernel stack, a user stack and
+thread-local blocks of its own - and `SYS_THREAD_EXIT` ends one without ending
+the process, so `mv_thread_create`/`mv_thread_join` are the C shape of a
+function call. The base slot a module reads its TLS block from lives in the
+shared image, so each thread's value is installed by the scheduler on every
+switch; `hbx_thread` proves two threads of one image see different blocks across
+eight switches, and `threadtest` runs four threads over one heap plus 64
+create/join cycles that would exhaust the task slots or the mapping records if
+either leaked. What is still open in this wave: a scalable font (and with it
+every code point CP437 has no glyph for), and detaching, cancelling and
+prioritising a thread.
 
 ### M6 · Shell and user experience (12–16 weeks)
 

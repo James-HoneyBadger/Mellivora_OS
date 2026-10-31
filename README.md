@@ -4,7 +4,7 @@
 
 **A bare-metal 32-bit x86 operating system written in NASM assembly.**
 
-Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3/v4 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 204 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
+Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3/v4 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 206 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
 compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program sources (277 NASM and one C), and 37 bundled samples (NASM, C, Perl, and BASIC).
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
@@ -35,7 +35,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **Chronicle and the Sett are programmable** — `SYS_LOG_WRITE` writes into the same ring the drivers write to (`chronicle` shows both), `SYS_SETT` reads and writes a persisted string setting by path
 - **A POSIX C surface** — `c/include/` carries `unistd.h`, `fcntl.h`, `sys/stat.h`, `sys/wait.h`, `signal.h`, `errno.h`, `ctype.h`, `locale.h` and `limits.h`, each a thin shim over a syscall the kernel already had; `docs/POSIX.md` states what conforms, what does not and why (no conformance suite has been run)
 - **Unicode text** — UTF-8 decoded at the console and the desktop, mapped to the glyph the CP437 font has (Latin-1, Greek, box drawing, arrows); UTF-16 conversion at the C runtime boundary
-- **204 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`)
+- **206 syscalls** via `INT 0x80` — v10 adds dup/pipe2/mmap/mprotect/clock_gettime/surfaces; v11 adds sigaction/sigreturn/alarm/xattr; v12.0 adds full POSIX session/uid/signal/timer/termios set; v12.1 adds per-task errno (`SYS_GETERRNO`); v14 adds `SYS_EXECVE` and terminal job control (`SYS_TCSETPGRP`/`SYS_TCGETPGRP`); M5 adds threads (`SYS_CLONE`/`SYS_THREAD_EXIT`)
 - **Virtual filesystem (VFS)** — unified open/read/write/stat/readdir front-end; backends: HBFS (`/`), procfs (`/proc`), devfs (`/dev`), tmpfs (`/tmp`)
 - **Priority-based preemptive scheduler** — 4 priority levels (HIGH/NORMAL/LOW/IDLE), 128 concurrent ring-3 tasks; blocking `waitpid`
 - **Per-task fd isolation** (v12.1) — each task has a private 4 KB fd table page; no cross-task aliasing
@@ -118,9 +118,14 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
   `calloc` that refuses a product too large for a `u32`
 - **A start-up** — `c/rt/start.c` calls `main` and hands its return value to
   `SYS_EXIT`, so a C program is one `main` and nothing else
+- **Threads** — `mv_thread_create`, `mv_thread_join` and `mv_thread_exit` in
+  `c/include/mv/thread.h` over `SYS_CLONE`: a second task in the calling process
+  shares the heap, the descriptors and the pid and owns a stack, a kernel stack
+  and thread-local blocks, so a thread is a function call and its return value
+  is what the joiner collects
 - **One runtime for both spaces** — `c/rt/string.c` is linked into the kernel
-  module and into user programs; stdio, the heap and the start-up reach the
-  kernel through `int 0x80`, so they are user-only
+  module and into user programs; stdio, the heap, threads and the start-up reach
+  the kernel through `int 0x80`, so they are user-only
 
 ### HB Lair Shell (v3.0)
 

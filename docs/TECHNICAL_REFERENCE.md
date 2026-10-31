@@ -2157,8 +2157,10 @@ length, which also rejects a range that wraps past 2^32):
 | 186 | `SYS_FAULTINJECT` | EBX=op, ECX=count | EAX=0/-1; see [Fault Injection](#fault-injection-p10) |
 | 200 | `SYS_TOKEN_QUERY` | EBX=buffer | EAX=0/-1 |
 | 201 | `SYS_SVC_CONTROL` | EBX=op (0 ask, 1 stopped, 2 refuse) | EAX=0/1/2, -1 if not a service |
+| 204 | `SYS_CLONE` | EBX=entry, ECX=user ESP, EDX=flags (0) | EAX=thread id in the caller, 0 in the thread, -1 on refusal |
+| 205 | `SYS_THREAD_EXIT` | EBX=status | does not return; the process keeps running |
 
-**Total: 204 syscalls defined (0–203, no gaps).**
+**Total: 206 syscalls defined (0–205, no gaps).**
 
 ---
 

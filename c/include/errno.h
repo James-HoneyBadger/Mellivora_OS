@@ -2,13 +2,15 @@
  * errno.h - the POSIX error numbers, and the lvalue a POSIX program expects
  *
  * POSIX wants `errno` to be an lvalue that a failed call sets and a program
- * reads. The kernel keeps errno per task (SYS_GETERRNO), but a task's copy is
- * not addressable from user mode, so the runtime keeps one here and every
+ * reads. The kernel keeps errno per task (SYS_GETERRNO), and a task is a thread
+ * since M5, so the kernel's copy is already per thread; a task's copy is not
+ * addressable from user mode, though, so the runtime keeps one here and every
  * wrapper in c/rt/posix.c copies the kernel's value into it on failure.
  *
- * One variable, not one per thread: this tree has threads, but its TLS is per
- * task (EXEC.md section 6), so a second thread shares this. That is the same
- * gap the TLS note records, not a separate one.
+ * One variable per program, not per thread: each thread has its own kernel errno
+ * but they share this one, because a per-thread C variable needs the compiler's
+ * TLS model and the storage behind it - the gap c/include/mv/thread.h records,
+ * not a separate one.
  */
 #ifndef EERRNO_H
 #define EERRNO_H

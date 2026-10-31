@@ -80,8 +80,8 @@ closed; the rest are here so a port knows what to expect.
 | `O_EXCL` is ignored | `open(O_CREAT\|O_EXCL)` does not fail on an existing file | No create-and-fail atomically; the create path is a whole-file write |
 | `pipe()` fails with `ENOSYS` | A port that pipes between processes or threads cannot | `SYS_PIPE2` allocates a pipe and two descriptors, but nothing in the VFS reads or writes a pipe: the first use reached the HBFS backend with a descriptor it had never seen. It now refuses instead of faulting, and the descriptor backend over `ipc_pipe_*` is the work it waits for |
 | `socket`, `poll`, `select` are not in the POSIX surface | A port that needs them cannot build | The kernel has sockets, but through its own calls; wrapping them is a separate increment |
-| No `fork` with threads; no `pthread_*` | A threaded POSIX program cannot build | Threads exist at the syscall level and their TLS is per task; `pthread` needs per-thread TLS first |
-| `errno` is one variable per task, not per thread | A second thread shares it | The same TLS gap |
+| No `pthread_*` | A threaded POSIX program cannot build its threads with the standard names | Threads and their TLS are real (`SYS_CLONE`, `mv_thread_create` in `c/include/mv/thread.h`); what is missing is the `pthread` wrapper - the names, `pthread_t`, `pthread_join` returning a `void *` - and a compiler that can emit a TLS template into a flat image |
+| `errno` is one variable per program, not per thread | Two threads in one call path share it | The kernel's errno is per thread (a thread is a task); the library's lvalue is a single variable because per-thread C storage needs the TLS model described above |
 | No `getrlimit`/`setrlimit`, no `umask`, no `nice` | Limits cannot be queried or changed | Nothing in the kernel exposes them yet |
 | One locale: `"C"` | No collation, no case folding outside ASCII, no message catalogues | Multi-byte collation is a data and library project |
 | No `#!/bin/sh`; scripts are `.bat` | A POSIX shell script does not run | EXEC.md section 7 write-up; the loader's interpreter line is not implemented |
@@ -104,8 +104,10 @@ In the order the cost rises:
    share the offset the way the standard requires.
 4. **A descriptor backend for pipes**, then the `pipe()` wrapper over it, and
    the same for sockets.
-5. **`pthread` on top of per-thread TLS**, which needs the TLS index to be per
-   thread rather than per task (EXEC.md section 6's open item).
+5. **`pthread` on top of the thread support that exists**. Per-thread TLS
+   landed with the thread group (EXEC.md section 6); what a `pthread_create`
+   port needs is the wrapper, and a build step that emits a TLS template into
+   an image so `__thread` variables have somewhere to live.
 
 ## 5. The shape of the ABI, for the record
 

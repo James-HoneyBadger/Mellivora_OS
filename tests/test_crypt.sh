@@ -67,10 +67,15 @@ fi
 
 [ -f "$IMAGE" ] || fail "volume encryption" "no image at $IMAGE"
 
-work="$(mktemp -d)"
+# The copy goes beside the image, not in $TMPDIR: a 2 GB image copied into a
+# RAM-backed /tmp competes with the guest's own memory and turns every boot in
+# this gate into a 150-second crawl. Beside the image it is a reflink on btrfs
+# and costs nothing.
+work="$(mktemp -d "$(cd "$(dirname "$IMAGE")" && pwd)/.crypt-gate.XXXXXX")" \
+    || fail "volume encryption" "could not make a work directory"
 trap 'rm -rf "$work"' EXIT
 img="$work/crypt.img"
-cp --reflink=auto --sparse=always "$IMAGE" "$img" 2>/dev/null || cp "$IMAGE" "$img" \
+cp --reflink=auto "$IMAGE" "$img" 2>/dev/null || cp "$IMAGE" "$img" \
     || fail "volume encryption" "could not copy $IMAGE"
 
 echo "  volume encryption: $(basename "$IMAGE") -> a copy"
@@ -118,10 +123,14 @@ fi
 pass "the marker is not in the raw image"
 
 # 3. A reboot with an empty key store: the volume is refused, not mounted empty.
+# The mount is refused, so the status says the volume is encrypted and locked,
+# and the file written before the reboot cannot be read: a volume whose key is
+# missing is not a volume that mounts empty.
 step "a reboot refuses the volume without the key" \
     "crypt status" \
-    --expect "HBFS: volume is encrypted" \
-    --expect "key 'volkey' - locked"
+    --then "cat $PROBE" \
+    --expect "key 'volkey' - locked" \
+    --reject "$MARK"
 
 # 4. The wrong key is refused, and refusing must not touch the disk.
 before="$(sha256sum "$img" | cut -d' ' -f1)"

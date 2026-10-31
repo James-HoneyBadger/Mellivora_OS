@@ -197,6 +197,7 @@ M2 does not close until:
 | Jobs and quotas | None |
 | Wait reasons, hung-task detection | None |
 | Nanosecond accounting | Tick counts |
+| Threads in a process | Real: `SYS_CLONE` makes one, `SYS_THREAD_EXIT` ends one, and each has its own kernel stack, user stack and thread-local blocks ([EXEC.md](EXEC.md#6-shared-libraries)). A process's threads are scheduled independently and share one fd view and one address space; there is no per-thread priority, affinity or detach |
 
 The lock-rank gate, the AP start-up path, the APIC timer and the SMP boot are
 real and tested; this document says what they grow into.

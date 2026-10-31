@@ -570,6 +570,12 @@ SYS_TCSETPGRP       equ 183     ; Set terminal foreground pgid: EBX=pgid -> 0/-1
 SYS_TCGETPGRP       equ 184     ; Get terminal foreground pgid: -> EAX=pgid
 SYS_MMAP_FILE       equ 185     ; Map a file: EBX=path ECX=len EDX=prot ESI=off -> addr/-1
 
+; M5: threads (EXEC.md section 6). A task is a thread; SYS_CLONE makes a second
+; one in the calling process and SYS_THREAD_EXIT ends it without ending the
+; process.
+SYS_CLONE           equ 204     ; clone(entry,stack,flags) -> EAX=tid in the caller, 0 in the thread
+SYS_THREAD_EXIT     equ 205     ; thread_exit(status) -> does not return
+
 ; Signal trampoline — read-only page mapped at top of demand zone
 SIGRETURN_TRAMPOLINE_VADDR equ 0x1FFFF000   ; Last page of demand zone (128–512MB)
 

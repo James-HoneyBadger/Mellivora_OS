@@ -194,6 +194,27 @@ A handle is a 32-bit value that is only meaningful in the process that owns it:
 The layout is an [ABI](README.md) commitment: a program may hold a handle in a
 `u32` and compare it for equality, and nothing else may be assumed about it.
 
+### 6.1 Threads
+
+A **process** is a thread group: the first task to run an image is its leader,
+and `SYS_CLONE` creates further tasks in it. Everything in this section is
+per process, so a thread sees the leader's handles, descriptors, token and
+address space, and `getpid` answers with the group's id rather than the calling
+thread's. A thread's own id is what `SYS_CLONE` returns to its creator, and it is
+what `SYS_WAITPID` is given to join it.
+
+What a thread owns alone is C-visible as:
+
+| Thing | Where it comes from |
+|---|---|
+| A user stack | The creator maps one and passes its top to `SYS_CLONE` |
+| A kernel stack | One page per task, as every task has |
+| An errno | `TCB_ERRNO`, so a failed call in one thread does not change another's |
+| Thread-local storage | One block per module per thread; the base slot in the image is rewritten on every switch into the thread ([EXEC.md](EXEC.md#6-shared-libraries)) |
+
+Floating-point and vector state is per task, so it is per thread: two threads of
+one process do not share an `MXCSR` any more than two processes do.
+
 ## 7. Floating point and vector state
 
 Each task owns a 512-byte image, saved and restored across a context switch with

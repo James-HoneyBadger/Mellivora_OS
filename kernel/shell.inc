@@ -6677,10 +6677,6 @@ cmd_exec_program:
         mov edi, eax
         call tls_setup_task
         pop eax
-        push eax
-        mov edi, eax
-        call tls_setup_task
-        pop eax
         ; Give the task a guarded, demand-grown stack before it runs. The
         ; unmapping has to happen in the task's own directory, so switch to it
         ; and back; sched_start_task installs it again when the task is entered.

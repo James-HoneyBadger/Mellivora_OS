@@ -189,7 +189,7 @@ C_USER_RT_OBJS = $(C_RT_OBJS) $(C_OBJ_DIR)/rt/stdlib.o \
                  $(C_OBJ_DIR)/rt/stdio.o $(C_OBJ_DIR)/rt/malloc.o \
                  $(C_OBJ_DIR)/rt/utf.o $(C_OBJ_DIR)/rt/posix.o \
                  $(C_OBJ_DIR)/rt/iface.o $(C_OBJ_DIR)/rt/args.o \
-                 $(C_OBJ_DIR)/rt/start.o
+                 $(C_OBJ_DIR)/rt/thread.o $(C_OBJ_DIR)/rt/start.o
 
 # The kernel module: a C subsystem linked at the cmod slot (kernel/data.inc).
 CMOD_OBJS = $(C_OBJ_DIR)/kmod/kmod.o $(C_RT_OBJS)
@@ -486,7 +486,8 @@ $(PE_FIXTURES): $(HBX_BUILD)/pe_fixtures.stamp
 # loaded at - so every launch exercises the relocation path. hbx_dll is the
 # program that imports from it; its import table comes from the HBI1 marker in
 # the payload, because only the payload knows where its IAT slots are.
-LIB_BINS = $(PROG_DIR)/hbx_dll.bin $(PROG_DIR)/mvlib.hbl $(PROG_DIR)/hbx_tls.bin
+LIB_BINS = $(PROG_DIR)/hbx_dll.bin $(PROG_DIR)/mvlib.hbl $(PROG_DIR)/hbx_tls.bin \
+           $(PROG_DIR)/hbx_thread.bin
 
 $(HBX_BUILD)/mvlib.bin: $(HBX_DIR)/mvlib.asm $(PROG_DIR)/syscalls.inc
 	@mkdir -p $(HBX_BUILD)
@@ -501,6 +502,18 @@ $(PROG_DIR)/hbx_tls.bin: $(HBX_DIR)/hbx_tls.asm $(PROG_DIR)/syscalls.inc tools/m
 	@mkdir -p $(HBX_BUILD)
 	$(NASM) -f bin -O0 -I$(PROG_DIR)/ -I$(HBX_DIR)/ -o $(HBX_BUILD)/hbx_tls.bin $<
 	python3 tools/mkhbx.py $(HBX_BUILD)/hbx_tls.bin -o $@
+
+# Threads (EXEC.md section 6): an image with a TLS directory that starts a
+# second thread of the same process and checks, across real context switches,
+# that the base slot names each thread's own block.
+#
+# -w-label-redef-late: the failure blocks sit past every check and a jump to one
+# grows from short to near on the second pass, which NASM reports as a label
+# that moved.
+$(PROG_DIR)/hbx_thread.bin: $(HBX_DIR)/hbx_thread.asm $(PROG_DIR)/syscalls.inc tools/mkhbx.py
+	@mkdir -p $(HBX_BUILD)
+	$(NASM) -f bin -O0 -w-label-redef-late -I$(PROG_DIR)/ -I$(HBX_DIR)/ -o $(HBX_BUILD)/hbx_thread.bin $<
+	python3 tools/mkhbx.py $(HBX_BUILD)/hbx_thread.bin -o $@
 
 $(PROG_DIR)/hbx_dll.bin: $(HBX_DIR)/hbx_dll.asm $(PROG_DIR)/syscalls.inc tools/mkhbx.py
 	@mkdir -p $(HBX_BUILD)

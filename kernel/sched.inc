@@ -106,7 +106,30 @@ TCB_WAITSET     equ 692     ; M1: this task's wait set (allocated on first use)
 TCB_SVC         equ 696     ; M4: the service record this task runs (-1 = none)
 TCB_SESS        equ 700     ; M4: the logon session this task belongs to
 
-TCB_SIZE        equ 704     ; Bytes per TCB: 144 + 512 + 40, 16-byte aligned
+; M5: threads. A task is a thread; the first thread of a process is its leader,
+; and every thread names the leader in TCB_TGID. getpid() answers with the
+; group, waitpid() still names one thread, and the shared state - the address
+; space, the fd page, the handle table, the vm areas - is reached through the
+; group so that a thread can map and unmap without a table of its own.
+TCB_TGID        equ 704     ; thread group: the PID of the first thread
+; The thread-local view: one entry per module that declared a TLS directory.
+; The block a module reads through its base slot is per thread, but that slot
+; lives in the image, which the whole group shares - so the value in it is only
+; true for the thread that is running. Each entry remembers what to write
+; (slot and block) and what the block was copied from (template and size), so
+; the scheduler can install the incoming thread's view on every switch and a
+; new thread can be given blocks of its own without asking the loader again.
+TCB_TLS_COUNT   equ 708     ; entries used in TCB_TLS_VIEW
+; The lowest block address given out in this thread group. Blocks come down from
+; the top of the demand zone, and the group shares one address space, so the
+; next block a *thread* takes must start below the last one its process took -
+; this is that number, kept in the leader's TCB.
+TCB_TLS_TOP     equ 712
+TCB_TLS_VIEW    equ 716     ; TLS_VIEW_MAX entries of TLS_VIEW_SIZE bytes
+TLS_VIEW_MAX    equ 5       ; the program itself plus LIB_MAX_MODULES libraries
+TLS_VIEW_SIZE   equ 16      ; {slot address, block address, template, size}
+
+TCB_SIZE        equ 800     ; 716 + 5 x 16 = 796, rounded to 16 for fxsave
 
 
 MAX_TASKS    equ 128         ; v5.0: Doubled from 64
@@ -595,6 +618,11 @@ sched_create_task:
         mov [edi + TCB_SVC],       dword -1
         mov eax, [sess_current]
         mov [edi + TCB_SESS], eax
+        ; A new process is its own thread group and starts with no TLS view:
+        ; tls_setup_task fills the view once the image has been mapped.
+        mov [edi + TCB_TGID], edx
+        mov [edi + TCB_TLS_COUNT], dword 0
+        mov [edi + TCB_TLS_TOP], dword 0
         ; The object charge is per slot, and a recycled slot must start at zero:
         ; otherwise a new task inherits the previous occupant's count and is
         ; refused creates it never made.
@@ -734,9 +762,9 @@ sched_free_ready_task:
 .sfr_fd:
         mov eax, [edi + TCB_FD_TABLE_PTR]
         call vfs_release_all
-        mov ecx, [edi + TCB_PID]
+        mov ecx, [edi + TCB_TGID]
         call vm_free_table
-        mov eax, [edi + TCB_PID]
+        mov eax, [edi + TCB_TGID]
         call task_args_free
         mov eax, [edi + TCB_FD_TABLE_PTR]
         test eax, eax
@@ -812,6 +840,27 @@ sched_kill_all_tasks:
         cmp dword [edi + TCB_STATE], TASK_FREE
         je .skat_next
 
+        ; A thread that is not its group's leader owns only its kernel stack
+        ; and its thread-local blocks here. The window, the fd page, the handle
+        ; table, the vm areas and the directory belong to the group, and the
+        ; leader's turn through this loop releases them once.
+        mov eax, [edi + TCB_TGID]
+        cmp eax, [edi + TCB_PID]
+        je .skat_leader
+        call tls_release_thread
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .skat_thread_clear
+        sub eax, 4096
+        call pmm_free_page
+.skat_thread_clear:
+        mov dword [edi + TCB_KSTACK], 0
+        mov dword [edi + TCB_USTACK], 0
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_PID], 0
+        jmp .skat_next
+
+.skat_leader:
         ; Release the private program-window frames.
         mov eax, [edi + TCB_CR3]
         test eax, eax
@@ -861,11 +910,11 @@ sched_kill_all_tasks:
         mov eax, [edi + TCB_CR3]
         test eax, eax
         jz .skat_pd
-        mov ecx, [edi + TCB_PID]
+        mov ecx, [edi + TCB_TGID]
         call vm_release_all
-        mov ecx, [edi + TCB_PID]
+        mov ecx, [edi + TCB_TGID]
         call vm_free_table
-        mov eax, [edi + TCB_PID]
+        mov eax, [edi + TCB_TGID]
         call task_args_free
 .skat_pd:
         ; The master directory is active here, so the task's directory is not
@@ -911,6 +960,11 @@ sched_exit_task:
         jmp .exit_find
 
 .exit_found:
+        ; A process ends with its last thread, and every thread of it ends
+        ; here: the others are stopped first so nothing is left runnable in an
+        ; address space that is about to be released.
+        call sched_kill_group_mates
+
         ; A service's task dying is a service failure the SCM has to see, and
         ; it must see it before the slot is recycled.
         cmp dword [edi + TCB_SVC], -1
@@ -921,7 +975,7 @@ sched_exit_task:
 .exit_not_service:
 
         ; Reap any windows this task owned before the TCB is recycled.
-        mov eax, [edi + TCB_PID]
+        mov eax, [edi + TCB_TGID]
         call gui_cleanup_pid
 
         ; Release every handle the task held, and the table itself. A handle
@@ -976,15 +1030,15 @@ sched_exit_task:
         mov eax, [edi + TCB_CR3]
         test eax, eax
         jz .exit_no_vm
-        mov ecx, [edi + TCB_PID]
+        mov ecx, [edi + TCB_TGID]
         call vm_release_all
 .exit_no_vm:
 
         ; Its area table and argument snapshot have served their purpose: the
         ; records are gone and the slot is about to be reusable.
-        mov ecx, [edi + TCB_PID]
+        mov ecx, [edi + TCB_TGID]
         call vm_free_table
-        mov eax, [edi + TCB_PID]
+        mov eax, [edi + TCB_TGID]
         call task_args_free
 
         ; Queue this task's page directory for release. It cannot be freed here:
@@ -1028,6 +1082,65 @@ sched_exit_task:
 .exit_done:
         popad
         ret
+
+;---------------------------------------
+; sched_kill_group_mates - end the other threads of a dying process
+;   In : EDI = TCB of the thread whose process is ending
+;
+; Every other task that names the same thread group belongs to the same
+; process, and everything the executive calls "process state" - the directory,
+; the fd page, the handle table, the signal table, the vm areas, the argument
+; snapshot - is about to be released by the caller. What a thread owns alone is
+; a kernel stack and its thread-local blocks, and those go here. A thread that
+; has already exited is a zombie that gave both back at exit, so it is only
+; marked free.
+;
+; The caller runs on the shared kernel stack (every exit path switches to it
+; first), otherwise this could free the page it is standing on.
+;---------------------------------------
+sched_kill_group_mates:
+        pushad
+        mov [.kgm_self], edi
+        mov eax, [edi + TCB_TGID]
+        mov [.kgm_gid], eax
+        mov esi, task_table
+        xor edx, edx
+.kgm_loop:
+        cmp edx, MAX_TASKS
+        jge .kgm_done
+        mov edi, esi
+        cmp dword [edi + TCB_STATE], TASK_FREE
+        je .kgm_next
+        cmp edi, [.kgm_self]
+        je .kgm_next
+        mov eax, [edi + TCB_TGID]
+        cmp eax, [.kgm_gid]
+        jne .kgm_next
+        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
+        je .kgm_zombie
+        call tls_release_thread
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .kgm_no_kstack
+        sub eax, 4096
+        call pmm_free_page
+        mov dword [edi + TCB_KSTACK], 0
+.kgm_no_kstack:
+        dec dword [task_count]
+.kgm_zombie:
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_PID], 0
+        mov dword [edi + TCB_ESP], 0
+        mov dword [edi + TCB_TLS_COUNT], 0
+.kgm_next:
+        add esi, TCB_SIZE
+        inc edx
+        jmp .kgm_loop
+.kgm_done:
+        popad
+        ret
+.kgm_self: dd 0
+.kgm_gid:  dd 0
 
 ;---------------------------------------
 ; sched_publish_death - hand a dead task to waitpid and wake its parent
@@ -1081,7 +1194,14 @@ sched_publish_death:
 .spd_wake_done:
 
         ; --- Deliver SIGCHLD to the parent ---
+        ; A thread is not a child: its death belongs to its own process, so the
+        ; group's parent hears nothing, and the TCB waits for a join even when
+        ; the process has no parent to reap it (a foreground program's threads
+        ; would otherwise lose their status before waitpid could ask for it).
         mov edi, [.spd_tcb]
+        mov eax, [edi + TCB_TGID]
+        cmp eax, [edi + TCB_PID]
+        jne .spd_done
         mov eax, [edi + TCB_PPID]
         cmp eax, -1
         je .spd_reap                    ; no parent -> nobody will waitpid()
@@ -1831,6 +1951,11 @@ sched_self_leave:
 ; sys_getpid - Return current task PID
 ; Returns EAX = task PID (or -1 if shell)
 ;
+; The answer is the thread group's id, not the slot: a thread's getpid() has to
+; name the process it belongs to, or two threads of one program would disagree
+; about which process they are in. Threads are told apart by SYS_CLONE's return
+; value and joined by waitpid().
+;
 ; EDI/ECX are the scan registers, so save them: only EAX may carry a value
 ; back to user space. sys_getpid used to hand back its loop counter in ECX,
 ; which silently corrupted any caller that kept something there across the
@@ -1851,7 +1976,7 @@ sys_getpid:
         inc ecx
         jmp .gp_find
 .gp_found:
-        mov eax, [edi + TCB_PID]
+        mov eax, [edi + TCB_TGID]
         pop edi
         pop ecx
         iretd
@@ -1960,8 +2085,14 @@ sched_signal_task:
 .sst_kill:
         mov edi, [.sst_tcb]
 
+        ; A kill ends the process, not one of its threads: the others would
+        ; otherwise keep running in an address space this path is about to
+        ; release.
+        call sched_kill_group_mates
+        mov edi, [.sst_tcb]
+
         ; Destroy the target's windows/surfaces.
-        mov eax, [edi + TCB_PID]
+        mov eax, [edi + TCB_TGID]
         call gui_cleanup_pid
 
         ; Release the memory the target owned. It never runs its own exit path,
@@ -1994,12 +2125,12 @@ sched_signal_task:
         mov dword [edi + TCB_USTACK], 0 ; see sched_exit_task: no double release
 
         mov eax, [edi + TCB_CR3]
-        mov ecx, [edi + TCB_PID]
+        mov ecx, [edi + TCB_TGID]
         call vm_release_all
 .sst_kill_no_mem:
-        mov ecx, [edi + TCB_PID]
+        mov ecx, [edi + TCB_TGID]
         call vm_free_table
-        mov eax, [edi + TCB_PID]
+        mov eax, [edi + TCB_TGID]
         call task_args_free
 
         ; Free the signal handler table page (allocated lazily by sigaction)
@@ -2739,7 +2870,7 @@ sched_deliver_signals:
 
         ; All others (SIGKILL, SIGTERM, SIGINT, SIGALRM, etc.): terminate
         ; Destroy the task's windows/surfaces before recycling the TCB.
-        mov eax, [ebx + TCB_PID]
+        mov eax, [ebx + TCB_TGID]
         call gui_cleanup_pid
         ; Free the kernel stack page if allocated. A self-delivery runs on that
         ; very page, so it must stay allocated until the caller has switched
@@ -3154,6 +3285,8 @@ sys_taskname:
 ; be done once CR3 no longer points at it, which is exactly here.
 ;---------------------------------------
 sched_apply_cr3:
+        push edx
+        mov  edx, eax                   ; the incoming task, for its TLS view
         test eax, eax
         jz   .sac_master
         mov  eax, [eax + TCB_CR3]
@@ -3167,10 +3300,19 @@ sched_apply_cr3:
 .sac_release:
         mov  eax, [pd_deferred_free]
         test eax, eax
-        jz   .sac_done
+        jz   .sac_view
         mov  dword [pd_deferred_free], 0
         call paging_free_pd
+.sac_view:
+        ; A thread-local base slot lives in the image, which the whole thread
+        ; group shares, so it only means anything for the thread running now.
+        ; Every path into a task comes through here, so this is where the
+        ; incoming thread's view is installed.
+        test edx, edx
+        jz   .sac_done
+        call tls_apply_view
 .sac_done:
+        pop  edx
         ret
 
 ;---------------------------------------
@@ -3346,6 +3488,7 @@ sys_fork:
         mov  edi, [fork_child_tcb]
         mov  eax, [fork_child_pid_slot]
         mov  [edi + TCB_PID],    eax        ; child PID = slot index
+        mov  [edi + TCB_TGID],   eax        ; and it leads its own thread group
         mov  eax, [fork_parent_pid]
         mov  [edi + TCB_PPID],   eax        ; parent PID
         mov  dword [edi + TCB_STATE], TASK_READY
@@ -3541,3 +3684,297 @@ sys_fork:
         mov  dword [esp + 28], -1
         popad
         iretd
+
+;=======================================================================
+; sys_clone — SYS_CLONE (204) — a second thread in the calling process
+;
+;   In : EBX = entry point (ring 3 EIP)
+;        ECX = initial user ESP, a stack the caller prepared
+;        EDX = flags (must be 0: every thread this tree makes shares memory)
+;   Out: EAX = the new thread's id to the caller, 0 in the new thread
+;
+; A thread is a task that shares its process: the same address space, the same
+; descriptor page, the same handle table, token, signal table, break and vm
+; areas. What is its own is a kernel stack, a user stack and its thread-local
+; blocks. That is why this is a copy of the caller's TCB rather than of the
+; process's: everything shared is already the same pointer, and every field
+; overwritten below is one that must not be shared.
+;
+; The entry point and the stack are the caller's choices, so the kernel needs to
+; know nothing about a calling convention: a C caller pushes an argument and a
+; return address on the new stack and names its function, which makes the new
+; thread's first instruction a normal function call. The return address is the
+; thread's own exit, so returning from the function ends the thread.
+;=======================================================================
+sys_clone:
+        pushad
+        mov dword [.cl_kstop], 0
+        mov [.cl_entry], ebx
+        mov [.cl_stack], ecx
+        test edx, edx
+        jnz .cl_fail                    ; no flag is defined yet
+
+        call sched_get_current_task
+        test eax, eax
+        jz .cl_fail                     ; the shell is not a thread
+        mov edi, eax
+        mov [.cl_parent], edi
+
+        mov eax, [.cl_entry]
+        call validate_user_ptr
+        jc .cl_fail
+        mov eax, [.cl_stack]
+        call validate_user_ptr
+        jc .cl_fail
+
+        ; From 1, like every other task: slot 0 is the scheduler's, and a thread
+        ; in it would be handed id 0 - the value clone returns to say "you are
+        ; the child".
+        mov esi, task_table + TCB_SIZE
+        mov edx, 1
+.cl_find_slot:
+        cmp edx, MAX_TASKS
+        jge .cl_fail
+        cmp dword [esi + TCB_STATE], TASK_FREE
+        je .cl_have_slot
+        add esi, TCB_SIZE
+        inc edx
+        jmp .cl_find_slot
+.cl_have_slot:
+        mov [.cl_child_tcb], esi
+        mov [.cl_child_pid], edx
+
+        ; Kernel stack, then the switch frame: a thread that has never run and
+        ; one that was preempted look the same to the scheduler.
+        call pmm_alloc_page
+        test eax, eax
+        jz .cl_fail
+        add eax, 4096
+        mov [.cl_kstop], eax
+        mov esi, eax
+        mov dword [esi - 4],  USER_DS
+        mov ecx, [.cl_stack]
+        mov dword [esi - 8],  ecx       ; ESP3
+        mov dword [esi - 12], 0x200     ; EFLAGS (IF=1)
+        mov dword [esi - 16], USER_CS
+        mov ecx, [.cl_entry]
+        mov dword [esi - 20], ecx       ; EIP
+        xor eax, eax                    ; every general register zero, EAX=0
+        mov ecx, 8
+        lea edi, [esi - 52]
+        cld
+        rep stosd
+        sub esi, 52
+        mov [.cl_kesp], esi
+
+        ; The TCB starts as a copy of the caller's: a thread inherits its
+        ; process. Then every field that must not be shared is written.
+        mov esi, [.cl_parent]
+        mov edi, [.cl_child_tcb]
+        mov ecx, TCB_SIZE / 4
+        rep movsd
+
+        mov edi, [.cl_child_tcb]
+        mov eax, [.cl_child_pid]
+        mov [edi + TCB_PID], eax        ; the thread id
+        mov eax, [.cl_parent]
+        mov eax, [eax + TCB_TGID]
+        mov [edi + TCB_TGID], eax       ; the process it belongs to
+        mov dword [edi + TCB_STATE], TASK_READY
+        mov eax, [.cl_kstop]
+        mov [edi + TCB_KSTACK], eax
+        mov eax, [.cl_kesp]
+        mov [edi + TCB_ESP], eax
+        mov eax, [.cl_stack]
+        mov [edi + TCB_USTACK], eax
+        mov eax, [.cl_entry]
+        mov [edi + TCB_ENTRY], eax
+        ; State that belongs to a running thread, not to the process.
+        mov dword [edi + TCB_EXIT_CODE],   0
+        mov dword [edi + TCB_SIG_PEND],    0
+        mov dword [edi + TCB_ITIMER_VAL],  0
+        mov dword [edi + TCB_ITIMER_INT],  0
+        mov dword [edi + TCB_SAVED_MASK],  0
+        mov dword [edi + TCB_ALARM],       0
+        mov dword [edi + TCB_WAKEUP],      0
+        mov dword [edi + TCB_WAIT_PID],    0
+        mov dword [edi + TCB_WAITOBJ],     0
+        mov dword [edi + TCB_WAITRES],     0
+        mov dword [edi + TCB_WAITKIND],    0
+        mov dword [edi + TCB_WAITR],       0
+        mov dword [edi + TCB_ERRNO],       0
+        mov dword [edi + TCB_SVC],        -1   ; a thread does not run a service
+        mov dword [edi + TCB_TLS_COUNT],   0   ; tls_thread_setup fills it
+        ; Its slot may be recycled: the objects it inherits stay charged to
+        ; whoever created them, exactly as for a task the shell starts.
+        mov eax, [.cl_child_pid]
+        cmp eax, MAX_TASKS
+        jae .cl_no_quota
+        mov dword [obj_owner_live + eax*4], 0
+.cl_no_quota:
+
+        ; Start from the initialised x87 image, not the caller's registers.
+        push edi
+        lea edi, [edi + TCB_FPU_AREA]
+        mov esi, fpu_init_image
+        mov ecx, FPU_AREA_SIZE / 4
+        cld
+        rep movsd
+        pop edi
+
+        lea edi, [edi + TCB_NAME]
+        mov esi, .cl_name
+        mov ecx, 15
+.cl_name_copy:
+        lodsb
+        stosb
+        test al, al
+        jz .cl_name_done
+        dec ecx
+        jnz .cl_name_copy
+        mov byte [edi], 0
+.cl_name_done:
+
+        mov edi, [.cl_child_pid]
+        call tls_thread_setup
+
+        inc dword [task_count]
+        mov eax, [.cl_child_pid]
+        mov [esp + 28], eax
+        popad
+        iretd
+
+.cl_fail:
+        mov eax, [.cl_kstop]
+        test eax, eax
+        jz .cl_fail_done
+        sub eax, 4096
+        call pmm_free_page
+.cl_fail_done:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+.cl_name:      db "thread", 0
+.cl_entry:     dd 0
+.cl_stack:     dd 0
+.cl_parent:    dd 0
+.cl_child_tcb: dd 0
+.cl_child_pid: dd 0
+.cl_kstop:     dd 0
+.cl_kesp:      dd 0
+
+;=======================================================================
+; sys_thread_exit — SYS_THREAD_EXIT (205) — end this thread, not the process
+;   In : EBX = status
+;
+; The thread becomes a zombie its joiner collects with SYS_WAITPID, and gives
+; back what only it owns: its kernel stack and its thread-local blocks. The
+; process's address space, descriptors and handles stay, because its other
+; threads are still using them.
+;
+; Two cases are not a thread exit at all. Called by the group's leader, there is
+; no one left to outlive it, and called by the last live thread - a process
+; whose every other thread has already exited - nothing would be left to run, so
+; both leave through exit() and take the process down properly.
+;=======================================================================
+sys_thread_exit:
+        mov [thread_exit_code], ebx
+        call sched_get_current_task
+        test eax, eax
+        jz .ste_process                 ; no task: the shell's direct launch
+        mov edi, eax
+        mov eax, [edi + TCB_TGID]
+        cmp eax, [edi + TCB_PID]
+        je .ste_process                 ; the leader: exit() semantics
+
+        ; Is any other thread of this process still alive?
+        mov edx, [edi + TCB_TGID]
+        mov ebx, task_table
+        xor ecx, ecx
+.ste_peers:
+        cmp ecx, MAX_TASKS
+        jge .ste_process                ; no: the process ends with this thread
+        cmp dword [ebx + TCB_STATE], TASK_FREE
+        je .ste_peer_next
+        cmp dword [ebx + TCB_STATE], TASK_ZOMBIE
+        je .ste_peer_next
+        cmp ebx, edi
+        je .ste_peer_next
+        cmp [ebx + TCB_TGID], edx
+        jne .ste_peer_next
+        jmp .ste_thread
+.ste_peer_next:
+        add ebx, TCB_SIZE
+        inc ecx
+        jmp .ste_peers
+
+.ste_thread:
+        ; Leave the kernel stack this thread owns before it is released.
+        mov esp, KERNEL_STACK
+        call sched_exit_thread
+        call sched_force_switch
+        jmp shell_main
+
+.ste_process:
+        mov ebx, [thread_exit_code]
+        jmp sys_exit
+
+thread_exit_code: dd 0
+
+;---------------------------------------
+; sched_exit_thread - retire one thread, keeping its process
+;   In : EDI = that thread's TCB, [thread_exit_code] = its status
+;
+; The caller has already moved to the shared kernel stack. What is released here
+; is only what the thread alone owned; the TCB stays as a zombie, holding the
+; status, until a join collects it or the process ends.
+;---------------------------------------
+sched_exit_thread:
+        pushad
+        mov [.set_tcb], edi
+        call tls_release_thread
+        mov edi, [.set_tcb]
+        mov eax, [edi + TCB_KSTACK]
+        test eax, eax
+        jz .set_zombie
+        sub eax, 4096
+        call pmm_free_page
+        mov dword [edi + TCB_KSTACK], 0
+
+.set_zombie:
+        mov edi, [.set_tcb]
+        mov dword [edi + TCB_STATE], TASK_ZOMBIE
+        mov dword [edi + TCB_ESP], 0
+        mov eax, [thread_exit_code]
+        mov [edi + TCB_EXIT_CODE], eax
+        dec dword [task_count]
+
+        ; --- Wake anyone blocked in waitpid for this thread ---
+        mov esi, [edi + TCB_PID]
+        mov edi, task_table
+        xor edx, edx
+.set_wake:
+        cmp edx, MAX_TASKS
+        jge .set_done
+        cmp dword [edi + TCB_STATE], TASK_BLOCKED
+        jne .set_wake_next
+        mov ebx, [edi + TCB_WAIT_PID]
+        cmp ebx, esi
+        je .set_wake_found
+        cmp ebx, -1                     ; waiting for any child?
+        jne .set_wake_next
+.set_wake_found:
+        mov dword [edi + TCB_WAIT_PID], 0
+        mov dword [edi + TCB_STATE], TASK_READY
+        mov ebx, [edi + TCB_ESP]
+        mov eax, [thread_exit_code]
+        mov [ebx + 28], eax             ; EAX slot of the waiter's pushad frame
+.set_wake_next:
+        add edi, TCB_SIZE
+        inc edx
+        jmp .set_wake
+.set_done:
+        popad
+        ret
+.set_tcb: dd 0

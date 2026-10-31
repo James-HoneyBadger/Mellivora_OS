@@ -291,7 +291,7 @@ M1 does not close until all of these hold, and `make check` keeps them holding:
 | PAE, 64 GiB | 2-level tables, 4 GiB at most, 512 MB tested |
 | PFN database | Bitmap plus buddy order lists |
 | Physical map window | RAM is identity-mapped, so a kernel pointer is a physical address |
-| Regions in a tree | A linked list of `vm_area` per task |
+| Regions in a tree | A linked list of `vm_area` per process: a thread's mappings are recorded in its group's table (`TCB_TGID`), because the address space is the process's |
 | Reserve/commit | `sbrk` and `mmap` commit immediately |
 | Sections | Shared-memory table keyed by name |
 | 2 MiB large pages | None |

@@ -299,6 +299,16 @@ run_case "C program imports from a shared library" \
     $'mvprobe' \
     "MVPROBE_OK" \
     "" "CPU EXCEPTION|MVPROBE_FAIL|not found"
+# M5's threading: SYS_CLONE makes a second task in the calling process, and the
+# C library's mv_thread_create/mv_thread_join turn it into a function call. Four
+# threads run at once and share the heap, the globals and the pid while each has
+# its own stack; a thread that exits itself still reports its status; and 64
+# threads are created and joined one at a time, which is more than there are task
+# slots (128) or mapping records (32) unless each exit gives its own back.
+run_case "threads: one process, many stacks" \
+    $'threadtest' \
+    "THREAD_OK" \
+    "" "CPU EXCEPTION|THREAD_FAIL|PAGE FAULT"
 # The ELF side of the tree: the same runtime and the same link address as every
 # flat program, but left as an ELF32 executable. The loader reads the program
 # headers and copies each PT_LOAD segment to the address in its own header, so

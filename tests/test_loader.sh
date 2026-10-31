@@ -137,6 +137,15 @@ run_case "a library keeps its own thread-local count" "hbx_dll" "LIB_TLS 1" "hbx
 # would print TLS_TASK_FAIL, which the case rejects.
 run_case "thread-local storage starts fresh each launch" \
     "hbx_tls" "TLS_TASK_OK" "hbx_tls" "CPU EXCEPTION|PAGE FAULT|TLS_TASK_FAIL"
+# EXEC.md section 6, the threading half: two threads of one process share the
+# image - and therefore the dword the module reads its base from - but not the
+# block that dword names. Both threads yield eight times and check after every
+# switch that the slot still names their own block and that it still holds their
+# own value, so a kernel that installed the view for the wrong thread, or not at
+# all, prints THREAD_TLS_FAIL and a number instead of THREAD_TLS_OK. The case
+# runs it twice, so a block that survived a launch would show up as well.
+run_case "thread-local storage is per thread" \
+    "hbx_thread" "THREAD_TLS_OK" "hbx_thread" "CPU EXCEPTION|PAGE FAULT|THREAD_TLS_FAIL"
 
 # The refusals, each followed by a program that has to still run: a half-built
 # process would have taken the shell's next command with it.

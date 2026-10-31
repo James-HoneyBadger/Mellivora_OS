@@ -465,8 +465,11 @@ syscall_table:
         ; Interfaces over the Warren (202-203)
         dd sys_log_write        ; 202 SYS_LOG_WRITE
         dd sys_sett             ; 203 SYS_SETT
-        ; Reserved / unimplemented (204..511)
-        times (SYSCALL_MAX - 204) dd syscall_handler.syscall_bad
+        ; Threads (204-205)
+        dd sys_clone            ; 204 SYS_CLONE
+        dd sys_thread_exit      ; 205 SYS_THREAD_EXIT
+        ; Reserved / unimplemented (206..511)
+        times (SYSCALL_MAX - 206) dd syscall_handler.syscall_bad
 
 ;=======================================================================
 ; v10.0 POSIX compatibility syscall implementations (116–140)
@@ -3106,7 +3109,10 @@ sys_exit:
         jnz .exit_is_bg
         ; A forked child must stay a zombie for waitpid and switch to its
         ; parent, not return to the shell. Only shell-launched tasks have
-        ; the -1 "no parent" sentinel.
+        ; the -1 "no parent" sentinel. A thread inherits its group's parent, so
+        ; exit() in a thread of a foreground program takes the foreground path -
+        ; which is right, because sched_exit_task ends the whole group and the
+        ; console is free again.
         cmp dword [edi + TCB_PPID], -1
         jne .exit_is_child
         jmp .exit_is_fg
@@ -3150,7 +3156,7 @@ sys_exit:
         call sched_get_current_task
         test eax, eax
         jz .exit_no_gui_pid
-        mov eax, [eax + TCB_PID]
+        mov eax, [eax + TCB_TGID]
         mov [gui_exit_pid], eax
 .exit_no_gui_pid:
         popad
@@ -3318,7 +3324,7 @@ exec_kernel_line:
         ; exec replaces the address space: the old image's mmap areas go away
         ; with it (POSIX semantics), and their frames are dropped through the
         ; reference counts in case a fork relative still shares them.
-        mov ecx, [eax + TCB_PID]
+        mov ecx, [eax + TCB_TGID]
         mov eax, [eax + TCB_CR3]
         test eax, eax
         jz .ekl_no_vm
@@ -3425,6 +3431,15 @@ sys_execve:
 
 .sev_run:
         mov byte [edi], 0
+        ; exec replaces the image in the process, so the process's other threads
+        ; cannot outlive it: they would wake up in an image they were never
+        ; built for. POSIX says the same thing, in the same order.
+        call sched_get_current_task
+        test eax, eax
+        jz .sev_exec
+        mov edi, eax
+        call sched_kill_group_mates
+.sev_exec:
         mov esi, program_args_buf
         call exec_kernel_line
         jc .sev_fail

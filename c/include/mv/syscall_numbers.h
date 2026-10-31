@@ -213,7 +213,9 @@
 #define SYS_SVC_CONTROL 201
 #define SYS_LOG_WRITE 202
 #define SYS_SETT 203
+#define SYS_CLONE 204
+#define SYS_THREAD_EXIT 205
 
-#define SYS_COUNT 204
+#define SYS_COUNT 206
 
 #endif /* MV_SYSCALL_NUMBERS_H */

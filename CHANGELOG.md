@@ -1,5 +1,80 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: a task is a thread, and TLS is per thread
+
+EXEC.md section 6 asks for thread-local storage per thread and a `clone`/
+`CreateThread` to attach a second thread's blocks to. The tree had neither: a
+task was a process and a thread at once, so `hbx_tls` could only prove that two
+*launches* get different blocks, never that two threads do. Both exist now, and
+building them found the reason TLS could not have worked one thread at a time.
+
+```text
+Lair:/> threadtest
+THREAD_OK
+
+Lair:/> hbx_thread
+hbx: not relocatable, loaded at 0x00500000
+THREAD_TLS_OK
+```
+
+- **`SYS_CLONE` (204) makes a second task in the calling process.** It takes an
+  entry point, a stack pointer and a flags word that must be zero, and copies the
+  caller's TCB rather than building a fresh one - a thread *is* its process, so
+  the address space, the descriptor page, the handle table, the token, the
+  signal table, the break and the vm areas are already the same values. What it
+  overrides is what must not be shared: the id, the kernel stack, the user
+  stack, the wait and timer state, the FPU image, the service slot and the TLS
+  view. It starts at the entry point the caller named with the stack the caller
+  built, so the kernel needs no calling convention: `c/rt/thread.c` puts the
+  argument and a return address on the new stack, the thread's first instruction
+  is an ordinary call, and its `return` lands on the thread exit.
+- **`SYS_THREAD_EXIT` (205) ends one thread without ending the process.** It
+  frees the kernel stack and the thread-local blocks, leaves a zombie holding
+  the status for `SYS_WAITPID` - which is the join - and switches away. The
+  last live thread and the group's leader both leave through `exit()` instead,
+  because nothing would be left to run.
+- **A process is a thread group.** `TCB_TGID` names the leader, and everything
+  process-shaped is keyed by it: the vm area table, the teardown sweep, the
+  argument snapshot, the window reaping, and `getpid`. `exit()` in any thread
+  ends the process, `sched_exit_task` sweeps the other threads before it
+  releases the shared state, and a signal that kills one thread kills the
+  group. A thread's own id stays in `TCB_PID`, which is what `waitpid` looks up.
+- **TLS is per thread, and the base slot is why that needed real work.** A
+  module reads its block with one load from a dword in its image - and every
+  thread of a process shares that image. So the slot can only hold the value
+  true for the thread running now, and each task now carries a **view**: one
+  entry per module naming the slot to write, the block that is this thread's,
+  and the template a later thread copies from. `sched_apply_cr3` installs the
+  incoming view, which is one function because every path into a task already
+  went through it.
+- **Blocks no longer collide, and that was a real bug on the way in.** The
+  allocator took its top from the *task*, so a second thread of one process
+  computed the same address as the first and mapped its block over it: the two
+  threads then shared one block, which is exactly what the new fixture reported
+  before the fix (`THREAD_TLS_FAIL 8`). The top is the group's now, in the
+  leader's TCB, and each thread's blocks continue below the last.
+- **The template is read through the page tables.** It used to be read directly
+  at image-base plus RVA, which only works for an image that happens to be
+  visible in the *loading* address space. `vm_pte_phys` is the honest way, and it
+  is what lets a mapped image and a window copy take the same path.
+- **`tls_setup_task` was called twice per launch.** A duplicated call in the
+  exec path mapped every block twice and leaked the first set; the second write
+  hid it, so nothing failed. One call now.
+- **`c/include/mv/thread.h` is the C shape**: `mv_thread_create` maps a 64 KB
+  stack, builds the call frame and calls `SYS_CLONE`; `mv_thread_join` waits and
+  releases the stack; `mv_thread_exit` leaves the process running.
+- **`threadtest` is the gate** (`make check-runtime`): four threads share the
+  heap, a global and the pid while each has its own stack - the test compares
+  the address of a local across threads - a thread that exits itself still
+  reports its status, and 64 create/join cycles run in one process, which is
+  more than the 128 task slots or the 32 mapping records unless an exit gives
+  its own back.
+- **`hbx_thread` is the TLS gate** (`make check-loader`): an HBX image with a
+  TLS directory starts a second thread, both write their block and then yield
+  eight times, and after every switch each checks that the slot still names its
+  own block and the block still holds its own value. It runs twice, so a block
+  that survived a launch fails it as well.
+
 ## Unreleased - M5: four numbers that were not what they said
 
 The ELF32 utilities ran, and in running they asked the layer underneath for

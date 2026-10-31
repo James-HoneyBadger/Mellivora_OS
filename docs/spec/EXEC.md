@@ -285,21 +285,57 @@ module is read *again* at map time rather than trusting bytes that were true
 before the clear.
 
 **Thread-local storage** (`kernel/tls.inc`). A module that declares a TLS
-directory gets a block of its own in every task that loads it, and the two
+directory gets a block of its own in every *thread* that loads it, and the two
 halves of the contract are filled where each can be known. The *index* is
 assigned while the image is still in the window - the program is module 0 and
 each library takes the next - so it travels with the file copy into both roads.
-The *block* needs the task, so it is made at launch: one page-rounded
-allocation per module, filled from the template and zeroed past it, mapped into
-the task's own address space from the top of the demand zone downwards (images
-are drawn in its first 256 MB, so the two cannot meet), recorded as a vm area
-so fork copies it copy-on-write, and its address written into `base_rva` -
-directly for a window image, through the page tables for a mapped one. A module
-reads `[base_rva]` once and keeps it; there is no per-access kernel call.
+The *block* needs the thread, so it is made when the thread starts: one
+page-rounded allocation per module, filled from the template (read through the
+task's own page tables, so a mapped image works as well as a window copy) and
+zeroed past it, mapped into the thread group's address space from the top of the
+demand zone downwards, one continuing below the last so two threads of a process
+never collide, and recorded as a vm area of the group so exit releases it.
+
+The base slot is where the per-thread part has to be arranged. A module reads it
+with one load - `mov ebx, [base_rva]` - and the slot lives in the image, which
+every thread of a process shares; so the slot can only hold the value that is
+true for the thread running now. Each task therefore carries a **view**: one
+entry per module naming the slot to write, the block that is this thread's, and
+the template a thread created later copies from. `sched_apply_cr3` installs the
+incoming thread's view on every path into a task, which is one function because
+the tree already had exactly one door there. A thread that exits gives back its
+own blocks; the rest wait for the leader.
+
+**Threads** (`kernel/sched.inc`, `SYS_CLONE` 204, `SYS_THREAD_EXIT` 205). A task
+is a thread. `SYS_CLONE` makes a second one in the calling process: the same
+address space, descriptor page, handle table, token, signal table, break and vm
+areas, and its own kernel stack, user stack and thread-local blocks. The group
+is named by `TCB_TGID` - the leader's id - and that is what `getpid` answers,
+what the vm area table is keyed by, and what the teardown sweeps, because all of
+those belong to the process rather than to one thread. `SYS_WAITPID` on a thread
+id is the join: the thread becomes a zombie holding its status, and its kernel
+stack and blocks are released at exit. `exit()` from any thread ends the
+process, which is what the C library's `exit` does; a thread that returns from
+its function reaches `SYS_THREAD_EXIT` instead, so a process is not taken down by
+a worker finishing.
+
+The kernel takes an entry point and a stack pointer and no calling convention:
+`c/rt/thread.c` pushes the argument and a return address on the new stack and
+names the function, so the thread's first instruction is an ordinary call and
+its `return` lands on the thread exit. `make check-runtime` runs `threadtest`
+(four threads sharing the heap, the globals and the pid, each with its own stack,
+plus 64 create/join cycles that would exhaust the task slots or the mapping
+records if either leaked) and `make check-loader` runs `hbx_thread`, which is the
+TLS half: two threads of one image, each checking across eight switches that the
+base slot names its own block and that the block still holds its own value.
 
 What section 6 still asks for and this does not do: unloading (`FreeLibrary`
 and its reference count), delay loading, versioned exports, a library that
-imports another library, and the `PROCESS_ATTACH`/`THREAD_ATTACH` notification. A module that cannot be mapped at launch (out of frames) is
+imports another library, and the `PROCESS_ATTACH`/`THREAD_ATTACH` notification.
+Also not here: detaching a thread, cancellation, thread priorities, and a C
+compiler that can emit a TLS template into a flat image (`__thread` in a program
+built by the host compiler), which is why the per-thread proof is an HBX fixture
+rather than a C one. A module that cannot be mapped at launch (out of frames) is
 reported and skipped: its imports stay unresolved and the first call through
 one faults inside that one task, which the fault path contains.
 
@@ -355,7 +391,11 @@ M5 does not close until:
    base, a PE32 image, a program calling into a shared library (§6), and every
    refusal in section 8 in both formats.)
 3. A program and a library built from the SDK samples load, call across the
-   boundary, use TLS in two threads, and unload in the right order.
+   boundary, and use per-thread TLS in two threads. (**As built:** `hbx_dll`
+   calls into `mvlib.hbl` and the library keeps its own thread-local count;
+   `hbx_thread` runs two threads of one image and checks each one's block across
+   eight switches. Unloading is not implemented, so the "right order" half of
+   this item is still open.)
 4. ASLR: 1 000 launches of the same image produce 1 000 distinct main-image
    bases, and a non-relocatable image reports why it cannot be randomised.
 5. `fork`/`exec`/`waitpid` and `argv_test` pass unchanged
@@ -370,10 +410,10 @@ M5 does not close until:
 | HBX images | Read and enforced: `MVBX` header, CRC-32C, sections, relocations and entry point. A relocatable image is mapped at a random base; a fixed-base one is copied into the window. |
 | PE32 images | Read and enforced: the §2.1 subset, with one refusal per rule. A PE32 image is copied into the window like a fixed-base HBX image, so it is not randomised and cannot import; the unwrapping and the refusal set are what `make check-loader` proves. |
 | Shared libraries | Loaded, bound and mapped: a `dll` image is found in `/lib`, its exports are matched against a program's imports, and it is mapped into the task's own address space. No unloading, no versioning, no delay loading; a library may not import another |
-| TLS per module | A block per module per task, from the module's own template; a library's block is separate from its program's. One block per thread is all this tree has, because a process is one thread |
-| Threading | No `clone`/`CreateThread`: a task is a process and a thread at once, so a second thread's TLS block has nothing to attach to yet |
+| TLS per module | A block per module per *thread*, from the module's own template; a library's block is separate from its program's, and every thread of a process has its own set |
+| Threading | `SYS_CLONE` makes a thread in the calling process (shared address space, descriptors, handles, token and vm areas) and `SYS_THREAD_EXIT` ends one; `mv_thread_create`/`mv_thread_join` in `c/include/mv/thread.h` are the C shape, and `SYS_WAITPID` on a thread id is the join. No detach, no cancellation, no priorities, no `pthread` names |
 | POSIX calls | A shim per call in `c/rt/posix.c` over syscalls this specification does not introduce, with ten headers in `c/include/`. What conforms is listed in [POSIX.md](../POSIX.md), along with the gaps that remain - `struct stat` without a mode, `dup` without a shared offset, no `pipe`/`socket` wrappers, no `pthread` - and the fact that no conformance suite has been run |
-| ASLR | The main image base for a relocatable HBX image, and per-launch randomised heap and stack top. Shared libraries, thread stacks and section views have nothing to randomise yet |
+| ASLR | The main image base for a relocatable HBX image, and per-launch randomised heap and stack top. Shared libraries, thread stacks (mapped by the library, so wherever `mmap` puts them) and section views have nothing to randomise yet |
 | Section-based mapping | Frames are mapped into the task's directory page by page and a page in a writable section is mapped writable; a writable-and-executable section is refused. There is no section object and no execute bit on this page table |
 | Imports/exports | Both directions work: an import is resolved against a real export table, a missing module or symbol fails the load naming `module!symbol` before any process exists, and a module is loaded once however many descriptors name it |
 | Mitigations | DEP and W^X exist ([VMM.md](VMM.md)); no SEH-analogue |

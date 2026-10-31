@@ -248,6 +248,9 @@ SYS_TOKEN_QUERY     equ 200     ; token_query(buf) -> 0/-1
 SYS_SVC_CONTROL     equ 201     ; svc_control(op) -> 0/1/2, -1 if not a service
 SYS_LOG_WRITE     equ 202 ; Write to Chronicle: EBX=level(0..3) ECX=text -> EAX=0/-1
 SYS_SETT          equ 203 ; Config store: EBX=op(0 get,1 set) ECX=path EDX=buf ESI=size
+; Threads: a second task sharing the caller's address space (EXEC.md section 6)
+SYS_CLONE         equ 204 ; clone(entry,stack,flags) -> tid in the caller, 0 in the thread
+SYS_THREAD_EXIT   equ 205 ; thread_exit(status) -> ends this thread, not the process
 ; Object types
 OBJ_TYPE_DIRECTORY  equ 0
 OBJ_TYPE_EVENT      equ 1

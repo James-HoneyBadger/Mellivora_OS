@@ -1577,6 +1577,52 @@ ELFINFO_OK
 `elfinfo` prints the header and the `PT_LOAD` segments of a file, `elfcat` is a
 `cat` with `-n`, and `elfwc` counts lines, words and bytes.
 
+### Threads
+
+`<mv/thread.h>` is the shape a C program wants: a function, an argument, and a
+return value the joiner collects. The thread shares the process - its heap, its
+globals, its open files and its pid - and owns its stack.
+
+```c
+#include <stdio.h>
+#include <mv/thread.h>
+
+static i32 worker(void *arg)
+{
+    int n = (int)(unsigned long)arg;
+
+    mv_thread_yield();          /* let the others run */
+    return n * 2;
+}
+
+int main(void)
+{
+    mv_thread_t t[4];
+    i32 status;
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (mv_thread_create(&t[i], worker, (void *)(unsigned long)i) != 0) {
+            printf("create %d failed\n", i);
+            return 1;
+        }
+    }
+    for (i = 0; i < 4; i++) {
+        mv_thread_join(t[i], &status);
+        printf("thread %d returned %d\n", i, status);
+    }
+    return 0;
+}
+```
+
+`mv_thread_exit(status)` ends one thread and leaves the process running;
+returning from the thread function does the same thing with the return value.
+`exit()` - in any thread - ends the whole process. What a thread does *not* get
+is its own `errno` (`c/include/errno.h` says why) or a `__thread` variable: a C
+compiler cannot emit a TLS template into a flat image, so per-thread storage is
+declared by an image that describes it (see `programs/hbx/hbx_thread.asm` and
+EXEC.md section 6).
+
 > **ELF32 is the container, not the ABI.** These binaries are linked against
 > `c/rt/` and call Mellivora's syscall numbers through `int 0x80`, with
 > Mellivora's semantics. A binary built for Linux - glibc, Linux's own syscall
@@ -1666,7 +1712,7 @@ newline_str: db 10, 0
 
 ## Complete Syscall Table
 
-Quick reference for all 204 syscalls. See `programs/syscalls.inc` for the authoritative list.
+Quick reference for all 206 syscalls. See `programs/syscalls.inc` for the authoritative list.
 
 | # | Name | EBX | ECX | EDX | Returns |
 | --- | --- | --- | --- | --- | --- |

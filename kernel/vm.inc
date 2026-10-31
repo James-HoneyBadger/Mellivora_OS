@@ -3,7 +3,9 @@
 ;
 ; Implements the contract in docs/spec/VMM.md for the 32-bit tree:
 ;   * user mappings live in the demand zone (128..512 MB)
-;   * every mapping is recorded in a per-task vm_area table
+;   * every mapping is recorded in a per-process vm_area table; a process's
+;     threads share it, so the table is keyed by the thread group (TCB_TGID)
+;     and a thread that maps or unmaps is recorded under its group
 ;   * anonymous mappings are demand-zero: pages are allocated and zeroed on
 ;     first touch, with the area's protection, by the page-fault handler
 ;   * permissions come from PROT_* at map time and are re-applied by
@@ -188,7 +190,7 @@ vm_find_area:
         call sched_get_current_task
         test eax, eax
         jz .vfa_none
-        mov ecx, [eax + TCB_PID]
+        mov ecx, [eax + TCB_TGID]
         call vm_area_base
         test eax, eax
         jz .vfa_none
@@ -230,7 +232,7 @@ vm_free_slot:
         call sched_get_current_task
         test eax, eax
         jz .vfs_none
-        mov ecx, [eax + TCB_PID]
+        mov ecx, [eax + TCB_TGID]
         call vm_area_base
         test eax, eax
         jz .vfs_none
@@ -272,7 +274,7 @@ vm_overlaps:
         call sched_get_current_task
         test eax, eax
         jz .vo_free
-        mov ecx, [eax + TCB_PID]
+        mov ecx, [eax + TCB_TGID]
         call vm_area_base
         test eax, eax
         jz .vo_free
@@ -327,7 +329,7 @@ vm_gap:
         call sched_get_current_task
         test eax, eax
         jz .vg_fail
-        mov eax, [eax + TCB_PID]
+        mov eax, [eax + TCB_TGID]
         imul eax, VM_AREA_SIZE
         mov eax, [vm_next + eax]
         test eax, eax
@@ -377,7 +379,7 @@ vm_gap:
         call sched_get_current_task
         test eax, eax
         jz .vg_commit
-        mov edx, [eax + TCB_PID]
+        mov edx, [eax + TCB_TGID]
         imul edx, VM_AREA_SIZE
         mov eax, [.vg_end]
         mov [vm_next + edx], eax
@@ -875,7 +877,7 @@ vm_record_anon:
         call sched_get_current_task
         test eax, eax
         jz .vrec_none
-        mov edi, [eax + TCB_PID]
+        mov edi, [eax + TCB_TGID]
         mov eax, [esp + 28]                 ; base
         mov ecx, [esp + 24]                 ; pages
         mov edx, [esp + 20]                 ; prot
@@ -1013,6 +1015,56 @@ vm_release_area:
         pop ebx
         pop eax
         ret
+
+;---------------------------------------
+; vm_unrecord_for_pid - drop one area record, releasing its frames
+;   In : EAX = page directory, EBX = base address, EDI = task id
+;   Out: EAX = 1 when a record was found and released, 0 otherwise
+;
+; A thread's thread-local block is recorded in its group's table, because the
+; table belongs to the process; when that thread exits, its blocks are released
+; now rather than at process teardown, so a program that creates and joins many
+; threads does not fill the table or hold frames it cannot reach.
+;---------------------------------------
+vm_unrecord_for_pid:
+        pushad
+        mov [.vur_pd], eax
+        mov [.vur_base], ebx
+        mov ecx, edi
+        call vm_area_base
+        test eax, eax
+        jz .vur_none
+        mov esi, eax
+        mov ecx, VM_AREAS_PER_TASK
+.vur_loop:
+        mov eax, [esi + VMA_START]
+        cmp eax, [.vur_base]
+        je .vur_found
+        add esi, VM_AREA_SIZE
+        dec ecx
+        jnz .vur_loop
+.vur_none:
+        mov dword [esp + 28], 0
+        popad
+        ret
+.vur_found:
+        mov eax, [.vur_pd]
+        mov ebx, [esi + VMA_START]
+        mov ecx, [esi + VMA_PAGES]
+        call vm_release_area_frames
+        xor eax, eax
+        mov [esi + VMA_START], eax
+        mov [esi + VMA_PAGES], eax
+        mov [esi + VMA_PROT], eax
+        mov [esi + VMA_SECTOR], eax
+        mov [esi + VMA_BLOCKS], eax
+        mov [esi + VMA_FLAGS], eax
+        mov [esi + VMA_END], eax
+        mov dword [esp + 28], 1
+        popad
+        ret
+.vur_pd:   dd 0
+.vur_base: dd 0
 
 ;---------------------------------------
 ; sys_mmap (120) - map anonymous memory
