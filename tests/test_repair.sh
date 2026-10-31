@@ -146,5 +146,29 @@ else
     fail "a check-only repair changed the volume it checked"
 fi
 
+# `repair` twice in one boot is a supported thing to type, and `repair fix` runs
+# the walk twice by itself. The counts are accumulated by the walk, so a run
+# that does not clear them reports the second pass added to the first: twice the
+# entries and twice the blocks, which then reads as every block claimed twice.
+# The trailing `echo` is what says the second report had been printed: --expect
+# can only ask for text to be present, so waiting on REPAIR_ alone would stop
+# the machine after the first run's report.
+out="$work/twice.txt"
+printf '  %-34s ' "a second check counts the same"
+python3 "$DRIVE" "$copy" $'repair\nrepair' --then "echo TWICE_DONE" --wait 40 \
+    --expect REPAIR_ --expect TWICE_DONE --out "$out" >/dev/null 2>&1 \
+    || fail "repair did not run twice"
+# Each report is one line, so the number of count lines is the number of runs
+# that reported, and they all have to name the same volume.
+reports="$(grep -o 'entries [0-9]*  blocks [0-9]*' "$out" | sort)"
+if [ "$(printf '%s\n' "$reports" | grep -c . || true)" -lt 2 ]; then
+    fail "repair did not report twice in one boot"
+fi
+if [ "$(printf '%s\n' "$reports" | sort -u | grep -c . || true)" -ne 1 ]; then
+    printf '%s\n' "$reports" >&2
+    fail "two checks of one volume disagreed about its size"
+fi
+echo PASS
+
 printf '  PASS  a corrupted volume was found, repaired and verified\n'
 exit 0

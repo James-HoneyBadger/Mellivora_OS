@@ -624,6 +624,14 @@ FD_ENTRY_SIZE       equ 32
 FD_FLAG_CLOSED      equ 0
 FD_FLAG_READ        equ 1
 FD_FLAG_WRITE       equ 2
+; Set only by fd_write, when a write extends the file. fd_close persists the
+; descriptor's size into the directory entry only for a handle that grew the
+; file itself: a handle that never wrote through fd_write still holds the size
+; it saw at open, and writing that back would undo whatever wrote the file in
+; the meantime (SYS_FWRITE replaces the whole entry, for one). It used to write
+; the stale number unconditionally, so a file written through stdio and then
+; closed came back with the length it had when it was opened - zero.
+FD_FLAG_DIRTY       equ 0x80000000
 
 ; A task's private fd page (4 KB) holds BOTH fd views:
 ;   offset 0    legacy HBFS fd_table  (FD_MAX * FD_ENTRY_SIZE = 256 bytes)

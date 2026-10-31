@@ -287,7 +287,9 @@ and compares what the tree claims with the allocation bitmap.
 really goes wrong - a needed block marked free, an unowned block marked used,
 and a free count that no longer describes the bitmap - and asserts that
 `repair` finds all three, `repair fix` repairs them, a second boot still calls
-the volume clean, and `tools/fsck_hbfs.py` agrees afterwards.
+the volume clean, and `tools/fsck_hbfs.py` agrees afterwards. It also runs
+`repair` twice in one boot and requires the two reports to count the same
+volume: the counters belong to a walk, not to the boot.
 
 The walk borrows the bitmap as its own scratch (referenced bits are cleared as
 they are met, so what remains set is exactly the leaks), and nothing is written

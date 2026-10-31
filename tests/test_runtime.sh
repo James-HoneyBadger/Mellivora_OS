@@ -316,7 +316,7 @@ run_case "ELF32 program: header, segments, entry" \
 # zeros, which a count of 0 for each file would have shown as a pass.
 run_case "ELF32 program: files counted" \
     $'elfwc /docs/readme.txt /docs/notes.txt' \
-    "2676 3737 total" \
+    "67     400    2676|88     540    3737|155     940    6413 total" \
     "" "CPU EXCEPTION|elfwc:"
 # And the same file printed, numbered: getopt, argv, and a read loop over
 # something bigger than the buffer it reads in.

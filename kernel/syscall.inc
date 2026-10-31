@@ -974,8 +974,12 @@ sys_ftruncate:
         mov [esi + 16], eax
 
 .ftr_update_size:
-        ; Update size in fd entry
+        ; Update size in fd entry, and mark the handle as the one that set it:
+        ; fd_close only writes a descriptor's size back to the directory for a
+        ; handle that changed it, so without this a truncate is a change the
+        ; close cannot see and the old length returns at the next open.
         mov [esi + 4], ecx
+        or  dword [esi], FD_FLAG_DIRTY
         mov dword [esp + 28], 0
         popad
         iretd

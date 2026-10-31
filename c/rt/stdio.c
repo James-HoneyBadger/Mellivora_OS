@@ -722,8 +722,12 @@ static int format_into(out_t *o, const char *fmt, va_list ap)
                        precision, pad, left);
             break;
         case 'p':
+            /* 0x plus eight digits, zero filled. The fill comes from the '0'
+             * flag, which out_number only honours when no precision is asked
+             * for - asking for one digit here suppressed the padding and %p
+             * printed 0x1234 for 0x00001234. */
             out_text(o, "0x");
-            out_number(o, va_arg(ap, u32), "", 16, 0, 8, 1, '0', 0);
+            out_number(o, va_arg(ap, u32), "", 16, 0, 8, 0, '0', 0);
             break;
         case 's': {
             const char *s = va_arg(ap, const char *);

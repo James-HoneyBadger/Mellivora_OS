@@ -1,5 +1,49 @@
 # Mellivora OS - Changelog
 
+## Unreleased - M5: four numbers that were not what they said
+
+The ELF32 utilities ran, and in running they asked the layer underneath for
+answers no flat program had asked for. Four of the answers were wrong: the
+descriptor an open returned, the length a close wrote back, the digits `%p`
+printed, and the count a second `repair` reported.
+
+- **`fd_open` handed back the address of the path instead of a slot number.**
+  The free-slot scan counts in EBX and `hbfs_enter_path` takes the path in EBX,
+  so the second overwrote the first and the "descriptor" returned to the caller
+  was a pointer into the program's own command line. Every field of the entry
+  was then written to `fd_table + path * 32` - outside the table, usually
+  outside RAM - and every later read or write was refused, because a number
+  that large is not a descriptor. A file could be opened and never read, which
+  is what `elfwc` did with `/docs/readme.txt`. The slot is parked before the
+  path is loaded now, and the failure path leaves the directory it entered.
+- **A close wrote back a length the handle had not chosen.** `fd_close`
+  persisted the descriptor's size into the directory entry for any handle
+  opened for writing, and the number in a descriptor is only the file's length
+  if *that* handle grew it. `fflush` replaces the whole entry through
+  `SYS_FWRITE`, so by the time stdio closed the stream the descriptor's number
+  was older than the file's, and the write that had just landed was undone: a
+  file created and written by one `fopen` came back with the length it had when
+  it was opened - zero. A descriptor now records that it changed the size
+  (`FD_FLAG_DIRTY`, set where the file grows in `fd_write` and where
+  `ftruncate` sets one), and only such a handle writes its size back.
+- **`%p` printed `0x1234` for `0x00001234`.** The conversion asked
+  `out_number` for a one-digit precision, and a precision suppresses the `0`
+  flag that would have padded to the width - so the pointer came out unpadded.
+  `crtdemo` asserted `0x00001234` and could not pass while that was true.
+- **`repair` added this run's counts to the last run's.** The counters are
+  accumulated by the walk, and a boot can walk twice: `repair` twice is a
+  supported thing to type, and `repair fix` runs the walk twice itself. The
+  second report therefore claimed twice the entries, and every block came out
+  claimed twice - a healthy volume told `REPAIR_TROUBLE`. The counters are
+  cleared at the start of a scan rather than only at declaration.
+
+`make check-runtime` covers all four (the `crtdemo` case pins `%p`, and the
+cases that read a file through a descriptor pin the other two), and
+`make check-repair` now runs `repair` twice in one boot and requires the two
+reports to count the same volume. `elfwc`'s case asserts each file's own
+lines, words and bytes as well as the total, so a count that collapses to zero
+fails rather than adding up.
+
 ## Unreleased - M5: an ELF32 image runs from its own program headers
 
 The loader has described a second container since M5 opened, but nothing had

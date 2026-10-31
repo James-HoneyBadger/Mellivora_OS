@@ -317,6 +317,17 @@ repair_pass:
 repair_scan:
         call hbfs_require_writable
         jc .rs_refused
+        ; Every counter below is accumulated by the walk, and a walk is not the
+        ; only one this boot will run: `repair` twice is a supported thing to
+        ; type, and a fix runs the walk twice itself. They are cleared here
+        ; rather than only at declaration, or the second run adds its counts to
+        ; the first and a healthy volume is reported as having twice the entries
+        ; and every block claimed twice.
+        mov dword [repair_ref_total], 0
+        mov dword [repair_missing],   0
+        mov dword [repair_bad],       0
+        mov dword [repair_shared],    0
+        mov dword [repair_entries],   0
         call hbfs_load_bitmap
         jc .rs_unreadable
         call repair_popcount

@@ -1267,27 +1267,30 @@ fd_open:
         inc ebx
         jmp .find_fd
 .got_fd:
-        ; The path may name a directory: enter it, look the final component up
-        ; there, and leave once the entry's fields have been copied into the fd.
+        ; The free slot number and the path both want EBX - hbfs_enter_path
+        ; takes the path there - so the slot is parked first. Using EBX for
+        ; both made the number handed back to the caller the *address* of the
+        ; path string: every field of the descriptor was written to
+        ; fd_table + path * 32, outside the table and usually outside RAM, and
+        ; every later read or write of that "fd" was refused because the
+        ; number was larger than FD_MAX. A file could be opened and never read.
+        mov  [.fd_slot], ebx
         push esi
         mov  ebx, esi
         call hbfs_enter_path
         pop  esi
         test eax, eax
         jnz  .no_fd
-        push ebx
         mov  esi, path_base_buf
         call hbfs_find_file
-        pop  ebx
         jc   .no_fd_leave
 
         ; Permissions are enforced here because every open funnels through
         ; this point: the legacy syscall, the VFS backends and the loader.
         ; The stored mode says who may read and write, the caller's effective
         ; uid/gid decides which triplet applies, and root is not held to it.
-        ; EDI is the directory entry from the search, and hbfs_check_access
-        ; overwrites it, so it is preserved around the check.
-        push ebx                        ; EBX is the free fd slot: keep it
+        ; EDI is the directory entry from the search, and it is preserved
+        ; because the descriptor below is filled from it.
         mov ebx, HBFS_ACC_READ
         mov eax, [.fd_mode]
         test eax, FD_FLAG_WRITE
@@ -1295,10 +1298,10 @@ fd_open:
         or ebx, HBFS_ACC_WRITE
 .fd_acc_check:
         call hbfs_access_current        ; EDI = entry, EBX = bits
-        pop ebx
         test eax, eax
-        jnz .no_fd
+        jnz .no_fd_leave                ; the directory was entered: leave it
 
+        mov ebx, [.fd_slot]
         mov eax, ebx
         imul eax, FD_ENTRY_SIZE
         mov ecx, [.fd_mode]
@@ -1336,6 +1339,7 @@ fd_open:
         mov eax, -1
         ret
 .fd_mode: dd 0
+.fd_slot: dd 0
 
 fd_read:
         pushad
@@ -1492,6 +1496,7 @@ fd_write:
         cmp ecx, [fd_table + eax + 4]
         jle .fw_no_grow
         mov [fd_table + eax + 4], ecx     ; extend file size
+        or  dword [fd_table + eax], FD_FLAG_DIRTY
 .fw_no_grow:
         mov [esp + 28], edx              ; return bytes written via EAX
         popad
@@ -1520,10 +1525,14 @@ fd_close:
         mov eax, ebx
         imul eax, FD_ENTRY_SIZE
 
-        ; If opened for writing, persist updated file size to directory.
-        ; A read-write handle counts: testing for equality with FD_FLAG_WRITE
-        ; silently dropped the size update for O_RDWR opens.
-        test dword [fd_table + eax], FD_FLAG_WRITE
+        ; Only a handle that grew the file itself persists its size into the
+        ; directory. A write-opened handle that never called fd_write still
+        ; carries the size it saw at open, and an open cannot be assumed to
+        ; still describe the entry: SYS_FWRITE replaces the whole entry, so by
+        ; close time the descriptor's number is older than the file's. Writing
+        ; it back shrank every file stdio had just written to its length at
+        ; open - zero for a file created by the same fopen().
+        test dword [fd_table + eax], FD_FLAG_DIRTY
         jz   .fcl_mark_closed
 
         ; Save start_block and file_size from FD entry
