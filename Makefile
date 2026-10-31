@@ -189,7 +189,8 @@ C_USER_RT_OBJS = $(C_RT_OBJS) $(C_OBJ_DIR)/rt/stdlib.o \
                  $(C_OBJ_DIR)/rt/stdio.o $(C_OBJ_DIR)/rt/malloc.o \
                  $(C_OBJ_DIR)/rt/utf.o $(C_OBJ_DIR)/rt/posix.o \
                  $(C_OBJ_DIR)/rt/iface.o $(C_OBJ_DIR)/rt/args.o \
-                 $(C_OBJ_DIR)/rt/thread.o $(C_OBJ_DIR)/rt/start.o
+                 $(C_OBJ_DIR)/rt/thread.o $(C_OBJ_DIR)/rt/time.o \
+                 $(C_OBJ_DIR)/rt/start.o
 
 # The kernel module: a C subsystem linked at the cmod slot (kernel/data.inc).
 CMOD_OBJS = $(C_OBJ_DIR)/kmod/kmod.o $(C_RT_OBJS)

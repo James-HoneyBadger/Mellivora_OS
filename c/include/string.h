@@ -33,6 +33,16 @@ char  *strncat(char *dst, const char *src, size_t n);
 int    strcmp(const char *a, const char *b);
 int    strncmp(const char *a, const char *b, size_t n);
 
+/*
+ * The C locale's collation: byte order. locale.h promises these, and a program
+ * that sorts with them gets an order it can predict; a locale whose collation
+ * order is not byte order is a later wave (docs/POSIX.md).
+ */
+int    strcoll(const char *a, const char *b);
+
+/* strxfrm for the C locale: the transformed string is the string itself. */
+size_t strxfrm(char *dst, const char *src, size_t n);
+
 char  *strchr(const char *s, int c);
 char  *strrchr(const char *s, int c);
 char  *strstr(const char *haystack, const char *needle);

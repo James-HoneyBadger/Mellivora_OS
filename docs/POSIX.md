@@ -65,6 +65,8 @@ Verified by `posixtest` on every `make check-runtime` run:
 | `signal` + `kill` to self with `SIG_IGN` | `SYS_SIGACTION`, `SYS_KILL` |
 | `setlocale(LC_ALL, "C")` succeeds; an absent locale returns NULL | There is one locale and it is the C locale |
 | `toupper`, `isdigit`, `isspace` and the rest | Table-free ASCII classifiers in the runtime |
+| `strcoll`/`strxfrm` sort by byte order | The C locale's collation, defined rather than absent; `localetest` proves it |
+| `localtime` is UTC plus the stored offset, and `strftime %Z` names it | `<time.h>` reads `\Registry\Machine\System\TimeZone` from the Sett every call, so a change takes effect without a reboot; `localetest` proves the offset, the inverse (`mktime`) and a negative offset crossing midnight |
 
 ## 3. What does not conform, and why
 
@@ -83,7 +85,8 @@ closed; the rest are here so a port knows what to expect.
 | No `pthread_*` | A threaded POSIX program cannot build its threads with the standard names | Threads and their TLS are real (`SYS_CLONE`, `mv_thread_create` in `c/include/mv/thread.h`); what is missing is the `pthread` wrapper - the names, `pthread_t`, `pthread_join` returning a `void *` - and a compiler that can emit a TLS template into a flat image |
 | `errno` is one variable per program, not per thread | Two threads in one call path share it | The kernel's errno is per thread (a thread is a task); the library's lvalue is a single variable because per-thread C storage needs the TLS model described above |
 | No `getrlimit`/`setrlimit`, no `umask`, no `nice` | Limits cannot be queried or changed | Nothing in the kernel exposes them yet |
-| One locale: `"C"` | No collation, no case folding outside ASCII, no message catalogues | Multi-byte collation is a data and library project |
+| One locale: `"C"` | No case folding outside ASCII, no message catalogues | A non-C collation order is a data and library project |
+| A time zone is an offset, not a database | No DST rule, no historical zones; `tm_isdst` is always 0 | tzdata plus the rules that use it is a later wave, and an offset that is written down is better than a database nobody updates |
 | No `#!/bin/sh`; scripts are `.bat` | A POSIX shell script does not run | EXEC.md section 7 write-up; the loader's interpreter line is not implemented |
 | No `dirent.h`, no `readdir` | Directory listing is `SYS_READDIR` only | The VFS has a directory iterator but no POSIX-shaped wrapper yet |
 | `open` on a `/tmp` file with `O_WRONLY` creates it | A write-open without `O_CREAT` can create | tmpfs has no separate create call; documented rather than hidden |

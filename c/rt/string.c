@@ -81,6 +81,27 @@ u32 strlen(const char *s)
     return n;
 }
 
+/* The C locale sorts by byte order, which is what strcmp already does. */
+int strcoll(const char *a, const char *b)
+{
+    return strcmp(a, b);
+}
+
+/* And its transformed form is the string unchanged: strxfrm copies at most
+ * n bytes, and always reports the full length so a caller can size a buffer. */
+size_t strxfrm(char *dst, const char *src, size_t n)
+{
+    size_t len = strlen(src);
+
+    if (dst != NULL && n > 0) {
+        size_t copy = (len < n - 1) ? len : n - 1;
+
+        memcpy(dst, src, copy);
+        dst[copy] = '\0';
+    }
+    return len;
+}
+
 int strcmp(const char *a, const char *b)
 {
     while (*a && *a == *b) {

@@ -295,6 +295,12 @@ run_case "M5 exit criterion: the application" \
     $'mvapp' \
     "MVAPP_OK runs=|sum=7" \
     "" "CPU EXCEPTION|MVAPP_FAIL|fault|not found"
+# The locale, collation and time-zone contract POSIX.md states: one locale, byte
+# order, and an offset from the Sett that localtime applies and strftime names.
+run_case "locale, collation and the time zone" \
+    $'localetest' \
+    "LOCALE_OK" \
+    "" "CPU EXCEPTION|LOCALE_FAIL|fault"
 # The rest of what a thread can be told: detach (its join fails because nothing
 # was kept), priorities (the call reports the value it replaced), and cancel (a
 # request the thread observes at a cancellation point, so a joiner collects
