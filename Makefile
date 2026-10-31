@@ -1108,3 +1108,6 @@ clean:
 	rm -rf .build
 	rm -rf $(dir $(CMOD_BLOB))
 	rm -f $(HBPKG_BIN)
+	# Python leaves these behind; .gitignore already covers them.
+	rm -f .populate_cache
+	rm -rf __pycache__ tests/__pycache__ tools/__pycache__
