@@ -192,6 +192,52 @@ unicode_to_glyph:
         ret
 
 ;-----------------------------------------------------------------------
+; font_selftest - every code point the tree's own text uses has a glyph
+;   Prints FONT_SELFTEST_OK or FONT_SELFTEST_FAIL on COM1. Runs once at boot.
+;
+; unicode_to_glyph is the whole of "does this character draw", and the tree had
+; no check on it: a code point missing from the table renders as '?', which no
+; other test can see because the bytes on the wire are still correct UTF-8. An
+; em dash written in a banner was the one that showed it.
+;-----------------------------------------------------------------------
+font_selftest:
+        push esi
+        mov esi, font_selftest_points
+.fst_loop:
+        lodsd
+        test eax, eax
+        jz .fst_ok
+        call unicode_to_glyph
+        cmp eax, GLYPH_UNKNOWN
+        je .fst_fail
+        jmp .fst_loop
+.fst_ok:
+        mov esi, font_st_ok
+        call serial_print
+        pop esi
+        ret
+.fst_fail:
+        mov esi, font_st_fail
+        call serial_print
+        pop esi
+        ret
+
+font_st_ok:     db "FONT_SELFTEST_OK", 10, 0
+font_st_fail:   db "FONT_SELFTEST_FAIL", 10, 0
+
+; The characters this system's own strings contain, plus the neighbours a
+; terminal program reaches for: accents, Greek, arrows, box drawing, the
+; typographic punctuation and the arithmetic signs.
+font_selftest_points:
+        dd 0x00E9, 0x00FC, 0x00E4, 0x00B7
+        dd 0x03B1, 0x03C0, 0x03A3, 0x03A9
+        dd 0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2026
+        dd 0x2190, 0x2192, 0x2191, 0x2193
+        dd 0x2500, 0x2502, 0x250C, 0x2510, 0x2514, 0x2518, 0x2588
+        dd 0x2260, 0x2264, 0x2265, 0x20AC
+        dd 0
+
+;-----------------------------------------------------------------------
 ; utf8_print - print a UTF-8 string
 ;   In : ESI = NUL-terminated UTF-8
 ;
@@ -303,6 +349,12 @@ unicode_glyph_map:
         dd 0x03C3, 0xE5                ; σ
         dd 0x03C4, 0xF5                ; τ  (as above)
         dd 0x03C6, 0xED                ; φ
+        dd 0x2010, 0x2D                ; hyphen
+        dd 0x2011, 0x2D                ; non-breaking hyphen
+        dd 0x2012, 0xC4                ; figure dash: the box line is the
+        dd 0x2013, 0xC4                ;   closest full-width dash CP437 has
+        dd 0x2014, 0xC4                ; em dash
+        dd 0x2015, 0xC4                ; horizontal bar
         dd 0x2018, 0x91                ; '
         dd 0x2019, 0x92                ; '
         dd 0x201C, 0x93                ; "

@@ -43,7 +43,8 @@ FAULT_RE='CPU EXCEPTION|double fault|triple fault'
 #   - the allocator's register and accounting contract,
 #   - the per-task x87/SSE image,
 #   - the volume cipher, against its FIPS-197 vector,
-#   - the password KDF, against BLAKE2b and two Argon2id vectors.
+#   - the password KDF, against BLAKE2b and two Argon2id vectors,
+#   - the font, for every code point the tree's own text uses.
 REQUIRED_RES=(
     "${BOOT_CPU_RE:-CPU_P4 .*family=15 model=2 step=7 fxsr=1 sse=1 sse2=1}"
     'LOCK_SELFTEST_OK'
@@ -51,6 +52,7 @@ REQUIRED_RES=(
     'FPU_SELFTEST_OK'
     'AES_SELFTEST_OK'
     'ARGON2_SELFTEST_OK'
+    'FONT_SELFTEST_OK'
 )
 
 LOG_DIR="$ROOT/.build"

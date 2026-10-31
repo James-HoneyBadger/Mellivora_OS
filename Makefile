@@ -547,7 +547,12 @@ programs/generated_app_catalog.inc: docs/app-catalog.json tools/generate_launche
 # `make -j check` cannot test an image whose population step is still running
 # (or was never run).
 POPULATE_STAMP = .build/populated.stamp
-POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) $(LIB_BINS) populate.py
+# samples/ and docs/ are content of the image too, so editing one has to rewrite
+# it: without these, a new sample stayed off the image until the stamp was
+# deleted by hand, which is how a test can "pass" against a file that is not
+# there.
+POPULATE_DEPS = $(IMAGE) $(KERNEL_BIN) $(PROG_BINS) $(HBX_BINS) $(PE_FIXTURES) $(LIB_BINS) populate.py \
+                $(wildcard samples/*) $(wildcard docs/*.md) $(wildcard docs/*.json)
 
 $(POPULATE_STAMP): $(POPULATE_DEPS)
 	@mkdir -p $(dir $@)

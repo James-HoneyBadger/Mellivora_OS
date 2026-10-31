@@ -298,6 +298,14 @@ run_case "M5 exit criterion: the application" \
 # A C payload wrapped as an HBX image, importing mv_add from mvlib.hbl and
 # calling it through the import slot the loader patches: the SDK's link step
 # (tools/hbbuild.py) and the shared-library path, together, from C.
+# M5's other half of "built with the SDK and the in-OS toolchain": tcc, running
+# inside the machine, compiles a C source to a flat binary and the shell runs
+# what it wrote. A compiler whose output nobody executes proves nothing, so the
+# case requires the program's own output line.
+run_case "in-OS toolchain: compile and run" \
+    $'source /samples/tcc_build.bat' \
+    "TCC_BUILD_OK" \
+    "" "CPU EXCEPTION|PAGE FAULT|Compile error"
 run_case "C program imports from a shared library" \
     $'mvprobe' \
     "MVPROBE_OK" \

@@ -905,6 +905,11 @@ kernel_entry:
         ; would otherwise only be found by someone choosing that mode.
         call gfx_selftest
 
+        ; The font: every code point the tree's own text uses has a glyph. A
+        ; missing one draws '?' and the bytes on the wire still look right, so
+        ; nothing else in the suite can see it.
+        call font_selftest
+
         ; The password function, against a tag the reference implementation
         ; produced. A KDF that is self-consistent and wrong would otherwise be
         ; discovered by a user whose password no longer works.
