@@ -295,6 +295,14 @@ run_case "M5 exit criterion: the application" \
     $'mvapp' \
     "MVAPP_OK runs=|sum=7" \
     "" "CPU EXCEPTION|MVAPP_FAIL|fault|not found"
+# The rest of what a thread can be told: detach (its join fails because nothing
+# was kept), priorities (the call reports the value it replaced), and cancel (a
+# request the thread observes at a cancellation point, so a joiner collects
+# CANCELED rather than a number nobody chose).
+run_case "thread detach, priority and cancel" \
+    $'threadmore' \
+    "THREAD_MORE_OK" \
+    "" "CPU EXCEPTION|THREAD_MORE_FAIL|fault"
 # A C payload wrapped as an HBX image, importing mv_add from mvlib.hbl and
 # calling it through the import slot the loader patches: the SDK's link step
 # (tools/hbbuild.py) and the shared-library path, together, from C.

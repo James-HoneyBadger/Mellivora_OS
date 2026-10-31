@@ -152,3 +152,37 @@ i32 mv_thread_yield(void)
 {
     return mv_syscall(SYS_YIELD, 0, 0, 0, 0, 0);
 }
+
+i32 mv_thread_detach(mv_thread_t id)
+{
+    /* The stack entry is forgotten: nothing will join this thread, so nothing
+     * will collect it, and the kernel recycles the TCB at exit. */
+    u32 size = 0;
+
+    if (mv_syscall(SYS_THREAD_DETACH, (u32)id, 0, 0, 0, 0) != 0) {
+        return -1;
+    }
+    (void)forget_stack(id, &size);
+    return 0;
+}
+
+i32 mv_thread_set_priority(mv_thread_t id, i32 prio)
+{
+    return mv_syscall(SYS_THREAD_SETPRIO, (u32)id, (u32)prio, 0, 0, 0);
+}
+
+i32 mv_thread_cancel(mv_thread_t id)
+{
+    if (mv_syscall(SYS_THREAD_CANCEL, (u32)id, 0, 0, 0, 0) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+i32 mv_thread_testcancel(void)
+{
+    if (mv_syscall(SYS_TESTCANCEL, 0, 0, 0, 0, 0) != 0) {
+        mv_thread_exit(MV_THREAD_CANCELED);
+    }
+    return 0;
+}

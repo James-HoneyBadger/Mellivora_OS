@@ -4,7 +4,7 @@ This file is generated from programs/syscalls.inc.
 Do not edit manually; run: python3 tools/generate_syscalls_json.py
 
 - Source: programs/syscalls.inc
-- Syscall count: 206
+- Syscall count: 210
 
 | Number | Name | Summary |
 | ---: | --- | --- |
@@ -214,3 +214,7 @@ Do not edit manually; run: python3 tools/generate_syscalls_json.py
 | 203 | SYS_SETT | Config store: EBX=op(0 get,1 set) ECX=path EDX=buf ESI=size |
 | 204 | SYS_CLONE | clone(entry,stack,flags) -> tid in the caller, 0 in the thread |
 | 205 | SYS_THREAD_EXIT | thread_exit(status) -> ends this thread, not the process |
+| 206 | SYS_THREAD_DETACH | thread_detach(tid) -> 0/-1, no status is kept for a joiner |
+| 207 | SYS_THREAD_SETPRIO | thread_setprio(tid, prio) -> old prio/-1 |
+| 208 | SYS_THREAD_CANCEL | thread_cancel(tid) -> 0/-1, a request the thread observes |
+| 209 | SYS_TESTCANCEL | testcancel() -> 1 and the request is cleared, or 0 |

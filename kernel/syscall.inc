@@ -468,6 +468,10 @@ syscall_table:
         ; Threads (204-205)
         dd sys_clone            ; 204 SYS_CLONE
         dd sys_thread_exit      ; 205 SYS_THREAD_EXIT
+        dd sys_thread_detach    ; 206 SYS_THREAD_DETACH
+        dd sys_thread_setprio   ; 207 SYS_THREAD_SETPRIO
+        dd sys_thread_cancel    ; 208 SYS_THREAD_CANCEL
+        dd sys_thread_testcancel ; 209 SYS_TESTCANCEL
         ; Reserved / unimplemented (206..511)
         times (SYSCALL_MAX - 206) dd syscall_handler.syscall_bad
 

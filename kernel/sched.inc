@@ -129,7 +129,14 @@ TCB_TLS_VIEW    equ 716     ; TLS_VIEW_MAX entries of TLS_VIEW_SIZE bytes
 TLS_VIEW_MAX    equ 5       ; the program itself plus LIB_MAX_MODULES libraries
 TLS_VIEW_SIZE   equ 16      ; {slot address, block address, template, size}
 
-TCB_SIZE        equ 800     ; 716 + 5 x 16 = 796, rounded to 16 for fxsave
+; What a program can do to a thread after it exists (EXEC.md section 6): detach
+; it so nobody has to join it, cancel it as a request it observes, and set the
+; priority the run queue already orders by.
+TFLAG_DETACHED  equ 1       ; no status is kept: the TCB is recycled at exit
+TFLAG_CANCEL    equ 2       ; a cancel has been requested and not yet observed
+TCB_TFLAGS      equ 800
+
+TCB_SIZE        equ 816     ; 716 + 5 x 16 = 796, then the flags, to 16 for fxsave
 
 
 MAX_TASKS    equ 128         ; v5.0: Doubled from 64
@@ -473,6 +480,17 @@ sched_create_task:
         jge .create_fail
         cmp dword [edi + TCB_STATE], TASK_FREE
         je .found_slot
+        ; A detached thread's slot is reclaimed here rather than in the exit
+        ; path: its thread is still running on the TCB when it dies, so the
+        ; slot is only safe to hand on once nothing is left to run on it.
+        cmp dword [edi + TCB_STATE], TASK_ZOMBIE
+        jne .find_next
+        test dword [edi + TCB_TFLAGS], TFLAG_DETACHED
+        jz .find_next
+        mov dword [edi + TCB_STATE], TASK_FREE
+        mov dword [edi + TCB_PID], 0
+        jmp .found_slot
+.find_next:
         add edi, TCB_SIZE
         inc edx
         jmp .find_slot
@@ -612,6 +630,7 @@ sched_create_task:
         mov [edi + TCB_WAITOBJ],   dword 0
         mov [edi + TCB_WAITRES],   dword 0
         mov [edi + TCB_WAITKIND],  dword 0
+        mov [edi + TCB_TFLAGS],    dword 0
         mov [edi + TCB_WAITR],     dword 0
         mov [edi + TCB_PROCOBJ],   dword 0
         mov [edi + TCB_WAITSET],   dword 0
@@ -1293,8 +1312,13 @@ sys_waitpid:
         cmp [edi + TCB_PID], ebx
         jne .swp_next
 .swp_check_this:
+        ; A detached thread is not joinable, alive or dead: nothing was kept for
+        ; a joiner, and waiting for it would block on a status nobody is owed.
+        test dword [edi + TCB_TFLAGS], TFLAG_DETACHED
+        jnz .swp_fail
         cmp dword [edi + TCB_STATE], TASK_ZOMBIE
         je .swp_reap
+        jmp .swp_next
 .swp_next:
         add edi, TCB_SIZE
         inc ecx
@@ -3780,6 +3804,7 @@ sys_clone:
         mov eax, [.cl_parent]
         mov eax, [eax + TCB_TGID]
         mov [edi + TCB_TGID], eax       ; the process it belongs to
+        mov dword [edi + TCB_TFLAGS], 0 ; a new thread is joinable and uncancelled
         mov dword [edi + TCB_STATE], TASK_READY
         mov eax, [.cl_kstop]
         mov [edi + TCB_KSTACK], eax
@@ -3921,6 +3946,168 @@ sys_thread_exit:
         jmp sys_exit
 
 thread_exit_code: dd 0
+
+;-----------------------------------------------------------------------
+; sched_find_thread - the TCB of another thread of the calling process
+;   In : EBX = thread id, EDI = the caller's TCB
+;   Out: EDI = that thread's TCB, CF clear
+;        CF set - no live thread of this process has that id
+;
+; The leader is not a thread for these calls: detaching or cancelling a process
+; is not what a thread does to itself, and the leader's TCB only leaves through
+; exit(). A tiered check, so a stale id cannot reach a recycled slot: the slot
+; must be live, share the caller's group, and not be the group's leader.
+;-----------------------------------------------------------------------
+sched_find_thread:
+        push eax
+        push ecx
+        push edx
+        mov eax, [edi + TCB_TGID]           ; the caller's process
+        mov edx, task_table
+        xor ecx, ecx
+.sft_loop:
+        cmp ecx, MAX_TASKS
+        jge .sft_no
+        cmp [edx + TCB_PID], ebx
+        jne .sft_next
+        cmp dword [edx + TCB_STATE], TASK_FREE
+        je .sft_no
+        cmp dword [edx + TCB_STATE], TASK_ZOMBIE
+        je .sft_no
+        cmp [edx + TCB_TGID], eax
+        jne .sft_no
+        cmp ebx, eax                        ; the group's leader
+        je .sft_no
+        mov edi, edx
+        clc
+        jmp .sft_out
+.sft_next:
+        add edx, TCB_SIZE
+        inc ecx
+        jmp .sft_loop
+.sft_no:
+        stc
+.sft_out:
+        pop edx
+        pop ecx
+        pop eax
+        ret
+
+;-----------------------------------------------------------------------
+; sys_thread_detach - the thread will never be joined (206)
+;   In : EBX = thread id
+;   Out: EAX = 0, or -1 when no such thread is in this process
+;
+; The flag is read where a thread's death is published: a detached thread's TCB
+; is recycled instead of left as a zombie, so nothing accumulates. Its stack is
+; a mapping of the process and is released with the process; a program that
+; detaches many threads can unmap the stack itself once the thread is done.
+;
+; The dispatcher jumps into a handler, so every one of these ends with iretd -
+; a ret would return into an interrupt frame that is not a call frame.
+;-----------------------------------------------------------------------
+sys_thread_detach:
+        pushad
+        call sched_get_current_task
+        test eax, eax
+        jz .std_fail
+        mov edi, eax
+        call sched_find_thread
+        jc .std_fail
+        or dword [edi + TCB_TFLAGS], TFLAG_DETACHED
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.std_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_thread_setprio - the priority the run queue already orders by (207)
+;   In : EBX = thread id, ECX = priority (PRIO_HIGH..PRIO_IDLE)
+;   Out: EAX = the priority it had, or -1
+;
+; Returning the old value makes the call testable without a second syscall, and
+; the scheduler scans by priority on every pick, so the field is all it takes.
+;-----------------------------------------------------------------------
+sys_thread_setprio:
+        pushad
+        mov [.stp_prio], ecx
+        cmp ecx, PRIO_IDLE
+        ja .stp_fail
+        call sched_get_current_task
+        test eax, eax
+        jz .stp_fail
+        mov edi, eax
+        call sched_find_thread
+        jc .stp_fail
+        mov ecx, [edi + TCB_PRIORITY]
+        mov [.stp_old], ecx
+        mov ecx, [.stp_prio]
+        mov [edi + TCB_PRIORITY], ecx
+        mov eax, [.stp_old]
+        mov [esp + 28], eax
+        popad
+        iretd
+.stp_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+.stp_prio: dd 0
+.stp_old:  dd 0
+
+;-----------------------------------------------------------------------
+; sys_thread_cancel - ask a thread to end (208)
+;   In : EBX = thread id
+;   Out: EAX = 0, or -1
+;
+; Cancellation is a request the thread observes, not an interruption from
+; outside: no instruction stream is stopped mid-way, because a task torn down
+; in the middle of a kernel call is where lifetime bugs live. The thread ends
+; when it asks (SYS_TESTCANCEL, which the C library calls at its cancellation
+; points) or when it returns from whatever it is doing.
+;-----------------------------------------------------------------------
+sys_thread_cancel:
+        pushad
+        call sched_get_current_task
+        test eax, eax
+        jz .sca_fail
+        mov edi, eax
+        call sched_find_thread
+        jc .sca_fail
+        or dword [edi + TCB_TFLAGS], TFLAG_CANCEL
+        mov dword [esp + 28], 0
+        popad
+        iretd
+.sca_fail:
+        mov dword [esp + 28], -1
+        popad
+        iretd
+
+;-----------------------------------------------------------------------
+; sys_thread_testcancel - has this thread been asked to end? (209)
+;   Out: EAX = 1 and the request cleared, or 0
+;
+; A cancellation point: the C library turns a 1 into an exit with the status
+; PTHREAD_CANCELED, so a joiner sees a cancelled thread rather than a thread
+; that returned a number nobody chose.
+;-----------------------------------------------------------------------
+sys_thread_testcancel:
+        pushad
+        call sched_get_current_task
+        test eax, eax
+        jz .stc_none
+        test dword [eax + TCB_TFLAGS], TFLAG_CANCEL
+        jz .stc_none
+        and dword [eax + TCB_TFLAGS], ~TFLAG_CANCEL
+        mov dword [esp + 28], 1
+        popad
+        iretd
+.stc_none:
+        mov dword [esp + 28], 0
+        popad
+        iretd
 
 ;---------------------------------------
 ; sched_exit_thread - retire one thread, keeping its process

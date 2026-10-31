@@ -23,10 +23,10 @@
  * program that allocates from two threads at once needs a lock of its own. The
  * console is the same: two threads printing at once interleave.
  *
- * Not here: detaching (a thread that is never joined keeps its stack until the
- * process ends), cancellation, priorities, and thread-local storage a C program
- * can declare - `__thread` needs a TLS template in the image, which only HBX
- * images built by tools/mkhbx.py carry (see programs/hbx/hbx_thread.asm).
+ * Detaching, priorities and cancellation are here; what is still not is
+ * thread-local storage a C program can *declare* - `__thread` needs a TLS
+ * template in the image, which only HBX images built by tools/mkhbx.py carry
+ * (see programs/hbx/hbx_thread.asm).
  */
 #ifndef MV_THREAD_H
 #define MV_THREAD_H
@@ -61,5 +61,42 @@ void mv_thread_exit(i32 status) __attribute__((noreturn));
 
 /* Hand the processor to another ready thread (SYS_YIELD). */
 i32 mv_thread_yield(void);
+
+/*
+ * Say that this thread will never be joined. Its exit status is discarded and
+ * its kernel resources are recycled as soon as it ends, so detaching is what
+ * keeps a program that starts many short threads from accumulating zombies.
+ * The stack it was given is a mapping of the process and is released with the
+ * process; unmap it yourself if you need the address space back.
+ *   Returns 0, or -1 when the id is not a live thread of this process.
+ */
+i32 mv_thread_detach(mv_thread_t id);
+
+/*
+ * Set a thread's scheduling priority (PRIO_HIGH 0 .. PRIO_IDLE 3; lower runs
+ * first). The scheduler already orders the run queue by this value.
+ *   Returns the priority it had, or -1.
+ */
+#define MV_THREAD_PRIO_HIGH   0
+#define MV_THREAD_PRIO_NORMAL 1
+#define MV_THREAD_PRIO_LOW    2
+#define MV_THREAD_PRIO_IDLE   3
+i32 mv_thread_set_priority(mv_thread_t id, i32 prio);
+
+/*
+ * Ask a thread to end. Cancellation is *cooperative*: the thread stops when it
+ * next calls mv_thread_testcancel(), so it never abandons a kernel call
+ * half-way. A cancelled thread exits with MV_THREAD_CANCELED as its status, and
+ * its joiner sees that value.
+ *   Returns 0, or -1 when the id is not a live thread of this process.
+ */
+#define MV_THREAD_CANCELED ((i32)0x40000000)
+i32 mv_thread_cancel(mv_thread_t id);
+
+/*
+ * A cancellation point. If a cancel is pending, this thread ends here with
+ * MV_THREAD_CANCELED and this function does not return; otherwise it returns 0.
+ */
+i32 mv_thread_testcancel(void);
 
 #endif /* MV_THREAD_H */

@@ -1,7 +1,7 @@
 {
   "generated_from": "programs/syscalls.inc",
-  "syscall_count": 206,
-  "highest_syscall_number": 205,
+  "syscall_count": 210,
+  "highest_syscall_number": 209,
   "syscalls": [
     {
       "name": "SYS_EXIT",
@@ -1032,6 +1032,26 @@
       "name": "SYS_THREAD_EXIT",
       "number": 205,
       "summary": "thread_exit(status) -> ends this thread, not the process"
+    },
+    {
+      "name": "SYS_THREAD_DETACH",
+      "number": 206,
+      "summary": "thread_detach(tid) -> 0/-1, no status is kept for a joiner"
+    },
+    {
+      "name": "SYS_THREAD_SETPRIO",
+      "number": 207,
+      "summary": "thread_setprio(tid, prio) -> old prio/-1"
+    },
+    {
+      "name": "SYS_THREAD_CANCEL",
+      "number": 208,
+      "summary": "thread_cancel(tid) -> 0/-1, a request the thread observes"
+    },
+    {
+      "name": "SYS_TESTCANCEL",
+      "number": 209,
+      "summary": "testcancel() -> 1 and the request is cleared, or 0"
     }
   ]
 }
