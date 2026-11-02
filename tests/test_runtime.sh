@@ -538,6 +538,7 @@ run_case "del takes a path and keeps flags" "touch /pt_paths/a.txt" "deleted: a.
 # Virtual directories have no blocks behind them; acting on an entry there has
 # to be refused, and the refusal must not disturb the mounted volume's cache.
 run_case "virtual dirs refuse writes" "mkdir /tmp/nope"      "Virtual dirs are read-only" "" "CPU EXCEPTION"
+run_case "exec from a virtual dir fails cleanly" "cp /bin/hello /tmp/hello" "Executing" "/tmp/hello" "CPU EXCEPTION|PAGE FAULT|directory read failed"
 run_case "a refused path leaves the volume intact" "del /tmp/*.log" "Virtual dirs are read-only" "ls /pt_paths" "CPU EXCEPTION|No such dir"
 run_case "del takes a plain path"    "touch /pt_paths/b.txt"  "Deleted."           "del /pt_paths/b.txt" "CPU EXCEPTION|No such dir"
 # The volume cipher's fixture: three whole 4 KiB blocks written in one call,

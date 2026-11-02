@@ -6457,6 +6457,8 @@ cmd_exec_program:
         call cmd_cd_internal
         test eax, eax
         jnz .path_cd_fail
+        cmp dword [current_dir_lba], 0xFFFFFFFF
+        je .path_cd_fail                ; virtual directory: nothing to read
 
         ; Now search for the program in this directory
         call hbfs_load_root_dir

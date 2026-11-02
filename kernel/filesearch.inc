@@ -165,6 +165,9 @@ hbfs_read_file:
         call cmd_cd_internal
         test eax, eax
         jnz .path_read_fail
+        ; A virtual directory (/tmp, /proc, /dev) has no HBFS blocks to read.
+        cmp dword [current_dir_lba], 0xFFFFFFFF
+        je .path_read_fail
 
         ; Now read from the resolved directory
         call hbfs_load_root_dir

@@ -117,6 +117,16 @@ dpc_init:
 ;-----------------------------------------------------------------------
 dpc_selftest:
         pushad
+        pushfd
+        cli                             ; a timer tick must not drain or feed
+                                        ; the queue between the steps below
+        call .dt_run
+        mov [esp + 4 + 28], eax
+        popfd
+        popad
+        ret
+.dt_run:
+        pushad
         mov dword [dpc_trace], 0
         call dpc_init
         mov eax, .dt_a

@@ -70,10 +70,15 @@ The parity scorecard moves: "Develop for it" passes, because its probes named
 `pe_load_program` and `lib_resolve_imports` were there. A wave that delivered
 the developer story was scored as if it had not.
 
-Still open, and named rather than carried silently: `/tmp` cannot be exec'd
-(the crash above is not fixed, only avoided), a scalable outline font and
-tzdata are later waves, and `DPC_SELFTEST` can fail on a boot where a timer tick
-lands between its `dpc_init` and its first drain.
+Closed afterwards: executing a path in a virtual directory (`/tmp`) used to
+read a directory that has no blocks behind it and page-fault; `hbfs_read_file`
+and the shell's PATH search now refuse it cleanly ("Unknown command"). And
+`dpc_selftest` runs with interrupts off, so a timer tick can no longer drain
+the queue between its enqueue and its drain.
+
+Still open, and named rather than carried silently: a scalable outline font and
+tzdata are later waves, as are shared-library unloading and the 1000-launch
+ASLR gate.
 
 ## Unreleased - M5: a task is a thread, and TLS is per thread
 
