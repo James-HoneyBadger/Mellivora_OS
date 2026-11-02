@@ -71,6 +71,12 @@ int main(void)
     }
     printf("gmtime ok\n");
 
+    /* --- difftime is the second count between two times, in either order --- */
+    if (difftime(epoch, -60) != 60 || difftime(-60, epoch) != -60) {
+        FAIL("difftime is not the difference in seconds");
+    }
+    printf("difftime ok\n");
+
     /* --- the stored offset moves localtime by exactly that much --- */
     saved[0] = '\0';
     (void)sett_read(saved, sizeof saved);

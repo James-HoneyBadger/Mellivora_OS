@@ -87,6 +87,7 @@ closed; the rest are here so a port knows what to expect.
 | No `getrlimit`/`setrlimit`, no `umask`, no `nice` | Limits cannot be queried or changed | Nothing in the kernel exposes them yet |
 | One locale: `"C"` | No case folding outside ASCII, no message catalogues | A non-C collation order is a data and library project |
 | A time zone is an offset, not a database | No DST rule, no historical zones; `tm_isdst` is always 0 | tzdata plus the rules that use it is a later wave, and an offset that is written down is better than a database nobody updates |
+| `difftime` returns `time_t`, not `double` | A port that stores the result in a `double` fails to link: converting, comparing or printing a `double` is a call to a soft-float helper | The runtime is compiled `-msoft-float` and carries no floating point at all; a `double` return would make the header's own declaration unlinkable. Seconds are what callers use, and a difference outside `time_t` saturates rather than wrapping |
 | No `#!/bin/sh`; scripts are `.bat` | A POSIX shell script does not run | EXEC.md section 7 write-up; the loader's interpreter line is not implemented |
 | No `dirent.h`, no `readdir` | Directory listing is `SYS_READDIR` only | The VFS has a directory iterator but no POSIX-shaped wrapper yet |
 | `open` on a `/tmp` file with `O_WRONLY` creates it | A write-open without `O_CREAT` can create | tmpfs has no separate create call; documented rather than hidden |

@@ -182,9 +182,23 @@ time_t mktime(struct tm *tm)
     return secs;
 }
 
-double difftime(time_t a, time_t b)
+/* POSIX says double, and this runtime has no floating point at all (see the
+ * note in stdio.h): a conversion or a comparison of a double is a call to a
+ * soft-float helper that nothing in the tree provides, so a returning double
+ * would not link. Seconds are what every caller of this function wants, so the
+ * difference is time_t and saturates rather than wrapping at the ends of the
+ * range. docs/POSIX.md carries the deviation. */
+time_t difftime(time_t a, time_t b)
 {
-    return (double)(a - b);
+    i64 d = (i64)a - (i64)b;
+
+    if (d > 2147483647LL) {
+        return (time_t)2147483647LL;
+    }
+    if (d < -2147483648LL) {
+        return (time_t)(-2147483648LL);
+    }
+    return (time_t)d;
 }
 
 /* ------------------------------------------------------------------ */

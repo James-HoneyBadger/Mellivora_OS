@@ -47,8 +47,11 @@ struct tm *localtime(const time_t *t);
 /* The inverse of localtime(): the seconds a broken-down local time names. */
 time_t mktime(struct tm *tm);
 
-/* Difference in seconds between two times. */
-double difftime(time_t a, time_t b);
+/* Difference in seconds between two times. POSIX says double; this runtime
+ * has no floating point, so the difference is the 32-bit second count and a
+ * difference outside that range saturates (docs/POSIX.md, "what does not
+ * conform"). */
+time_t difftime(time_t a, time_t b);
 
 /*
  * The C locale's strftime: %Y %y %m %d %e %H %I %M %S %j %a %A %b %B %p %Z %%
