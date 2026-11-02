@@ -1,6 +1,6 @@
 # Mellivora OS - Changelog
 
-## Unreleased - M5 closed: one image, one toolchain, and the last three debts
+## v15.0.0 - M5 closed: one image, one toolchain, and the last three debts
 
 M5 has been called closed since v14.0.0 while four things it claimed were true
 were not. The exit criterion was split across two programs and the combined one

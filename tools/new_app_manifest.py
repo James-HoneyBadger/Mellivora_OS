@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_DIR = ROOT / "docs" / "app-manifests"
 PROGRAM_DIR = ROOT / "programs"
 EXCLUSIONS_PATH = ROOT / "docs" / "app-manifest-exclusions.json"
-OS_VERSION = "13.0.0"
+OS_VERSION = "15.0.0"
 
 CATEGORY_DEFAULTS = {
     "editor": [

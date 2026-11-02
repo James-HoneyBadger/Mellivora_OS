@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bpaint",
   "name": "Burrows Paint",
-  "version": "14.0.0",
+  "version": "15.0.0",
   "entry": "bpaint",
   "category": "editor",
   "description": "Pixel drawing workspace for simple images and sketches",

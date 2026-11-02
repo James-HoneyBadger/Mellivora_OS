@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bsettings",
   "name": "Burrows Settings",
-  "version": "14.0.0",
+  "version": "15.0.0",
   "entry": "bsettings",
   "category": "system",
   "description": "Desktop settings for themes, preferences, and system behavior",

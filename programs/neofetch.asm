@@ -494,9 +494,9 @@ str_at:         db "@", 0
 str_hostname:   db "honeybadger", 0
 str_separator:  db "------------------------", 0
 str_colon:      db ": ", 0
-str_os_val:     db "Mellivora OS v14.0.0", 0
-str_kernel_val: db "Mellivora v14.0.0 (Pentium 4 32-bit)", 0
-str_shell_val:  db "HB Lair v14.0 (Honey Badger Lair)", 0
+str_os_val:     db "Mellivora OS v15.0.0", 0
+str_kernel_val: db "Mellivora v15.0.0 (Pentium 4 32-bit)", 0
+str_shell_val:  db "HB Lair v15.0 (Honey Badger Lair)", 0
 str_cpu_val:    db "Pentium 4 SSE2 (Protected Mode, Ring 0/3)", 0
 str_disk_val:   db "ATA PIO + AHCI, HBFS v3 (2 GB, 4 KB blocks)", 0
 str_term_val:   db "VGA 80x25, 16 colors", 0

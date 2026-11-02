@@ -105,7 +105,7 @@ banner_str:
         db 0xC9                                             ; ╔
         times 78 db 0xCD                                   ; ══...══
         db 0xBB                                             ; ╗
-        db 0xBA, "      Mellivora OS  v14.0.0          Honey Badger Operating System           ", " ", 0xBA
+        db 0xBA, "      Mellivora OS  v15.0.0          Honey Badger Operating System           ", " ", 0xBA
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
@@ -127,10 +127,10 @@ msg_boot_suf:   db "s", 0x0A, 0
 msg_boot_ok:    db "MELLIVORA_BOOT_OK", 0x0A, 0
 
 version_text:
-        db "Mellivora OS v14.0.0 - HBFS v3/v4, 187 Syscalls, VFS, Paging, Fork, IPv6", 0x0A
+        db "Mellivora OS v15.0.0 - HBFS v3/v4, 210 Syscalls, VFS, Paging, Fork, IPv6", 0x0A
         db "  Kernel:        Mellivora (32-bit protected mode, ring 0/3)", 0x0A
         db "  Init System:   Ratel (hardware & subsystem initialization)", 0x0A
-        db "  Shell:         HB Lair v14.0 (Honey Badger Lair)", 0x0A
+        db "  Shell:         HB Lair v15.0 (Honey Badger Lair)", 0x0A
         db "  Utilities:     HBU (Honey Badger Utilities)", 0x0A
         db "  Address Space: 4 GB flat memory model", 0x0A
         db "  Disk:          ATA PIO + Bus Master DMA + AHCI SATA, LBA48 (up to 128 PB)", 0x0A

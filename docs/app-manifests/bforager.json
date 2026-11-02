@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bforager",
   "name": "Burrows File Manager",
-  "version": "14.0.0",
+  "version": "15.0.0",
   "entry": "bforager",
   "category": "file",
   "description": "Graphical file manager with cut/copy/paste, rename, and dual-pane layout",

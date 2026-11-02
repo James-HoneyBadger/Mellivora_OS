@@ -9,8 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-OS_VERSION = "14.0.0"
-SHELL_VERSION = "14.0"
+OS_VERSION = "15.0.0"
+SHELL_VERSION = "15.0"
 
 
 def read_text(rel_path: str) -> str:

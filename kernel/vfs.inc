@@ -2018,7 +2018,7 @@ proc_str_unknown:   db "<unknown>", 0
 proc_str_memtotal:  db "MemTotal:", 0x09, 0
 proc_str_memfree:   db "MemFree:", 0x09, 0
 proc_str_kb_nl:     db " kB", 0x0A, 0
-proc_str_version:   db "Mellivora v10.0 (x86 protected mode)", 0x0A, 0
+proc_str_version:   db "Mellivora v15.0 (x86 protected mode)", 0x0A, 0
 proc_dirent_names:
         dd proc_name_uptime
         dd proc_name_meminfo

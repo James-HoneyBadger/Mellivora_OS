@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bsysmon",
   "name": "Burrows System Monitor",
-  "version": "14.0.0",
+  "version": "15.0.0",
   "entry": "bsysmon",
   "category": "system",
   "description": "Live view of processes, memory, and system activity",

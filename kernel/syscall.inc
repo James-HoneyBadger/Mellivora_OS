@@ -1750,8 +1750,8 @@ sys_uname:
         iretd
 .uname_sysname:  db 'Mellivora', 0
 .uname_nodename: db 'mellivora', 0
-.uname_release:  db '12.1.0', 0
-.uname_version:  db 'Mellivora OS v12.1.0 (POSIX)', 0
+.uname_release:  db '15.0.0', 0
+.uname_version:  db 'Mellivora OS v15.0.0 (POSIX)', 0
 .uname_machine:  db 'i686', 0
 
 ;-----------------------------------------------------------------------

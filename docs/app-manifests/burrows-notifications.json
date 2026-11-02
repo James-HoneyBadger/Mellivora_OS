@@ -1,7 +1,7 @@
 {
   "id": "os.mellivora.bnotify",
   "name": "Burrows Notifications",
-  "version": "14.0.0",
+  "version": "15.0.0",
   "entry": "bnotify",
   "category": "system",
   "description": "Test and inspect desktop notification behavior",
