@@ -1,19 +1,19 @@
 # Mellivora OS
 
-![Release](https://img.shields.io/github/v/release/James-HoneyBadger/Mellivora_OS?display_name=tag) ![License](https://img.shields.io/github/license/James-HoneyBadger/Mellivora_OS) ![Platform](https://img.shields.io/badge/platform-x86%20%7C%20QEMU-blue) ![Language](https://img.shields.io/badge/language-NASM%20x86-informational)
+![Release](https://img.shields.io/github/v/release/James-HoneyBadger/Mellivora_OS?display_name=tag) ![License](https://img.shields.io/github/license/James-HoneyBadger/Mellivora_OS) ![Platform](https://img.shields.io/badge/platform-x86%20%7C%20QEMU-blue) ![Language](https://img.shields.io/badge/language-NASM%20%2B%20C-informational)
 
-**A bare-metal 32-bit x86 operating system written in NASM assembly.**
+**A bare-metal 32-bit x86 operating system built from NASM assembly and freestanding C.**
 
 Mellivora OS is a from-scratch hobby OS that boots on real x86 hardware or in QEMU. It includes a custom HBFS v3/v4 filesystem with permissions and xattr, ring 3 user-mode execution, a DOS-inspired interactive shell with POSIX features, 210 syscalls, priority-based preemptive scheduling with per-task fd isolation, POSIX signals with a W^X trampoline, a VFS abstraction layer, AHCI SATA and Intel e1000 NIC drivers, a GDB remote stub,
-compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program sources (277 NASM and one C), and 37 bundled samples (NASM, C, Perl, and BASIC).
+compositor surface IPC, an in-OS Tiny C Compiler, a package manager, hundreds of userland programs, and bundled NASM, C, Perl, and BASIC samples.
 
 > New to the project? Start with the [Installation Guide](docs/INSTALL.md), then try the [Tutorial](docs/TUTORIAL.md) or browse the [Technical Reference](docs/TECHNICAL_REFERENCE.md).
 
 ## 🦡 At a Glance
 
 - **Boot path:** BIOS 3-stage boot into 32-bit protected mode
-- **Userland:** 97 shell built-ins, 278 program sources (277 NASM and one C), and 37 bundled samples (NASM, C, Perl, and BASIC)
-- **Core pieces:** HBFS v3 filesystem + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
+- **Userland:** shell built-ins, hundreds of assembly and C programs, and bundled NASM, C, Perl, and BASIC samples
+- **Core pieces:** HBFS v4 filesystem (checksummed, journalled) + VFS layer, ELF32 loader, buddy PMM allocator, serial/VGA/ATA drivers
 - **Developer-ready:** API docs, programming guide, regression tests, release packaging, and `hbpkg` package manager
 
 ---
@@ -22,7 +22,7 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 
 ### Kernel & Architecture
 
-- **32-bit protected mode** with a flat memory model, ring 0 / ring 3 separation, and one address space shared by every task
+- **32-bit protected mode** with ring 0 / ring 3 separation and per-process page directories; threads share their process address space, while `fork` uses copy-on-write
 - **Ring 0 / Ring 3** privilege separation — programs run in user mode
 - **A C library** — `c/rt/` is a real one: string and memory families, `qsort` (stable merge), `bsearch`, `strtol`/`strtoul`, streams (`fopen`/`fread`/`fwrite`/`fgets`/`fseek`/`getline`/`perror`), a formatter with precision and flags, `getopt`, `atexit`; ten standard headers in `c/include/`
 - **ELF32 programs, built and run** — `ELF_PROGS` in the Makefile links the same
@@ -91,9 +91,12 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
   is spent
 - **Before logon** — boot and system services start at boot, and the boot log
   names each start; auto services start when somebody logs on
-- **Accounts and logon** — `account add/del/list`, `logon`, `logoff`, `lock`,
-  `unlock`, `switch`, `sessions`; a salted hash in the Sett, a profile directory,
-  and a per-user hive loaded at logon and saved at logoff
+- **Accounts and logon** — `account add/del/list`, `logonui`, `logon`, `logoff`,
+  `lock`, `unlock`, `switch`, `sessions`; the graphical logon screen can create
+  an account with F2 and a confirmed password, then signs in using the same
+  salted Argon2id credential store as the shell; both create paths enforce one
+  name rule (letters, digits, dot, underscore or hyphen, and not only dots);
+  profiles and per-user hives load at logon and save at logoff
 - **Profiles** — `profile list`, `profile delete NAME`: the first logon makes
   `/Users/<name>` with `Documents`, `Desktop`, `Downloads` and
   `AppData\Local|Roaming`; a delete is refused while the account is logged on
@@ -183,16 +186,16 @@ compositor surface IPC, an in-OS Tiny C Compiler, a package manager, 278 program
 - **VirtIO** PCI legacy — virtio-blk (block) and virtio-net (network)
 - **GDB remote stub** (v11) — RSP protocol over COM1; supports registers, memory, continue, step, breakpoints
 
-### Programs (278 program sources + 37 bundled samples)
+### Programs
 
-- **Games (29)**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
+- **Games**: Snake, Tetris, Minesweeper, Galaga, Pac-Man, Game of Life, Maze, Kingdom, Outbreak, Neurovault, Blackjack, Rogue, Solitaire, Breakout, Raycaster, Robot Town, and more
 - **HBU (Honey Badger Utilities)**: grep, sort, sed, awk, tr, wc, cut, head, tail, diff, find, uniq, rev, paste, xargs, tar, nm, and more
 - **Tools**: Text editor, hex viewer, file pager (`more`/`pager`), CSV viewer, dual-pane file manager (burrow), `top` process monitor
 - **Demos**: Mandelbrot/Julia renderers, plasma effect, VBE sprite blit, rotating cube, banner, colors, Doom fire effect
 - **Languages**: TCC (Tiny C Compiler), BASIC interpreter (`basic` + `basicc` compiler), Brainfuck interpreter, Perl interpreter, Forth interpreter
 - **Network tools**: ping, wget, nc, ftp, telnet, irc, gopher, dig, traceroute, whois, daytime
 - **Daily-driver suite (new)**: `tutorial`, `pkginfo`, `meminfo`, `journal`, `bcal`, `theme`, `tag`, `histgrep`, `bnotify`, `mkprog`, `dnslook`, `play`, `nim`, `plasma`, `tldr`, `todo`, `pomodoro`, `morse`, `wiki`, `color`, `stopwatch`, `countdown`, `passgen`, `dice`, `coin`, `tip`, `roll`, `pick`, `reverse`, `upper`, `lower`, `countc`
-- **API Libraries**: 17 reusable `.inc` libraries in `programs/lib/` (string, I/O, math, VGA, memory, data, net, GUI, VBE, font, audio, highscore, and more)
+- **API Libraries**: 18 reusable `.inc` libraries in `programs/lib/` (string, I/O, math, VGA, memory, data, net, GUI, VBE, font, audio, highscore, and more)
 - **Samples**: 2 NASM programs + 18 C programs + 11 Perl scripts + 6 BASIC scripts in `/samples`; see [the sample catalog](docs/SAMPLES.md)
 
 ### Burrows Desktop (3.0)
@@ -321,7 +324,7 @@ Mellivora_OS/
 │   ├── tcc.asm             Tiny C Compiler (subset)
 │   ├── grep.asm            Pattern search
 │   ├── sort.asm            Line sorting
-│   └── ...                 (278 program sources total)
+│   └── ...                 (assembly and C user programs)
 ├── samples/                NASM, C, Perl, and BASIC source files
 │   ├── hello.c, fib.c, primes.c, calc.c, matrix.c, hanoi.c
 │   ├── bf.c, wumpus.c, boxes.c, stars.c, echo.c
@@ -474,6 +477,9 @@ Mellivora_OS/
 | `make check-perf` | Measure the guest: syscall, yield, fork+exec+wait in TSC cycles, plus the boot footprint |
 | `make check-perf-update` | Record the guest baseline for the current machine profile |
 | `make hbpkg` | Build the host package-manager utility |
+| `make check-hbpkg` | Test package install, association rollback, and exact removal |
+| `make glyphs` | Regenerate the shell's 16x16 icon table in `kernel/glyphs.inc` |
+| `make check-glyphs` | Fail when `kernel/glyphs.inc` is out of date with `tools/gen_glyphs.py` |
 
 ---
 
@@ -501,12 +507,12 @@ ARM hardware cannot boot Mellivora natively; use QEMU's x86 system emulator on A
 
 | Metric | Value |
 | -------- | ------- |
-| Kernel source | Entry file + 30 modular include files |
-| Syscalls | 185 (via `INT 0x80`) |
+| Kernel source | NASM modules plus the freestanding C kernel module |
+| Syscalls | 210 (via `INT 0x80`) |
 | Shell commands | 90+ built-ins, aliases, history (128 entries), tab completion |
-| User programs | 278 program sources built by the Makefile (277 NASM, one C) |
+| User programs | Assembly and C programs built by the Makefile |
 | Bundled samples | 37 (2 NASM + 18 C + 11 Perl + 6 BASIC) in `/samples` |
-| API libraries | 17 reusable `.inc` modules in `programs/lib/` |
+| API libraries | 18 reusable `.inc` modules in `programs/lib/` |
 | Disk image | 2 GB raw HBFS image |
 | HBFS directory capacity | 455 files, root or subdirectory |
 | Concurrent tasks | 128 (preemptive scheduler, 4 priority levels) |

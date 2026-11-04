@@ -273,6 +273,10 @@ run_case "C user program"             "cprog"                 "C_PROG_OK"       
 # when all of them hold; the formatted line is asserted here as well, so a
 # formatter that quietly changes an output fails the case rather than the
 # program.
+# The 2048 game's rules - pairs merge once, a gap does not block, a packed row
+# does not move, every direction reuses one slide - checked in the guest.
+run_case "2048 game rules"           "2048 --selftest"       "G2048_OK" \
+    "" "CPU EXCEPTION|G2048_FAIL|  FAIL  "
 run_case "C runtime: printf, heap and start-up" \
     $'crtdemo' \
     "CRT: printf -42 4000000000 deadbeef BEEF str z % [   42][42   ][00042]|CRT: heap|grown past a page|CRTDEMO_OK" \
@@ -727,6 +731,14 @@ run_case "a profile is used, logged off and deleted" \
 run_case "deleting a profile that is not there is refused" \
     $'account del m4b4\naccount add m4b4 m4pw\nprofile delete m4b4' \
     "has no profile on disk" "" "CPU EXCEPTION|profile: deleted"
+# M6: a per-user file association is registered through the Sett and `open`
+# runs the handler with the file path - the desktop workflow the scorecard's
+# "Use the desktop" row is blocked on. `head` is a real /bin program, so its
+# first line proves the handler was launched with the document it was given.
+run_case "desktop file operations and associations work end to end" \
+    $'account del m6assoc\naccount add m6assoc m6pw\nlogon m6assoc m6pw\nassoc .txt head\nassoc .txt\nopen /docs/notes.txt' \
+    "opens with head|Mellivora OS Developer Notes" \
+    "" "CPU EXCEPTION|sign in before|could not be started|File not found|no handler" "" "" "" 90
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"

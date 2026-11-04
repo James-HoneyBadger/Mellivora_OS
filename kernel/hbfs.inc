@@ -1030,9 +1030,20 @@ hbfs_journal_commit:
         mov  dword [esi + 8], 0
         mov  eax, [hbfs_journal_epoch]
         mov  [esi + 12], eax            ; epoch of the transaction being closed
+        ; A commit marker carries its own checksum over the header, so a torn
+        ; marker cannot be mistaken for a durable commit during recovery.
+        mov  eax, esi
+        mov  ecx, 16
+        call crc32c
+        mov  [esi + 16], eax
         mov  eax, edi
         mov  ecx, 1
         call ata_write_sectors
+        ; A commit marker that never reached the disk cannot close the
+        ; transaction. Marking the superblock clean anyway would leave metadata
+        ; changes with no recoverable transaction, so roll the pre-images back
+        ; to the last durable state instead.
+        jc   .hjc_commit_fail
 
 .hjc_flush:
         ; Reset journal state and flush superblock
@@ -1046,6 +1057,11 @@ hbfs_journal_commit:
         popad
 .hjc_ret:
 .hjc_done:
+        ret
+
+.hjc_commit_fail:
+        popad
+        call hbfs_journal_abort
         ret
 
 .hjc_abort:
@@ -1077,6 +1093,10 @@ hbfs_journal_abort:
         mov  dword [esi + 8], 0
         mov  eax, [hbfs_journal_epoch]
         mov  [esi + 12], eax
+        mov  eax, esi
+        mov  ecx, 16
+        call crc32c
+        mov  [esi + 16], eax
         mov  eax, edi
         mov  ecx, 1
         call ata_write_sectors
@@ -1149,8 +1169,24 @@ hbfs_journal_recover:
         ; Check type
         mov  edx, [hbfs_jrnl_buf + 4]
         cmp  edx, HBFS_JRNL_T_COMMIT
-        je   .hjr_done              ; found commit — transaction was OK, stop undo
+        jne  .hjr_not_commit
+        ; A commit record is only trusted if its checksum matches: a torn
+        ; marker with intact magic/type/epoch would otherwise stop the undo and
+        ; leave partially written metadata exposed. A zero checksum is a
+        ; pre-checksum image and is accepted for compatibility.
+        mov  edx, [hbfs_jrnl_buf + 16]
+        test edx, edx
+        jz   .hjr_done              ; legacy commit record: accept
+        push edx
+        lea  eax, [hbfs_jrnl_buf]
+        mov  ecx, 16
+        call crc32c
+        pop  edx
+        cmp  eax, edx
+        jne  .hjr_next              ; torn marker: treat as no commit, keep scanning
+        jmp  .hjr_done
 
+.hjr_not_commit:
         cmp  edx, HBFS_JRNL_T_PRE
         jne  .hjr_next              ; unknown type — skip
 

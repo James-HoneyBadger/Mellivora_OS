@@ -12,6 +12,12 @@ structure layout or a current syscall number. Where today's tree has a ceiling
 that exists only because something was sized by hand, the ceiling is gone from
 the contract and the removal is listed in the table below.
 
+Project-wide progress is tracked only by the generated user-job scorecard in
+the [roadmap](../ROADMAP.md#the-parity-scorecard). The specifications define
+contracts and conformance tests; they do not maintain a second set of progress
+statuses. `make check-parity` verifies the scorecard against the tree and
+rejects drift between its evidence and the roadmap.
+
 ## Status vocabulary
 
 | Term | Meaning |
@@ -56,7 +62,7 @@ named.
 | Kernel virtual space | ~2 MB image window at 1 MB, 8 MB reserve | 1 GiB at `0xC0000000`: image, heaps, page tables, cache | M1 |
 | User virtual space | ~1 MB program window plus a demand zone from the top of RAM to 1 GB | 3 GiB per process, ASLR across the whole range | M1 |
 | Physical memory | 512 MB tested; frames only below 512 MB, all of it identity-mapped | 64 GiB via PAE, PFN database over all of it | M2 |
-| Syscalls | 206, flat: 0–186 legacy, 187–201 the executive, 202–205 the interface and thread calls (frozen by number) | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
+| Syscalls | 210, flat: 0–186 legacy, 187–203 the executive and interfaces, 204–209 thread calls (frozen by number) | The same 187 as a compatibility layer forever, plus typed groups beyond 512 | M1 |
 | Names | 63 bytes, 8-bit | 255 UTF-16 code units, resolved case-insensitively for the Windows-facing namespace | M1 |
 | Directory entries | 455 per directory, root or subdirectory | 65 535 per directory, B+tree directories | M3 |
 | File size | 32-bit block numbers, 2 GB volume | 2^63 bytes per file, 2^62 bytes per volume, 64-bit block numbers | M3 |

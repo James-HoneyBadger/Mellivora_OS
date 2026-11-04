@@ -177,12 +177,22 @@ FILE *fopen(const char *path, const char *mode)
         }
         if (append) {
             /* Append has to carry the existing bytes with it, because the flush
-             * replaces the file rather than adding to it. */
-            static char old[4096];
-            i32 got = mv_syscall(SYS_FREAD, (u32)path, (u32)old, 0, 0, 0);
+             * replaces the file rather than adding to it. Read them into a
+             * buffer sized to the file instead of a fixed scratch area, so a
+             * file larger than the scratch area cannot overrun it. */
+            struct stat st;
+            if (stat(path, &st) == 0 && st.st_size > 0) {
+                char *old = (char *)malloc((u32)st.st_size);
+                if (old != 0) {
+                    i32 got = mv_syscall(SYS_FREAD, (u32)path, (u32)old, 0, 0, 0);
 
-            if (got > 0)
-                (void)fwrite(old, 1, (size_t)got, f);
+                    if (got > 0)
+                        (void)fwrite(old, 1, (size_t)got, f);
+                    free(old);
+                } else {
+                    errno = ENOMEM;
+                }
+            }
         }
         return f;
     }
@@ -254,6 +264,10 @@ size_t fread(void *buf, size_t size, size_t count, FILE *f)
     if (f == 0 || size == 0 || count == 0)
         return 0;
     want = size * count;
+    if (want / size != count) {          /* size*count overflowed 32 bits */
+        errno = EINVAL;
+        return 0;
+    }
 
     /* One pushed-back character, then the rest of the request. */
     if (f->ungot >= 0 && done < want) {
@@ -312,6 +326,10 @@ size_t fwrite(const void *buf, size_t size, size_t count, FILE *f)
     if (f == 0 || size == 0 || count == 0)
         return 0;
     want = size * count;
+    if (want / size != count) {          /* size*count overflowed 32 bits */
+        errno = EINVAL;
+        return 0;
+    }
 
     if (f->is_console) {
         console_write((const char *)buf, (u32)want);

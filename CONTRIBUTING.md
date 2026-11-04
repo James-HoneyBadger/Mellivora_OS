@@ -1,8 +1,9 @@
 # Contributing to Mellivora OS
 
-Thank you for your interest in contributing! Mellivora OS is written entirely in NASM
-x86 assembly. This document covers everything you need to get set up, understand the
-project conventions, and submit a contribution.
+Thank you for your interest in contributing! Mellivora OS combines NASM x86
+assembly with freestanding C for kernel subsystems, the runtime, and user
+programs. See [the installation guide](docs/INSTALL.md) for the complete,
+current host toolchain requirements.
 
 Please also read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
@@ -30,6 +31,7 @@ Please also read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 | Tool | Version | Purpose |
 | --- | --- | --- |
 | **NASM** | 2.15+ | Assembles all `.asm` sources |
+| **32-bit C compiler and linker** | See `tools/find_c_toolchain.sh` | Builds the freestanding kernel module and C user programs |
 | **GNU Make** | 4.0+ | Build orchestration |
 | **QEMU** | 6.0+ | `qemu-system-x86_64` for testing |
 | **Python 3** | 3.6+ | Runs `populate.py` to build the disk image |
@@ -39,16 +41,16 @@ Please also read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ```bash
 # Debian/Ubuntu
-sudo apt install nasm qemu-system-x86 make python3
+sudo apt install nasm qemu-system-x86 make python3 clang lld binutils
 
 # Fedora
-sudo dnf install nasm qemu-system-x86 make python3
+sudo dnf install nasm qemu-system-x86 make python3 clang lld binutils
 
 # Arch Linux
-sudo pacman -S nasm qemu-full make python
+sudo pacman -S nasm qemu-full make python clang lld binutils
 
 # macOS
-brew install nasm qemu make python3
+brew install nasm qemu make python3 llvm
 ```
 
 ### Initial build
@@ -69,14 +71,18 @@ Mellivora_OS/
 ├── boot.asm           Stage 1 MBR boot sector (512 bytes, 16-bit real mode)
 ├── stage2.asm         Stage 2 loader (A20, E820, protected-mode switch)
 ├── kernel.asm         Kernel entry point + %include graph
-├── kernel/            26 kernel include modules (sched, vga, hbfs, net, ...)
-├── programs/          User-space assembly programs (~231 total)
+├── kernel/            NASM kernel modules (sched, vga, hbfs, net, ...)
+├── c/                 Freestanding kernel C, runtime, headers, and C programs
+├── programs/          User-space assembly programs
 │   ├── syscalls.inc   Shared syscall constants — include this first
-│   └── lib/           17 reusable library includes (string, io, math, vbe, ...)
-├── samples/           C, Perl, and BASIC source files for TCC / interpreters
-├── tests/             Regression test suite
+│   └── lib/           18 reusable library includes (string, io, math, vbe, ...)
+├── samples/           NASM, C, Perl, and BASIC source files for interpreters
+├── tests/             Regression suite (22 scripts; `make check` runs them)
 │   ├── test_build.sh  Build-time checks (sizes, HBFS layout, constants)
-│   └── test_hbfs.py   HBFS filesystem integrity checks
+│   ├── test_hbfs*.py  HBFS integrity, checksums, extents, journal and v4 mount
+│   ├── test_boot.sh, test_runtime.sh, test_loader.sh, test_desktop.py
+│   │                  QEMU boot, syscall, loader and desktop workflows
+│   └── test_iso.py    Installer disc structure and end-to-end install
 ├── docs/              Full documentation suite
 │   ├── STYLE_GUIDE.md    ← read this before writing any code
 │   ├── API_REFERENCE.md
@@ -102,8 +108,8 @@ modifying any code in `programs/`.
 | `make full` | Complete build: kernel + programs + populate filesystem |
 | `make run` | Launch the built image in QEMU |
 | `make debug` | QEMU with monitor on stdio and interrupt/reset logging |
-| `make check` | Run the regression suite and HBFS integrity tests |
-| `make sanitize` | Build with `KERNEL_DEBUG_BOUNDS=1` for bounds-check hardening |
+| `make check` | Run build, contract, host-side, and QEMU regression checks |
+| `make sanitize` | Build with `KERNEL_DEBUG_BOUNDS=1` and run regressions; not a sanitizer |
 | `make iso` | Create `mellivora.iso` bootable installer |
 | `make clean` | Remove all build artifacts |
 | `make sizes` | Print component sizes |
@@ -132,9 +138,10 @@ needed.
 | Type | Where to put it |
 | --- | --- |
 | New user-space program | `programs/<name>.asm` |
+| New C user program | `c/prog/<name>.c` |
 | New shared library | `programs/lib/<name>.inc` |
 | Kernel bug fix | `kernel/<module>.inc` |
-| New kernel feature | `kernel/<module>.inc` + `kernel/syscall.inc` + `kernel/data.inc` |
+| New kernel feature | `kernel/<module>.inc` or `c/kmod/`, plus relevant syscall/data integration |
 | New sample (C/Perl/BASIC) | `samples/<name>.<ext>` |
 | Documentation fix | `docs/<file>.md` or `README.md` |
 | Build / tooling | `Makefile` or `populate.py` |
@@ -234,8 +241,9 @@ every library function.
 
 ## Modifying the Kernel
 
-Kernel code lives in `kernel.asm` (entry point and constants) and the 26
-include files in `kernel/`. Each module has a clear responsibility:
+Kernel code lives in `kernel.asm` (entry point and constants), the NASM
+include files in `kernel/`, and the freestanding C module in `c/kmod/`.
+Each module has a clear responsibility:
 
 | File | Responsibility |
 | --- | --- |
@@ -252,20 +260,19 @@ include files in `kernel/`. Each module has a clear responsibility:
 
 ### Adding a syscall
 
-1. Pick the next free number in `programs/syscalls.inc` and add a
-   `SYS_NAME equ N` line with a comment describing arguments and return.
-2. Add the same constant to the dispatch table in `kernel/syscall.inc`.
-3. Implement the handler in the appropriate kernel module.
-4. Document the new syscall in:
-   - `docs/TECHNICAL_REFERENCE.md` — Complete Syscall Table section
-   - `docs/PROGRAMMING_GUIDE.md` — Syscall Numbers listing
+1. Allocate the next free number in `programs/syscalls.inc` and document its
+   arguments and return value.
+2. Add the dispatch entry and handler in the appropriate kernel module.
+3. Regenerate and verify derived syscall references with the Makefile targets
+   (`make syscall-header`, `make syscalls-json`, and `make syscalls-md`).
+4. Update the relevant user and technical documentation.
 
 ### Kernel build rules
 
 - The kernel is assembled with `-f bin -O0 -w-zeroing`.
 - All global state belongs in `kernel/data.inc`; no BSS in other modules.
-- The kernel must stay under 2048 sectors (1 MB). `make full` will fail
-  with an error if this limit is exceeded.
+- The kernel must stay under 8192 sectors (4 MB); `KERNEL_MAX_BYTES` in the
+  Makefile is that limit. `make full` will fail with an error if it is exceeded.
 - `kernel_sectors.inc` is generated automatically from `kernel.bin` size
   — do not edit it manually.
 
@@ -314,15 +321,14 @@ Before opening a pull request, verify each item that applies to your change:
 
 ```bash
 make full       # build must be current before testing
-make check      # runs both test_build.sh and test_hbfs.py
+make check      # build, contract, host-side, and QEMU regression checks
 ```
 
-`test_build.sh` checks binary sizes, disk image layout, HBFS magic number
-and superblock constants, and consistency between `kernel.asm` and
-`populate.py`.
-
-`test_hbfs.py` mounts the HBFS image via Python and verifies directory
-structure, file integrity, and entry counts.
+`make check` covers build and contract checks, host-side filesystem tests, and
+QEMU boot, runtime, loader, desktop, heap, networking, durability, and SMP
+regressions. Some QEMU checks may skip on a local host without QEMU; CI runs
+the required smoke tests strictly. Run the focused `make check-*` target for
+the subsystem you changed, then `make check` before submitting.
 
 ### Bounds-check build
 
@@ -330,9 +336,9 @@ structure, file integrity, and entry counts.
 make sanitize
 ```
 
-Builds with `KERNEL_DEBUG_BOUNDS=1`, which enables additional runtime
-assertions in the kernel. Run this when changing memory management or
-filesystem code.
+Rebuilds with `KERNEL_DEBUG_BOUNDS=1` and runs the regression suite. The define
+does not currently enable additional checks unless a kernel source explicitly
+uses it, so this target is not a substitute for a memory sanitizer.
 
 ### Manual testing in QEMU
 

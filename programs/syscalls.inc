@@ -40,6 +40,8 @@ SYS_GETTIME     equ 15
 SYS_SLEEP       equ 16
 SYS_CLEAR       equ 17
 SYS_SETCOLOR    equ 18
+; OR into EBX for SYS_SETCOLOR to keep the colour after the program exits.
+SETCOLOR_PERSIST equ 0x100
 SYS_MALLOC      equ 19          ; Allocate block: EBX=size -> EAX=ptr/0
 SYS_FREE        equ 20          ; Free block: EBX=base -> EAX=0/-1
 SYS_EXEC        equ 21

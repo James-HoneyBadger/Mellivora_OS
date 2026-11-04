@@ -2,9 +2,9 @@
 
 ## Overview
 
-Mellivora OS is a bare-metal, from-scratch 32-bit protected-mode operating system written entirely in NASM
-assembly language. It targets BIOS-bootable x86 hardware and runs under QEMU or on compatible real
-hardware.
+Mellivora OS is a bare-metal, from-scratch 32-bit protected-mode operating
+system built from NASM assembly and freestanding C. It targets BIOS-bootable
+x86 hardware and runs under QEMU or on compatible real hardware.
 
 This guide covers everything you need to build, run, and test the OS.
 
@@ -27,7 +27,7 @@ This guide covers everything you need to build, run, and test the OS.
 
 ```bash
 sudo apt update
-sudo apt install nasm qemu-system-x86 make python3 clang lld
+sudo apt install nasm qemu-system-x86 make python3 clang lld binutils
 ```
 
 `clang` from the distribution targets `i386-elf` without multilib; if you
@@ -38,13 +38,13 @@ which candidates the probe accepted.
 ### Installing on Fedora/RHEL
 
 ```bash
-sudo dnf install nasm qemu-system-x86 make python3
+sudo dnf install nasm qemu-system-x86 make python3 clang lld binutils
 ```
 
 ### Installing on Arch Linux
 
 ```bash
-sudo pacman -S nasm qemu-full make python
+sudo pacman -S nasm qemu-full make python clang lld binutils
 ```
 
 ### Linux Host Architectures
@@ -120,7 +120,7 @@ make run QEMU="$HOME/.local/bin/qemu-system-x86_64" QEMU_AUDIO_BACKEND=none
 ### Installing on macOS (Homebrew)
 
 ```bash
-brew install nasm qemu make python3
+brew install nasm qemu make python3 llvm
 ```
 
 > **Note:** On macOS, `dd` and `hdiutil` are pre-installed. You may need to use `gmake`

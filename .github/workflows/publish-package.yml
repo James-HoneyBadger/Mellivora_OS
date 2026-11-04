@@ -23,7 +23,8 @@ jobs:
       - name: Build OS disk image
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nasm make python3
+          sudo apt-get install -y nasm make python3 clang lld binutils
+          sh tools/find_c_toolchain.sh | tee toolchain-report.txt
           # The image is the container's payload. Build it at the size the
           # installer disc uses (256 MiB) rather than the 2 GB development
           # default: the filesystem uses ~9 MiB either way, so the default was
@@ -57,3 +58,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Upload build toolchain report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-toolchain-${{ github.run_id }}
+          path: toolchain-report.txt
+          if-no-files-found: warn
+          retention-days: 7

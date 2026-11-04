@@ -167,6 +167,76 @@ copy_from_user:
         stc
         ret
 
+; copy_user_string - copy a NUL-terminated string out of ring 3 into a kernel
+; buffer, bounded so a string that runs past the end of its mapping cannot make
+; the kernel fault while scanning for the terminator.
+;   In : EAX = user source, EDI = kernel destination, ECX = max bytes (incl NUL)
+;   Out: CF=0 copied (destination NUL-terminated); CF=1 bad pointer or too long
+;        (destination is left empty either way). EAX/ECX/EDX/ESI clobbered.
+copy_user_string:
+        push ebx
+        push ecx
+        push edx
+        push esi
+        mov esi, eax              ; source
+        mov ebx, ecx              ; max bytes including the NUL
+        cmp byte [syscall_ring], 0
+        jne .csu_check
+        ; Ring 0 (the shell) passes trusted kernel pointers: bound by max only.
+        mov edx, ebx
+        jmp .csu_loop
+.csu_check:
+        call user_ptr_ok          ; EAX preserved
+        jc .csu_bad
+        cmp eax, USER_PTR_MAX
+        jae .csu_area
+        ; Identity window: readable up to USER_PTR_MAX.
+        mov edx, USER_PTR_MAX
+        sub edx, eax
+        jmp .csu_lim
+.csu_area:
+        ; Above the window: the string has to sit inside one VMA.
+        call vm_find_area         ; EAX = area or 0
+        test eax, eax
+        jz .csu_bad
+        mov edx, [eax + VMA_END]
+        sub edx, esi
+.csu_lim:
+        ; bound = min(available bytes, max)
+        cmp edx, ebx
+        jbe .csu_loop
+        mov edx, ebx
+.csu_loop:
+        xor ecx, ecx              ; copied so far
+.csu_next:
+        cmp ecx, edx
+        jae .csu_long
+        mov al, [esi + ecx]
+        mov [edi + ecx], al
+        test al, al
+        jz .csu_ok
+        inc ecx
+        jmp .csu_next
+.csu_ok:
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        clc
+        ret
+.csu_long:
+        ; Too long: leave the destination empty so a caller cannot act on a
+        ; truncated command or string.
+        mov byte [edi], 0
+.csu_bad:
+        mov byte [edi], 0
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        stc
+        ret
+
 ; errno_set - record a POSIX error for the calling context and return -1.
 ;   In : EAX = errno value (an E* constant from kernel.asm)
 ;   Out: EAX = -1
@@ -3171,6 +3241,7 @@ sys_exit:
         ; Clear running flag
         mov byte [program_running], 0
         ; Reset color so shell doesn't inherit program's color
+        call vga_end_program_color
         call vga_reset_color
         ; Ensure interrupts are enabled for the shell
         sti
@@ -3208,23 +3279,23 @@ sys_getchar:
         iretd
 
 sys_print:
-        ; Phase 1.2: reject obviously-bogus user pointers (NULL, kernel range,
-        ; addresses beyond identity-mapped RAM) instead of dereferencing them.
-        push eax
+        ; Copy the string into kernel scratch first, bounded, so a pointer near
+        ; the end of its mapping cannot make the kernel fault while it scans for
+        ; the NUL terminator.
         mov eax, ebx
-        call validate_user_ptr
+        mov edi, temp_line_buf
+        mov ecx, LINE_BUFFER_SIZE
+        call copy_user_string
         jc .sp_bad
-        pop eax
         push esi
-        mov esi, ebx
+        mov esi, temp_line_buf
         call vga_print
-        mov esi, ebx
+        mov esi, temp_line_buf
         call serial_print
         pop esi
         xor eax, eax
         iretd
 .sp_bad:
-        pop eax
         mov eax, -1
         iretd
 
@@ -3240,9 +3311,19 @@ sys_clear:
         xor eax, eax
         iretd
 
+; EBX = attribute byte; bit 8 (SETCOLOR_PERSIST) makes it the shell's colour.
+; Without the bit the colour lasts until the program exits: the shell keeps the
+; colour it had at launch (vga_end_program_color), so a coloured game or
+; banner does not leave the prompt painted in its last colour.
+SETCOLOR_PERSIST equ 0x100
+
 sys_setcolor:
         mov [vga_color], bl
         mov [default_color], bl
+        test ebx, SETCOLOR_PERSIST
+        jz .ssc_done
+        mov byte [prog_color_persist], 1
+.ssc_done:
         xor eax, eax
         iretd
 
@@ -3267,15 +3348,17 @@ sys_exec_call:
         ; Note: on success, this never returns (IRETs into the new program)
         ; On failure (program not found), EAX = -1
 
-        ; Phase 1.2: validate filename pointer before any kernel state changes
-        push eax
+        ; Copy the command line into kernel scratch first, bounded: the parser
+        ; scans for NUL in kernel mode, so a pointer at the end of a mapping
+        ; must not be passed straight through.
         mov eax, ebx
-        call validate_user_ptr
+        mov edi, temp_line_buf
+        mov ecx, LINE_BUFFER_SIZE
+        call copy_user_string
         jc .exec_bad_ptr
-        pop eax
 
         push esi
-        mov esi, ebx
+        mov esi, temp_line_buf
         call exec_kernel_line
         pop esi
         jc .exec_fail
@@ -3286,7 +3369,6 @@ sys_exec_call:
         mov eax, -1
         iretd
 .exec_bad_ptr:
-        pop eax
         mov eax, -1
         iretd
 

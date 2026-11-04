@@ -1988,7 +1988,7 @@ length, which also rejects a range that wraps past 2^32):
 | 15 | `SYS_GETTIME` | — | EAX=tick_count |
 | 16 | `SYS_SLEEP` | EBX=ticks | EAX=0 |
 | 17 | `SYS_CLEAR` | — | EAX=0 |
-| 18 | `SYS_SETCOLOR` | EBX=color byte | EAX=0 |
+| 18 | `SYS_SETCOLOR` | EBX=color byte; bit 8 (`SETCOLOR_PERSIST`) keeps it after exit | EAX=0 |
 | 19 | `SYS_MALLOC` | EBX=size (rounded to 4 KB pages) | EAX=address (0=fail) |
 | 20 | `SYS_FREE` | EBX=address, ECX=size | EAX=0 |
 | 21 | `SYS_EXEC` | EBX=filename | EAX=0 |

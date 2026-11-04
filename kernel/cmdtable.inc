@@ -88,6 +88,8 @@ cmd_table:
         CMDENT cmd_chown_str, CAT_FILES, sum_chown, det_chown
         CMDENT cmd_copy_str, CAT_FILES, sum_copy, det_copy
         CMDENT cmd_del_str, CAT_FILES, sum_del, det_del
+        CMDENT cmd_assoc_str, CAT_FILES, sum_assoc, det_assoc
+        CMDENT cmd_open_str, CAT_FILES, sum_open, det_open
         CMDENT cmd_df_str, CAT_FILES, sum_df, det_df
         CMDENT cmd_dir_str, CAT_FILES, sum_dir, det_dir
         CMDENT cmd_dirs_str, CAT_FILES, sum_dirs, det_dirs
@@ -152,6 +154,7 @@ cmd_table:
         CMDENT nm_while, CAT_SCRIPT, sum_while, det_while   ; dispatches cmd_while_str
         CMDENT cmd_beep_str, CAT_DISPLAY, sum_beep, det_beep
         CMDENT cmd_gui_str, CAT_DISPLAY, sum_gui, det_gui
+        CMDENT cmd_logonui_str, CAT_DISPLAY, sum_logonui, det_logonui
         CMDENT cmd_gfx_str, CAT_DISPLAY, sum_gfx, det_gfx
         CMDENT cmd_mouse_str, CAT_DISPLAY, sum_mouse, det_mouse
         CMDENT cmd_scrsaver_str, CAT_DISPLAY, sum_scrsaver, det_scrsaver
@@ -702,6 +705,22 @@ det_gfx:
 det_gui:
         db "burrows", 0x0A
         db "  Start the Burrows desktop. Ctrl+C returns to the text shell.", 0x0A, 0
+sum_logonui: db "Authenticate graphically and start Burrows", 0
+det_logonui:
+        db "logonui", 0x0A
+        db "  Open the graphical user-name and password screen. Tab changes", 0x0A
+        db "  fields, Enter submits, and Escape cancels to the shell.", 0x0A
+        db "  Press F2 to create an account with a confirmed password.", 0x0A, 0
+sum_assoc: db "Set or inspect per-user file type handlers", 0
+det_assoc:
+        db "assoc [.EXT [PROGRAM|delete]]", 0x0A
+        db "  With no arguments, list every registered file type: your own", 0x0A
+        db "  handlers first, then the machine defaults. With .EXT, show its", 0x0A
+        db "  handler; with PROGRAM, set yours; with delete, remove yours.", 0x0A, 0
+sum_open: db "Open a file with its registered handler", 0
+det_open:
+        db "open FILE", 0x0A
+        db "  Launch the per-user handler for FILE's extension.", 0x0A, 0
 sum_mouse: db "Mouse status", 0
 det_mouse:
         db "mouse", 0x0A

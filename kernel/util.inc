@@ -5345,6 +5345,8 @@ hbfs_create_path:
         call path_enter
         test eax, eax
         jnz .hcp_fail
+        call hbfs_load_root_dir         ; same stale-buffer guard as hbfs_enter_path
+        jc .hcp_fail
 
         mov esi, path_base_buf
         call hbfs_find_file
@@ -5390,6 +5392,8 @@ hbfs_truncate_path:
         call path_enter
         test eax, eax
         jnz .htp_fail
+        call hbfs_load_root_dir         ; same stale-buffer guard as hbfs_enter_path
+        jc .htp_fail
 
         mov esi, path_base_buf
         call hbfs_find_file
@@ -5438,6 +5442,13 @@ hbfs_enter_path:
         call path_enter
         test eax, eax
         jnz .hep_fail
+        ; Ensure hbfs_dir_buf holds the entered (or current) directory. A PATH
+        ; search cd's into each search directory and then restores only the
+        ; cwd scalars, leaving the buffer named to the search directory; a
+        ; relative lookup that followed would search the wrong entries. The
+        ; load is a cache hit whenever the buffer is already current.
+        call hbfs_load_root_dir
+        jc .hep_fail
         mov dword [esp + 28], 0
         popad
         ret

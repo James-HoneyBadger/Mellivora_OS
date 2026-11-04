@@ -128,7 +128,7 @@ M6 does not close until:
 |---|---|
 | Shell namespace | File-system paths and a few virtual names; no `Computer`, `Network` or `Devices` view |
 | Path arguments | `touch`, `mkdir`, `ls`/`dir` and `del` resolve `dir/name` (flags included) and restore the working directory; the interactive editors (`write`, `append`) still name a file only |
-| Associations | None; a program is run by name |
+| Associations | `assoc` alone lists every registered type (user entries, then machine defaults); `assoc .EXT PROGRAM` stores a per-user handler; query checks the user hive then machine hive, `assoc .EXT delete` removes the user override, and `open FILE` launches the handler. Extension-only, single-token workflow; no Open With UI or command templates yet |
 | Drag and drop | None |
 | Clipboard | Text and bitmap, no format listener, no cross-session rule |
 | Workspaces | Four, working |
@@ -137,5 +137,5 @@ M6 does not close until:
 | Accessibility, DPI | None |
 
 The compositor, surfaces, damage rectangles, workspaces, clipboard basics, file
-dialogs and notification queue are real and tested; the namespace, associations
-and data-object protocols are new in M6.
+dialogs, notification queue and basic extension associations are real and tested;
+the namespace and data-object protocols are new in M6.

@@ -76,6 +76,16 @@ class Desktop:
             time.sleep(0.2)
         return False
 
+    def wait_for_count(self, text, count, timeout=15):
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.serial.text().count(text) >= count:
+                return True
+            if self.proc.poll() is not None:
+                fail("QEMU exited while waiting for %r occurrence %d" % (text, count))
+            time.sleep(0.2)
+        return False
+
     def key(self, name, settle=0.35):
         self.monitor.cmd("sendkey %s" % name, 0.1)
         time.sleep(settle)
@@ -124,7 +134,8 @@ def main():
         desk = Desktop(proc, monitor, serial, workdir)
 
         serial.send_line("burrows")
-        check("desktop starts in graphics mode", desk.wait_for("[burrows] desktop up"), "")
+        check("desktop starts in graphics mode",
+              desk.wait_for_count("[burrows] desktop up", 1), "")
         width, height = desk.screendump("01-desktop")
         check("VBE mode is 1024x768", (width, height) == (1024, 768),
               "%dx%d" % (width, height))
@@ -172,11 +183,109 @@ def main():
         time.sleep(1.5)
         desk.type_text("exit")
         desk.key("ret")
-        check("Exit Desktop leaves Burrows", desk.wait_for("[burrows] desktop exit"))
+        check("Exit Desktop leaves Burrows",
+              desk.wait_for_count("[burrows] desktop exit", 1))
         time.sleep(2.0)
         width, height = desk.screendump("05-shell")
         is_text_mode = height == 400 and width < 800
         check("text mode restored", is_text_mode, "%dx%d" % (width, height))
+
+        serial.send_line("account del guilogin")
+        time.sleep(1.0)
+        serial.send_line("logonui")
+        check("graphical logon screen opens",
+              desk.wait_for_count("[logon-ui] ready", 1))
+        width, height = desk.screendump("06-logon")
+        check("logon screen uses graphics mode",
+              (width, height) == (1024, 768),
+              "%dx%d" % (width, height))
+
+        desk.key("f2")
+        check("F2 opens graphical account creation",
+              desk.wait_for_count("[logon-ui] create mode", 1))
+        desk.type_text("guilogin")
+        desk.key("tab")
+        desk.type_text("gui-pass")
+        desk.key("tab")
+        desk.type_text("mismatch")
+        desk.key("ret")
+        check("mismatched account passwords are refused",
+              desk.wait_for_count("[logon-ui] account creation refused", 1, 30))
+        desk.type_text("gui-pass")
+        desk.key("tab")
+        desk.type_text("gui-pass")
+        desk.key("ret")
+        check("graphical account creation logs on",
+              desk.wait_for("[logon-ui] account created", 30) and
+              desk.wait_for_count("[logon-ui] authenticated", 1, 30) and
+              desk.wait_for_count("[burrows] desktop up", 2, 10))
+        width, height = desk.screendump("07-user-desktop")
+        check("new user's desktop renders",
+              (width, height) == (1024, 768),
+              "%dx%d" % (width, height))
+
+        desk.key("f1")
+        time.sleep(1.0)
+        desk.type_text("exit")
+        desk.key("ret")
+        check("authenticated desktop exits cleanly",
+              desk.wait_for_count("[burrows] desktop exit", 2))
+        serial.send_line("assoc .txt pkginfo")
+        check("per-user association is stored",
+              desk.wait_for_count("[assoc] per-user association saved", 1))
+        serial.send_line("assoc .txt")
+        check("per-user association can be queried",
+              desk.wait_for_count("[assoc] association queried", 1))
+        serial.send_line("assoc")
+        check("associations can be listed",
+              desk.wait_for_count("[assoc] associations listed", 1))
+        serial.send_line("open test.txt")
+        check("open launches the registered file handler",
+              desk.wait_for_count("[assoc] opened handler", 1, 30))
+        time.sleep(1.0)
+        serial.send_line("assoc .txt delete")
+        check("per-user association can be removed",
+              desk.wait_for_count("[assoc] per-user association removed", 1))
+        serial.send_line("logonui")
+        check("active session blocks another logon",
+              desk.wait_for("[logon-ui] refused: session already active"))
+        serial.send_line("logoff")
+        time.sleep(1.0)
+
+        serial.send_line("logonui")
+        check("new account can return to graphical logon",
+              desk.wait_for_count("[logon-ui] ready", 2))
+        desk.screendump("08-logon-again")
+        desk.key("f2")
+        check("F2 opens duplicate-account form",
+              desk.wait_for_count("[logon-ui] create mode", 2))
+        desk.type_text("guilogin")
+        desk.key("tab")
+        desk.type_text("gui-pass")
+        desk.key("tab")
+        desk.type_text("gui-pass")
+        desk.key("ret")
+        check("duplicate graphical account is refused",
+              desk.wait_for_count("[logon-ui] account creation refused", 2, 30))
+        desk.key("f2")
+        check("F2 returns to logon form",
+              desk.wait_for_count("[logon-ui] logon mode", 1))
+        desk.key("esc")
+        check("logon screen cancellation is reported",
+              desk.wait_for_count("[logon-ui] cancelled", 1))
+
+        serial.send_line("logonui")
+        check("graphical logon screen reopens",
+              desk.wait_for_count("[logon-ui] ready", 3))
+        desk.type_text("guilogin")
+        desk.key("tab")
+        desk.type_text("wrong")
+        desk.key("ret")
+        check("invalid credentials are refused",
+              desk.wait_for_count("[logon-ui] authentication refused", 1, 30))
+        desk.key("esc")
+        check("invalid logon can be cancelled",
+              desk.wait_for_count("[logon-ui] cancelled", 2))
 
         text = serial.text()
         bad = re.search(r"CPU EXCEPTION|PAGE FAULT|fault @", text)

@@ -90,11 +90,15 @@ skip_spaces:
         jmp skip_spaces
 
 ;---------------------------------------
-; copy_token: copy non-space chars from ESI to EDI, null-terminate
+; copy_token: copy non-space chars from ESI to EDI, null-terminate.
+; Bounded to 255 characters so a path argument cannot overrun its 256-byte
+; buffer; an overlong token is consumed in full so parsing stays in step.
 ;---------------------------------------
 copy_token:
         xor ecx, ecx
-.ct:    mov al, [esi]
+.ct:    cmp ecx, 255
+        jae .ct_trunc
+        mov al, [esi]
         cmp al, ' '
         je .ct_done
         cmp al, 9
@@ -105,6 +109,18 @@ copy_token:
         inc ecx
         inc esi
         jmp .ct
+.ct_trunc:
+        ; Buffer full: skip the rest of this token so the caller's pointer
+        ; lands on the next argument, not in the middle of this one.
+        mov al, [esi]
+        cmp al, ' '
+        je .ct_done
+        cmp al, 9
+        je .ct_done
+        cmp al, 0
+        je .ct_done
+        inc esi
+        jmp .ct_trunc
 .ct_done:
         mov byte [edi + ecx], 0
         ret

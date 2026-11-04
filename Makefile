@@ -128,7 +128,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table check-cmodule syscall-header check-syscall-header FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg check-hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table glyphs check-glyphs check-doc-claims check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
 
@@ -176,7 +176,7 @@ endif
 C_CFLAGS = -c -O2 -std=c11 -ffreestanding -fno-builtin -fno-stack-protector \
            -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables \
            -march=pentium4 -mtune=pentium4 \
-           -mno-sse -mno-mmx -msoft-float -Wall -Wextra -Ic/include
+           -mno-sse -mno-mmx -msoft-float -Wall -Wextra -Werror -Ic/include
 
 C_INCS    = $(wildcard c/include/*.h c/include/*/*.h)
 C_OBJ_DIR = .build/c
@@ -200,7 +200,7 @@ CMOD_BLOB = c/build/kmod.bin
 # and the start-up in c/rt/start.c, so a program is one main() and no boilerplate.
 C_PROGS = $(patsubst c/prog/%.c,programs/%.bin,$(wildcard c/prog/*.c))
 
-$(C_OBJ_DIR)/%.o: c/%.c $(C_INCS)
+$(C_OBJ_DIR)/%.o: c/%.c $(C_INCS) Makefile
 	@mkdir -p $(dir $@)
 	$(C_CC) $(C_CFLAGS) -o $@ $<
 
@@ -795,7 +795,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-loader check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-loader check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -893,6 +893,20 @@ check-font:
 check-command-table:
 	@python3 tools/check_command_table.py
 
+# The shell's icons are one generated 16x16 table, so an icon is a drawing in
+# tools/gen_glyphs.py rather than hand-placed rectangles in burrows.inc.
+glyphs:
+	@python3 tools/gen_glyphs.py
+
+check-glyphs:
+	@python3 tools/gen_glyphs.py --check
+
+# The prose quotes numbers (built-ins, programs, syscalls, the kernel limit) and
+# denies features the tree does not have. Both drift silently without this.
+check-doc-claims:
+	@python3 tools/check_doc_claims.py
+	@python3 tests/test_doc_claims.py
+
 validate-syscalls:
 	@python3 tools/validate_syscalls.py
 
@@ -926,7 +940,7 @@ launcher-catalog: docs/app-catalog.json tools/generate_launcher_catalog.py
 check-launcher-catalog:
 	@python3 tools/generate_launcher_catalog.py --check
 
-lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-syscall-header check-app-catalog check-launcher-catalog validate-manifest check-docs check-font check-command-table
+lint: validate-constants check-constants check-hbfs-checksum check-hbfs-extents validate-syscalls validate-version validate-permissions check-syscalls-json check-syscalls-md check-syscall-header check-app-catalog check-launcher-catalog validate-manifest check-docs check-font check-command-table check-glyphs check-doc-claims
 	@bash tools/nasm_lint.sh boot.asm stage2.asm kernel.asm \
 		install/boot/stage1.asm install/boot/installer.asm
 	@echo "=== Lint checks complete ==="
@@ -973,18 +987,16 @@ validate-manifest-coverage:
 check-samples:
 	@python3 tools/check_samples.py
 
-# Phase 4: nightly-style sanitize build. Defines KERNEL_DEBUG_BOUNDS so any
-# compile-time bounds-check macros are enabled, then runs the regression
-# suite. NASM treats unknown -D flags harmlessly so this is a no-op until
-# kernel sources start guarding code with %ifdef KERNEL_DEBUG_BOUNDS.
+# Debug-bounds regression build. The define currently has no effect until
+# kernel sources use %ifdef KERNEL_DEBUG_BOUNDS; this target is not a sanitizer.
 sanitize:
-	@echo "=== Sanitize build (KERNEL_DEBUG_BOUNDS=1) ==="
+	@echo "=== Debug-bounds regression (KERNEL_DEBUG_BOUNDS=1; not a sanitizer) ==="
 	$(MAKE) clean
 	$(NASM) -f bin -O0 -DKERNEL_DEBUG_BOUNDS=1 \
 		-o $(KERNEL_BIN) -l $(KERNEL_BIN:.bin=.lst) $(KERNEL_SRC)
 	$(MAKE) full
 	$(MAKE) check
-	@echo "=== Sanitize run complete ==="
+	@echo "=== Debug-bounds regression complete ==="
 
 # Show component sizes
 sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
@@ -1018,6 +1030,9 @@ $(HBPKG_BIN): tools/hbpkg.c
 	@echo "=== Package manager: $(HBPKG_BIN) ==="
 
 hbpkg: $(HBPKG_BIN)
+
+check-hbpkg: hbpkg
+	@python3 tests/test_hbpkg.py
 
 # Print available build targets
 help:

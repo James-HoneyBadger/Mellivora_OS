@@ -1081,7 +1081,7 @@ GAME_PROGRAMS = {
     'lunar', 'mastermind', 'matrix', 'maze', 'mine',
     'neurovault', 'outbreak', 'pacman', 'iago', 'rain', 'raycaster', 'rogue',
     'simon', 'snake', 'solitaire', 'starfield', 'tetris', 'tictactoe',
-    'robotown',
+    'robotown', '2048',
 }
 
 # Everything else in programs/ goes to /bin

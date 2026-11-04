@@ -71,6 +71,30 @@ def main():
           all(row["status"] in tool.STATUS_RANK for row in rows))
     check("the summary counts the rows",
           summary["pass"] + summary["partial"] + summary["fail"] == summary["total"] == 14)
+    check("service status requires boot, dependency and recovery workflow tests",
+          rows[2]["status"] == "pass" and
+          not any("workflow test:" in item for item in rows[2]["missing"]))
+    check("configuration status requires typed and transactional workflow tests",
+          rows[3]["status"] == "pass" and
+          not any("workflow test:" in item for item in rows[3]["missing"]))
+    check("logon remains partial until the GUI and separate desktop workflows exist",
+          rows[0]["status"] == "partial" and
+          any("logon screen" in item for item in rows[0]["missing"]) and
+          any("separate desktops" in item for item in rows[0]["missing"]))
+    check("desktop passes once the associations workflow exists",
+          rows[5]["status"] == "pass" and
+          not any("workflow test:" in item for item in rows[5]["missing"]))
+    check("package, network and print rows name missing user workflows",
+          all(rows[index]["status"] in {"partial", "fail"} and
+              any("workflow test:" in item for item in rows[index]["missing"])
+              for index in (4, 7, 8)))
+    roadmap = tool.ROADMAP.read_text(encoding="utf-8")
+    start = roadmap.find(tool.ROADMAP_START)
+    end = roadmap.find(tool.ROADMAP_END, start + len(tool.ROADMAP_START))
+    check("the roadmap scorecard matches generated workflow evidence",
+          start >= 0 and end >= 0 and
+          roadmap[start:end + len(tool.ROADMAP_END)] ==
+          tool.render_roadmap_section(rows))
 
     # The committed baseline must match the tree: a row that quietly improved
     # is as much a baseline error as one that regressed.

@@ -109,7 +109,7 @@ banner_str:
         db 0xCC                                             ; ╠
         times 78 db 0xCD                                   ; ══...══
         db 0xB9                                             ; ╣
-        db 0xBA, " HBFS v3/4 ", 0xF9, "  210 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  278 programs  ", 0xF9, "  Ring 3         ", " ", 0xBA
+        db 0xBA, " HBFS v3/4 ", 0xF9, "  210 syscalls  ", 0xF9, "  VFS Layer  ", 0xF9, "  Burrows GUI   ", 0xF9, "  Ring 3         ", " ", 0xBA
         db 0xC8                                             ; ╚
         times 78 db 0xCD                                   ; ══...══
         db 0xBC, 0                                        ; ╝\0
@@ -152,7 +152,7 @@ version_text:
         db "  PCI:           Bus enumeration (buses 0-7, 64-entry table)", 0x0A
         db "  VirtIO:        virtio-blk (block) + virtio-net (network)", 0x0A
         db "  Syscalls:      INT 0x80 (210 syscalls)", 0x0A
-        db "  Desktop:       Burrows (VBE 640x480 framebuffer)", 0x0A
+        db "  Desktop:       Burrows (VBE 1024x768, 32 bpp)", 0x0A
         db "  Compositor:    Surface IPC, multi-window desktop compositor", 0x0A
         db "  Scheduler:     Priority-based preemptive (128 tasks, 4 levels)", 0x0A
         db "  Signals:       POSIX-style (INT/KILL/TERM/TSTP/CONT/USR1/USR2)", 0x0A
@@ -263,6 +263,7 @@ cmd_size_str:   db "size", 0
 cmd_strings_str: db "strings", 0
 cmd_mouse_str:  db "mouse", 0
 cmd_gui_str:    db "burrows", 0
+cmd_logonui_str: db "logonui", 0
 cmd_gfx_str:    db "gfx", 0
 cmd_ping_str:   db "ping", 0
 cmd_ifconfig_str: db "ifconfig", 0
@@ -279,6 +280,51 @@ cmd_sessions_str: db "sessions", 0
 cmd_lock_str:   db "lock", 0
 cmd_unlock_str: db "unlock", 0
 cmd_switch_str: db "switch", 0
+cmd_assoc_str:   db "assoc", 0
+cmd_open_str:    db "open", 0
+msg_logonui_active: db "logonui: log off before starting a new session", 0x0A, 0
+assoc_user_prefix: db "\Registry\User\", 0
+assoc_machine_prefix: db "\Registry\Machine\Software\Classes\", 0
+assoc_classes_suffix: db "\Software\Classes\", 0
+assoc_open_value: db "Open", 0
+assoc_delete_word: db "delete", 0
+assoc_opened_serial: db "[assoc] opened handler", 13, 10, 0
+assoc_set_serial: db "[assoc] per-user association saved", 13, 10, 0
+assoc_delete_serial: db "[assoc] per-user association removed", 13, 10, 0
+assoc_query_serial: db "[assoc] association queried", 13, 10, 0
+assoc_ext_buf: times 18 db 0
+assoc_file_buf: times 128 db 0
+assoc_handler_buf: times 64 db 0
+assoc_user_key_buf: times 160 db 0
+assoc_machine_key_buf: times 96 db 0
+assoc_command_buf: times 256 db 0
+assoc_arg_buf: times 24 db 0
+assoc_build_ptr: dd 0
+assoc_open_pending: db 0
+assoc_valid_ext_msg: db "assoc: extension must start with a dot and contain only letters, digits, dot, _ or -", 0x0A, 0
+assoc_need_session_msg: db "assoc: sign in before setting a per-user association", 0x0A, 0
+assoc_usage_msg: db "Usage: assoc [.EXT [PROGRAM|delete]] | open FILE", 0x0A, 0
+assoc_missing_msg: db "assoc: no handler is registered for that file type", 0x0A, 0
+assoc_bad_handler_msg: db "assoc: handler names may contain only letters, digits, dot, _ or -", 0x0A, 0
+assoc_store_fail_msg: db "assoc: could not persist the association", 0x0A, 0
+assoc_not_found_msg: db "open: associated program could not be started", 0x0A, 0
+assoc_open_no_ext_msg: db "open: the file name has no usable extension", 0x0A, 0
+assoc_long_ext_msg: db "assoc: the extension is longer than 17 characters", 0x0A, 0
+assoc_long_handler_msg: db "assoc: the handler name is longer than 63 characters", 0x0A, 0
+assoc_long_path_msg: db "open: the path is longer than 127 characters", 0x0A, 0
+assoc_list_header: db "  Extension   Handler         Scope", 0x0A, 0
+assoc_indent:      db "  ", 0
+assoc_scope_user:    db "(user)", 0
+assoc_scope_machine: db "(machine)", 0
+assoc_none_msg:    db "assoc: no file types are registered. Try: assoc .txt edit", 0x0A, 0
+assoc_list_serial: db "[assoc] associations listed", 13, 10, 0
+assoc_list_name:   times 24 db 0
+assoc_list_key_buf: times 200 db 0
+assoc_list_count:  dd 0
+assoc_saved_msg: db "assoc: saved ", 0
+assoc_removed_msg: db "assoc: removed ", 0
+assoc_query_msg: db "assoc: ", 0
+assoc_opens_msg: db " opens with ", 0
 cmd_tasks_str:  db "tasks", 0
 cmd_stat_str:   db "stat", 0
 cmd_fsck_str:   db "fsck", 0
@@ -705,6 +751,9 @@ vga_cursor_x:   resd 1
 vga_cursor_y:   resd 1
 vga_color:      resb 1
 default_color:  resb 1
+prog_saved_color:   resb 1      ; default_color when a foreground program started
+prog_color_saved:   resb 1      ; 1 while prog_saved_color is waiting to be restored
+prog_color_persist: resb 1      ; set by SYS_SETCOLOR with SETCOLOR_PERSIST
 
 tick_count:     resd 1
 total_free_pages: resd 1
@@ -1163,6 +1212,7 @@ sb16_state:       resb 1          ; 0=idle, 1=playing, 2=done
 sb16_version_major: resb 1
 sb16_version_minor: resb 1
 sb16_sample_rate: resd 1          ; Current sample rate
+align 65536
 sb16_stage:       resb SB16_STAGE_BYTES   ; staging copy for demand-zone buffers
 sb16_buf_addr:    resd 1          ; DMA buffer physical address
 sb16_buf_len:     resd 1          ; DMA buffer length
@@ -1422,4 +1472,3 @@ cmod_blob:
     %error "the C module is larger than its 32 KB slot"
 %endif
 %endif ; CMOD_ABSENT
-

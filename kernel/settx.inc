@@ -1815,10 +1815,20 @@ sett_ext_command:
         shl eax, 24
         or eax, [.acl_owner]
         mov edx, eax                     ; the (mode << 24) | owner word
+        ; Changing an owner or mode is itself an access-controlled change: the
+        ; caller must hold owner-write on the key being edited (SYSTEM always
+        ; may). Skipping this let an unprivileged user reassign ownership.
+        mov eax, [.acl_key]
+        call sett_acl_may_write
+        jc .acl_denied
         mov eax, [.acl_key]
         call sett_key_base
         mov [ebx + SETT_KEY_SPARE], edx
         mov esi, msg_sett_aclset
+        call vga_print
+        jmp .done
+.acl_denied:
+        mov esi, msg_sett_denied
         call vga_print
         jmp .done
 .acl_show:
@@ -2005,6 +2015,7 @@ msg_sett_nobak:      db "sett: no last-known-good generation to roll back to", 0
 msg_sett_watching:   db "sett: watching ", 0
 msg_sett_watchfull:  db "sett: no free watch slots", 0x0A, 0
 msg_sett_aclset:     db "sett: access set", 0x0A, 0
+msg_sett_denied:     db "sett: permission denied", 0x0A, 0
 msg_sett_owner:      db " owner ", 0
 msg_sett_mode:       db " mode 0x", 0
 msg_sett_hivesaved:  db "sett: hive written", 0x0A, 0

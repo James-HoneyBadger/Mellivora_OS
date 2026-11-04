@@ -1616,6 +1616,26 @@ svc_command:
         ; The verb compares below use ESI, so the first argument is kept.
         mov [svc_argp], esi
 
+        ; Service control mutates machine state, so only root (uid 0) may
+        ; create/delete/start/stop/configure a service. list and query stay
+        ; open to everyone. The boot shell is the frozen SYSTEM identity, so
+        ; it keeps working exactly as before.
+        call obj_identity
+        mov [.svc_uid], eax
+        test eax, eax
+        jz .authorized
+        mov esi, svc_tok
+        mov edi, svc_word_list
+        call sett_ci_equal
+        jc .list
+        mov esi, svc_tok
+        mov edi, svc_word_query
+        call sett_ci_equal
+        jc .query
+        mov esi, msg_svc_denied
+        call vga_print
+        jmp .done
+.authorized:
         mov esi, svc_tok
         mov edi, svc_word_list
         call sett_ci_equal
@@ -2134,6 +2154,7 @@ svc_command:
 .rec:  dd 0
 .type: dd 0
 .next: dd 0
+.svc_uid: dd 0
 
 svc_word_list:     db "list", 0
 svc_word_create:   db "create", 0
@@ -2182,6 +2203,7 @@ msg_svc_restarts:   db " restarts=", 0
 msg_svc_fails:      db " fails=", 0
 msg_svc_depword:    db " needs=", 0
 msg_svc_none:       db "sc: no services", 0x0A, 0
+msg_svc_denied:     db "sc: permission denied", 0x0A, 0
 msg_svc_created:    db "sc: created ", 0
 msg_svc_deleted:    db "sc: deleted", 0x0A, 0
 msg_svc_dup:        db "sc: a service of that name already exists", 0x0A, 0

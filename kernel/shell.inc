@@ -1967,6 +1967,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_del
 
+        mov edi, cmd_assoc_str
+        call str_starts_with
+        jc .cmd_assoc
+
+        mov edi, cmd_open_str
+        call str_starts_with
+        jc .cmd_open
+
         mov edi, cmd_format_str
         call str_starts_with
         jc .cmd_format
@@ -2174,6 +2182,10 @@ shell_dispatch_core:
         mov edi, cmd_gui_str
         call str_starts_with
         jc .cmd_gui
+
+        mov edi, cmd_logonui_str
+        call str_starts_with
+        jc .cmd_logonui
 
         mov edi, cmd_gfx_str
         call str_starts_with
@@ -2515,6 +2527,14 @@ shell_dispatch_core:
         call cmd_delete_file
         ret
 
+.cmd_assoc:
+        call assoc_command
+        ret
+
+.cmd_open:
+        call assoc_open_file
+        ret
+
 .cmd_format:
         mov esi, msg_format_confirm
         call vga_print
@@ -2816,6 +2836,22 @@ shell_dispatch_core:
         call vbe_restore_text
         call vga_init
         mov byte [vbe_restore_pending], 0
+        ret
+
+.cmd_logonui:
+        cmp dword [sess_current], 0
+        jne .logonui_active
+        mov byte [gui_login_required], 1
+        call gui_desktop_main
+        call vbe_restore_text
+        call vga_init
+        mov byte [vbe_restore_pending], 0
+        ret
+.logonui_active:
+        mov esi, burrows_login_active
+        call serial_print
+        mov esi, msg_logonui_active
+        call vga_print
         ret
 
 .cmd_whoami:
@@ -6354,6 +6390,580 @@ cmd_df_info:
         ret
 
 ;---------------------------------------
+; Per-user file associations and `open`
+;---------------------------------------
+assoc_command:
+        pushad
+        mov esi, line_buffer
+        mov edi, cmd_assoc_str
+        call str_starts_with
+        jc .ac_args
+        jmp .ac_usage
+.ac_args:
+        mov edi, assoc_ext_buf
+        mov edx, 17
+        call sett_word
+        jc .ac_list
+        mov al, [esi]
+        test al, al
+        jz .ac_ext_ok
+        cmp al, ' '
+        jne .ac_long_ext
+.ac_ext_ok:
+        call assoc_validate_extension
+        jc .ac_bad_ext
+
+        mov edi, assoc_handler_buf
+        mov edx, 63
+        call sett_word
+        jc .ac_query
+        mov al, [esi]
+        test al, al
+        jz .ac_handler_ok
+        cmp al, ' '
+        jne .ac_long_handler
+.ac_handler_ok:
+        mov esi, assoc_handler_buf
+        mov edi, assoc_delete_word
+        call sett_ci_equal
+        jc .ac_delete
+        call assoc_validate_handler
+        jc .ac_bad_handler
+        cmp dword [sess_current], 0
+        je .ac_need_session
+
+        call sett_txn_begin_internal
+        call assoc_build_user_key
+        jc .ac_store_abort
+        mov edi, assoc_user_key_buf
+        mov esi, assoc_open_value
+        mov edx, assoc_handler_buf
+        call sett_kv_set_str
+        jc .ac_store_abort
+        call sett_save
+        jc .ac_store_abort
+        call sett_txn_end_internal
+        mov esi, assoc_set_serial
+        call serial_print
+        mov esi, assoc_saved_msg
+        call vga_print
+        mov esi, assoc_ext_buf
+        call vga_print
+        mov esi, assoc_opens_msg
+        call vga_print
+        mov esi, assoc_handler_buf
+        call vga_print
+        call vga_newline
+        jmp .ac_done
+
+.ac_query:
+        call assoc_find_handler
+        jc .ac_missing
+        mov esi, assoc_query_serial
+        call serial_print
+        mov esi, assoc_query_msg
+        call vga_print
+        mov esi, assoc_ext_buf
+        call vga_print
+        mov esi, assoc_opens_msg
+        call vga_print
+        mov esi, assoc_handler_buf
+        call vga_print
+        call vga_newline
+        jmp .ac_done
+
+.ac_delete:
+        cmp dword [sess_current], 0
+        je .ac_need_session
+        call sett_txn_begin_internal
+        call assoc_build_user_key
+        jc .ac_store_abort
+        mov esi, assoc_user_key_buf
+        call sett_key_find
+        jc .ac_delete_missing
+        mov esi, assoc_user_key_buf
+        call sett_key_delete
+        jc .ac_delete_missing
+        call sett_save
+        jc .ac_store_abort
+        call sett_txn_end_internal
+        mov esi, assoc_delete_serial
+        call serial_print
+        mov esi, assoc_removed_msg
+        call vga_print
+        mov esi, assoc_ext_buf
+        call vga_print
+        call vga_newline
+        jmp .ac_done
+.ac_delete_missing:
+        call sett_txn_abort_internal
+        jmp .ac_missing
+
+.ac_store_abort:
+        call sett_txn_abort_internal
+        mov esi, assoc_store_fail_msg
+        call vga_print
+        jmp .ac_done
+.ac_bad_ext:
+        mov esi, assoc_valid_ext_msg
+        call vga_print
+        jmp .ac_done
+.ac_long_ext:
+        mov esi, assoc_long_ext_msg
+        call vga_print
+        jmp .ac_done
+.ac_long_handler:
+        mov esi, assoc_long_handler_msg
+        call vga_print
+        jmp .ac_done
+.ac_bad_handler:
+        mov esi, assoc_bad_handler_msg
+        call vga_print
+        jmp .ac_done
+.ac_need_session:
+        mov esi, assoc_need_session_msg
+        call vga_print
+        jmp .ac_done
+.ac_missing:
+        mov esi, assoc_missing_msg
+        call vga_print
+        jmp .ac_done
+.ac_list:
+        call assoc_list_all
+        jmp .ac_done
+.ac_usage:
+        mov esi, assoc_usage_msg
+        call vga_print
+.ac_done:
+        popad
+        ret
+
+;---------------------------------------
+; assoc_list_all - `assoc` with no arguments
+;
+; Every registered extension: the signed-in user's own handlers first, then
+; the machine defaults. A user entry for an extension wins over the machine
+; one, which is the order `open` looks them up in, so the list reads top to
+; bottom the way the shell resolves it.
+;---------------------------------------
+assoc_list_all:
+        pushad
+        mov dword [assoc_list_count], 0
+        mov byte [assoc_ext_buf], 0
+        cmp dword [sess_current], 0
+        je .ala_machine
+        call assoc_build_user_key       ; "...\Software\Classes\" + ""
+        jc .ala_machine
+        mov esi, assoc_user_key_buf
+        call assoc_strip_trailing_slash
+        mov edi, assoc_scope_user
+        call assoc_list_key
+.ala_machine:
+        mov byte [assoc_ext_buf], 0
+        call assoc_build_machine_key
+        mov esi, assoc_machine_key_buf
+        call assoc_strip_trailing_slash
+        mov edi, assoc_scope_machine
+        call assoc_list_key
+        cmp dword [assoc_list_count], 0
+        jne .ala_done
+        mov esi, assoc_none_msg
+        call vga_print
+.ala_done:
+        mov esi, assoc_list_serial
+        call serial_print
+        popad
+        ret
+
+; ESI = NUL-terminated path; drop one trailing backslash in place.
+assoc_strip_trailing_slash:
+        push eax
+        push edi
+        mov edi, esi
+.ats_end:
+        cmp byte [edi], 0
+        je .ats_found
+        inc edi
+        jmp .ats_end
+.ats_found:
+        cmp edi, esi
+        je .ats_done
+        cmp byte [edi - 1], '\'
+        jne .ats_done
+        mov byte [edi - 1], 0
+.ats_done:
+        pop edi
+        pop eax
+        ret
+
+; ESI = parent key ("...\Software\Classes"), EDI = scope label.
+; Prints "  .ext       handler   (scope)" for each child with an Open value.
+assoc_list_key:
+        pushad
+        mov [.alk_parent], esi
+        mov [.alk_scope], edi
+        mov dword [.alk_i], 0
+.alk_loop:
+        cmp dword [.alk_i], 64
+        jae .alk_done
+        mov eax, [.alk_i]
+        mov esi, [.alk_parent]
+        mov edi, assoc_list_name
+        mov edx, 23
+        call sett_child_name
+        jc .alk_done
+        inc dword [.alk_i]
+        cmp byte [assoc_list_name], '.'
+        jne .alk_loop
+        ; Full key = parent + "\" + child
+        mov esi, [.alk_parent]
+        mov edi, assoc_list_key_buf
+        call str_copy
+        dec edi
+        mov al, '\'
+        stosb
+        mov esi, assoc_list_name
+        call str_copy
+        mov edi, assoc_list_key_buf
+        mov esi, assoc_open_value
+        call sett_kv_get_str
+        jc .alk_loop
+        mov [.alk_handler], esi
+        cmp dword [assoc_list_count], 0
+        jne .alk_row
+        mov esi, assoc_list_header
+        call vga_print
+.alk_row:
+        inc dword [assoc_list_count]
+        mov esi, assoc_indent
+        call vga_print
+        mov esi, assoc_list_name
+        call vga_print
+        mov esi, assoc_list_name
+        mov ecx, 12
+        call assoc_pad
+        mov esi, [.alk_handler]
+        call vga_print
+        mov esi, [.alk_handler]
+        mov ecx, 16
+        call assoc_pad
+        mov esi, [.alk_scope]
+        call vga_print
+        call vga_newline
+        jmp .alk_loop
+.alk_done:
+        popad
+        ret
+.alk_parent:  dd 0
+.alk_scope:   dd 0
+.alk_handler: dd 0
+.alk_i:       dd 0
+
+; Pad to a column: ESI = text already printed, ECX = column width.
+assoc_pad:
+        pushad
+.ap_len:
+        cmp byte [esi], 0
+        je .ap_fill
+        inc esi
+        dec ecx
+        jmp .ap_len
+.ap_fill:
+        cmp ecx, 1
+        jge .ap_spaces
+        mov ecx, 1                      ; always at least one space
+.ap_spaces:
+        mov al, ' '
+        call vga_putchar
+        dec ecx
+        jnz .ap_spaces
+        popad
+        ret
+
+assoc_open_file:
+        pushad
+        mov esi, line_buffer
+        mov edi, cmd_open_str
+        call str_starts_with
+        jc .aof_args
+        jmp .aof_usage
+.aof_args:
+        mov edi, assoc_file_buf
+        mov edx, 127
+        call sett_word
+        jc .aof_usage
+        cmp byte [assoc_file_buf], 0
+        je .aof_usage
+        mov al, [esi]
+        test al, al
+        jz .aof_path_ok
+        cmp al, ' '
+        jne .aof_long_path
+.aof_path_ok:
+        mov dword [assoc_arg_buf], 0
+
+        ; The command grammar accepts one path token. The path is a single
+        ; whitespace-delimited word with no quote characters in it, so the
+        ; handler command is plain `handler path` - no quoting is added, because
+        ; the shell forwards quotes literally and the handler would then try to
+        ; open a file whose name begins with a quote.
+        mov esi, assoc_file_buf
+.aof_scan:
+        lodsb
+        test al, al
+        jz .aof_no_dot
+        cmp al, '"'
+        je .aof_bad_path
+        cmp al, '/'
+        je .aof_component
+        cmp al, '\'
+        je .aof_component
+        cmp al, '.'
+        je .aof_dot
+        jmp .aof_scan
+.aof_component:
+        mov dword [assoc_arg_buf], 0
+        mov dword [assoc_ext_buf], 0
+        jmp .aof_scan
+.aof_dot:
+        mov [assoc_arg_buf], esi
+        jmp .aof_scan
+.aof_no_dot:
+        cmp dword [assoc_arg_buf], 0
+        je .aof_missing_ext
+        mov esi, [assoc_arg_buf]
+        dec esi
+        mov edi, assoc_ext_buf
+        mov edx, 17
+        call str_copy_bounded
+        jc .aof_missing_ext
+        call assoc_validate_extension
+        jc .aof_missing_ext
+        call assoc_find_handler
+        jc .aof_missing_handler
+
+        mov edi, assoc_command_buf
+        mov esi, assoc_handler_buf
+        call str_copy
+        dec edi
+        mov al, ' '
+        stosb
+        mov esi, assoc_file_buf
+        call str_copy
+        xor al, al
+        stosb
+        mov esi, assoc_command_buf
+        mov edi, line_buffer
+        call str_copy
+        mov byte [assoc_open_pending], 1
+        mov esi, line_buffer
+        call cmd_exec_program
+        jc .aof_launch_fail
+        jmp .aof_done
+
+.aof_bad_path:
+        jmp .aof_usage
+.aof_missing_ext:
+        mov esi, assoc_open_no_ext_msg
+        call vga_print
+        jmp .aof_done
+.aof_long_path:
+        mov esi, assoc_long_path_msg
+        call vga_print
+        jmp .aof_done
+.aof_missing_handler:
+        mov esi, assoc_missing_msg
+        call vga_print
+        jmp .aof_done
+.aof_launch_fail:
+        mov byte [assoc_open_pending], 0
+        mov esi, assoc_not_found_msg
+        call vga_print
+        jmp .aof_done
+.aof_usage:
+        mov esi, assoc_usage_msg
+        call vga_print
+.aof_done:
+        popad
+        ret
+
+; ESI = NUL-terminated source, EDI = destination, EDX = room including NUL.
+; CF is set rather than silently truncating the path.
+str_copy_bounded:
+        push eax
+        push ecx
+        mov ecx, edx
+.scb_loop:
+        test ecx, ecx
+        jz .scb_fail
+        lodsb
+        stosb
+        test al, al
+        jz .scb_ok
+        dec ecx
+        jmp .scb_loop
+.scb_ok:
+        pop ecx
+        pop eax
+        clc
+        ret
+.scb_fail:
+        mov byte [edi - 1], 0
+        pop ecx
+        pop eax
+        stc
+        ret
+
+assoc_find_handler:
+        pushad
+        cmp dword [sess_current], 0
+        je .afh_machine
+        call assoc_build_user_key
+        jc .afh_machine
+        mov edi, assoc_user_key_buf
+        mov esi, assoc_open_value
+        call sett_kv_get_str
+        jnc .afh_copy
+.afh_machine:
+        call assoc_build_machine_key
+        mov edi, assoc_machine_key_buf
+        mov esi, assoc_open_value
+        call sett_kv_get_str
+        jc .afh_none
+.afh_copy:
+        mov edi, assoc_handler_buf
+        call str_copy
+        popad
+        clc
+        ret
+.afh_none:
+        popad
+        stc
+        ret
+
+assoc_build_user_key:
+        pushad
+        cmp dword [sess_current], 0
+        je .abuk_fail
+        mov esi, assoc_user_prefix
+        mov edi, assoc_user_key_buf
+        call str_copy
+        dec edi
+        mov [assoc_build_ptr], edi
+        mov eax, [sess_current]
+        call sess_slot
+        lea esi, [edi + SESS_F_NAME]
+        mov edi, [assoc_build_ptr]
+        call str_copy
+        dec edi
+        mov esi, assoc_classes_suffix
+        call str_copy
+        dec edi
+        mov esi, assoc_ext_buf
+        call str_copy
+        popad
+        clc
+        ret
+.abuk_fail:
+        popad
+        stc
+        ret
+
+assoc_build_machine_key:
+        pushad
+        mov esi, assoc_machine_prefix
+        mov edi, assoc_machine_key_buf
+        call str_copy
+        dec edi
+        mov esi, assoc_ext_buf
+        call str_copy
+        popad
+        ret
+
+assoc_validate_extension:
+        pushad
+        mov esi, assoc_ext_buf
+        cmp byte [esi], '.'
+        jne .ave_bad
+        inc esi
+        cmp byte [esi], 0
+        je .ave_bad
+.ave_loop:
+        lodsb
+        test al, al
+        jz .ave_good
+        cmp al, 'a'
+        jb .ave_upper
+        cmp al, 'z'
+        jbe .ave_loop
+.ave_upper:
+        cmp al, 'A'
+        jb .ave_digit
+        cmp al, 'Z'
+        jbe .ave_loop
+.ave_digit:
+        cmp al, '0'
+        jb .ave_punct
+        cmp al, '9'
+        jbe .ave_loop
+.ave_punct:
+        cmp al, '.'
+        je .ave_loop
+        cmp al, '_'
+        je .ave_loop
+        cmp al, '-'
+        je .ave_loop
+        jmp .ave_bad
+.ave_good:
+        popad
+        clc
+        ret
+.ave_bad:
+        popad
+        stc
+        ret
+
+assoc_validate_handler:
+        pushad
+        mov esi, assoc_handler_buf
+        cmp byte [esi], 0
+        je .avh_bad
+.avh_loop:
+        lodsb
+        test al, al
+        jz .avh_good
+        cmp al, 'a'
+        jb .avh_upper
+        cmp al, 'z'
+        jbe .avh_loop
+.avh_upper:
+        cmp al, 'A'
+        jb .avh_digit
+        cmp al, 'Z'
+        jbe .avh_loop
+.avh_digit:
+        cmp al, '0'
+        jb .avh_punct
+        cmp al, '9'
+        jbe .avh_loop
+.avh_punct:
+        cmp al, '.'
+        je .avh_loop
+        cmp al, '_'
+        je .avh_loop
+        cmp al, '-'
+        je .avh_loop
+        jmp .avh_bad
+.avh_good:
+        popad
+        clc
+        ret
+.avh_bad:
+        popad
+        stc
+        ret
+
+;---------------------------------------
 ; Command: run - Execute a program from filesystem
 ;---------------------------------------
 cmd_exec_program:
@@ -6558,6 +7168,24 @@ cmd_exec_program:
         ret
 
 .found_program:
+        cmp byte [assoc_open_pending], 1
+        jne .launch_marker_done
+        mov byte [assoc_open_pending], 0
+        mov esi, assoc_opened_serial
+        call serial_print
+.launch_marker_done:
+
+        ; Remember the shell's colour once per foreground launch (an in-place
+        ; SYS_EXEC keeps the first snapshot), so the exit can give it back.
+        cmp byte [prog_color_saved], 0
+        jne .color_saved
+        push eax
+        mov al, [default_color]
+        mov [prog_saved_color], al
+        pop eax
+        mov byte [prog_color_saved], 1
+        mov byte [prog_color_persist], 0
+.color_saved:
 
         ; Set program running flag
         mov byte [program_running], 1
@@ -6844,6 +7472,7 @@ cmd_exec_program:
         ; Launch program as a background scheduler task
         ; Clear foreground program_running flag (bg tasks don't block the shell)
         mov byte [program_running], 0
+        mov byte [prog_color_saved], 0     ; a background task owns no console
         ; A background launch copies the window to its own 1 MB slot and moves
         ; the entry by the difference, so the image has to be in the window:
         ; a prepared HBX image is copied in now, and stays where it lands.

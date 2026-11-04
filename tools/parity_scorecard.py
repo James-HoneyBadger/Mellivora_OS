@@ -28,7 +28,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "docs" / "parity-baseline.json"
+ROADMAP = ROOT / "docs" / "ROADMAP.md"
 SYSCALLS = ROOT / "docs" / "syscalls.json"
+ROADMAP_START = "<!-- parity-scorecard:start -->"
+ROADMAP_END = "<!-- parity-scorecard:end -->"
 
 STATUS_RANK = {"fail": 0, "partial": 1, "pass": 2}
 
@@ -88,6 +91,10 @@ def present(tree: Tree, probe: tuple) -> bool:
         return probe[1] in tree.syscalls()
     if kind == "text":
         return re.search(probe[2], tree.file(probe[1])) is not None
+    if kind == "case":
+        return re.search(
+            rf'(?m)^\s*run_case\s+"{re.escape(probe[1])}"',
+            tree.file("tests/test_runtime.sh")) is not None
     if kind == "kernel":
         return re.search(probe[1], tree.kernel()) is not None
     raise ValueError(f"unknown probe kind: {kind}")
@@ -109,6 +116,8 @@ def describe(probe: tuple) -> str:
         return probe[1]
     if kind == "text":
         return f"{probe[1]}: {readable(probe[2])}"
+    if kind == "case":
+        return f"workflow test: {probe[1]}"
     return f"kernel: {readable(probe[1])}"
 
 
@@ -118,64 +127,66 @@ def describe(probe: tuple) -> str:
 # exists in the tree.
 SCORECARD: list[Row] = [
     Row(1, "Log on",
-        "Logon screen, per-user profile and desktop, switch user without "
+        "Graphical logon, per-user profile and desktop, switch user without "
         "reboot",
-        required=[("kernel", r"\blogon_user\b"), ("syscall", "SYS_LOGON")],
-        evidence=[("kernel", r"\bsession_id\b")]),
+        required=[("case", "the logon screen authenticates a user"),
+                  ("case", "two users have separate desktops"),
+                  ("case", "a profile is created with its directories")],
+        evidence=[("case", "an account logs on to its own session"),
+                  ("case", "two users share the machine")]),
     Row(2, "Manage users",
         "Accounts, groups, passwords, quotas and permissions edited from a "
         "GUI",
-        required=[("syscall", "SYS_GETUID"), ("syscall", "SYS_CHMOD"),
-                  ("kernel", r"\bacl_check\b|\baccess_check\b"),
-                  ("kernel", r"\buser_account\b|\bpasswd_")],
-        evidence=[("syscall", "SYS_GETUID"), ("syscall", "SYS_CHMOD"),
-                  ("syscall", "SYS_SETUID")]),
+        required=[("case", "users and groups are managed from the control panel"),
+                  ("case", "permissions are edited from a property sheet")],
+        evidence=[("case", "access control list conformance"),
+                  ("case", "permissions deny")]),
     Row(3, "Run services",
         "Services start before logon, have dependencies and restart on "
         "failure",
-        required=[("kernel", r"\bscm_start\b"),
-                  ("kernel", r"\bservice_depend\b")],
-        evidence=[("kernel", r"\bsvc_\w+\b")]),
+        required=[("case", "a service starts before logon"),
+                  ("case", "a dependency cycle is refused"),
+                  ("case", "a crash-loop is counted out")],
+        evidence=[("case", "the service manager starts a service")]),
     Row(4, "Configure the machine",
         "One hierarchical transactional store for kernel, service and user "
         "settings",
-        required=[("kernel", r"\bsett_open\b"),
-                  ("kernel", r"\bsett_commit\b")],
-        evidence=[("kernel", r"\bsett_\w+\b")]),
+        required=[("case", "the Sett stores and returns typed values"),
+                  ("case", "the Sett aborts a transaction whole"),
+                  ("case", "the Sett commits a transaction once")],
+        evidence=[("case", "the Sett keeps the tree across save and load")]),
     Row(5, "Install software",
         "Install and uninstall with dependencies, registration and clean "
         "removal",
-        required=[("file", "tools/hbpkg.c"), ("syscall", "SYS_PKG_INSTALL"),
-                  ("program", "uninstall")],
+        required=[("case", "a package installs registers opens and uninstalls cleanly")],
         evidence=[("file", "tools/hbpkg.c"), ("program", "pkg"),
                   ("program", "pkginfo")]),
     Row(6, "Use the desktop",
         "Multi-app shell, taskbar, file manager, drag-drop, clipboard, "
         "associations",
-        required=[("text", "kernel/burrows.inc", r"\btaskbar\b"),
-                  ("syscall", "SYS_SURFACE_CREATE"),
-                  ("syscall", "SYS_CLIPBOARD_COPY"),
-                  ("kernel", r"\bshell_namespace\b|\bfile_assoc\b")],
+        required=[("case", "desktop file operations and associations work end to end")],
         evidence=[("text", "kernel/burrows.inc", r"\btaskbar\b"),
-                  ("syscall", "SYS_SURFACE_CREATE")]),
+                  ("syscall", "SYS_SURFACE_CREATE"),
+                  ("file", "tests/test_desktop.py")]),
     Row(7, "Multitask hard",
         "Preemptive, protected, per-process memory; a hung app cannot take "
-        "the machine down",
+        "the machine down over the 24-hour containment run",
         required=[("syscall", "SYS_MMAP"), ("syscall", "SYS_MPROTECT"),
                   ("syscall", "SYS_FORK"),
                   ("text", "kernel/paging.inc",
-                   r"paging_clone_pd|paging_free_pd")],
-        evidence=[("syscall", "SYS_MMAP")]),
+                   r"paging_clone_pd|paging_free_pd"),
+                  ("text", ".github/workflows/reliability-soak.yml",
+                   r"SOAK_MINUTES=1440")],
+        evidence=[("syscall", "SYS_MMAP"),
+                  ("text", "tests/test_runtime.sh", r"cow_test"),
+                  ("text", "tests/test_runtime.sh", r"memprot_test")]),
     Row(8, "Network",
         "TCP/IP, DHCP, DNS, and a shared folder another machine mounts",
-        required=[("syscall", "SYS_SOCKET"), ("kernel", r"\bdhcp_"),
-                  ("kernel", r"\bshare_mount\b|\bshare_serve\b")],
+        required=[("case", "two VMs authenticate mount a share and enforce permissions")],
         evidence=[("syscall", "SYS_SOCKET"), ("kernel", r"\bdhcp_")]),
     Row(9, "Print",
         "Spooler with queued, cancellable jobs",
-        required=[("kernel", r"\bspool_enqueue\b"),
-                  ("kernel", r"\bspool_cancel\b")],
-        evidence=[("kernel", r"\bspool_\w+\b")]),
+        required=[("case", "print queue cancels one job and completes the others")]),
     Row(10, "Detect hardware",
         "ACPI, PnP enumeration, power states, sleep and soft-off",
         required=[("kernel", r"\bacpi_"), ("kernel", r"\blapic_|\bioapic_"),
@@ -282,6 +293,43 @@ def write_baseline(rows: list[dict]) -> None:
     print(f"wrote {shown(BASELINE)}")
 
 
+def render_roadmap_section(rows: list[dict]) -> str:
+    lines = [
+        ROADMAP_START,
+        "| # | User job | Pass criteria | Status | Missing evidence |",
+        "|---:|---|---|---|---|",
+    ]
+    for row in rows:
+        missing = "; ".join(f"`{item}`" for item in row["missing"]) or "—"
+        lines.append(
+            f"| {row['number']} | {row['job']} | {row['criteria']} "
+            f"| **{row['status'].title()}** | {missing} |")
+    counts = summarise(rows)
+    lines.extend([
+        "",
+        f"Current score: **{counts['pass']} pass, {counts['partial']} "
+        f"partial, {counts['fail']} fail**. This table is generated by "
+        "`tools/parity_scorecard.py`; update it with `make check-parity-update`.",
+        ROADMAP_END,
+    ])
+    return "\n".join(lines)
+
+
+def update_roadmap(rows: list[dict]) -> int:
+    content = ROADMAP.read_text(encoding="utf-8")
+    start = content.find(ROADMAP_START)
+    end = content.find(ROADMAP_END, start + len(ROADMAP_START))
+    if start < 0 or end < 0:
+        print(f"[parity] FAIL  scorecard markers missing in {shown(ROADMAP)}")
+        return 1
+    end += len(ROADMAP_END)
+    ROADMAP.write_text(
+        content[:start] + render_roadmap_section(rows) + content[end:],
+        encoding="utf-8")
+    print(f"updated {shown(ROADMAP)}")
+    return 0
+
+
 def check(rows: list[dict]) -> int:
     baseline = load_baseline()
     if baseline is None:
@@ -306,6 +354,18 @@ def check(rows: list[dict]) -> int:
         problems.append(f"row {row['number']} ({row['job']}) is new; "
                         "update the baseline in the same change")
 
+    roadmap = ROADMAP.read_text(encoding="utf-8")
+    start = roadmap.find(ROADMAP_START)
+    end = roadmap.find(ROADMAP_END, start + len(ROADMAP_START))
+    if start < 0 or end < 0:
+        problems.append(f"scorecard markers are missing in {shown(ROADMAP)}")
+    else:
+        end += len(ROADMAP_END)
+        if roadmap[start:end] != render_roadmap_section(rows):
+            problems.append(
+                f"the generated scorecard in {shown(ROADMAP)} is stale; "
+                "run 'make check-parity-update'")
+
     if problems:
         print("[parity] FAIL")
         for problem in problems:
@@ -325,6 +385,8 @@ def main() -> int:
                         help="fail when a row is worse than the baseline.json")
     parser.add_argument("--update-baseline", action="store_true",
                         help="record the current statuses as the baseline")
+    parser.add_argument("--update-roadmap", action="store_true",
+                        help="regenerate the scorecard section in docs/ROADMAP.md")
     parser.add_argument("--json", action="store_true",
                         help="print the scorecard as JSON")
     args = parser.parse_args()
@@ -333,7 +395,9 @@ def main() -> int:
 
     if args.update_baseline:
         write_baseline(rows)
-        return 0
+        return update_roadmap(rows)
+    if args.update_roadmap:
+        return update_roadmap(rows)
     if args.json:
         print(json.dumps({"rows": rows, "summary": summarise(rows)}, indent=2))
         return 0

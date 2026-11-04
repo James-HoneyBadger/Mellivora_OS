@@ -78,7 +78,7 @@ EVT_MOUSE_MOVE  equ 2
 EVT_KEY_PRESS   equ 3
 EVT_CLOSE       equ 4
 
-; Menu constants — Windows 2000 Start menu proportions
+; Menu constants — Start menu proportions (brand strip, body, fly-outs)
 GUI_SW_W        equ 260         ; Alt+Tab switcher width
 GUI_SW_ROW_H    equ 22          ; switcher row height
 GUI_SW_MAX      equ 8           ; switcher shows at most this many windows
@@ -202,6 +202,7 @@ gui_desktop_main:
         call vbe_set_mode
         jmp .vbe_ok
 .no_vbe:
+        mov byte [gui_login_required], 0
         call vga_set_error
         mov esi, .no_vbe_msg
         call vga_print
@@ -210,6 +211,17 @@ gui_desktop_main:
 .no_vbe_msg: db "Error: VBE not available", 0x0A, 0
 .notify_welcome: db "Welcome to Mellivora OS!", 0
 .vbe_ok:
+        cmp byte [gui_login_required], 0
+        je .login_complete
+        mov byte [gui_login_required], 0
+        call gui_login_screen
+        test eax, eax
+        jnz .login_complete
+        call vbe_restore_text
+        call vga_init
+        mov byte [vbe_restore_pending], 0
+        ret
+.login_complete:
 
         ; Switch mouse to pixel-resolution tracking
         mov dword [mouse_max_x], GUI_SCREEN_W - 1
@@ -424,12 +436,583 @@ gui_exit_desktop:
         ret
 
 LOGIN_NAME_LEN  equ 16
+LOGIN_PASS_MAX  equ 47
+LOGIN_BOX_X     equ 312
+LOGIN_BOX_Y     equ 252
+LOGIN_BOX_W     equ 400
+LOGIN_BOX_H     equ 260
+LOGIN_FIELD_X   equ LOGIN_BOX_X + 132
+LOGIN_FIELD_W   equ 232
 
-; (login screen removed — single-user OS)
-; Stub retained only so the label address is valid if referenced.
 gui_login_screen:
+        pushad
+        mov byte [gui_login_user], 0
+        mov byte [gui_login_pass], 0
+        mov byte [gui_login_confirm], 0
+        mov byte [gui_login_mask], 0
+        mov dword [gui_login_user_len], 0
+        mov dword [gui_login_pass_len], 0
+        mov dword [gui_login_confirm_len], 0
+        mov dword [gui_login_focus], 0
+        mov byte [gui_login_mode], 0
+        mov byte [gui_login_error], 0
+        mov byte [login_authenticated], 0
+        call gui_login_draw
+        mov esi, burrows_login_ready
+        call serial_print
+
+.loop:
+        call gui_login_draw
+        mov eax, [kb_read_idx]
+        cmp eax, [kb_write_idx]
+        jne .read
+        sti
+        hlt
+        jmp .loop
+
+.read:
+        mov eax, [kb_read_idx]
+        movzx eax, byte [kb_buffer + eax]
+        inc dword [kb_read_idx]
+        and dword [kb_read_idx], 255
+        cmp al, 0x85
+        je .toggle_mode
+        cmp al, 0x1B
+        je .cancel
+        cmp al, 0x09
+        je .toggle_focus
+        cmp al, 0x0D
+        je .enter
+        cmp al, 0x08
+        je .backspace
+        cmp al, 32
+        jb .loop
+        cmp al, 126
+        ja .loop
+        cmp dword [gui_login_focus], 0
+        jne .append_password
+        mov ecx, [gui_login_user_len]
+        cmp ecx, LOGIN_NAME_LEN - 1
+        jae .loop
+        mov [gui_login_user + ecx], al
+        inc ecx
+        mov [gui_login_user_len], ecx
+        mov byte [gui_login_user + ecx], 0
+        mov byte [gui_login_error], 0
+        jmp .loop
+
+.append_password:
+        cmp dword [gui_login_focus], 1
+        jne .append_confirm
+        mov ecx, [gui_login_pass_len]
+        cmp ecx, LOGIN_PASS_MAX
+        jae .loop
+        mov [gui_login_pass + ecx], al
+        inc ecx
+        mov [gui_login_pass_len], ecx
+        mov byte [gui_login_pass + ecx], 0
+        mov byte [gui_login_error], 0
+        jmp .loop
+.append_confirm:
+        cmp byte [gui_login_mode], 1
+        jne .loop
+        mov ecx, [gui_login_confirm_len]
+        cmp ecx, LOGIN_PASS_MAX
+        jae .loop
+        mov [gui_login_confirm + ecx], al
+        inc ecx
+        mov [gui_login_confirm_len], ecx
+        mov byte [gui_login_confirm + ecx], 0
+        mov byte [gui_login_error], 0
+        jmp .loop
+
+.toggle_focus:
+        inc dword [gui_login_focus]
+        cmp byte [gui_login_mode], 1
+        jne .login_focus_limit
+        cmp dword [gui_login_focus], 3
+        jb .loop
+        mov dword [gui_login_focus], 0
+        jmp .loop
+.login_focus_limit:
+        cmp dword [gui_login_focus], 2
+        jb .loop
+        mov dword [gui_login_focus], 0
+        jmp .loop
+
+.backspace:
+        cmp dword [gui_login_focus], 0
+        jne .backspace_non_user
+        cmp dword [gui_login_user_len], 0
+        je .loop
+        dec dword [gui_login_user_len]
+        mov eax, [gui_login_user_len]
+        mov byte [gui_login_user + eax], 0
+        jmp .loop
+.backspace_non_user:
+        cmp dword [gui_login_focus], 1
+        jne .backspace_confirm
+        cmp dword [gui_login_pass_len], 0
+        je .loop
+        dec dword [gui_login_pass_len]
+        mov eax, [gui_login_pass_len]
+        mov byte [gui_login_pass + eax], 0
+        jmp .loop
+.backspace_confirm:
+        cmp dword [gui_login_confirm_len], 0
+        je .loop
+        dec dword [gui_login_confirm_len]
+        mov eax, [gui_login_confirm_len]
+        mov byte [gui_login_confirm + eax], 0
+        jmp .loop
+
+.toggle_mode:
+        xor byte [gui_login_mode], 1
+        cmp byte [gui_login_mode], 1
+        jne .mode_logon
+        mov esi, burrows_login_create_mode
+        call serial_print
+        jmp .mode_changed
+.mode_logon:
+        mov esi, burrows_login_logon_mode
+        call serial_print
+.mode_changed:
+        call gui_login_clear_password
+        mov byte [gui_login_error], 0
+        mov dword [gui_login_focus], 0
+        jmp .loop
+
+.enter:
+        cmp byte [gui_login_mode], 1
+        je .create_enter
+        cmp dword [gui_login_focus], 0
+        jne .attempt
+        mov dword [gui_login_focus], 1
+        jmp .loop
+
+.create_enter:
+        cmp dword [gui_login_focus], 2
+        je .create_attempt
+        inc dword [gui_login_focus]
+        jmp .loop
+
+.attempt:
+        cmp dword [gui_login_user_len], 0
+        je .refused
+        lea esi, [gui_login_user]
+        lea edi, [gui_login_pass]
+        call sess_logon
+        jc .refused
         mov byte [login_authenticated], 1
+        call gui_login_clear_password
+        mov esi, burrows_login_ok
+        call serial_print
+        mov dword [esp + 28], 1
+        popad
         ret
+
+.create_attempt:
+        cmp dword [gui_login_user_len], 0
+        je .create_invalid
+        cmp dword [gui_login_pass_len], 0
+        je .create_invalid
+        cmp dword [gui_login_confirm_len], 0
+        je .create_invalid
+        mov eax, [gui_login_pass_len]
+        cmp eax, [gui_login_confirm_len]
+        jne .create_invalid
+        cld
+        lea esi, [gui_login_pass]
+        lea edi, [gui_login_confirm]
+        mov ecx, eax
+        repe cmpsb
+        jne .create_invalid
+        call gui_login_validate_name
+        jc .create_refused
+
+        lea esi, [gui_login_user]
+        lea edi, [sess_name_buf]
+        mov ecx, LOGIN_NAME_LEN
+        cld
+        rep movsb
+        lea esi, [gui_login_pass]
+        lea edi, [sess_pw_buf]
+        mov ecx, LOGIN_PASS_MAX + 1
+        rep movsb
+        call sess_account_create
+        cmp eax, 1
+        je .create_exists
+        cmp eax, 3
+        je .create_refused
+        test eax, eax
+        jnz .create_failed
+        mov esi, burrows_login_account_created
+        call serial_print
+        lea esi, [gui_login_user]
+        lea edi, [gui_login_pass]
+        call sess_logon
+        jc .create_auth_failed
+        mov byte [login_authenticated], 1
+        call gui_login_clear_account_secrets
+        mov esi, burrows_login_ok
+        call serial_print
+        mov dword [esp + 28], 1
+        popad
+        ret
+
+.create_auth_failed:
+        call gui_login_clear_account_secrets
+        mov byte [gui_login_error], 5
+        mov dword [gui_login_focus], 1
+        mov esi, burrows_login_create_auth_failed
+        call serial_print
+        jmp .loop
+
+.create_invalid:
+        call gui_login_clear_account_secrets
+        mov byte [gui_login_error], 2
+        mov dword [gui_login_focus], 1
+        mov esi, burrows_login_create_refused
+        call serial_print
+        jmp .loop
+.create_refused:
+        call gui_login_clear_account_secrets
+        mov byte [gui_login_error], 6
+        mov dword [gui_login_focus], 0
+        mov esi, burrows_login_create_refused
+        call serial_print
+        jmp .loop
+.create_exists:
+        call gui_login_clear_account_secrets
+        mov byte [gui_login_error], 3
+        mov dword [gui_login_focus], 0
+        mov esi, burrows_login_create_refused
+        call serial_print
+        jmp .loop
+.create_failed:
+        call gui_login_clear_account_secrets
+        mov byte [gui_login_error], 4
+        mov dword [gui_login_focus], 1
+        mov esi, burrows_login_create_refused
+        call serial_print
+        jmp .loop
+
+.refused:
+        call gui_login_clear_password
+        mov byte [gui_login_error], 1
+        mov dword [gui_login_focus], 1
+        mov esi, burrows_login_refused
+        call serial_print
+        jmp .loop
+
+.cancel:
+        cmp byte [gui_login_mode], 1
+        je .cancel_create
+        call gui_login_clear_password
+        mov byte [login_authenticated], 0
+        mov esi, burrows_login_cancel
+        call serial_print
+        mov dword [esp + 28], 0
+        popad
+        ret
+.cancel_create:
+        mov byte [gui_login_mode], 0
+        mov byte [gui_login_error], 0
+        mov dword [gui_login_focus], 0
+        call gui_login_clear_password
+        jmp .loop
+
+gui_login_clear_password:
+        pushad
+        mov edi, gui_login_pass
+        xor eax, eax
+        mov ecx, LOGIN_PASS_MAX + 1
+        cld
+        rep stosb
+        mov dword [gui_login_pass_len], 0
+        mov edi, gui_login_confirm
+        mov ecx, LOGIN_PASS_MAX + 1
+        rep stosb
+        mov dword [gui_login_confirm_len], 0
+        mov edi, gui_login_mask
+        mov ecx, LOGIN_PASS_MAX + 1
+        rep stosb
+        mov edi, gui_login_confirm_mask
+        mov ecx, LOGIN_PASS_MAX + 1
+        rep stosb
+        popad
+        ret
+
+gui_login_clear_account_secrets:
+        pushad
+        call gui_login_clear_password
+        mov edi, sess_pw_buf
+        xor eax, eax
+        mov ecx, 48
+        cld
+        rep stosb
+        mov edi, sess_salt_buf
+        mov ecx, 8
+        rep stosb
+        mov edi, sess_calc_buf
+        mov ecx, 32
+        rep stosb
+        popad
+        ret
+
+; The graphical form asks sess_name_valid - the rule sess_account_create
+; enforces - so the screen and the shell cannot disagree about a valid name.
+gui_login_validate_name:
+        push esi
+        lea esi, [gui_login_user]
+        call sess_name_valid
+        pop esi
+        ret
+
+;---------------------------------------
+; gui_login_field - One text field on the logon card
+;   EAX = the field's focus index, EBX = y
+;
+; A white well in a hairline. The focused field's hairline is the accent and
+; two pixels thick, so the caret's field is obvious at a glance - the field
+; fill alone cannot show it when the card is already white.
+;---------------------------------------
+gui_login_field:
+        pushad
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        xor edi, edi
+        cmp eax, [gui_login_focus]
+        jne .lf_border
+        mov esi, [gui_theme + THEME_ACCENT]
+        inc edi
+.lf_border:
+        mov dword [gui_round_r], 3
+        mov eax, LOGIN_FIELD_X
+        mov ecx, LOGIN_FIELD_W
+        mov edx, 26
+        call gui_bb_round_fill
+        inc eax
+        inc ebx
+        sub ecx, 2
+        sub edx, 2
+        add eax, edi
+        add ebx, edi
+        sub ecx, edi
+        sub ecx, edi
+        sub edx, edi
+        sub edx, edi
+        mov esi, 0x00FFFFFF
+        mov dword [gui_round_r], 3
+        call gui_bb_round_fill
+        popad
+        ret
+
+gui_login_draw:
+        pushad
+        mov eax, 0
+        mov ebx, 0
+        mov ecx, GUI_SCREEN_W
+        mov edx, GUI_SCREEN_H
+        mov esi, 0x00182848
+        call gui_bb_fill_rect
+
+        ; The card: a rounded sheet on the brand background, a hairline, and
+        ; an accent header. It is the same vocabulary as a Burrows window, so
+        ; signing in does not look like a different product from the desktop.
+        mov dword [gui_round_r], 6
+        mov eax, LOGIN_BOX_X
+        mov ebx, LOGIN_BOX_Y
+        mov ecx, LOGIN_BOX_W
+        mov edx, LOGIN_BOX_H
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_round_fill
+        mov dword [gui_round_r], 6
+        mov eax, LOGIN_BOX_X + 1
+        mov ebx, LOGIN_BOX_Y + 1
+        mov ecx, LOGIN_BOX_W - 2
+        mov edx, LOGIN_BOX_H - 2
+        mov esi, [gui_theme + THEME_WINDOW_BG]
+        call gui_bb_round_fill
+        mov dword [gui_round_r], 6
+        mov eax, LOGIN_BOX_X + 1
+        mov ebx, LOGIN_BOX_Y + 1
+        mov ecx, LOGIN_BOX_W - 2
+        mov edx, 40
+        mov esi, [gui_theme + THEME_ACCENT]
+        call gui_bb_round_fill
+        mov eax, LOGIN_BOX_X + 1
+        mov ebx, LOGIN_BOX_Y + 30
+        mov ecx, LOGIN_BOX_W - 2
+        mov edx, 6
+        mov esi, [gui_theme + THEME_ACCENT]
+        call gui_bb_fill_rect           ; square off the header's lower corners
+        mov eax, LOGIN_BOX_X + 20
+        mov ebx, LOGIN_BOX_Y + 11
+        mov esi, gui_login_title
+        cmp byte [gui_login_mode], 1
+        jne .draw_title
+        mov esi, gui_login_create_title
+.draw_title:
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_string
+        mov eax, LOGIN_BOX_X + 28
+        mov ebx, LOGIN_BOX_Y + 68
+        mov esi, gui_login_user_label
+        mov edx, [gui_theme + THEME_MENU_TEXT]
+        call gui_bb_draw_string
+        mov eax, LOGIN_BOX_X + 28
+        mov ebx, LOGIN_BOX_Y + 112
+        mov esi, gui_login_pass_label
+        mov edx, [gui_theme + THEME_MENU_TEXT]
+        call gui_bb_draw_string
+        cmp byte [gui_login_mode], 1
+        jne .draw_fields
+        mov eax, LOGIN_BOX_X + 28
+        mov ebx, LOGIN_BOX_Y + 156
+        mov esi, gui_login_confirm_label
+        mov edx, [gui_theme + THEME_MENU_TEXT]
+        call gui_bb_draw_string
+
+.draw_fields:
+        mov eax, 0
+        mov ebx, LOGIN_BOX_Y + 62
+        call gui_login_field
+        mov eax, LOGIN_FIELD_X + 7
+        mov ebx, LOGIN_BOX_Y + 67
+        mov esi, gui_login_user
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        mov eax, 1
+        mov ebx, LOGIN_BOX_Y + 106
+        call gui_login_field
+        mov ecx, [gui_login_pass_len]
+        mov edi, gui_login_mask
+        mov al, '*'
+        rep stosb
+        mov byte [edi], 0
+        mov eax, LOGIN_FIELD_X + 7
+        mov ebx, LOGIN_BOX_Y + 111
+        mov esi, gui_login_mask
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        cmp byte [gui_login_mode], 1
+        jne .draw_hint
+        mov eax, 2
+        mov ebx, LOGIN_BOX_Y + 150
+        call gui_login_field
+        mov ecx, [gui_login_confirm_len]
+        mov edi, gui_login_confirm_mask
+        mov al, '*'
+        rep stosb
+        mov byte [edi], 0
+        mov eax, LOGIN_FIELD_X + 7
+        mov ebx, LOGIN_BOX_Y + 155
+        mov esi, gui_login_confirm_mask
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+.draw_hint:
+        mov eax, LOGIN_BOX_X + 32
+        mov ebx, LOGIN_BOX_Y + 160
+        mov esi, gui_login_hint
+        cmp byte [gui_login_mode], 1
+        jne .draw_hint_text
+        mov ebx, LOGIN_BOX_Y + 184
+        mov esi, gui_login_create_hint
+.draw_hint_text:
+        mov edx, [gui_theme + THEME_MENU_TEXT]
+        call gui_bb_draw_string
+        cmp byte [gui_login_error], 0
+        je .no_error
+        mov eax, LOGIN_BOX_X + 32
+        mov ebx, LOGIN_BOX_Y + 194
+        mov esi, gui_login_error_text
+        cmp byte [gui_login_mode], 1
+        jne .draw_error_text
+        mov ebx, LOGIN_BOX_Y + 206
+        mov esi, gui_login_create_error_text
+        cmp byte [gui_login_error], 2
+        jne .create_error_3
+        mov esi, gui_login_create_mismatch_text
+.create_error_3:
+        cmp byte [gui_login_error], 3
+        jne .create_error_4
+        mov esi, gui_login_create_duplicate_text
+.create_error_4:
+        cmp byte [gui_login_error], 4
+        jne .create_error_5
+        mov esi, gui_login_create_storage_text
+.create_error_5:
+        cmp byte [gui_login_error], 5
+        jne .create_error_6
+        mov esi, gui_login_create_auth_failed_text
+.create_error_6:
+        cmp byte [gui_login_error], 6
+        jne .draw_error_text
+        mov esi, gui_login_create_name_text
+.draw_error_text:
+        mov edx, 0x00A00000
+        call gui_bb_draw_string
+.no_error:
+        mov eax, LOGIN_BOX_X + 260
+        mov ebx, LOGIN_BOX_Y + 218
+        mov ecx, 104
+        mov edx, 28
+        mov esi, [gui_theme + THEME_ACCENT]
+        call gui_bb_button_3d
+        mov eax, LOGIN_BOX_X + 289
+        mov ebx, LOGIN_BOX_Y + 224
+        mov esi, gui_login_button
+        cmp byte [gui_login_mode], 1
+        jne .draw_button_text
+        mov esi, gui_login_create_button
+.draw_button_text:
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_string
+        call gui_flip
+        popad
+        ret
+
+gui_login_user: times LOGIN_NAME_LEN db 0
+gui_login_pass: times LOGIN_PASS_MAX + 1 db 0
+gui_login_confirm: times LOGIN_PASS_MAX + 1 db 0
+gui_login_mask: times LOGIN_PASS_MAX + 1 db 0
+gui_login_confirm_mask: times LOGIN_PASS_MAX + 1 db 0
+gui_login_user_len: dd 0
+gui_login_pass_len: dd 0
+gui_login_confirm_len: dd 0
+gui_login_focus: dd 0
+gui_login_error: db 0
+gui_login_mode: db 0
+gui_login_required: db 0
+gui_login_title: db "Mellivora OS - Log On", 0
+gui_login_create_title: db "Mellivora OS - Create Account", 0
+gui_login_user_label: db "User name:", 0
+gui_login_pass_label: db "Password:", 0
+gui_login_confirm_label: db "Confirm password:", 0
+gui_login_hint: db "F2: New user. Tab: Next. Enter: Submit.", 0
+gui_login_create_hint: db "F2: Log on. Tab: Next. Enter: Submit.", 0
+gui_login_error_text: db "The user name or password was not accepted.", 0
+gui_login_create_error_text: db "Account creation failed. Check the user name.", 0
+gui_login_create_mismatch_text: db "Passwords must match and fields cannot be empty.", 0
+gui_login_create_duplicate_text: db "That user name already exists.", 0
+gui_login_create_storage_text: db "Could not save this account. Try again.", 0
+gui_login_create_auth_failed_text: db "Account saved, but sign-in failed.", 0
+gui_login_create_name_text: db "Use letters, digits, dot, underscore or hyphen - not only dots.", 0
+gui_login_button: db "Log On", 0
+gui_login_create_button: db "Create", 0
+burrows_login_ready: db "[logon-ui] ready", 13, 10, 0
+burrows_login_create_mode: db "[logon-ui] create mode", 13, 10, 0
+burrows_login_logon_mode: db "[logon-ui] logon mode", 13, 10, 0
+burrows_login_refused: db "[logon-ui] authentication refused", 13, 10, 0
+burrows_login_ok: db "[logon-ui] authenticated", 13, 10, 0
+burrows_login_account_created: db "[logon-ui] account created", 13, 10, 0
+burrows_login_create_refused: db "[logon-ui] account creation refused", 13, 10, 0
+burrows_login_create_auth_failed: db "[logon-ui] account created but authentication failed", 13, 10, 0
+burrows_login_cancel: db "[logon-ui] cancelled", 13, 10, 0
+burrows_login_active: db "[logon-ui] refused: session already active", 13, 10, 0
 
 %if 0  ; login screen body removed
 
@@ -1360,7 +1943,7 @@ fdlg_draw:
         mov ebx, FDLG_BTN_OK_Y
         mov ecx, 60
         mov edx, 22
-        mov esi, 0x00D4D0C8
+        mov esi, [gui_theme + THEME_BUTTON_BG]
         call gui_bb_button_3d
         mov eax, FDLG_BTN_OK_X + 8
         mov ebx, FDLG_BTN_OK_Y + 3
@@ -1371,7 +1954,7 @@ fdlg_draw:
 .fd_save_btn:
         mov esi, .fd_btn_save
 .fd_draw_ok:
-        mov edx, 0x00000000
+        mov edx, [gui_theme + THEME_MENU_TEXT]
         call gui_bb_draw_string
 
         ; --- Cancel Button ---
@@ -1379,12 +1962,12 @@ fdlg_draw:
         mov ebx, FDLG_BTN_CAN_Y
         mov ecx, 60
         mov edx, 22
-        mov esi, 0x00D4D0C8
+        mov esi, [gui_theme + THEME_BUTTON_BG]
         call gui_bb_button_3d
         mov eax, FDLG_BTN_CAN_X + 8
         mov ebx, FDLG_BTN_CAN_Y + 3
         mov esi, .fd_btn_cancel
-        mov edx, 0x00000000
+        mov edx, [gui_theme + THEME_MENU_TEXT]
         call gui_bb_draw_string
 
         ; --- Scroll indicator ---
@@ -1596,6 +2179,11 @@ gui_draw_switcher:
         popad
         ret
 
+; Wallpaper: a lighter neutral at the bottom edge than at the top. Sixteen
+; levels over 768 rows is enough to read as light falling across the desk and
+; not enough to look like a gradient exercise.
+GB_LIFT         equ 16
+
 ;---------------------------------------
 gui_draw_background:
         pushad
@@ -1622,8 +2210,7 @@ gui_draw_background:
         and ecx, 0xFF
         mov [.gb_r0], ecx
         mov edi, ecx
-        shr edi, 1
-        add edi, ecx
+        add edi, GB_LIFT
         cmp edi, 255
         jbe .gb_r_ok
         mov edi, 255
@@ -1635,8 +2222,7 @@ gui_draw_background:
         and ecx, 0xFF
         mov [.gb_g0], ecx
         mov edi, ecx
-        shr edi, 1
-        add edi, ecx
+        add edi, GB_LIFT
         cmp edi, 255
         jbe .gb_g_ok
         mov edi, 255
@@ -1647,8 +2233,7 @@ gui_draw_background:
         and ecx, 0xFF
         mov [.gb_b0], ecx
         mov edi, ecx
-        shr edi, 1
-        add edi, ecx
+        add edi, GB_LIFT
         cmp edi, 255
         jbe .gb_b_ok
         mov edi, 255
@@ -1845,12 +2430,12 @@ gui_compose_surfaces:
 ;---------------------------------------
 ; Desktop icon layout constants
 ;---------------------------------------
-ICON_TEXT_H     equ 14          ; space below icon for label
-ICON_CELL_W     equ 76          ; grid cell width
-ICON_CELL_H     equ 64          ; grid cell height
-ICON_SIZE       equ 32          ; icon box width/height
-ICON_START_X    equ 12          ; first column x
-ICON_START_Y    equ 12          ; first row y
+ICON_TEXT_H     equ 18          ; space below icon for label
+ICON_CELL_W     equ 88          ; grid cell width
+ICON_CELL_H     equ 80          ; grid cell height
+ICON_SIZE       equ 40          ; tile width/height
+ICON_START_X    equ 16          ; first column x
+ICON_START_Y    equ 16          ; first row y
 ICON_COLS       equ 1           ; single column of icons
 ICON_COUNT      equ 9           ; number of desktop icons
 
@@ -1859,921 +2444,99 @@ ICON_COUNT      equ 9           ; number of desktop icons
 ;   EAX = icon index, EBX = x, ECX = y
 ;---------------------------------------
 gui_draw_icon32:
-        pushad
-        mov [.i_idx], eax
-        mov [.i_x], ebx
-        mov [.i_y], ecx
-        cmp eax, 0
-        je .i_term
-        cmp eax, 1
-        je .i_folder
-        cmp eax, 2
-        je .i_globe
-        cmp eax, 3
-        je .i_edit
-        cmp eax, 4
-        je .i_calc
-        cmp eax, 5
-        je .i_paint
-        cmp eax, 6
-        je .i_clock
-        cmp eax, 7
-        je .i_mon
-        jmp .i_launcher
-.i_term:
-        ; Monitor body and dark screen
-        mov eax, [.i_x]
-        mov ebx, [.i_y]
-        mov ecx, 32
-        mov edx, 27
-        mov esi, 0x00C0C0C0
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        mov ebx, [.i_y]
-        mov ecx, 32
-        mov edx, 27
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 3
-        mov ebx, [.i_y]
-        add ebx, 3
-        mov ecx, 26
-        mov edx, 16
-        mov esi, 0x00000000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 5
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov cl, '>'
-        mov edx, 0x0033FF66
-        call gui_bb_draw_char
-        mov eax, [.i_x]
-        add eax, 14
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov cl, '_'
-        mov edx, 0x0033FF66
-        call gui_bb_draw_char
-        ; Stand
-        mov eax, [.i_x]
-        add eax, 11
-        mov ebx, [.i_y]
-        add ebx, 27
-        mov ecx, 10
-        mov edx, 3
-        mov esi, 0x00808080
-        call gui_bb_fill_rect
-        jmp .i_done
-.i_folder:
-        ; Folder tab and body
-        mov eax, [.i_x]
-        mov ebx, [.i_y]
-        mov ecx, 14
-        mov edx, 7
-        mov esi, 0x00C8A000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        mov ebx, [.i_y]
-        add ebx, 4
-        mov ecx, 32
-        mov edx, 26
-        mov esi, 0x00FFD24A
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        mov ebx, [.i_y]
-        add ebx, 4
-        mov ecx, 32
-        mov edx, 26
-        mov esi, 0x00000000
-        call gui_bb_rect
-        ; Paper sheet
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 9
-        mov ecx, 20
-        mov edx, 17
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 9
-        mov ecx, 20
-        mov edx, 17
-        mov esi, 0x00808080
-        call gui_bb_rect
-        jmp .i_done
-.i_globe:
-        ; Blue globe with latitude/longitude lines
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov ecx, 28
-        mov edx, 28
-        mov esi, 0x000060C0
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov ecx, 28
-        mov edx, 28
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 3
-        mov ebx, [.i_y]
-        add ebx, 3
-        mov ecx, 26
-        mov edx, 6
-        mov esi, 0x00A8D0FF
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 12
-        mov ecx, 28
-        mov edx, 0x00FFFFFF
-        call gui_bb_hline
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 20
-        mov ecx, 28
-        mov edx, 0x00FFFFFF
-        call gui_bb_hline
-        mov eax, [.i_x]
-        add eax, 15
-        mov ebx, [.i_y]
-        add ebx, 3
-        mov ecx, 26
-        mov edx, 0x00FFFFFF
-        call gui_bb_vline
-        jmp .i_done
-.i_edit:
-        ; White page with blue text lines and folded corner
-        mov eax, [.i_x]
-        add eax, 4
-        mov ebx, [.i_y]
-        mov ecx, 24
-        mov edx, 32
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 4
-        mov ebx, [.i_y]
-        mov ecx, 24
-        mov edx, 32
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 22
-        mov ebx, [.i_y]
-        mov ecx, 6
-        mov edx, 6
-        mov esi, 0x00C0C0C0
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 7
-        mov ebx, [.i_y]
-        add ebx, 8
-        mov ecx, 18
-        mov edx, 0x000040A0
-        call gui_bb_hline
-        mov eax, [.i_x]
-        add eax, 7
-        mov ebx, [.i_y]
-        add ebx, 13
-        mov ecx, 18
-        mov edx, 0x000040A0
-        call gui_bb_hline
-        mov eax, [.i_x]
-        add eax, 7
-        mov ebx, [.i_y]
-        add ebx, 18
-        mov ecx, 18
-        mov edx, 0x000040A0
-        call gui_bb_hline
-        mov eax, [.i_x]
-        add eax, 7
-        mov ebx, [.i_y]
-        add ebx, 23
-        mov ecx, 11
-        mov edx, 0x000040A0
-        call gui_bb_hline
-        jmp .i_done
-.i_calc:
-        ; Calculator body, display and keypad
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov ecx, 28
-        mov edx, 28
-        mov esi, 0x00C0C0C0
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov ecx, 28
-        mov edx, 28
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 5
-        mov ecx, 20
-        mov edx, 6
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 5
-        mov ecx, 20
-        mov edx, 6
-        mov esi, 0x00808080
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 15
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 13
-        mov ebx, [.i_y]
-        add ebx, 15
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 20
-        mov ebx, [.i_y]
-        add ebx, 15
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 22
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 13
-        mov ebx, [.i_y]
-        add ebx, 22
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 20
-        mov ebx, [.i_y]
-        add ebx, 22
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00A00000
-        call gui_bb_fill_rect
-        jmp .i_done
-.i_paint:
-        ; Palette and brush
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 7
-        mov ecx, 28
-        mov edx, 22
-        mov esi, 0x00E8E8E8
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 7
-        mov ecx, 28
-        mov edx, 22
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 11
-        mov ecx, 5
-        mov edx, 5
-        mov esi, 0x00C00000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 13
-        mov ebx, [.i_y]
-        add ebx, 11
-        mov ecx, 5
-        mov edx, 5
-        mov esi, 0x0000A000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 20
-        mov ebx, [.i_y]
-        add ebx, 11
-        mov ecx, 5
-        mov edx, 5
-        mov esi, 0x000000A0
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 6
-        mov ebx, [.i_y]
-        add ebx, 19
-        mov ecx, 5
-        mov edx, 5
-        mov esi, 0x00C0A000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 20
-        mov ebx, [.i_y]
-        mov ecx, 4
-        mov edx, 9
-        mov esi, 0x00804020
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 20
-        mov ebx, [.i_y]
-        add ebx, 9
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00C00000
-        call gui_bb_fill_rect
-        jmp .i_done
-.i_clock:
-        ; Clock face with hands
-        mov eax, [.i_x]
-        add eax, 4
-        mov ebx, [.i_y]
-        add ebx, 3
-        mov ecx, 24
-        mov edx, 27
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 4
-        mov ebx, [.i_y]
-        add ebx, 3
-        mov ecx, 24
-        mov edx, 27
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 12
-        mov ebx, [.i_y]
-        mov ecx, 8
-        mov edx, 4
-        mov esi, 0x00808080
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 8
-        mov ebx, [.i_y]
-        add ebx, 16
-        mov ecx, 12
-        mov edx, 0x00000000
-        call gui_bb_hline
-        mov eax, [.i_x]
-        add eax, 16
-        mov ebx, [.i_y]
-        add ebx, 9
-        mov ecx, 10
-        mov edx, 0x00000000
-        call gui_bb_vline
-        jmp .i_done
-.i_mon:
-        ; System monitor with green bars
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov ecx, 28
-        mov edx, 25
-        mov esi, 0x00C0C0C0
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 2
-        mov ebx, [.i_y]
-        add ebx, 2
-        mov ecx, 28
-        mov edx, 25
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.i_x]
-        add eax, 5
-        mov ebx, [.i_y]
-        add ebx, 5
-        mov ecx, 22
-        mov edx, 17
-        mov esi, 0x00000000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 7
-        mov ebx, [.i_y]
-        add ebx, 14
-        mov ecx, 3
-        mov edx, 6
-        mov esi, 0x0033FF66
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 13
-        mov ebx, [.i_y]
-        add ebx, 11
-        mov ecx, 3
-        mov edx, 9
-        mov esi, 0x0033FF66
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 19
-        mov ebx, [.i_y]
-        add ebx, 8
-        mov ecx, 3
-        mov edx, 12
-        mov esi, 0x0033FF66
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 11
-        mov ebx, [.i_y]
-        add ebx, 27
-        mov ecx, 10
-        mov edx, 3
-        mov esi, 0x00808080
-        call gui_bb_fill_rect
-        jmp .i_done
-.i_launcher:
-        ; Four-pane Windows flag
-        mov eax, [.i_x]
-        add eax, 5
-        mov ebx, [.i_y]
-        add ebx, 5
-        mov ecx, 10
-        mov edx, 10
-        mov esi, 0x00C00000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 17
-        mov ebx, [.i_y]
-        add ebx, 5
-        mov ecx, 10
-        mov edx, 10
-        mov esi, 0x0000A000
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 5
-        mov ebx, [.i_y]
-        add ebx, 17
-        mov ecx, 10
-        mov edx, 10
-        mov esi, 0x000000A0
-        call gui_bb_fill_rect
-        mov eax, [.i_x]
-        add eax, 17
-        mov ebx, [.i_y]
-        add ebx, 17
-        mov ecx, 10
-        mov edx, 10
-        mov esi, 0x00C0A000
-        call gui_bb_fill_rect
-.i_done:
-        popad
-        ret
-.i_idx: dd 0
-.i_x:   dd 0
-.i_y:   dd 0
+        ; Kept under its original name: the desktop and the context menu call
+        ; it, and what changed is only how a tile of that size is drawn.
+        jmp gui_draw_tile
 
 ;---------------------------------------
 ; gui_draw_icon16 - Draw a 16x16 application icon
 ;   EAX = icon index, EBX = x, ECX = y
 ;---------------------------------------
 gui_draw_icon16:
+        ; One definition of a small icon for the title bar, the taskbar and the
+        ; Start menu, so an application looks the same wherever it appears.
+        jmp gui_draw_tile16
+
+;---------------------------------------
+; gui_draw_tile - One application icon: a softened tile and its glyph
+;   EAX = icon index, EBX = x, ECX = y
+;
+; The tile is white on the wallpaper with a one-pixel hairline, which is what
+; separates an icon from the background without the 1995 bevel. The glyph is
+; drawn in the accent so every icon in the shell shares one hue.
+;---------------------------------------
+gui_draw_tile:
         pushad
-        mov [.j_idx], eax
-        mov [.j_x], ebx
-        mov [.j_y], ecx
-        cmp eax, 0
-        je .j_term
-        cmp eax, 1
-        je .j_folder
-        cmp eax, 2
-        je .j_globe
-        cmp eax, 3
-        je .j_edit
-        cmp eax, 4
-        je .j_calc
-        cmp eax, 5
-        je .j_paint
-        cmp eax, 6
-        je .j_clock
-        cmp eax, 7
-        je .j_mon
-        cmp eax, 8
-        je .j_flag
-        cmp eax, 9
-        je .j_settings
-        cmp eax, 10
-        je .j_about
-        cmp eax, 11
-        je .j_exit
-        jmp .j_window
-.j_term:
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        mov ecx, 16
-        mov edx, 14
-        mov esi, 0x00000000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov cl, '>'
-        mov edx, 0x0033FF66
-        call gui_bb_draw_char
-        jmp .j_done
-.j_folder:
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        mov ecx, 7
-        mov edx, 4
-        mov esi, 0x00C8A000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        add ebx, 3
-        mov ecx, 16
-        mov edx, 12
-        mov esi, 0x00FFD24A
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        add ebx, 3
-        mov ecx, 16
-        mov edx, 12
-        mov esi, 0x00000000
-        call gui_bb_rect
-        jmp .j_done
-.j_globe:
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        mov ecx, 16
-        mov edx, 15
-        mov esi, 0x000060C0
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 5
-        mov ecx, 14
-        mov edx, 0x00FFFFFF
-        call gui_bb_hline
-        mov eax, [.j_x]
-        add eax, 7
-        mov ebx, [.j_y]
-        mov ecx, 13
-        mov edx, 0x00FFFFFF
-        call gui_bb_vline
-        jmp .j_done
-.j_edit:
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        mov ecx, 12
-        mov edx, 15
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        mov ecx, 12
-        mov edx, 15
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.j_x]
-        add eax, 4
-        mov ebx, [.j_y]
-        add ebx, 5
-        mov ecx, 8
-        mov edx, 0x000040A0
-        call gui_bb_hline
-        mov eax, [.j_x]
-        add eax, 4
-        mov ebx, [.j_y]
-        add ebx, 9
-        mov ecx, 8
-        mov edx, 0x000040A0
-        call gui_bb_hline
-        jmp .j_done
-.j_calc:
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 14
-        mov edx, 14
-        mov esi, 0x00C0C0C0
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 14
-        mov edx, 14
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.j_x]
-        add eax, 3
-        mov ebx, [.j_y]
-        add ebx, 3
-        mov ecx, 10
-        mov edx, 4
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 3
-        mov ebx, [.j_y]
-        add ebx, 9
-        mov ecx, 3
-        mov edx, 3
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 8
-        mov ebx, [.j_y]
-        add ebx, 9
-        mov ecx, 3
-        mov edx, 3
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 3
-        mov ebx, [.j_y]
-        add ebx, 12
-        mov ecx, 3
-        mov edx, 3
-        mov esi, 0x00404040
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 8
-        mov ebx, [.j_y]
-        add ebx, 12
-        mov ecx, 3
-        mov edx, 3
-        mov esi, 0x00A00000
-        call gui_bb_fill_rect
-        jmp .j_done
-.j_paint:
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        add ebx, 2
-        mov ecx, 16
-        mov edx, 12
-        mov esi, 0x00E8E8E8
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        add ebx, 2
-        mov ecx, 16
-        mov edx, 12
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.j_x]
-        add eax, 3
-        mov ebx, [.j_y]
-        add ebx, 5
-        mov ecx, 3
-        mov edx, 3
-        mov esi, 0x00C00000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 8
-        mov ebx, [.j_y]
-        add ebx, 5
-        mov ecx, 3
-        mov edx, 3
-        mov esi, 0x0000A000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 12
-        mov ebx, [.j_y]
-        add ebx, 5
-        mov ecx, 2
-        mov edx, 3
-        mov esi, 0x000000A0
-        call gui_bb_fill_rect
-        jmp .j_done
-.j_clock:
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 14
-        mov edx, 14
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 14
-        mov edx, 14
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.j_x]
-        add eax, 4
-        mov ebx, [.j_y]
-        add ebx, 7
-        mov ecx, 8
-        mov edx, 0x00000000
-        call gui_bb_hline
-        mov eax, [.j_x]
-        add eax, 7
-        mov ebx, [.j_y]
+        mov [.t_idx], eax
+        mov [.t_x], ebx
+        mov [.t_y], ecx
+
+        mov dword [gui_round_r], 6
+        mov eax, [.t_x]
+        mov ebx, [.t_y]
+        mov ecx, ICON_SIZE
+        mov edx, ICON_SIZE
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_round_fill
+        mov eax, [.t_x]
+        inc eax
+        mov ebx, [.t_y]
+        inc ebx
+        mov ecx, ICON_SIZE - 2
+        mov edx, ICON_SIZE - 2
+        mov esi, [gui_theme + THEME_BUTTON_BG]
+        call gui_bb_round_fill
+
+        ; Glyph: 16 units at 2x, centred in the tile.
+        mov eax, [.t_idx]
+        mov ebx, [.t_x]
         add ebx, 4
-        mov ecx, 5
-        mov edx, 0x00000000
-        call gui_bb_vline
-        jmp .j_done
-.j_mon:
-        mov eax, [.j_x]
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 16
-        mov edx, 13
-        mov esi, 0x00000000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        add ebx, 9
-        mov ecx, 2
-        mov edx, 4
-        mov esi, 0x0033FF66
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 6
-        mov ebx, [.j_y]
-        add ebx, 6
-        mov ecx, 2
-        mov edx, 7
-        mov esi, 0x0033FF66
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 10
-        mov ebx, [.j_y]
-        add ebx, 4
-        mov ecx, 2
-        mov edx, 9
-        mov esi, 0x0033FF66
-        call gui_bb_fill_rect
-        jmp .j_done
-.j_flag:
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 6
-        mov edx, 6
-        mov esi, 0x00C00000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 9
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 6
-        mov edx, 6
-        mov esi, 0x0000A000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 9
-        mov ecx, 6
-        mov edx, 6
-        mov esi, 0x000000A0
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 9
-        mov ebx, [.j_y]
-        add ebx, 9
-        mov ecx, 6
-        mov edx, 6
-        mov esi, 0x00C0A000
-        call gui_bb_fill_rect
-        jmp .j_done
-.j_settings:
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        add ebx, 2
-        mov ecx, 12
-        mov edx, 12
-        mov esi, 0x00808080
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        add ebx, 2
-        mov ecx, 12
-        mov edx, 12
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, [.j_x]
-        add eax, 6
-        mov ebx, [.j_y]
-        add ebx, 6
-        mov ecx, 4
-        mov edx, 4
-        mov esi, 0x00000000
-        call gui_bb_fill_rect
-        jmp .j_done
-.j_about:
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        add ebx, 2
-        mov ecx, 12
-        mov edx, 12
-        mov esi, 0x00000080
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 7
-        mov ebx, [.j_y]
-        add ebx, 4
-        mov ecx, 2
-        mov edx, 2
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 7
-        mov ebx, [.j_y]
-        add ebx, 7
-        mov ecx, 2
-        mov edx, 5
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        jmp .j_done
-.j_exit:
-        mov eax, [.j_x]
-        add eax, 2
-        mov ebx, [.j_y]
-        add ebx, 2
-        mov ecx, 12
-        mov edx, 12
-        mov esi, 0x00A00000
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 4
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov cl, 'X'
-        mov edx, 0x00FFFFFF
-        call gui_bb_draw_char
-        jmp .j_done
-.j_window:
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 14
-        mov edx, 14
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 14
-        mov edx, 4
-        mov esi, 0x00000080
-        call gui_bb_fill_rect
-        mov eax, [.j_x]
-        add eax, 1
-        mov ebx, [.j_y]
-        add ebx, 1
-        mov ecx, 14
-        mov edx, 14
-        mov esi, 0x00000000
-        call gui_bb_rect
-.j_done:
+        mov ecx, [.t_y]
+        add ecx, 4
+        mov edx, [gui_theme + THEME_ACCENT]
+        mov esi, 2
+        call gui_draw_glyph
         popad
         ret
-.j_idx: dd 0
-.j_x:   dd 0
-.j_y:   dd 0
+.t_idx: dd 0
+.t_x:   dd 0
+.t_y:   dd 0
+
+;---------------------------------------
+; gui_draw_tile16 - The same tile at the size a title bar or taskbar has
+;   EAX = icon index, EBX = x, ECX = y
+;---------------------------------------
+gui_draw_tile16:
+        pushad
+        mov [.m_idx], eax
+        mov [.m_x], ebx
+        mov [.m_y], ecx
+        mov dword [gui_round_r], 3
+        mov eax, [.m_x]
+        mov ebx, [.m_y]
+        mov ecx, 16
+        mov edx, 16
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_round_fill
+        mov eax, [.m_x]
+        inc eax
+        mov ebx, [.m_y]
+        inc ebx
+        mov ecx, 14
+        mov edx, 14
+        mov esi, [gui_theme + THEME_BUTTON_BG]
+        call gui_bb_round_fill
+        mov eax, [.m_idx]
+        mov ebx, [.m_x]
+        mov ecx, [.m_y]
+        mov edx, [gui_theme + THEME_ACCENT]
+        mov esi, 1
+        call gui_draw_glyph
+        popad
+        ret
+.m_idx: dd 0
+.m_x:   dd 0
+.m_y:   dd 0
 
 ;---------------------------------------
 ; gui_draw_desktop_icons - Draw icons and labels on the desktop
@@ -2793,25 +2556,20 @@ gui_draw_desktop_icons:
         add eax, ICON_START_Y
         mov [.di_y], eax
 
-        ; Selected icon gets a classic dotted focus box.
+        ; A selected icon is a washed tile behind the icon, not a dotted
+        ; rectangle drawn over it: the tile keeps its hairline and the
+        ; selection reads as a highlight, the way a modern shell shows it.
         cmp ecx, [gui_icon_sel]
         jne .di_no_focus
+        mov dword [gui_round_r], 6
         mov eax, [.di_x]
-        sub eax, 2
+        sub eax, 4
         mov ebx, [.di_y]
-        sub ebx, 2
-        mov ecx, ICON_SIZE + 4
-        mov edx, ICON_SIZE + 4
-        mov esi, 0x00FFFFFF
-        call gui_bb_rect
-        mov eax, [.di_x]
-        sub eax, 1
-        mov ebx, [.di_y]
-        sub ebx, 1
-        mov ecx, ICON_SIZE + 2
-        mov edx, ICON_SIZE + 2
-        mov esi, 0x00000080
-        call gui_bb_rect
+        sub ebx, 4
+        mov ecx, ICON_SIZE + 8
+        mov edx, ICON_SIZE + 8
+        mov esi, [gui_theme + THEME_MENU_HIGHLIGHT]
+        call gui_bb_round_fill
 
 .di_no_focus:
         mov eax, [.di_idx]
@@ -2819,39 +2577,47 @@ gui_draw_desktop_icons:
         mov ecx, [.di_y]
         call gui_draw_icon32
 
-        ; Label background when selected
-        cmp dword [gui_icon_sel], -1
-        je .di_label_plain
-        mov eax, [.di_idx]
-        cmp eax, [gui_icon_sel]
+        ; Label: centred under the tile. Selected labels sit on an accent
+        ; chip; unselected ones are ink on the wallpaper with no shadow.
+        mov ecx, [.di_idx]
+        mov esi, [gui_icon_labels + ecx*4]
+        xor edx, edx
+.di_len:
+        cmp byte [esi + edx], 0
+        je .di_len_done
+        inc edx
+        jmp .di_len
+.di_len_done:
+        shl edx, 3                      ; pixel width
+        mov eax, ICON_SIZE
+        sub eax, edx
+        sar eax, 1
+        add eax, [.di_x]                ; centred under the tile
+        mov [.di_lx], eax
+
+        mov ecx, [.di_idx]
+        cmp ecx, [gui_icon_sel]
         jne .di_label_plain
-        mov eax, [.di_x]
-        sub eax, 2
+        mov dword [gui_round_r], 3
+        mov eax, [.di_lx]
+        sub eax, 4
         mov ebx, [.di_y]
-        add ebx, ICON_SIZE + 2
-        mov ecx, ICON_CELL_W - 2
+        add ebx, ICON_SIZE + 1
+        mov ecx, edx
+        add ecx, 8
         mov edx, ICON_TEXT_H
-        mov esi, 0x00000080
-        call gui_bb_fill_rect
-
+        mov esi, [gui_theme + THEME_ACCENT]
+        call gui_bb_round_fill
+        mov edx, 0x00FFFFFF
+        jmp .di_label_draw
 .di_label_plain:
-        ; Shadowed white label, or white on navy when selected.
-        mov eax, [.di_x]
-        add eax, 2
-        mov ebx, [.di_y]
-        add ebx, ICON_SIZE + 3
-        mov ecx, [.di_idx]
-        mov esi, [gui_icon_labels + ecx*4]
-        mov edx, 0x00000000
-        call gui_bb_draw_string
-
-        mov eax, [.di_x]
-        add eax, 1
+        mov edx, 0x00202A36
+.di_label_draw:
+        mov eax, [.di_lx]
         mov ebx, [.di_y]
         add ebx, ICON_SIZE + 2
         mov ecx, [.di_idx]
         mov esi, [gui_icon_labels + ecx*4]
-        mov edx, 0x00FFFFFF
         call gui_bb_draw_string
 
         mov ecx, [.di_idx]
@@ -2863,6 +2629,7 @@ gui_draw_desktop_icons:
 .di_idx: dd 0
 .di_x:   dd 0
 .di_y:   dd 0
+.di_lx:  dd 0
 
 ;---------------------------------------
 ; gui_icon_hit_test - Check if click is on a desktop icon
@@ -3385,138 +3152,212 @@ gui_bb_rect:
         ret
 
 ;---------------------------------------
-; gui_bb_button_3d - Draw a 3D raised button
+; gui_bb_round_fill - Filled rectangle with softened corners
+;   EAX = x, EBX = y, ECX = w, EDX = h, ESI = colour
+;   [gui_round_r] = corner radius in pixels (3, 4 or 6)
+;
+; Flat design lives or dies on the corners: a square chip reads as a 1995
+; button, a softened one reads as a control. The inset per row comes from a
+; table instead of a square root, which is the only reason this is cheap
+; enough to call for every tile on a repaint.
+;---------------------------------------
+gui_bb_round_fill:
+        pushad
+        mov [.rf_x], eax
+        mov [.rf_y], ebx
+        mov [.rf_w], ecx
+        mov [.rf_h], edx
+        mov [.rf_c], esi
+
+        cmp ecx, 8
+        jl .rf_plain
+        cmp edx, 8
+        jl .rf_plain
+
+        mov eax, [gui_round_r]
+        mov dword [.rf_tab], .rf_tab4
+        mov dword [.rf_r], 4
+        cmp eax, 3
+        jne .rf_not3
+        mov dword [.rf_tab], .rf_tab3
+        mov dword [.rf_r], 3
+.rf_not3:
+        cmp eax, 6
+        jne .rf_tab_ready
+        mov dword [.rf_tab], .rf_tab6
+        mov dword [.rf_r], 6
+.rf_tab_ready:
+        mov eax, [.rf_h]
+        shr eax, 1
+        cmp [.rf_r], eax
+        jbe .rf_r_ok
+        mov [.rf_r], eax
+.rf_r_ok:
+        mov dword [.rf_cur], 0
+.rf_row:
+        mov ecx, [.rf_cur]
+        cmp ecx, [.rf_h]
+        jge .rf_done
+        xor edx, edx
+        cmp ecx, [.rf_r]
+        jae .rf_bottom_half
+        mov ebx, [.rf_tab]
+        movzx edx, byte [ebx + ecx]
+        jmp .rf_have_inset
+.rf_bottom_half:
+        mov eax, [.rf_h]
+        dec eax
+        sub eax, ecx
+        cmp eax, [.rf_r]
+        jae .rf_have_inset
+        mov ebx, [.rf_tab]
+        movzx edx, byte [ebx + eax]
+.rf_have_inset:
+        mov [.rf_inset], edx
+        mov eax, [.rf_w]
+        sub eax, [.rf_inset]
+        sub eax, [.rf_inset]
+        jle .rf_next
+        mov [.rf_iw], eax
+        mov eax, [.rf_x]
+        add eax, [.rf_inset]
+        mov ebx, [.rf_y]
+        add ebx, [.rf_cur]
+        mov ecx, [.rf_iw]
+        mov edx, 1
+        mov esi, [.rf_c]
+        call gui_bb_fill_rect
+.rf_next:
+        inc dword [.rf_cur]
+        jmp .rf_row
+
+.rf_plain:
+        mov eax, [.rf_x]
+        mov ebx, [.rf_y]
+        mov ecx, [.rf_w]
+        mov edx, [.rf_h]
+        mov esi, [.rf_c]
+        call gui_bb_fill_rect
+.rf_done:
+        popad
+        ret
+.rf_x:      dd 0
+.rf_y:      dd 0
+.rf_w:      dd 0
+.rf_h:      dd 0
+.rf_c:      dd 0
+.rf_r:      dd 0
+.rf_cur:    dd 0
+.rf_inset:  dd 0
+.rf_iw:     dd 0
+.rf_tab:    dd 0
+.rf_tab3:   db 2, 1, 0
+.rf_tab4:   db 3, 1, 1, 0
+.rf_tab6:   db 5, 3, 2, 1, 1, 0
+
+;---------------------------------------
+; gui_ink_on_highlight - EDX = a text colour that reads on the menu highlight
+;
+; A navy highlight wants white text; Classic's pale accent wash wants ink.
+; Picking by luminance (0.3 R + 0.6 G + 0.1 B) keeps a selected item legible
+; in every theme without each theme carrying a second text colour.
+;---------------------------------------
+gui_ink_on_highlight:
+        push eax
+        push ebx
+        push ecx
+        mov eax, [gui_theme + THEME_MENU_HIGHLIGHT]
+        mov ebx, eax
+        shr ebx, 16
+        and ebx, 0xFF
+        imul ebx, 3                     ; R * 3
+        mov ecx, eax
+        shr ecx, 8
+        and ecx, 0xFF
+        imul ecx, 6                     ; G * 6
+        add ebx, ecx
+        and eax, 0xFF                   ; B * 1
+        add ebx, eax                    ; luminance * 10
+        mov edx, 0x00FFFFFF
+        cmp ebx, 1400                   ; light enough for dark ink
+        jb .ioh_done
+        mov edx, 0x001D2430
+.ioh_done:
+        pop ecx
+        pop ebx
+        pop eax
+        ret
+
+;---------------------------------------
+; gui_bb_button_3d - Draw a push button
 ; EAX = x, EBX = y, ECX = w, EDX = h, ESI = face color
+;
+; The name is historical: every dialog, the context menu and the logon screen
+; call it, so the button style lives here once. A button is a softened face
+; inside a one-pixel hairline in the theme's border colour - the same
+; treatment as a desktop tile or a taskbar chip, so a dialog does not look
+; like it came from a different system than the shell around it.
 ;---------------------------------------
 gui_bb_button_3d:
         pushad
-        ; Fill face
+        cmp ecx, 3
+        jl .b3_face_only
+        cmp edx, 3
+        jl .b3_face_only
+        push esi
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        mov dword [gui_round_r], 3
+        call gui_bb_round_fill
+        pop esi
+        inc eax
+        inc ebx
+        sub ecx, 2
+        sub edx, 2
+        mov dword [gui_round_r], 3
+        call gui_bb_round_fill
+        popad
+        ret
+.b3_face_only:
         call gui_bb_fill_rect
-
-        ; --- Top highlight ---
-        push edx
-        mov edx, 0x00FFFFFF
-        call gui_bb_hline       ; hline(x, y, w, white)
-        pop edx
-
-        ; --- Left highlight ---
-        push ecx
-        push edx               ; save h (edx is clobbered by color)
-        mov ecx, edx           ; ecx = h
-        mov edx, 0x00FFFFFF
-        call gui_bb_vline       ; vline(x, y, h, white)
-        pop edx                 ; restore h
-        pop ecx
-
-        ; --- Bottom shadow ---
-        push ebx
-        add ebx, edx           ; ebx = y + h
-        dec ebx                 ; ebx = y + h - 1
-        push edx
-        mov edx, 0x00222222
-        call gui_bb_hline       ; hline(x, y+h-1, w, dark)
-        pop edx
-        pop ebx
-
-        ; --- Right shadow ---
-        push eax
-        add eax, ecx           ; eax = x + w
-        dec eax                 ; eax = x + w - 1
-        push ecx
-        mov ecx, edx           ; ecx = h
-        mov edx, 0x00222222
-        call gui_bb_vline       ; vline(x+w-1, y, h, dark)
-        pop ecx
-        pop eax
-
         popad
         ret
 
 ;---------------------------------------
-; gui_bb_raise_rect - classic raised 3-D border
+; gui_bb_raise_rect - Outline a raised surface
 ; EAX = x, EBX = y, ECX = w, EDX = h
+;
+; A hairline in the theme's border colour. The surface's own fill is drawn
+; by the caller first; separation from what is behind it is the rule, not a
+; white-and-grey bevel.
 ;---------------------------------------
 gui_bb_raise_rect:
         pushad
-        mov [.rr_x], eax
-        mov [.rr_y], ebx
-        mov [.rr_w], ecx
-        mov [.rr_h], edx
-
-        mov esi, 0x00FFFFFF
-        call gui_bb_hline
-
-        mov eax, [.rr_x]
-        mov ebx, [.rr_y]
-        mov ecx, [.rr_h]
-        mov edx, 0x00FFFFFF
-        call gui_bb_vline
-
-        mov eax, [.rr_x]
-        mov ebx, [.rr_y]
-        add ebx, [.rr_h]
-        dec ebx
-        mov ecx, [.rr_w]
-        mov edx, 0x00808080
-        call gui_bb_hline
-
-        mov eax, [.rr_x]
-        add eax, [.rr_w]
-        dec eax
-        mov ebx, [.rr_y]
-        mov ecx, [.rr_h]
-        mov edx, 0x00808080
-        call gui_bb_vline
-
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_rect
         popad
         ret
-.rr_x: dd 0
-.rr_y: dd 0
-.rr_w: dd 0
-.rr_h: dd 0
 
 ;---------------------------------------
-; gui_bb_sink_rect - classic sunken 3-D border
+; gui_bb_sink_rect - Outline an inset well (text field, pressed control)
 ; EAX = x, EBX = y, ECX = w, EDX = h
+;
+; The same hairline as a raised surface, plus a second rule just inside the
+; top edge: enough to read as "you type here" without a 1995 bevel.
 ;---------------------------------------
 gui_bb_sink_rect:
         pushad
-        mov [.sr_x], eax
-        mov [.sr_y], ebx
-        mov [.sr_w], ecx
-        mov [.sr_h], edx
-
-        mov esi, 0x00808080
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_rect
+        cmp ecx, 3
+        jl .sk_done
+        inc eax
+        inc ebx
+        sub ecx, 2
+        mov edx, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_hline
-
-        mov eax, [.sr_x]
-        mov ebx, [.sr_y]
-        mov ecx, [.sr_h]
-        mov edx, 0x00808080
-        call gui_bb_vline
-
-        mov eax, [.sr_x]
-        mov ebx, [.sr_y]
-        add ebx, [.sr_h]
-        dec ebx
-        mov ecx, [.sr_w]
-        mov edx, 0x00FFFFFF
-        call gui_bb_hline
-
-        mov eax, [.sr_x]
-        add eax, [.sr_w]
-        dec eax
-        mov ebx, [.sr_y]
-        mov ecx, [.sr_h]
-        mov edx, 0x00FFFFFF
-        call gui_bb_vline
-
+.sk_done:
         popad
         ret
-.sr_x: dd 0
-.sr_y: dd 0
-.sr_w: dd 0
-.sr_h: dd 0
 
 ;---------------------------------------
 ; gui_bb_tri_right - small right-pointing submenu arrow
@@ -3736,13 +3577,102 @@ gui_bb_draw_string:
 gui_str_x:  dd 0
 
 ;---------------------------------------
+; Icon glyphs
+;
+; Every icon in the shell is one 16x16 glyph from kernel/glyphs.inc, blitted at
+; the scale its caller asks for: 2 inside a 40px desktop tile, 1 inside the
+; 16px mark a title bar, the taskbar and the Start menu have room for. One
+; table is what stops the four places an application appears from disagreeing
+; about its icon.
+;
+; The table is generated by tools/gen_glyphs.py, so a glyph is a drawing job
+; rather than an assembly job, and `make check-glyphs` keeps it current.
+;---------------------------------------
+ICON_TERM      equ 0
+ICON_FOLDER    equ 1
+ICON_LIST      equ 2
+ICON_DOC       equ 3
+ICON_CALC      equ 4
+ICON_PAINT     equ 5
+ICON_CLOCK     equ 6
+ICON_PULSE     equ 7
+ICON_APPS      equ 8
+ICON_SETTINGS  equ 9
+ICON_INFO      equ 10
+ICON_EXIT      equ 11
+ICON_WINDOW    equ 12
+
+;---------------------------------------
+; gui_draw_glyph - Blit one icon glyph
+;   EAX = index, EBX = x, ECX = y, EDX = colour, ESI = scale (1 or 2)
+;---------------------------------------
+gui_draw_glyph:
+        pushad
+        mov [.gx], ebx
+        mov [.gy], ecx
+        mov [.gc], edx
+        mov [.gs], esi
+        cmp eax, GLYPH_COUNT
+        jb .index_ok
+        xor eax, eax
+.index_ok:
+        shl eax, 5                    ; 32 bytes per glyph
+        add eax, gui_glyph_table
+        mov [.gtable], eax
+        mov dword [.rownum], 0
+.row_loop:
+        mov ecx, [.rownum]
+        cmp ecx, 16
+        jge .blit_done
+        mov ebx, [.gtable]
+        movzx eax, word [ebx + ecx*2]
+        mov [.gbits], eax
+        mov dword [.colnum], 0
+.col_loop:
+        mov ecx, [.colnum]
+        cmp ecx, 16
+        jge .row_next
+        mov eax, 0x8000
+        shr eax, cl
+        test [.gbits], eax
+        jz .col_next
+        mov eax, [.colnum]
+        imul eax, [.gs]
+        add eax, [.gx]
+        mov ebx, [.rownum]
+        imul ebx, [.gs]
+        add ebx, [.gy]
+        mov ecx, [.gs]
+        mov edx, ecx
+        mov esi, [.gc]
+        call gui_bb_fill_rect
+.col_next:
+        inc dword [.colnum]
+        jmp .col_loop
+.row_next:
+        inc dword [.rownum]
+        jmp .row_loop
+.blit_done:
+        popad
+        ret
+.gx:     dd 0
+.gy:     dd 0
+.gc:     dd 0
+.gs:     dd 1
+.rownum: dd 0
+.colnum: dd 0
+.gbits:  dd 0
+.gtable: dd 0
+
+%include "kernel/glyphs.inc"
+
+;---------------------------------------
 ; gui_bb_draw_char_v - Draw one 8x16 character rotated 90° anticlockwise
 ;
 ;   EAX = x, EBX = y, CL = char, EDX = color
 ;
 ; The rotated glyph occupies 16 px horizontally and 8 px vertically. Used for
-; the vertical "Windows 2000" banner on the Start menu, which in Windows 2000
-; reads bottom-to-top.
+; the product name in the Start menu's brand strip, which reads bottom-to-top.
 ;---------------------------------------
 gui_bb_draw_char_v:
         pushad
@@ -4700,304 +4630,177 @@ gui_draw_window_n:
         mov esi, [ebp + WIN_W]
         mov edi, [ebp + WIN_H]
 
-        ; --- Classic 3-D window frame (Windows 2000 had no drop shadow) ---
-        push ecx
-        push edx
-        mov eax, ecx
-        sub eax, BORDER_W
-        mov ebx, edx
-        sub ebx, TITLEBAR_H
-        mov ecx, esi
-        add ecx, 2 * BORDER_W
-        mov edx, edi
-        add edx, TITLEBAR_H + BORDER_W
-        push esi
-        mov esi, 0x00000000
-        call gui_bb_rect
-        pop esi
-        pop edx
-        pop ecx
+        ; --- Flat frame: a hairline, a title sheet and one soft shadow ---
+        ; The 2000 frame was two bevels and a gradient. What is left is the
+        ; hierarchy a window actually needs: a hairline to separate it from
+        ; the wallpaper, a title sheet that changes tone when focused, and an
+        ; accent rule under that title so the active window is obvious.
+        mov eax, [ebp + WIN_X]
+        mov [.wn_wx], eax
+        mov eax, [ebp + WIN_Y]
+        mov [.wn_wy], eax
+        mov eax, [ebp + WIN_W]
+        mov [.wn_ww], eax
+        mov eax, [ebp + WIN_H]
+        mov [.wn_wh], eax
 
-        push ecx
-        push edx
-        mov eax, ecx
-        sub eax, BORDER_W
-        mov ebx, edx
-        sub ebx, TITLEBAR_H
-        mov ecx, esi
-        add ecx, 2 * BORDER_W
-        mov edx, edi
-        add edx, TITLEBAR_H + BORDER_W
-        call gui_bb_raise_rect
-        pop edx
-        pop ecx
+        ; Shadow: two pixels down and right, no blur.
+        mov eax, [.wn_wx]
+        sub eax, BORDER_W - 1
+        mov ebx, [.wn_wy]
+        sub ebx, TITLEBAR_H - 2
+        mov ecx, [.wn_ww]
+        add ecx, 2 * BORDER_W - 1
+        mov edx, [.wn_wh]
+        add edx, TITLEBAR_H + BORDER_W - 1
+        mov esi, 0x00C7CDD5
+        call gui_bb_fill_rect
 
-        ; --- Draw title bar (gradient) ---
-        push ecx
-        push edx
-        push esi
-        ; Choose base color based on focus
+        ; Frame and title sheet.
+        mov eax, [.wn_wx]
+        sub eax, BORDER_W
+        mov ebx, [.wn_wy]
+        sub ebx, TITLEBAR_H
+        mov ecx, [.wn_ww]
+        add ecx, 2 * BORDER_W
+        mov edx, [.wn_wh]
+        add edx, TITLEBAR_H + BORDER_W
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_fill_rect
+
         mov esi, [gui_theme + THEME_TITLE_INACTIVE]
-        push eax
+        mov dword [.wn_title_text], 0x00707A87
+        mov dword [.wn_title_focus], 0
         mov eax, [gui_focused_win]
         imul eax, WIN_STRUCT_SIZE
         add eax, gui_win_table
         cmp eax, ebp
-        pop eax
-        jne .wn_unfocused
+        jne .wn_title_face
         mov esi, [gui_theme + THEME_TITLE_ACTIVE]
-.wn_unfocused:
-        ; Windows 2000 paints an active title bar as a horizontal gradient:
-        ; dark blue at the left edge fading to pale blue at the right. Build
-        ; the start (base) and end (lightened) colours, then one vertical
-        ; line per column.
-        mov [gui_grad_base], esi
-        mov [gui_grad_x], ecx
-        mov [gui_grad_y], edx
-        ; width for title bar fill = win_w + 2*BORDER_W - 2
-        ; ESI holds the colour; win_w is still on the stack from the
-        ; 'push esi' at the start of this block.
-        mov eax, [esp]             ; win_w (saved on stack)
-        add eax, 2 * BORDER_W - 2
-        mov [gui_grad_w], eax
+        mov eax, [gui_theme + THEME_TITLE_TEXT]
+        mov [.wn_title_text], eax
+        mov dword [.wn_title_focus], 1
+.wn_title_face:
+        mov [.wn_title_bg], esi
+        mov eax, [.wn_wx]
+        sub eax, BORDER_W - 1
+        mov ebx, [.wn_wy]
+        sub ebx, TITLEBAR_H - 1
+        mov ecx, [.wn_ww]
+        add ecx, 2 * BORDER_W - 2
+        mov edx, TITLEBAR_H - 1
+        mov esi, [.wn_title_bg]
+        call gui_bb_fill_rect
 
-        ; Right-edge target: blend 55% toward white (same rule for every
-        ; theme, so inactive grey becomes the familiar #C0C0C0).
-        mov ecx, esi
-        shr ecx, 16
-        and ecx, 0xFF
-        mov [gui_grad_r0], ecx
-        mov eax, 255
-        sub eax, ecx
-        imul eax, eax, 140
-        shr eax, 8
-        add eax, ecx
-        mov [gui_grad_r1], eax
+        ; Accent rule under a focused title, a plain rule under the other.
+        mov eax, [.wn_wx]
+        sub eax, BORDER_W - 1
+        mov ebx, [.wn_wy]
+        dec ebx
+        mov ecx, [.wn_ww]
+        add ecx, 2 * BORDER_W - 2
+        mov edx, 0x00D8DEE5
+        cmp dword [.wn_title_focus], 0
+        je .wn_title_rule
+        mov edx, [gui_theme + THEME_ACCENT]
+.wn_title_rule:
+        call gui_bb_hline
 
-        mov ecx, esi
-        shr ecx, 8
-        and ecx, 0xFF
-        mov [gui_grad_g0], ecx
-        mov eax, 255
-        sub eax, ecx
-        imul eax, eax, 140
-        shr eax, 8
-        add eax, ecx
-        mov [gui_grad_g1], eax
-
-        mov ecx, esi
-        and ecx, 0xFF
-        mov [gui_grad_b0], ecx
-        mov eax, 255
-        sub eax, ecx
-        imul eax, eax, 140
-        shr eax, 8
-        add eax, ecx
-        mov [gui_grad_b1], eax
-
-        mov dword [gui_grad_row], 0
-
-.grad_loop:
-        mov eax, [gui_grad_row]
-        cmp eax, [gui_grad_w]
-        jge .grad_done
-
-        ; factor = column * 256 / (width - 1)
-        mov ecx, [gui_grad_w]
-        dec ecx
-        jz .grad_one_col
-        imul eax, 256
-        xor edx, edx
-        div ecx
-        jmp .grad_have_factor
-.grad_one_col:
-        xor eax, eax
-.grad_have_factor:
-        mov [gui_grad_factor], eax
-
-        ; Red
-        mov eax, [gui_grad_r1]
-        sub eax, [gui_grad_r0]
-        imul eax, [gui_grad_factor]
-        shr eax, 8
-        add eax, [gui_grad_r0]
-        shl eax, 16
-        mov [gui_grad_color], eax
-        ; Green
-        mov eax, [gui_grad_g1]
-        sub eax, [gui_grad_g0]
-        imul eax, [gui_grad_factor]
-        shr eax, 8
-        add eax, [gui_grad_g0]
-        shl eax, 8
-        or [gui_grad_color], eax
-        ; Blue
-        mov eax, [gui_grad_b1]
-        sub eax, [gui_grad_b0]
-        imul eax, [gui_grad_factor]
-        shr eax, 8
-        add eax, [gui_grad_b0]
-        or [gui_grad_color], eax
-
-        ; Draw this column.
-        mov eax, [gui_grad_x]
-        sub eax, BORDER_W
-        inc eax
-        add eax, [gui_grad_row]
-        mov ebx, [gui_grad_y]
-        sub ebx, TITLEBAR_H
-        inc ebx
-        mov ecx, TITLEBAR_H - 1
-        mov edx, [gui_grad_color]
-        call gui_bb_vline
-        inc dword [gui_grad_row]
-        jmp .grad_loop
-
-.grad_done:
-        pop esi
-        pop edx
-        pop ecx
-
-        ; --- Draw title icon and text ---
-        push ecx
-        push edx
-        push esi
-        mov eax, 12
-        mov ebx, ecx
-        add ebx, 3
-        mov ecx, edx
+        ; Title mark and title text.
+        mov eax, ICON_WINDOW
+        mov ebx, [.wn_wx]
+        add ebx, 5
+        mov ecx, [.wn_wy]
         sub ecx, TITLEBAR_H
         add ecx, 3
         call gui_draw_icon16
-
-        mov eax, [esp + 8]      ; saved win_x
-        add eax, 22
-        mov ebx, [esp + 4]      ; saved win_y
+        mov eax, [.wn_wx]
+        add eax, 27
+        mov ebx, [.wn_wy]
         sub ebx, TITLEBAR_H
         add ebx, 3
         lea esi, [ebp + WIN_TITLE]
-        mov edx, 0x00000000        ; inactive: black on the grey gradient
-        mov eax, [gui_focused_win]
-        imul eax, WIN_STRUCT_SIZE
-        add eax, gui_win_table
-        cmp eax, ebp
-        je .wn_title_focused
-        ; A dark inactive title bar (the Dark theme) needs light text.
-        mov eax, [gui_theme + THEME_TITLE_INACTIVE]
-        shr eax, 8
-        and eax, 0xFF
-        cmp eax, 0x80
-        jae .wn_title_color_ready
-        mov edx, [gui_theme + THEME_TITLE_TEXT]
-        jmp .wn_title_color_ready
-.wn_title_focused:
-        mov edx, [gui_theme + THEME_TITLE_TEXT]
-.wn_title_color_ready:
-        mov eax, [esp + 8]
-        add eax, 22
+        mov edx, [.wn_title_text]
         call gui_bb_draw_string
-        pop esi
-        pop edx
-        pop ecx
 
-        ; --- Draw close button (3D red square with X) ---
-        push ecx
-        push edx
-        push esi
-        mov eax, ecx
-        add eax, esi            ; win_x + win_w
+        ; Window controls: one glyph each, no boxes. The hit rectangles are
+        ; unchanged, so this is a drawing change only.
+        mov eax, [.wn_wx]
+        add eax, [.wn_ww]
         add eax, BORDER_W
         sub eax, CLOSE_BTN_SIZE + 4
-        mov ebx, edx
+        mov ebx, [.wn_wy]
         sub ebx, TITLEBAR_H
         add ebx, 3
-        push eax
-        push ebx
-        mov ecx, CLOSE_BTN_SIZE
-        mov edx, CLOSE_BTN_SIZE
-        mov esi, [gui_theme + THEME_BUTTON_BG]
-        call gui_bb_button_3d
-        pop ebx
-        pop eax
-        ; Draw "X"
-        add eax, 4
-        mov cl, 'X'
-        mov edx, 0x00000000
-        call gui_bb_draw_char
-        pop esi
-        pop edx
-        pop ecx
+        mov [.wn_btn_x], eax
+        mov [.wn_btn_y], ebx
 
-        ; --- Draw maximize button (3D gray square with box char) ---
-        push ecx
-        push edx
-        push esi
-        mov eax, ecx
-        add eax, esi
+        ; Close: an X drawn pixel by pixel so it stays crisp at any size.
+        mov dword [.wn_i], 0
+.wn_close_loop:
+        mov ecx, [.wn_i]
+        cmp ecx, 7
+        jge .wn_close_done
+        mov eax, [.wn_btn_x]
+        add eax, 5
+        add eax, ecx
+        mov ebx, [.wn_btn_y]
+        add ebx, 5
+        add ebx, ecx
+        mov edx, 0x00596270
+        call gui_bb_pixel
+        mov eax, [.wn_btn_x]
+        add eax, 10
+        sub eax, ecx
+        mov ebx, [.wn_btn_y]
+        add ebx, 5
+        add ebx, ecx
+        mov edx, 0x00596270
+        call gui_bb_pixel
+        inc dword [.wn_i]
+        jmp .wn_close_loop
+.wn_close_done:
+
+        ; Maximize: a 9x9 outline, doubled when the window is already maximised.
+        mov eax, [.wn_wx]
+        add eax, [.wn_ww]
         add eax, BORDER_W
         sub eax, 2 * (CLOSE_BTN_SIZE + 2) + 4
-        mov ebx, edx
+        mov ebx, [.wn_wy]
         sub ebx, TITLEBAR_H
         add ebx, 3
-        push eax
-        push ebx
-        mov ecx, CLOSE_BTN_SIZE
-        mov edx, CLOSE_BTN_SIZE
-        mov esi, [gui_theme + THEME_BUTTON_BG]
-        call gui_bb_button_3d
-        pop ebx
-        pop eax
-        ; Maximize / restore glyph
+        mov [.wn_btn_x], eax
+        mov [.wn_btn_y], ebx
         add eax, 4
-        add ebx, 3
-        push eax
-        push ebx
+        add ebx, 4
         mov ecx, 9
         mov edx, 9
-        mov esi, 0x00000000
+        mov esi, 0x00596270
         call gui_bb_rect
-        pop ebx
-        pop eax
         test dword [ebp + WIN_FLAGS], 0x04
-        jz .wn_max_glyph_done
-        add eax, 2
-        add ebx, 2
+        jz .wn_max_done
+        mov eax, [.wn_btn_x]
+        add eax, 6
+        mov ebx, [.wn_btn_y]
+        add ebx, 6
         mov ecx, 9
         mov edx, 9
-        mov esi, 0x00000000
+        mov esi, 0x00596270
         call gui_bb_rect
-.wn_max_glyph_done:
-        pop esi
-        pop edx
-        pop ecx
+.wn_max_done:
 
-        ; --- Draw minimize button (3D gray square with underscore) ---
-        push ecx
-        push edx
-        push esi
-        mov eax, ecx
-        add eax, esi
+        ; Minimize: one 9 px rule.
+        mov eax, [.wn_wx]
+        add eax, [.wn_ww]
         add eax, BORDER_W
         sub eax, 3 * (CLOSE_BTN_SIZE + 2) + 4
-        mov ebx, edx
-        sub ebx, TITLEBAR_H
-        add ebx, 3
-        push eax
-        push ebx
-        mov ecx, CLOSE_BTN_SIZE
-        mov edx, CLOSE_BTN_SIZE
-        mov esi, [gui_theme + THEME_BUTTON_BG]
-        call gui_bb_button_3d
-        pop ebx
-        pop eax
         add eax, 4
+        mov ebx, [.wn_wy]
+        sub ebx, TITLEBAR_H
         add ebx, 12
         mov ecx, 9
-        mov edx, 0x00000000
+        mov edx, 0x00596270
         call gui_bb_hline
-        pop esi
-        pop edx
-        pop ecx
 
         ; --- Fill the content area, then blit the private content buffer ---
         push ecx
@@ -5031,6 +4834,16 @@ gui_draw_window_n:
 .wn_done:
         popad
         ret
+.wn_wx:         dd 0
+.wn_wy:         dd 0
+.wn_ww:         dd 0
+.wn_wh:         dd 0
+.wn_title_text: dd 0
+.wn_title_bg:   dd 0
+.wn_title_focus: dd 0
+.wn_btn_x:      dd 0
+.wn_btn_y:      dd 0
+.wn_i:          dd 0
 
 ;=======================================================================
 ; gui_alpha_blend_rect — v9.0 per-window alpha transparency
@@ -5260,7 +5073,9 @@ gui_draw_taskbar:
         call gui_target_screen
         call gui_taskbar_layout
 
-        ; Taskbar face and top 3-D edge
+        ; A flat raised strip: one surface colour, one hairline along the top
+        ; edge. The bevel and the tray well are gone; separation is a rule,
+        ; not a shadow.
         mov eax, 0
         mov ebx, TASKBAR_Y
         mov ecx, GUI_SCREEN_W
@@ -5270,133 +5085,85 @@ gui_draw_taskbar:
         mov eax, 0
         mov ebx, TASKBAR_Y
         mov ecx, GUI_SCREEN_W
-        mov edx, 0x00FFFFFF
-        call gui_bb_hline
-        mov eax, 0
-        mov ebx, TASKBAR_Y + 1
-        mov ecx, GUI_SCREEN_W
-        mov edx, [gui_theme + THEME_TASKBAR_BG]
+        mov edx, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_hline
 
-        ; --- Start button ---
+        ; --- Start: a chip with the applications glyph and a label ---
+        mov dword [gui_round_r], 4
         mov eax, 2
         mov ebx, TASKBAR_Y + 2
         mov ecx, TASKBAR_START_W
-        mov edx, 24
+        mov edx, TASKBAR_H - 4
         mov esi, [gui_theme + THEME_BUTTON_BG]
-        call gui_bb_fill_rect
+        call gui_bb_round_fill
+        mov dword [gui_round_r], 4
+        mov eax, 2
+        mov ebx, TASKBAR_Y + 2
+        mov ecx, TASKBAR_START_W
+        mov edx, TASKBAR_H - 4
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_round_fill
+        mov eax, 3
+        mov ebx, TASKBAR_Y + 3
+        mov ecx, TASKBAR_START_W - 2
+        mov edx, TASKBAR_H - 6
+        mov esi, [gui_theme + THEME_BUTTON_BG]
+        call gui_bb_round_fill
+
+        ; The chip darkens while the menu is open, which is the whole pressed
+        ; state: no sunken border.
         cmp byte [gui_menu_open], 1
-        je .tb_start_down
-        mov eax, 2
-        mov ebx, TASKBAR_Y + 2
-        mov ecx, TASKBAR_START_W
-        mov edx, 24
-        call gui_bb_raise_rect
-        jmp .tb_start_icon
-.tb_start_down:
-        mov eax, 2
-        mov ebx, TASKBAR_Y + 2
-        mov ecx, TASKBAR_START_W
-        mov edx, 24
-        call gui_bb_sink_rect
-
-.tb_start_icon:
-        ; Waving four-colour Windows flag, pane by pane.
-        xor ecx, ecx
-.tb_flag_row:
-        movzx eax, byte [gui_flag_wave + ecx]
-        add eax, 6
+        jne .tb_start_face
+        mov eax, 3
+        mov ebx, TASKBAR_Y + 3
+        mov ecx, TASKBAR_START_W - 2
+        mov edx, TASKBAR_H - 6
+        mov esi, [gui_theme + THEME_MENU_HIGHLIGHT]
+        call gui_bb_round_fill
+.tb_start_face:
+        mov eax, ICON_APPS
+        mov ebx, 9
+        mov ecx, TASKBAR_Y + 7
+        mov edx, [gui_theme + THEME_ACCENT]
+        mov esi, 1
+        call gui_draw_glyph
+        mov eax, 30
         mov ebx, TASKBAR_Y + 7
-        add ebx, ecx
-        cmp ecx, 5
-        jae .tb_flag_lower
-        mov esi, 0x00C00000           ; red
-        jmp .tb_flag_left
-.tb_flag_lower:
-        mov esi, 0x000000A0           ; blue
-.tb_flag_left:
-        mov edx, 1
-        push ecx
-        mov ecx, 5
-        call gui_bb_fill_rect
-        pop ecx
-
-        movzx eax, byte [gui_flag_wave + ecx]
-        add eax, 12
-        mov ebx, TASKBAR_Y + 7
-        add ebx, ecx
-        cmp ecx, 5
-        jae .tb_flag_right_lower
-        mov esi, 0x0000A000           ; green
-        jmp .tb_flag_right
-.tb_flag_right_lower:
-        mov esi, 0x00C0A000           ; yellow
-.tb_flag_right:
-        mov edx, 1
-        push ecx
-        mov ecx, 5
-        call gui_bb_fill_rect
-        pop ecx
-
-        inc ecx
-        cmp ecx, 10
-        jb .tb_flag_row
-
-        ; "Start" label
-        mov eax, 23
-        mov ebx, TASKBAR_Y + 5
         mov esi, gui_str_start
-        mov edx, 0x00000000
+        mov edx, [gui_theme + THEME_TITLE_TEXT]
         call gui_bb_draw_string
 
-        ; --- Tray (sunken status area) ---
+        ; --- Tray: a rule, the workspace pill and the clock ---
         mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W
-        mov ebx, TASKBAR_Y + 3
-        mov ecx, TASKBAR_TRAY_W - 2
-        mov edx, 22
-        mov esi, [gui_theme + THEME_BUTTON_BG]
-        call gui_bb_fill_rect
-        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W
-        mov ebx, TASKBAR_Y + 3
-        mov ecx, TASKBAR_TRAY_W - 2
-        mov edx, 22
-        call gui_bb_sink_rect
-
-        ; Tray gripper, as on the Windows 2000 notification area.
-        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 3
         mov ebx, TASKBAR_Y + 5
-        mov ecx, 18
-        mov edx, 0x00FFFFFF
-        call gui_bb_vline
-        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 4
-        mov ebx, TASKBAR_Y + 5
-        mov ecx, 18
-        mov edx, 0x00808080
+        mov ecx, TASKBAR_H - 10
+        mov edx, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_vline
 
-        ; Workspace button inside the tray
         movzx eax, byte [gui_active_workspace]
         add al, '1'
         mov [gui_ws_buf], al
         mov byte [gui_ws_buf + 1], 0
-        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 10
-        mov ebx, TASKBAR_Y + 5
+        mov dword [gui_round_r], 3
+        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 6
+        mov ebx, TASKBAR_Y + 4
         mov ecx, 20
-        mov edx, 18
-        mov esi, 0x00FFFFFF
-        call gui_bb_fill_rect
-        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 10
+        mov edx, TASKBAR_H - 8
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_round_fill
+        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 7
         mov ebx, TASKBAR_Y + 5
-        mov ecx, 20
-        mov edx, 18
-        call gui_bb_sink_rect
-        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 16
-        mov ebx, TASKBAR_Y + 7
+        mov ecx, 18
+        mov edx, TASKBAR_H - 10
+        mov esi, [gui_theme + THEME_BUTTON_BG]
+        call gui_bb_round_fill
+        mov eax, GUI_SCREEN_W - TASKBAR_TRAY_W + 13
+        mov ebx, TASKBAR_Y + 6
         mov esi, gui_ws_buf
-        mov edx, 0x00000000
+        mov edx, [gui_theme + THEME_ACCENT]
         call gui_bb_draw_string
 
-        ; Clock: 12-hour, right-aligned inside the tray.
+        ; Clock: right-aligned, muted, at the same optical baseline as a label.
         call gui_read_time
         call gui_format_time_12
         mov esi, gui_clock_buf
@@ -5409,14 +5176,14 @@ gui_draw_taskbar:
 .tb_clock_len_done:
         mov eax, ecx
         shl eax, 3                  ; text width in pixels
-        mov ecx, GUI_SCREEN_W - 8
+        mov ecx, GUI_SCREEN_W - 10
         sub ecx, eax
         mov eax, ecx
         mov ebx, TASKBAR_Y + 6
-        mov edx, 0x00000000
+        mov edx, 0x00505A66
         call gui_bb_draw_string
 
-        ; --- Window task buttons ---
+        ; --- Window task chips ---
         mov dword [.tb_x], TASKBAR_TASKS_X
         xor ecx, ecx
 .tb_loop:
@@ -5436,12 +5203,24 @@ gui_draw_taskbar:
 
         push ecx
         push eax
+
+        ; Chip: hairline, sheet, and an accent rule under the focused window
+        ; so the active application is visible without a pressed border.
+        mov dword [gui_round_r], 4
         mov eax, [.tb_x]
+        mov ebx, TASKBAR_Y + 2
+        mov ecx, [gui_task_btn_w]
+        mov edx, TASKBAR_H - 4
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_round_fill
+        mov eax, [.tb_x]
+        inc eax
         mov ebx, TASKBAR_Y + 3
         mov ecx, [gui_task_btn_w]
-        mov edx, 22
+        sub ecx, 2
+        mov edx, TASKBAR_H - 6
         mov esi, [gui_theme + THEME_BUTTON_BG]
-        call gui_bb_fill_rect
+        call gui_bb_round_fill
 
         pop eax
         push eax
@@ -5449,37 +5228,32 @@ gui_draw_taskbar:
         imul esi, WIN_STRUCT_SIZE
         add esi, gui_win_table
         cmp eax, esi
-        jne .tb_raise
-        ; Focused task looks pressed.
+        jne .tb_icon
+
         mov eax, [.tb_x]
-        mov ebx, TASKBAR_Y + 3
+        add eax, 4
+        mov ebx, TASKBAR_Y + TASKBAR_H - 5
         mov ecx, [gui_task_btn_w]
-        mov edx, 22
-        call gui_bb_sink_rect
-        jmp .tb_icon
-.tb_raise:
-        mov eax, [.tb_x]
-        mov ebx, TASKBAR_Y + 3
-        mov ecx, [gui_task_btn_w]
-        mov edx, 22
-        call gui_bb_raise_rect
+        sub ecx, 8
+        mov edx, 2
+        mov esi, [gui_theme + THEME_ACCENT]
+        call gui_bb_fill_rect
 
 .tb_icon:
-        ; Generic application icon
-        mov eax, 12
+        mov eax, ICON_WINDOW
         mov ebx, [.tb_x]
-        add ebx, 4
+        add ebx, 5
         mov ecx, TASKBAR_Y + 6
         call gui_draw_icon16
 
-        ; Truncated title, sized to the button
+        ; Truncated title, sized to the chip
         pop eax
         push eax
         mov esi, eax
         add esi, WIN_TITLE
         mov edi, gui_title_buf
         mov ecx, [gui_task_btn_w]
-        sub ecx, 24
+        sub ecx, 30
         shr ecx, 3
         cmp ecx, 15
         jbe .tb_trunc_ok
@@ -5487,10 +5261,10 @@ gui_draw_taskbar:
 .tb_trunc_ok:
         call gui_copy_trunc
         mov eax, [.tb_x]
-        add eax, 22
-        mov ebx, TASKBAR_Y + 5
+        add eax, 25
+        mov ebx, TASKBAR_Y + 6
         mov esi, gui_title_buf
-        mov edx, 0x00000000
+        mov edx, [gui_theme + THEME_MENU_TEXT]
         call gui_bb_draw_string
 
         pop eax
@@ -5719,48 +5493,18 @@ gui_draw_menu:
         mov ebx, [.dm_y]
         mov ecx, GUI_MENU_W
         mov edx, GUI_MENU_H
-        mov esi, 0x00000000
-        call gui_bb_rect
-        mov eax, GUI_MENU_X
-        mov ebx, [.dm_y]
-        mov ecx, GUI_MENU_W
-        mov edx, GUI_MENU_H
         call gui_bb_raise_rect
 
-        ; Vertical Windows 2000 banner with a top-to-bottom blue gradient.
-        mov dword [.dm_row], 0
-.dm_banner_loop:
-        mov eax, [.dm_row]
-        cmp eax, GUI_MENU_H - 2
-        jge .dm_banner_done
-        mov ebx, eax
-        imul ebx, 110
-        xor edx, edx
-        mov ecx, GUI_MENU_H - 2
-        div ecx                     ; eax = gradient factor
-        mov esi, eax
-        shl esi, 16                 ; red
-        mov edx, eax
-        shl edx, 8                  ; green
-        or esi, edx
-        add eax, 0x80               ; blue
-        cmp eax, 255
-        jbe .dm_banner_blue_ok
-        mov eax, 255
-.dm_banner_blue_ok:
-        or esi, eax
+        ; Brand strip: one flat accent band down the left edge, the product
+        ; name read bottom-to-top in white. No gradient - the accent is the
+        ; only saturated colour in the shell, and this is where it is loudest.
         mov eax, GUI_MENU_X + 1
         mov ebx, [.dm_y]
         inc ebx
-        add ebx, [.dm_row]
         mov ecx, GUI_MENU_BANNER_W - 1
-        mov edx, 1
+        mov edx, GUI_MENU_H - 2
+        mov esi, [gui_theme + THEME_ACCENT]
         call gui_bb_fill_rect
-        inc dword [.dm_row]
-        jmp .dm_banner_loop
-.dm_banner_done:
-        ; Vertical product name, rotated like the Windows 2000 banner and
-        ; read from the bottom of the menu upwards.
         mov esi, gui_str_start_banner
         mov eax, GUI_MENU_X + 9
         mov ebx, [.dm_y]
@@ -5768,61 +5512,70 @@ gui_draw_menu:
         mov edx, 0x00FFFFFF
         call gui_bb_draw_string_v
 .dm_banner_text_done:
-        ; Separator between banner and body.
+        ; Hairline between the strip and the body.
         mov eax, GUI_MENU_BODY_X
         mov ebx, [.dm_y]
         inc ebx
-        mov ecx, 1
-        mov edx, GUI_MENU_H - 2
-        mov esi, 0x00000000
+        mov ecx, GUI_MENU_H - 2
+        mov edx, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_vline
 
-        ; Header: user tile and product line
+        ; Header: who is signed in. An accent avatar with the account's
+        ; initial, the account name, and the product line muted beneath it.
+        ; With nobody signed in the shell itself is the "user".
+        mov esi, gui_str_start_user
+        cmp dword [sess_current], 0
+        je .dm_have_user
+        push edi
+        mov eax, [sess_current]
+        call sess_slot
+        lea esi, [edi + SESS_F_NAME]
+        pop edi
+        cmp byte [esi], 0
+        jne .dm_have_user
+        mov esi, gui_str_start_user
+.dm_have_user:
+        mov [.dm_user], esi
+        mov dword [gui_round_r], 6
         mov eax, GUI_MENU_BODY_X + 6
         mov ebx, [.dm_y]
         add ebx, 8
-        mov ecx, 22
-        mov edx, 22
-        mov esi, 0x00000080
-        call gui_bb_fill_rect
-        mov eax, GUI_MENU_BODY_X + 6
+        mov ecx, 30
+        mov edx, 30
+        mov esi, [gui_theme + THEME_ACCENT]
+        call gui_bb_round_fill
+        mov esi, [.dm_user]
+        mov cl, [esi]
+        cmp cl, 'a'
+        jb .dm_initial_ready
+        cmp cl, 'z'
+        ja .dm_initial_ready
+        sub cl, 'a' - 'A'
+.dm_initial_ready:
+        mov eax, GUI_MENU_BODY_X + 17
         mov ebx, [.dm_y]
-        add ebx, 8
-        mov ecx, 22
-        mov edx, 22
-        mov esi, 0x00FFFFFF
-        call gui_bb_rect
-        mov eax, GUI_MENU_BODY_X + 13
-        mov ebx, [.dm_y]
-        add ebx, 10
-        mov cl, 'B'
+        add ebx, 15
         mov edx, 0x00FFFFFF
         call gui_bb_draw_char
 
-        mov eax, GUI_MENU_BODY_X + 34
+        mov eax, GUI_MENU_BODY_X + 44
         mov ebx, [.dm_y]
         add ebx, 8
-        mov esi, gui_str_start_user
-        mov edx, 0x00000000
+        mov esi, [.dm_user]
+        mov edx, [gui_theme + THEME_MENU_TEXT]
         call gui_bb_draw_string
-        mov eax, GUI_MENU_BODY_X + 34
+        mov eax, GUI_MENU_BODY_X + 44
         mov ebx, [.dm_y]
-        add ebx, 26
+        add ebx, 24
         mov esi, gui_str_start_banner
-        mov edx, 0x00404040
+        mov edx, 0x00707A87
         call gui_bb_draw_string
 
-        mov eax, GUI_MENU_BODY_X
-        mov ebx, [.dm_y]
-        add ebx, GUI_MENU_HEADER_H - 2
-        mov ecx, GUI_MENU_W - GUI_MENU_BANNER_W - 2
-        mov edx, 0x00808080
-        call gui_bb_hline
         mov eax, GUI_MENU_BODY_X
         mov ebx, [.dm_y]
         add ebx, GUI_MENU_HEADER_H - 1
         mov ecx, GUI_MENU_W - GUI_MENU_BANNER_W - 2
-        mov edx, 0x00FFFFFF
+        mov edx, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_hline
 
         ; Items
@@ -5847,13 +5600,7 @@ gui_draw_menu:
         mov eax, GUI_MENU_BODY_X + 4
         mov ebx, [.dm_iy]
         mov ecx, GUI_MENU_W - GUI_MENU_BANNER_W - 8
-        mov edx, 0x00808080
-        call gui_bb_hline
-        mov eax, GUI_MENU_BODY_X + 4
-        mov ebx, [.dm_iy]
-        inc ebx
-        mov ecx, GUI_MENU_W - GUI_MENU_BANNER_W - 8
-        mov edx, 0x00FFFFFF
+        mov edx, [gui_theme + THEME_WINDOW_BORDER]
         call gui_bb_hline
 .dm_no_sep:
         ; Hover / selection highlight
@@ -5885,7 +5632,7 @@ gui_draw_menu:
         mov edx, [gui_theme + THEME_MENU_TEXT]
         cmp ecx, [gui_menu_sel]
         jne .dm_text_ready
-        mov edx, 0x00FFFFFF
+        call gui_ink_on_highlight
 .dm_text_ready:
         call gui_bb_draw_string
 
@@ -5894,10 +5641,10 @@ gui_draw_menu:
         movzx eax, byte [gui_menu_sub_map + ecx]
         cmp al, GUI_SUB_NONE
         je .dm_no_arrow
-        mov edx, 0x00000000
+        mov edx, [gui_theme + THEME_MENU_TEXT]
         cmp ecx, [gui_menu_sel]
         jne .dm_arrow_color
-        mov edx, 0x00FFFFFF
+        call gui_ink_on_highlight
 .dm_arrow_color:
         mov eax, GUI_MENU_X + GUI_MENU_W - 14
         mov ebx, [.dm_iy]
@@ -5912,8 +5659,8 @@ gui_draw_menu:
         popad
         ret
 .dm_y:   dd 0
-.dm_row: dd 0
 .dm_idx: dd 0
+.dm_user: dd 0
 .dm_iy:  dd 0
 
 ;---------------------------------------
@@ -6069,7 +5816,7 @@ gui_draw_submenu:
         mov edx, [gui_theme + THEME_MENU_TEXT]
         cmp ecx, [gui_menu_sub_sel]
         jne .dsm_text_ok
-        mov edx, 0x00FFFFFF
+        call gui_ink_on_highlight
 .dsm_text_ok:
         call gui_bb_draw_string
 
@@ -7310,7 +7057,7 @@ gui_draw_ctx_menu:
         mov edx, [gui_theme + THEME_MENU_TEXT]
         cmp ecx, [gui_ctx_sel]
         jne .ctx_txt_ok
-        mov edx, 0x00FFFFFF
+        call gui_ink_on_highlight
 .ctx_txt_ok:
         call gui_bb_draw_string
         pop ecx
@@ -10540,19 +10287,23 @@ gui_cursor_shadow:
 ;=======================================================================
 
 ; Windows 2000 classic: teal desktop, grey 3-D chrome, navy title/menu.
+; Classic: the Windows 2000 arrangement in a flat, light-neutral key. The
+; surfaces are one family of greys a few steps apart, the only saturated
+; colour is the accent, and every edge is a hairline instead of a bevel. The
+; name in burrows.cfg stays "blue" so a saved theme keeps loading.
 gui_theme_blue:
-        dd 0x00008080           ; desktop bg - teal
-        dd 0x00C0C0C0           ; taskbar bg - classic grey
-        dd 0x00000080           ; title active - navy
-        dd 0x00808080           ; title inactive - grey
-        dd 0x00FFFFFF           ; title text
-        dd 0x00C0C0C0           ; window bg - classic grey
-        dd 0x00000000           ; window border - black
-        dd 0x00C0C0C0           ; menu bg - classic grey
-        dd 0x00000000           ; menu text - black
-        dd 0x00000080           ; menu highlight - navy
-        dd 0x00C0C0C0           ; button bg - classic grey
-        dd 0x00000080           ; accent - navy
+        dd 0x00E4E8ED           ; desktop bg - light neutral (gradient base)
+        dd 0x00F3F5F8           ; taskbar bg - raised surface
+        dd 0x00FFFFFF           ; title active - sheet white
+        dd 0x00F1F3F6           ; title inactive - recessed surface
+        dd 0x001D2430           ; title text - ink
+        dd 0x00FBFBFC           ; window bg - sheet
+        dd 0x00C3CAD3           ; window border - hairline
+        dd 0x00FFFFFF           ; menu bg - sheet white
+        dd 0x001D2430           ; menu text - ink
+        dd 0x00E7EEF7           ; menu highlight - accent wash
+        dd 0x00FFFFFF           ; button bg - sheet white
+        dd 0x00336699           ; accent - steel blue
 
 gui_theme_dark:
         dd 0x00202020
@@ -10605,7 +10356,7 @@ gui_str_start:      db "Start", 0
 gui_str_am:         db "AM", 0
 gui_str_pm:         db "PM", 0
 gui_str_start_user: db "Burrows", 0
-gui_str_start_banner: db "Windows 2000", 0
+gui_str_start_banner: db "Mellivora OS", 0
 gui_str_about:      db "About", 0
 gui_str_clock:      db "Clock", 0
 gui_str_settings:   db "Settings", 0
@@ -10765,8 +10516,6 @@ gui_prog_bsysmon:   db "bsysmon", 0
 gui_prog_blauncher: db "blauncher", 0
 gui_prog_timewarp:  db "timewarp", 0
 
-; Horizontal offset of each Start-flag row, giving the flag its wave.
-gui_flag_wave:      db 0, 0, 1, 1, 2, 2, 1, 1, 0, 0
 
 ; Desktop icon data
 gui_icon_symbols:   db 'T', 'H', 'W', 'E', 'C', 'P', 'Z', 'M', 'L', 0
@@ -11240,6 +10989,10 @@ gui_prev_mouse_btn: db 0
 gui_mouse_moved:    db 0
                     db 0, 0     ; padding
 gui_clock_buf:      times 12 db 0
+
+; Rounded-rectangle scratch. The compositor is single-threaded, so one
+; temporary serves every tile on screen. (gui_draw_glyph keeps its own.)
+gui_round_r:        dd 4           ; corner radius in pixels: 3, 4 or 6
 
 ; Gradient title bar temporaries
 gui_grad_base:      dd 0

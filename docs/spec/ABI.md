@@ -44,7 +44,7 @@ are built freestanding by a host compiler proved by
 | Unwind information | off (`-fno-asynchronous-unwind-tables -fno-unwind-tables`) | Nothing unwinds |
 | Instruction set | `-march=pentium4 -mtune=pentium4` | The CPU floor is a Pentium 4; `cmov` and Netburst selection are available |
 | Vector state | off for kernel C (`-mno-sse -mno-mmx -msoft-float`) | XMM belongs to tasks, not to ring-0 C; see §7 |
-| Warnings | `-Wall -Wextra`, warnings are not errors | The tree carries historical assembly that is not C |
+| Warnings | `-Wall -Wextra -Werror` | Every freestanding C translation unit must compile without warnings |
 
 ### 2.1 The runtime, as built
 
@@ -359,12 +359,15 @@ and a new structure. The old one stays.
 
 | Contract | Tree today |
 |---|---|
-| `mv_status` on new calls | Legacy `-1`/`errno` only |
-| Generated handles with generations | Bare small integers |
-| 255 UTF-16 names | 63-byte byte strings |
+| `mv_status` on new calls | The fourteen object calls (`187`–`200`) put an `mv_status` in `EDX`; no user header publishes the constants (`c/include/mv/` has none), and every legacy call still reports `-1` plus `errno` |
+| Generated handles with generations | Yes: `(generation << 18) \| (index << 2)` with a 14-bit generation and a per-process table (§6, `kernel/object.inc`) |
+| 255 UTF-16 names | 255 **bytes** of UTF-8 in the object namespace (`OBJ_NAME_MAX`) and a 253-byte name field in an HBFS directory entry; neither boundary carries UTF-16 |
 | Parameter blocks beyond five arguments | Five registers, no block |
 | `u64` 8-aligned | Natural alignment capped at 4 in shared structures |
-| Object-manager call range | Not allocated yet |
+| Object-manager call range | Allocated: `187`–`200`, fourteen calls |
 | `mv_abi_version` | Absent |
 
-The C boundary (§2, §10) is in place; the rest arrives with M1.
+The C boundary (§2, §10), generational handles and the object-manager range
+are in place. What the rest of this document still owes is a published
+`mv_status` header, UTF-16 names at the boundary, parameter blocks, an 8-aligned
+`u64` rule and `mv_abi_version`.

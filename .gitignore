@@ -19,6 +19,7 @@ kernel.elf
 
 # C build output (the kernel module blob is generated, not checked in)
 c/build/
+tools/hbpkg
 
 # Windows executables
 *.exe

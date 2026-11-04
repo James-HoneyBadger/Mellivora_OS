@@ -344,6 +344,11 @@ ahci_submit:
         ret
 
 .done:
+        ; The command slot cleared; the task file is the last word. An error
+        ; latched when CI drops must not be reported as a successful transfer.
+        mov eax, [ebx + AHCI_P_TFD]
+        test eax, 1              ; TFD.ERR
+        jnz .fail
         pop edi
         pop esi
         pop edx
@@ -425,14 +430,29 @@ ahci_flush:
 .fpoll:
         mov eax, [ebx + AHCI_P_CI]
         test eax, 1
-        jz  .fdone
+        jz  .fdone_ok
+        mov eax, [ebx + AHCI_P_TFD]
+        test eax, 1
+        jnz .ffail
         loop .fpoll
-.fdone:
+        ; Timeout: the cache flush never completed. Reporting success here
+        ; would let a journal commit believe its data is on the platter.
+.ffail:
         pop edi
         pop ecx
         pop ebx
         pop eax
+        stc
+        ret
+.fdone_ok:
+        pop edi
+        pop ecx
+        pop ebx
+        pop eax
+        clc
+        ret
 .skip:
+        clc
         ret
 
 ;-----------------------------------------------------------------------

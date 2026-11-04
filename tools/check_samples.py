@@ -91,6 +91,14 @@ def shell_vocabulary() -> set[str]:
                 names.add(keyword_names[entry].strip())
     for source in PROGRAMS.glob("*.asm"):
         names.add(source.stem)
+    # Programs built from C (one file, or a directory of sources) are on the
+    # image too, so a script may call them.
+    c_programs = ROOT / "c" / "prog"
+    for source in c_programs.glob("*.c"):
+        names.add(source.stem)
+    for source in c_programs.iterdir() if c_programs.is_dir() else ():
+        if source.is_dir():
+            names.add(source.name)
     return {name for name in names if name}
 
 

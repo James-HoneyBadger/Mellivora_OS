@@ -59,6 +59,26 @@ vga_set_dim:
         jmp vga_set_style
 
 ; Restore vga_color to user-selected default (preserves all regs)
+;-----------------------------------------------------------------------
+; vga_end_program_color - a foreground program has given the console back
+;
+; Restore the colour the shell had at launch unless the program asked, with
+; SETCOLOR_PERSIST, for its colour to become the shell's (`theme` does).
+; Safe to call on any exit path: it does nothing when no launch was recorded.
+;-----------------------------------------------------------------------
+vga_end_program_color:
+        cmp byte [prog_color_saved], 0
+        je .epc_done
+        mov byte [prog_color_saved], 0
+        cmp byte [prog_color_persist], 0
+        jne .epc_done
+        push eax
+        mov al, [prog_saved_color]
+        mov [default_color], al
+        pop eax
+.epc_done:
+        ret
+
 vga_reset_color:
         push eax
         mov al, [default_color]
@@ -549,7 +569,20 @@ vga_print_dec_width:
 .vpdw_width: dd 0
 
 ; Set cursor position: EAX=x, EDX=y
+;
+; Clamped, because the caller may be ring 3 (SYS_SETCURSOR passes its registers
+; straight through) and every later character is written at
+; VGA_BASE + y*VGA_WIDTH*2 + x*2: an unchecked y makes the console a write
+; primitive into whatever that arithmetic lands on.
 vga_set_cursor:
+        cmp eax, VGA_WIDTH
+        jb .vsc_x_ok
+        mov eax, VGA_WIDTH - 1
+.vsc_x_ok:
+        cmp edx, VGA_HEIGHT
+        jb .vsc_y_ok
+        mov edx, VGA_HEIGHT - 1
+.vsc_y_ok:
         mov [vga_cursor_x], eax
         mov [vga_cursor_y], edx
         call vga_update_cursor

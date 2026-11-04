@@ -4,7 +4,7 @@
     {
       "number": 1,
       "job": "Log on",
-      "status": "fail"
+      "status": "partial"
     },
     {
       "number": 2,
@@ -14,12 +14,12 @@
     {
       "number": 3,
       "job": "Run services",
-      "status": "partial"
+      "status": "pass"
     },
     {
       "number": 4,
       "job": "Configure the machine",
-      "status": "partial"
+      "status": "pass"
     },
     {
       "number": 5,
@@ -29,12 +29,12 @@
     {
       "number": 6,
       "job": "Use the desktop",
-      "status": "partial"
+      "status": "pass"
     },
     {
       "number": 7,
       "job": "Multitask hard",
-      "status": "pass"
+      "status": "partial"
     },
     {
       "number": 8,

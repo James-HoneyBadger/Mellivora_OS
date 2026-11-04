@@ -142,19 +142,52 @@ pci_write_config32:
 
 ;---------------------------------------
 ; pci_read_bar - EAX=bdf, EBX=bar_index(0-5) -> EAX=base or 0
+;
+; A 64-bit memory BAR spans two BAR slots; its upper half lives in the next
+; slot. This kernel addresses memory below 4 GB, so a BAR whose upper half is
+; nonzero cannot be used and is reported as 0 instead of silently truncated.
 ;---------------------------------------
 pci_read_bar:
         push ebx
+        push ecx
+        push esi
+        mov esi, eax                  ; bdf
+        mov ecx, ebx                  ; bar index
         imul ebx, 4
         add  ebx, PCI_OFF_BAR0
-        call pci_read_config32
+        call pci_read_config32         ; EAX = raw BAR value
         test eax, 1
         jnz  .io
+        ; Memory BAR: bits 2-1 give the width. 0b10 is 64-bit.
+        mov  edx, eax
+        and  edx, 0x06
+        cmp  edx, 0x04
+        jne  .mem32
+        ; 64-bit BAR: the next slot carries the upper 32 address bits.
+        and  eax, 0xFFFFFFF0
+        push eax
+        mov  eax, esi                 ; bdf
+        inc  ecx
+        imul ecx, 4
+        add  ecx, PCI_OFF_BAR0
+        mov  ebx, ecx
+        call pci_read_config32         ; upper 32 bits
+        pop  edx                      ; low 32 bits
+        test eax, eax
+        jnz  .bar64_high              ; above 4 GB: unusable here
+        mov  eax, edx
+        jmp  .done
+.bar64_high:
+        xor  eax, eax
+        jmp  .done
+.mem32:
         and  eax, 0xFFFFFFF0            ; memory BAR: mask type bits
         jmp  .done
 .io:
         and  eax, 0xFFFFFFFC            ; I/O BAR: mask type bits
 .done:
+        pop  esi
+        pop  ecx
         pop  ebx
         ret
 

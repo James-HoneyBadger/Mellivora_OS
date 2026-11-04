@@ -148,7 +148,7 @@ SYS_SETCURSOR       equ 14  ; Set cursor: EBX=col ECX=row
 SYS_GETTIME         equ 15  ; Get RTC time -> EAX=packed time
 SYS_SLEEP           equ 16  ; Sleep: EBX=ticks (100 ticks = 1 sec)
 SYS_CLEAR           equ 17  ; Clear screen
-SYS_SETCOLOR        equ 18  ; Set text color: EBX=fg ECX=bg
+SYS_SETCOLOR        equ 18  ; Set text color: EBX=attribute (bg<<4 | fg)
 SYS_MALLOC          equ 19  ; Allocate block: EBX=size -> EAX=ptr/0
 SYS_FREE            equ 20  ; Free block: EBX=base -> EAX=0/-1
 SYS_EXEC            equ 21  ; Execute program: EBX=name ECX=args -> EAX=0/-1
@@ -499,6 +499,11 @@ int 0x80
 ```
 
 Color byte: high nibble = background, low nibble = foreground.
+
+The colour lasts until the program exits; the shell then returns to the colour
+it had when the program started, so a coloured program never leaves the prompt
+in its last colour. A program whose purpose is to change the shell's colour
+(as `theme` does) ORs `SETCOLOR_PERSIST` (`0x100`) into EBX.
 
 ### Direct VGA Access
 

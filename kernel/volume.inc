@@ -245,16 +245,84 @@ vol_probe:
         cmp dword [vol_sec_buf + 4], GPT_SIG_HI
         jne .vp_after
 
-        mov eax, [vol_sec_buf + 72]
-        mov [.vp_entry_lba], eax         ; where the entry array starts
-        mov eax, [vol_sec_buf + 80]
+        ; The header CRC guards the entry-array location, count and size this
+        ; path is about to trust. It is a CRC-32C over header_size bytes with
+        ; the CRC field itself zeroed.
+        mov eax, [vol_sec_buf + 12]      ; header size
+        cmp eax, 92
+        jb .vp_gpt_bad
+        cmp eax, 512
+        ja .vp_gpt_bad
+        mov [.vp_hdr_size], eax
+        mov eax, [vol_sec_buf + 16]      ; stored header CRC
+        mov [.vp_crc], eax
+        mov dword [vol_sec_buf + 16], 0
+        mov eax, vol_sec_buf
+        mov ecx, [.vp_hdr_size]
+        call crc32c
+        cmp eax, [.vp_crc]
+        jne .vp_gpt_bad
+
+        ; The entry size must be a sane power of two, or the per-entry offset
+        ; arithmetic below walks the wrong place.
+        mov eax, [vol_sec_buf + 84]
+        cmp eax, 128
+        jb .vp_gpt_bad
+        cmp eax, 512
+        ja .vp_gpt_bad
+        mov ecx, eax
+        dec ecx
+        test eax, ecx                    ; power of two?
+        jnz .vp_gpt_bad
+        mov [.vp_entry_size], eax
+
+        ; The entry array carries its own CRC. Read it whole and verify before
+        ; any entry is used; a corrupt array yields a corrupt partition table.
+        mov eax, [vol_sec_buf + 80]      ; entry count
         cmp eax, VOL_MAX
         jbe .vp_count_ok
         mov eax, VOL_MAX
 .vp_count_ok:
         mov [.vp_remaining], eax
-        mov eax, [vol_sec_buf + 84]
-        mov [.vp_entry_size], eax
+        mov ecx, [.vp_entry_size]
+        mul ecx                          ; EDX:EAX = array bytes (<= 4096)
+        test edx, edx
+        jnz .vp_gpt_bad                  ; absurd size
+        test eax, eax
+        jz .vp_gpt_bad
+        mov [.vp_array_bytes], eax
+        add eax, 511
+        shr eax, 9                       ; sectors in the array
+        mov [.vp_array_sects], eax
+
+        mov eax, [vol_sec_buf + 72]
+        mov [.vp_entry_lba], eax         ; where the entry array starts
+        mov eax, [vol_sec_buf + 88]      ; stored entry-array CRC
+        mov [.vp_crc], eax
+
+        mov dword [.vp_index], 0
+.vp_erd_loop:
+        mov eax, [.vp_index]
+        cmp eax, [.vp_array_sects]
+        jae .vp_entries_read
+        mov eax, [.vp_entry_lba]
+        add eax, [.vp_index]
+        mov ecx, 1
+        mov edi, .vp_entries
+        mov ebx, [.vp_index]
+        shl ebx, 9
+        add edi, ebx
+        call ata_read_sectors
+        jc .vp_fail
+        inc dword [.vp_index]
+        jmp .vp_erd_loop
+
+.vp_entries_read:
+        mov eax, .vp_entries
+        mov ecx, [.vp_array_bytes]
+        call crc32c
+        cmp eax, [.vp_crc]
+        jne .vp_gpt_bad
         mov dword [.vp_index], 0
 
 .vp_gpt_loop:
@@ -281,8 +349,11 @@ vol_probe:
 .vp_gpt_used:
         mov ebx, [esi + 32]              ; first LBA
         mov ecx, [esi + 40]              ; last LBA, inclusive
+        cmp ecx, ebx
+        jb .vp_gpt_next                  ; malformed: last precedes first
         sub ecx, ebx
         inc ecx                          ; length in sectors
+        jz .vp_gpt_next                  ; length wrapped past 2^32: bogus
 
         push esi
         push ecx
@@ -322,6 +393,9 @@ vol_probe:
         dec dword [.vp_remaining]
         jmp .vp_gpt_loop
 
+.vp_gpt_bad:
+        ; A corrupt GPT is not a table: report none rather than a lie.
+        mov byte [vol_gpt], 0
 .vp_after:
         ; Probe each volume for a filesystem.
         mov dword [.vp_index], 0
@@ -353,7 +427,12 @@ vol_probe:
 .vp_remaining:   dd 0
 .vp_index:       dd 0
 .vp_boot:        dd 0
+.vp_hdr_size:    dd 0
+.vp_crc:         dd 0
+.vp_array_bytes: dd 0
+.vp_array_sects: dd 0
 .vp_name_buf:    times VOL_LABEL_LEN db 0
+.vp_entries:     times VOL_MAX * 512 db 0
 
 ;-----------------------------------------------------------------------
 ; vol_utf16_to_ascii - GPT names are UTF-16LE; the console is not

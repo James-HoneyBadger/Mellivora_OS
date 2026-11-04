@@ -28,7 +28,11 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nasm make python3 xorriso qemu-system-x86
+          sudo apt-get install -y nasm make python3 xorriso qemu-system-x86 clang lld binutils
+
+      - name: Record selected 32-bit C toolchain
+        run: |
+          sh tools/find_c_toolchain.sh | tee toolchain-report.txt
 
       # SOURCE_DATE_EPOCH makes the disc reproducible: rebuilding the same tag
       # gives the same bytes, so the published checksum stays meaningful.
@@ -56,4 +60,4 @@ jobs:
           gh release upload "$TAG" \
             mellivora.iso mellivora-lite.iso \
             mellivora.iso.gz mellivora-lite.iso.gz \
-            SHA256SUMS --clobber
+            SHA256SUMS toolchain-report.txt --clobber

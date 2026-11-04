@@ -1417,6 +1417,154 @@ sess_whoami:
         ret
 .sw_rec: dd 0
 
+;-----------------------------------------------------------------------
+; sess_name_valid - ESI = account name; CF clear when it may name a path
+;   An account name becomes a Sett key component and a /Users/<name>
+;   directory, so it is held to one rule: letters, digits, dot, underscore
+;   or hyphen, at least one of them that is not a dot, and no trailing dot.
+;   Both `account add` and the graphical logon create accounts through
+;   sess_account_create, which applies this, so the two cannot disagree.
+;-----------------------------------------------------------------------
+sess_name_valid:
+        push eax
+        push ebx
+        push edx
+        push esi
+        xor ebx, ebx                    ; characters that are not dots
+        xor edx, edx                    ; last character seen
+        cmp byte [esi], 0
+        je .snv_bad
+.snv_loop:
+        lodsb
+        test al, al
+        jz .snv_end
+        mov dl, al
+        cmp al, 'a'
+        jb .snv_upper
+        cmp al, 'z'
+        jbe .snv_letter
+.snv_upper:
+        cmp al, 'A'
+        jb .snv_digit
+        cmp al, 'Z'
+        jbe .snv_letter
+.snv_digit:
+        cmp al, '0'
+        jb .snv_punct
+        cmp al, '9'
+        jbe .snv_letter
+.snv_punct:
+        cmp al, '.'
+        je .snv_loop
+        cmp al, '_'
+        je .snv_letter
+        cmp al, '-'
+        jne .snv_bad
+.snv_letter:
+        inc ebx
+        jmp .snv_loop
+.snv_end:
+        test ebx, ebx                   ; "." or ".." is a path, not a name
+        jz .snv_bad
+        cmp dl, '.'
+        je .snv_bad                     ; "/Users/name." is not a directory
+        pop esi
+        pop edx
+        pop ebx
+        pop eax
+        clc
+        ret
+.snv_bad:
+        pop esi
+        pop edx
+        pop ebx
+        pop eax
+        stc
+        ret
+
+; Create the account named by sess_name_buf with the password in sess_pw_buf.
+; EAX = 0 on creation, 1 for an existing account, 2 on a storage/KDF failure,
+; 3 when the name is not acceptable.
+; Both the shell command and graphical logon use this same credential path.
+sess_account_create:
+        pushad
+        lea esi, [sess_name_buf]
+        call sess_name_valid
+        jc .sac_bad_name
+        lea esi, [sess_name_buf]
+        call sess_path_of_account
+        mov [.sac_path], esi
+        mov edi, [.sac_path]
+        mov esi, ACC_VAL_UID
+        call sett_kv_get_u32
+        jc .sac_new
+        mov [.sac_uid], eax
+        mov edi, [.sac_path]
+        mov esi, ACC_VAL_ALGO
+        call sett_kv_get_u32
+        jnc .sac_have_algo
+        jmp .sac_stale
+.sac_have_algo:
+        cmp eax, SESS_KDF_SCHEME
+        jne .sac_stale
+        mov eax, 1
+        jmp .sac_done
+.sac_new:
+        call sess_uid_alloc
+        mov [.sac_uid], eax
+.sac_stale:
+        mov eax, [tick_count]
+        mov [sess_salt_buf], eax
+        mov eax, [tick_count]
+        imul eax, 2654435761
+        xor eax, [.sac_uid]
+        mov [sess_salt_buf + 4], eax
+        lea esi, [sess_pw_buf]
+        lea edi, [sess_salt_buf]
+        lea ebx, [sess_calc_buf]
+        call sess_hash_password
+        jc .sac_fail
+        lea esi, [sess_name_buf]
+        call sess_path_of_account
+        mov [.sac_path], esi
+        mov edi, [.sac_path]
+        mov esi, ACC_VAL_UID
+        mov ebx, [.sac_uid]
+        call sett_kv_set_u32
+        jc .sac_fail
+        mov edi, [.sac_path]
+        mov esi, ACC_VAL_ALGO
+        mov ebx, SESS_KDF_SCHEME
+        call sett_kv_set_u32
+        jc .sac_fail
+        mov edi, [.sac_path]
+        mov esi, ACC_VAL_SALT
+        lea edx, [sess_salt_buf]
+        mov ecx, 8
+        call sett_kv_set_bin
+        jc .sac_fail
+        mov edi, [.sac_path]
+        mov esi, ACC_VAL_HASH
+        lea edx, [sess_calc_buf]
+        mov ecx, 32
+        call sett_kv_set_bin
+        jc .sac_fail
+        call sett_save
+        jc .sac_fail
+        xor eax, eax
+        jmp .sac_done
+.sac_fail:
+        mov eax, 2
+        jmp .sac_done
+.sac_bad_name:
+        mov eax, 3
+.sac_done:
+        mov [esp + 28], eax
+        popad
+        ret
+.sac_uid: dd 0
+.sac_path: dd 0
+
 ; `account ...`
 sess_account_command:
         pushad
@@ -1455,77 +1603,24 @@ sess_account_command:
         mov edx, 31
         call sett_word
         jc .usage
-        ; Refuse a duplicate, unless the record was written by another scheme:
-        ; that one cannot be verified any more, so `account add` re-sets it
-        ; under the same uid rather than leaving a name nobody can log on with.
-        lea esi, [sess_name_buf]
-        call sess_path_of_account
-        mov edi, esi
-        mov esi, ACC_VAL_UID
-        call sett_kv_get_u32
-        jc .add_new
-        mov [.uid], eax
-        mov edi, esi
-        mov esi, ACC_VAL_ALGO
-        call sett_kv_get_u32
-        jnc .add_have_algo
-        jmp .add_stale
-.add_have_algo:
-        cmp eax, SESS_KDF_SCHEME
-        jne .add_stale
-        jmp .add_dup
-.add_new:
-        call sess_uid_alloc
-        mov [.uid], eax
-.add_stale:
-        ; Salt from the clock: the tick and the RTC's second, twice, so two
-        ; accounts made in the same second still differ.
-        mov eax, [tick_count]
-        mov [sess_salt_buf], eax
-        mov eax, [tick_count]
-        imul eax, 2654435761
-        xor eax, [sess_uid_buf]
-        mov [sess_salt_buf + 4], eax
-        lea esi, [sess_pw_buf]
-        lea edi, [sess_salt_buf]
-        lea ebx, [sess_calc_buf]
-        call sess_hash_password
-        jc .add_fail
-        ; sess_uid_alloc walks the account keys and that walk shares
-        ; sess_path_buf, so the path is taken again before anything is written.
-        lea esi, [sess_name_buf]
-        call sess_path_of_account
-        mov [.path], esi
-        ; Write uid, scheme, salt and hash.
-        mov edi, [.path]
-        mov esi, ACC_VAL_UID
-        mov ebx, [.uid]
-        call sett_kv_set_u32
-        jc .add_fail
-        mov edi, [.path]
-        mov esi, ACC_VAL_ALGO
-        mov ebx, SESS_KDF_SCHEME
-        call sett_kv_set_u32
-        jc .add_fail
-        mov edi, [.path]
-        mov esi, ACC_VAL_SALT
-        lea edx, [sess_salt_buf]
-        mov ecx, 8
-        call sett_kv_set_bin
-        jc .add_fail
-        mov edi, [.path]
-        mov esi, ACC_VAL_HASH
-        lea edx, [sess_calc_buf]
-        mov ecx, 32
-        call sett_kv_set_bin
-        jc .add_fail
-        call sett_save
-        jc .add_fail
+        call sess_account_create
+        test eax, eax
+        jz .add_created
+        cmp eax, 1
+        je .add_dup
+        cmp eax, 3
+        je .add_bad_name
+        jmp .add_fail
+.add_created:
         mov esi, msg_acc_added
         call vga_print
         lea esi, [sess_name_buf]
         call vga_print
         call vga_newline
+        jmp .done
+.add_bad_name:
+        mov esi, msg_acc_bad_name
+        call vga_print
         jmp .done
 .add_dup:
         mov esi, msg_acc_dup
@@ -1593,7 +1688,6 @@ sess_account_command:
         popad
         ret
 .uid:  dd 0
-.path: dd 0
 .i:    dd 0
 .argp: dd 0
 
@@ -1860,6 +1954,7 @@ msg_who_privs_user: db " privileges=SE_SHUTDOWN", 0x0A, 0
 msg_acc_added:    db "account: added ", 0
 msg_acc_dup:      db "account: that name already exists", 0x0A, 0
 msg_acc_fail:     db "account: could not write the account", 0x0A, 0
+msg_acc_bad_name: db "account: names use letters, digits, dot, underscore or hyphen, and at least one that is not a dot", 0x0A, 0
 msg_acc_deleted:  db "account: deleted", 0x0A, 0
 msg_acc_nosuch:   db "account: no such account", 0x0A, 0
 msg_acc_none:     db "account: no accounts", 0x0A, 0

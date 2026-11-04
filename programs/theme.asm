@@ -51,6 +51,7 @@ start:
         mov [chosen], eax
         mov eax, SYS_SETCOLOR
         mov ebx, [chosen]
+        or ebx, SETCOLOR_PERSIST        ; the point of `theme` is to stay
         int 0x80
         mov eax, SYS_CLEAR
         int 0x80

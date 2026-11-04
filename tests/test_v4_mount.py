@@ -188,7 +188,7 @@ def main() -> int:
                                str(image), "--complain"],
                               capture_output=True, text=True)
         check("the offline checker verifies every v4 checksum",
-              fsck.returncode == 0 and "8 of 8" in fsck.stdout,
+              fsck.returncode == 0 and "regions match" in fsck.stdout,
               (fsck.stdout + fsck.stderr)[-300:])
 
         payload = add_fragmented_file(image)

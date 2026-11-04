@@ -202,8 +202,19 @@ atadma_read_sectors:
         test al, BMIDE_STA_ACTIVE
         jz  .dma_done
         loop .dma_poll
-        ; Timeout fallthrough → treat as success and read ATA status
+        ; Timeout: the transfer never completed. Falling through would copy a
+        ; half-filled bounce buffer and report it as a successful read.
+        jmp .dma_error
 .dma_done:
+        ; The bus master says done; the controller's own status is the last
+        ; word. An error latched there means the data is not trustworthy.
+        mov dx, ATA_STATUS
+        in  al, dx
+        test al, ATA_SR_BSY
+        jnz .dma_error              ; controller still busy: not a completed read
+        test al, ATA_SR_ERR
+        jnz .dma_error
+
         ; Stop Bus Master
         mov edx, [atadma_bmide_base]
         add edx, BMIDE_CMD

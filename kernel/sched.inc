@@ -837,6 +837,8 @@ fault_kill_current_task:
         mov dword [tty_fg_pgid], -1
         mov byte [program_running], 0
         call shell_redir_reset
+        call vga_end_program_color
+        call vga_reset_color
         popad
         ret
 
@@ -1966,6 +1968,7 @@ sched_self_leave:
         mov dword [tty_fg_pgid], -1
         mov byte [program_running], 0
         call shell_redir_reset
+        call vga_end_program_color
         call vga_reset_color
         sti
         jmp shell_main

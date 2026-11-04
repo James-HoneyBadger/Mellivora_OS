@@ -40,6 +40,22 @@ normal `/bin` or `/games` program sets.
 Run these commands from the Mellivora shell after `make full` and `make run`.
 Host C syntax checks are useful but do not replace a TCC build inside the OS.
 
+### Shell scripts (8)
+
+| Sample | Focus | Runtime |
+| --- | --- | --- |
+| `conditions.bat` | `if`/`then`/`else` and `case`, one construct per line | `batch /samples/conditions.bat` |
+| `file_types.bat` | File associations: `assoc` lists, sets and removes handlers; `open` launches one | `batch /samples/file_types.bat` |
+| `functions.bat` | Functions, positional parameters and `shift` | `batch /samples/functions.bat` |
+| `hello.bat` | Variables, expansion and exit status | `batch /samples/hello.bat` |
+| `loops.bat` | `for`, `while` and arithmetic | `batch /samples/loops.bat` |
+| `menu.bat` | Interactive input with `read` and `case` | `batch /samples/menu.bat` |
+| `status.bat` | Exit status and early `exit` | `batch /samples/status.bat` |
+| `tcc_build.bat` | The in-OS toolchain end to end: compile with `tcc`, then run the result | `batch /samples/tcc_build.bat` |
+
+`make check-samples` checks that every command word in a script is a built-in
+or a program, and that block keywords balance.
+
 ### Perl (11)
 
 | Sample | Focus | Runtime |

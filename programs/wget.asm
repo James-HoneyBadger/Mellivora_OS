@@ -131,6 +131,8 @@ start:
 .copy_of:
         xor ecx, ecx
 .copy_of_loop:
+        cmp ecx, 127             ; outfile is 128 bytes: leave room for the NUL
+        jae .copy_of_done
         mov al, [esi + ecx]
         test al, al
         jz .copy_of_done

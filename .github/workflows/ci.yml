@@ -28,6 +28,16 @@ jobs:
           # multilib.
           sudo apt-get install -y nasm make python3 qemu-system-x86 fdisk dosfstools clang lld binutils
 
+      - name: Record selected 32-bit C toolchain
+        run: |
+          sh tools/find_c_toolchain.sh | tee toolchain-report.txt
+          {
+            echo "## Selected C toolchain"
+            echo '```text'
+            cat toolchain-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run lint and contract checks
         run: make lint
 
@@ -131,7 +141,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mellivora-img-${{ github.sha }}
-          path: mellivora.img
+          path: |
+            mellivora.img
+            toolchain-report.txt
           retention-days: 7
 
   installer-iso:

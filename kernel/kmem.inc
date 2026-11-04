@@ -31,6 +31,14 @@ KMEM_PAGE_SIZE  equ 4096
 KMEM_FREE_END   equ 0xFFFFFFFF      ; empty free list
 KMEM_ARGS_SIZE  equ 512             ; one task's argv snapshot
 
+align 16
+kmem_lock:
+        dd 0
+        dd RANK_KMEM
+        dd 0
+        dd kmem_lock_name
+kmem_lock_name: db "kmem", 0
+
 ;-----------------------------------------------------------------------
 ; kmem_init - reset the cache table and create the kernel's caches
 ;-----------------------------------------------------------------------
@@ -134,21 +142,31 @@ kmem_alloc:
         cmp dword [kmem_obj_size + eax*4], 0
         je .ka_fail                     ; unregistered cache
 
+        ; The free lists are shared the moment two processors run; take the
+        ; cache lock for the pop (and, on a miss, for the slab hand-off too).
+        mov  edi, kmem_lock
+        call spin_lock
+
+        mov eax, [.ka_cache]            ; spin_lock clobbers EAX
         mov edi, [kmem_free_list + eax*4]
         cmp edi, KMEM_FREE_END
         jne .ka_pop
         call kmem_new_slab
         test eax, eax
-        jz .ka_fail
+        jz .ka_fail_locked
         mov eax, [.ka_cache]
         mov edi, [kmem_free_list + eax*4]
 .ka_pop:
         mov edx, [edi]                  ; next free object
         mov ecx, [.ka_cache]
         mov [kmem_free_list + ecx*4], edx
+        mov [.ka_obj], edi              ; keep the object across the unlock
+
+        mov  edi, kmem_lock
+        call spin_unlock
 
         ; Hand out a zeroed object: slots are recycled constantly.
-        mov [.ka_obj], edi
+        mov ecx, [.ka_cache]
         mov ecx, [kmem_obj_size + ecx*4]
         shr ecx, 2
         xor eax, eax
@@ -160,6 +178,9 @@ kmem_alloc:
         mov [esp + 28], eax
         popad
         ret
+.ka_fail_locked:
+        mov  edi, kmem_lock
+        call spin_unlock
 .ka_fail:
         mov dword [esp + 28], 0
         popad
@@ -228,11 +249,27 @@ kmem_free:
         jae .kf_done
         cmp dword [kmem_obj_size + eax*4], 0
         je .kf_done
+        ; A free is only trustworthy for an aligned object inside the arena the
+        ; allocator owns. Anything else is a caller bug that would thread a
+        ; non-object onto the free list and corrupt the next allocation.
+        test ebx, 3
+        jnz .kf_done
+        cmp ebx, KERNEL_RESERVED_END
+        jb .kf_done
+        cmp ebx, [pmm_mem_top]
+        jae .kf_done
+        mov [.kf_cache], eax
+        mov edi, kmem_lock
+        call spin_lock
+        mov eax, [.kf_cache]
         mov edx, [kmem_free_list + eax*4]
         mov [ebx], edx
         mov [kmem_free_list + eax*4], ebx
+        mov edi, kmem_lock
+        call spin_unlock
 .kf_done:
         pop edx
         pop ecx
         pop eax
         ret
+.kf_cache: dd 0

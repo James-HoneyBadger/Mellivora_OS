@@ -1,0 +1,60 @@
+name: Extended Reliability
+
+on:
+  schedule:
+    - cron: "0 2 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extended-reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nasm make python3 qemu-system-x86 fdisk dosfstools clang lld binutils
+
+      - name: Build test image
+        run: make IMAGE_SIZE_MB=256 full
+
+      - name: Extended crash-recovery run
+        id: crash
+        run: |
+          set -o pipefail
+          CRASH_ITERS=100 make IMAGE_SIZE_MB=256 crash-soak 2>&1 | tee reliability-crash.log
+
+      - name: Four-vCPU mixed-load soak
+        id: soak
+        run: |
+          set -o pipefail
+          SOAK_MINUTES=240 make IMAGE_SIZE_MB=256 soak 2>&1 | tee reliability-soak.log
+
+      - name: Summarize reliability run
+        if: always()
+        run: |
+          {
+            echo "## Extended reliability results"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Crash recovery: 100 iterations — ${{ steps.crash.outcome }}"
+            echo "- Four-vCPU mixed-load soak: 240 minutes — ${{ steps.soak.outcome }}"
+            echo
+            echo "These extended checks supplement, but do not replace, the 10,000-iteration and 24-hour roadmap exit criteria."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reliability logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reliability-${{ github.run_id }}
+          path: reliability-*.log
+          if-no-files-found: warn
+          retention-days: 30

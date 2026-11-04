@@ -1,4 +1,4 @@
-name: Nightly Sanitize
+name: Nightly Debug-Bounds Regression
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  sanitize:
+  debug-bounds:
     runs-on: ubuntu-latest
 
     steps:
@@ -81,5 +81,5 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Run sanitize build and regression suite
+      - name: Run debug-bounds build and regression suite
         run: make sanitize

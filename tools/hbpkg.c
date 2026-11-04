@@ -8,8 +8,8 @@
  *   gzip-compressed tar archive containing:
  *     HBPKG/meta.toml   — package metadata  (name, version, deps, desc, …)
  *     HBPKG/files/      — payload files at their install-tree paths
- *     HBPKG/install.sh  — optional pre/post install script
- *     HBPKG/meta.toml.sig — Ed25519 signature (over SHA-256 of meta.toml)
+ *     HBPKG/install.sh  — legacy payload, refused during installation
+ *     HBPKG/meta.toml.sig — reserved; signature verification is unavailable
  *
  * Package database (binary flat file):  /var/pkg/installed.db
  *   Each record (256 bytes):
@@ -34,16 +34,18 @@
  *   hbpkg help                   — show this help text
  *
  * Security notes:
- *   - Packages are verified against Ed25519 signatures before install.
+ *   - Signature verification is unavailable; a configured trusted key fails closed.
  *   - Downloads use TLS 1.2+ (libcurl) on the host.
- *   - Path traversal in tarball extraction is rejected (HBPKG-SEC-001).
+ *   - Archive member paths and member types are validated before extraction.
  *   - All user-supplied filenames are sanitised before any file I/O.
  */
 
+#define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
@@ -61,6 +63,7 @@
 #  include <unistd.h>
 #  include <dirent.h>
 #  include <fcntl.h>
+#  include <sys/wait.h>
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -73,6 +76,7 @@
 #define HBPKG_REPO_URL     "https://pkg.mellivora.os/repo"   /* default */
 #define HBPKG_MAX_DEPS     32
 #define HBPKG_MAX_FILES    1024
+#define HBPKG_MAX_ASSOC    32
 #define HBPKG_REC_SIZE     256
 #define HBPKG_NAME_LEN     64
 #define HBPKG_VER_LEN      32
@@ -92,6 +96,11 @@ typedef struct {
     uint32_t patch;
     char     pre[16];   /* pre-release tag, e.g. "alpha.1" */
 } semver_t;
+
+typedef struct {
+    char extension[24];
+    char handler[HBPKG_NAME_LEN];
+} pkg_assoc_t;
 
 /* On-disk package database record (256 bytes, packed) */
 typedef struct __attribute__((packed)) {
@@ -116,6 +125,8 @@ typedef struct {
     int       dep_count;
     char      files[HBPKG_MAX_FILES][256];
     int       file_count;
+    pkg_assoc_t associations[HBPKG_MAX_ASSOC];
+    int       association_count;
     uint8_t   sig[64];            /* Ed25519 signature bytes */
     bool      sig_valid;
 } pkg_meta_t;
@@ -158,7 +169,6 @@ static bool    meta_verify_sig(const pkg_meta_t *meta, const char *key_path);
 
 static int     extract_hbp(const char *hbp_path, const char *dest_dir);
 static int     install_files(const char *extracted_dir, const pkg_meta_t *meta);
-static int     run_install_script(const char *dir, const char *phase);
 
 static int     topo_sort(dep_node_t *nodes, int count, int *order_out);
 static int     topo_visit(dep_node_t *nodes, int count, int i, int *order, int *order_idx);
@@ -168,12 +178,40 @@ static void    sha256_hex(const void *data, size_t len, char *out_hex64);
 static void    log_info (const char *fmt, ...);
 static void    log_warn (const char *fmt, ...);
 static void    log_error(const char *fmt, ...);
+static int     safe_relative_path(const char *path);
+static int     valid_extension(const char *ext);
+static int     rooted_path(char *out, size_t cap, const char *path);
+static int     ensure_directory(const char *path);
+static int     copy_file(const char *src, const char *dst);
+static int     update_package_associations(const char *owner, const pkg_meta_t *meta);
+static int     write_package_manifest(const pkg_meta_t *meta);
+static int     remove_package_manifest(const char *name);
+static int     remove_files_from_meta(const pkg_meta_t *meta);
+static int     remove_package_files(const char *name);
+static int     register_package_associations(const pkg_meta_t *meta);
+static int     unregister_package_associations(const char *name);
+
+static char install_root[PATH_MAX] = "/";
 
 /* ------------------------------------------------------------------ */
 /* Entry point                                                         */
 /* ------------------------------------------------------------------ */
 int main(int argc, char **argv)
 {
+    const char *root = getenv("HBPKG_ROOT");
+    if (root && *root) {
+        size_t n = strlen(root);
+        if (root[0] != '/' || n >= sizeof(install_root)) {
+            log_error("HBPKG_ROOT must be an absolute path shorter than %zu bytes.",
+                      sizeof(install_root));
+            return 2;
+        }
+        memcpy(install_root, root, n + 1);
+        while (n > 1 && install_root[n - 1] == '/') {
+            install_root[--n] = '\0';
+        }
+    }
+
     if (argc < 2) {
         cmd_help();
         return 0;
@@ -245,8 +283,13 @@ static int cmd_install(int argc, char **argv)
                  ver_constraint);
 
         /* Construct expected cache path */
+        char cache_dir[PATH_MAX];
+        if (rooted_path(cache_dir, sizeof(cache_dir), HBPKG_CACHE_DIR) != 0) {
+            log_error("Package cache path is too long: %s", HBPKG_CACHE_DIR);
+            return 1;
+        }
         char hbp_path[PATH_MAX];
-        snprintf(hbp_path, sizeof(hbp_path), "%s/%s.hbp", HBPKG_CACHE_DIR, safe_name);
+        snprintf(hbp_path, sizeof(hbp_path), "%s/%s.hbp", cache_dir, safe_name);
 
         /* If not cached, attempt download (requires libcurl at link time on host) */
         struct stat st;
@@ -258,7 +301,10 @@ static int cmd_install(int argc, char **argv)
             /* Use curl(1) subprocess for portability — avoids libcurl dependency */
             char cmd_buf[768];
             /* Create cache dir if needed */
-            (void)mkdir(HBPKG_CACHE_DIR, 0755);
+            if (ensure_directory(cache_dir) != 0) {
+                log_error("Cannot create package cache: %s", cache_dir);
+                return 1;
+            }
             snprintf(cmd_buf, sizeof(cmd_buf),
                      "curl -fsSL --retry 3 -o '%s' '%s'", hbp_path, url);
             int rc = system(cmd_buf);   /* NOSONAR: controlled URL from config */
@@ -274,7 +320,7 @@ static int cmd_install(int argc, char **argv)
 
         /* Extract and install */
         char extract_dir[PATH_MAX];
-        snprintf(extract_dir, sizeof(extract_dir), "%s/%s.tmp", HBPKG_CACHE_DIR, safe_name);
+        snprintf(extract_dir, sizeof(extract_dir), "%s/%s.tmp", cache_dir, safe_name);
         if (extract_hbp(hbp_path, extract_dir) != 0) {
             log_error("  Extraction failed for %s", safe_name);
             return 1;
@@ -289,10 +335,25 @@ static int cmd_install(int argc, char **argv)
             log_error("  Cannot parse metadata for %s", safe_name);
             return 1;
         }
+        char metadata_name[HBPKG_NAME_LEN];
+        if (!sanitise_name(meta.name, metadata_name, sizeof(metadata_name)) ||
+            strcmp(metadata_name, safe_name) != 0) {
+            log_error("Package metadata name does not match requested package %s.", safe_name);
+            return 1;
+        }
+        for (int f = 0; f < meta.file_count; f++) {
+            if (!safe_relative_path(meta.files[f])) {
+                log_error("Unsafe package path in metadata: %s", meta.files[f]);
+                return 1;
+            }
+        }
 
         /* Verify signature */
         char key_path[PATH_MAX];
-        snprintf(key_path, sizeof(key_path), "/etc/hbpkg/trusted.pub");
+        if (rooted_path(key_path, sizeof(key_path), "/etc/hbpkg/trusted.pub") != 0) {
+            log_error("Trusted-key path is too long.");
+            return 1;
+        }
         if (stat(key_path, &st) == 0) {
             if (!meta_verify_sig(&meta, key_path)) {
                 log_error("  Signature verification FAILED for %s — aborting.", safe_name);
@@ -317,8 +378,12 @@ static int cmd_install(int argc, char **argv)
             }
         }
 
-        /* Pre-install script */
-        run_install_script(extract_dir, "pre");
+        char script_path[PATH_MAX];
+        snprintf(script_path, sizeof(script_path), "%s/HBPKG/install.sh", extract_dir);
+        if (access(script_path, F_OK) == 0) {
+            log_error("Package scripts are not supported; refusing %s.", safe_name);
+            return 1;
+        }
 
         /* Copy files */
         if (install_files(extract_dir, &meta) != 0) {
@@ -326,12 +391,30 @@ static int cmd_install(int argc, char **argv)
             return 1;
         }
 
-        /* Post-install script */
-        run_install_script(extract_dir, "post");
+        if (write_package_manifest(&meta) != 0) {
+            log_error("Could not write the installed-file manifest for %s.", safe_name);
+            if (remove_files_from_meta(&meta) != 0)
+                log_error("Rollback left package files behind for %s.", safe_name);
+            return 1;
+        }
+        if (register_package_associations(&meta) != 0) {
+            log_error("Could not register package associations for %s.", safe_name);
+            if (remove_files_from_meta(&meta) != 0)
+                log_error("Rollback left package files behind for %s.", safe_name);
+            if (remove_package_manifest(safe_name) != 0)
+                log_error("Rollback left the package manifest behind for %s.", safe_name);
+            return 1;
+        }
 
         /* Register in DB */
         if (db_pkg_add(&meta) != 0) {
             log_error("  Database update failed for %s", safe_name);
+            if (unregister_package_associations(safe_name) != 0)
+                log_error("Rollback left package associations behind for %s.", safe_name);
+            if (remove_files_from_meta(&meta) != 0)
+                log_error("Rollback left package files behind for %s.", safe_name);
+            if (remove_package_manifest(safe_name) != 0)
+                log_error("Rollback left the package manifest behind for %s.", safe_name);
             return 1;
         }
 
@@ -362,8 +445,26 @@ static int cmd_remove(int argc, char **argv)
 
         log_info("Removing %s %s ...", rec.name, rec.version);
 
+        int files_removed = remove_package_files(safe_name);
+        if (files_removed < 0) {
+            log_error("Could not remove all files owned by %s.", safe_name);
+            return 1;
+        }
+        if (files_removed > 0) {
+            log_warn("No installed-file manifest for %s: the record was made by "
+                     "an older hbpkg, so its files are not tracked. Removing the "
+                     "database record only.", safe_name);
+        }
+        if (unregister_package_associations(safe_name) != 0) {
+            log_error("Could not remove association registrations for %s.", safe_name);
+            return 1;
+        }
         if (db_pkg_remove(safe_name) != 0) {
             log_error("Database removal failed for %s", safe_name);
+            return 1;
+        }
+        if (remove_package_manifest(safe_name) != 0) {
+            log_error("Files were removed but the package manifest remains for %s.", safe_name);
             return 1;
         }
 
@@ -379,10 +480,20 @@ static int cmd_update(int argc, char **argv)
 
 #ifdef HBPKG_HOST
     char cmd_buf[512];
-    (void)mkdir(HBPKG_CACHE_DIR, 0755);
+    char cache_dir[PATH_MAX];
+    char index_path[PATH_MAX];
+    if (rooted_path(cache_dir, sizeof(cache_dir), HBPKG_CACHE_DIR) != 0 ||
+        rooted_path(index_path, sizeof(index_path), HBPKG_REPO_INDEX) != 0) {
+        log_error("Package index paths are too long.");
+        return 1;
+    }
+    if (ensure_directory(cache_dir) != 0) {
+        log_error("Cannot create package cache: %s", cache_dir);
+        return 1;
+    }
     snprintf(cmd_buf, sizeof(cmd_buf),
              "curl -fsSL --retry 3 -o '%s' '%s/index.db'",
-             HBPKG_REPO_INDEX, HBPKG_REPO_URL);
+             index_path, HBPKG_REPO_URL);
     int rc = system(cmd_buf);   /* NOSONAR: URL from config constant */
     if (rc != 0) {
         log_error("Index fetch failed (exit %d)", rc);
@@ -420,7 +531,12 @@ static int cmd_search(int argc, char **argv)
     }
 
     /* Search local index.db for matching names/descriptions */
-    FILE *fp = fopen(HBPKG_REPO_INDEX, "r");
+    char index_path[PATH_MAX];
+    if (rooted_path(index_path, sizeof(index_path), HBPKG_REPO_INDEX) != 0) {
+        log_error("Package index path is too long.");
+        return 1;
+    }
+    FILE *fp = fopen(index_path, "r");
     if (!fp) {
         log_warn("No package index found. Run 'hbpkg update' first.");
         return 1;
@@ -557,7 +673,12 @@ static int cmd_audit(int argc, char **argv)
     (void)argc; (void)argv;
     log_info("Auditing installed packages ...");
 
-    FILE *fp = fopen(HBPKG_DB_PATH, "rb");
+    char db_path[PATH_MAX];
+    if (rooted_path(db_path, sizeof(db_path), HBPKG_DB_PATH) != 0) {
+        log_error("Package database path is too long.");
+        return 1;
+    }
+    FILE *fp = fopen(db_path, "rb");
     if (!fp) {
         log_warn("No package database found.");
         return 0;
@@ -596,8 +717,16 @@ static void cmd_help(void)
     printf("  build   <spec.toml>   Build a .hbp package from a spec file\n");
     printf("  audit                 Verify installed package integrity\n");
     printf("  help                  Show this help text\n\n");
-    printf("Package DB:     %s\n", HBPKG_DB_PATH);
-    printf("Package cache:  %s\n", HBPKG_CACHE_DIR);
+    char db_path[PATH_MAX], cache_dir[PATH_MAX];
+    if (rooted_path(db_path, sizeof(db_path), HBPKG_DB_PATH) != 0 ||
+        rooted_path(cache_dir, sizeof(cache_dir), HBPKG_CACHE_DIR) != 0) {
+        printf("Package DB:     %s\n", HBPKG_DB_PATH);
+        printf("Package cache:  %s\n", HBPKG_CACHE_DIR);
+        printf("Repository:     %s\n", HBPKG_REPO_URL);
+        return;
+    }
+    printf("Package DB:     %s\n", db_path);
+    printf("Package cache:  %s\n", cache_dir);
     printf("Repository:     %s\n", HBPKG_REPO_URL);
 }
 
@@ -614,16 +743,25 @@ static bool db_pkg_installed(const char *name)
 static int db_ensure_dirs(void)
 {
 #ifdef HBPKG_HOST
-    (void)mkdir("/var", 0755);
-    (void)mkdir("/var/pkg", 0755);
+    char pkg_dir[PATH_MAX];
+    if (rooted_path(pkg_dir, sizeof(pkg_dir), "/var/pkg") != 0) return -1;
+    if (ensure_directory(pkg_dir) != 0) return -1;
 #endif
     return 0;
 }
 
 static int db_pkg_add(const pkg_meta_t *meta)
 {
-    db_ensure_dirs();
-    FILE *fp = fopen(HBPKG_DB_PATH, "ab");
+    if (db_ensure_dirs() != 0) {
+        log_error("Cannot create package database directory.");
+        return -1;
+    }
+    char db_path[PATH_MAX];
+    if (rooted_path(db_path, sizeof(db_path), HBPKG_DB_PATH) != 0) {
+        log_error("Package database path is too long.");
+        return -1;
+    }
+    FILE *fp = fopen(db_path, "ab");
     if (!fp) {
         log_error("Cannot open DB for writing: %s", strerror(errno));
         return -1;
@@ -648,48 +786,69 @@ static int db_pkg_add(const pkg_meta_t *meta)
 
     rec.file_count = (uint32_t)meta->file_count;
 
-    fwrite(&rec, sizeof(rec), 1, fp);
-    fclose(fp);
-    return 0;
+    int result = fwrite(&rec, sizeof(rec), 1, fp) == 1 ? 0 : -1;
+    if (fflush(fp) != 0) result = -1;
+    if (fclose(fp) != 0) result = -1;
+    if (result != 0) log_error("Could not write package database record.");
+    return result;
 }
 
 static int db_pkg_remove(const char *name)
 {
     /* Read all records, write back all except the target */
-    FILE *fp = fopen(HBPKG_DB_PATH, "rb");
+    char db_path[PATH_MAX];
+    if (rooted_path(db_path, sizeof(db_path), HBPKG_DB_PATH) != 0) return -1;
+    FILE *fp = fopen(db_path, "rb");
     if (!fp) return -1;
 
     char tmp_path[PATH_MAX];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", HBPKG_DB_PATH);
+    if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", db_path) >=
+        (int)sizeof(tmp_path)) {
+        fclose(fp);
+        return -1;
+    }
     FILE *out = fopen(tmp_path, "wb");
     if (!out) { fclose(fp); return -1; }
 
     pkg_record_t rec;
     bool found = false;
+    int result = 0;
     while (fread(&rec, sizeof(rec), 1, fp) == 1) {
         if (strcmp(rec.name, name) == 0) {
             found = true;
             continue;   /* skip this record */
         }
-        fwrite(&rec, sizeof(rec), 1, out);
+        if (fwrite(&rec, sizeof(rec), 1, out) != 1) {
+            result = -1;
+            break;
+        }
     }
-    fclose(fp);
-    fclose(out);
+    if (ferror(fp)) result = -1;
+    long input_size = ftell(fp);
+    if (input_size < 0 || input_size % (long)sizeof(rec) != 0) result = -1;
+    if (fclose(fp) != 0) result = -1;
+    if (fflush(out) != 0) result = -1;
+    if (fclose(out) != 0) result = -1;
 
-    if (!found) {
+    if (!found || result != 0) {
         remove(tmp_path);
         return -1;
     }
 
 #ifdef HBPKG_HOST
-    rename(tmp_path, HBPKG_DB_PATH);
+    if (rename(tmp_path, db_path) != 0) {
+        remove(tmp_path);
+        return -1;
+    }
 #endif
     return 0;
 }
 
 static int db_pkg_get(const char *name, pkg_record_t *out)
 {
-    FILE *fp = fopen(HBPKG_DB_PATH, "rb");
+    char db_path[PATH_MAX];
+    if (rooted_path(db_path, sizeof(db_path), HBPKG_DB_PATH) != 0) return -1;
+    FILE *fp = fopen(db_path, "rb");
     if (!fp) return -1;
 
     pkg_record_t rec;
@@ -707,7 +866,9 @@ static int db_pkg_get(const char *name, pkg_record_t *out)
 static int db_pkg_list(bool installed_only)
 {
     if (installed_only) {
-        FILE *fp = fopen(HBPKG_DB_PATH, "rb");
+        char db_path[PATH_MAX];
+        if (rooted_path(db_path, sizeof(db_path), HBPKG_DB_PATH) != 0) return 1;
+        FILE *fp = fopen(db_path, "rb");
         if (!fp) {
             log_warn("No packages installed.");
             return 0;
@@ -726,7 +887,9 @@ static int db_pkg_list(bool installed_only)
         fclose(fp);
     } else {
         /* List from index */
-        FILE *fp = fopen(HBPKG_REPO_INDEX, "r");
+        char index_path[PATH_MAX];
+        if (rooted_path(index_path, sizeof(index_path), HBPKG_REPO_INDEX) != 0) return 1;
+        FILE *fp = fopen(index_path, "r");
         if (!fp) {
             log_warn("No package index. Run 'hbpkg update' first.");
             return 1;
@@ -832,15 +995,12 @@ static int meta_parse_toml(const char *path, pkg_meta_t *out)
     }
 
     char line[512];
-    bool in_deps_array = false;
-
     while (fgets(line, sizeof(line), fp)) {
         /* Strip newline */
         line[strcspn(line, "\r\n")] = '\0';
 
         /* Skip blank lines and comments */
         if (line[0] == '#' || line[0] == '\0') {
-            in_deps_array = false;
             continue;
         }
 
@@ -913,6 +1073,40 @@ static int meta_parse_toml(const char *path, pkg_meta_t *out)
                 p = fe + 1;
             }
         }
+        else if (strcmp(key, "associations") == 0) {
+            char *p = val;
+            if (*p == '[') p++;
+            while (*p && out->association_count < HBPKG_MAX_ASSOC) {
+                while (isspace((unsigned char)*p) || *p == ',') p++;
+                if (*p == ']' || *p == '\0') break;
+                if (*p == '"') p++;
+                char *item_end = strchr(p, '"');
+                if (!item_end) item_end = strchr(p, ']');
+                if (!item_end) break;
+                char *separator = memchr(p, ':', (size_t)(item_end - p));
+                if (!separator) {
+                    fclose(fp);
+                    log_error("Invalid association entry: %.*s",
+                              (int)(item_end - p), p);
+                    return -1;
+                }
+                size_t ext_len = (size_t)(separator - p);
+                size_t handler_len = (size_t)(item_end - separator - 1);
+                pkg_assoc_t *association = &out->associations[out->association_count];
+                if (ext_len == 0 || ext_len >= sizeof(association->extension) ||
+                    handler_len == 0 || handler_len >= sizeof(association->handler)) {
+                    fclose(fp);
+                    log_error("Association entry is too long.");
+                    return -1;
+                }
+                memcpy(association->extension, p, ext_len);
+                association->extension[ext_len] = '\0';
+                memcpy(association->handler, separator + 1, handler_len);
+                association->handler[handler_len] = '\0';
+                out->association_count++;
+                p = item_end + 1;
+            }
+        }
     }
     fclose(fp);
 
@@ -924,39 +1118,244 @@ static int meta_parse_toml(const char *path, pkg_meta_t *out)
         log_error("meta.toml missing required 'version' field");
         return -1;
     }
+    for (int i = 0; i < out->association_count; i++) {
+        char safe_handler[HBPKG_NAME_LEN];
+        if (!valid_extension(out->associations[i].extension) ||
+            !sanitise_name(out->associations[i].handler, safe_handler, sizeof(safe_handler)) ||
+            strcmp(safe_handler, out->associations[i].handler) != 0) {
+            log_error("Invalid file association in package metadata.");
+            return -1;
+        }
+        for (int j = 0; j < i; j++) {
+            if (strcasecmp(out->associations[i].extension,
+                           out->associations[j].extension) == 0) {
+                log_error("Duplicate file association: %s",
+                          out->associations[i].extension);
+                return -1;
+            }
+        }
+    }
     return 0;
 }
 
 static bool meta_verify_sig(const pkg_meta_t *meta, const char *key_path)
 {
-    /* Ed25519 signature verification requires libsodium or openssl.
-     * On host with OpenSSL available, use: openssl pkeyutl -verify
-     * For now: stub that returns true (warn-only in production).
-     * A full implementation would:
-     *   1. Read the 64-byte sig from meta.sig[]
-     *   2. Load the 32-byte Ed25519 public key from key_path
-     *   3. Verify sig over SHA-256(meta.toml content)
-     */
-    (void)meta; (void)key_path;
-    /* TODO: link -lsodium and use crypto_sign_ed25519_verify_detached() */
-    return true;
+    (void)meta;
+    (void)key_path;
+    return false;
+}
+
+/* Install-rooted path. Returns -1 instead of truncating: a shortened path
+ * would name a file the caller did not ask for, so the caller must fail. */
+static int rooted_path(char *out, size_t cap, const char *path)
+{
+    while (*path == '/') path++;
+    int written = snprintf(out, cap, "%s%s%s", install_root,
+                           strcmp(install_root, "/") == 0 ? "" : "/",
+                           path);
+    if (written < 0 || (size_t)written >= cap) {
+        if (cap > 0) out[cap - 1] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
+static int ensure_directory(const char *path)
+{
+#ifdef HBPKG_HOST
+    char copy[PATH_MAX];
+    size_t n = strlen(path);
+    if (n == 0 || n >= sizeof(copy)) return -1;
+    memcpy(copy, path, n + 1);
+    for (char *p = copy + 1; ; p++) {
+        if (*p != '/' && *p != '\0') continue;
+        char saved = *p;
+        *p = '\0';
+        if (mkdir(copy, 0755) != 0 && errno != EEXIST) return -1;
+        struct stat st;
+        if (stat(copy, &st) != 0 || !S_ISDIR(st.st_mode)) return -1;
+        *p = saved;
+        if (saved == '\0') break;
+    }
+    return 0;
+#else
+    (void)path;
+    return -1;
+#endif
+}
+
+static int safe_relative_path(const char *path)
+{
+    if (!path || !*path || path[0] == '/' || strchr(path, '\\')) return 0;
+    const char *component = path;
+    for (const char *p = path; ; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c != '\0' &&
+            (c == '\t' || c == '\r' || c == '\n' || c < 0x20)) return 0;
+        if (c == '/' || c == '\0') {
+            size_t len = (size_t)(p - component);
+            if (len == 0 || (len == 1 && component[0] == '.') ||
+                (len == 2 && component[0] == '.' && component[1] == '.')) return 0;
+            if (c == '\0') return 1;
+            component = p + 1;
+        }
+    }
+}
+
+static int valid_extension(const char *ext)
+{
+    if (!ext || ext[0] != '.' || ext[1] == '\0' ||
+        strlen(ext) >= sizeof(((pkg_assoc_t *)0)->extension)) return 0;
+    for (const unsigned char *p = (const unsigned char *)ext + 1; *p; p++) {
+        if (!isalnum(*p) && *p != '.' && *p != '_' && *p != '-') return 0;
+    }
+    return 1;
+}
+
+static int copy_file(const char *src, const char *dst)
+{
+#ifdef HBPKG_HOST
+    int in_fd = open(src, O_RDONLY | O_NOFOLLOW);
+    if (in_fd < 0) return -1;
+    struct stat st;
+    if (fstat(in_fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(in_fd);
+        errno = EINVAL;
+        return -1;
+    }
+    int out_fd = open(dst, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    if (out_fd < 0) {
+        close(in_fd);
+        return -1;
+    }
+    char buffer[8192];
+    int result = 0;
+    for (;;) {
+        ssize_t got = read(in_fd, buffer, sizeof(buffer));
+        if (got == 0) break;
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            result = -1;
+            break;
+        }
+        ssize_t offset = 0;
+        while (offset < got) {
+            ssize_t written = write(out_fd, buffer + offset, (size_t)(got - offset));
+            if (written < 0) {
+                if (errno == EINTR) continue;
+                result = -1;
+                break;
+            }
+            offset += written;
+        }
+        if (result != 0) break;
+    }
+    if (close(out_fd) != 0) result = -1;
+    close(in_fd);
+    if (result != 0) unlink(dst);
+    return result;
+#else
+    (void)src; (void)dst;
+    return -1;
+#endif
 }
 
 /* ------------------------------------------------------------------ */
 /* Extraction and installation                                         */
 /* ------------------------------------------------------------------ */
 
+static int validate_tar_listing(const char *archive, bool verbose)
+{
+#ifdef HBPKG_HOST
+    int pipe_fd[2];
+    if (pipe(pipe_fd) != 0) return -1;
+    pid_t child = fork();
+    if (child < 0) {
+        close(pipe_fd[0]);
+        close(pipe_fd[1]);
+        return -1;
+    }
+    if (child == 0) {
+        close(pipe_fd[0]);
+        if (dup2(pipe_fd[1], STDOUT_FILENO) < 0) _exit(126);
+        close(pipe_fd[1]);
+        if (verbose) execlp("tar", "tar", "-tvzf", archive, (char *)NULL);
+        else execlp("tar", "tar", "-tzf", archive, (char *)NULL);
+        _exit(127);
+    }
+
+    close(pipe_fd[1]);
+    FILE *listing = fdopen(pipe_fd[0], "r");
+    if (!listing) {
+        close(pipe_fd[0]);
+        (void)waitpid(child, NULL, 0);
+        return -1;
+    }
+    int result = 0;
+    char line[PATH_MAX];
+    bool found_entry = false;
+    while (fgets(line, sizeof(line), listing)) {
+        if (verbose) {
+            if (line[0] != '-' && line[0] != 'd') {
+                log_error("Package archives may contain only regular files and directories.");
+                result = -1;
+            }
+            continue;
+        }
+
+        char *newline = strchr(line, '\n');
+        if (!newline && !feof(listing)) {
+            log_error("Package archive member name is too long.");
+            result = -1;
+            continue;
+        }
+        if (newline) *newline = '\0';
+        size_t length = strlen(line);
+        while (length > 0 && line[length - 1] == '/') line[--length] = '\0';
+        if (!safe_relative_path(line) ||
+            (strcmp(line, "HBPKG") != 0 && strncmp(line, "HBPKG/", 6) != 0)) {
+            log_error("Unsafe package archive member: %s", line);
+            result = -1;
+        }
+        found_entry = true;
+    }
+    if (ferror(listing)) result = -1;
+    fclose(listing);
+
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || (!verbose && !found_entry))
+        result = -1;
+    return result;
+#else
+    (void)archive; (void)verbose;
+    return -1;
+#endif
+}
+
 static int extract_hbp(const char *hbp_path, const char *dest_dir)
 {
 #ifdef HBPKG_HOST
-    char cmd_buf[PATH_MAX * 2 + 64];
-    /* SECURITY: both paths are derived from sanitised names or
-     * trusted config constants.  No user-supplied data reaches here
-     * without sanitise_name() validation. */
-    snprintf(cmd_buf, sizeof(cmd_buf),
-             "mkdir -p '%s' && tar -xzf '%s' -C '%s'",
-             dest_dir, hbp_path, dest_dir);
-    return system(cmd_buf) == 0 ? 0 : -1;
+    if (validate_tar_listing(hbp_path, false) != 0 ||
+        validate_tar_listing(hbp_path, true) != 0) {
+        log_error("Package archive validation failed.");
+        return -1;
+    }
+    if (ensure_directory(dest_dir) != 0) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        execlp("tar", "tar", "--no-same-owner", "--no-same-permissions",
+               "-xzf", hbp_path, "-C", dest_dir, (char *)NULL);
+        _exit(127);
+    }
+    int status;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
 #else
     (void)hbp_path; (void)dest_dir;
     return -1;
@@ -966,24 +1365,59 @@ static int extract_hbp(const char *hbp_path, const char *dest_dir)
 static int install_files(const char *extracted_dir, const pkg_meta_t *meta)
 {
 #ifdef HBPKG_HOST
-    char src[PATH_MAX], dst[PATH_MAX];
+    char source_root[PATH_MAX];
+    char source_root_real[PATH_MAX];
+    char src[PATH_MAX], dst[PATH_MAX], parent[PATH_MAX], resolved[PATH_MAX];
+    snprintf(source_root, sizeof(source_root), "%s/HBPKG/files", extracted_dir);
+    if (!realpath(source_root, source_root_real)) return -1;
+
     for (int i = 0; i < meta->file_count; i++) {
-        /* Validate: no absolute paths or path traversal in file list */
         const char *f = meta->files[i];
-        if (f[0] == '/' || strstr(f, "..")) {
-            log_error("HBPKG-SEC-001: path traversal rejected: %s", f);
+        if (!safe_relative_path(f)) {
+            log_error("HBPKG-SEC-001: unsafe package path: %s", f);
             return -1;
         }
-        snprintf(src, sizeof(src), "%s/HBPKG/files/%s", extracted_dir, f);
-        snprintf(dst, sizeof(dst), "/%s", f);
+        if (snprintf(src, sizeof(src), "%s/%s", source_root, f) >= (int)sizeof(src)) return -1;
+        struct stat source_stat;
+        if (lstat(src, &source_stat) != 0 || !S_ISREG(source_stat.st_mode) ||
+            !realpath(src, resolved) ||
+            strncmp(resolved, source_root_real, strlen(source_root_real)) != 0 ||
+            resolved[strlen(source_root_real)] != '/') {
+            log_error("Package payload is missing or escapes its staging directory: %s", f);
+            return -1;
+        }
+        if (rooted_path(dst, sizeof(dst), f) != 0) {
+            log_error("Installation path is too long: %s", f);
+            return -1;
+        }
+        struct stat dest_stat;
+        if (lstat(dst, &dest_stat) == 0 || errno != ENOENT) {
+            log_error("Refusing to overwrite an existing path: %s", dst);
+            return -1;
+        }
+    }
 
-        char cmd_buf[PATH_MAX * 2 + 32];
-        /* Ensure parent directory exists */
-        snprintf(cmd_buf, sizeof(cmd_buf), "mkdir -p \"$(dirname '%s')\"", dst);
-        system(cmd_buf);
-        snprintf(cmd_buf, sizeof(cmd_buf), "cp '%s' '%s'", src, dst);
-        if (system(cmd_buf) != 0) {
+    for (int i = 0; i < meta->file_count; i++) {
+        const char *f = meta->files[i];
+        if (snprintf(src, sizeof(src), "%s/%s", source_root, f) >= (int)sizeof(src) ||
+            rooted_path(dst, sizeof(dst), f) != 0) {
+            log_error("Installation path is too long: %s", f);
+            remove_files_from_meta(meta);
+            return -1;
+        }
+        snprintf(parent, sizeof(parent), "%s", dst);
+        char *slash = strrchr(parent, '/');
+        if (slash) {
+            if (slash == parent) slash[1] = '\0';
+            else *slash = '\0';
+            if (ensure_directory(parent) != 0) {
+                remove_files_from_meta(meta);
+                return -1;
+            }
+        }
+        if (copy_file(src, dst) != 0) {
             log_error("Failed to install file: %s", dst);
+            remove_files_from_meta(meta);
             return -1;
         }
     }
@@ -994,21 +1428,237 @@ static int install_files(const char *extracted_dir, const pkg_meta_t *meta)
 #endif
 }
 
-static int run_install_script(const char *dir, const char *phase)
+static int remove_owned_file(const char *relative_path)
 {
-    char script[PATH_MAX];
-    snprintf(script, sizeof(script), "%s/HBPKG/install.sh", dir);
-
-    struct stat st;
-    if (stat(script, &st) != 0) return 0;   /* no script — ok */
-
 #ifdef HBPKG_HOST
-    char cmd_buf[PATH_MAX + 32];
-    snprintf(cmd_buf, sizeof(cmd_buf), "PHASE=%s sh '%s'", phase, script);
-    return system(cmd_buf) == 0 ? 0 : -1;
+    if (!safe_relative_path(relative_path)) return -1;
+    char path[PATH_MAX];
+    if (rooted_path(path, sizeof(path), relative_path) != 0) return -1;
+    struct stat st;
+    if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -1;
+    if (!S_ISREG(st.st_mode)) {
+        log_error("Refusing to remove non-regular package path: %s", path);
+        return -1;
+    }
+    return unlink(path);
 #else
-    return 0;
+    (void)relative_path;
+    return -1;
 #endif
+}
+
+static int write_package_manifest(const pkg_meta_t *meta)
+{
+#ifdef HBPKG_HOST
+    char safe_name[HBPKG_NAME_LEN];
+    if (!sanitise_name(meta->name, safe_name, sizeof(safe_name)) ||
+        strcmp(safe_name, meta->name) != 0) return -1;
+    char directory[PATH_MAX], path[PATH_MAX], temporary[PATH_MAX];
+    if (rooted_path(directory, sizeof(directory), "/var/pkg/installed") != 0)
+        return -1;
+    if (ensure_directory(directory) != 0) return -1;
+    if (snprintf(path, sizeof(path), "%s/%s.files", directory, safe_name) >=
+        (int)sizeof(path) ||
+        snprintf(temporary, sizeof(temporary), "%s.tmp", path) >=
+        (int)sizeof(temporary)) return -1;
+    FILE *fp = fopen(temporary, "w");
+    if (!fp) return -1;
+    int result = 0;
+    for (int i = 0; i < meta->file_count; i++) {
+        if (!safe_relative_path(meta->files[i]) ||
+            fprintf(fp, "%s\n", meta->files[i]) < 0) {
+            result = -1;
+            break;
+        }
+        for (int j = 0; j < i; j++) {
+            if (strcmp(meta->files[i], meta->files[j]) == 0) result = -1;
+        }
+        if (result != 0) break;
+    }
+    if (fclose(fp) != 0) result = -1;
+    if (result == 0 && rename(temporary, path) == 0) return 0;
+    unlink(temporary);
+    return -1;
+#else
+    (void)meta;
+    return -1;
+#endif
+}
+
+static int remove_package_manifest(const char *name)
+{
+#ifdef HBPKG_HOST
+    char safe_name[HBPKG_NAME_LEN], directory[PATH_MAX], path[PATH_MAX];
+    if (!sanitise_name(name, safe_name, sizeof(safe_name)) ||
+        strcmp(safe_name, name) != 0) return -1;
+    if (rooted_path(directory, sizeof(directory), "/var/pkg/installed") != 0)
+        return -1;
+    if (snprintf(path, sizeof(path), "%s/%s.files", directory, safe_name) >=
+        (int)sizeof(path)) return -1;
+    if (unlink(path) == 0 || errno == ENOENT) return 0;
+    return -1;
+#else
+    (void)name;
+    return -1;
+#endif
+}
+
+static int remove_files_from_meta(const pkg_meta_t *meta)
+{
+    int result = 0;
+    for (int i = 0; i < meta->file_count; i++) {
+        if (remove_owned_file(meta->files[i]) != 0) result = -1;
+    }
+    return result;
+}
+
+/* Remove every file named by /var/pkg/installed/<name>.files.
+ * Returns 0 on success, 1 when there is no manifest (the record was written by
+ * a version of hbpkg that did not keep one), and -1 on failure. The caller
+ * decides whether a manifest-less record may still leave the database. */
+static int remove_package_files(const char *name)
+{
+#ifdef HBPKG_HOST
+    char safe_name[HBPKG_NAME_LEN], directory[PATH_MAX], manifest[PATH_MAX];
+    if (!sanitise_name(name, safe_name, sizeof(safe_name)) ||
+        strcmp(safe_name, name) != 0) return -1;
+    if (rooted_path(directory, sizeof(directory), "/var/pkg/installed") != 0)
+        return -1;
+    if (snprintf(manifest, sizeof(manifest), "%s/%s.files", directory, safe_name) >=
+        (int)sizeof(manifest)) return -1;
+    FILE *fp = fopen(manifest, "r");
+    if (!fp) return errno == ENOENT ? 1 : -1;
+    char line[512];
+    int result = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        size_t length = strcspn(line, "\r\n");
+        if (line[length] != '\0') line[length] = '\0';
+        if (length == 0 || !safe_relative_path(line) ||
+            remove_owned_file(line) != 0) {
+            log_error("Invalid or unremovable path in package manifest: %s", line);
+            result = -1;
+            break;
+        }
+    }
+    if (ferror(fp)) result = -1;
+    fclose(fp);
+    return result;
+#else
+    (void)name;
+    return -1;
+#endif
+}
+
+static int update_package_associations(const char *owner, const pkg_meta_t *meta)
+{
+#ifdef HBPKG_HOST
+    char safe_owner[HBPKG_NAME_LEN], directory[PATH_MAX];
+    char path[PATH_MAX], temporary[PATH_MAX];
+    if (!sanitise_name(owner, safe_owner, sizeof(safe_owner)) ||
+        strcmp(safe_owner, owner) != 0) return -1;
+    if (rooted_path(directory, sizeof(directory), "/var/pkg") != 0) return -1;
+    if (ensure_directory(directory) != 0) return -1;
+    if (rooted_path(path, sizeof(path), "/var/pkg/associations.db") != 0)
+        return -1;
+    if (snprintf(temporary, sizeof(temporary), "%s.tmp", path) >=
+        (int)sizeof(temporary)) return -1;
+
+    FILE *input = fopen(path, "r");
+    if (!input && errno != ENOENT) return -1;
+    FILE *output = fopen(temporary, "w");
+    if (!output) {
+        if (input) fclose(input);
+        return -1;
+    }
+
+    int result = 0;
+    size_t kept = 0;
+    char line[256];
+    while (input && fgets(line, sizeof(line), input)) {
+        if (!strchr(line, '\n') && !feof(input)) {
+            log_error("Association database contains an overlong record.");
+            result = -1;
+            break;
+        }
+        line[strcspn(line, "\r\n")] = '\0';
+        char *extension = line;
+        char *handler = strchr(extension, '\t');
+        if (!handler) { result = -1; break; }
+        *handler++ = '\0';
+        char *record_owner = strchr(handler, '\t');
+        if (!record_owner) { result = -1; break; }
+        *record_owner++ = '\0';
+        char safe_handler[HBPKG_NAME_LEN], safe_record_owner[HBPKG_NAME_LEN];
+        if (strchr(record_owner, '\t') || !valid_extension(extension) ||
+            !sanitise_name(handler, safe_handler, sizeof(safe_handler)) ||
+            strcmp(safe_handler, handler) != 0 ||
+            !sanitise_name(record_owner, safe_record_owner, sizeof(safe_record_owner)) ||
+            strcmp(safe_record_owner, record_owner) != 0) {
+            result = -1;
+            break;
+        }
+        if (strcmp(record_owner, safe_owner) == 0) continue;
+
+        if (meta) {
+            for (int i = 0; i < meta->association_count; i++) {
+                if (strcasecmp(extension, meta->associations[i].extension) == 0) {
+                    log_error("Association %s is already owned by package %s.",
+                              extension, record_owner);
+                    result = -1;
+                    break;
+                }
+            }
+        }
+        if (result != 0 || fprintf(output, "%s\t%s\t%s\n",
+                                   extension, handler, record_owner) < 0) {
+            result = -1;
+            break;
+        }
+        kept++;
+    }
+    if (input && ferror(input)) result = -1;
+    if (input) fclose(input);
+
+    if (result == 0 && meta) {
+        for (int i = 0; i < meta->association_count; i++) {
+            if (fprintf(output, "%s\t%s\t%s\n",
+                        meta->associations[i].extension,
+                        meta->associations[i].handler, safe_owner) < 0) {
+                result = -1;
+                break;
+            }
+            kept++;
+        }
+    }
+    if (fclose(output) != 0) result = -1;
+    if (result != 0) {
+        unlink(temporary);
+        return -1;
+    }
+    if (kept == 0) {
+        unlink(temporary);
+        if (unlink(path) != 0 && errno != ENOENT) return -1;
+        return 0;
+    }
+    if (rename(temporary, path) != 0) {
+        unlink(temporary);
+        return -1;
+    }
+    return 0;
+#else
+    (void)owner; (void)meta;
+    return -1;
+#endif
+}
+
+static int register_package_associations(const pkg_meta_t *meta)
+{
+    return update_package_associations(meta->name, meta);
+}
+
+static int unregister_package_associations(const char *name)
+{
+    return update_package_associations(name, NULL);
 }
 
 /* ------------------------------------------------------------------ */

@@ -250,6 +250,21 @@ sb16_play:
         cmp byte [sb16_present], 0
         je .play_done
 
+        ; A zero-length request underflows the 16-bit DMA count into 0xFFFF and
+        ; plays 64 KB of whatever follows the buffer; a longer one cannot be
+        ; represented in that count. ISA DMA channel 1 also wraps at a 64 KiB
+        ; page, so a transfer that would cross the boundary plays the wrong
+        ; memory. Refuse all three rather than corrupt the stream.
+        test ecx, ecx
+        jz .play_done
+        cmp ecx, 0x10000
+        ja .play_done
+        mov eax, ebx
+        and eax, 0xFFFF
+        add eax, ecx
+        cmp eax, 0x10000
+        ja .play_done
+
         ; Save playback parameters
         mov [sb16_buf_addr], ebx
         mov [sb16_buf_len], ecx

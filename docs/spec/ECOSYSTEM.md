@@ -4,10 +4,10 @@
 registered, updated and removed; what the SDK promises; and how an ABI and a
 release are allowed to change.
 
-The tree today has `hbpkg` archives, per-app manifests with a capability list,
-a generated app catalogue and 37 samples. What it does not have is
-**registration**: an installer writes files, and nothing knows what those files
-do, what they replaced, or how to remove them cleanly.
+The tree has `hbpkg` archives, per-app manifests with a capability list, a
+generated app catalogue and 37 samples. Basic package-owned file tracking and
+extension-association registration now exist, but the complete registration,
+trust, and transactional update model described below remains future work.
 
 ## 1. Package
 
@@ -48,7 +48,7 @@ they run.
 | Commit | One transaction ([STORAGE.md](STORAGE.md#5-transactions-and-recovery)): files moved into place, registration written, the package's record written last |
 | Rollback | Any failure moves the staged files back and removes the registration; a half-installed package cannot exist |
 | Update | Install the new version beside the old, switch the registration, and keep the old version until the next successful boot — the same mechanism a restore point uses ([RELIABILITY.md](RELIABILITY.md#6-restore-points)) |
-| Remove | Registration removed first, then files, then the record; user data is kept unless the user chooses otherwise, and the choice is recorded |
+| Remove | Registration removed first, then files, then the record; user data is kept unless the user chooses otherwise, and the choice is recorded. A record with no file manifest (written by an `hbpkg` that did not keep one) still leaves the database, with a warning that its files were not tracked |
 | Shared files | Two packages may not own the same path; the resolver refuses the conflict rather than letting the last writer win |
 
 **Downgrade** is an install of an older version, allowed only if the package
@@ -142,13 +142,14 @@ M10 does not close until:
 
 | Contract | Tree today |
 |---|---|
-| Manifest with dependencies, capabilities, hashes | A manifest with an app id and a capability list, and an archive |
-| Signature and trust store | None |
-| Registration and exact removal | None; `hbpkg` installs files |
-| Dependency resolution | None |
+| Manifest with dependencies, capabilities, hashes | `meta.toml` carries name, version, dependency names, files and associations; no hashes/capabilities |
+| Signature and trust store | No working verifier or trust workflow; unsigned installs warn when no key is configured, and fail closed if a key is present |
+| Registration and exact removal | Host `hbpkg` records owned file paths and package associations and removes them; guest shell associations are separate Sett entries |
+| Dependency resolution | Recursively installs missing named dependencies; version ranges and full conflict resolution are not enforced |
 | In-place update with rollback | None |
 | ABI level and policy | The 187 calls are frozen in practice; nothing declares it |
 | SDK | Samples, headers and a guide; no stable contract |
 
-`hbpkg`, the manifests, the generated catalogue and the sample suite are real and
-tested; the resolver, the registration model and the trust layer are new in M10.
+`hbpkg` install/remove registration and the guest's basic extension association
+workflow have regression coverage. The complete resolver, unified registration
+model, trust layer, and transactional update flow remain new in M10.

@@ -518,6 +518,12 @@ key_command:
         jmp .kc_usage
 
 .kc_add:
+        ; A volume key unlocks or encrypts the disk, so only root may manage
+        ; the store. `key list` stays open: it shows names and lengths, never
+        ; the secret itself.
+        call obj_identity
+        test eax, eax
+        jnz .kc_denied
         ; The remainder of the line is the name, then the hex.
         mov esi, line_buffer
         mov edi, cmd_key_str
@@ -546,6 +552,9 @@ key_command:
         jmp .kc_done
 
 .kc_del:
+        call obj_identity
+        test eax, eax
+        jnz .kc_denied
         mov esi, line_buffer
         mov edi, cmd_key_str
         call str_starts_with
@@ -569,6 +578,10 @@ key_command:
 
 .kc_no_such:
         mov esi, msg_crypt_no_key
+        call vga_print
+        jmp .kc_done
+.kc_denied:
+        mov esi, msg_key_denied
         call vga_print
         jmp .kc_done
 .kc_usage:
@@ -802,6 +815,7 @@ msg_key_empty:       db "  (none)", 0x0A, 0
 msg_key_len:         db "  ", 0
 msg_key_bytes:       db " bytes", 0x0A, 0
 msg_key_added:       db "key: stored", 0x0A, 0
+msg_key_denied:      db "key: permission denied", 0x0A, 0
 msg_key_add_fail:    db "key: refused (duplicate name, bad name or not 64 hex digits)", 0x0A, 0
 msg_key_deleted:     db "key: deleted", 0x0A, 0
 msg_key_usage:       db "key add <name> <64 hex> | key list | key del <name>", 0x0A, 0

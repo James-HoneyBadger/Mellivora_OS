@@ -72,7 +72,7 @@ Mellivora organizes files into subdirectories:
 ```text
 /
 ├── bin/          Generated utility programs (edit, grep, sort, tcc, sed, awk, top, tar, ...)
-├── games/         29 games (snake, tetris, galaga, pacman, rogue, robotown, ...)
+├── games/         30 games (2048, snake, tetris, galaga, pacman, rogue, robotown, ...)
 ├── Burrows/       Generated GUI applications (bedit, bforager, bhive, bterm, bsheet, ...)
 ├── samples/       37 source files (2 NASM, 18 C, 11 Perl, 6 BASIC)
 ├── docs/           text files (readme.txt, license.txt, notes.txt, ...)
@@ -468,6 +468,7 @@ are added; use `dir` in each directory for the current image contents.
 
 | Program | Controls | Description |
 | --- | --- | --- |
+| `2048` | Arrows/WASD/HJKL move, U undo, R new game, Q quit | Slide and merge tiles to reach 2048, with score, best and one-step undo; `2048 --selftest` checks the rules |
 | `snake` | Arrow keys, ESC | Classic snake — eat food, grow, don't crash (VBE) |
 | `tetris` | ←→ move, ↑ rotate, ↓ soft drop, Space hard drop, ESC quit | Tetris with 7 pieces, scoring, and levels (VBE) |
 | `mine` | Arrow keys, Space reveal, F flag, ESC quit | Minesweeper |

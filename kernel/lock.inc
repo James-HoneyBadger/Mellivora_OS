@@ -45,6 +45,10 @@ RANK_ARGON2     equ 150                ; the password function's shared state
                                        ; logon hashes before it reads a hive
 RANK_VFS        equ 200                ; virtual filesystem tables
 RANK_SCHED      equ 300                ; run queue and task table
+RANK_KMEM       equ 390                ; slab allocator free lists. Just below
+                                       ; PMM: a slab that runs out takes a frame,
+                                       ; and nothing the frame allocator does
+                                       ; calls back into the slab allocator.
 RANK_PMM        equ 400                ; frame allocator
 ; Test locks live above everything, so the self-test cannot deadlock against
 ; a real lock by accident.

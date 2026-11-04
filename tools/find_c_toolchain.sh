@@ -101,8 +101,16 @@ if [ -n "$CC_FOUND" ]; then
         echo "C_CC := $CC_FOUND"
         echo "C_LD := ${LD_FOUND:-none (the C probe object linked with none of: $LD_CANDIDATES)}"
     else
+        cc_bin=${CC_FOUND%% *}
+        cc_version=$("$cc_bin" --version 2>&1 | sed -n '1p')
         echo "cc: $CC_FOUND"
+        echo "cc-version: ${cc_version:-unavailable}"
         echo "ld: ${LD_FOUND:-none (the C probe object linked with none of: $LD_CANDIDATES)}"
+        if [ -n "$LD_FOUND" ]; then
+            ld_bin=${LD_FOUND%% *}
+            ld_version=$("$ld_bin" --version 2>&1 | sed -n '1p')
+            echo "ld-version: ${ld_version:-unavailable}"
+        fi
     fi
     exit 0
 fi
