@@ -231,6 +231,7 @@ shell_main:
         cmp dword [line_len], 0
         jne .read_wait
         call svc_tick
+        call share_server_poll          ; answer a waiting share client
         cmp byte [shell_from_park], 0
         jne .read_idle_poll
         mov byte [shell_from_park], 1
@@ -2670,8 +2671,60 @@ shell_dispatch_core:
         ret
 
 .cmd_net:
+        ; `net share` and `net view` are the share protocol's surface; every
+        ; other form prints the interface status, as it always has.
+        push esi
+        call skip_spaces
+        mov edi, net_share_word
+        call str_starts_with
+        jc .cmd_net_share
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_view_word
+        call str_starts_with
+        jc .cmd_net_view
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_use_word
+        call str_starts_with
+        jc .cmd_net_use
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_get_word
+        call str_starts_with
+        jc .cmd_net_get
+        pop esi
         call cmd_net_status
         ret
+.cmd_net_share:
+        pop esi
+        call skip_spaces
+        call skip_one_word             ; drop "share"
+        call cmd_net_share
+        ret
+.cmd_net_view:
+        pop esi
+        call skip_spaces
+        call skip_one_word             ; drop "view"
+        call cmd_net_view
+        ret
+.cmd_net_use:
+        pop esi
+        call skip_spaces
+        call skip_one_word             ; drop "use"
+        call cmd_net_use
+        ret
+.cmd_net_get:
+        pop esi
+        call skip_spaces
+        call skip_one_word             ; drop "get"
+        call cmd_net_get
+        ret
+
+
 
 .cmd_diskinfo:
         call cmd_show_disk

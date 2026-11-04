@@ -80,6 +80,41 @@ The redirector seam in the VFS ([STORAGE.md](STORAGE.md#12-concurrency-and-shari
 is what makes a share look like a volume: the file system layer does not know
 whether a handle is local or remote, and the cache treats both the same way.
 
+### 4.1 The wire format as built
+
+One message is a 16-byte header, a payload, and a 16-byte MAC:
+
+| Offset | Field | Meaning |
+|---|---|---|
+| 0 | magic | `MVSH` |
+| 4 | version | 1 |
+| 5 | type | `HELLO`, `CHALLENGE`, `AUTH`, `OK`, `DENY`, `VIEW`, `LIST`, `STAT`, `READ` |
+| 6 | flags | reserved, 0 |
+| 8 | seq | request id, echoed by the reply |
+| 12 | length | payload bytes that follow |
+
+The MAC is `BLAKE2b(key || BLAKE2b(header || payload))` truncated to 16 bytes:
+the outer hash binds the key and the inner one fixes the message length, so it
+is not a plain secret-prefix MAC.
+
+| Step | Message | Key |
+|---|---|---|
+| 1 | client `HELLO{share}` | none - there is no key yet |
+| 2 | server `CHALLENGE{nonce}` | none |
+| 3 | client `AUTH{proof}` | `H` |
+| 4 | server `OK` / `DENY{reason}` | `OK` uses `H`; `DENY` is bare |
+| 5 | requests and replies | the session key |
+
+`H = BLAKE2b(secret)` is what the server stores; the secret never crosses the
+wire. `proof = BLAKE2b(H || nonce)`, and the session key is
+`BLAKE2b(H || nonce || "MVSH-K")`, fresh per connection, so a recorded
+exchange cannot be replayed against a later one. `DENY` carries no MAC because
+the peer may not have chosen a share yet: it is a refusal, not state a client
+can act on. A MAC mismatch drops the connection.
+
+`VIEW` is the one request answered without a session, because a browse list of
+names is disclosure and not access. Everything that touches a file needs one.
+
 **What a share is not:** it is not SMB, it is not NFS, and it will not talk to a
 machine that speaks either. It is one protocol, documented, with one
 implementation, that two Mellivora machines use to share a folder
@@ -167,7 +202,7 @@ M7 does not close until:
 | Socket as an object | Sockets are numbers in a table, with `poll` and non-blocking connect |
 | Blocking calls | `connect` and `accept` wait without freezing the console: a task that is waiting parks itself, the shell keeps reading commands, and the scheduler hands the task back its frame when it is dispatched again. Two programs talk over the loopback interface at the same time (`httpd 8000 &` then `curl http://127.0.0.1:8000/...`) |
 | Overlapped I/O via completion ports | None |
-| Shares | None — the reason this document exists |
+| Shares | A directory exported under a name, served from the kernel on TCP 4450 and reachable from the shell: `net share NAME PATH [SECRET]` exports, `net view HOST` browses, `net use HOST SHARE [SECRET]` opens an authenticated session and lists it, `net get HOST SHARE FILE [SECRET]` reads a file out of it. Framing, the challenge-response handshake and the MAC are in [§4.1](#41-the-wire-format-as-built). A VFS mount point for a share, write/rename/delete and leases are not built yet |
 | RPC | None |
 | Remote administration | None |
 | Firewall | None |

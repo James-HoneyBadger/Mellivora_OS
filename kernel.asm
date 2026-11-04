@@ -859,6 +859,7 @@ kernel_entry:
         LOGBOOT LOG_INFO, log_fs
         call vfs_init
         LOGBOOT LOG_INFO, log_vfs
+        call share_init
 
         ; The interrupt controller is chosen last, once every subsystem that
         ; allocates memory has been initialised: programming the APIC allocates
@@ -1027,4 +1028,5 @@ kernel_entry:
 %include "kernel/syscall.inc"
 %include "kernel/cmdtable.inc"
 %include "kernel/cmod.inc"
+%include "kernel/share.inc"
 %include "kernel/data.inc"

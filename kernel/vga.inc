@@ -112,6 +112,10 @@ vga_putchar:
         pushf                           ; Save caller's interrupt flag state
 
         cli                             ; Protect redirection state from interrupts
+        ; A kernel routine working on a file - the share server standing in a
+        ; client's directory, for instance - must not paint on the console.
+        cmp byte [console_suppress], 0
+        jne .vp_suppressed
         cmp byte [stdout_redir_active], 1
         jne .vp_normal
 
@@ -133,6 +137,11 @@ vga_putchar:
 
 .vp_redir_done:
         popf                            ; Restore caller's interrupt flag
+        popad
+        ret
+
+.vp_suppressed:
+        popf
         popad
         ret
 

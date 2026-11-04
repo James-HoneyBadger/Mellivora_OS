@@ -814,6 +814,26 @@ run_case "a literal address resolves"     "dig 127.0.0.1"         "A       127.0
 # NETWORK.md section 10: two programs talk over the loopback interface. The
 # server parks in accept and the client in connect, so the shell has to stay
 # usable while both wait - and the request has to come back with a status line.
+# NETWORK.md section 4: a folder is exported, browsed and opened as a session.
+# Three cases, because each one proves a different half of the protocol: the
+# browse needs no key, the session needs the right one, and a wrong key is
+# refused rather than served.
+run_case "a share is exported and browsed" \
+    $'net share docs /docs s3cret\nnet view 127.0.0.1' \
+    "Shared: docs = /docs|docs" "" \
+    "CPU EXCEPTION|PAGE FAULT|cannot reach|drop" "" "" "" 30
+run_case "a share session lists the exported folder" \
+    $'net share docs /docs s3cret\nnet use 127.0.0.1 docs s3cret' \
+    "Session on docs|readme.txt|notes.txt" "" \
+    "CPU EXCEPTION|PAGE FAULT|refused|dropped" "" "" "" 30
+run_case "a share file is read over the session" \
+    $'net share docs /docs s3cret\nnet get 127.0.0.1 docs todo.txt s3cret' \
+    "[x] Shell tab completion|Ctrl+C program abort" "" \
+    "CPU EXCEPTION|PAGE FAULT|refused|dropped" "" "" "" 30
+run_case "a wrong share secret is refused" \
+    $'net share docs /docs s3cret\nnet use 127.0.0.1 docs wrongm' \
+    "dropped the session" "" \
+    "CPU EXCEPTION|PAGE FAULT|Session on" "" "" "" 30
 run_case "a loopback server answers a request" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \
     "HTTP/1.0 200 OK|Hello from batch file" "" \
