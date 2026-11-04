@@ -2095,6 +2095,22 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_touch
 
+        mov edi, cmd_print_str
+        call str_starts_with
+        jc .cmd_print
+
+        mov edi, cmd_printq_str
+        call str_starts_with
+        jc .cmd_printq
+
+        mov edi, cmd_printcancel_str
+        call str_starts_with
+        jc .cmd_printcancel
+
+        mov edi, cmd_printflush_str
+        call str_starts_with
+        jc .cmd_printflush
+
         mov edi, cmd_set_str
         call str_starts_with
         jc .cmd_set
@@ -2729,6 +2745,24 @@ shell_dispatch_core:
 .cmd_touch:
         call skip_spaces
         call cmd_touch_file
+        ret
+
+.cmd_print:
+        call skip_spaces
+        call cmd_print_file
+        ret
+
+.cmd_printq:
+        call cmd_print_queue
+        ret
+
+.cmd_printcancel:
+        call skip_spaces
+        call cmd_print_cancel
+        ret
+
+.cmd_printflush:
+        call cmd_print_flush
         ret
 
 .cmd_set:
@@ -5982,6 +6016,168 @@ cmd_touch_file:
         call path_leave
 
 .touch_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
+; Printing spooler (M6): queue, cancel and flush.
+; Jobs live in kernel state so `print` and `printq` see the same queue across
+; invocations. The console's serial port is the printer for this wave: a flush
+; records each job's completion on COM1 as it is handed to the printer.
+;-----------------------------------------------------------------------
+cmd_print_file:
+        pushad
+        mov edi, filename_buf
+        mov edx, SPOOL_NAME_LEN - 1
+        call sett_word
+        jc .print_usage
+        cmp byte [filename_buf], 0
+        je .print_usage
+
+        xor ecx, ecx
+.find_free:
+        cmp ecx, SPOOL_MAX_JOBS
+        jae .print_full
+        cmp byte [spool_status + ecx], 0
+        je .have_slot
+        inc ecx
+        jmp .find_free
+.have_slot:
+        mov eax, ecx
+        imul eax, SPOOL_NAME_LEN
+        lea edi, [spool_names + eax]
+        mov esi, filename_buf
+        call str_copy
+        mov byte [spool_status + ecx], 1
+        mov esi, msg_print_queued
+        call vga_print
+        mov eax, ecx
+        inc eax
+        call vga_print_dec
+        mov esi, msg_print_tail_queued
+        call vga_print
+        jmp .done
+.print_full:
+        mov esi, msg_print_full
+        call vga_print
+        jmp .done
+.print_usage:
+        mov esi, msg_print_usage
+        call vga_print
+.done:
+        popad
+        ret
+
+cmd_print_queue:
+        pushad
+        xor ecx, ecx
+        xor edx, edx
+.list_loop:
+        cmp ecx, SPOOL_MAX_JOBS
+        jae .list_done
+        cmp byte [spool_status + ecx], 0
+        je .next_slot
+        mov eax, ecx
+        inc eax
+        call vga_print_dec
+        mov al, ' '
+        call vga_putchar
+        cmp byte [spool_status + ecx], 1
+        je .st_queued
+        cmp byte [spool_status + ecx], 2
+        je .st_done
+        mov esi, msg_printq_status_cancelled
+        jmp .st_print
+.st_queued:
+        mov esi, msg_printq_status_queued
+        jmp .st_print
+.st_done:
+        mov esi, msg_printq_status_done
+.st_print:
+        call vga_print
+        mov al, ' '
+        call vga_putchar
+        mov eax, ecx
+        imul eax, SPOOL_NAME_LEN
+        lea esi, [spool_names + eax]
+        call vga_print
+        call vga_newline
+        inc edx
+.next_slot:
+        inc ecx
+        jmp .list_loop
+.list_done:
+        test edx, edx
+        jnz .done
+        mov esi, msg_printq_empty
+        call vga_print
+.done:
+        popad
+        ret
+
+cmd_print_cancel:
+        pushad
+        mov edi, filename_buf
+        mov edx, 8
+        call sett_word
+        jc .bad_id
+        cmp byte [filename_buf], 0
+        je .bad_id
+        mov esi, filename_buf
+        call parse_decimal
+        test eax, eax
+        jz .bad_id
+        cmp eax, SPOOL_MAX_JOBS
+        ja .bad_id
+        push eax
+        dec eax
+        cmp byte [spool_status + eax], 1
+        jne .bad_id_pop
+        mov byte [spool_status + eax], 3
+        mov esi, msg_print_cancel
+        call vga_print
+        pop eax
+        call vga_print_dec
+        mov esi, msg_print_tail_cancel
+        call vga_print
+        jmp .done
+.bad_id_pop:
+        pop eax
+.bad_id:
+        mov esi, msg_print_bad_id
+        call vga_print
+.done:
+        popad
+        ret
+
+cmd_print_flush:
+        pushad
+        xor ecx, ecx
+.flush_loop:
+        cmp ecx, SPOOL_MAX_JOBS
+        jae .flush_done
+        cmp byte [spool_status + ecx], 1
+        jne .next_slot
+        mov byte [spool_status + ecx], 2
+        ; The completion record is the printer's own output on COM1.
+        mov esi, msg_print_done
+        call serial_print
+        mov eax, ecx
+        inc eax
+        call serial_print_dec
+        mov esi, msg_print_tail_done
+        call serial_print
+        mov esi, msg_print_done
+        call vga_print
+        mov eax, ecx
+        inc eax
+        call vga_print_dec
+        mov esi, msg_print_tail_done
+        call vga_print
+.next_slot:
+        inc ecx
+        jmp .flush_loop
+.flush_done:
         popad
         ret
 

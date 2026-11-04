@@ -105,7 +105,7 @@ def main() -> int:
           "; ".join(errors))
 
     errors = mutate(checker, "built-in count", [
-        ("docs/ROADMAP.md", "124 shell built-ins", "97 shell built-ins")])
+        ("docs/ROADMAP.md", "128 shell built-ins", "97 shell built-ins")])
     check("a stale built-in count is refused",
           any("shell built-ins" in e and "97" in e for e in errors),
           "; ".join(errors))

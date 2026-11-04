@@ -44,7 +44,7 @@
     {
       "number": 9,
       "job": "Print",
-      "status": "fail"
+      "status": "pass"
     },
     {
       "number": 10,

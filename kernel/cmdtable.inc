@@ -114,6 +114,10 @@ cmd_table:
         CMDENT cmd_touch_str, CAT_FILES, sum_touch, det_touch
         CMDENT cmd_type_str, CAT_FILES, sum_type, det_type
         CMDENT cmd_write_str, CAT_FILES, sum_write, det_write
+        CMDENT cmd_print_str, CAT_FILES, sum_print, det_print
+        CMDENT cmd_printq_str, CAT_FILES, sum_printq, det_printq
+        CMDENT cmd_printcancel_str, CAT_FILES, sum_printcancel, det_printcancel
+        CMDENT cmd_printflush_str, CAT_FILES, sum_printflush, det_printflush
         CMDENT cmd_diff_str, CAT_TEXT, sum_diff, det_diff
         CMDENT cmd_find_str, CAT_TEXT, sum_find, det_find
         CMDENT cmd_hex_str, CAT_TEXT, sum_hex, det_hex
@@ -544,6 +548,22 @@ sum_touch: db "Create an empty file", 0
 det_touch:
         db "touch FILE", 0x0A
         db "  Create FILE if it does not exist.", 0x0A, 0
+sum_print: db "Queue a file for printing", 0
+det_print:
+        db "print FILE", 0x0A
+        db "  Enqueue FILE on the print spooler.", 0x0A, 0
+sum_printq: db "List the print queue", 0
+det_printq:
+        db "printq", 0x0A
+        db "  List queued, done and cancelled print jobs.", 0x0A, 0
+sum_printcancel: db "Cancel a queued print job", 0
+det_printcancel:
+        db "printcancel JOB", 0x0A
+        db "  Cancel the queued job with that number.", 0x0A, 0
+sum_printflush: db "Print every queued job", 0
+det_printflush:
+        db "printflush", 0x0A
+        db "  Send every queued job to the printer and mark it done.", 0x0A, 0
 sum_type: db "Alias for cat", 0
 det_type:
         db "type [-n] [FILE]", 0x0A

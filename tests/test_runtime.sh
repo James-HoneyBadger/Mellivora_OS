@@ -746,6 +746,12 @@ run_case "the logon screen authenticates a user" \
     $'account del m6ui\naccount add m6ui m6pw\nlogonui' \
     "[logon-ui] authenticated" \
     "" "CPU EXCEPTION|PAGE FAULT" "" "" "" 60 "" "" "" "m,6,u,i,ret,m,6,p,w,ret" "[logon-ui] ready"
+# M6: the print spooler queues three jobs, cancels the middle one, and flushes
+# the other two - the queue semantics the scorecard's Print row is blocked on.
+run_case "print queue cancels one job and completes the others" \
+    $'print /docs/notes.txt\nprint /docs/poem.txt\nprint /docs/todo.txt\nprintcancel 2\nprintflush\nprintq' \
+    "print: job 1 done|print: job 3 done|2  cancelled /docs/poem.txt" \
+    "" "CPU EXCEPTION|queue full|no such" "" "" "" 20
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"

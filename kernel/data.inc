@@ -343,6 +343,10 @@ cmd_nice_str:   db "nice", 0
 cmd_export_str: db "export", 0
 cmd_source_str: db "source", 0
 cmd_printf_str: db "printf", 0
+cmd_print_str:       db "print", 0
+cmd_printq_str:      db "printq", 0
+cmd_printcancel_str: db "printcancel", 0
+cmd_printflush_str:  db "printflush", 0
 cmd_read_str:   db "read", 0
 cmd_exit_str:   db "exit", 0
 cmd_shift_str:  db "shift", 0
@@ -740,6 +744,23 @@ obj_init_dirs:
         dd obj_dir_sessions, obj_sessions
         dd 0, 0
 
+; Printing spooler (M6) - strings live above bss_start: everything below it is
+; zeroed at boot, so a message placed there would read as an empty string.
+msg_print_usage:   db "Usage: print FILE | printq | printcancel JOB | printflush", 0x0A, 0
+msg_print_no_file: db "print: no such file", 0x0A, 0
+msg_print_full:    db "print: queue full", 0x0A, 0
+msg_print_bad_id:  db "print: no such job", 0x0A, 0
+msg_print_queued:  db "print: job ", 0
+msg_print_done:    db "print: job ", 0
+msg_print_cancel:  db "print: job ", 0
+msg_print_tail_queued: db " queued", 0x0A, 0
+msg_print_tail_done:   db " done", 0x0A, 0
+msg_print_tail_cancel: db " cancelled", 0x0A, 0
+msg_printq_empty:  db "printq: queue empty", 0x0A, 0
+msg_printq_status_queued:   db " queued", 0
+msg_printq_status_done:     db " done", 0
+msg_printq_status_cancelled: db " cancelled", 0
+
 
 ;=======================================================================
 ; BSS (Uninitialized Data) - zeroed at boot
@@ -832,6 +853,15 @@ hbfs_dt_atomic:     resd 1      ; 1 = one transaction for the whole tree
 
 line_buffer:    resb LINE_BUFFER_SIZE
 temp_line_buf:  resb LINE_BUFFER_SIZE
+
+; Printing spooler (M6): a fixed queue of jobs with a status each. The queue
+; lives in kernel state so `print` and `printq` see the same jobs across
+; invocations. Status: 0 free, 1 queued, 2 done, 3 cancelled.
+SPOOL_MAX_JOBS   equ 16
+SPOOL_NAME_LEN   equ 64
+spool_names:     resb SPOOL_MAX_JOBS * SPOOL_NAME_LEN
+spool_status:    resb SPOOL_MAX_JOBS
+
 filename_buf:   resb 256
 filename_buf2:  resb 256
 list_arg_buf:   resb 256        ; `ls <path>` target directory
