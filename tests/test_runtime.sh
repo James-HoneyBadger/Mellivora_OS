@@ -804,6 +804,13 @@ run_case "print queue cancels one job and completes the others" \
     "" "CPU EXCEPTION|queue full|no such" "" "" "" 20
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
+# NETWORK.md section 3: loopback is a real interface, so the stack answers its
+# own echo requests without a NIC or a second machine in the way.
+run_case "loopback answers its own echo"  "ping 127.0.0.1"        "4/4 packets received" "" "CPU EXCEPTION|PAGE FAULT|timed out"
+# A literal address is its own answer: no DNS server knows "127.0.0.1", and
+# before the resolver learned to read one, curl could not reach a loopback
+# server at all.
+run_case "a literal address resolves"     "dig 127.0.0.1"         "A       127.0.0.1"     "" "CPU EXCEPTION|PAGE FAULT|no such host"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"
 run_case "sbrk heap growth"           "sbrk_test"             "SBRK_BIG_OK"        "" "CPU EXCEPTION|PAGE FAULT|Test FAILED"
 run_case "user/kernel memory isolation" "memprot_test"        "MEMPROT_OK"         "" "CPU EXCEPTION|MEMPROT_FAIL"

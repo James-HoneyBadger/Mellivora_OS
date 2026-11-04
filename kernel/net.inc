@@ -168,6 +168,48 @@ BROADCAST_MAC:  db 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 ZERO_MAC:       db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 BROADCAST_IP    equ 0xFFFFFFFF  ; 255.255.255.255
 
+; Loopback interface (NETWORK.md section 3). 127.0.0.1 as the stack stores an
+; address: the four octets in memory order, so 0x0100007F.
+LOOPBACK_IP     equ 0x0100007F
+LOOPBACK_MAC:   db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+
+;---------------------------------------
+; net_is_loopback - is EAX a 127.0.0.0/8 address?
+;   Out: ZF=0 when it is. Registers preserved.
+;
+; The stack keeps an address as the four octets in memory order, so the first
+; octet of 127.0.0.1 (0x0100007F) is the low byte.
+;---------------------------------------
+net_is_loopback:
+        push eax
+        and eax, 0xFF
+        cmp eax, 127
+        pop eax
+        ret
+
+;---------------------------------------
+; net_source_for - the source address a datagram to EAX carries
+;   In : EAX = destination, little-endian
+;   Out: EAX = source address for the header and the transport pseudo-header
+;
+; A datagram to 127.0.0.0/8 comes from the loopback address, so its reply is
+; addressed back to it and takes the same path. Everything else comes from the
+; interface address.
+;---------------------------------------
+net_source_for:
+        push ebx
+        push eax
+        and al, 0xFF
+        movzx ebx, al
+        mov eax, [net_ip]
+        cmp ebx, 127
+        jne .nsf_done
+        mov eax, LOOPBACK_IP
+.nsf_done:
+        pop ebx                     ; discard the saved destination
+        pop ebx
+        ret
+
 
 ;=======================================================================
 ; SECTION 1: NIC DRIVER (RTL8139)
@@ -603,6 +645,66 @@ irq_net:
 
         popad
         iretd
+
+;---------------------------------------
+; net_loopback_deliver - hand a datagram back to the receive path
+;   In : ESI = datagram (IP header + payload), ECX = its length
+;
+; The datagram is copied into the ring before anything is dispatched: a
+; handler that runs will send replies, and those replies arrive here too. The
+; outermost delivery drains until the ring is empty, so a nested send cannot
+; overwrite the buffer its caller is reading.
+;---------------------------------------
+net_loopback_deliver:
+        pushad
+        cmp ecx, NET_LO_SLOT - 4
+        ja .ld_drop                     ; larger than a frame can be
+
+        mov eax, [net_lo_head]
+        inc eax
+        and eax, NET_LO_SLOTS - 1
+        cmp eax, [net_lo_tail]
+        je .ld_drop                     ; ring full
+
+        mov eax, [net_lo_head]
+        imul eax, NET_LO_SLOT
+        mov edi, net_lo_ring
+        add edi, eax
+        mov [edi], ecx
+        add edi, 4
+        cld
+        rep movsb
+        mov eax, [net_lo_head]
+        inc eax
+        and eax, NET_LO_SLOTS - 1
+        mov [net_lo_head], eax
+
+        cmp dword [net_lo_busy], 0
+        jne .ld_done                     ; an outer delivery will drain it
+        mov dword [net_lo_busy], 1
+.ld_drain:
+        mov eax, [net_lo_tail]
+        cmp eax, [net_lo_head]
+        je .ld_drained
+        imul eax, NET_LO_SLOT
+        mov esi, net_lo_ring
+        add esi, eax
+        mov ecx, [esi]
+        add esi, 4
+        call ip_handle
+        mov eax, [net_lo_tail]
+        inc eax
+        and eax, NET_LO_SLOTS - 1
+        mov [net_lo_tail], eax
+        jmp .ld_drain
+.ld_drained:
+        mov dword [net_lo_busy], 0
+.ld_done:
+        popad
+        ret
+.ld_drop:
+        inc dword [net_lo_dropped]
+        jmp .ld_done
 
 ;---------------------------------------
 ; net_send_frame - Transmit an Ethernet frame
@@ -1160,10 +1262,12 @@ ip_handle:
         test ax, ax
         jnz .ip_h_done
 
-        ; Check destination is us or broadcast
+        ; Check destination is us, the loopback address, or broadcast
         mov eax, [esi + 16]    ; destination IP
         cmp eax, [net_ip]
         je .ip_for_us
+        call net_is_loopback
+        jz .ip_for_us
         cmp eax, BROADCAST_IP
         je .ip_for_us
         ; Check subnet broadcast
@@ -1271,8 +1375,10 @@ ip_send:
         mov [edi+9], al
         ; Header checksum (zero for now)
         mov word [edi+10], 0
-        ; Source IP
-        mov eax, [net_ip]
+        ; Source IP. A datagram to the loopback address comes from it, so the
+        ; reply is addressed back to the loopback address and stays local.
+        mov eax, [net_ip_dst]
+        call net_source_for
         mov [edi+12], eax
         ; Destination IP
         mov eax, [net_ip_dst]
@@ -1295,6 +1401,20 @@ ip_send:
         rep movsb
         pop ecx
 
+        ; A loopback datagram never reaches a NIC: it goes back up this
+        ; stack's receive path, which is what lets two processes talk without
+        ; a network device.
+        mov eax, [net_ip_dst]
+        call net_is_loopback
+        jnz .ip_send_wire
+        mov esi, net_ip_buf
+        mov ecx, [net_ip_payload_len]
+        add ecx, IP_HLEN
+        call net_loopback_deliver
+        popad
+        ret
+
+.ip_send_wire:
         ; Resolve destination MAC via ARP
         mov eax, [net_ip_dst]
         mov edi, net_frame_dst_mac
@@ -1671,10 +1791,13 @@ udp_compute_checksum:
         xor edx, edx           ; 32-bit accumulator
 
         ; Add pseudo-header fields
-        ; Source IP (in network byte order)
-        movzx eax, word [net_ip]
+        ; Source IP (in network byte order), by the same rule ip_send uses
+        mov eax, [net_udp_dst_ip]
+        call net_source_for
+        mov [net_udp_ck_src], eax
+        movzx eax, word [net_udp_ck_src]
         add edx, eax
-        movzx eax, word [net_ip + 2]
+        movzx eax, word [net_udp_ck_src + 2]
         add edx, eax
         ; Destination IP
         movzx eax, word [net_udp_dst_ip]
@@ -2398,8 +2521,9 @@ tcp_checksum:
 
         ; Build pseudo-header + TCP in net_tcp_ck_buf
         mov edi, net_tcp_ck_buf
-        ; Source IP
-        mov eax, [net_ip]
+        ; Source IP - the same address ip_send puts in the header
+        mov eax, [net_tcp_ck_dst]
+        call net_source_for
         stosd
         ; Dest IP
         mov eax, [net_tcp_ck_dst]
@@ -2786,12 +2910,92 @@ dhcp_request:
 ; Returns: EAX = IP address (0 on failure)
 ; Blocks up to ~5 seconds (two 2.5s attempts with retry)
 ;---------------------------------------
+;---------------------------------------
+; net_parse_literal - read a dotted-quad address
+;   In : ESI = text
+;   Out: EAX = address (memory order), CF=0
+;        CF=1 when the text is not an address
+;
+; A resolver answers a literal address without asking anybody. Before this,
+; nothing did: `curl http://127.0.0.1/` asked DNS to resolve "127.0.0.1",
+; which no server can answer, so a perfectly good address was unreachable.
+;---------------------------------------
+net_parse_literal:
+        push ebx
+        push ecx
+        push edx
+        push ebp
+        push esi
+        xor edx, edx                    ; address, bytes in memory order
+        xor ecx, ecx                    ; octet index
+.ol_octet:
+        xor ebx, ebx                    ; value of this octet
+        xor ebp, ebp                    ; digits seen in this octet
+.ol_digit:
+        mov al, [esi]
+        cmp al, '0'
+        jb .ol_octet_done
+        cmp al, '9'
+        ja .ol_octet_done
+        imul ebx, 10
+        movzx eax, al
+        sub eax, '0'
+        add ebx, eax
+        cmp ebx, 255
+        ja .ol_not
+        inc ebp
+        inc esi
+        jmp .ol_digit
+.ol_octet_done:
+        test ebp, ebp
+        jz .ol_not                      ; an octet needs at least one digit
+        mov eax, ebx
+        mov ebp, ecx
+        shl ebp, 3
+        push ecx
+        mov ecx, ebp
+        shl eax, cl
+        pop ecx
+        or edx, eax
+        inc ecx
+        cmp byte [esi], '.'
+        jne .ol_end
+        inc esi
+        cmp ecx, 4
+        jb .ol_octet
+        jmp .ol_not
+.ol_end:
+        cmp byte [esi], 0
+        jne .ol_not                     ; trailing text is not an address
+        cmp ecx, 4
+        jne .ol_not
+        mov eax, edx
+        pop esi
+        pop ebp
+        pop edx
+        pop ecx
+        pop ebx
+        clc
+        ret
+.ol_not:
+        pop esi
+        pop ebp
+        pop edx
+        pop ecx
+        pop ebx
+        stc
+        ret
+
 dns_resolve:
         push ebx
         push ecx
         push edx
         push esi
         push edi
+
+        ; A literal address is its own answer, and needs no NIC.
+        call net_parse_literal
+        jnc .dns_return
 
         ; Check DNS cache first
         call dns_cache_lookup

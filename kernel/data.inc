@@ -1170,6 +1170,19 @@ net_ip_proto:     resb 1
                   resb 3          ; alignment
 net_ip_payload:   resd 1
 net_ip_payload_len: resd 1
+; Loopback (127.0.0.0/8): a datagram addressed there is queued here and handed
+; to the receive path, which is what lets two processes use the stack without
+; a NIC. The ring is drained by whichever delivery finds the drainer idle, so
+; the replies a handler sends while it runs are queued behind it rather than
+; overwriting the buffer it is reading.
+NET_LO_SLOTS      equ 8
+NET_LO_SLOT       equ 1604       ; 4-byte length + 1600-byte datagram
+net_lo_ring:      resb NET_LO_SLOTS * NET_LO_SLOT
+net_lo_head:      resd 1
+net_lo_tail:      resd 1
+net_lo_busy:      resd 1
+net_lo_dropped:   resd 1          ; datagrams lost to a full ring, counted
+net_udp_ck_src:   resd 1          ; source address for the UDP pseudo-header
 net_recv_src_ip:  resd 1          ; Source IP of received packet
 net_recv_dst_ip:  resd 1          ; Destination IP of received packet (may be
                                   ; broadcast, so it is not always [net_ip])

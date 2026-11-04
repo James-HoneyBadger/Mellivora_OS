@@ -162,6 +162,8 @@ M7 does not close until:
 
 | Contract | Tree today |
 |---|---|
+| Loopback | A real interface: a datagram addressed to 127.0.0.0/8 is queued and handed back to the receive path, and it carries the loopback address as its source, so the reply stays local. It works with no NIC present. |
+| Name resolution | A literal dotted quad is answered by the resolver itself, so an address needs no server to resolve it |
 | Socket as an object | Sockets are numbers in a table, with `poll` and non-blocking connect |
 | Overlapped I/O via completion ports | None |
 | Shares | None — the reason this document exists |

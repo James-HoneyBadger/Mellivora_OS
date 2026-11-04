@@ -1,7 +1,9 @@
 ; curl.asm - HTTP GET/POST client (v9.0)
 ; Uses Mellivora OS networking stack via UDP/TCP syscalls.
-; Usage: curl [-X POST] [-d "data"] <host> <path>
-; Sends an HTTP/1.0 request and prints the response.
+; Usage: curl [-X POST] [-d "data"] <host[:port]> [path]
+;        curl [-X POST] [-d "data"] http://host[:port][/path]
+; Sends an HTTP/1.0 request and prints the response. A literal address is
+; used as given, and a port defaults to 80.
 
 %include "syscalls.inc"
 
@@ -27,6 +29,7 @@ start:
         mov byte [post_data], 0
         mov byte [host_buf], 0
         mov byte [path_buf], 0
+        mov dword [dest_port], HTTP_PORT
 
 .parse_loop:
         cmp byte [esi], 0
@@ -85,9 +88,20 @@ start:
         jmp .parse_loop
 
 .parse_host:
-        ; First non-flag token = host
+        ; First non-flag token = host, optionally "http://host:port"
         cmp byte [host_buf], 0
         jne .parse_path
+        ; A URL pasted whole carries its scheme; the scheme is not the host.
+        cmp dword [esi], 'http'
+        jne .host_copy_start
+        cmp byte [esi + 4], ':'
+        jne .host_copy_start
+        cmp byte [esi + 5], '/'
+        jne .host_copy_start
+        cmp byte [esi + 6], '/'
+        jne .host_copy_start
+        add esi, 7
+.host_copy_start:
         mov edi, host_buf
         mov ecx, URL_MAX - 1
 .cp_host:
@@ -101,6 +115,39 @@ start:
         jnz .cp_host
 .host_done:
         mov byte [edi], 0
+        ; "host:port" - the port is not part of the name to resolve.
+        mov esi, host_buf
+.host_scan:
+        mov al, [esi]
+        test al, al
+        jz .host_no_port
+        cmp al, ':'
+        je .host_split
+        inc esi
+        jmp .host_scan
+.host_split:
+        mov byte [esi], 0
+        inc esi
+        xor eax, eax
+.host_port_digits:
+        movzx edx, byte [esi]
+        cmp dl, '0'
+        jb .host_port_done
+        cmp dl, '9'
+        ja .host_port_done
+        imul eax, 10
+        sub dl, '0'
+        movzx edx, dl
+        add eax, edx
+        inc esi
+        jmp .host_port_digits
+.host_port_done:
+        test eax, eax
+        jz .host_no_port
+        cmp eax, 65535
+        ja .host_no_port
+        mov [dest_port], eax
+.host_no_port:
         call skip_spaces
         jmp .parse_loop
 
@@ -159,7 +206,7 @@ start:
         mov eax, SYS_CONNECT
         mov ebx, [sock_fd]
         mov ecx, [dest_ip]
-        mov edx, HTTP_PORT
+        mov edx, [dest_port]
         int 0x80
         cmp eax, -1
         je .conn_fail
@@ -414,6 +461,7 @@ post_data:      times DATA_MAX db 0
 method:         db 'G'
 sock_fd:        dd 0
 dest_ip:        dd 0
+dest_port:      dd HTTP_PORT
 post_len:       dd 0
 req_len:        dd 0
 uint_tmp:       times 16 db 0
