@@ -77,9 +77,9 @@ def main():
     check("configuration status requires typed and transactional workflow tests",
           rows[3]["status"] == "pass" and
           not any("workflow test:" in item for item in rows[3]["missing"]))
-    check("logon remains partial until the separate desktop workflow exists",
-          rows[0]["status"] == "partial" and
-          any("separate desktops" in item for item in rows[0]["missing"]))
+    check("logon passes once the GUI and separate desktop workflows exist",
+          rows[0]["status"] == "pass" and
+          not any("workflow test:" in item for item in rows[0]["missing"]))
     check("desktop passes once the associations workflow exists",
           rows[5]["status"] == "pass" and
           not any("workflow test:" in item for item in rows[5]["missing"]))

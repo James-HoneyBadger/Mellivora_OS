@@ -261,6 +261,26 @@ gui_desktop_main:
         mov esi, burrows_log_up
         call serial_print
 
+        ; Name the signed-in user on COM1 so the regression test can prove two
+        ; users get two desktops, not one desktop with two names written over.
+        mov esi, burrows_log_user
+        call serial_print
+        mov esi, gui_str_start_user
+        cmp dword [sess_current], 0
+        je .log_user
+        mov eax, [sess_current]
+        call sess_slot
+        lea esi, [edi + SESS_F_NAME]
+        cmp byte [esi], 0
+        jne .log_user
+        mov esi, gui_str_start_user
+.log_user:
+        call serial_print
+        mov al, 13
+        call serial_putchar
+        mov al, 10
+        call serial_putchar
+
 gui_desktop_loop:
         ; Track idle time / trigger screensaver
         call scr_idle_tick
@@ -10410,6 +10430,7 @@ gui_str_m_launcher: db "Launcher", 0
 gui_str_m_about:    db "About", 0
 ; Serial markers used by tests/test_desktop.py and for debugging.
 burrows_log_up:     db "[burrows] desktop up", 13, 10, 0
+burrows_log_user:   db "[burrows] user: ", 0
 burrows_log_down:   db "[burrows] desktop exit", 13, 10, 0
 burrows_log_launch: db "[burrows] launch ", 0
 burrows_log_ws:     db "[burrows] workspace ", 0

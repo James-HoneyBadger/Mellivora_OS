@@ -10,6 +10,10 @@ Usage: qemu_drive.py <image> "<command>" [options]
 
 Options:
   --then CMD          run another command after the first (repeatable)
+  --after CMD         run a command after --keys (repeatable); a two-phase
+                      case (command, keys, command) uses --then for the first
+                      phase and --after for the commands typed once the keys
+                      have returned the machine to the shell
   --wait N            keep polling for --expect text for up to N seconds
                       after the command is typed (default 6)
   --timeout N         seconds to wait for the boot marker (default 60)
@@ -323,6 +327,7 @@ def main() -> int:
     expects = _opt_all(args, "--expect")
     rejects = _opt_all(args, "--reject")
     thens = _opt_all(args, "--then")
+    afters = _opt_all(args, "--after")
     out_file = _opt(args, "--out")
     screendump = _opt(args, "--screendump")
     mem_mb = _opt(args, "--mem")
@@ -407,6 +412,19 @@ def main() -> int:
                 for key in [k.strip() for k in keys.split(",") if k.strip()]:
                     mon_ctl.send_key(key, 0.4)
                     time.sleep(0.25)
+
+            # A second phase: once the keys have returned control to the shell
+            # (e.g. ESC exits the desktop), type the follow-on commands.
+            for after in afters:
+                if transport == "serial":
+                    ser.send_line(after)
+                else:
+                    mon_ctl.send_text(after)
+                    time.sleep(0.3)
+                    mon_ctl.cmd("sendkey ret", 0.3)
+                    time.sleep(0.3)
+                    mon_ctl.cmd("sendkey ret", 0.3)
+                time.sleep(3.0)
 
             for mon_cmd in _opt_all(args, "--monitor"):
                 mon_ctl.cmd(mon_cmd, 1.0)

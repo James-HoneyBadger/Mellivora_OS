@@ -78,6 +78,7 @@ fi
 failures=0
 
 # run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB] [SMP] [CPU] [WAIT_S] [PROFILE]
+#                     [MONITOR] [EXIT_WAIT] [KEYS] [WAIT_FOR] [AFTER]
 # An empty EXPECT means "only check that nothing faulted" (useful for a
 # graphics program that owns the screen and prints nothing).
 #
@@ -110,6 +111,7 @@ run_case() {
     local name="$1" cmd="$2" expect="$3" then="${4:-}" reject="${5:-CPU EXCEPTION}"
     local mem="${6:-}" smp="${7:-}" cpu="${8:-}" wait_s="${9:-}" profile="${10:-}"
     local monitor="${11:-}" exit_wait="${12:-}" keys="${13:-}" wait_for="${14:-}"
+    local after="${15:-}"
     local args=("$IMAGE" "$cmd" --reject "$reject")
     if [ -n "$monitor" ]; then
         args+=(--monitor "$monitor")
@@ -139,6 +141,9 @@ run_case() {
     fi
     if [ -n "$then" ]; then
         args+=(--then "$then")
+    fi
+    if [ -n "$after" ]; then
+        args+=(--after "$after")
     fi
     if [ -n "$mem" ]; then
         args+=(--mem "$mem")
@@ -746,6 +751,13 @@ run_case "the logon screen authenticates a user" \
     $'account del m6ui\naccount add m6ui m6pw\nlogonui' \
     "[logon-ui] authenticated" \
     "" "CPU EXCEPTION|PAGE FAULT" "" "" "" 60 "" "" "" "m,6,u,i,ret,m,6,p,w,ret" "[logon-ui] ready"
+# M6: two accounts each get their own desktop. The desktop names its signed-in
+# user on COM1; ESC leaves the first desktop, then the second user logs on and
+# their desktop names them too.
+run_case "two users have separate desktops" \
+    $'account del m6a\naccount add m6a m6pw\naccount del m6b\naccount add m6b m6pw\nlogon m6a m6pw\nburrows' \
+    "[burrows] user: m6a|[burrows] user: m6b" \
+    "" "CPU EXCEPTION|PAGE FAULT" "" "" "" 90 "" "" "" "esc" "[burrows] desktop up" $'logon m6b m6pw\nburrows'
 # M6: the print spooler queues three jobs, cancels the middle one, and flushes
 # the other two - the queue semantics the scorecard's Print row is blocked on.
 run_case "print queue cancels one job and completes the others" \
