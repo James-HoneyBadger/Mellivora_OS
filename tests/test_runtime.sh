@@ -739,6 +739,13 @@ run_case "desktop file operations and associations work end to end" \
     $'account del m6assoc\naccount add m6assoc m6pw\nlogon m6assoc m6pw\nassoc .txt head\nassoc .txt\nopen /docs/notes.txt' \
     "opens with head|Mellivora OS Developer Notes" \
     "" "CPU EXCEPTION|sign in before|could not be started|File not found|no handler" "" "" "" 90
+# M6: the graphical logon screen authenticates through the GUI path, not the
+# shell `logon` command. The account is made over the shell, then logonui is
+# driven by PS/2 keystrokes and the authenticated marker is asserted.
+run_case "the logon screen authenticates a user" \
+    $'account del m6ui\naccount add m6ui m6pw\nlogonui' \
+    "[logon-ui] authenticated" \
+    "" "CPU EXCEPTION|PAGE FAULT" "" "" "" 60 "" "" "" "m,6,u,i,ret,m,6,p,w,ret" "[logon-ui] ready"
 run_case "background job reaped"     "hello &"               "No background jobs" "ps"
 run_case "DHCP + DNS"                "dhcp"                  "ANSWER SECTION"     "dig example.com"
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"

@@ -44,7 +44,7 @@ The generated block below is the sole progress-status table. Run
 <!-- parity-scorecard:start -->
 | # | User job | Pass criteria | Status | Missing evidence |
 |---:|---|---|---|---|
-| 1 | Log on | Graphical logon, per-user profile and desktop, switch user without reboot | **Partial** | `workflow test: the logon screen authenticates a user`; `workflow test: two users have separate desktops` |
+| 1 | Log on | Graphical logon, per-user profile and desktop, switch user without reboot | **Partial** | `workflow test: two users have separate desktops` |
 | 2 | Manage users | Accounts, groups, passwords, quotas and permissions edited from a GUI | **Partial** | `workflow test: users and groups are managed from the control panel`; `workflow test: permissions are edited from a property sheet` |
 | 3 | Run services | Services start before logon, have dependencies and restart on failure | **Pass** | — |
 | 4 | Configure the machine | One hierarchical transactional store for kernel, service and user settings | **Pass** | — |
