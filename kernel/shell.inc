@@ -7610,6 +7610,21 @@ cmd_exec_program:
 ; it, then switch back to the master directory.
 ;-----------------------------------------------------------------------
 .exec_gui_task:
+        mov byte [.exec_want_bg], 0
+        jmp .exec_spawn_task
+
+;-----------------------------------------------------------------------
+; .exec_spawn_task - create a task with its own copy of the program window
+;   In : [.exec_want_bg] = 0 for a GUI task, 1 for a background one
+;   Returns CF=0, EAX = task id; CF=1 on failure.
+;
+; A background launch used to copy the image to a frame the allocator handed
+; back and jump to it at that physical address, which is not reachable from
+; ring 3: every background program faulted on its first instruction. It now
+; gets the same private window a GUI task gets, which is what makes a server
+; able to run while the shell keeps working.
+;-----------------------------------------------------------------------
+.exec_spawn_task:
         mov esi, prog_name_buf
         call sched_set_create_name
         mov ebx, [program_entry]
@@ -7618,7 +7633,10 @@ cmd_exec_program:
         test eax, eax
         js .exec_gui_create_fail
         call sched_set_task_args
+        cmp byte [.exec_want_bg], 0
+        jne .exec_spawn_no_fg
         mov [tty_fg_pgid], eax
+.exec_spawn_no_fg:
 
         push eax                        ; keep the id across the mapping call
         mov edi, eax
@@ -7651,7 +7669,33 @@ cmd_exec_program:
         xor eax, eax
         call sched_apply_cr3            ; back to the master directory
         pop eax                         ; task id
+        cmp byte [.exec_want_bg], 0
+        je .exec_spawn_done
+        ; A background task owns no console and must not compete with it.
+        push eax
+        imul eax, TCB_SIZE
+        add eax, task_table
+        mov dword [eax + TCB_PRIORITY], PRIO_LOW
+        pop eax
+.exec_spawn_done:
         mov [esp + 28], eax             ; return it through the pushad frame
+        cmp byte [.exec_want_bg], 0
+        je .exec_spawn_return
+        ; Tell the user what was started. The shell keeps the prompt: it does
+        ; not wait for a background task.
+        push eax
+        mov byte [bg_launch_flag], 0
+        call vga_set_info
+        mov esi, msg_bg_launched
+        call vga_print
+        pop eax
+        push eax
+        call vga_print_dec
+        mov al, 10
+        call vga_putchar
+        pop eax
+        call vga_reset_color
+.exec_spawn_return:
         popad
         clc
         ret
@@ -7667,126 +7711,31 @@ cmd_exec_program:
         ret
 
 .exec_gui_create_fail:
+        cmp byte [.exec_want_bg], 0
+        je .exec_create_fail_out
+        mov byte [bg_launch_flag], 0
+.exec_create_fail_out:
         mov dword [esp + 28], -1
         popad
         stc
         ret
 
 .exec_bg:
-        ; Launch program as a background scheduler task
-        ; Clear foreground program_running flag (bg tasks don't block the shell)
+        ; Launch program as a background scheduler task. The shell does not wait
+        ; for it, and it owns no console.
         mov byte [program_running], 0
-        mov byte [prog_color_saved], 0     ; a background task owns no console
-        ; A background launch copies the window to its own 1 MB slot and moves
-        ; the entry by the difference, so the image has to be in the window:
-        ; a prepared HBX image is copied in now, and stays where it lands.
+        mov byte [prog_color_saved], 0
+        ; A prepared HBX image is mapped into the window before the task's own
+        ; copy is taken.
         cmp byte [hbx_map_pending], 0
-        je .exec_bg_loaded
+        je .exec_bg_mapped
         mov edi, -1
         call hbx_fallback_window
-.exec_bg_loaded:
-        ; 1. Allocate memory for a copy of the program (1MB = 256 pages)
-        mov ecx, BG_PROG_PAGES
-        call pmm_alloc_pages
-        test eax, eax
-        jz .bg_nomem
-        mov [.bg_prog_addr], eax
+.exec_bg_mapped:
+        mov byte [.exec_want_bg], 1
+        jmp .exec_spawn_task
 
-        ; 2. Copy program from PROGRAM_BASE to allocated area
-        push eax
-        mov edi, eax
-        mov esi, PROGRAM_BASE
-        mov ecx, (BG_PROG_PAGES * 4096) / 4
-        rep movsd
-        pop eax                         ; EAX = bg_prog_addr again
-
-        ; 3. Fix up entry point (relative to new base)
-        mov ebx, [program_entry]
-        sub ebx, PROGRAM_BASE
-        add ebx, eax                    ; EBX = entry point in bg copy
-
-        ; 4. Write SYS_EXIT trampoline at end of bg slot
-        mov edi, eax
-        add edi, (BG_PROG_PAGES * 4096) - 16
-        mov [.bg_tramp_addr], edi
-        mov byte  [edi],     0xB8       ; mov eax, SYS_EXIT(0)
-        mov dword [edi + 1], 0
-        mov byte  [edi + 5], 0xCD       ; int 0x80
-        mov byte  [edi + 6], 0x80
-
-        ; 5. Allocate user stack for bg task (64KB = 16 pages)
-        push ebx
-        mov ecx, BG_STACK_PAGES
-        call pmm_alloc_pages
-        test eax, eax
-        jz .bg_nomem_pop
-        mov [.bg_stack_addr], eax
-        add eax, (BG_STACK_PAGES * 4096) - 4   ; Stack top - 4 for trampoline
-        ; Push trampoline address as "return address" on ring-3 stack
-        mov edx, [.bg_tramp_addr]
-        mov [eax], edx
-        ; ECX = ring-3 ESP (pointing at trampoline)
-        mov ecx, eax
-        pop ebx                         ; EBX = bg entry point
-
-        ; 6. Create the task
-        mov esi, prog_name_buf
-        call sched_set_create_name
-        call sched_create_task          ; EBX=entry, ECX=stack → EAX=pid (or -1)
-        test eax, eax
-        js .bg_sched_fail
-        call sched_set_task_args        ; background task gets its own argv copy
-
-        ; 7. Mark the task as background in TCB (bit 31 of TCB_EXIT_CODE)
-        ;    Store bg_prog_addr page number so sys_exit can free it.
-        push eax                        ; save PID (= slot index)
-        imul eax, TCB_SIZE
-        lea edi, [task_table + eax]
-        mov eax, [.bg_prog_addr]
-        shr eax, 12                     ; Convert to page number
-        or  eax, 0x80000000             ; Set bg_task flag (bit 31)
-        mov [edi + TCB_EXIT_CODE], eax
-        mov dword [edi + TCB_PRIORITY], PRIO_LOW  ; Run at low priority
-        pop eax                         ; EAX = PID
-
-        ; 8. Print "[1] <pid>" to confirm bg launch
-        mov byte [bg_launch_flag], 0
-        call vga_set_info
-        mov esi, msg_bg_launched
-        call vga_print
-        push eax
-        call vga_print_dec
-        mov al, 10
-        call vga_putchar
-        pop eax
-        call vga_reset_color
-
-        popad
-        clc
-        ret
-
-.bg_nomem_pop:
-        pop ebx
-.bg_nomem:
-        mov byte [bg_launch_flag], 0
-        mov esi, msg_bg_nomem
-        call vga_print
-        jmp .not_found
-
-.bg_sched_fail:
-        ; Free allocated pages before failing
-        mov eax, [.bg_prog_addr]
-        mov ecx, BG_PROG_PAGES
-        call pmm_free_pages
-        mov eax, [.bg_stack_addr]
-        mov ecx, BG_STACK_PAGES
-        call pmm_free_pages
-        mov byte [bg_launch_flag], 0
-        jmp .not_found
-
-.bg_prog_addr:   dd 0
-.bg_stack_addr:  dd 0
-.bg_tramp_addr:  dd 0
+.exec_want_bg:   dd 0           ; 1 while a background task is being made
 .exec_task:      dd 0           ; the task running at exec time, or 0
 
 .path_fsize: dd 0               ; Temp storage for file size during PATH search
