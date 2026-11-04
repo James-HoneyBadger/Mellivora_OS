@@ -902,6 +902,7 @@ serial_present: resb 1
 ; Keyboard ctrl state
 kb_ctrl:        resb 1
 kb_alt:         resb 1
+shell_from_park:  resb 1          ; 1 = the shell was resumed from a parked task
 boot_kb_flushed: resb 1
 boot_motd_shown: resb 1          ; 0 = show MOTD on first prompt
 
@@ -1088,6 +1089,8 @@ gff_cwd_name:     resb 256
 gff_cwd_stack:    resb DIR_STACK_MAX * DIR_STACK_ENTRY_SIZE
 
 ; Scheduler / preemptive multitasking state
+sched_park_tcb:   resd 1          ; TCB of the task parked in a syscall
+sched_rr_next:    resd 1          ; Slot the next shell dispatch starts scanning at
 task_current:     resd 1                              ; Index of current running task
 task_count:       resd 1                              ; Number of active tasks
 sched_tick:       resd 1                              ; Tick counter for current time slice

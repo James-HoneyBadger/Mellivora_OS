@@ -223,7 +223,9 @@ start:
         cmp eax, -1
         je .send_fail
 
-        ; Receive and print response
+        ; Receive and print response. SYS_RECV does not block, so the first
+        ; byte is worth waiting for: yield until the server answers.
+        mov dword [recv_tries], 0
 .recv_loop:
         mov eax, SYS_RECV
         mov ebx, [sock_fd]
@@ -231,7 +233,15 @@ start:
         mov edx, BUF_SIZE - 1
         int 0x80
         cmp eax, 0
-        jle .recv_done
+        jg .recv_got
+        jl .recv_done
+        inc dword [recv_tries]
+        cmp dword [recv_tries], 20000
+        ja .recv_done
+        mov eax, SYS_YIELD
+        int 0x80
+        jmp .recv_loop
+.recv_got:
         ; Null-terminate and print
         mov byte [resp_buf + eax], 0
         push eax
@@ -239,6 +249,7 @@ start:
         mov ebx, resp_buf
         int 0x80
         pop eax
+        mov dword [recv_tries], 0
         jmp .recv_loop
 
 .recv_done:
@@ -459,7 +470,8 @@ host_buf:       times URL_MAX db 0
 path_buf:       times URL_MAX db 0
 post_data:      times DATA_MAX db 0
 method:         db 'G'
-sock_fd:        dd 0
+sock_fd:		dd 0
+recv_tries:	dd 0
 dest_ip:        dd 0
 dest_port:      dd HTTP_PORT
 post_len:       dd 0

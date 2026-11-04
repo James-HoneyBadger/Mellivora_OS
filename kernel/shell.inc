@@ -41,6 +41,21 @@ shell_print_prompt:
         call vga_reset_color
         ret
 
+;-----------------------------------------------------------------------
+; shell_idle - where a parked task hands the machine back to the shell
+;
+; Reached from sched_park_self by a jump, not a call: the task's kernel stack
+; is saved in its TCB, so this starts on the shell's own stack with an empty
+; command line - the state the dispatch hook above requires.
+;-----------------------------------------------------------------------
+shell_idle:
+        mov esp, KERNEL_STACK
+        mov edi, line_buffer            ; cursor pointer, as at .prompt_ready
+        xor ecx, ecx
+        mov dword [line_len], 0
+        mov byte [shell_from_park], 1
+        jmp shell_main.read_loop
+
 shell_main:
         mov esp, KERNEL_STACK
 
@@ -172,6 +187,7 @@ shell_main:
         call vga_print
         call vga_reset_color
 .prompt_ready:
+        mov byte [shell_from_park], 0   ; a command just finished: tasks first
         call shell_print_prompt
 
         ; Reset history browsing position
@@ -202,20 +218,36 @@ shell_main:
         mov dword [kb_write_idx], 0
 
 .read_loop:
-        ; Run a background task before blocking for input. Background tasks
-        ; are ring-3, and the timer only preempts ring-3 code, so a task that
-        ; the shell just started with '&' would otherwise stay READY forever:
-        ; this is the only point where the shell (ring 0) can give up the CPU
-        ; without losing a context. Only do it at a clean prompt so a partly
-        ; typed line is never discarded.
+        ; At a clean prompt the shell has no context worth keeping, so this is
+        ; where a task gets the machine. Two orders are needed:
+        ;
+        ;   - after a command, a task runs first: a server the user just
+        ;     started is listening before the next command reaches it;
+        ;   - after a parked task handed the machine back, input is polled
+        ;     first, so typing stays responsive while a server runs in the
+        ;     background.
         cmp ecx, 0
         jne .read_wait
         cmp dword [line_len], 0
         jne .read_wait
         call svc_tick
-        call sched_start_ready
+        cmp byte [shell_from_park], 0
+        jne .read_idle_poll
+        mov byte [shell_from_park], 1
+        call sched_start_ready          ; returns if no task is ready
+.read_idle_poll:
+        call kb_pollchar
+        or al, al
+        jnz .read_dispatch
+        call sched_start_ready          ; another slice for a parked task
+        call kb_pollchar
+        or al, al
+        jnz .read_dispatch
+        hlt                             ; nothing to do: wait for an interrupt
+        jmp .read_loop
 .read_wait:
         call kb_getchar
+.read_dispatch:
 
         cmp al, 0x0D            ; Enter?
         je .execute

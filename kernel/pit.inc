@@ -60,35 +60,7 @@ kb_getchar:
 .have_serial:
         ; Echo back to the serial console so a remote terminal sees what it
         ; typed. The shell echoes to VGA on its own, so this only touches COM1.
-        cmp al, 0x0D
-        je .serial_cr
-        cmp al, 0x08
-        je .serial_bs
-        cmp al, 0x20
-        jb .serial_done
-        cmp al, 0x7E
-        ja .serial_done
-        push eax
-        call serial_putchar
-        pop eax
-        jmp .serial_done
-.serial_cr:
-        push eax
-        mov al, 0x0D
-        call serial_putchar
-        mov al, 0x0A
-        call serial_putchar
-        pop eax
-        jmp .serial_done
-.serial_bs:
-        push eax
-        mov al, 0x08
-        call serial_putchar
-        mov al, ' '
-        call serial_putchar
-        mov al, 0x08
-        call serial_putchar
-        pop eax
+        call serial_echo_input
 .serial_done:
         movzx eax, al
         ret
@@ -109,10 +81,13 @@ kb_pollchar:
         cmp eax, [kb_write_idx]
         jne .have
 
-        ; No PS/2 key; try the serial console.
+        ; No PS/2 key; try the serial console. A byte polled here is echoed
+        ; like one read by kb_getchar, or the first character of a line typed
+        ; at a remote terminal would be missing from its own echo.
         call serial_getchar
         cmp al, 0xFF
         je .none
+        call serial_echo_input
         movzx eax, al
         or al, al               ; Clear ZF
         ret

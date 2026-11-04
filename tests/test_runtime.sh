@@ -811,6 +811,13 @@ run_case "loopback answers its own echo"  "ping 127.0.0.1"        "4/4 packets r
 # before the resolver learned to read one, curl could not reach a loopback
 # server at all.
 run_case "a literal address resolves"     "dig 127.0.0.1"         "A       127.0.0.1"     "" "CPU EXCEPTION|PAGE FAULT|no such host"
+# NETWORK.md section 10: two programs talk over the loopback interface. The
+# server parks in accept and the client in connect, so the shell has to stay
+# usable while both wait - and the request has to come back with a status line.
+run_case "a loopback server answers a request" \
+    $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \
+    "HTTP/1.0 200 OK|Hello from batch file" "" \
+    "CPU EXCEPTION|PAGE FAULT|connection failed" "" "" "" 40
 run_case "VBE framebuffer + font"    "fonttest"              ""                   "" "CPU EXCEPTION|PAGE FAULT"
 run_case "sbrk heap growth"           "sbrk_test"             "SBRK_BIG_OK"        "" "CPU EXCEPTION|PAGE FAULT|Test FAILED"
 run_case "user/kernel memory isolation" "memprot_test"        "MEMPROT_OK"         "" "CPU EXCEPTION|MEMPROT_FAIL"

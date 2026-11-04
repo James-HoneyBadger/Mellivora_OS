@@ -84,13 +84,24 @@ server_loop:
         je .accept_retry
         mov [client_fd], eax
 
-        ; Receive request
+        ; Receive request. SYS_RECV does not block, so poll: the peer may still
+        ; be sending. Yield between tries so the client gets the machine.
+        mov dword [recv_tries], 0
+.recv_wait:
         mov eax, [client_fd]
         mov ebx, req_buf
         mov ecx, MAX_REQ_SIZE - 1
         call net_recv
         cmp eax, 0
-        jle .close_client
+        jg .recv_got
+        jl .close_client                ; -1: connection gone
+        inc dword [recv_tries]
+        cmp dword [recv_tries], 20000
+        ja .close_client
+        mov eax, SYS_YIELD
+        int 0x80
+        jmp .recv_wait
+.recv_got:
 
         ; Null-terminate request
         mov byte [req_buf + eax], 0
@@ -219,8 +230,11 @@ handle_request:
 
         ; Strip leading /
         lea esi, [req_path + 1]
-        ; Check if file exists via SYS_STAT
+        ; Check if file exists via SYS_STAT. ECX must be zero: a non-zero
+        ; value is taken as a stat buffer, and a stale pointer is rejected
+        ; before the lookup, which turns every file into a 404.
         mov ebx, esi
+        xor ecx, ecx
         mov eax, SYS_STAT
         int 0x80
         cmp eax, -1
@@ -734,6 +748,7 @@ dir_html_footer:
 
 server_fd:      dd 0
 client_fd:      dd 0
+recv_tries:     dd 0
 listen_port:    dd 0
 file_size:      dd 0
 content_type_ptr: dd ct_octet

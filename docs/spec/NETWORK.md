@@ -165,6 +165,7 @@ M7 does not close until:
 | Loopback | A real interface: a datagram addressed to 127.0.0.0/8 is queued and handed back to the receive path, and it carries the loopback address as its source, so the reply stays local. It works with no NIC present. |
 | Name resolution | A literal dotted quad is answered by the resolver itself, so an address needs no server to resolve it |
 | Socket as an object | Sockets are numbers in a table, with `poll` and non-blocking connect |
+| Blocking calls | `connect` and `accept` wait without freezing the console: a task that is waiting parks itself, the shell keeps reading commands, and the scheduler hands the task back its frame when it is dispatched again. Two programs talk over the loopback interface at the same time (`httpd 8000 &` then `curl http://127.0.0.1:8000/...`) |
 | Overlapped I/O via completion ports | None |
 | Shares | None — the reason this document exists |
 | RPC | None |

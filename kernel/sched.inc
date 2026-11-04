@@ -1532,6 +1532,61 @@ sched_restore_shell_fds:
         popad
         ret
 
+;-----------------------------------------------------------------------
+; sched_park_self - give the machine back to the shell while a syscall waits
+;
+; A blocking syscall spins in ring 0, and the timer only preempts ring-3 code,
+; so the shell - which is not a task - could not run again until the program
+; exited. A server waiting for a connection therefore froze the console.
+;
+; Parking saves the waiting task's own kernel context the way the timer saves
+; a ring-3 one, marks the task READY and re-enters the shell's idle loop. The
+; shell dispatches the task again, iretd returns into the wait, and the syscall
+; continues as if nothing happened.
+;
+; Called from the wait loops of the blocking socket syscalls; returns when the
+; task is resumed.
+;-----------------------------------------------------------------------
+sched_park_self:
+        ; Build the frame the scheduler already knows how to restore: the GP
+        ; registers, then EIP, CS and EFLAGS. CS is the kernel's own, so the
+        ; returning iretd pops three words and lands back in this syscall at
+        ; ring 0 - which is exactly the context that has to be preserved.
+        pushfd
+        push dword 0x08                 ; KERNEL_CS
+        push dword .sps_resume
+        pushad
+
+        call sched_get_current_task
+        test eax, eax
+        jz .sps_not_a_task
+        mov [sched_park_tcb], eax
+        mov [eax + TCB_ESP], esp        ; ESP points at our pushad frame
+        mov dword [eax + TCB_STATE], TASK_READY
+
+        ; Hand the live fd and vector views back the way a normal switch does:
+        ; the task's copies go into its private page and the shell's come back.
+        ; Restoring the shell's alone would discard every descriptor the task
+        ; opened since it was last switched in - and the task would then be
+        ; handed the *shell's* table when it resumed, so a later close could
+        ; land on another task's socket.
+        xor ebx, ebx                    ; incoming: the shell
+        mov edi, [sched_park_tcb]       ; outgoing: the parked task
+        call sched_swap_fd_tables
+        call sched_swap_fpu
+        xor eax, eax
+        call sched_apply_cr3            ; master directory
+        mov dword [tss_struct + 4], KERNEL_STACK
+        mov esp, KERNEL_STACK
+        jmp shell_idle                  ; resumed by the scheduler at .sps_resume
+.sps_not_a_task:
+        ; The shell has no TCB: drop the frame and carry on.
+        popad
+        add esp, 12
+        ret
+.sps_resume:
+        ret                             ; back into the wait loop that parked
+
 ;---------------------------------------
 ; sched_start_ready - Run the first READY task, if there is one
 ;
@@ -1553,16 +1608,32 @@ sched_start_ready:
         pushad
         pushfd
         cli
-        mov edi, task_table
-        xor edx, edx
-.ssr_scan:
+        ; Round-robin from the slot after the one that ran last. Restarting the
+        ; scan at slot 0 every time starves a later task: a server that parks
+        ; on every accept hands the machine back after a few microseconds, so
+        ; the task in the lowest slot would be dispatched forever and a second
+        ; task would never run at all.
+        mov edx, [sched_rr_next]
         cmp edx, MAX_TASKS
-        jge .ssr_none
+        jb .ssr_have_start
+        xor edx, edx
+.ssr_have_start:
+        mov eax, edx
+        imul eax, TCB_SIZE
+        lea edi, [task_table + eax]
+        mov ecx, MAX_TASKS
+.ssr_scan:
         cmp dword [edi + TCB_STATE], TASK_READY
         je .ssr_found
         add edi, TCB_SIZE
         inc edx
-        jmp .ssr_scan
+        cmp edx, MAX_TASKS
+        jb .ssr_no_wrap
+        xor edx, edx
+        mov edi, task_table
+.ssr_no_wrap:
+        dec ecx
+        jnz .ssr_scan
 
 .ssr_none:
         popfd
@@ -1570,6 +1641,14 @@ sched_start_ready:
         ret
 
 .ssr_found:
+        ; Remember where to resume scanning, so the next dispatch starts with
+        ; the following task.
+        lea eax, [edx + 1]
+        cmp eax, MAX_TASKS
+        jb .ssr_store_next
+        xor eax, eax
+.ssr_store_next:
+        mov [sched_rr_next], eax
         ; EDI = TCB, EDX = slot; the helper switches to it and never returns.
         jmp sched_switch_to_tcb
 
@@ -2834,6 +2913,17 @@ sched_deliver_signals:
 
         cmp eax, SIG_DFL
         je  .sdel_default               ; Default action
+
+        ; A task parked inside a syscall has a ring-0 frame, which carries no
+        ; user stack to build a handler frame on. Put the signal back and let
+        ; the next ring-3 resumption deliver it.
+        test byte [edi + 36], 3         ; CS in the frame
+        jnz .sdel_handler_ok
+        mov eax, 1
+        shl eax, cl
+        or  [ebx + TCB_SIG_PEND], eax
+        jmp .sdel_ok
+.sdel_handler_ok:
 
         ; ---- User-space handler ----
         ; eax = handler fn address, ecx = signum, edi = frame base

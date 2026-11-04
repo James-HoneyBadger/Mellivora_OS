@@ -2337,6 +2337,34 @@ tcp_flush_pending:
         ret
 
 ;---------------------------------------
+; tcp_flush_all_pending - Send deferred flags for every waiting socket
+;
+; A SYN that arrives while the machine is in the receive path cannot be
+; answered there: the reply would re-enter the transmit path. The accept loop
+; defers the SYN-ACK by setting SOCK_PENDING on the *child* socket, so a flush
+; that only looks at the caller's own socket (the listener) never sends it and
+; the handshake stalls. Walk the table instead.
+;---------------------------------------
+tcp_flush_all_pending:
+        pushad
+        mov ebp, net_sock_table
+        mov edx, MAX_SOCKETS
+.tfap_loop:
+        cmp dword [ebp + SOCK_TYPE], SOCK_TCP
+        jne .tfap_next
+        cmp byte [ebp + SOCK_PENDING], 0
+        je .tfap_next
+        push edx
+        call tcp_flush_pending
+        pop edx
+.tfap_next:
+        add ebp, SOCK_SIZE
+        dec edx
+        jnz .tfap_loop
+        popad
+        ret
+
+;---------------------------------------
 ; tcp_send_flags - Send TCP segment with flags
 ;  EBP = pointer to socket in net_sock_table
 ;  AL = TCP flags to send
@@ -3388,6 +3416,10 @@ sock_alloc:
 
         ; Set type
         mov [edi + SOCK_TYPE], ebx
+        ; -1 (not 0) is "no parent": slot 0 is a real socket index, so a zero
+        ; here would make an accepted-connection scan see every fresh socket as
+        ; a child of the first listener and hand back the wrong descriptor.
+        mov dword [edi + SOCK_PARENT], -1
 
         ; Allocate recv buffer (SOCK_BUF_SIZE bytes, not one 4 KB page)
         push ecx
@@ -3646,9 +3678,16 @@ sys_connect:
         mov al, TCP_SYN
         call tcp_send_flags
 
-        ; Wait for ESTABLISHED (up to 5 seconds)
+        ; Wait for ESTABLISHED (up to 5 seconds), handing the machine back to
+        ; the shell every thirty-second turn as the accept wait does.
         mov ecx, 500
 .sconn_wait:
+        push ecx
+        and ecx, 31
+        jnz .sconn_no_park
+        call sched_park_self
+.sconn_no_park:
+        pop ecx
         hlt
         call tcp_flush_pending    ; Send deferred ACK from non-ISR context
         cmp dword [ebp + SOCK_STATE], TCP_ESTABLISHED
@@ -3971,11 +4010,21 @@ sys_accept:
         cmp dword [ebp + SOCK_STATE], TCP_LISTEN
         jne .saccept_fail
 
-        ; Wait for a child socket to reach ESTABLISHED (up to 30 seconds)
+        ; Wait for a child socket to reach ESTABLISHED (up to 30 seconds).
+        ; Every thirty-second turn the wait hands the machine back to the
+        ; shell, so a server that is waiting for a connection does not freeze
+        ; the console - the shell dispatches this task again from its idle
+        ; loop.
         mov ecx, 3000
 .saccept_wait:
+        push ecx
+        and ecx, 31
+        jnz .saccept_no_park
+        call sched_park_self
+.saccept_no_park:
+        pop ecx
         hlt
-        call tcp_flush_pending    ; Send deferred SYN-ACK from non-ISR context
+        call tcp_flush_all_pending   ; deferred SYN-ACK on any child socket
 
         ; Scan socket table for child socket that has our index as parent
         push ecx

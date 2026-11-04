@@ -707,6 +707,39 @@ serial_print_dec:
         popad
         ret
 
+; Echo one byte typed on the serial console, so a remote terminal sees the
+; line it is typing. AL = the byte; every register is preserved.
+serial_echo_input:
+        pushad
+        mov bl, al
+        cmp bl, 0x0D
+        je .sei_cr
+        cmp bl, 0x08
+        je .sei_bs
+        cmp bl, 0x20
+        jb .sei_done
+        cmp bl, 0x7E
+        ja .sei_done
+        mov al, bl
+        call serial_putchar
+        jmp .sei_done
+.sei_cr:
+        mov al, 0x0D
+        call serial_putchar
+        mov al, 0x0A
+        call serial_putchar
+        jmp .sei_done
+.sei_bs:
+        mov al, 0x08
+        call serial_putchar
+        mov al, ' '
+        call serial_putchar
+        mov al, 0x08
+        call serial_putchar
+.sei_done:
+        popad
+        ret
+
 ; Non-blocking read one character from COM1
 ; Returns: AL = character if available, or 0xFF (-1 unsigned) if none
 ; Preserves all registers except EAX
