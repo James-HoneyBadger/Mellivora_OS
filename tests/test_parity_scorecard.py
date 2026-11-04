@@ -86,10 +86,12 @@ def main():
     check("print passes once the queue workflow exists",
           rows[8]["status"] == "pass" and
           not any("workflow test:" in item for item in rows[8]["missing"]))
-    check("package and network rows name missing user workflows",
-          all(rows[index]["status"] in {"partial", "fail"} and
-              any("workflow test:" in item for item in rows[index]["missing"])
-              for index in (4, 7)))
+    check("package install passes once its workflow exists",
+          rows[4]["status"] == "pass" and
+          not any("workflow test:" in item for item in rows[4]["missing"]))
+    check("the network row names its missing user workflow",
+          rows[7]["status"] in {"partial", "fail"} and
+          any("workflow test:" in item for item in rows[7]["missing"]))
     roadmap = tool.ROADMAP.read_text(encoding="utf-8")
     start = roadmap.find(tool.ROADMAP_START)
     end = roadmap.find(tool.ROADMAP_END, start + len(tool.ROADMAP_START))

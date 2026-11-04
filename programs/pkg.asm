@@ -6,6 +6,7 @@
 ;        pkg size              - Show disk usage summary
 ;        pkg search <pattern>  - Search for programs by name
 ;        pkg install <url>     - Download and install from HTTP URL
+;        pkg install <path>    - Install from a local path into the current dir
 ;        pkg remove <name>     - Remove (delete) a file from disk
 
 %include "syscalls.inc"
@@ -648,8 +649,9 @@ do_remove:
         jmp exit
 
 ;---------------------------------------
-; do_install - Download and install from HTTP URL
-; Usage: pkg install http://host/path
+; do_install - Install a package
+; Usage: pkg install http://host/path  (download)
+;        pkg install /local/path       (copy into the current directory)
 ;---------------------------------------
 do_install:
         call skip_spaces
@@ -669,11 +671,8 @@ do_install:
         inc edi
         jmp .url_check
 .url_bad:
-        pop esi
-        mov eax, SYS_PRINT
-        mov ebx, msg_install_badurl
-        int 0x80
-        jmp exit
+        pop esi                 ; restore the local path (not http://)
+        jmp near do_local_install
 .url_prefix_ok:
         pop eax                 ; discard saved ESI
 
@@ -877,6 +876,97 @@ exit:
         mov eax, SYS_EXIT
         xor ebx, ebx
         int 0x80
+
+;---------------------------------------
+; do_local_install - install from a local path instead of a URL
+;   In : ESI = the local path (not "http://...")
+;   Stats the source, copies it into the current directory under its
+;   basename, and keeps the source's file type (a /bin program has no
+;   ".bin" suffix, so an extension scan would type it as text).
+;---------------------------------------
+do_local_install:
+        ; Copy the local path (up to a space or NUL) into install_path.
+        mov edi, install_path
+        xor ecx, ecx
+.loc_copy:
+        mov al, [esi]
+        cmp al, ' '
+        je .loc_done
+        cmp al, 0
+        je .loc_done
+        mov [edi], al
+        inc edi
+        inc esi
+        inc ecx
+        cmp ecx, 255
+        jb .loc_copy
+.loc_done:
+        mov byte [edi], 0
+        cmp byte [install_path], 0
+        je .loc_usage
+        ; Derive the destination filename from the last '/' component.
+        mov esi, install_path
+        mov ebx, install_path
+.loc_find_slash:
+        mov al, [esi]
+        cmp al, 0
+        je .loc_slash_done
+        cmp al, '/'
+        jne .loc_slash_next
+        lea ebx, [esi + 1]
+.loc_slash_next:
+        inc esi
+        jmp .loc_find_slash
+.loc_slash_done:
+        mov esi, ebx
+        mov edi, filename_buf
+        xor ecx, ecx
+.loc_fname:
+        mov al, [esi]
+        cmp al, 0
+        je .loc_fname_done
+        mov [edi], al
+        inc edi
+        inc esi
+        inc ecx
+        cmp ecx, 127
+        jb .loc_fname
+.loc_fname_done:
+        mov byte [edi], 0
+        cmp byte [filename_buf], 0
+        je .loc_usage
+        ; Stat the source so the installed file keeps its type. Guest
+        ; programs in /bin are stored without a ".bin" suffix, so the
+        ; extension scan the download path uses would type them as text.
+        mov eax, SYS_STAT
+        mov ebx, install_path
+        mov ecx, stat_buf
+        int 0x80
+        cmp eax, 0
+        jl .loc_read_fail
+        mov eax, [stat_buf + 4]
+        mov [install_ftype], eax
+        ; Read the local file into the same buffer the download uses.
+        mov eax, SYS_FREAD
+        mov ebx, install_path
+        mov ecx, http_resp_buf
+        int 0x80
+        test eax, eax
+        jz .loc_read_fail
+        mov [install_size], eax
+        ; The destination name and type are ready: share the download
+        ; path's write (and its success/failure reporting).
+        jmp do_install.do_write
+.loc_read_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_read_fail
+        int 0x80
+        jmp exit
+.loc_usage:
+        mov eax, SYS_PRINT
+        mov ebx, msg_install_usage
+        int 0x80
+        jmp exit
 
 ;=== Utility functions ===
 
@@ -1094,6 +1184,7 @@ help_text:
         db "  size              Show disk usage summary", 10
         db "  search <pattern>  Search files by name", 10
         db "  install <url>     Download and install from HTTP URL", 10
+        db "  install <path>    Install from a local path into this dir", 10
         db "  remove <name>     Remove a file from disk", 10
         db "  help              Show this help", 10, 0
 
@@ -1146,7 +1237,8 @@ msg_install_dns:   db "pkg: DNS resolution failed", 10, 0
 msg_install_conn:  db "pkg: connection failed or empty response", 10, 0
 msg_install_write: db "pkg: disk write failed (disk full?)", 10, 0
 msg_install_badurl:db "pkg: URL must start with http://", 10, 0
-msg_install_usage: db "Usage: pkg install http://host/path/file.bin", 10, 0
+msg_install_usage: db "Usage: pkg install http://host/path/file.bin | pkg install /path/file.bin", 10, 0
+msg_install_read_fail: db "pkg: cannot read package file", 10, 0
 install_http_prefix: db "http://", 0
 
 unit_b:    db " B", 0
@@ -1157,6 +1249,7 @@ unit_mb:   db " MB", 0
 arg_buf:        times 256 db 0
 dirent_buf:     times 288 db 0
 filename_buf:   times 128 db 0
+stat_buf:       times 12 db 0
 search_name:    dd 0
 total_size:     dd 0
 count_text:     dd 0

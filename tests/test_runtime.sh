@@ -758,6 +758,14 @@ run_case "two users have separate desktops" \
     $'account del m6a\naccount add m6a m6pw\naccount del m6b\naccount add m6b m6pw\nlogon m6a m6pw\nburrows' \
     "[burrows] user: m6a|[burrows] user: m6b" \
     "" "CPU EXCEPTION|PAGE FAULT" "" "" "" 90 "" "" "" "esc" "[burrows] desktop up" $'logon m6b m6pw\nburrows'
+# M6 row 5: `pkg install` accepts a local path and keeps the source file's
+# type, so a program installed into a PATH directory runs by name. A per-user
+# association is then registered, queried, opened and deleted, the package is
+# removed, and the profile is cleaned up so `repair` proves a clean volume.
+run_case "a package installs registers opens and uninstalls cleanly" \
+    $'account del m6pkg\naccount add m6pkg m6pw\nlogon m6pkg m6pw\ncd /games\npkg remove hello\npkg install /bin/hello\nhello\nassoc .txt head\nassoc .txt\nopen /docs/notes.txt\nassoc .txt delete\npkg remove hello\ncd /\nlogoff\nprofile delete m6pkg\nrepair' \
+    "Installed: hello|Hello, World! Welcome to Mellivora OS!|[assoc] per-user association saved|[assoc] association queried|[assoc] opened handler|Mellivora OS Developer Notes|[assoc] per-user association removed|Removed: hello|profile: deleted m6pkg|REPAIR_CLEAN" \
+    "" "CPU EXCEPTION|PAGE FAULT|sign in before|could not be started|no handler|REPAIR_ISSUES" "" "" "" 90
 # M6: the print spooler queues three jobs, cancels the middle one, and flushes
 # the other two - the queue semantics the scorecard's Print row is blocked on.
 run_case "print queue cancels one job and completes the others" \
