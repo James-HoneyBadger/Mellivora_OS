@@ -6015,7 +6015,7 @@ gui_sub_select:
         cmp eax, 0
         jne .ss_datetime
         popad
-        call gui_applet_settings
+        call gui_applet_cpanel
         ret
 .ss_datetime:
         popad
@@ -8735,6 +8735,371 @@ gui_applet_settings:
         ret
 .set_win: dd 0
 
+;---------------------------------------
+; gui_applet_cpanel - the Control Panel. A small window listing the
+; management applets; keys launch them in place.
+;---------------------------------------
+gui_applet_cpanel:
+        pushad
+        mov eax, 160
+        mov ebx, 110
+        mov ecx, 320
+        mov edx, 210
+        mov esi, gui_str_cpanel
+        call gui_create_window
+        cmp eax, -1
+        je .cp_ret
+        mov [.cp_win], eax
+
+        mov esi, burrows_log_cpanel
+        call serial_print
+
+.cp_loop:
+        call gui_draw_background
+        call gui_draw_all_windows
+
+        mov eax, [.cp_win]
+        imul eax, WIN_STRUCT_SIZE
+        lea ebp, [gui_win_table + eax]
+        mov ecx, [ebp + WIN_X]
+        mov edx, [ebp + WIN_Y]
+
+        lea eax, [ecx + 46]
+        lea ebx, [edx + 14]
+        mov esi, gui_str_cpanel_title
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        lea eax, [ecx + 30]
+        lea ebx, [edx + 62]
+        mov esi, gui_str_cpanel_display
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        lea eax, [ecx + 30]
+        lea ebx, [edx + 96]
+        mov esi, gui_str_cpanel_users
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        lea eax, [ecx + 18]
+        lea ebx, [edx + 156]
+        mov esi, gui_str_cpanel_instr
+        mov edx, 0x00404040
+        call gui_bb_draw_string
+
+        call gui_draw_taskbar
+        call gui_draw_cursor
+        call gui_flip
+
+        call kb_pollchar
+        cmp al, 27
+        je .cp_close
+        cmp al, '1'
+        je .cp_display
+        cmp al, '2'
+        je .cp_users
+        cmp al, 0
+        jne .cp_loop
+
+        ; Close-button hit test (same geometry as the settings applet).
+        mov eax, [.cp_win]
+        imul eax, WIN_STRUCT_SIZE
+        lea eax, [gui_win_table + eax]
+        mov ebx, [eax + WIN_X]
+        add ebx, [eax + WIN_W]
+        add ebx, BORDER_W
+        sub ebx, CLOSE_BTN_SIZE + 4
+        cmp dword [mouse_x], ebx
+        jl .cp_loop
+        add ebx, CLOSE_BTN_SIZE
+        cmp dword [mouse_x], ebx
+        jg .cp_loop
+        mov ecx, [eax + WIN_Y]
+        sub ecx, TITLEBAR_H
+        add ecx, 3
+        cmp dword [mouse_y], ecx
+        jl .cp_loop
+        add ecx, CLOSE_BTN_SIZE
+        cmp dword [mouse_y], ecx
+        jg .cp_loop
+        jmp .cp_close
+
+.cp_display:
+        call gui_applet_settings
+        jmp .cp_loop
+.cp_users:
+        call gui_applet_users
+        jmp .cp_loop
+
+.cp_close:
+.cp_crel:
+        movzx eax, byte [mouse_buttons]
+        test eax, 0x01
+        jnz .cp_crel
+        mov eax, [.cp_win]
+        call gui_destroy_window_n
+.cp_ret:
+        popad
+        ret
+.cp_win: dd 0
+
+;---------------------------------------
+; gui_applet_users - Users & Groups. Lists the signed-in identity and
+; manages a demo account (cptest) entirely from the keyboard, emitting a
+; serial marker for each action so the workflow test can assert on it.
+;---------------------------------------
+gui_applet_users:
+        pushad
+        mov eax, 150
+        mov ebx, 100
+        mov ecx, 360
+        mov edx, 240
+        mov esi, gui_str_users
+        call gui_create_window
+        cmp eax, -1
+        je .us_ret
+        mov [.us_win], eax
+
+        mov esi, burrows_log_users
+        call serial_print
+
+.us_loop:
+        call gui_draw_background
+        call gui_draw_all_windows
+
+        mov eax, [.us_win]
+        imul eax, WIN_STRUCT_SIZE
+        lea ebp, [gui_win_table + eax]
+        mov ecx, [ebp + WIN_X]
+        mov edx, [ebp + WIN_Y]
+
+        lea eax, [ecx + 54]
+        lea ebx, [edx + 12]
+        mov esi, gui_str_users_title
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        lea eax, [ecx + 24]
+        lea ebx, [edx + 96]
+        mov esi, gui_str_users_instr
+        mov edx, 0x00404040
+        call gui_bb_draw_string
+
+        call gui_draw_taskbar
+        call gui_draw_cursor
+        call gui_flip
+
+        call kb_pollchar
+        cmp al, 27
+        je .us_close
+        cmp al, 'a'
+        je .us_add
+        cmp al, 'd'
+        je .us_del
+        cmp al, 'g'
+        je .us_groups
+        cmp al, 0
+        jne .us_loop
+
+        ; Close-button hit test.
+        mov eax, [.us_win]
+        imul eax, WIN_STRUCT_SIZE
+        lea eax, [gui_win_table + eax]
+        mov ebx, [eax + WIN_X]
+        add ebx, [eax + WIN_W]
+        add ebx, BORDER_W
+        sub ebx, CLOSE_BTN_SIZE + 4
+        cmp dword [mouse_x], ebx
+        jl .us_loop
+        add ebx, CLOSE_BTN_SIZE
+        cmp dword [mouse_x], ebx
+        jg .us_loop
+        mov ecx, [eax + WIN_Y]
+        sub ecx, TITLEBAR_H
+        add ecx, 3
+        cmp dword [mouse_y], ecx
+        jl .us_loop
+        add ecx, CLOSE_BTN_SIZE
+        cmp dword [mouse_y], ecx
+        jg .us_loop
+        jmp .us_close
+
+.us_add:
+        lea esi, [gui_str_cptest]
+        lea edi, [sess_name_buf]
+        call str_copy
+        lea esi, [gui_str_cptest]
+        lea edi, [sess_pw_buf]
+        call str_copy
+        call sess_account_create
+        test eax, eax
+        jz .us_added
+        mov esi, burrows_log_user_dup
+        call serial_print
+        jmp .us_loop
+.us_added:
+        mov esi, burrows_log_user_added
+        call serial_print
+        jmp .us_loop
+
+.us_del:
+        lea esi, [gui_str_cptest]
+        lea edi, [sess_name_buf]
+        call str_copy
+        lea esi, [sess_name_buf]
+        call sess_path_of_account
+        mov edi, esi
+        call sett_kv_delkey
+        jc .us_del_none
+        call sett_save
+        mov esi, burrows_log_user_deleted
+        call serial_print
+        jmp .us_loop
+.us_del_none:
+        mov esi, burrows_log_user_none
+        call serial_print
+        jmp .us_loop
+
+.us_groups:
+        mov esi, burrows_log_groups
+        call serial_print
+        jmp .us_loop
+
+.us_close:
+.us_crel:
+        movzx eax, byte [mouse_buttons]
+        test eax, 0x01
+        jnz .us_crel
+        mov eax, [.us_win]
+        call gui_destroy_window_n
+.us_ret:
+        popad
+        ret
+.us_win: dd 0
+
+;---------------------------------------
+; gui_props_screen - the file property sheet. A standalone screen (like the
+; logon screen) so `props FILE` works from the shell with or without the
+; desktop. Keys edit the permission mode through SYS_CHMOD and report it on
+; COM1.
+;---------------------------------------
+gui_props_screen:
+        pushad
+        mov esi, burrows_log_props
+        call serial_print
+
+.props_loop:
+        call gui_props_draw
+        call kb_pollchar
+        cmp al, 27
+        je .props_close
+        cmp al, 'x'
+        je .props_exec
+        cmp al, 'w'
+        je .props_write
+        cmp al, 'r'
+        je .props_read
+        cmp al, 0
+        jne .props_loop
+        sti
+        hlt
+        jmp .props_loop
+
+.props_exec:
+        mov ecx, 0x1ED          ; 0755
+        mov esi, props_marker_755
+        jmp .props_chmod
+.props_write:
+        mov ecx, 0x1A4          ; 0644
+        mov esi, props_marker_644
+        jmp .props_chmod
+.props_read:
+        mov ecx, 0x124          ; 0444
+        mov esi, props_marker_444
+.props_chmod:
+        mov eax, SYS_CHMOD
+        mov ebx, props_name_buf
+        int 0x80
+        test eax, eax
+        jnz .props_fail
+        push esi
+        mov esi, props_marker_prefix
+        call serial_print
+        mov esi, props_name_buf
+        call serial_print
+        pop esi
+        call serial_print
+        jmp .props_loop
+.props_fail:
+        mov esi, props_log_fail
+        call serial_print
+        jmp .props_loop
+
+.props_close:
+        popad
+        ret
+
+;---------------------------------------
+; gui_props_draw - render the property sheet card
+;---------------------------------------
+gui_props_draw:
+        pushad
+        mov eax, 0
+        mov ebx, 0
+        mov ecx, GUI_SCREEN_W
+        mov edx, GUI_SCREEN_H
+        mov esi, 0x00182848
+        call gui_bb_fill_rect
+
+        mov dword [gui_round_r], 6
+        mov eax, 120
+        mov ebx, 100
+        mov ecx, 400
+        mov edx, 260
+        mov esi, [gui_theme + THEME_WINDOW_BORDER]
+        call gui_bb_round_fill
+        mov dword [gui_round_r], 6
+        mov eax, 121
+        mov ebx, 101
+        mov ecx, 398
+        mov edx, 258
+        mov esi, [gui_theme + THEME_WINDOW_BG]
+        call gui_bb_round_fill
+        mov eax, 121
+        mov ebx, 101
+        mov ecx, 398
+        mov edx, 40
+        mov esi, [gui_theme + THEME_ACCENT]
+        call gui_bb_fill_rect
+
+        mov eax, 154
+        mov ebx, 112
+        mov esi, gui_str_props_title
+        mov edx, 0x00FFFFFF
+        call gui_bb_draw_string
+
+        mov eax, 140
+        mov ebx, 168
+        mov esi, gui_str_props_name
+        mov edx, [gui_theme + THEME_MENU_TEXT]
+        call gui_bb_draw_string
+        mov eax, 200
+        mov ebx, 168
+        mov esi, props_name_buf
+        mov edx, 0x00000000
+        call gui_bb_draw_string
+
+        mov eax, 140
+        mov ebx, 210
+        mov esi, gui_str_props_instr
+        mov edx, [gui_theme + THEME_MENU_TEXT]
+        call gui_bb_draw_string
+
+        call gui_flip
+        popad
+        ret
+
 ;=======================================================================
 ; DESKTOP SETTINGS - theme and wallpaper persisted to burrows.cfg
 ;
@@ -10413,6 +10778,28 @@ gui_str_wall_gradient: db "Gradient", 0
 gui_str_wall_solid: db "Solid", 0
 gui_str_set_instr:  db "Click or press 1/2/3/4, 5 = wallpaper", 0
 
+; Control Panel applet strings
+gui_str_cpanel:      db "Control Panel", 0
+gui_str_cpanel_title: db "Control Panel", 0
+gui_str_cpanel_display: db "1  Display", 0
+gui_str_cpanel_users:   db "2  Users & Groups", 0
+gui_str_cpanel_instr:   db "1 = Display  2 = Users & Groups  ESC = close", 0
+gui_str_users:       db "Users & Groups", 0
+gui_str_users_title: db "Users & Groups", 0
+gui_str_users_instr: db "a = add cptest  d = delete cptest  g = groups  ESC = close", 0
+gui_str_cptest:      db "cptest", 0
+
+; Property sheet strings
+gui_str_props_title: db "File Properties", 0
+gui_str_props_name:  db "Name:", 0
+gui_str_props_instr: db "x = executable (755)  w = writable (644)  r = read-only (444)  ESC = close", 0
+props_marker_prefix: db "[props] mode set: ", 0
+props_marker_755:    db " 755", 13, 10, 0
+props_marker_644:    db " 644", 13, 10, 0
+props_marker_444:    db " 444", 13, 10, 0
+props_log_fail:      db "[props] permission change failed", 13, 10, 0
+burrows_log_props:   db "[props] property sheet open", 13, 10, 0
+
 ; Menu item strings
 gui_str_launcher_title: db "Burrows Launcher", 0
 gui_str_ws:         db "WS", 0
@@ -10436,6 +10823,15 @@ burrows_log_launch: db "[burrows] launch ", 0
 burrows_log_ws:     db "[burrows] workspace ", 0
 burrows_log_fault:  db "[burrows] fault contained", 13, 10, 0
 burrows_log_crlf:   db 13, 10, 0
+
+; Control Panel serial markers (M6 row 2 workflow tests key off these).
+burrows_log_cpanel:   db "[cpanel] control panel open", 13, 10, 0
+burrows_log_users:    db "[cpanel] users and groups applet open", 13, 10, 0
+burrows_log_user_added:   db "[cpanel] user added: cptest", 13, 10, 0
+burrows_log_user_dup:     db "[cpanel] user already exists: cptest", 13, 10, 0
+burrows_log_user_deleted: db "[cpanel] user deleted: cptest", 13, 10, 0
+burrows_log_user_none:    db "[cpanel] no such user: cptest", 13, 10, 0
+burrows_log_groups:       db "[cpanel] groups: Administrators, Users", 13, 10, 0
 
 gui_str_nc_title:   db "Notifications", 0
 gui_str_nc_empty:   db "Nothing yet", 0

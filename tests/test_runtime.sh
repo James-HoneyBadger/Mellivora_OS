@@ -766,6 +766,20 @@ run_case "a package installs registers opens and uninstalls cleanly" \
     $'account del m6pkg\naccount add m6pkg m6pw\nlogon m6pkg m6pw\ncd /games\npkg remove hello\npkg install /bin/hello\nhello\nassoc .txt head\nassoc .txt\nopen /docs/notes.txt\nassoc .txt delete\npkg remove hello\ncd /\nlogoff\nprofile delete m6pkg\nrepair' \
     "Installed: hello|Hello, World! Welcome to Mellivora OS!|[assoc] per-user association saved|[assoc] association queried|[assoc] opened handler|Mellivora OS Developer Notes|[assoc] per-user association removed|Removed: hello|profile: deleted m6pkg|REPAIR_CLEAN" \
     "" "CPU EXCEPTION|PAGE FAULT|sign in before|could not be started|no handler|REPAIR_ISSUES" "" "" "" 90
+# M6 row 2: the Control Panel's Users & Groups applet is driven from the
+# keyboard. A demo account is deleted, re-added (Argon2 hashing included) and
+# the group list is reported - each action on COM1 so the test can assert it.
+run_case "users and groups are managed from the control panel" \
+    $'account del cptest\naccount add cptest cptest\nlogon cptest cptest\nburrows' \
+    "[cpanel] control panel open|[cpanel] users and groups applet open|[cpanel] user deleted: cptest|[cpanel] user added: cptest|[cpanel] groups: Administrators, Users|profile: deleted cptest|REPAIR_CLEAN" \
+    "" "CPU EXCEPTION|PAGE FAULT|REPAIR_ISSUES" "" "" "" 90 "" "" "" "ctrl-esc,down,down,right,ret,2,d,a,g,esc,esc,esc" "[burrows] desktop up" $'logoff\nprofile delete cptest\naccount del cptest\nrepair'
+# M6 row 2: a file property sheet edits permissions. The sheet is opened for a
+# file from the shell, its mode is changed with a key, and the change is
+# reported on COM1 before the file is removed.
+run_case "permissions are edited from a property sheet" \
+    $'touch m6props.txt\nprops m6props.txt' \
+    "[props] property sheet open|[props] mode set: m6props.txt 755" \
+    "" "CPU EXCEPTION|PAGE FAULT|permission change failed" "" "" "" 30 "" "" "" "x,esc" "[props] property sheet open" $'del m6props.txt'
 # M6: the print spooler queues three jobs, cancels the middle one, and flushes
 # the other two - the queue semantics the scorecard's Print row is blocked on.
 run_case "print queue cancels one job and completes the others" \

@@ -159,6 +159,7 @@ cmd_table:
         CMDENT cmd_beep_str, CAT_DISPLAY, sum_beep, det_beep
         CMDENT cmd_gui_str, CAT_DISPLAY, sum_gui, det_gui
         CMDENT cmd_logonui_str, CAT_DISPLAY, sum_logonui, det_logonui
+        CMDENT cmd_props_str, CAT_FILES, sum_props, det_props
         CMDENT cmd_gfx_str, CAT_DISPLAY, sum_gfx, det_gfx
         CMDENT cmd_mouse_str, CAT_DISPLAY, sum_mouse, det_mouse
         CMDENT cmd_scrsaver_str, CAT_DISPLAY, sum_scrsaver, det_scrsaver
@@ -731,6 +732,11 @@ det_logonui:
         db "  Open the graphical user-name and password screen. Tab changes", 0x0A
         db "  fields, Enter submits, and Escape cancels to the shell.", 0x0A
         db "  Press F2 to create an account with a confirmed password.", 0x0A, 0
+sum_props: db "Edit a file's properties in a graphical property sheet", 0
+det_props:
+        db "props FILE", 0x0A
+        db "  Open a property sheet for FILE. x = executable (755),", 0x0A
+        db "  w = writable (644), r = read-only (444), Escape closes.", 0x0A, 0
 sum_assoc: db "Set or inspect per-user file type handlers", 0
 det_assoc:
         db "assoc [.EXT [PROGRAM|delete]]", 0x0A

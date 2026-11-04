@@ -264,6 +264,7 @@ cmd_strings_str: db "strings", 0
 cmd_mouse_str:  db "mouse", 0
 cmd_gui_str:    db "burrows", 0
 cmd_logonui_str: db "logonui", 0
+cmd_props_str:  db "props", 0
 cmd_gfx_str:    db "gfx", 0
 cmd_ping_str:   db "ping", 0
 cmd_ifconfig_str: db "ifconfig", 0
@@ -283,6 +284,8 @@ cmd_switch_str: db "switch", 0
 cmd_assoc_str:   db "assoc", 0
 cmd_open_str:    db "open", 0
 msg_logonui_active: db "logonui: log off before starting a new session", 0x0A, 0
+msg_props_usage: db "Usage: props <filename>", 0x0A, 0
+msg_props_no_vbe: db "props: VBE not available", 0x0A, 0
 assoc_user_prefix: db "\Registry\User\", 0
 assoc_machine_prefix: db "\Registry\Machine\Software\Classes\", 0
 assoc_classes_suffix: db "\Software\Classes\", 0
@@ -982,6 +985,7 @@ program_refused: resb 1          ; 1 = found, but the loader refused the image
 bg_launch_flag:  resb 1          ; 1 = next exec should launch as background task
 last_bg_pid:     resd 1          ; PID of the most recently launched background task
 prog_name_buf:   resb 256        ; Parsed program name from command line
+props_name_buf:  resb 128        ; File the `props` property sheet edits
 parent_prog_name: resb 256       ; Parent program name for SYS_EXEC return
 parent_active:    resb 1         ; 1 = re-launch parent after child exits
 program_stack_top: resd 1        ; randomised user stack top for this launch

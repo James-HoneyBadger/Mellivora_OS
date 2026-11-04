@@ -2203,6 +2203,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_logonui
 
+        mov edi, cmd_props_str
+        call str_starts_with
+        jc .cmd_props
+
         mov edi, cmd_gfx_str
         call str_starts_with
         jc .cmd_gfx
@@ -2886,6 +2890,10 @@ shell_dispatch_core:
         call serial_print
         mov esi, msg_logonui_active
         call vga_print
+        ret
+
+.cmd_props:
+        call cmd_props
         ret
 
 .cmd_whoami:
@@ -9160,6 +9168,65 @@ cmd_ln:
 .ln_err:       db "Failed to create link.", 0x0A, 0
 .ln_usage_s:   db "Usage: ln -s <target> <linkname>", 0x0A, 0
 .ln_buf:       times 256 db 0
+
+;---------------------------------------
+; Command: props <filename>
+; Open the graphical property sheet for a file, where the permission bits
+; can be edited with single keys. The sheet is a standalone screen, so it
+; works with or without the desktop running.
+;---------------------------------------
+cmd_props:
+        pushad
+        call skip_spaces
+        cmp byte [esi], 0
+        je .props_usage
+
+        mov edi, props_name_buf
+        xor ecx, ecx
+.props_copy:
+        mov al, [esi]
+        cmp al, ' '
+        je .props_copied
+        cmp al, 0
+        je .props_copied
+        mov [edi], al
+        inc edi
+        inc esi
+        inc ecx
+        cmp ecx, 127
+        jb .props_copy
+.props_copied:
+        mov byte [edi], 0
+        cmp byte [props_name_buf], 0
+        je .props_usage
+
+        cmp byte [vbe_available], 0
+        je .props_no_vbe
+
+        ; Enter graphics, show the sheet, then return to the text console.
+        mov eax, GUI_SCREEN_W
+        mov ebx, GUI_SCREEN_H
+        mov ecx, GUI_BPP
+        call vbe_set_mode
+        mov dword [mouse_max_x], GUI_SCREEN_W - 1
+        mov dword [mouse_max_y], GUI_SCREEN_H - 1
+        mov dword [mouse_scale], 1
+        call gui_props_screen
+        call vbe_restore_text
+        call vga_init
+        mov byte [vbe_restore_pending], 0
+        popad
+        ret
+.props_no_vbe:
+        mov esi, msg_props_no_vbe
+        call vga_print
+        popad
+        ret
+.props_usage:
+        mov esi, msg_props_usage
+        call vga_print
+        popad
+        ret
 
 ;---------------------------------------
 ; Command: chmod <octal> <filename>
