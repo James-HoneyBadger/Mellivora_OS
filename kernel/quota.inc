@@ -99,6 +99,12 @@ quota_allow:
         push ebx
         push ecx
         push edx
+        ; The administrator is not held to a quota. Without this, root owns the
+        ; whole system image (every shipped program and document is uid 0), so
+        ; the very first write by the shell would cross the default ceiling and
+        ; refuse - accounts could not be saved and no system file could grow.
+        test eax, eax
+        jz .qa_ok
         mov ebx, ecx                    ; want
         call quota_slot
         jc .qa_refuse
