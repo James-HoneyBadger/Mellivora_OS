@@ -683,6 +683,16 @@ as a request the thread observes rather than an interruption from outside.
 icon and an association, print a document to a cancellable queue, then uninstall
 it leaving no files and no settings behind.
 
+**Exit: met.** `pkg install` takes a local path as well as a URL, keeps the
+source's file type, and registers the program by writing a link file into
+`/Burrows`; the Burrows Launcher reads those links at startup, so an
+application installed while the machine runs appears with an icon row
+(`tests/test_runtime.sh`: "an installed package appears in the start menu").
+`assoc` registers a per-user handler in the Sett and `open` runs it; `print`,
+`printcancel` and `printflush` queue, cancel and complete jobs; and uninstalling
+the package, its association and the profile leaves `repair` reporting
+`REPAIR_CLEAN` ("installed software is associated printed and uninstalled").
+
 ### M7 · Networking, the 2000 kind (13–18 weeks)
 
 - **File and printer sharing** over a protocol of our own on TCP: share permissions

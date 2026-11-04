@@ -2939,10 +2939,12 @@ sys_fwrite:
         mov [.fw_name], ebx
         mov [.fw_buf], ecx
         mov [.fw_size], edx
-        ; ESI = file type (0 = default to FTYPE_TEXT)
+        ; ESI = file type (0 = default to FTYPE_TEXT). A link is a type a
+        ; caller may store: `pkg install` registers a program by writing one
+        ; into /Burrows, and the launcher looks for exactly that type.
         cmp esi, FTYPE_TEXT
         jb .fw_default_type
-        cmp esi, FTYPE_BATCH
+        cmp esi, FTYPE_LINK
         ja .fw_default_type
         mov [.fw_type], esi
         jmp .fw_type_set

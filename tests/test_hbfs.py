@@ -51,10 +51,11 @@ FTYPE_TEXT = 1
 FTYPE_DIR = 2
 FTYPE_EXEC = 3
 FTYPE_BATCH = 4
+FTYPE_LINK = 5
 
 FTYPE_NAMES = {
     FTYPE_FREE: "free", FTYPE_TEXT: "text", FTYPE_DIR: "dir",
-    FTYPE_EXEC: "exec", FTYPE_BATCH: "batch",
+    FTYPE_EXEC: "exec", FTYPE_BATCH: "batch", FTYPE_LINK: "link",
 }
 
 _counters = {"pass": 0, "fail": 0}
@@ -154,7 +155,8 @@ def validate_file_entry(fi, bitmap, prefix=""):
           len(name) > 0 and all(32 <= ord(c) < 127 for c in name))
 
     check(f"  '{display}' has valid type ({FTYPE_NAMES.get(ftype, '?')})",
-          ftype in (FTYPE_TEXT, FTYPE_DIR, FTYPE_EXEC, FTYPE_BATCH))
+          ftype in (FTYPE_TEXT, FTYPE_DIR, FTYPE_EXEC, FTYPE_BATCH,
+                    FTYPE_LINK))
 
     if ftype != FTYPE_DIR:
         expected_blocks = max(1, (size + BLOCK_SIZE - 1) // BLOCK_SIZE)

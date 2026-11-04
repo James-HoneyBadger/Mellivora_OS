@@ -780,6 +780,22 @@ run_case "permissions are edited from a property sheet" \
     $'touch m6props.txt\nprops m6props.txt' \
     "[props] property sheet open|[props] mode set: m6props.txt 755" \
     "" "CPU EXCEPTION|PAGE FAULT|permission change failed" "" "" "" 30 "" "" "" "x,esc" "[props] property sheet open" $'del m6props.txt'
+# M6 exit criterion, part 1: an application installed from a package is in
+# the start menu. `pkg install` registers the program by writing a link into
+# /Burrows, and the launcher reads those links at startup - so the entry that
+# appears with an icon row beside it is the one the install just made.
+run_case "an installed package appears in the start menu" \
+    $'cd /games\npkg remove hello\npkg install /bin/hello\nburrows' \
+    "Installed: hello|Registered: hello|[launcher] app: hello" \
+    "" "CPU EXCEPTION|PAGE FAULT|cannot read" "" "" "" 90 "" "" "" "ctrl-esc,right,down,down,down,down,down,down,down,down,ret" "[burrows] desktop up"
+# M6 exit criterion, part 2: that package is associated with a file type,
+# opened through the association, sent to a cancellable print queue, and
+# uninstalled - with the profile removed and repair proving nothing was left
+# behind, which is the whole exit statement minus the start menu (part 1).
+run_case "installed software is associated printed and uninstalled" \
+    $'account del m6exit\naccount add m6exit m6pw\nlogon m6exit m6pw\ncd /games\npkg remove hello\npkg install /bin/hello\nassoc .txt hello\nopen /docs/notes.txt\nprint /docs/notes.txt\nprint /docs/poem.txt\nprintcancel 1\nprintflush\nassoc .txt delete\npkg remove hello\ncd /\nlogoff\nprofile delete m6exit\nrepair' \
+    "Hello, World! Welcome to Mellivora OS!|print: job 1 cancelled|print: job 2 done|Unregistered: hello|profile: deleted m6exit|REPAIR_CLEAN" \
+    "" "CPU EXCEPTION|PAGE FAULT|no handler|could not be started|REPAIR_ISSUES" "" "" "" 90
 # M6: the print spooler queues three jobs, cancels the middle one, and flushes
 # the other two - the queue semantics the scorecard's Print row is blocked on.
 run_case "print queue cancels one job and completes the others" \

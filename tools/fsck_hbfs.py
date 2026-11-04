@@ -87,11 +87,13 @@ FTYPE_TEXT = 1
 FTYPE_DIR = 2
 FTYPE_EXEC = 3
 FTYPE_BATCH = 4
+FTYPE_LINK = 5
 FTYPE_NAMES = {
     FTYPE_TEXT: "text",
     FTYPE_DIR: "dir",
     FTYPE_EXEC: "exec",
     FTYPE_BATCH: "batch",
+    FTYPE_LINK: "link",
 }
 
 # Directory entry offsets (must match kernel.asm).

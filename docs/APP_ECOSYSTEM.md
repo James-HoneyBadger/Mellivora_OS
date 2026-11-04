@@ -36,6 +36,8 @@ The manifest `entry` must map to an existing source file at `programs/<entry>.as
 
 The launcher app table is generated from `docs/app-catalog.json` into `programs/generated_app_catalog.inc`. This keeps display names and executable entries synchronized without requiring the ring 3 launcher to parse JSON at runtime.
 
+The generated catalog is only the first half of the list. Installing a package is what adds the second: `pkg install` writes a link file `/Burrows/<program>.lnk` (file type `FTYPE_LINK`) whose content is the program name, and the launcher reads those links at startup, so an application installed while the machine is running appears in the list with an icon row without a rebuild. `pkg remove` deletes the link with the program, so uninstalling takes the entry away again. Each registered program is announced on COM1 as `[launcher] app: <name>`, followed by `[launcher] apps: <count>`, and `pkg` reports `Registered:`/`Unregistered:` as it does it. The launcher restores the directory it was started in, so opening it never moves the shell.
+
 Regenerate or verify the generated table with:
 
 ```text
@@ -45,7 +47,7 @@ make check-launcher-catalog
 
 Building `programs/blauncher.bin` depends on the generated include, so catalog changes are picked up by the normal program build.
 
-The launcher displays 15 rows at a time. Up/down navigation keeps the selected row in view, and mouse clicks are mapped through the current viewport. Search filters the complete catalog case-insensitively by executable name, display name, category, description, and keywords, including the synthetic Exit Desktop entry.
+The launcher displays 15 rows at a time. Up/down navigation keeps the selected row in view, and mouse clicks are mapped through the current viewport. Search filters the complete list - catalog entries and registered programs alike, including the synthetic Exit Desktop entry - case-insensitively by executable name, display name, category, description, and keywords. A registered program has no description, so it is matched by its name.
 
 Apps are started with `gui_launch`, which spawns a separate scheduler task and returns
 immediately, so the launcher never blocks the desktop and several applications can run

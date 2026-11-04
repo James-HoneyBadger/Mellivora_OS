@@ -619,6 +619,10 @@ do_remove:
         cmp eax, -1
         je .remove_fail
 
+        ; Take the start-menu entry away with the program, so an uninstall
+        ; leaves no registration behind.
+        call unregister_program
+
         mov eax, SYS_PRINT
         mov ebx, msg_removed
         int 0x80
@@ -846,6 +850,11 @@ do_install:
         mov eax, SYS_PUTCHAR
         mov ebx, 10
         int 0x80
+
+        ; Register the program in the start menu. The Burrows launcher lists
+        ; the link files in /Burrows, so installing is what puts an entry
+        ; there and uninstalling is what takes it away again.
+        call register_program
         jmp exit
 
 .install_dns_fail:
@@ -969,6 +978,182 @@ do_local_install:
         jmp exit
 
 ;=== Utility functions ===
+
+;---------------------------------------
+; register_program - create the start-menu link for filename_buf
+;   Writes "/Burrows/<name>.lnk" holding the program name, with the file
+;   type the launcher looks for. Best effort: a full volume must not turn a
+;   successful install into a failure, but it is reported either way.
+;---------------------------------------
+register_program:
+        pushad
+        call lnk_name
+        jc .reg_done
+
+        ; The program name is the link's content, so the file says what it
+        ; starts rather than being an empty marker.
+        mov esi, filename_buf
+        xor edx, edx
+.name_len:
+        cmp byte [esi + edx], 0
+        je .have_len
+        inc edx
+        jmp .name_len
+.have_len:
+        test edx, edx
+        jz .reg_done
+
+        call lnk_enter_dir
+        jc .reg_fail
+        mov eax, SYS_FWRITE
+        mov ebx, lnk_name_buf
+        mov ecx, filename_buf
+        mov esi, FTYPE_LINK
+        int 0x80
+        push eax
+        call lnk_leave_dir
+        pop eax
+        cmp eax, -1
+        je .reg_fail
+
+        mov eax, SYS_PRINT
+        mov ebx, msg_registered
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, filename_buf
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+        jmp .reg_done
+.reg_fail:
+        mov eax, SYS_PRINT
+        mov ebx, msg_register_fail
+        int 0x80
+.reg_done:
+        popad
+        ret
+
+;---------------------------------------
+; unregister_program - remove the start-menu link for filename_buf
+;   Best effort: a program that was never registered has no link, and the
+;   program removal that already succeeded is the answer the user asked for.
+;---------------------------------------
+unregister_program:
+        pushad
+        call lnk_name
+        jc .unreg_done
+        call lnk_enter_dir
+        jc .unreg_done
+        mov eax, SYS_DELETE
+        mov ebx, lnk_name_buf
+        int 0x80
+        push eax
+        call lnk_leave_dir
+        pop eax
+        cmp eax, -1
+        je .unreg_done
+        mov eax, SYS_PRINT
+        mov ebx, msg_unregistered
+        int 0x80
+        mov eax, SYS_PRINT
+        mov ebx, filename_buf
+        int 0x80
+        mov eax, SYS_PUTCHAR
+        mov ebx, 10
+        int 0x80
+.unreg_done:
+        popad
+        ret
+
+;---------------------------------------
+; lnk_name - build "<program>.lnk" in lnk_name_buf, CF set if there is no
+; program name to build it from
+;---------------------------------------
+lnk_name:
+        push eax
+        push esi
+        push edi
+        mov esi, filename_buf
+        mov edi, lnk_name_buf
+        xor eax, eax
+.ln_copy:
+        cmp byte [esi], 0
+        je .ln_nul_ok
+        mov al, [esi]
+        stosb
+        inc esi
+        cmp edi, lnk_name_buf + 96
+        jb .ln_copy
+        jmp .ln_fail
+.ln_nul_ok:
+        mov byte [edi], 0
+        cmp edi, lnk_name_buf
+        je .ln_fail
+        mov esi, lnk_ext
+        call copy_str
+        pop edi
+        pop esi
+        pop eax
+        clc
+        ret
+.ln_fail:
+        pop edi
+        pop esi
+        pop eax
+        stc
+        ret
+
+;---------------------------------------
+; lnk_enter_dir - move into the registration directory, remembering where
+; the caller was. CF set when the directory cannot be entered.
+;---------------------------------------
+lnk_enter_dir:
+        push eax
+        push ebx
+        mov eax, SYS_GETCWD
+        mov ebx, lnk_cwd
+        int 0x80
+        mov eax, SYS_CHDIR
+        mov ebx, lnk_dir
+        int 0x80
+        test eax, eax
+        jnz .le_fail
+        pop ebx
+        pop eax
+        clc
+        ret
+.le_fail:
+        pop ebx
+        pop eax
+        stc
+        ret
+
+;---------------------------------------
+; lnk_leave_dir - return to the directory lnk_enter_dir remembered
+;---------------------------------------
+lnk_leave_dir:
+        push eax
+        push ebx
+        mov eax, SYS_CHDIR
+        mov ebx, lnk_cwd
+        int 0x80
+        pop ebx
+        pop eax
+        ret
+
+;---------------------------------------
+; copy_str - ESI source, EDI destination; EDI ends after the copied NUL
+;---------------------------------------
+copy_str:
+        push eax
+.cs_loop:
+        lodsb
+        stosb
+        test al, al
+        jnz .cs_loop
+        pop eax
+        ret
 
 ;---------------------------------------
 ; match_cmd - Check if ESI starts with string at EDI
@@ -1238,6 +1423,11 @@ msg_install_conn:  db "pkg: connection failed or empty response", 10, 0
 msg_install_write: db "pkg: disk write failed (disk full?)", 10, 0
 msg_install_badurl:db "pkg: URL must start with http://", 10, 0
 msg_install_usage: db "Usage: pkg install http://host/path/file.bin | pkg install /path/file.bin", 10, 0
+msg_registered: db "Registered: ", 0
+msg_register_fail: db "pkg: could not add the start menu entry", 10, 0
+msg_unregistered: db "Unregistered: ", 0
+lnk_dir:        db "/Burrows", 0
+lnk_ext:        db ".lnk", 0
 msg_install_read_fail: db "pkg: cannot read package file", 10, 0
 install_http_prefix: db "http://", 0
 
@@ -1250,6 +1440,8 @@ arg_buf:        times 256 db 0
 dirent_buf:     times 288 db 0
 filename_buf:   times 128 db 0
 stat_buf:       times 12 db 0
+lnk_name_buf:   times 128 db 0
+lnk_cwd:        times 128 db 0
 search_name:    dd 0
 total_size:     dd 0
 count_text:     dd 0
