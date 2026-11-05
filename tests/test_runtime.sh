@@ -834,6 +834,36 @@ run_case "a wrong share secret is refused" \
     $'net share docs /docs s3cret\nnet use 127.0.0.1 docs wrongm' \
     "dropped the session" "" \
     "CPU EXCEPTION|PAGE FAULT|Session on" "" "" "" 30
+run_case "a writable share takes a file over the wire" \
+    $'net share /rw docs /docs s3cret\nnet put 127.0.0.1 docs /docs/todo.txt s3cret' \
+    "bytes to the share" "" \
+    "CPU EXCEPTION|PAGE FAULT|refused|no such local file" "" "" "" 30
+run_case "a read-only share refuses a write" \
+    $'net share docs /docs s3cret\nnet put 127.0.0.1 docs /docs/todo.txt s3cret' \
+    "refused the write" "" \
+    "CPU EXCEPTION|PAGE FAULT|Wrote " "" "" "" 30
+run_case "a share mounts as a volume" \
+    $'net share docs /docs s3cret\nnet use 127.0.0.1 docs /mnt s3cret\ndir /mnt' \
+    "Mounted /mnt from docs|readme.txt" "" \
+    "CPU EXCEPTION|PAGE FAULT|could not open a session" "" "" "" 40
+# The account is deleted again at the end: the suite shares one image, and a
+# stray account changes the user count the quota and profile cases assert on.
+run_case "a password is proved to the other machine" \
+    $'account del alice\naccount add alice secret1\nnet share docs /docs s3cret\nnet logon 127.0.0.1 alice secret1\naccount del alice' \
+    "Logged on as alice on 127.0.0.1" "" \
+    "CPU EXCEPTION|PAGE FAULT|refused the logon" "" "" "" 40
+run_case "a wrong password is refused across the network" \
+    $'account del alice\naccount add alice secret1\nnet share docs /docs s3cret\nnet logon 127.0.0.1 alice wrongpw\naccount del alice' \
+    "refused the logon" "" \
+    "CPU EXCEPTION|PAGE FAULT|Logged on as" "" "" "" 40
+run_case "a remote service is restarted over the share" \
+    $'sc create pt /bin/svcrun manual\nnet share docs /docs s3cret\nnet svc 127.0.0.1 docs pt start s3cret' \
+    "Service pt is|unknown service" "" \
+    "CPU EXCEPTION|PAGE FAULT|refused the session" "" "" "" 40
+run_case "a document is printed on the other machine" \
+    $'net share docs /docs s3cret\nnet print 127.0.0.1 docs /docs/todo.txt s3cret\nprintq' \
+    "Queued job |Spool-todo.txt" "" \
+    "CPU EXCEPTION|PAGE FAULT|could not store the job" "" "" "" 40
 run_case "a loopback server answers a request" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \
     "HTTP/1.0 200 OK|Hello from batch file" "" \

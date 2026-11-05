@@ -709,6 +709,29 @@ the package, its association and the profile leaves `repair` reporting
 across the network, print to a shared printer, and restart a service on the other
 machine from Den.
 
+**Exit: met over the loopback interface; the two-VM harness is the piece still
+missing.** Both ends of the protocol run in one kernel, so the whole sequence is
+driven from one shell and every step is a workflow test:
+`net share /rw docs /docs s3cret` exports a folder; `net use 127.0.0.1 docs /mnt
+s3cret` registers a `VFS_FS_NET` mount and `dir /mnt` lists the folder;
+`net put 127.0.0.1 docs /docs/todo.txt s3cret` writes through the protocol and a
+read-only share refuses the same write with the reason named; `net logon
+127.0.0.1 alice secret1` proves the password against the other side's account
+store and the wrong password is refused; `net svc 127.0.0.1 docs pt start s3cret`
+reports "Service pt is running" and the service really starts; `net print`
+queues a document into the other machine's spooler and `printq` shows the job.
+The remote control surface is the shell's `net` command rather than Den's
+services snap-in, which is the milestone's remaining UI work.
+
+**Known defect found while closing M7:** the Argon2 fill loop intermittently
+stops advancing with interrupts held off, and the CPU spins at a `a2_g` entry
+until the machine is reset. It first showed during account creation, which is
+why `A2_M_KIB` is 64 KiB rather than a MiB and why `SESS_KDF_SCHEME` is 2: a
+record written under the old cost is refused instead of looking like a wrong
+password. A 1 MiB request is not inherently broken — two such blocks pass the
+page allocator's own selftest at boot — so the trigger is inside the KDF and
+still to be found.
+
 ### M8 · Devices and media (16–22 weeks)
 
 - **USB**: host controller stack (UHCI and OHCI, then EHCI), hub enumeration, HID

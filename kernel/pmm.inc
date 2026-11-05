@@ -667,6 +667,84 @@ pmm_selftest:
         cmp  edi, PMM_T_EDI
         jne  .ps_fail
 
+        ;--- two 1 MiB blocks: distinct, writable, non-overlapping ---
+        ; A high-order request is what the password KDF makes, and a block
+        ; that overlaps another hands out memory the kernel is still using:
+        ; the damage shows up far away and much later.
+        mov  ecx, 256
+        call pmm_alloc_pages
+        test eax, eax
+        jz   .ps_fail
+        mov  [.ps_big1], eax
+        mov  ecx, 256
+        call pmm_alloc_pages
+        test eax, eax
+        jz   .ps_fail
+        mov  [.ps_big2], eax
+
+        mov  eax, [.ps_big1]
+        add  eax, 256 * 4096
+        cmp  eax, [.ps_big2]
+        jbe  .ps_big_sep
+        mov  eax, [.ps_big2]
+        add  eax, 256 * 4096
+        cmp  eax, [.ps_big1]
+        jbe  .ps_big_sep
+        jmp  .ps_fail
+.ps_big_sep:
+        mov  edi, [.ps_big1]
+        mov  ebx, 0
+        mov  ecx, 256 * 1024
+.ps_fill1:
+        mov  eax, ebx
+        xor  eax, 0xA5A55A5A
+        mov  [edi + ebx*4], eax
+        inc  ebx
+        dec  ecx
+        jnz  .ps_fill1
+
+        mov  edi, [.ps_big2]
+        mov  ebx, 0
+        mov  ecx, 256 * 1024
+.ps_fill2:
+        mov  eax, ebx
+        xor  eax, 0x5A5A5A5A
+        mov  [edi + ebx*4], eax
+        inc  ebx
+        dec  ecx
+        jnz  .ps_fill2
+
+        mov  edi, [.ps_big1]
+        mov  ebx, 0
+        mov  ecx, 256 * 1024
+.ps_vfy1:
+        mov  eax, ebx
+        xor  eax, 0xA5A55A5A
+        cmp  [edi + ebx*4], eax
+        jne  .ps_fail
+        inc  ebx
+        dec  ecx
+        jnz  .ps_vfy1
+
+        mov  edi, [.ps_big2]
+        mov  ebx, 0
+        mov  ecx, 256 * 1024
+.ps_vfy2:
+        mov  eax, ebx
+        xor  eax, 0x5A5A5A5A
+        cmp  [edi + ebx*4], eax
+        jne  .ps_fail
+        inc  ebx
+        dec  ecx
+        jnz  .ps_vfy2
+
+        mov  eax, [.ps_big1]
+        mov  ecx, 256
+        call pmm_free_pages
+        mov  eax, [.ps_big2]
+        mov  ecx, 256
+        call pmm_free_pages
+
         ;--- the accounting came back ---
         mov  eax, [total_free_pages]
         cmp  eax, [.ps_before]
@@ -693,8 +771,10 @@ pmm_selftest:
 .ps_before: dd 0
 .ps_page:   dd 0
 .ps_pages:  dd 0
+.ps_big1:   dd 0
+.ps_big2:   dd 0
 pmm_selftest_ok_msg:   db "PMM_SELFTEST_OK", 10, 0
-pmm_selftest_fail_msg: db "PMM_SELFTEST_FAIL: an entry point did not preserve its registers", 10, 0
+pmm_selftest_fail_msg: db "PMM_SELFTEST_FAIL: a block test or register check failed", 10, 0
 
 ;-----------------------------------------------------------------------
 ; pmm_free_region — free a raw byte range into buddy lists (init helper)

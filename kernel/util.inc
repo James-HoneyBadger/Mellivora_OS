@@ -2207,20 +2207,35 @@ cmd_cd_internal:
         ret
 
 .cdes_vfs_name_check:
+        ; Any mount point that is not the volume's own file system is a virtual
+        ; directory: proc, dev and tmp were hard-coded here, which left a share
+        ; mounted from another machine unreachable by `cd`.
+        mov edi, .cdes_vfs_scratch
+        mov al, '/'
+        stosb
         mov esi, filename_buf
-        mov edi, .cd_vname_proc
-        call str_compare        ; EAX=0 if equal
-        jz  .cdes_enter_vfs
-        mov esi, filename_buf
-        mov edi, .cd_vname_dev
-        call str_compare
-        jz  .cdes_enter_vfs
-        mov esi, filename_buf
-        mov edi, .cd_vname_tmp
-        call str_compare
-        jz  .cdes_enter_vfs
+        mov ecx, 250
+.cdes_vfs_build:
+        lodsb
+        stosb
+        test al, al
+        jz .cdes_vfs_built
+        dec ecx
+        jnz .cdes_vfs_build
+        xor al, al
+        stosb
+.cdes_vfs_built:
+        mov ebx, .cdes_vfs_scratch
+        call vfs_route
+        test eax, eax
+        jz .cdes_vfs_no
+        cmp byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        je .cdes_vfs_no
+        jmp .cdes_enter_vfs
+.cdes_vfs_no:
         stc
         ret
+.cdes_vfs_scratch: times 260 db 0
 
 .cdes_enter_vfs:
         ; Push root state onto dir_stack[0] and mark entry as virtual

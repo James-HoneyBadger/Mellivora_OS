@@ -42,6 +42,7 @@ VFS_FS_PROC  equ 2      ; procfs (/proc)
 VFS_FS_DEV   equ 3      ; devfs (/dev)
 VFS_FS_TMP   equ 4      ; tmpfs (/tmp)
 VFS_FS_SOCK  equ 5      ; socket (VFD_REAL_FD = index into net_sock_table)
+VFS_FS_NET   equ 6      ; a share on another machine (redirector, NETWORK.md 4)
 
 ; Max mount points
 VFS_MAX_MOUNTS  equ 8
@@ -2244,6 +2245,8 @@ vfs_read:
         je  .vrd_dev
         cmp  eax, VFS_FS_TMP
         je  .vrd_tmp
+        cmp  eax, VFS_FS_NET
+        je  .vrd_net
         jmp  .vrd_fail2
 
 .vrd_hbfs: call vfs_hbfs_read   ; EBX=vfd, ECX=buf, EDX=len → EAX
@@ -2253,6 +2256,8 @@ vfs_read:
 .vrd_dev:  call vfs_dev_read
            jmp  .vrd_ret
 .vrd_tmp:  call vfs_tmp_read
+           jmp  .vrd_ret
+.vrd_net:  call vfs_net_read
 .vrd_ret:
         pop  edi
         ret
@@ -2294,6 +2299,8 @@ vfs_write:
         je  .vwr_dev
         cmp  eax, VFS_FS_TMP
         je  .vwr_tmp
+        cmp  eax, VFS_FS_NET
+        je  .vwr_net
         ; proc / unknown: read-only
         jmp  .vwr_fail2
 
@@ -2302,6 +2309,8 @@ vfs_write:
 .vwr_dev:  call vfs_dev_write
            jmp  .vwr_ret
 .vwr_tmp:  call vfs_tmp_write
+           jmp  .vwr_ret
+.vwr_net:  call vfs_net_write
 .vwr_ret:
         pop  edi
         ret
@@ -2349,8 +2358,18 @@ vfs_close:
         je  .vcl_hbfs
         cmp  eax, VFS_FS_SOCK
         je  .vcl_sock
+        cmp  eax, VFS_FS_NET
+        je  .vcl_net
         ; proc / dev / tmp: just free the VFD
         call vfs_proc_close             ; same body for all three
+        pop  edi
+        ret
+
+.vcl_net:
+        push ebx
+        call vfs_net_close
+        pop  ebx
+        call vfs_proc_close
         pop  edi
         ret
 
@@ -2453,7 +2472,9 @@ vfs_seek:
 ;=======================================================================
 vfs_readdir:
         push edi
+        push edx                ; the entry index must reach the backend
         call vfs_route          ; EAX = mount entry for EBX path
+        pop  edx                ; vfs_route multiplies, which clobbers EDX
         test eax, eax
         jz   .vrdir_fail
         mov  edi, eax           ; mount entry pointer

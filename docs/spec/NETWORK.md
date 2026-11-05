@@ -88,7 +88,7 @@ One message is a 16-byte header, a payload, and a 16-byte MAC:
 |---|---|---|
 | 0 | magic | `MVSH` |
 | 4 | version | 1 |
-| 5 | type | `HELLO`, `CHALLENGE`, `AUTH`, `OK`, `DENY`, `VIEW`, `LIST`, `STAT`, `READ` |
+| 5 | type | `HELLO`, `CHALLENGE`, `AUTH`, `OK`, `DENY`, `VIEW`, `LIST`, `STAT`, `READ`, `WRITE`, `SVC`, `LOGON`, `LOGONPROOF`, `PRINT` |
 | 6 | flags | reserved, 0 |
 | 8 | seq | request id, echoed by the reply |
 | 12 | length | payload bytes that follow |
@@ -105,6 +105,13 @@ is not a plain secret-prefix MAC.
 | 4 | server `OK` / `DENY{reason}` | `OK` uses `H`; `DENY` is bare |
 | 5 | requests and replies | the session key |
 
+Two request families run outside that handshake. `LOGON` and `LOGONPROOF` are
+their own conversation on a fresh connection (the client sends the account
+name, the server answers `CHALLENGE{salt, nonce}`, the client answers with a
+proof over the password verifier), so neither carries a MAC; the `OK` that
+ends it is keyed with the verifier both sides now hold, which proves the server
+knows it too. `VIEW` stays unkeyed (§ below).
+
 `H = BLAKE2b(secret)` is what the server stores; the secret never crosses the
 wire. `proof = BLAKE2b(H || nonce)`, and the session key is
 `BLAKE2b(H || nonce || "MVSH-K")`, fresh per connection, so a recorded
@@ -114,6 +121,12 @@ can act on. A MAC mismatch drops the connection.
 
 `VIEW` is the one request answered without a session, because a browse list of
 names is disclosure and not access. Everything that touches a file needs one.
+
+A job larger than one message is streamed: `PRINT{offset, total, name, bytes}`
+carries a chunk, the server answers one byte `0` while more is wanted, and the
+reply to the last chunk is the four-byte job id. `WRITE{offset, length, name,
+bytes}` streams the same way into an exported folder.
+
 
 **What a share is not:** it is not SMB, it is not NFS, and it will not talk to a
 machine that speaks either. It is one protocol, documented, with one
@@ -202,10 +215,12 @@ M7 does not close until:
 | Socket as an object | Sockets are numbers in a table, with `poll` and non-blocking connect |
 | Blocking calls | `connect` and `accept` wait without freezing the console: a task that is waiting parks itself, the shell keeps reading commands, and the scheduler hands the task back its frame when it is dispatched again. Two programs talk over the loopback interface at the same time (`httpd 8000 &` then `curl http://127.0.0.1:8000/...`) |
 | Overlapped I/O via completion ports | None |
-| Shares | A directory exported under a name, served from the kernel on TCP 4450 and reachable from the shell: `net share NAME PATH [SECRET]` exports, `net view HOST` browses, `net use HOST SHARE [SECRET]` opens an authenticated session and lists it, `net get HOST SHARE FILE [SECRET]` reads a file out of it. Framing, the challenge-response handshake and the MAC are in [§4.1](#41-the-wire-format-as-built). A VFS mount point for a share, write/rename/delete and leases are not built yet |
-| RPC | None |
-| Remote administration | None |
+| Shares | A directory exported under a name, served from the kernel on TCP 4450: `net share [/rw] NAME PATH [SECRET]` exports (read-only unless `/rw`), `net view HOST` browses, `net use HOST SHARE [SECRET]` lists it, `net get HOST SHARE FILE [SECRET]` reads one file, `net put HOST SHARE FILE [SECRET]` streams one back, and `net use HOST SHARE /MOUNT [SECRET]` registers a `VFS_FS_NET` mount so `dir`, `cat`, `cd` and `>` work on a share like any other volume. Framing, the handshake and the MAC are in [§4.1](#41-the-wire-format-as-built). Rename, delete, leases and reconnect of a broken session are not built |
+| Network logon | `net logon HOST USER PASSWORD` proves the password to the other machine's account store without sending it: the server answers with the account's salt and a fresh nonce, the client answers with a proof over the Argon2 verifier, and the `OK` is keyed with that verifier. The console's logon is the same verifier, so an account is one account on both sides |
+| Remote administration | `net svc HOST SHARE SERVICE start\|stop\|restart [SECRET]` controls a service on the other machine through its SCM and reports the resulting state, and `net print HOST SHARE FILE [SECRET]` sends a document to the other machine's spooler (jobs up to 4 KiB, streamed in messages, stored in the root as `Spool-<name>` because HBFS has no directory for them) |
 | Firewall | None |
+| Firewall | None |
+| Diagnostics | `net sess` dumps the server's session and socket tables, because both ends of the protocol run in this kernel and "the server refused the session" is answered with the tables rather than a guess |
 | IPv6, MSI-X-driven NICs | Not in scope / not used |
 
 The TCP/IP stack, DHCP, DNS and the socket API are real, tested and stay; the

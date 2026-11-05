@@ -31,7 +31,14 @@
 ; error, not a faster function.
 ;=======================================================================
 
-A2_M_KIB        equ 1024        ; memory cost, KiB
+; Memory cost. RFC 9106 suggests MiBs; this kernel keeps it to 64 KiB because
+; a request of a whole MiB (256 pages, buddy order 8) intermittently freezes
+; the fill loop with interrupts held off - the block counter stops advancing
+; somewhere in the last pass while the CPU keeps spinning. Until that is
+; understood (see ROADMAP "known defects"), the cost stays where a logon
+; always completes. SESS_KDF_SCHEME is bumped whenever this changes, so a
+; record made under the old cost is refused instead of "wrong password".
+A2_M_KIB        equ 64          ; memory cost, KiB
 A2_T_COST       equ 3           ; passes
 A2_TAGLEN       equ 32
 A2_VERSION      equ 0x13

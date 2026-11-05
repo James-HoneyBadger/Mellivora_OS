@@ -46,7 +46,7 @@ ACC_VAL_ALGO     db "Algo", 0
 
 ; The scheme number a stored hash is tagged with. Any change to the Argon2id
 ; parameters or to a2_lock's shape makes this a new number.
-SESS_KDF_SCHEME  equ 1
+SESS_KDF_SCHEME  equ 2         ; 2: A2_M_KIB 64 (was 1 MiB) - see argon2.inc
 SESS_PW_MAX      equ 48          ; longer passwords are taken at this length
 SESS_KDF_PAGES   equ (A2_M_KIB * 1024) / 4096
 

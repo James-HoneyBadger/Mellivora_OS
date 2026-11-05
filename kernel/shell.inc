@@ -2697,7 +2697,41 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_net_get
         pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_put_word
+        call str_starts_with
+        jc .cmd_net_put
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_svc_word
+        call str_starts_with
+        jc .cmd_net_svc
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_logon_word
+        call str_starts_with
+        jc .cmd_net_logon
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_print_word
+        call str_starts_with
+        jc .cmd_net_print
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_sess_word
+        call str_starts_with
+        jc .cmd_net_sess
+        pop esi
         call cmd_net_status
+        ret
+.cmd_net_sess:
+        pop esi
+        call cmd_net_sess
         ret
 .cmd_net_share:
         pop esi
@@ -2722,6 +2756,30 @@ shell_dispatch_core:
         call skip_spaces
         call skip_one_word             ; drop "get"
         call cmd_net_get
+        ret
+.cmd_net_put:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_put
+        ret
+.cmd_net_svc:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_svc
+        ret
+.cmd_net_logon:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_logon
+        ret
+.cmd_net_print:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_print
         ret
 
 
@@ -5799,6 +5857,35 @@ cmd_cat_file:
         jc .cat_usage
         jmp .cat_loaded
 .cat_from_file:
+        ; A file on a mounted file system that is not the volume itself -
+        ; procfs, a share from another machine - has to be read through the
+        ; VFS; only the volume's own files go through the HBFS reader.
+        mov [.cat_name], esi
+        mov ebx, esi
+        call vfs_route
+        test eax, eax
+        jz .cat_hbfs
+        cmp byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        je .cat_hbfs
+        mov ebx, [.cat_name]
+        mov ecx, FD_FLAG_READ
+        call vfs_open
+        cmp eax, -1
+        je .not_found
+        mov [.cat_vfd], eax
+        mov ebx, eax
+        mov ecx, PROGRAM_BASE
+        mov edx, PROGRAM_MAX_SIZE - 1
+        call vfs_read
+        mov [.cat_size], eax
+        mov ebx, [.cat_vfd]
+        call vfs_close
+        mov ecx, [.cat_size]
+        test ecx, ecx
+        js .not_found
+        jmp .cat_loaded
+.cat_hbfs:
+        mov esi, [.cat_name]
         mov edi, PROGRAM_BASE   ; Use program area as temp buffer
         call hbfs_read_file
         jc .not_found
@@ -5879,6 +5966,10 @@ cmd_cat_file:
 ; Flags: -n N  lines per page (default 23)
 ;---------------------------------------
 PAGER_LINES equ 23
+
+.cat_name: dd 0
+.cat_vfd:  dd 0
+.cat_size: dd 0
 
 cmd_more_file:
         pushad
