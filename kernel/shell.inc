@@ -7951,6 +7951,10 @@ shell_prepare_redirection:
 
         call shell_redir_reset
         mov esi, line_buffer
+        ; 0 = outside quotes, 1 = inside "...", 2 = inside '...'. EBX carried
+        ; whatever the caller left in it, so a `>` could be scanned as part of a
+        ; quoted string and `echo x > file` would print the redirect instead.
+        xor ebx, ebx
 .spr_scan:
         mov al, [esi]
         test al, al

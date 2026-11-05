@@ -8,9 +8,9 @@
 ;
 ; The parameters are compiled in and are part of what a stored hash means:
 ;
-;   memory   1 MiB      (RFC 9106 suggests 64 MiB; a guest here may have 128 MB
-;                        in total and the machine still has to log a user on)
-;   passes   3
+;   memory   A2_M_KIB   (64 KiB; RFC 9106 suggests MiBs, but a guest here may
+;                        have 128 MB in total and still has to log a user on)
+;   passes   A2_T_COST  (3)
 ;   lanes    1
 ;   salt     8 bytes    (what the account record carries)
 ;   tag      32 bytes
@@ -31,13 +31,15 @@
 ; error, not a faster function.
 ;=======================================================================
 
-; Memory cost. RFC 9106 suggests MiBs; this kernel keeps it to 64 KiB because
-; a request of a whole MiB (256 pages, buddy order 8) intermittently freezes
-; the fill loop with interrupts held off - the block counter stops advancing
-; somewhere in the last pass while the CPU keeps spinning. Until that is
-; understood (see ROADMAP "known defects"), the cost stays where a logon
-; always completes. SESS_KDF_SCHEME is bumped whenever this changes, so a
-; record made under the old cost is refused instead of "wrong password".
+; Memory cost. RFC 9106 suggests MiBs; this kernel keeps it to 64 KiB, which is
+; enough to make a guess cost something without spending a second of a small
+; guest's CPU on every logon. The "freeze" this used to work around was a
+; stale selftest vector, not a defect in the fill loop: the selftest hashed at
+; the new cost and compared the tag with the old one, so it failed every boot
+; and the old 1 MiB run looked like a hang under emulation. argon2_selftest
+; now refuses to build a cost that has no vector, and SESS_KDF_SCHEME is bumped
+; whenever this changes so a record written under the old cost is refused
+; rather than looking like a wrong password.
 A2_M_KIB        equ 64          ; memory cost, KiB
 A2_T_COST       equ 3           ; passes
 A2_TAGLEN       equ 32
@@ -1237,7 +1239,20 @@ argon2_selftest:
 
         mov eax, A2_M_KIB               ; and the parameters a logon uses
         mov ebx, A2_T_COST
-        mov edi, a2_st_vec3
+        ; The tag must be the one these parameters produce, not the one a
+        ; previous cost produced. When A2_M_KIB was cut from 1 MiB to 64 KiB
+        ; the vector was left behind, so every boot hashed at 64 KiB and
+        ; compared the result with the 1 MiB tag: the selftest failed 100% of
+        ; the time and the "intermittent freeze" it was blamed for was this
+        ; mismatch plus a very slow TCG run at the old cost. The build now
+        ; refuses a cost with no vector rather than shipping a red selftest.
+%if A2_M_KIB = 64 && A2_T_COST = 3
+        mov edi, a2_st_vec2             ; same parameters as the vector above
+%elif A2_M_KIB = 1024 && A2_T_COST = 3
+        mov edi, a2_st_vec_1mib
+%else
+  %error "A2_M_KIB/A2_T_COST changed: generate its tag with 'printf password | argon2 somesalt -id -t <t> -k <m> -p 1 -l 32' and add it as a vector"
+%endif
         call a2_st_vector
         test eax, eax
         jz .a2st_fail
@@ -1343,15 +1358,17 @@ a2_st_vec1:
         db 0xDA,0xFE,0x43,0xC1,0x64,0x08,0x55,0xAC
         db 0x8C,0x6E,0x33,0xE9,0xBD,0x63,0xEE,0xB3
 
-; m=64, t=3, password/somesalt
+; m=64, t=3, password/somesalt - also the parameters a logon uses today
 a2_st_vec2:
         db 0xB9,0xE3,0xBF,0xDA,0x58,0xFB,0x95,0xF1
         db 0xE1,0xE4,0x79,0xAF,0x4E,0x01,0xBF,0xAD
         db 0xE5,0xA0,0xDB,0xA3,0x4D,0x40,0x0A,0x25
         db 0x4F,0x77,0x04,0x62,0x67,0x41,0x69,0xE6
 
-; m=1024, t=3, password/somesalt - the parameters a logon uses
-a2_st_vec3:
+; m=1024, t=3, password/somesalt - the vector for a 1 MiB cost. It is not
+; compared against while A2_M_KIB is 64; it is here so raising the cost again
+; has a tag to check against (see the %if in argon2_selftest).
+a2_st_vec_1mib:
         db 0x85,0x34,0x9F,0x83,0x4F,0x99,0xC5,0x45
         db 0x40,0xE8,0x0C,0xBC,0x12,0xDD,0x35,0xB1
         db 0xE3,0x6D,0xDA,0xDC,0x75,0x4F,0x5F,0x17

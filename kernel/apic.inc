@@ -419,38 +419,71 @@ lapic_timer_start:
         mov ecx, LAPIC_TIMER_LVT
         mov eax, IRQ_VECTOR_BASE | LAPIC_TIMER_MASKED
         call lapic_write
+
+        ; Read the reference counter in rate-generator mode. In square wave
+        ; mode - the mode the tick itself uses - the counter steps by two and
+        ; the value read back is not a count of input clocks, so a period
+        ; measured that way came out half its true length and the clock ran
+        ; twice as fast as the one asked for. Mode 2 counts down by one. The
+        ; reload value is unchanged, so a PIT that keeps the tick after a
+        ; failed measurement is still running at 100 Hz.
+        mov al, 0x34                    ; channel 0, lobyte/hibyte, mode 2
+        out PIT_CMD, al
+        mov ax, PIT_DIVISOR
+        out PIT_CH0, al
+        mov al, ah
+        out PIT_CH0, al
+
         mov ecx, LAPIC_TIMER_INIT
         mov eax, 0xFFFFFFFF
         call lapic_write
 
+        ; Measure one whole PIT period, edge to edge. The counter reloads
+        ; every ten milliseconds, so a modular difference across a reload is
+        ; not elapsed time: it is whichever of ~0 or ~65535 the arithmetic
+        ; lands on. That is what made the same machine calibrate 1x, 2x or
+        ; 100x depending on when the boot happened to read it. A reload is a
+        ; jump up in the counter, and the APIC delta between two such jumps is
+        ; the count for exactly one period.
+        mov ebp, 200000                 ; give up if channel 0 never reloads
         call pit_counter
-        mov [.lts_pit_start], eax
-
-        ; Ten milliseconds of PIT ticks: 1.193 MHz / 100.
-        mov ebx, PIT_FREQ / 100
-.lts_wait:
+        mov [.lts_prev], eax
+.lts_edge1:
         call pit_counter
-        mov edx, [.lts_pit_start]
-        sub edx, eax
-        and edx, 0xFFFF
-        cmp edx, ebx
-        jb .lts_wait
-
-        ; How far did the APIC timer fall in that time?
+        cmp eax, [.lts_prev]
+        ja .lts_edge1_done
+        mov [.lts_prev], eax
+        dec ebp
+        jnz .lts_edge1
+        jmp .lts_unusable
+.lts_edge1_done:
+        mov [.lts_prev], eax            ; the value the reload left behind
         mov ecx, LAPIC_TIMER_CUR
         call lapic_read
-        mov ebx, 0xFFFFFFFF
-        sub ebx, eax                    ; counts in ten milliseconds
+        mov [.lts_apic_a], eax
+        mov ebp, 200000
+.lts_edge2:
+        call pit_counter
+        cmp eax, [.lts_prev]
+        ja .lts_edge2_done
+        mov [.lts_prev], eax
+        dec ebp
+        jnz .lts_edge2
+        jmp .lts_unusable
+.lts_edge2_done:
+        mov ecx, LAPIC_TIMER_CUR
+        call lapic_read
+        mov ebx, [.lts_apic_a]
+        sub ebx, eax                    ; counts in one PIT period
 
-        ; Ticks per second is a hundred times that; the periodic reload is one
-        ; hundredth of it.
+        ; One period is a hundredth of a second: ticks per second is a
+        ; hundred times the count, and the periodic reload is the count.
         mov eax, ebx
-        mov ebx, 100
-        mul ebx
+        imul eax, 100
         test eax, eax
         jz .lts_unusable
         mov ecx, eax                    ; ECX = ticks per second
-        div ebx                         ; EAX = ticks per tick period
+        mov eax, ebx                    ; EAX = ticks per tick period
         test eax, eax
         jz .lts_unusable
 
@@ -487,7 +520,8 @@ lapic_timer_start:
         mov dword [esp + 28], -1
         popad
         ret
-.lts_pit_start: dd 0
+.lts_prev: dd 0
+.lts_apic_a: dd 0
 
 ;-----------------------------------------------------------------------
 ; apic_init - choose the interrupt controller and program it

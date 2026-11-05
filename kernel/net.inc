@@ -767,8 +767,14 @@ net_send_frame:
         mov ebp, 60
         sub ebp, ecx
         xchg ecx, ebp
-        xor al, al
+        ; EAX is the descriptor index, and the address register written below
+        ; is selected with it. `xor al, al` would zero it, so every padded
+        ; frame after the first would be sent from buffer 0 - an ARP or a TCP
+        ; ACK went out as whatever the previous short frame left there.
+        push eax
+        xor eax, eax
         rep stosb
+        pop eax
         pop ecx
         mov ecx, 60
 .tx_no_pad:

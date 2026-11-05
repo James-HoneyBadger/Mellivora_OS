@@ -89,9 +89,15 @@ def main():
     check("package install passes once its workflow exists",
           rows[4]["status"] == "pass" and
           not any("workflow test:" in item for item in rows[4]["missing"]))
-    check("the network row names its missing user workflow",
-          rows[7]["status"] in {"partial", "fail"} and
-          any("workflow test:" in item for item in rows[7]["missing"]))
+    # Row 8 used to demand a workflow test in tests/test_runtime.sh, which can
+    # only ever boot one machine: the row was failing on evidence that could not
+    # exist. The proof is now the two-machine plan, and the row must name those
+    # steps rather than a loopback case.
+    network = tool.SCORECARD[7]
+    check("the network row rests on the two-machine plan",
+          rows[7]["status"] == "pass" and
+          any(probe[0] == "step" for probe in network.required) and
+          not any("two-VM step:" in item for item in rows[7]["missing"]))
     roadmap = tool.ROADMAP.read_text(encoding="utf-8")
     start = roadmap.find(tool.ROADMAP_START)
     end = roadmap.find(tool.ROADMAP_END, start + len(tool.ROADMAP_START))

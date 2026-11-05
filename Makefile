@@ -128,7 +128,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg check-hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table glyphs check-glyphs check-doc-claims check-cmodule syscall-header check-syscall-header FORCE
+.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg check-hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-twovm check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table glyphs check-glyphs check-doc-claims check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
 
@@ -719,6 +719,14 @@ check-boot: $(POPULATE_STAMP)
 check-runtime: $(POPULATE_STAMP)
 	@RUNTIME_ALLOW_SKIP=1 bash tests/test_runtime.sh $(IMAGE)
 
+# The M7 exit criterion on two machines: a virtual Ethernet segment joins two
+# QEMU guests running the same image through -snapshot overlays, and one shares
+# a folder, mounts it, writes through it, logs on across the wire, prints to the
+# other machine and starts a service there. The loopback share cases in
+# check-runtime prove the protocol; this proves it survives leaving a NIC.
+check-twovm: $(POPULATE_STAMP)
+	@TWOVM_ALLOW_SKIP=1 bash tests/test_two_vms.sh $(IMAGE)
+
 # The HBX loader gate: the images that must load, every refusal in EXEC.md
 # section 8, and the flat path that must keep working (§10 item 2).
 check-loader: $(POPULATE_STAMP)
@@ -795,7 +803,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-loader check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-twovm check-loader check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -1070,6 +1078,7 @@ help:
 	@echo "    make crash-test   Kill QEMU at random points and require fsck to pass (HBFS journal)"
 	@echo "    make check-faults Inject OOM / disk-full / frame drops and require clean errors"
 	@echo "    make check-crypt  Prove an AES-256-XTS volume round-trips and refuses a wrong key"
+	@echo "    make check-twovm  Share, mount, log on, print and control a service across two VMs"
 	@echo "    make lint         Run contract and NASM source lint checks"
 	@echo "    make validate-version Validate repo version strings for the current release"
 	@echo "    make check-toolchain Report which 32-bit C toolchain the build uses"

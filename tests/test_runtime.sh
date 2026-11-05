@@ -857,10 +857,13 @@ run_case "a wrong password is refused across the network" \
     "refused the logon" "" \
     "CPU EXCEPTION|PAGE FAULT|Logged on as" "" "" "" 40
 # The service writes to the console while it runs, which scrolls the verdict
-# off the screen, so the assertion is on the boot log line the SCM emits.
-run_case "a remote service is restarted over the share" \
-    $'sc create pt /bin/svcrun manual\nnet share docs /docs s3cret\nnet svc 127.0.0.1 docs pt start s3cret\nsc stop pt\nsc delete pt' \
-    "scm: a service started|scm: a service stopped" "" \
+# off the screen, so the assertion is on the boot log lines the SCM emits.
+# `svcrun` is the fixture that ignores STOP, so the honest end state is the
+# SCM's own kill rather than a "stopped" line the kernel never writes; the
+# stop timeout is shortened so the case does not sit through the 30 s default.
+run_case "a remote service is started and stopped over the share" \
+    $'sc create pt /bin/svcrun manual\nsc stoptimeout pt 5\nnet share docs /docs s3cret\nnet svc 127.0.0.1 docs pt start s3cret\nsc stop pt\nsleep 6\nsc delete pt' \
+    "scm: a service started|scm: stop requested|ignored STOP and was killed" "" \
     "CPU EXCEPTION|PAGE FAULT|refused the session" "" "" "" 40
 # The stored job is deleted again: the printer gate further down asserts the
 # volume is clean, and a spool file left behind fails it.

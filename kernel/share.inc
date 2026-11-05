@@ -643,16 +643,14 @@ share_close_socket:
         pushad
         cmp eax, -1
         je .scs_done
-        mov [.scs_idx], eax
-        imul eax, SOCK_SIZE
-        lea ebp, [net_sock_table + eax]
-        mov dword [ebp + SOCK_STATE], TCP_CLOSED
-        mov eax, [.scs_idx]
-        call sock_free
+        ; Close the connection, not just the local socket. The server frees a
+        ; session when the peer's FIN arrives; a close it never hears about
+        ; holds one of four slots until the 60-second deadline, and a handful
+        ; of finished commands then lock out the next connection.
+        call sock_close
 .scs_done:
         popad
         ret
-.scs_idx: dd 0
 
 ;=======================================================================
 ; share_session_free - drop a session
@@ -2836,12 +2834,21 @@ vfs_net_readdir:
         mov eax, [.vnr_slot]
         call net_ensure_session
         jc .vnr_fail
-        mov al, SH_MSG_LIST
-        mov esi, net_rel_path
-        mov ecx, SHARE_PATH_LEN
-        call share_client_call
-        cmp eax, 4
-        jb .vnr_fail
+        call .vnr_ask
+        jnc .vnr_listed
+        ; A cached session can be out of step with the server: a reply left
+        ; over from an earlier request is read as this one's answer. That is
+        ; how a 9-byte STAT reply became an empty folder - its first word is a
+        ; file size, which for a directory is 0. Reopen once and ask again,
+        ; because "cannot list" must not be reported as "nothing here".
+        call share_client_close
+        mov eax, [.vnr_slot]
+        call net_ensure_session
+        jc .vnr_fail
+        call .vnr_ask
+        jc .vnr_fail
+.vnr_listed:
+
         ; keep the listing for the calls that follow
         mov eax, [.vnr_slot]
         imul eax, NETM_SIZE
@@ -2919,6 +2926,28 @@ vfs_net_readdir:
         popad
         mov eax, -1
         ret
+
+; Ask for the listing once. CF set when the reply is not a listing: a LIST
+; reply is a count followed by 40 bytes per entry, so anything else is a
+; leftover from another request, not an empty folder.
+.vnr_ask:
+        mov al, SH_MSG_LIST
+        mov esi, net_rel_path
+        mov ecx, SHARE_PATH_LEN
+        call share_client_call
+        cmp eax, 4
+        jb .vnr_ask_bad
+        mov edx, [share_cl_reply]
+        imul edx, 40
+        add edx, 4
+        cmp edx, [share_cl_len]
+        jne .vnr_ask_bad
+        clc
+        ret
+.vnr_ask_bad:
+        stc
+        ret
+
 .vnr_path:  dd 0
 .vnr_buf:   dd 0
 .vnr_index: dd 0

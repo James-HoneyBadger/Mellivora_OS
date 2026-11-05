@@ -173,6 +173,84 @@ ARP Cache:
   10.0.2.3    52:55:0A:00:02:03
 ```
 
+### Sharing a folder — `net share`, `net view`, `net use`, `net put`, `net get`
+
+A share is a directory exported to another Mellivora machine over the platform's own
+protocol on TCP port 4450. It is not SMB and not NFS: two Mellivora machines speak it,
+and nothing else does. An export is read-only unless `/rw` is given, because a share
+that grants writes by accident is the failure that matters.
+
+```text
+Lair:/> net share /rw docs /docs s3cret
+Shared: docs = /docs
+Lair:/> net share
+docs = /docs
+Lair:/> net share -d docs
+Share removed
+```
+
+The secret is optional. When one is set, the client must present it; the secret never
+crosses the wire, and a wrong one drops the session rather than denying a single
+request:
+
+```text
+Lair:/> net view 10.0.0.1
+Shares on 10.0.0.1:4450
+docs
+Lair:/> net use 10.0.0.1 docs s3cret
+Session on docs
+  readme.txt
+  todo.txt
+```
+
+`net use HOST SHARE /MOUNT` registers the share as a volume, so the ordinary file
+commands work on it:
+
+```text
+Lair:/> net use 10.0.0.1 docs /mnt s3cret
+Mounted /mnt from docs
+Lair:/> dir /mnt
+Lair:/> cat /mnt/readme.txt
+```
+
+Two commands move one file without mounting anything. `net get` reads a file from the
+export and prints it; `net put` streams a local file into an export that was made
+`/rw`, and prints how many bytes arrived:
+
+```text
+Lair:/> net put 10.0.0.1 docs /notes.txt s3cret
+Wrote 42 bytes to the share
+```
+
+A read-only export answers the same command with
+`net: the share refused the write (read-only?)`. Rename, delete, leases and reconnect
+of a broken session are not implemented.
+
+### Remote administration — `net logon`, `net svc`, `net print`, `net sess`
+
+These use the same authenticated session as a share. `net logon` proves a password to
+another machine's account store without sending it: the server returns the account's
+salt and a fresh nonce, and the client answers with a proof over the Argon2 verifier.
+
+```text
+Lair:/> net logon 10.0.0.1 alice secret1
+Logged on as alice on 10.0.0.1
+Lair:/> net logon 10.0.0.1 alice wrongpw
+net: the server refused the logon
+```
+
+`net svc` drives the other machine's service manager and reports the state reached;
+`net print` streams a document into the other machine's spooler, where `printq` shows
+it; `net sess` dumps the server's own session and socket tables, which is how a
+refused session is diagnosed from the serving side.
+
+```text
+Lair:/> net svc 10.0.0.1 docs pt start s3cret
+Service pt is running
+Lair:/> net print 10.0.0.1 docs /notes.txt s3cret
+Queued job 1
+```
+
 ---
 
 ## Networking Programs
@@ -595,6 +673,51 @@ qemu-system-i386 ... \
 ```
 
 This forwards host port 8080 to guest port 80.
+
+### Two Machines on One Wire
+
+`make check-twovm` is the milestone gate that needs two computers: one guest exports a
+folder, and the other mounts it, writes through it, logs on, prints and starts a
+service. It joins two QEMU processes with a TCP socket netdev pair, which needs no
+bridge, no TAP device and no root. Start the listening end first:
+
+```bash
+# machine A (the server): listens, and must be up before B starts
+qemu-system-i386 ... -netdev socket,id=net0,listen=127.0.0.1:40000 \
+    -device rtl8139,netdev=net0,mac=52:54:00:12:34:01 -snapshot ...
+
+# machine B (the client)
+qemu-system-i386 ... -netdev socket,id=net0,connect=127.0.0.1:40000 \
+    -device rtl8139,netdev=net0,mac=52:54:00:12:34:02 -snapshot ...
+```
+
+A multicast group would be the obvious choice and is not: whether two guests on
+one host hear each other depends on the host's multicast setup, and a run that
+silently delivers nothing looks exactly like a stack bug.
+
+Both machines boot the same disk image because each is given a `-snapshot` overlay;
+without it the second guest's writes would appear in the first guest's filesystem.
+They need distinct MACs — the profile's NIC otherwise defaults both to
+52:54:00:12:34:56. Give each a static address with `ifconfig` (there is no DHCP server
+on a private segment), then use the share commands from the section above:
+
+```text
+# machine A
+Lair:/> ifconfig 10.0.0.1
+IP set to 10.0.0.1
+Lair:/> net share /rw docs /docs s3cret
+Shared: docs = /docs
+
+# machine B
+Lair:/> ifconfig 10.0.0.2
+IP set to 10.0.0.2
+Lair:/> net use 10.0.0.1 docs /mnt s3cret
+Mounted /mnt from docs
+```
+
+The driver behind the gate is `tools/qemu_twonode.py`; it takes a JSON plan of steps
+and reports each one, so a hand-written two-machine experiment can be scripted the
+same way.
 
 ### TAP Networking (Advanced)
 

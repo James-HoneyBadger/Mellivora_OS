@@ -95,6 +95,12 @@ def present(tree: Tree, probe: tuple) -> bool:
         return re.search(
             rf'(?m)^\s*run_case\s+"{re.escape(probe[1])}"',
             tree.file("tests/test_runtime.sh")) is not None
+    if kind == "step":
+        # A step in the two-machine plan (tests/test_two_vms.sh): the command
+        # that machine b types at machine a over the virtual wire.
+        return re.search(
+            r'"run":\s*"' + re.escape(probe[1]) + r'"',
+            tree.file("tests/test_two_vms.sh")) is not None
     if kind == "kernel":
         return re.search(probe[1], tree.kernel()) is not None
     raise ValueError(f"unknown probe kind: {kind}")
@@ -118,6 +124,8 @@ def describe(probe: tuple) -> str:
         return f"{probe[1]}: {readable(probe[2])}"
     if kind == "case":
         return f"workflow test: {probe[1]}"
+    if kind == "step":
+        return f"two-VM step: {probe[1]}"
     return f"kernel: {readable(probe[1])}"
 
 
@@ -182,7 +190,13 @@ SCORECARD: list[Row] = [
                   ("text", "tests/test_runtime.sh", r"memprot_test")]),
     Row(8, "Network",
         "TCP/IP, DHCP, DNS, and a shared folder another machine mounts",
-        required=[("case", "two VMs authenticate mount a share and enforce permissions")],
+        # The evidence is the two-machine plan: an export on one guest, a mount,
+        # a logon and a refused write on the other, all over the wire rather
+        # than loopback (tests/test_two_vms.sh, `make check-twovm`).
+        required=[("step", "ifconfig 10.0.0.1"),
+                  ("step", "net use 10.0.0.1 docs /mnt s3cret"),
+                  ("step", "net logon 10.0.0.1 alice secret1"),
+                  ("step", "net put 10.0.0.1 ro /btest.txt ros3cret")],
         evidence=[("syscall", "SYS_SOCKET"), ("kernel", r"\bdhcp_")]),
     Row(9, "Print",
         "Spooler with queued, cancellable jobs",
