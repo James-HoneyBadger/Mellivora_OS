@@ -182,6 +182,12 @@ class Node:
         except (OSError, SystemExit):
             return ""
 
+    def alive(self) -> bool:
+        """False once the guest or its monitor is gone."""
+        if self.proc is None or self.proc.poll() is not None:
+            return False
+        return not (self.monitor is not None and getattr(self.monitor, "gone", False))
+
     @staticmethod
     def at_prompt(screen: str) -> bool:
         """True when the last thing drawn on the screen is a bare prompt."""
@@ -197,7 +203,7 @@ class Node:
             seen = self.say()
             if BOOT_MARKER in seen and self.at_prompt(self.screen()):
                 return True, ""
-            if self.proc is not None and self.proc.poll() is not None:
+            if not self.alive():
                 return False, self.diagnosis("the machine exited during boot")
             time.sleep(0.1)
         return False, self.diagnosis("the boot marker never appeared")
@@ -254,7 +260,7 @@ class Node:
             # command runs.
             if all(e in out for e in expect) and self.at_prompt(screen):
                 return True, ""
-            if self.proc.poll() is not None:
+            if not self.alive():
                 return False, self.diagnosis("the machine exited")
             time.sleep(0.1)
         missing = [e for e in expect if e not in out]

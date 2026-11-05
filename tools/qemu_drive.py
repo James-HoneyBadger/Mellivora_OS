@@ -20,6 +20,14 @@ Options:
   --via serial|sendkey  input transport (default serial)
   --expect TEXT       require TEXT in serial+screen (repeatable)
   --reject TEXT       fail if TEXT appears in serial+screen (repeatable)
+  --max TEXT:N        fail if TEXT appears more than N times in
+                      serial+screen (repeatable). Some defects are a
+                      surplus, not an absence: a prompt printed on every
+                      task switch floods the console and still leaves
+                      every --expect satisfied.
+  --settle N          idle for N seconds after the commands before
+                      reading the screen, so a case can prove what the
+                      machine does when nobody is typing
   --regs              dump CPU registers at the end
   --screendump FILE   save the framebuffer as PNG (works in VBE graphics modes)
   --json              emit a machine-readable result object
@@ -92,6 +100,7 @@ def find_qemu() -> str:
 
 class Monitor:
     def __init__(self, path: str, timeout: float = 10.0):
+        self.gone = False
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -110,14 +119,27 @@ class Monitor:
             while True:
                 chunk = self.sock.recv(65536)
                 if not chunk:
+                    self.gone = True
                     break
                 out += chunk
         except socket.timeout:
             pass
+        except OSError:
+            # The guest powered off or died, taking the monitor with it. A
+            # reader that raises here turns "the machine is not there" into a
+            # traceback; returning what arrived lets the caller report the
+            # absence instead.
+            self.gone = True
         return out.decode("utf-8", "replace")
 
     def cmd(self, line: str, wait: float = 0.25) -> str:
-        self.sock.sendall((line + "\n").encode())
+        if self.gone:
+            return ""
+        try:
+            self.sock.sendall((line + "\n").encode())
+        except OSError:
+            self.gone = True
+            return ""
         time.sleep(wait)
         return self._drain()
 
@@ -175,6 +197,7 @@ class SerialConsole:
     """Unix-socket serial console: read boot output, send command lines."""
 
     def __init__(self, path: str, timeout: float = 10.0):
+        self.gone = False
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -326,6 +349,8 @@ def main() -> int:
     transport = _opt(args, "--via", "serial")
     expects = _opt_all(args, "--expect")
     rejects = _opt_all(args, "--reject")
+    maxes = _opt_all(args, "--max")
+    settle = float(_opt(args, "--settle", 0.0))
     thens = _opt_all(args, "--then")
     afters = _opt_all(args, "--after")
     out_file = _opt(args, "--out")
@@ -426,6 +451,11 @@ def main() -> int:
                     mon_ctl.cmd("sendkey ret", 0.3)
                 time.sleep(3.0)
 
+            if settle:
+                # Nobody types for a while. Whatever the machine does on its own
+                # - a service waking, a task printing - happens during this.
+                time.sleep(settle)
+
             for mon_cmd in _opt_all(args, "--monitor"):
                 mon_ctl.cmd(mon_cmd, 1.0)
 
@@ -484,8 +514,17 @@ def main() -> int:
     faults = re.search(r"CPU EXCEPTION|double fault|triple fault", slog, re.I)
     missing = [e for e in expects if e not in expect_haystack]
     rejected = [r for r in rejects if r in combined]
+    surplus = []
+    for spec in maxes:
+        text, _, limit = spec.rpartition(":")
+        if not text or not limit.strip().isdigit():
+            raise SystemExit(f"--max wants TEXT:N, got {spec!r}")
+        seen = combined.count(text)
+        if seen > int(limit):
+            surplus.append(f"{text!r} appeared {seen} times, at most {limit} allowed")
 
-    ok = failure is None and faults is None and not missing and not rejected
+    ok = (failure is None and faults is None and not missing
+          and not rejected and not surplus)
 
     if out_file:
         with open(out_file, "w", encoding="utf-8") as f:
@@ -503,6 +542,7 @@ def main() -> int:
             "fault": faults.group(0) if faults else None,
             "missing_expect": missing,
             "rejected": rejected,
+            "surplus": surplus,
             "serial": slog,
             "screen": screen,
             "registers": regs,
@@ -525,6 +565,8 @@ def main() -> int:
             print(f"FAIL: expected text not found: {e!r}")
         for r in rejected:
             print(f"FAIL: unexpected text found: {r!r}")
+        for r in surplus:
+            print(f"FAIL: too much repeated output: {r}")
         print("\nPASS" if ok else "\nFAIL")
 
     return 0 if ok else 1

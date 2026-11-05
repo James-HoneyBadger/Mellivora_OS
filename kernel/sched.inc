@@ -1405,9 +1405,14 @@ sys_waitpid:
         iretd
 
 .swp_no_next:
-        ; No other task to run — go to shell
+        ; No other task to run — the shell idles until the child exits.
         ; (our task remains BLOCKED; timer will wake it when child exits)
         ; EDI=our TCB (outgoing), EBX=0 (incoming=shell)
+        ;
+        ; This goes to shell_idle, not shell_main: no command finished, so
+        ; there is nothing to report and no prompt to print. shell_main also
+        ; resumes batch scripts and && / || chains, which would run the next
+        ; command of a script because some unrelated child blocked.
         xor ebx, ebx
         call sched_swap_fd_tables
         call sched_swap_fpu
@@ -1416,7 +1421,7 @@ sys_waitpid:
         mov esp, KERNEL_STACK
         cmp byte [gui_desktop_active], 1
         je gui_desktop_resume
-        jmp shell_main
+        jmp shell_idle
 
 .swp_fail:
         mov dword [esp + 28], -1
@@ -1825,7 +1830,12 @@ sched_force_switch:
         popad                      ; Restore its GP registers
         iretd                      ; Resume the ring-3 task
 .sfs_no_task:
-        ; No other ring-3 task running — return to shell prompt
+        ; No other ring-3 task running — hand the machine back to the shell.
+        ; A *foreground* program's exit comes through sys_exit's own path,
+        ; which goes to shell_main and prints the prompt; this one is reached
+        ; only for a background task or a forked child, where no command has
+        ; finished and printing another prompt would duplicate the one already
+        ; on screen.
         call sched_restore_shell_fds
         xor eax, eax
         call sched_apply_cr3          ; back to the master directory
@@ -1833,7 +1843,7 @@ sched_force_switch:
         mov esp, KERNEL_STACK
         cmp byte [gui_desktop_active], 1
         je gui_desktop_resume
-        jmp shell_main
+        jmp shell_idle
 
 ;
 ; Cooperatively yields the CPU to the
@@ -2709,13 +2719,24 @@ sys_sleep:
         dec ecx
         jnz .sleep_scan
 
-        ; No other task. A foreground program keeps the CPU and sleeps in the
-        ; HLT fallback, which is what it has always done. A service is a
-        ; background task that never owns the console: it stays blocked and the
-        ; shell gets the machine back, because a service that sleeps in ring 3
-        ; would starve the prompt it is supposed to run behind.
+        ; No other task to run. The question is whether the sleeping task owns
+        ; the console:
+        ;
+        ;   - a program the user is looking at (the terminal's foreground
+        ;     group) keeps the CPU and sleeps in the HLT fallback, which is
+        ;     what it has always done;
+        ;   - everything else - a service, or a background job started with
+        ;     `&` - stays blocked and hands the machine back. Nothing preempts
+        ;     ring 0, so a background program that hlt-loops through its own
+        ;     sleep freezes the console until it exits: `svcrun &` made the
+        ;     shell stop answering while it ran.
         cmp dword [edi + TCB_SVC], -1
         jne .sleep_service_home
+        mov eax, [tty_fg_pgid]
+        cmp eax, -1
+        je .sleep_service_home          ; no job owns the console
+        cmp [edi + TCB_PGID], eax
+        jne .sleep_service_home         ; a background job, not the foreground
         mov dword [edi + TCB_STATE], TASK_RUNNING
         jmp .sleep_abort
 
@@ -2725,7 +2746,12 @@ sys_sleep:
         call sched_restore_shell_fds
         mov dword [tss_struct + 4], KERNEL_STACK
         mov esp, KERNEL_STACK
-        jmp shell_main
+        ; shell_idle, not shell_main: a service going to sleep is not a command
+        ; finishing. Going through shell_main printed a prompt on every sleep,
+        ; which for a service that polls twice a second buried the console under
+        ; prompts. The shell still repaints when the service prints (see
+        ; shell_repaint_if_stale).
+        jmp shell_idle
 
 .sleep_switch:
         ; EDI = outgoing task TCB, EBX = incoming task TCB

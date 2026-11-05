@@ -234,6 +234,32 @@ run_varying_case() {
     rm -f "$out"
 }
 
+# run_max_case NAME CMD MAXSPEC SETTLE [EXPECT]
+# A case whose failure mode is a surplus instead of an absence. MAXSPEC is
+# TEXT:N - the string may appear at most N times - and SETTLE is how long the
+# machine is left alone after the commands, so what it does while nobody types
+# is part of the evidence.
+run_max_case() {
+    local name="$1" cmd="$2" maxspec="$3" settle="$4" expect="${5:-}"
+    local args=("$IMAGE" "$cmd" --reject "CPU EXCEPTION" --max "$maxspec"
+                --settle "$settle")
+    if [ -n "$expect" ]; then
+        args+=(--expect "$expect")
+    fi
+    local log
+    log="$(mktemp)"
+    printf '  %-34s ' "$name"
+    if timeout $((CASE_TIMEOUT + ${settle%.*})) python3 "$DRIVE" "${args[@]}" \
+            --out "$log" >/dev/null 2>&1; then
+        echo "PASS"
+        rm -f "$log"
+    else
+        echo "FAIL  (output: $log)"
+        failures=$((failures + 1))
+    fi
+    fsck_after_case "$name" "$log"
+}
+
 echo "  runtime tests: $(basename "$IMAGE"), ${CASE_TIMEOUT}s per case"
 
 run_case "flat binary runs"          "hello"                 "Hello, World!"
@@ -622,6 +648,15 @@ run_case "the Sett notifies a watcher in order" \
 run_case "the service manager starts a service" \
     $'sc create t1 /bin/svcrun manual\nsc start t1\nsc query t1' \
     "RUNNING" "" "CPU EXCEPTION|could not start"
+# A service is the lowest-priority thing on the machine, and it still runs: a
+# sleeping service must cost the console nothing. Every wake-up used to re-enter
+# the command-completion path, which printed a prompt, so a service left running
+# buried the screen under two prompts a second and pushed the user's own output
+# off it. Twelve seconds of a service that sleeps in a loop is about two dozen
+# wake-ups; the six prompts this case types are the only ones allowed.
+run_max_case "a sleeping service does not flood the console" \
+    $'sc delete ptx\nsc create ptx /bin/svcrun manual\nsc start ptx' \
+    "Lair:/>:6" 12 "svcrun: running"
 # A cycle is refused when the record is written, with the two ends named.
 run_case "a dependency cycle is refused" \
     $'sc create c1 /bin/svcrun manual c2\nsc create c2 /bin/svcrun manual c1' \
@@ -846,6 +881,22 @@ run_case "a share mounts as a volume" \
     $'net share docs /docs s3cret\nnet use 127.0.0.1 docs /mnt s3cret\ndir /mnt' \
     "Mounted /mnt from docs|readme.txt" "" \
     "CPU EXCEPTION|PAGE FAULT|could not open a session" "" "" "" 40
+# The shell's redirect is a file operation and must behave like one. Three
+# things were wrong and all three failed silently: the name was taken whole, so
+# `> /dir/name` stored an entry nothing could look up; `>` appended instead of
+# replacing, because the append flag was recorded and never read; and a mount
+# was unreachable, so the write landed on the volume under the mount's name.
+# One line, so the driver's --expect reads the command's output and not the
+# echoed text: "AAABBB" cannot appear in the command itself, only in a file
+# that `>` failed to truncate.
+run_case "the redirect takes a path and replaces" \
+    'mkdir /rdir; echo AAA > /rdir/f.txt; echo BBB >> /rdir/f.txt; echo CCC > /rdir/f.txt; cat /rdir/f.txt' \
+    "CCC" "" "CPU EXCEPTION|AAABBB|File not found"
+# The redirector is a file system, so `>` reaches a share like any other mount.
+# The file is removed from the export again: the suite shares one image.
+run_case "the redirect writes through a mounted share" \
+    $'net share /rw docs /docs s3cret\nnet use 127.0.0.1 docs /mnt s3cret\necho WIRE > /mnt/rtest.txt\ncat /mnt/rtest.txt\ndel /docs/rtest.txt' \
+    "WIRE" "" "CPU EXCEPTION|PAGE FAULT|File not found|no such" "" "" "" 40
 # The account is deleted again at the end: the suite shares one image, and a
 # stray account changes the user count the quota and profile cases assert on.
 run_case "a password is proved to the other machine" \

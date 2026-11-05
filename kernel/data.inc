@@ -906,6 +906,8 @@ console_suppress: resb 1          ; 1 = kernel work must not paint the console
 shell_from_park:  resb 1          ; 1 = the shell was resumed from a parked task
 boot_kb_flushed: resb 1
 boot_motd_shown: resb 1          ; 0 = show MOTD on first prompt
+shell_cursor_x:  resd 1          ; where the shell last left the cursor
+shell_cursor_y:  resd 1          ; (see shell_repaint_if_stale)
 
 ; RTC time fields
 rtc_sec:        resb 1

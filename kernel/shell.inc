@@ -39,6 +39,47 @@ shell_print_prompt:
         mov esi, shell_prompt_post
         call vga_print
         call vga_reset_color
+        ; Remember where the prompt ended. A task that runs while the shell is
+        ; idle may print, and the prompt on screen is then stale; comparing the
+        ; cursor against this is how that is noticed without guessing.
+        mov eax, [vga_cursor_x]
+        mov [shell_cursor_x], eax
+        mov eax, [vga_cursor_y]
+        mov [shell_cursor_y], eax
+        ret
+
+;-----------------------------------------------------------------------
+; shell_repaint_if_stale - put a fresh prompt at the cursor if one is needed
+;
+; Reached at the top of the idle read loop, which is the only place the shell
+; hands the machine to a task. A task that printed while it had the machine -
+; a service's first line, a background program's output - leaves the prompt
+; that is on screen behind the text, and typing would continue after it.
+;
+; Nothing is drawn when the cursor has not moved, so a service that only
+; sleeps costs no output at all. Repainting once per *change* is also what
+; keeps a long-running service from filling the screen with prompts, which is
+; what jumping into the command-completion path used to do twice a second.
+;-----------------------------------------------------------------------
+shell_repaint_if_stale:
+        pushad
+        mov eax, [vga_cursor_x]
+        cmp eax, [shell_cursor_x]
+        jne .sris_stale
+        mov eax, [vga_cursor_y]
+        cmp eax, [shell_cursor_y]
+        je .sris_done
+.sris_stale:
+        ; A task stopped mid-line: start the prompt on a line of its own, or it
+        ; would appear glued to whatever the task printed.
+        cmp dword [vga_cursor_x], 0
+        je .sris_prompt
+        mov al, 0x0A
+        call vga_putchar
+.sris_prompt:
+        call shell_print_prompt
+.sris_done:
+        popad
         ret
 
 ;-----------------------------------------------------------------------
@@ -230,6 +271,7 @@ shell_main:
         jne .read_wait
         cmp dword [line_len], 0
         jne .read_wait
+        call shell_repaint_if_stale
         call svc_tick
         call share_server_poll          ; answer a waiting share client
         cmp byte [shell_from_park], 0
@@ -8092,21 +8134,62 @@ shell_finish_redirection:
 
         mov eax, [stdout_redir_len]
         mov byte [redir_out_buf + eax], 0
+
+        ; A mount that is not the volume itself - a share from another machine,
+        ; procfs - takes the output through the VFS. The HBFS writer below
+        ; cannot reach one, so without this `echo x > /mnt/file` would create a
+        ; file on the volume named "/mnt/file".
+        mov ebx, redir_out_name
+        call vfs_route
+        test eax, eax
+        jz .sfr_hbfs
+        cmp byte [eax + VFS_MT_TYPE], VFS_FS_HBFS
+        je .sfr_hbfs
+        mov ebx, redir_out_name
+        mov ecx, FD_FLAG_WRITE
+        call vfs_open
+        cmp eax, -1
+        je .sfr_fail
+        mov [.sfr_vfd], eax
+        mov ebx, eax
+        mov ecx, redir_out_buf
+        mov edx, [stdout_redir_len]
+        call vfs_write
+        mov ebx, [.sfr_vfd]
+        call vfs_close
+        jmp .sfr_reset
+
+.sfr_hbfs:
+        ; The name is a path, not just a name: `echo x > /dir/name` has to land
+        ; in /dir. Taking the whole string as the name stored an entry nothing
+        ; could look up, so the write appeared to succeed and `cat /dir/name`
+        ; said "File not found".
         mov esi, redir_out_name
+        call path_split
+        call path_enter
+        cmp eax, 0
+        jne .sfr_fail_leave
+
+        ; `>` replaces the file's contents; only `>>` reads the old ones first.
+        ; The append flag was recorded but never read, so every `>` appended.
+        cmp byte [stdout_redir_append], 1
+        jne .sfr_write_new
+
+        mov esi, path_base_buf
         mov edi, PROGRAM_BASE
         call hbfs_read_file
-        jc .sfr_append_new
+        jc .sfr_write_new
         mov ebx, ecx
         mov eax, ebx
         add eax, [stdout_redir_len]
         cmp eax, PROGRAM_MAX_SIZE - 1
-        ja .sfr_fail
+        ja .sfr_fail_leave
         mov esi, redir_out_buf
         mov edi, PROGRAM_BASE
         add edi, ebx
         mov ecx, [stdout_redir_len]
         rep movsb
-        mov esi, redir_out_name
+        mov esi, path_base_buf
         mov ecx, ebx
         add ecx, [stdout_redir_len]
         mov edi, PROGRAM_BASE
@@ -8116,18 +8199,22 @@ shell_finish_redirection:
         mov edx, FTYPE_TEXT
 .sfr_append_type_ok:
         call hbfs_create_file
-        jc .sfr_fail
+        jc .sfr_fail_leave
+        call path_leave
         jmp .sfr_reset
 
-.sfr_append_new:
 .sfr_write_new:
-        mov esi, redir_out_name
+        mov esi, path_base_buf
         mov ecx, [stdout_redir_len]
         mov edi, redir_out_buf
         mov edx, FTYPE_TEXT
         call hbfs_create_file
-        jc .sfr_fail
+        jc .sfr_fail_leave
+        call path_leave
         jmp .sfr_reset
+
+.sfr_fail_leave:
+        call path_leave
 
 .sfr_fail:
         call shell_status_fail
@@ -8141,6 +8228,7 @@ shell_finish_redirection:
         call shell_redir_reset
         popad
         ret
+.sfr_vfd: dd 0
 
 shell_use_stdin_as_input:
         cmp byte [stdin_redir_active], 1

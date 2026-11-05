@@ -198,6 +198,7 @@ M2 does not close until:
 | Wait reasons, hung-task detection | None |
 | Nanosecond accounting | Tick counts |
 | Threads in a process | Real: `SYS_CLONE` makes one, `SYS_THREAD_EXIT` ends one, and each has its own kernel stack, user stack and thread-local blocks ([EXEC.md](EXEC.md#6-shared-libraries)). A process's threads are scheduled independently and share one fd view and one address space; there is no per-thread priority, affinity or detach |
+| Console ownership | One terminal. A task in `tty_fg_pgid` owns it and keeps the CPU when it sleeps; every other task that blocks or sleeps is parked and the shell gets the machine back, so a service or a `&` job cannot freeze the prompt. The shell repaints its prompt only when the cursor moved while it was not running, and never on a task switch alone, so a sleeping service costs no output |
 
 The lock-rank gate, the AP start-up path, the APIC timer and the SMP boot are
 real and tested; this document says what they grow into.
