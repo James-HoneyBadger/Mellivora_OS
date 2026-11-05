@@ -856,13 +856,17 @@ run_case "a wrong password is refused across the network" \
     $'account del alice\naccount add alice secret1\nnet share docs /docs s3cret\nnet logon 127.0.0.1 alice wrongpw\naccount del alice' \
     "refused the logon" "" \
     "CPU EXCEPTION|PAGE FAULT|Logged on as" "" "" "" 40
+# The service writes to the console while it runs, which scrolls the verdict
+# off the screen, so the assertion is on the boot log line the SCM emits.
 run_case "a remote service is restarted over the share" \
-    $'sc create pt /bin/svcrun manual\nnet share docs /docs s3cret\nnet svc 127.0.0.1 docs pt start s3cret' \
-    "Service pt is|unknown service" "" \
+    $'sc create pt /bin/svcrun manual\nnet share docs /docs s3cret\nnet svc 127.0.0.1 docs pt start s3cret\nsc stop pt\nsc delete pt' \
+    "scm: a service started|scm: a service stopped" "" \
     "CPU EXCEPTION|PAGE FAULT|refused the session" "" "" "" 40
+# The stored job is deleted again: the printer gate further down asserts the
+# volume is clean, and a spool file left behind fails it.
 run_case "a document is printed on the other machine" \
-    $'net share docs /docs s3cret\nnet print 127.0.0.1 docs /docs/todo.txt s3cret\nprintq' \
-    "Queued job |Spool-todo.txt" "" \
+    $'net share docs /docs s3cret\nnet print 127.0.0.1 docs /docs/todo.txt s3cret\nprintq\nprintflush\ndel /Spool-todo.txt' \
+    "Queued job |Spool-todo.txt|Deleted" "" \
     "CPU EXCEPTION|PAGE FAULT|could not store the job" "" "" "" 40
 run_case "a loopback server answers a request" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \

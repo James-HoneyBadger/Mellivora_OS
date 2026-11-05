@@ -1930,11 +1930,12 @@ share_client_call:
         jc .scc_fail
         mov al, [share_cl_type]
         cmp al, [.scc_type]
-        jne .scc_fail
+        jne .scc_mismatch
         mov eax, [share_cl_len]
         mov [esp + 28], eax
         popad
         ret
+.scc_mismatch:
 .scc_fail:
         popad
         mov eax, -1
@@ -2315,9 +2316,20 @@ cmd_net_use:
         call share_parse_target
         jc .nu_usage
         ; A third word that starts with '/' is where the share is mounted;
-        ; without one, `net use` proves the session and lists the folder.
+        ; without one, `net use` proves the session and lists the folder, and
+        ; that third word is the secret - which is what it meant before
+        ; mounting existed, and what an existing command line still says.
         cmp byte [share_arg_file], '/'
         je .nu_mount
+        cmp byte [share_arg_file], 0
+        je .nu_list
+        cmp byte [share_arg_secret], 0
+        jne .nu_list
+        mov esi, share_arg_file
+        mov edi, share_arg_secret
+        mov ecx, 63
+        call copy_word_n
+.nu_list:
         mov eax, [share_arg_ip]
         mov ebx, share_arg_share
         mov edx, share_arg_secret
