@@ -120,8 +120,11 @@ SH_E_HASH         equ 84           ; SHARE_KEY_LEN bytes: BLAKE2b(secret)
 SH_E_MODE         equ 116          ; dword: SH_MODE_RO / SH_MODE_RW
 SH_E_SIZE         equ 120
 
+; The mode is a set of flags, not a value: a share can be writable, an
+; administration channel, both, or neither.
 SH_MODE_RO        equ 0            ; a share grants nothing the mode does not
 SH_MODE_RW        equ 1
+SH_MODE_ADMIN     equ 2            ; service control, configuration, console
 
 ;=======================================================================
 ; share_hash - BLAKE2b, 32 bytes
@@ -1087,8 +1090,19 @@ share_session_parse:
         ; A call needs an authenticated session: the interface table is not
         ; public, and a management verb that changed a setting on an
         ; unauthenticated connection would be the whole point of the check.
+        ; It also needs a session opened on an administration share, which is
+        ; what a reply frame with ACCESS_DENIED says - the RPC status field,
+        ; not a dropped connection, so the client can tell the two apart.
         call share_require_ready
         jc .spr_drop
+        call share_may_admin
+        jnc .spr_rpc_go
+        mov dword [rpc_reply_buf + RPC_REP_STATUS], RPC_S_ACCESS_DENIED
+        mov dword [rpc_reply_buf + RPC_REP_BODYLEN], 0
+        mov dword [rpc_reply_len], RPC_REP_LEN
+        call share_admin_refused
+        jmp .spr_rpc_send
+.spr_rpc_go:
         mov edi, [share_cur_sess]
         lea esi, [edi + SH_S_RX + SHARE_HDR_LEN]
         ; [share_cur_total] counts the MAC as well; the frame is the header
@@ -1096,6 +1110,7 @@ share_session_parse:
         mov ecx, [share_cur_body]
         sub ecx, SHARE_HDR_LEN
         call rpc_dispatch
+.spr_rpc_send:
         mov dword [share_send_type], SH_MSG_RPC
         mov edi, [share_cur_sess]
         add edi, SH_S_KEY
@@ -1106,13 +1121,35 @@ share_session_parse:
         call share_consume
         jmp .spr_done
 
+;--- A request that needs the admin flag, on a share without it -------------
+.spr_no_admin:
+        ; Answered in the request's own shape rather than by dropping the
+        ; connection, because "no privilege" and "the wire died" are different
+        ; answers. For SVC that shape is an empty reply: a service state is one
+        ; byte, so nothing a state can be is an empty payload, and the client
+        ; already has a place to say so. The record is what makes the refusal
+        ; auditable.
+        mov dword [share_reply_len], 0
+        call share_admin_refused
+        call share_session_reply
+        call share_consume
+        jmp .spr_done
+
 ;--- CONSOLE -------------------------------------------------------------
 .spr_console:
         ; A command line for this machine's console. Authenticated like any
-        ; other request, and queued rather than executed: the receive path is
-        ; no place to run a shell command (remote.inc says why).
+        ; other request - and an administration one, because the line runs as
+        ; SYSTEM - and queued rather than executed: the receive path is no
+        ; place to run a shell command (remote.inc says why).
         call share_require_ready
         jc .spr_drop
+        call share_may_admin
+        jnc .spr_console_take
+        mov dword [rc_status], RC_ST_DENIED
+        call console_refuse
+        call share_consume
+        jmp .spr_done
+.spr_console_take:
         mov edi, [share_cur_sess]
         lea esi, [edi + SH_S_RX + SHARE_HDR_LEN]
         mov ecx, [share_cur_body]
@@ -1190,6 +1227,8 @@ share_session_parse:
 .spr_svc:
         call share_require_ready
         jc .spr_drop
+        call share_may_admin
+        jc .spr_no_admin
         mov dword [share_reply_sent], 0
         mov edi, [share_cur_sess]
         lea esi, [edi + SH_S_RX + SHARE_HDR_LEN]
@@ -1281,6 +1320,50 @@ share_require_ready:
         ret
 .srr_no:
         stc
+        ret
+
+;=======================================================================
+; share_may_admin - does the session's share carry the admin flag?
+;   Out: CF clear when it does
+;
+; NETWORK.md section 6: service control, configuration and the console are
+; administration, and file access is not. The transport can only authenticate
+; a share secret, so the flag on the export is what says whether that secret
+; also opens the machine: a folder shared for reading must not be a way to run
+; commands as SYSTEM.
+;=======================================================================
+share_may_admin:
+        push eax
+        push edi
+        mov edi, [share_cur_sess]
+        mov eax, [edi + SH_S_SHARE]
+        cmp eax, -1
+        je .sma_no
+        call share_slot_ptr
+        test dword [edi + SH_E_MODE], SH_MODE_ADMIN
+        jz .sma_no
+        pop edi
+        pop eax
+        clc
+        ret
+.sma_no:
+        pop edi
+        pop eax
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; share_admin_refused - record that a share tried to administer this machine
+;
+; One line, naming what was asked for: an audit trail that says "refused"
+; without saying what was refused is the useless half of one.
+;-----------------------------------------------------------------------
+share_admin_refused:
+        pushad
+        mov esi, msg_share_no_admin
+        mov al, LOG_WARN
+        call bootlog_write
+        popad
         ret
 
 ;=======================================================================
@@ -2100,28 +2183,45 @@ share_dec:
 ;=======================================================================
 cmd_net_share:
         pushad
+        mov [.ns_line], esi
         mov dword [.ns_mode], SH_MODE_RO
+.ns_option_loop:
+        mov esi, [.ns_line]
         call skip_spaces
+        mov [.ns_line], esi
         cmp byte [esi], 0
         je .ns_list
         cmp byte [esi], '/'
-        jne .ns_option_done
+        jne .ns_options_done
         ; /rw makes the export writable; the default is read-only, because a
         ; share that grants writes by accident is the failure that matters.
+        ; /admin makes it an administration channel: service control,
+        ; configuration and the console each need it, so a secret that opens a
+        ; folder does not also open the machine. Either order, and both at once.
         inc esi
-        mov al, [esi]
-        or al, 0x20
-        cmp al, 'r'
-        jne .ns_option_bad
-        inc esi
-        mov al, [esi]
-        or al, 0x20
-        cmp al, 'w'
-        jne .ns_option_bad
-        inc esi
-        mov dword [.ns_mode], SH_MODE_RW
+        mov edi, share_opt_buf
+        mov ecx, 15
+        call copy_word_n
         call skip_spaces
-.ns_option_done:
+        mov [.ns_line], esi
+        mov esi, share_opt_buf
+        mov edi, share_opt_rw
+        call str_compare
+        jz .ns_opt_rw
+        mov esi, share_opt_buf
+        mov edi, share_opt_admin
+        call str_compare
+        jz .ns_opt_admin
+        jmp .ns_option_bad
+.ns_opt_rw:
+        or dword [.ns_mode], SH_MODE_RW
+        jmp .ns_option_loop
+.ns_opt_admin:
+        or dword [.ns_mode], SH_MODE_ADMIN
+        jmp .ns_option_loop
+
+.ns_options_done:
+        mov esi, [.ns_line]
         cmp byte [esi], 0
         je .ns_list
         cmp byte [esi], '-'
@@ -2247,6 +2347,7 @@ cmd_net_share:
         popad
         ret
 .ns_mode: dd 0
+.ns_line: dd 0
 
 ;=======================================================================
 ; cmd_net_view - "net view HOST"
@@ -3648,6 +3749,8 @@ cmd_net_svc:
         cmp eax, -1
         je .nsv_failed
         call share_client_close
+        test eax, eax
+        jz .nsv_denied
         cmp eax, 1
         jne .nsv_noservice
         mov esi, msg_share_svc_done
@@ -3660,6 +3763,11 @@ cmd_net_svc:
         call share_print_svc_state
         mov al, 0x0A
         call vga_putchar
+        popad
+        ret
+.nsv_denied:
+        mov esi, msg_share_not_admin
+        call vga_print
         popad
         ret
 .nsv_noservice:
@@ -4179,8 +4287,8 @@ share_write_apply:
         mov edi, [share_cur_sess]
         mov eax, [edi + SH_S_SHARE]
         call share_slot_ptr
-        cmp dword [edi + SH_E_MODE], SH_MODE_RW
-        je .swa_writable
+        test dword [edi + SH_E_MODE], SH_MODE_RW
+        jnz .swa_writable
         ; A read-only share refuses before it looks at the name: the share's
         ; own permission is checked as well as the file's. The refusal is a
         ; normal, keyed reply of one byte, so the client can tell it apart
@@ -4696,6 +4804,16 @@ rpc_report_status:
         mov esi, msg_rpc_status
         call vga_print
         pop eax
+        ; Status 5 is the one a caller can act on: the call was understood and
+        ; refused for want of privilege, so say that instead of listing the
+        ; things that were not wrong with it.
+        cmp eax, RPC_S_ACCESS_DENIED
+        jne .rrs_why
+        mov esi, msg_rpc_denied_why
+        call vga_print
+        pop esi
+        ret
+.rrs_why:
         call vga_print_dec
         mov esi, msg_rpc_status_why
         call vga_print
@@ -5146,6 +5264,9 @@ net_log_word:   db "log", 0
 net_iface_word: db "iface", 0
 net_fw_word:    db "fw", 0
 net_console_word: db "console", 0
+share_opt_rw:    db "rw", 0
+share_opt_admin: db "admin", 0
+share_opt_buf:   times 16 db 0
 net_cfg_get_word: db "get", 0
 net_cfg_set_word: db "set", 0
 
@@ -5283,6 +5404,7 @@ msg_rpc_usage_cfg:   db "Usage: net cfg HOST SHARE get KEY [SECRET] | net cfg HO
 msg_rpc_usage_log:   db "Usage: net log HOST SHARE [SECRET]", 0x0A, 0
 msg_rpc_status:      db "net: the server refused the call, status ", 0
 msg_rpc_status_why:  db " (unknown interface, version, opnum or argument)", 0x0A, 0
+msg_rpc_denied_why:  db "5 (the share is not /admin)", 0x0A, 0
 msg_rpc_no_session:  db "net: could not open a session to the server", 0x0A, 0
 msg_rpc_too_big:     db "net: the call does not fit one message", 0x0A, 0
 msg_rpc_set_ok:      db "net: set ", 0
@@ -5303,6 +5425,8 @@ msg_share_svc_stopping: db "stopping", 0
 msg_share_svc_failed:   db "failed", 0
 msg_share_svc_retry:    db "waiting to retry", 0
 msg_share_dropped:     db "net: the server dropped the session (wrong secret?)", 0x0A, 0
+msg_share_no_admin:    db "share: refused an administration request, the share is not /admin", 0
+msg_share_not_admin:   db "net: that share is not an administration share (net share /admin)", 0x0A, 0
 msg_share_used:        db "Session on ", 0
 msg_share_on:          db " at ", 0
 msg_share_space:       db "  ", 0

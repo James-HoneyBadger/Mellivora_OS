@@ -234,17 +234,25 @@ Every one of these is refused without an authenticated identity that holds the
 privilege, and every refusal is an audit record. There is no unauthenticated
 administrative listener, and no default password.
 
+The privilege is the **`/admin` flag on the export**. A share opened with it is
+an administration channel - service control, configuration, the event log and
+the console - and a share without it is a folder: reading, writing and printing
+through the session, and a refusal by name for everything else, recorded in the
+log as `share: refused an administration request`. That keeps the one identity
+this transport can prove - a share secret - from being more authority than the
+share it opens.
+
 As built, the mechanism column is a mix of done and not:
 
 | Capability | State |
 |---|---|
-| Service control | **Done**, over the share's `SVC` request rather than over RPC: the SCM's records are reached by name, so the call is a command and not an interface yet |
+| Service control | **Done**, over the share's `SVC` request rather than over RPC: the SCM's records are reached by name, so the call is a command and not an interface yet. Needs `/admin` |
 | Configuration | **Done** over RPC (`mv.rpc/config`): read and write a Sett value on the other machine, with `NOT_FOUND` for a value that is not there |
 | Event log | **Done** over RPC (`mv.rpc/eventlog`): the record count and then one record at a time, so the client asks how many the far machine keeps instead of assuming |
 | Process and performance | Not built. There is no process-enumerating interface and no counter interface |
 | Remote console | **Built, with the limits §6.1 names.** `net console HOST SHARE SECRET [COMMAND]` sends a command line over the authenticated session; this machine's shell executes it in its own context with the output captured rather than painted, and the answer comes back. With no command it is an interactive session until an empty line or `exit` |
 | Power | Not built over the network. `S5` and restart exist locally in `sc`/`shutdown` |
-| Privileges | Not enforced per capability. The only check on a management call today is that the session is authenticated at all (§5.1), which is why the table above says *done* and not *authorised* |
+| Privileges | **Enforced per share.** Service control, configuration, the event log and the console each require a session opened on an `/admin` export; a share without the flag is refused by name and the refusal is recorded. What is still missing is a *user*: the console and the RPC handlers run as SYSTEM once the flag is present, so the flag buys SYSTEM rather than the client's own rights |
 | Audit | Every management call that changes something writes a record to the boot log, and every refusal does too |
 
 ### 6.1 The remote console as built
@@ -381,7 +389,7 @@ M7 does not close until:
 | Socket as an object | Sockets are numbers in a table, with `poll` and non-blocking connect |
 | Blocking calls | `connect` and `accept` wait without freezing the console: a task that is waiting parks itself, the shell keeps reading commands, and the scheduler hands the task back its frame when it is dispatched again. Two programs talk over the loopback interface at the same time (`httpd 8000 &` then `curl http://127.0.0.1:8000/...`) |
 | Overlapped I/O via completion ports | None |
-| Shares | A directory exported under a name, served from the kernel on TCP 4450: `net share [/rw] NAME PATH [SECRET]` exports (read-only unless `/rw`), `net view HOST` browses, `net use HOST SHARE [SECRET]` lists it, `net get HOST SHARE FILE [SECRET]` reads one file, `net put HOST SHARE FILE [SECRET]` streams one back, and `net use HOST SHARE /MOUNT [SECRET]` registers a `VFS_FS_NET` mount so `dir`, `cat`, `cd` and `>` work on a share like any other volume (the shell's redirect routes through the VFS for any mount that is not the volume itself). Framing, the handshake and the MAC are in [§4.1](#41-the-wire-format-as-built). Rename, delete, leases and reconnect of a broken session are not built |
+| Shares | A directory exported under a name, served from the kernel on TCP 4450: `net share [/rw] [/admin] NAME PATH [SECRET]` exports (read-only unless `/rw`; administration unless `/admin`), `net view HOST` browses, `net use HOST SHARE [SECRET]` lists it, `net get HOST SHARE FILE [SECRET]` reads one file, `net put HOST SHARE FILE [SECRET]` streams one back, and `net use HOST SHARE /MOUNT [SECRET]` registers a `VFS_FS_NET` mount so `dir`, `cat`, `cd` and `>` work on a share like any other volume (the shell's redirect routes through the VFS for any mount that is not the volume itself). Framing, the handshake and the MAC are in [§4.1](#41-the-wire-format-as-built). Rename, delete, leases and reconnect of a broken session are not built |
 | Network logon | `net logon HOST USER PASSWORD` proves the password to the other machine's account store without sending it: the server answers with the account's salt and a fresh nonce, the client answers with a proof over the Argon2 verifier, and the `OK` is keyed with that verifier. The console's logon is the same verifier, so an account is one account on both sides |
 | Two machines | `tests/test_two_vms.sh` (`make check-twovm`) joins two QEMU guests with a TCP socket netdev pair (listen then connect), each with its own `-snapshot` overlay and MAC, and drives both over their serial consoles: one exports a read-write and a read-only folder, the other mounts it, reads through it, writes through it, is refused by the read-only export and by a wrong secret, logs on, starts a service on the first and queues a print job there, and changes a Sett value on it through RPC and then reads that value out of the first machine's own registry. It proves the wire; the loopback cases in `tests/test_runtime.sh` keep the protocol's corners cheap. The same plan is the firewall's gate (§7.1), because a blocked connection needs two addresses that are not each other's. Item 3 above is still open: 1 000 files both ways, leases and reconnect are not exercised |
 | Remote administration | `net svc HOST SHARE SERVICE start\|stop\|restart [SECRET]` controls a service on the other machine through its SCM and reports the resulting state, and `net print HOST SHARE FILE [SECRET]` sends a document to the other machine's spooler (jobs up to 4 KiB, streamed in messages, stored in the root as `Spool-<name>` because HBFS has no directory for them) |

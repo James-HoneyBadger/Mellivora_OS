@@ -53,6 +53,7 @@ RC_ST_OK        equ 0
 RC_ST_TRUNC     equ 1
 RC_ST_BUSY      equ 2
 RC_ST_TOOLONG   equ 3
+RC_ST_DENIED    equ 4                   ; the share is not an administration share
 
 align 4
 rc_state:   dd RC_IDLE
@@ -268,6 +269,8 @@ rc_run:
         je .rr_busy
         cmp eax, RC_ST_TOOLONG
         je .rr_long
+        cmp eax, RC_ST_DENIED
+        je .rr_denied
         mov [.rr_status], eax
         inc esi
         mov ecx, [.rr_len]
@@ -284,6 +287,12 @@ rc_run:
         mov esi, msg_rc_truncated
         call vga_print
 .rr_ok:
+        popad
+        clc
+        ret
+.rr_denied:
+        mov esi, msg_rc_denied
+        call vga_print
         popad
         clc
         ret
@@ -466,4 +475,5 @@ msg_rc_busy:      db "remote: the machine is running another command", 0x0A, 0
 msg_rc_toolong:   db "remote: the command is too long for one message", 0x0A, 0
 msg_rc_truncated: db "remote: (output truncated)", 0x0A, 0
 msg_rc_lost:      db "remote: the connection failed", 0x0A, 0
+msg_rc_denied:    db "remote: that share is not an administration share (net share /admin)", 0x0A, 0
 msg_rc_self:      db "remote: that address is this machine; a console needs another", 0x0A, 0

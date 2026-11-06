@@ -226,6 +226,31 @@ A read-only export answers the same command with
 `net: the share refused the write (read-only?)`. Rename, delete, leases and reconnect
 of a broken session are not implemented.
 
+### Administration is a flag on the share — `/admin`
+
+A share exported for reading is a share, not a way to run commands on the
+machine. Service control, configuration, the event log and the console all need
+an export made with `/admin`:
+
+```text
+Lair:/> net share docs /docs s3cret
+Shared: docs = /docs
+Lair:/> net svc 10.0.0.1 docs pt start s3cret
+net: that share is not an administration share (net share /admin)
+Lair:/> net share /admin /rw adm /docs adms3cret
+Shared: adm = /docs
+Lair:/> net svc 10.0.0.1 adm pt start adms3cret
+Service pt is running
+```
+
+`/rw` and `/admin` are independent and can be given in either order. A refusal
+is written to the serving machine's log as
+`share: refused an administration request`, and the client is told by name
+rather than by a dropped connection: an RPC call answers `status 5`, the console
+answers `remote: that share is not an administration share`, and `net svc`
+answers the same way. Files and printing through a share without the flag work
+exactly as before.
+
 ### Remote administration — `net logon`, `net svc`, `net print`, `net sess`
 
 These use the same authenticated session as a share. `net logon` proves a password to

@@ -841,12 +841,25 @@ command runs in the console's context, so `cd` is shared), no pty, and no
 do what SYSTEM can. Per-capability privilege on the management calls is the next
 thing to close, not a detail to leave implied.
 
-Still open in M7: per-capability privileges on the management calls and on the
-console, `net_test` with fragmentation and reassembly (the stack has neither),
-`share_test` at 1 000 files with leases and reconnect, `packet_fuzz` as a gate
-rather than a default, and Den's services snap-in. Impersonation is parsed and
-bounded but carries no authority, because the transport authenticates a secret
-and not a user.
+**Privilege turned out to be a property of the export, not of the session.** The
+transport can prove one thing - that the client knows a share's secret - and
+section 6 asks for administration to be refused without a privilege. So the
+privilege is the share's `/admin` flag: a folder shared for reading is a folder,
+and every management request on it is refused by name and recorded
+(`share: refused an administration request`), while `/admin /rw` on the same
+directory opens service control, configuration, the event log and the console.
+The client is told why - an RPC call answers status 5, the console and `net svc`
+answer in words - because a refusal that looks like a dropped connection teaches
+the wrong thing. What the flag cannot do is name a *user*: once it is present the
+console and the RPC handlers run as SYSTEM. The flag buys SYSTEM, not the
+client's own rights, and that is the honest remaining gap.
+
+Still open in M7: a per-user privilege model (the `/admin` flag is per share, and
+the shell behind it is SYSTEM), `net_test` with fragmentation and reassembly (the
+stack has neither), `share_test` at 1 000 files with leases and reconnect,
+`packet_fuzz` as a gate rather than a default, and Den's services snap-in.
+Impersonation is parsed and bounded but carries no authority, because the
+transport authenticates a secret and not a user.
 
 ### M8 · Devices and media (16–22 weeks)
 

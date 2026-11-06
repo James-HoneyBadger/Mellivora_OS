@@ -924,7 +924,7 @@ run_case "a wrong password is refused across the network" \
 # SCM's own kill rather than a "stopped" line the kernel never writes; the
 # stop timeout is shortened so the case does not sit through the 30 s default.
 run_case "a remote service is started and stopped over the share" \
-    $'sc create pt /bin/svcrun manual\nsc stoptimeout pt 5\nnet share docs /docs s3cret\nnet svc 127.0.0.1 docs pt start s3cret\nsc stop pt\nsleep 6\nsc delete pt' \
+    $'sc create pt /bin/svcrun manual\nsc stoptimeout pt 5\nnet share /admin docs /docs s3cret\nnet svc 127.0.0.1 docs pt start s3cret\nsc stop pt\nsleep 6\nsc delete pt' \
     "scm: a service started|scm: stop requested|ignored STOP and was killed" "" \
     "CPU EXCEPTION|PAGE FAULT|refused the session" "" "" "" 40
 # The stored job is deleted again: the printer gate further down asserts the
@@ -939,32 +939,32 @@ run_case "a document is printed on the other machine" \
 # key is set and read in one boot, because a Sett write only reaches the volume
 # when the machine shuts down cleanly, and a case boots, runs and is killed.
 run_case "configuration is set and read on the other machine" \
-    $'net share /rw docs /docs s3cret\nnet cfg 127.0.0.1 docs set \\Registry\\Machine\\RpcDemo\\Host far-side s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Host s3cret\nsett get \\Registry\\Machine\\RpcDemo Host' \
+    $'net share /admin /rw docs /docs s3cret\nnet cfg 127.0.0.1 docs set \\Registry\\Machine\\RpcDemo\\Host far-side s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Host s3cret\nsett get \\Registry\\Machine\\RpcDemo Host' \
     "net: set \\Registry\\Machine\\RpcDemo\\Host|= far-side" "" \
     "CPU EXCEPTION|PAGE FAULT|refused|dropped|status 8" "" "" "" 60
 # A value the case never writes: the binding the far machine published for
 # itself at boot. Seeing it come back is a GET that read the far registry
 # rather than an echo of an argument.
 run_case "a published binding is read over the wire" \
-    $'net share docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\RpcControl\\mv.rpc/config s3cret' \
+    $'net share /admin docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\RpcControl\\mv.rpc/config s3cret' \
     "= 1.0" "" \
     "CPU EXCEPTION|PAGE FAULT|could not open a session|the server refused" "" "" "" 40
 # A value that is not there is a status, not a silent empty string: the
 # difference between "the setting is blank" and "there is no such setting" is
 # the whole reason the reply has a status field.
 run_case "a missing configuration value is a status" \
-    $'net share docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Absent s3cret' \
+    $'net share /admin docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Absent s3cret' \
     "status 8" "" \
     "CPU EXCEPTION|PAGE FAULT|could not open a session" "" "" "" 40
 # The management interface is not public: the call needs a session, and a
 # session needs the secret. The server drops the connection instead of
 # answering, which is how a bad key looks from the client side.
 run_case "an rpc call needs the share secret" \
-    $'net share docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Host wrongms' \
+    $'net share /admin docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Host wrongms' \
     "(wrong secret?)" "" \
     "CPU EXCEPTION|PAGE FAULT|net: set " "" "" "" 40
 run_case "the other machine's event log is read" \
-    $'net share docs /docs s3cret\nnet log 127.0.0.1 docs s3cret' \
+    $'net share /admin docs /docs s3cret\nnet log 127.0.0.1 docs s3cret' \
     "Event log: the last |records" "" \
     "CPU EXCEPTION|PAGE FAULT|nothing recorded|could not be read" "" "" "" 40
 # The binding table, which is what a client reads out of \RpcControl before it
@@ -1010,7 +1010,7 @@ run_case "loopback is not counted as an inbound connection" \
 # time out: the console is what would execute the command, and it is the thing
 # waiting for the answer.
 run_case "a console refuses this machine's own address" \
-    $'net share docs /docs s3cret\nnet console 127.0.0.1 docs s3cret dir /docs' \
+    $'net share /admin docs /docs s3cret\nnet console 127.0.0.1 docs s3cret dir /docs' \
     "that address is this machine" "" \
     "CPU EXCEPTION|PAGE FAULT|readme.txt" "" "" "" 40
 # The secret is not optional here: a console reachable without one is the thing
@@ -1019,6 +1019,17 @@ run_case "a console will not start without a secret" \
     "net console 127.0.0.1 docs" \
     "net console HOST SHARE SECRET" "" \
     "CPU EXCEPTION|PAGE FAULT|remote: " "" "" "" 40
+# NETWORK.md section 6: administration is a privilege, not a consequence of
+# holding a secret. A share exported for reading is a share; it is not a way to
+# run commands as SYSTEM, so the management requests are refused by name.
+run_case "a file share refuses administration" \
+    $'net share docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\RpcControl\\mv.rpc/config s3cret\nnet svc 127.0.0.1 docs nosuch start s3cret' \
+    "status 5 (the share is not /admin)|that share is not an administration share" "" \
+    "CPU EXCEPTION|PAGE FAULT|= 1.0" "" "" "" 40
+run_case "an administration share allows it" \
+    $'net share /admin /rw adm /docs admsecret\nnet cfg 127.0.0.1 adm get \\RpcControl\\mv.rpc/config admsecret\nnet cfg 127.0.0.1 adm set \\Registry\\Machine\\Demo\\K far admsecret' \
+    "= 1.0|net: set \\Registry\\Machine\\Demo\\K" "" \
+    "CPU EXCEPTION|PAGE FAULT|not an administration share" "" "" "" 40
 run_case "a loopback server answers a request" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \
     "HTTP/1.0 200 OK|Hello from batch file" "" \
