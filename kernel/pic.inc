@@ -39,3 +39,40 @@ pic_init:
         call irq_enable
 
         ret
+
+;---------------------------------------
+; irq_set_level - make one IRQ input level-triggered
+;   In : AL = IRQ number (0-15)
+;
+; The 8259 pair comes out of reset with edge-triggered inputs, but a PCI
+; interrupt line is not an edge: the card holds it asserted while its status
+; register is not clear, and low otherwise. Configured as an edge, an assertion
+; that lands while the handler is still running is lost - the line never went
+; low, so there is no new edge to see - and a card whose receive ring is full
+; has nothing to deliver, so it asserts no more. The result is a stack that
+; stops dead with nothing on the console: a fuzz storm of malformed frames took
+; the network down this way, ~12 000 frames in, every time.
+;---------------------------------------
+irq_set_level:
+        push eax
+        push ecx
+        push edx
+        mov ecx, eax
+        and ecx, 7              ; bit within the pair's register
+        cmp al, 8
+        jb .lvl_master
+        mov dx, ELCR2
+        jmp .lvl_read
+.lvl_master:
+        mov dx, ELCR1
+.lvl_read:
+        in al, dx
+        mov ah, al              ; the other seven lines keep their mode
+        mov al, 1
+        shl al, cl
+        or al, ah
+        out dx, al
+        pop edx
+        pop ecx
+        pop eax
+        ret

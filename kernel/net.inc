@@ -58,6 +58,7 @@ RTL_ISR_TOK     equ 0x0004
 
 ; Buffer sizes
 NET_RX_BUF_SIZE equ 8192 + 16
+NET_RX_RING   equ 8192              ; the RTL8139's receive ring
 NET_TX_BUF_SIZE equ 1536
 NET_PKT_BUF_SZ  equ 1536
 
@@ -313,6 +314,12 @@ net_init:
         and eax, 0xFF
         mov [net_irq], al
 
+        ; A PCI interrupt line is level-triggered, whatever the 8259 thinks.
+        ; Without this the card's next assertion can be lost for ever while a
+        ; storm keeps its line high.
+        mov al, [net_irq]
+        call irq_set_level
+
         ; Enable PCI bus mastering (register 0x04, set bit 2)
         push edx
         push ecx
@@ -567,14 +574,41 @@ irq_net:
         ; Handle received packets
         test ax, RTL_ISR_ROK
         jz .irq_net_check_tok
+        call net_rx_drain
 
-        ; Process all pending packets in RX ring
+.irq_net_check_tok:
+
+.irq_net_eoi:
+        movzx eax, byte [net_irq]
+        call irq_eoi
+
+        popad
+        iretd
+
+;---------------------------------------
+; net_rx_drain - take the packets the NIC has written out of the RX ring
+;
+; Its own routine because the loop is the part that has to be bounded and the
+; part that has to be reasoned about: it runs with interrupts off, its exit
+; test is a bit in the NIC, and a ring it cannot read must not become a machine
+; that never leaves its handler.
+;---------------------------------------
+net_rx_drain:
+        pushad
+        cmp dword [net_state], NET_STATE_UP
+        jne .rx_done
+        mov ebx, [net_io_base]
+        mov ebp, 512            ; a bound, not an estimate: 512 entries of even
+                                ; the smallest frames is 4 KB, past the 1514 the
+                                ; NIC wants free before it delivers again
 .rx_loop:
+        dec ebp
+        jz .rx_done
         ; Check if buffer empty: CMD bit 0 (BUFE) set means empty
         lea edx, [ebx + RTL_CMD]
         in al, dx
         test al, 0x01           ; BUFE
-        jnz .irq_net_eoi
+        jnz .rx_done
 
         ; Read packet header at rx_buf + rx_offset
         mov esi, [net_rx_buf]
@@ -586,15 +620,23 @@ irq_net:
         shr ecx, 16            ; ECX = packet length (includes 4-byte CRC)
         and eax, 0xFFFF        ; EAX = RX status
 
-        ; Check ROK bit in status
-        test eax, 1
-        jz .rx_skip
+        ; A header that is not usable is not a frame: the ring entry cannot be
+        ; measured, so its length cannot be trusted to step over it. Advancing
+        ; by it anyway is how a stale header in the gap the NIC leaves before
+        ; the end of the ring threw the read pointer thousands of bytes outside
+        ; an 8 KB ring, after which the NIC had nothing left to deliver and the
+        ; machine stopped taking frames for ever.
+        test eax, 1                     ; ROK
+        jz .rx_resync
+        cmp ecx, 8                      ; header + CRC, the least the NIC writes
+        jb .rx_resync
+        cmp ecx, NET_PKT_BUF_SZ
+        ja .rx_resync
 
-        ; Validate length
+        ; A frame this short cannot be one, but the length is believable, so
+        ; the ring entry can be stepped over.
         cmp ecx, 64
         jb .rx_skip
-        cmp ecx, NET_PKT_BUF_SZ
-        ja .rx_skip
 
         ; Copy packet to processing buffer (skip 4-byte header)
         sub ecx, 4             ; Remove CRC from length
@@ -622,29 +664,39 @@ irq_net:
         and eax, ~3            ; dword align
         add eax, [net_rx_offset]
 
-        ; Wrap at 8192
-        cmp eax, 8192
-        jb .rx_no_wrap
-        sub eax, 8192
-.rx_no_wrap:
+        ; Wrap at the end of the ring, masking rather than subtracting, so no
+        ; arithmetic on bad input can leave the pointer outside it.
+        and eax, NET_RX_RING - 1
         mov [net_rx_offset], eax
 
-        ; Update CAPR (offset - 16)
+        ; Update CAPR (offset - 16). The read offset can be inside the first
+        ; sixteen bytes - a 5-byte runt at the start of the ring lands at 12 -
+        ; and subtracting there used to write 0xFFFx, a read pointer outside
+        ; the ring, after which the NIC delivered nothing at all. Wrap it the
+        ; way the ring wraps.
         sub eax, 16
-        and eax, 0xFFFF
+        and eax, NET_RX_RING - 1
         lea edx, [ebx + RTL_CAPR]
         out dx, ax
 
         jmp .rx_loop
 
-.irq_net_check_tok:
+.rx_resync:
+        ; The read pointer has lost the NIC's, so there is no ring entry here to
+        ; measure. Start again at the beginning of the ring: the entries there
+        ; are parsed and dropped like any other malformed frame, and the pointer
+        ; walks to the NIC's write pointer in a bounded number of steps. The
+        ; receiver cannot be restarted from inside its own handler, so this is
+        ; the way back that costs nothing else.
+        mov dword [net_rx_offset], 0
+        mov ax, NET_RX_RING - 16
+        lea edx, [ebx + RTL_CAPR]
+        out dx, ax
+        jmp .rx_done
 
-.irq_net_eoi:
-        movzx eax, byte [net_irq]
-        call irq_eoi
-
+.rx_done:
         popad
-        iretd
+        ret
 
 ;---------------------------------------
 ; net_loopback_deliver - hand a datagram back to the receive path

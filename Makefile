@@ -128,7 +128,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg check-hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-twovm check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table glyphs check-glyphs check-doc-claims check-cmodule syscall-header check-syscall-header FORCE
+.PHONY: check-fuzz all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg check-hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-twovm check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table glyphs check-glyphs check-doc-claims check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
 
@@ -727,6 +727,16 @@ check-runtime: $(POPULATE_STAMP)
 check-twovm: $(POPULATE_STAMP)
 	@TWOVM_ALLOW_SKIP=1 bash tests/test_two_vms.sh $(IMAGE)
 
+# NETWORK.md section 9 item 2: 1 000 000 malformed frames, and the stack neither
+# panics nor loses a valid connection. tools/packet_fuzz.py generated the frames
+# with nowhere to send them; tools/qemu_fuzznode.py boots one guest on a socket
+# netdev, sends them, and then asks the guest to prove it still answers.
+#
+# Not part of `check` yet: the item it gates is open, and NETWORK.md section 9
+# item 2 says where it stops. It belongs in `check` the day it passes.
+check-fuzz: $(POPULATE_STAMP)
+	@FUZZ_ALLOW_SKIP=1 bash tests/test_packet_fuzz.sh $(IMAGE)
+
 # The HBX loader gate: the images that must load, every refusal in EXEC.md
 # section 8, and the flat path that must keep working (§10 item 2).
 check-loader: $(POPULATE_STAMP)
@@ -1079,6 +1089,7 @@ help:
 	@echo "    make check-faults Inject OOM / disk-full / frame drops and require clean errors"
 	@echo "    make check-crypt  Prove an AES-256-XTS volume round-trips and refuses a wrong key"
 	@echo "    make check-twovm  Share, mount, log on, print and control a service across two VMs"
+	@echo "    make check-fuzz   Feed a machine malformed frames (NETWORK.md item 2 is open: it fails)"
 	@echo "    make lint         Run contract and NASM source lint checks"
 	@echo "    make validate-version Validate repo version strings for the current release"
 	@echo "    make check-toolchain Report which 32-bit C toolchain the build uses"

@@ -854,6 +854,52 @@ the wrong thing. What the flag cannot do is name a *user*: once it is present th
 console and the RPC handlers run as SYSTEM. The flag buys SYSTEM, not the
 client's own rights, and that is the honest remaining gap.
 
+**The fuzz gate is built, and it is not green.** NETWORK.md section 9 item 2
+wants 1 000 000 malformed frames through a running machine. `packet_fuzz.py` had
+been generating them with nowhere to send them - a generator, not a gate. The
+missing half is `tools/qemu_fuzznode.py`: one guest on a socket netdev, the
+frames written down the wire the way QEMU frames them (a four-byte big-endian
+length, which is not the little-endian one the tool's file format uses), and
+then three questions asked of the guest through its own console - `ifconfig`,
+`ping 127.0.0.1` (4/4), and a loopback share mounted and listed. The fault log
+answers "did not panic"; those three answer "has not lost the connection".
+`make check-fuzz` is the whole of it, and it is deliberately not part of
+`make check` while it fails.
+
+It fails, and where it fails is worth writing down. With the generators mixed
+the wire stops moving after 12 000-15 000 frames. Nothing faults. The machine is
+not wedged in its interrupt handler - it is idle, and its console answers again
+once nothing more arrives. What is left behind is a receive ring whose read and
+write pointers are a few bytes apart, and that is the one state the emulated NIC
+will neither deliver into (it wants a whole 1514-byte frame's worth of room
+free, or a wholly empty ring) nor interrupt about, since it does not interrupt
+for entries already in the ring. A retry from the timer - the obvious answer -
+starved the machine, because the drain was then reading a ring it could not
+parse a hundred times a second, and `check-twovm` said so loudly. That the timer
+could starve the shell is itself the next thing to understand: the retry has to
+be conditional on the ring making progress, not on the ring being non-empty.
+
+Three defects the storm did find are fixed, and each was reached by a frame a
+driver should shrug at. **A read pointer outside the ring:** the offset handed
+to the NIC is `offset - 16`, and a skipped frame ending inside the first sixteen
+bytes made that subtraction negative inside a sixteen-bit mask, so the machine
+told the NIC to read next from `0xFFFx` - outside an 8 KB ring - after which it
+delivered nothing. **A length used to step over a frame that had already been
+rejected:** a header the driver had just decided it could not trust was still
+used to advance the pointer, which threw it thousands of bytes outside the ring;
+the driver now resynchronises to the start of the ring instead, which costs a lap
+of stale entries and nothing else. **An unbounded loop inside the interrupt
+handler:** the ring's exit test is a bit in the NIC, so a ring state the driver
+could not read left the handler spinning with interrupts off - a machine that
+stops answering with no fault to show for it. The drain is now its own routine
+with a bound. And the card's interrupt line is now level-triggered, which is
+what a PCI line is: as an edge, an assertion that lands while the handler is
+still running is lost, and a card with an empty queue has no reason to assert
+again.
+
+A storm that costs a minute to run found three defects and one open question
+that no interactive test would have, which is the argument for the item existing.
+
 Still open in M7, and named so the milestone is not read as closed:
 
 - **Connection sharing, dial-up and VPN** - bullet four's other halves. The
@@ -863,11 +909,14 @@ Still open in M7, and named so the milestone is not read as closed:
   is SYSTEM, so the flag buys SYSTEM rather than the client's own rights.
   Impersonation is parsed and bounded but carries no authority, because the
   transport authenticates a secret and not a user.
+- **`packet_fuzz` at 1 000 000 frames.** The gate is built (`make check-fuzz`)
+  and fails at 12 000-15 000 mixed frames, with the receive ring's pointers a
+  few bytes apart and no interrupt coming. NETWORK.md section 9 item 2 records
+  the state; the three defects found on the way are fixed.
 - **The conformance suites the spec names:** `net_test` (fragmentation and
-  reassembly are not in the stack at all), `share_test` at 1 000 files with
-  leases and reconnect, and `packet_fuzz` as a gate rather than a generator with
-  nowhere to send its frames. `rpc_test`'s ground is covered by the two-machine
-  plan and the loopback cases instead.
+  reassembly are not in the stack at all) and `share_test` at 1 000 files with
+  leases and reconnect. `rpc_test`'s ground is covered by the two-machine plan
+  and the loopback cases.
 - **Den's services snap-in**, so the exit line's "from Den" is met by the
   desktop rather than by `net svc`.
 

@@ -162,6 +162,8 @@ PIC1_CMD            equ 0x20
 PIC1_DATA           equ 0x21
 PIC2_CMD            equ 0xA0
 PIC2_DATA           equ 0xA1
+ELCR1               equ 0x4D0          ; edge/level control, IRQ 0-7
+ELCR2               equ 0x4D1          ; edge/level control, IRQ 8-15
 
 ; PIT
 PIT_FREQ            equ 1193182

@@ -54,7 +54,9 @@ compatibility project and a half-finished one satisfies nobody.
 | Loopback | A real interface, so two processes can use the stack without a NIC | Suite |
 
 Every length parsed out of a frame is bounded before it is used; a malformed
-frame is counted and dropped, never trusted. `tools/packet_fuzz.py` is the gate.
+frame is dropped, never trusted. `tools/packet_fuzz.py` generates the malformed
+frames and `tools/qemu_fuzznode.py` sends them to a running machine (§9 item 2,
+which is not met yet and says where it stops).
 
 Quality of service beyond this is out of scope. Congestion control is TCP's
 standard algorithm, named in the source, not tuned.
@@ -365,7 +367,24 @@ M7 does not close until:
 1. `net_test` runs the stack's suites: ARP, ICMP, TCP state transitions, UDP,
    loss and reordering at 5 %, and reassembly of a fragmented datagram.
 2. `packet_fuzz` feeds 1 000 000 malformed frames and the stack neither panics
-   nor loses a valid connection.
+   nor loses a valid connection. **The harness exists and the item does not
+   pass yet.** `make check-fuzz` runs it: `tools/qemu_fuzznode.py` boots one
+   guest with its NIC on a TCP socket netdev, writes the generators' frames down
+   it, and then asks the guest, through its own console, to `ifconfig`, to
+   `ping 127.0.0.1` (4/4) and to mount and list a loopback share. The fault log
+   covers "does not panic"; those three cover "has not lost the connection". The
+   frames are `packet_fuzz.py`'s, runts and all, sixteen bytes at a time if need
+   be.
+
+   Where it stops: with the generators mixed, the wire stops moving after
+   12 000-15 000 frames. The machine is not faulting and it is not in its
+   interrupt handler - it is idle - and it answers its console again once
+   nothing more arrives. The receive ring is left with its read and write
+   pointers a few bytes apart, which is the one state the NIC will neither
+   deliver into (it wants a whole 1514-byte frame's worth of room) nor
+   interrupt about. The three defects the storm already found are fixed and
+   recorded in §10; this one is not, so the item stays open and `check-fuzz` is
+   not part of `make check`.
 3. `share_test` mounts a share from a second QEMU instance, copies 1 000 files
    both ways, and the bytes and attributes match; a lease is granted and broken.
 4. `rpc_test` calls every management interface locally and over the share
@@ -396,6 +415,7 @@ M7 does not close until:
 | Remote console | `net console HOST SHARE SECRET [COMMAND]` sends a command line over the authenticated session and answers with its output; with no command it is an interactive session until an empty line or `exit` (§6.1). The shell executes it in its own context with output captured, so the local console is untouched and `cd` is shared with it. No pty, and no per-user privilege |
 | RPC | Two interfaces are served, `mv.rpc/config` and `mv.rpc/eventlog`, and both are reachable as `net cfg` and `net log` (§5.1). A call is dispatched by `(uuid, major.minor, opnum)` with the nine statuses above, and the bindings are written into `\RpcControl` at boot so a client reads the version instead of assuming it. There is no stub generator, the body limit is 1 200 bytes, and impersonation carries no authority - the session authenticates a secret, not a user. A call on a connection that has not finished the handshake is dropped, not answered |
 | Firewall | On at boot: inbound denied unless a rule admits it or the packet answers a flow this machine sent. Rules are Sett values under `\Registry\Machine\System\Firewall` and are edited with `net fw` (§7.1). Enforced in the TCP listen path and the UDP receive path. No application-image match, no per-package port declaration, and a blocked packet is dropped rather than reset. `make check-twovm` proves refusal, count, admission and refusal again |
+| Malformed frames | `make check-fuzz` boots a machine on a socket netdev, writes `packet_fuzz`'s frames at it and then asks it to prove it still answers (§9 item 2). The item is open: the wire stops moving after 12 000-15 000 mixed frames, with the ring's pointers a few bytes apart. Three defects the storm found are fixed. A **read pointer outside the ring**: the offset handed to the NIC is `offset - 16`, and a skipped frame ending inside the first sixteen bytes made that subtraction negative in a sixteen-bit mask, so the NIC was told to read from `0xFFFx` and delivered nothing again. An **untrusted length used to step over a frame**: a header the driver had just rejected as unusable was still used to advance the pointer, which threw it thousands of bytes outside an 8 KB ring. An **unbounded loop inside the interrupt handler**: the ring's exit test is a bit in the NIC, and a ring state the driver could not read left the interrupt handler spinning with interrupts off - a machine that stops with no fault to show for it. The ring's pointer arithmetic now masks at the ring size, advances only by lengths it believes, resynchronises to the start of the ring when it cannot read the header it is on, and the drain loop is bounded and its own routine. The card's interrupt line is also made level-triggered, which is what a PCI line is: as an edge, an assertion that lands while the handler is running is lost, and a card with an empty queue has no reason to assert again. There is no counter for a dropped frame: the loopback interface counts its drops and the wire does not |
 | Diagnostics | `net sess` dumps the server's session and socket tables, because both ends of the protocol run in this kernel and "the server refused the session" is answered with the tables rather than a guess |
 | IPv6, MSI-X-driven NICs | Not in scope / not used |
 
