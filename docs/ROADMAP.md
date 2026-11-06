@@ -854,12 +854,22 @@ the wrong thing. What the flag cannot do is name a *user*: once it is present th
 console and the RPC handlers run as SYSTEM. The flag buys SYSTEM, not the
 client's own rights, and that is the honest remaining gap.
 
-Still open in M7: a per-user privilege model (the `/admin` flag is per share, and
-the shell behind it is SYSTEM), `net_test` with fragmentation and reassembly (the
-stack has neither), `share_test` at 1 000 files with leases and reconnect,
-`packet_fuzz` as a gate rather than a default, and Den's services snap-in.
-Impersonation is parsed and bounded but carries no authority, because the
-transport authenticates a secret and not a user.
+Still open in M7, and named so the milestone is not read as closed:
+
+- **Connection sharing, dial-up and VPN** - bullet four's other halves. The
+  firewall is built; there is no NAT for a second machine, no PPP, and no
+  tunnel.
+- **A per-user privilege model.** `/admin` is per share, and the shell behind it
+  is SYSTEM, so the flag buys SYSTEM rather than the client's own rights.
+  Impersonation is parsed and bounded but carries no authority, because the
+  transport authenticates a secret and not a user.
+- **The conformance suites the spec names:** `net_test` (fragmentation and
+  reassembly are not in the stack at all), `share_test` at 1 000 files with
+  leases and reconnect, and `packet_fuzz` as a gate rather than a generator with
+  nowhere to send its frames. `rpc_test`'s ground is covered by the two-machine
+  plan and the loopback cases instead.
+- **Den's services snap-in**, so the exit line's "from Den" is met by the
+  desktop rather than by `net svc`.
 
 ### M8 · Devices and media (16–22 weeks)
 

@@ -232,7 +232,7 @@ SCORECARD: list[Row] = [
         # machine b takes against machine a in tests/test_two_vms.sh: a service
         # started, a setting written, a command line run on the other console.
         required=[("step", "net svc 10.0.0.1 docs pt start s3cret"),
-                  ("step", "net cfg 10.0.0.1 docs set \\\\Registry\\\\Machine\\\\RpcRemote\\\\Proof over-the-wire s3cret"),
+                  ("step", "net cfg 10.0.0.1 adm set \\\\Registry\\\\Machine\\\\RpcRemote\\\\Proof over-the-wire adms3cret"),
                   ("step", "net console 10.0.0.1 docs s3cret dir /docs"),
                   ("kernel", r"\brpc_")],
         evidence=[("step", "net log 10.0.0.1 docs s3cret"),
