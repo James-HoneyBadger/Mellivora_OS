@@ -1037,5 +1037,6 @@ kernel_entry:
 %include "kernel/cmod.inc"
 %include "kernel/rpc.inc"
 %include "kernel/firewall.inc"
+%include "kernel/remote.inc"
 %include "kernel/share.inc"
 %include "kernel/data.inc"

@@ -20,6 +20,12 @@
 # It also proves the permission model on the wire: a read-only export refuses a
 # write that the writable one accepts, and a wrong secret loses the session.
 #
+# The remote console runs a command line on the other machine through this
+# machine's shell and answers with its output, both one-shot and as an
+# interactive session. It is the only place that can be proved too: on one
+# machine the console is the thing that would execute the command and the thing
+# waiting for the answer, so `net console` refuses a loopback address by name.
+#
 # And it is the only place the firewall can be proved. The contract exempts
 # loopback, so a single machine cannot show a blocked connection: machine B is
 # refused with no rule for 4450, A counts the refusal, `net fw add tcp 4450`
@@ -133,6 +139,19 @@ PLAN="$(cat <<'JSON'
      "expect": ["(wrong secret?)"], "timeout": 40},
     {"node": "b", "run": "net log 10.0.0.1 docs s3cret",
      "expect": ["Event log: the last ", "records"], "timeout": 40},
+
+    {"node": "b", "run": "net console 10.0.0.1 docs s3cret dir /docs",
+     "name": "[b] one command runs on a", "expect": ["readme.txt"],
+     "timeout": 60},
+    {"node": "a", "run": "echo console-silent",
+     "name": "[a] and painted nothing on the local console",
+     "reject": ["readme.txt"]},
+    {"node": "b", "run": ["net console 10.0.0.1 docs s3cret", "sett get \\RpcControl mv.rpc/config", ""],
+     "name": "[b] an interactive session, ended by an empty line",
+     "expect": ["Remote console:", "= 1.0", "session closed"], "timeout": 60},
+    {"node": "b", "run": "net console 10.0.0.1 docs wrongsecret dir /docs",
+     "name": "[b] a console needs the secret",
+     "expect": ["(wrong secret?)"], "reject": ["readme.txt"], "timeout": 60},
 
     {"node": "b", "run": "del /btest.txt", "name": "[b] clear the local fixture"},
     {"node": "b", "run": "echo two-vm-proof > btest.txt",

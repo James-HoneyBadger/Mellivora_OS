@@ -282,6 +282,44 @@ that does not exist. The management interfaces are not public: a call on a
 connection that has not finished the handshake is dropped, and a wrong secret
 reports `net: the server dropped the session (wrong secret?)`.
 
+### The remote console — `net console`
+
+`net console HOST SHARE SECRET [COMMAND]` runs a command line on the other
+machine. The command runs in *that* machine's shell, so the answer is exactly
+what the command prints there — and the console in front of it is left alone:
+the output is captured and sent back rather than painted.
+
+```text
+Lair:/> net console 10.0.0.1 docs s3cret dir /docs
+readme.txt      license.txt     notes.txt       todo.txt
+poem.txt
+  5 file(s)
+Lair:/> net console 10.0.0.1 docs s3cret sett get \RpcControl mv.rpc/config
+\RpcControl = 1.0
+```
+
+With no command it is an interactive session, until an empty line or `exit`:
+
+```text
+Lair:/> net console 10.0.0.1 docs s3cret
+Remote console: an empty line or 'exit' closes it.
+remote:/> dir /docs
+readme.txt      license.txt     notes.txt       todo.txt
+poem.txt
+  5 file(s)
+remote:/>
+remote: session closed
+```
+
+The secret is not optional: a console reachable without one is not something
+this machine offers. The session is the other machine's console rather than a
+second terminal — a `cd` you run remotely moves that machine's local prompt too
+— and one command runs at a time, so a second client is told the machine is
+busy instead of waiting behind work it cannot see. An answer longer than one
+message is truncated and says so. `net console` against an address on this
+machine is refused by name, because the console is what would run the command
+and what would be waiting for it.
+
 ### The firewall — `net fw`
 
 Inbound connections are denied until a rule admits them, and outbound is

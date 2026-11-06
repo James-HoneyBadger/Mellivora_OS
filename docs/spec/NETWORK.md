@@ -88,7 +88,7 @@ One message is a 16-byte header, a payload, and a 16-byte MAC:
 |---|---|---|
 | 0 | magic | `MVSH` |
 | 4 | version | 1 |
-| 5 | type | `HELLO`, `CHALLENGE`, `AUTH`, `OK`, `DENY`, `VIEW`, `LIST`, `STAT`, `READ`, `WRITE`, `SVC`, `LOGON`, `LOGONPROOF`, `PRINT` |
+| 5 | type | `HELLO`, `CHALLENGE`, `AUTH`, `OK`, `DENY`, `VIEW`, `LIST`, `STAT`, `READ`, `WRITE`, `SVC`, `LOGON`, `LOGONPROOF`, `PRINT`, `RPC` (§5.1), `CONSOLE` (§6.1) |
 | 6 | flags | reserved, 0 |
 | 8 | seq | request id, echoed by the reply |
 | 12 | length | payload bytes that follow |
@@ -242,10 +242,48 @@ As built, the mechanism column is a mix of done and not:
 | Configuration | **Done** over RPC (`mv.rpc/config`): read and write a Sett value on the other machine, with `NOT_FOUND` for a value that is not there |
 | Event log | **Done** over RPC (`mv.rpc/eventlog`): the record count and then one record at a time, so the client asks how many the far machine keeps instead of assuming |
 | Process and performance | Not built. There is no process-enumerating interface and no counter interface |
-| Remote console | Not built. The share connection is authenticated, but there is no terminal request on it |
+| Remote console | **Built, with the limits §6.1 names.** `net console HOST SHARE SECRET [COMMAND]` sends a command line over the authenticated session; this machine's shell executes it in its own context with the output captured rather than painted, and the answer comes back. With no command it is an interactive session until an empty line or `exit` |
 | Power | Not built over the network. `S5` and restart exist locally in `sc`/`shutdown` |
 | Privileges | Not enforced per capability. The only check on a management call today is that the session is authenticated at all (§5.1), which is why the table above says *done* and not *authorised* |
 | Audit | Every management call that changes something writes a record to the boot log, and every refusal does too |
+
+### 6.1 The remote console as built
+
+The transport was never the hard part. The hard part is *which context runs the
+command*: the share server lives in the network receive path, which is no place
+to execute a shell command, and the shell is the only thing on this machine that
+can execute one. So the server runs nothing. It queues the line and answers
+later:
+
+1. The server receives `CONSOLE{command}` on an authenticated session and
+   records the command, the session and the sequence number.
+2. The shell, idle at an empty prompt, takes the command, starts capturing
+   console output, and runs the line through its own dispatch.
+3. The shell reaches its prompt again, which is the one place both a builtin and
+   a program arrive when a command is done: capture stops and the output becomes
+   the reply.
+4. The idle loop sends the reply on the session that asked.
+
+| Property | Behaviour |
+|---|---|
+| Authentication | The session's, like every other request. The secret is not optional in `net console`: a console reachable without one is what section 6 says must not exist |
+| Concurrency | One command at a time, and only while the local console is idle at an empty line. A second request is answered at once with `busy` rather than queued behind a command the client cannot see |
+| Output | Captured, not painted: the local console is somebody else's. What a program the command launches prints is caught too, because the capture sits in `vga_putchar` |
+| Size | 1 200 bytes back in one message; a longer answer is truncated and the client says so |
+| Failure | A transport failure is reported as `remote: the connection failed`, a refusal by name says so, and nothing is retried silently |
+
+**What it is not.** Not an independent session: the command runs in the
+console's own context, so it sees the console's current directory and a `cd`
+from a remote client moves the local shell too. There is no pty, no echo of what
+the client types, and no window size. And there is no `SE_SESSION_CROSS`: the
+shell runs as SYSTEM, so a client holding the share secret can do what SYSTEM
+can. That is the gap between this and section 6's "authenticated identity that
+holds the privilege", and it is the next thing to close.
+
+One address is refused by name rather than attempted: `net console` against an
+address on this machine. The console is what would execute the command and what
+would be waiting for the answer, so a loopback console would deadlock until the
+client's deadline.
 
 ## 7. Firewall
 
@@ -347,6 +385,7 @@ M7 does not close until:
 | Network logon | `net logon HOST USER PASSWORD` proves the password to the other machine's account store without sending it: the server answers with the account's salt and a fresh nonce, the client answers with a proof over the Argon2 verifier, and the `OK` is keyed with that verifier. The console's logon is the same verifier, so an account is one account on both sides |
 | Two machines | `tests/test_two_vms.sh` (`make check-twovm`) joins two QEMU guests with a TCP socket netdev pair (listen then connect), each with its own `-snapshot` overlay and MAC, and drives both over their serial consoles: one exports a read-write and a read-only folder, the other mounts it, reads through it, writes through it, is refused by the read-only export and by a wrong secret, logs on, starts a service on the first and queues a print job there, and changes a Sett value on it through RPC and then reads that value out of the first machine's own registry. It proves the wire; the loopback cases in `tests/test_runtime.sh` keep the protocol's corners cheap. The same plan is the firewall's gate (§7.1), because a blocked connection needs two addresses that are not each other's. Item 3 above is still open: 1 000 files both ways, leases and reconnect are not exercised |
 | Remote administration | `net svc HOST SHARE SERVICE start\|stop\|restart [SECRET]` controls a service on the other machine through its SCM and reports the resulting state, and `net print HOST SHARE FILE [SECRET]` sends a document to the other machine's spooler (jobs up to 4 KiB, streamed in messages, stored in the root as `Spool-<name>` because HBFS has no directory for them) |
+| Remote console | `net console HOST SHARE SECRET [COMMAND]` sends a command line over the authenticated session and answers with its output; with no command it is an interactive session until an empty line or `exit` (§6.1). The shell executes it in its own context with output captured, so the local console is untouched and `cd` is shared with it. No pty, and no per-user privilege |
 | RPC | Two interfaces are served, `mv.rpc/config` and `mv.rpc/eventlog`, and both are reachable as `net cfg` and `net log` (§5.1). A call is dispatched by `(uuid, major.minor, opnum)` with the nine statuses above, and the bindings are written into `\RpcControl` at boot so a client reads the version instead of assuming it. There is no stub generator, the body limit is 1 200 bytes, and impersonation carries no authority - the session authenticates a secret, not a user. A call on a connection that has not finished the handshake is dropped, not answered |
 | Firewall | On at boot: inbound denied unless a rule admits it or the packet answers a flow this machine sent. Rules are Sett values under `\Registry\Machine\System\Firewall` and are edited with `net fw` (§7.1). Enforced in the TCP listen path and the UDP receive path. No application-image match, no per-package port declaration, and a blocked packet is dropped rather than reset. `make check-twovm` proves refusal, count, admission and refusal again |
 | Diagnostics | `net sess` dumps the server's session and socket tables, because both ends of the protocol run in this kernel and "the server refused the session" is answered with the tables rather than a guess |

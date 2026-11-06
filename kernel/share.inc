@@ -81,6 +81,7 @@ SH_MSG_LOGON      equ 0x16
 SH_MSG_LOGONPROOF equ 0x17
 SH_MSG_PRINT      equ 0x18
 SH_MSG_RPC        equ 0x19            ; a remote procedure call (rpc.inc)
+SH_MSG_CONSOLE    equ 0x1A            ; a command line for this console (remote.inc)
 
 ; Refusal reasons
 SH_ERR_NO_SHARE   equ 1
@@ -963,6 +964,8 @@ share_session_parse:
         je .spr_print
         cmp eax, SH_MSG_RPC
         je .spr_rpc
+        cmp eax, SH_MSG_CONSOLE
+        je .spr_console
         jmp .spr_drop
 
 ;--- HELLO: choose the share, answer with a challenge --------------------
@@ -1100,6 +1103,21 @@ share_session_parse:
         mov esi, rpc_reply_buf
         mov ecx, [rpc_reply_len]
         call share_session_send_raw
+        call share_consume
+        jmp .spr_done
+
+;--- CONSOLE -------------------------------------------------------------
+.spr_console:
+        ; A command line for this machine's console. Authenticated like any
+        ; other request, and queued rather than executed: the receive path is
+        ; no place to run a shell command (remote.inc says why).
+        call share_require_ready
+        jc .spr_drop
+        mov edi, [share_cur_sess]
+        lea esi, [edi + SH_S_RX + SHARE_HDR_LEN]
+        mov ecx, [share_cur_body]
+        sub ecx, SHARE_HDR_LEN
+        call console_request
         call share_consume
         jmp .spr_done
 
@@ -5127,6 +5145,7 @@ net_cfg_word:   db "cfg", 0
 net_log_word:   db "log", 0
 net_iface_word: db "iface", 0
 net_fw_word:    db "fw", 0
+net_console_word: db "console", 0
 net_cfg_get_word: db "get", 0
 net_cfg_set_word: db "set", 0
 

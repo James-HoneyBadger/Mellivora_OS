@@ -1005,6 +1005,20 @@ run_case "loopback is not counted as an inbound connection" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat\nnet fw' \
     "HTTP/1.0 200 OK|Blocked: 0" "" \
     "CPU EXCEPTION|PAGE FAULT|connection failed" "" "" "" 40
+# NETWORK.md section 6: a remote console is a command line for the other
+# machine's console. On one machine it is refused by name rather than left to
+# time out: the console is what would execute the command, and it is the thing
+# waiting for the answer.
+run_case "a console refuses this machine's own address" \
+    $'net share docs /docs s3cret\nnet console 127.0.0.1 docs s3cret dir /docs' \
+    "that address is this machine" "" \
+    "CPU EXCEPTION|PAGE FAULT|readme.txt" "" "" "" 40
+# The secret is not optional here: a console reachable without one is the thing
+# section 6 says must not exist.
+run_case "a console will not start without a secret" \
+    "net console 127.0.0.1 docs" \
+    "net console HOST SHARE SECRET" "" \
+    "CPU EXCEPTION|PAGE FAULT|remote: " "" "" "" 40
 run_case "a loopback server answers a request" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \
     "HTTP/1.0 200 OK|Hello from batch file" "" \

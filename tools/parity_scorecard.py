@@ -228,16 +228,18 @@ SCORECARD: list[Row] = [
         "Remote console, remote service and configuration management",
         # The wire, not the names. `remote_admin` was never a symbol in this
         # tree and `rpc_` was not either when the row was written, so the row
-        # was describing an intention. These are steps machine b takes against
-        # machine a in tests/test_two_vms.sh, plus the remote console, which
-        # does not exist yet and is what keeps the row partial.
+        # was describing an intention. Every requirement here is now a step
+        # machine b takes against machine a in tests/test_two_vms.sh: a service
+        # started, a setting written, a command line run on the other console.
         required=[("step", "net svc 10.0.0.1 docs pt start s3cret"),
                   ("step", "net cfg 10.0.0.1 docs set \\\\Registry\\\\Machine\\\\RpcRemote\\\\Proof over-the-wire s3cret"),
-                  ("kernel", r"\brpc_"),
-                  ("kernel", r"\bremote_console\b")],
+                  ("step", "net console 10.0.0.1 docs s3cret dir /docs"),
+                  ("kernel", r"\brpc_")],
         evidence=[("step", "net log 10.0.0.1 docs s3cret"),
                   ("case", "configuration is set and read on the other machine"),
-                  ("file", "kernel/rpc.inc")]),
+                  ("case", "a console refuses this machine's own address"),
+                  ("file", "kernel/rpc.inc"),
+                  ("file", "kernel/remote.inc")]),
     Row(14, "Play media",
         "Mixed audio from several programs, video playback, a media framework",
         required=[("syscall", "SYS_AUDIO_OPEN"), ("kernel", r"\baudio_mix\b"),

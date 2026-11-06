@@ -116,6 +116,10 @@ vga_putchar:
         ; client's directory, for instance - must not paint on the console.
         cmp byte [console_suppress], 0
         jne .vp_suppressed
+        ; A remote console command's output is answered down the wire, not
+        ; painted here: the local console is somebody else's (remote.inc).
+        cmp dword [rc_capturing], 0
+        jne .vp_remote
         cmp byte [stdout_redir_active], 1
         jne .vp_normal
 
@@ -141,6 +145,19 @@ vga_putchar:
         ret
 
 .vp_suppressed:
+        popf
+        popad
+        ret
+
+.vp_remote:
+        cmp al, 0x0D            ; CR is not output, as in the redirect above
+        je .vp_remote_done
+        mov edx, [rc_cap_len]
+        cmp edx, RC_OUT_MAX
+        jae .vp_remote_done
+        mov [rc_cap_buf + edx], al
+        inc dword [rc_cap_len]
+.vp_remote_done:
         popf
         popad
         ret

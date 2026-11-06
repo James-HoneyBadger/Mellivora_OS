@@ -228,6 +228,9 @@ shell_main:
         call vga_print
         call vga_reset_color
 .prompt_ready:
+        ; Both a builtin and a program arrive here when the command is done, so
+        ; this is where a remote console command's output stops being captured.
+        call console_capture_done
         mov byte [shell_from_park], 0   ; a command just finished: tasks first
         call shell_print_prompt
 
@@ -274,6 +277,12 @@ shell_main:
         call shell_repaint_if_stale
         call svc_tick
         call share_server_poll          ; answer a waiting share client
+        ; A remote console answer goes out here, and a queued command runs
+        ; here: the shell is the only context that can execute one, and an
+        ; empty prompt is the only moment it can be taken from the machine.
+        call console_flush
+        call console_take
+        jc .execute
         cmp byte [shell_from_park], 0
         jne .read_idle_poll
         mov byte [shell_from_park], 1
@@ -2771,6 +2780,12 @@ shell_dispatch_core:
         pop esi
         push esi
         call skip_spaces
+        mov edi, net_console_word
+        call str_starts_with
+        jc .cmd_net_console
+        pop esi
+        push esi
+        call skip_spaces
         mov edi, net_cfg_word
         call str_starts_with
         jc .cmd_net_cfg
@@ -2812,6 +2827,12 @@ shell_dispatch_core:
         call skip_spaces
         call skip_one_word
         call cmd_net_cfg
+        ret
+.cmd_net_console:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_console
         ret
 .cmd_net_log:
         pop esi
