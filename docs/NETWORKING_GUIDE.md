@@ -251,6 +251,37 @@ Lair:/> net print 10.0.0.1 docs /notes.txt s3cret
 Queued job 1
 ```
 
+### Configuration and the event log — `net cfg`, `net log`, `net iface`
+
+These three are the RPC layer rather than a request of their own: a call carries
+an interface id, a version and an operation, and the answer comes back inside
+the same authenticated session. `net cfg` reads or writes a Sett value on the
+other machine, `net log` reads its boot log, and `net iface` lists the
+interfaces this machine serves, which is the thing to run when an answer is
+`unknown interface`.
+
+```text
+Lair:/> net cfg 10.0.0.1 docs set \Registry\Machine\Demo\Host far-side s3cret
+net: set \Registry\Machine\Demo\Host
+Lair:/> net cfg 10.0.0.1 docs get \Registry\Machine\Demo\Host s3cret
+\Registry\Machine\Demo\Host = far-side
+Lair:/> net cfg 10.0.0.1 docs get \Registry\Machine\Demo\Absent s3cret
+net: the server refused the call, status 8 (unknown interface, version, opnum or argument)
+Lair:/> net log 10.0.0.1 docs s3cret
+Event log: the last 20 records
+I scm: boot and system services started
+Lair:/> net iface
+Interfaces served:
+  mv.rpc/config  v1.0 ops 2
+  mv.rpc/eventlog  v1.0 ops 2
+```
+
+A value is one word, because the shell has no quoting yet. Status `8` is
+`NOT_FOUND`, and it is the difference between a setting that is blank and one
+that does not exist. The management interfaces are not public: a call on a
+connection that has not finished the handshake is dropped, and a wrong secret
+reports `net: the server dropped the session (wrong secret?)`.
+
 ---
 
 ## Networking Programs

@@ -112,7 +112,18 @@ run_case() {
     local mem="${6:-}" smp="${7:-}" cpu="${8:-}" wait_s="${9:-}" profile="${10:-}"
     local monitor="${11:-}" exit_wait="${12:-}" keys="${13:-}" wait_for="${14:-}"
     local after="${15:-}"
-    local args=("$IMAGE" "$cmd" --reject "$reject")
+    local args=("$IMAGE" "$cmd")
+    # REJECT is a list too, and splitting it matters: passed whole, a list like
+    # "CPU EXCEPTION|PAGE FAULT" is one needle that never appears in any
+    # transcript, so the case stops rejecting anything at all - the fault check
+    # included.
+    local bad_j was_ifs
+    was_ifs="$IFS"
+    IFS='|'
+    for bad_j in $reject; do
+        [ -n "$bad_j" ] && args+=(--reject "$bad_j")
+    done
+    IFS="$was_ifs"
     if [ -n "$monitor" ]; then
         args+=(--monitor "$monitor")
     fi
@@ -624,11 +635,11 @@ run_case "the Sett rolls back a bad generation" \
 # audit record rather than a value.
 run_case "a SECRET is never read back" \
     $'sett set \\Registry\\Machine\\Sec S secret 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F\nsett get \\Registry\\Machine\\Sec S\nchronicle -s sett' \
-    "a SECRET value was read back" "" "CPU EXCEPTION|tree is full|refused"
+    "a SECRET value was read back" "" "CPU EXCEPTION|tree is full"
 # Section 5: a hive carries a subtree to its own file and merges it back.
 run_case "a hive holds a subtree" \
     $'sett set \\Registry\\User\\Hive K str v\nsett hive save \\Registry\\User\\Hive hive.hiv\nsett delkey \\Registry\\User\\Hive\nsett hive load hive.hiv\nsett get \\Registry\\User\\Hive K' \
-    "= v" "" "CPU EXCEPTION|refused|hive"
+    "= v" "" "CPU EXCEPTION|the hive file was refused"
 # Section 10 item 5: a hive whose bin is damaged is refused by name and offset,
 # and the last known good generation beside it is loaded instead. Two saves put
 # the first generation in hive.hiv.bak; hivepoke writes over the magic of the
@@ -714,11 +725,11 @@ run_case "a scheduled task runs on its trigger" \
 # identity the console reports afterwards.
 run_case "an account logs on to its own session" \
     $'account del m4user\naccount add m4user m4pw\nlogon m4user m4pw\nwhoami\nsessions' \
-    "session=1" "" "CPU EXCEPTION|wrong" "" "" "" 60
+    "session=1" "" "CPU EXCEPTION|the password" "" "" "" 60
 # Two accounts, two sessions: the second logon does not disturb the first.
 run_case "two users share the machine" \
     $'account add m4b m4pb\nlogon m4user m4pw\nlogon m4b m4pb\nsessions\nswitch 1\nwhoami' \
-    "name=m4b" "" "CPU EXCEPTION|wrong" "" "" "" 60
+    "name=m4b" "" "CPU EXCEPTION|the password" "" "" "" 60
 # SERVICES.md section 6 item 6: a locked session runs one command. The refusal
 # is what makes the lock a boundary rather than a line of output, and it is in
 # the dispatch path, so a command added later cannot forget to ask.
@@ -922,6 +933,46 @@ run_case "a document is printed on the other machine" \
     $'net share docs /docs s3cret\nnet print 127.0.0.1 docs /docs/todo.txt s3cret\nprintq\nprintflush\ndel /Spool-todo.txt' \
     "Queued job |Spool-todo.txt|Deleted" "" \
     "CPU EXCEPTION|PAGE FAULT|could not store the job" "" "" "" 40
+# RPC (NETWORK.md section 5): a call carries an interface id, a version and an
+# operation, and the far machine's answer comes back inside the reply frame.
+# The value is asserted through `sett get`, not through the GET's own echo: the
+# key is set and read in one boot, because a Sett write only reaches the volume
+# when the machine shuts down cleanly, and a case boots, runs and is killed.
+run_case "configuration is set and read on the other machine" \
+    $'net share /rw docs /docs s3cret\nnet cfg 127.0.0.1 docs set \\Registry\\Machine\\RpcDemo\\Host far-side s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Host s3cret\nsett get \\Registry\\Machine\\RpcDemo Host' \
+    "net: set \\Registry\\Machine\\RpcDemo\\Host|= far-side" "" \
+    "CPU EXCEPTION|PAGE FAULT|refused|dropped|status 8" "" "" "" 60
+# A value the case never writes: the binding the far machine published for
+# itself at boot. Seeing it come back is a GET that read the far registry
+# rather than an echo of an argument.
+run_case "a published binding is read over the wire" \
+    $'net share docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\RpcControl\\mv.rpc/config s3cret' \
+    "= 1.0" "" \
+    "CPU EXCEPTION|PAGE FAULT|could not open a session|the server refused" "" "" "" 40
+# A value that is not there is a status, not a silent empty string: the
+# difference between "the setting is blank" and "there is no such setting" is
+# the whole reason the reply has a status field.
+run_case "a missing configuration value is a status" \
+    $'net share docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Absent s3cret' \
+    "status 8" "" \
+    "CPU EXCEPTION|PAGE FAULT|could not open a session" "" "" "" 40
+# The management interface is not public: the call needs a session, and a
+# session needs the secret. The server drops the connection instead of
+# answering, which is how a bad key looks from the client side.
+run_case "an rpc call needs the share secret" \
+    $'net share docs /docs s3cret\nnet cfg 127.0.0.1 docs get \\Registry\\Machine\\RpcDemo\\Host wrongms' \
+    "(wrong secret?)" "" \
+    "CPU EXCEPTION|PAGE FAULT|net: set " "" "" "" 40
+run_case "the other machine's event log is read" \
+    $'net share docs /docs s3cret\nnet log 127.0.0.1 docs s3cret' \
+    "Event log: the last |records" "" \
+    "CPU EXCEPTION|PAGE FAULT|nothing recorded|could not be read" "" "" "" 40
+# The binding table, which is what a client reads out of \RpcControl before it
+# has an id to call: the machine serves these two and says so.
+run_case "the rpc binding table is served" \
+    "net iface" \
+    "Interfaces served:|mv.rpc/config|mv.rpc/eventlog" "" \
+    "CPU EXCEPTION|PAGE FAULT|serves no interfaces"
 run_case "a loopback server answers a request" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \
     "HTTP/1.0 200 OK|Hello from batch file" "" \
@@ -959,7 +1010,7 @@ run_case "no stale bytes from the last program" "stale_write" "STALE_WROTE_OK" "
 # OOM at every depth of the fork path (with the free-page count checked after
 # each), a disk whose writes all fail, and a dropped network frame that the
 # resolver retries past. `dhcp` first, because the network section needs the NIC.
-run_case "fault injection: OOM, disk, net" "dhcp" "FAULT_OK" "fault_inject_test" "CPU EXCEPTION|FAULT_FAIL|fault"
+run_case "fault injection: OOM, disk, net" "dhcp" "FAULT_OK" "fault_inject_test" "CPU EXCEPTION|FAULT_FAIL"
 
 # Above 128 MB, physical frames live beyond the boot identity map: the allocator
 # walks free-list nodes that are not mapped yet, the fault handler faults on its

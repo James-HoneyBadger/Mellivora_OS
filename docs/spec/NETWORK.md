@@ -149,6 +149,74 @@ talk across a machine boundary.
 | Security | The server sees the client's token through the transport's authentication; impersonation levels (`identify`, `impersonate`, `delegate`) are explicit per call |
 | Failure | A transport failure is a distinct status from a server refusal, so a retry decision is possible |
 
+### 5.1 The call as built
+
+A call is a request frame and a reply frame, carried inside a share message
+(`type = RPC`) after the session handshake. The stub never sees a socket: the
+same two frames go over the share connection, and the dispatch does not know
+which transport delivered them.
+
+Request, 28 bytes then the body:
+
+| Offset | Field | Meaning |
+|---|---|---|
+| 0 | uuid | 16 bytes, NUL-padded |
+| 16 | major | 1 |
+| 17 | minor | 1 |
+| 18 | opnum | 2, little-endian |
+| 20 | impersonation | 0 `identify`, 1 `impersonate`, 2 `delegate` (refused with `NO_DELEGATE`); anything above 1 that is not `delegate` is `BAD_ARG` |
+| 21 | pad | 3, zero |
+| 24 | bodylen | 4 |
+| 28 | body | `bodylen` bytes |
+
+Reply, 8 bytes then the body: `status` (4) and `bodylen` (4). The status field
+is what separates "the wire was down" (no reply at all) from "the server said
+no" (a reply with a non-zero status), which is the decision a caller needs to
+retry or not.
+
+| Status | Name | Meaning |
+|---|---|---|
+| 0 | `OK` | The body is the answer |
+| 1 | `UNKNOWN_IF` | No interface with that uuid |
+| 2 | `BAD_VERSION` | Major differs, or the minor asked for is newer than served |
+| 3 | `UNKNOWN_OPNUM` | The interface has no such operation |
+| 4 | `BAD_ARG` | The body does not match the operation |
+| 5 | `ACCESS_DENIED` | The session may not call this |
+| 6 | `NOT_AUTHENTICATED` | A call arrived before the handshake finished |
+| 7 | `NO_DELEGATE` | `delegate` was asked for and cannot be honoured |
+| 8 | `NOT_FOUND` | The named value or record does not exist |
+| 9 | `TOO_BIG` | The body exceeds one message |
+
+Versioning is enforced as the contract asks: the major must match exactly and
+a minor newer than the one served is refused, because a caller that expects an
+opnum this build does not have must not be dispatched against the older table.
+Several versions of one interface are not served at once yet - the table holds
+one entry per uuid.
+
+The binding is written at boot: for each registered interface,
+`\RpcControl` holds `<uuid> = "<major>.<minor>"`, so a client looks the
+version up in Sett instead of assuming it. `net iface` prints the same table
+from memory.
+
+| Interface | Version | Operations |
+|---|---|---|
+| `mv.rpc/config` | 1.0 | 0 `GET key` -> value, 1 `SET key value` -> empty |
+| `mv.rpc/eventlog` | 1.0 | 0 `COUNT` -> count, 1 `READ index` -> `level, tick, source[16], text[80]` |
+
+`net cfg HOST SHARE get\|set KEY [VALUE] [SECRET]` is the client for the first
+and `net log HOST SHARE [SECRET]` for the second; both read the far machine's
+records as `LEVEL SOURCE: text`.
+
+**What this is not yet.** The body limit is 1 200 bytes rather than the 64 KiB
+inline the contract asks for, there is no stub generator (the two interfaces
+are hand-written and their layouts are in this table), and no section is used
+above the limit. Impersonation is parsed and bounded - `delegate` is refused
+with its own status rather than being quietly treated as `impersonate` - but
+it carries no authority: the transport authenticates a session against a share
+secret, not a user, so `identify` and `impersonate` change nothing about what
+the caller may do. Everything that needs a user's rights is refused, which is
+the honest state rather than a level that pretends to be one.
+
 ## 6. Remote administration
 
 The parity target says "administer a workstation remotely is in scope":
@@ -165,6 +233,19 @@ The parity target says "administer a workstation remotely is in scope":
 Every one of these is refused without an authenticated identity that holds the
 privilege, and every refusal is an audit record. There is no unauthenticated
 administrative listener, and no default password.
+
+As built, the mechanism column is a mix of done and not:
+
+| Capability | State |
+|---|---|
+| Service control | **Done**, over the share's `SVC` request rather than over RPC: the SCM's records are reached by name, so the call is a command and not an interface yet |
+| Configuration | **Done** over RPC (`mv.rpc/config`): read and write a Sett value on the other machine, with `NOT_FOUND` for a value that is not there |
+| Event log | **Done** over RPC (`mv.rpc/eventlog`): the record count and then one record at a time, so the client asks how many the far machine keeps instead of assuming |
+| Process and performance | Not built. There is no process-enumerating interface and no counter interface |
+| Remote console | Not built. The share connection is authenticated, but there is no terminal request on it |
+| Power | Not built over the network. `S5` and restart exist locally in `sc`/`shutdown` |
+| Privileges | Not enforced per capability. The only check on a management call today is that the session is authenticated at all (§5.1), which is why the table above says *done* and not *authorised* |
+| Audit | Every management call that changes something writes a record to the boot log, and every refusal does too |
 
 ## 7. Firewall
 
@@ -217,9 +298,9 @@ M7 does not close until:
 | Overlapped I/O via completion ports | None |
 | Shares | A directory exported under a name, served from the kernel on TCP 4450: `net share [/rw] NAME PATH [SECRET]` exports (read-only unless `/rw`), `net view HOST` browses, `net use HOST SHARE [SECRET]` lists it, `net get HOST SHARE FILE [SECRET]` reads one file, `net put HOST SHARE FILE [SECRET]` streams one back, and `net use HOST SHARE /MOUNT [SECRET]` registers a `VFS_FS_NET` mount so `dir`, `cat`, `cd` and `>` work on a share like any other volume (the shell's redirect routes through the VFS for any mount that is not the volume itself). Framing, the handshake and the MAC are in [§4.1](#41-the-wire-format-as-built). Rename, delete, leases and reconnect of a broken session are not built |
 | Network logon | `net logon HOST USER PASSWORD` proves the password to the other machine's account store without sending it: the server answers with the account's salt and a fresh nonce, the client answers with a proof over the Argon2 verifier, and the `OK` is keyed with that verifier. The console's logon is the same verifier, so an account is one account on both sides |
-| Two machines | `tests/test_two_vms.sh` (`make check-twovm`) joins two QEMU guests with a TCP socket netdev pair (listen then connect), each with its own `-snapshot` overlay and MAC, and drives both over their serial consoles: one exports a read-write and a read-only folder, the other mounts it, reads through it, writes through it, is refused by the read-only export and by a wrong secret, logs on, starts a service on the first and queues a print job there. It proves the wire; the loopback cases in `tests/test_runtime.sh` keep the protocol's corners cheap. Item 3 above is still open: 1 000 files both ways, leases and reconnect are not exercised |
+| Two machines | `tests/test_two_vms.sh` (`make check-twovm`) joins two QEMU guests with a TCP socket netdev pair (listen then connect), each with its own `-snapshot` overlay and MAC, and drives both over their serial consoles: one exports a read-write and a read-only folder, the other mounts it, reads through it, writes through it, is refused by the read-only export and by a wrong secret, logs on, starts a service on the first and queues a print job there, and changes a Sett value on it through RPC and then reads that value out of the first machine's own registry. It proves the wire; the loopback cases in `tests/test_runtime.sh` keep the protocol's corners cheap. Item 3 above is still open: 1 000 files both ways, leases and reconnect are not exercised |
 | Remote administration | `net svc HOST SHARE SERVICE start\|stop\|restart [SECRET]` controls a service on the other machine through its SCM and reports the resulting state, and `net print HOST SHARE FILE [SECRET]` sends a document to the other machine's spooler (jobs up to 4 KiB, streamed in messages, stored in the root as `Spool-<name>` because HBFS has no directory for them) |
-| Firewall | None |
+| RPC | Two interfaces are served, `mv.rpc/config` and `mv.rpc/eventlog`, and both are reachable as `net cfg` and `net log` (§5.1). A call is dispatched by `(uuid, major.minor, opnum)` with the nine statuses above, and the bindings are written into `\RpcControl` at boot so a client reads the version instead of assuming it. There is no stub generator, the body limit is 1 200 bytes, and impersonation carries no authority - the session authenticates a secret, not a user. A call on a connection that has not finished the handshake is dropped, not answered |
 | Firewall | None |
 | Diagnostics | `net sess` dumps the server's session and socket tables, because both ends of the protocol run in this kernel and "the server refused the session" is answered with the tables rather than a guess |
 | IPv6, MSI-X-driven NICs | Not in scope / not used |

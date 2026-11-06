@@ -945,6 +945,10 @@ kernel_entry:
         ; session 0 exists before anything logs on, and the service manager
         ; starts the boot and system services before the shell is a prompt.
         call sett_load
+        ; The interfaces this machine serves, and their bindings under
+        ; \RpcControl. Registered after the Sett is loaded, because a binding
+        ; is a Sett value and has to be written into the machine hive.
+        call rpc_init
         call sess_boot
         LOGBOOT LOG_INFO, log_sessions
         call svc_boot
@@ -1028,5 +1032,6 @@ kernel_entry:
 %include "kernel/syscall.inc"
 %include "kernel/cmdtable.inc"
 %include "kernel/cmod.inc"
+%include "kernel/rpc.inc"
 %include "kernel/share.inc"
 %include "kernel/data.inc"

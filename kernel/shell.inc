@@ -2769,11 +2769,47 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_net_sess
         pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_cfg_word
+        call str_starts_with
+        jc .cmd_net_cfg
+        pop esi
+        push esi
+        call skip_spaces
+        ; after `logon` in the chain, not before it: "logon" also starts with
+        ; "log", and the first match wins.
+        mov edi, net_log_word
+        call str_starts_with
+        jc .cmd_net_log
+        pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_iface_word
+        call str_starts_with
+        jc .cmd_net_iface
+        pop esi
         call cmd_net_status
         ret
 .cmd_net_sess:
         pop esi
         call cmd_net_sess
+        ret
+.cmd_net_cfg:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_cfg
+        ret
+.cmd_net_log:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_log
+        ret
+.cmd_net_iface:
+        pop esi
+        call cmd_net_iface
         ret
 .cmd_net_share:
         pop esi

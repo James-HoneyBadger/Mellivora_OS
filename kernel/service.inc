@@ -786,7 +786,8 @@ svc_start:
         je .sst_slow_nokill
         mov ebx, eax
         mov ecx, SIGKILL
-        call sys_kill
+        mov eax, SYS_SIGNAL
+        int 0x80
 .sst_slow_nokill:
         mov esi, msg_svc_timeout
         call vga_print
@@ -1009,9 +1010,14 @@ svc_tick:
         mov edi, [.skt_rec]
         call svc_stop_done
         LOGBOOT LOG_WARN, msg_svc_stopkill
+        ; Through the syscall gate, not a call: a syscall handler ends with
+        ; iretd, which returns from a frame only int 0x80 builds. Called
+        ; directly it popped the caller's stack as EIP/CS/EFLAGS and took the
+        ; machine with it.
         mov ebx, [.skt_pid]
         mov ecx, SIGKILL
-        call sys_kill
+        mov eax, SYS_SIGNAL
+        int 0x80
         jmp .skt_next
 .skt_stop_done:
         mov edi, [.skt_rec]

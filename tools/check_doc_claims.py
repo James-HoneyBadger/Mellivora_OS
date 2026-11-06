@@ -128,6 +128,10 @@ ABSENT_CLAIMS = [
      "programs/syscalls.inc", r"SYS_THREAD_DETACH", "thread detach"),
     ("docs/spec/ABI.md", "Bare small integers",
      "kernel/object.inc", r"HANDLE_GEN_SHIFT", "generational handles"),
+    # "no remote surface" outlived the surface by a whole milestone: `net svc`
+    # and the RPC interfaces had shipped and the row still said it.
+    ("docs/spec/SERVICES.md", "no remote surface",
+     "kernel/share.inc", r"SH_MSG_SVC|cmd_net_svc", "a remote management surface"),
 ]
 
 

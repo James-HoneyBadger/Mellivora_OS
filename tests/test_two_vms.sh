@@ -11,6 +11,12 @@
 #   share a folder, mount it on the other, log on across the network, print to
 #   a shared printer, and restart a service on the other machine.
 #
+# The RPC steps are the one thing on this wire that is not a file operation:
+# machine B changes a Sett value on machine A through the configuration
+# interface, and A then reads the value out of its own registry - which is the
+# only way to tell a reply that echoed the argument from one the far machine
+# actually applied.
+#
 # It also proves the permission model on the wire: a read-only export refuses a
 # write that the writable one accepts, and a wrong secret loses the session.
 #
@@ -96,6 +102,17 @@ PLAN="$(cat <<'JSON'
     {"node": "b", "run": "cat /mnt/todo.txt",
      "expect": ["[x] Shell tab completion"], "timeout": 40},
 
+    {"node": "b", "run": "net cfg 10.0.0.1 docs set \\Registry\\Machine\\RpcRemote\\Proof over-the-wire s3cret",
+     "expect": ["net: set \\Registry\\Machine\\RpcRemote\\Proof"], "timeout": 40},
+    {"node": "b", "run": "net cfg 10.0.0.1 docs get \\Registry\\Machine\\RpcRemote\\Proof s3cret",
+     "expect": ["= over-the-wire"], "timeout": 40},
+    {"node": "b", "run": "net cfg 10.0.0.1 docs get \\Registry\\Machine\\RpcRemote\\Absent s3cret",
+     "expect": ["status 8"], "timeout": 40},
+    {"node": "b", "run": "net cfg 10.0.0.1 docs get \\Registry\\Machine\\RpcRemote\\Proof wrongsecret",
+     "expect": ["(wrong secret?)"], "timeout": 40},
+    {"node": "b", "run": "net log 10.0.0.1 docs s3cret",
+     "expect": ["Event log: the last ", "records"], "timeout": 40},
+
     {"node": "b", "run": "del /btest.txt", "name": "[b] clear the local fixture"},
     {"node": "b", "run": "echo two-vm-proof > btest.txt",
      "name": "[b] write a local file with a name only this machine has"},
@@ -116,6 +133,8 @@ PLAN="$(cat <<'JSON'
      "expect": ["Queued job "], "timeout": 40},
 
     {"node": "a", "run": "cat /docs/btest.txt", "expect": ["two-vm-proof"]},
+    {"node": "a", "run": "sett get \\Registry\\Machine\\RpcRemote Proof",
+     "expect": ["= over-the-wire"]},
     {"node": "a", "run": "dir /docs", "expect": ["btest.txt"]},
     {"node": "a", "run": "printq", "expect": ["Spool-btest.txt"]},
 
@@ -124,6 +143,8 @@ PLAN="$(cat <<'JSON'
     {"node": "a", "run": "printflush", "name": "[a] flush the queue"},
     {"node": "a", "run": "del /Spool-btest.txt", "name": "[a] drop the spool file"},
     {"node": "a", "run": "del /docs/btest.txt", "name": "[a] drop the received file"},
+    {"node": "a", "run": "sett delkey \\Registry\\Machine\\RpcRemote",
+     "name": "[a] drop the key written from across the wire"},
     {"node": "a", "run": "net share -d docs", "expect": ["Share removed"]},
     {"node": "a", "run": "net share -d ro", "expect": ["Share removed"]},
     {"node": "a", "run": "account del alice", "expect": ["account: deleted"]},

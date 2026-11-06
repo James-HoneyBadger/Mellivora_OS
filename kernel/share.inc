@@ -80,6 +80,7 @@ SH_MSG_SVC        equ 0x15
 SH_MSG_LOGON      equ 0x16
 SH_MSG_LOGONPROOF equ 0x17
 SH_MSG_PRINT      equ 0x18
+SH_MSG_RPC        equ 0x19            ; a remote procedure call (rpc.inc)
 
 ; Refusal reasons
 SH_ERR_NO_SHARE   equ 1
@@ -960,6 +961,8 @@ share_session_parse:
         je .spr_logonproof
         cmp eax, SH_MSG_PRINT
         je .spr_print
+        cmp eax, SH_MSG_RPC
+        je .spr_rpc
         jmp .spr_drop
 
 ;--- HELLO: choose the share, answer with a challenge --------------------
@@ -1075,6 +1078,30 @@ share_session_parse:
 .spr_deny_proof:
         mov al, SH_ERR_BAD_PROOF
         jmp .spr_deny
+
+;--- RPC ----------------------------------------------------------------
+.spr_rpc:
+        ; A call needs an authenticated session: the interface table is not
+        ; public, and a management verb that changed a setting on an
+        ; unauthenticated connection would be the whole point of the check.
+        call share_require_ready
+        jc .spr_drop
+        mov edi, [share_cur_sess]
+        lea esi, [edi + SH_S_RX + SHARE_HDR_LEN]
+        ; [share_cur_total] counts the MAC as well; the frame is the header
+        ; plus the payload, which is [share_cur_body].
+        mov ecx, [share_cur_body]
+        sub ecx, SHARE_HDR_LEN
+        call rpc_dispatch
+        mov dword [share_send_type], SH_MSG_RPC
+        mov edi, [share_cur_sess]
+        add edi, SH_S_KEY
+        mov [share_send_key], edi
+        mov esi, rpc_reply_buf
+        mov ecx, [rpc_reply_len]
+        call share_session_send_raw
+        call share_consume
+        jmp .spr_done
 
 ;--- VIEW ---------------------------------------------------------------
 .spr_view:
@@ -4530,6 +4557,532 @@ share_logon_verify:
         ret
 
 ;=======================================================================
+; RPC over the share transport (rpc.inc holds the dispatcher)
+;=======================================================================
+
+;-----------------------------------------------------------------------
+; rpc_client_call - send the frame in rpc_req_buf, take the reply frame
+;   In : an open session (rpc_open_session has succeeded)
+;   Out: CF clear: reply in share_cl_reply/[share_cl_len];
+;        CF set: the transport failed. A server refusal is NOT a failure
+;        here - it arrives as a status in the reply frame, so a caller can
+;        tell "the wire was down" from "the server said no".
+;-----------------------------------------------------------------------
+rpc_client_call:
+        pushad
+        mov al, SH_MSG_RPC
+        mov esi, rpc_req_buf
+        mov ecx, [rpc_frame_len]
+        call share_client_call
+        cmp eax, -1
+        je .rcc_fail
+        cmp eax, RPC_REP_LEN
+        jb .rcc_fail
+        popad
+        clc
+        ret
+.rcc_fail:
+        popad
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; rpc_open_session - open the command's target as a share session
+;   In : [share_arg_ip], share_arg_share, share_arg_secret
+;   Out: CF set when the session could not be opened
+;-----------------------------------------------------------------------
+rpc_open_session:
+        push eax
+        push ebx
+        push edx
+        mov eax, [share_arg_ip]
+        mov ebx, share_arg_share
+        mov edx, share_arg_secret
+        cmp byte [share_arg_secret], 0
+        jne .ros_secret
+        xor edx, edx
+.ros_secret:
+        call share_client_open
+        cmp eax, -1
+        je .ros_fail
+        pop edx
+        pop ebx
+        pop eax
+        clc
+        ret
+.ros_fail:
+        pop edx
+        pop ebx
+        pop eax
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; rpc_call_share - open a session, run the frame, close the session
+;   In : [share_arg_ip], share_arg_share, share_arg_secret, rpc_req_buf
+;   Out: CF clear: reply in share_cl_reply/[share_cl_len]; CF set: no reply
+;-----------------------------------------------------------------------
+rpc_call_share:
+        pushad
+        call rpc_open_session
+        jc .rcs_fail
+        call rpc_client_call
+        jc .rcs_fail_open
+        call share_client_close
+        popad
+        clc
+        ret
+.rcs_fail_open:
+        call share_client_close
+.rcs_fail:
+        popad
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; rpc_resolve_host - share_arg_host -> [share_arg_ip]
+;   Out: CF set when the name does not resolve
+;-----------------------------------------------------------------------
+rpc_resolve_host:
+        push eax
+        push esi
+        mov esi, share_arg_host
+        call parse_ip
+        test eax, eax
+        jnz .rrh_ok
+        mov esi, share_arg_host
+        call dns_resolve
+        test eax, eax
+        jz .rrh_fail
+.rrh_ok:
+        mov [share_arg_ip], eax
+        pop esi
+        pop eax
+        clc
+        ret
+.rrh_fail:
+        pop esi
+        pop eax
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; rpc_report_status - print why the server refused a call
+;   In : EAX = the status from the reply frame
+;-----------------------------------------------------------------------
+rpc_report_status:
+        ; ESI first, then EAX: popped in that order, the status is what comes
+        ; back out. The other way round printed a string pointer as the status.
+        push esi
+        push eax
+        mov esi, msg_rpc_status
+        call vga_print
+        pop eax
+        call vga_print_dec
+        mov esi, msg_rpc_status_why
+        call vga_print
+        pop esi
+        ret
+
+;-----------------------------------------------------------------------
+; rpc_report_open - print why no session could be opened
+;
+; A refused secret and an unreachable server look nothing alike from the
+; client: the first drops the connection during the handshake. Say which,
+; rather than leaving the same message for both.
+;-----------------------------------------------------------------------
+rpc_report_open:
+        cmp byte [share_client_err], 0x13
+        jne .rro_plain
+        mov esi, msg_share_dropped
+        jmp .rro_print
+.rro_plain:
+        mov esi, msg_rpc_no_session
+.rro_print:
+        call vga_print
+        ret
+
+;=======================================================================
+; cmd_net_cfg - "net cfg HOST SHARE get KEY [SECRET]"
+;               "net cfg HOST SHARE set KEY VALUE [SECRET]"
+;
+; Configuration management over RPC (NETWORK.md section 6): the call carries
+; a Sett path and the far machine answers with the value. A value is one
+; word - the shell has no quoting yet, and pretending otherwise would make
+; `set X a b` look like it worked.
+;   In : ESI = rest of the command line
+;=======================================================================
+cmd_net_cfg:
+        pushad
+        mov byte [.ncf_is_get], 0
+        call skip_spaces
+        mov edi, share_arg_host
+        mov ecx, 63
+        call copy_word_n
+        cmp byte [share_arg_host], 0
+        je .ncf_usage
+        call skip_spaces
+        mov edi, share_arg_share
+        mov ecx, SHARE_NAME_LEN - 1
+        call copy_word_n
+        cmp byte [share_arg_share], 0
+        je .ncf_usage
+        call skip_spaces
+        mov edi, share_arg_op
+        mov ecx, 15
+        call copy_word_n
+        cmp byte [share_arg_op], 0
+        je .ncf_usage
+        call skip_spaces
+        mov edi, share_arg_file
+        mov ecx, 127
+        call copy_word_n
+        cmp byte [share_arg_file], 0
+        je .ncf_usage
+
+        ; The line pointer has to be kept: str_compare restores ESI to the word
+        ; it was given, so reading the secret through ESI afterwards reads the
+        ; verb again - the same trap cmd_net_svc documents for its own lookup.
+        mov [.ncf_line], esi
+        mov esi, share_arg_op
+        mov edi, net_cfg_get_word
+        call str_compare
+        jz .ncf_get
+        mov esi, share_arg_op
+        mov edi, net_cfg_set_word
+        call str_compare
+        jz .ncf_set
+        jmp .ncf_usage
+
+.ncf_get:
+        mov byte [.ncf_is_get], 1
+        mov esi, [.ncf_line]
+        mov byte [share_arg_secret], 0
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ncf_build_get
+        mov edi, share_arg_secret
+        mov ecx, 63
+        call copy_word_n
+.ncf_build_get:
+        ; body = the key; the handler terminates what it copies
+        mov esi, share_arg_file
+        call rpc_strlen
+        mov edx, eax
+        mov esi, share_arg_file
+        mov eax, rpc_id_config
+        mov ebx, (1 << 8) | 0
+        mov ecx, RPC_CONFIG_GET
+        jmp .ncf_send
+
+.ncf_set:
+        mov esi, [.ncf_line]
+        call skip_spaces
+        mov edi, share_arg_password
+        mov ecx, 63
+        call copy_word_n
+        cmp byte [share_arg_password], 0
+        je .ncf_usage
+        mov byte [share_arg_secret], 0
+        call skip_spaces
+        cmp byte [esi], 0
+        je .ncf_build_set
+        mov edi, share_arg_secret
+        mov ecx, 63
+        call copy_word_n
+.ncf_build_set:
+        ; body = key \0 value \0
+        mov edi, rpc_body_buf
+        mov esi, share_arg_file
+        call rpc_str_copy
+        inc edi
+        mov esi, share_arg_password
+        call rpc_str_copy
+        inc edi
+        mov eax, edi
+        sub eax, rpc_body_buf
+        mov edx, eax
+        mov esi, rpc_body_buf
+        mov eax, rpc_id_config
+        mov ebx, (1 << 8) | 0
+        mov ecx, RPC_CONFIG_SET
+
+.ncf_send:
+        ; EAX = interface, EBX = version, ECX = opnum, ESI = body, EDX = length
+        call rpc_build_frame
+        jc .ncf_too_big
+        call rpc_resolve_host
+        jc .ncf_nohost
+        call rpc_call_share
+        jc .ncf_no_session
+
+        mov esi, share_cl_reply
+        mov eax, [esi + RPC_REP_STATUS]
+        test eax, eax
+        jnz .ncf_refused
+        cmp byte [.ncf_is_get], 0
+        je .ncf_set_ok
+        ; "key = value", the same line `sett get` prints. A bare value would
+        ; leave the reply with nothing saying what it belongs to.
+        mov esi, share_arg_file
+        call vga_print
+        mov esi, msg_rpc_equals
+        call vga_print
+        lea esi, [share_cl_reply + RPC_REP_LEN]
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        popad
+        ret
+.ncf_set_ok:
+        mov esi, msg_rpc_set_ok
+        call vga_print
+        mov esi, share_arg_file
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        popad
+        ret
+.ncf_refused:
+        call rpc_report_status
+        popad
+        ret
+.ncf_no_session:
+        call rpc_report_open
+        popad
+        ret
+.ncf_nohost:
+        mov esi, msg_share_no_host
+        call vga_print
+        popad
+        ret
+.ncf_too_big:
+        mov esi, msg_rpc_too_big
+        call vga_print
+        popad
+        ret
+.ncf_usage:
+        mov esi, msg_rpc_usage_cfg
+        call vga_print
+        popad
+        ret
+.ncf_is_get: db 0
+.ncf_line:   dd 0
+
+;=======================================================================
+; cmd_net_log - "net log HOST SHARE [SECRET]"
+;
+; The far machine's event log over RPC, newest last, one record per line:
+; level letter, source, text - the shape `chronicle` prints, so a person who
+; has read one has read the other. The session is opened once and carries
+; every read: a dump of twenty records is twenty calls, not twenty handshakes.
+;   In : ESI = rest of the command line
+;=======================================================================
+NET_LOG_SHOWN equ 20
+
+cmd_net_log:
+        pushad
+        call skip_spaces
+        mov edi, share_arg_host
+        mov ecx, 63
+        call copy_word_n
+        cmp byte [share_arg_host], 0
+        je .nl_usage
+        call skip_spaces
+        mov edi, share_arg_share
+        mov ecx, SHARE_NAME_LEN - 1
+        call copy_word_n
+        cmp byte [share_arg_share], 0
+        je .nl_usage
+        mov byte [share_arg_secret], 0
+        call skip_spaces
+        cmp byte [esi], 0
+        je .nl_resolved
+        mov edi, share_arg_secret
+        mov ecx, 63
+        call copy_word_n
+.nl_resolved:
+        call rpc_resolve_host
+        jc .nl_nohost
+        call rpc_open_session
+        jc .nl_no_session
+
+        ; COUNT first: the number of lines is the far machine's answer, not
+        ; an assumption about how many records it keeps.
+        mov eax, rpc_id_eventlog
+        mov ebx, (1 << 8) | 0
+        mov ecx, RPC_EVENTLOG_COUNT
+        xor esi, esi
+        xor edx, edx
+        call rpc_build_frame
+        call rpc_client_call
+        jc .nl_stopped
+        mov esi, share_cl_reply
+        mov eax, [esi + RPC_REP_STATUS]
+        test eax, eax
+        jnz .nl_refused
+
+        mov eax, [esi + RPC_REP_LEN]
+        mov [.nl_total], eax
+        test eax, eax
+        jz .nl_empty
+        cmp eax, NET_LOG_SHOWN
+        jbe .nl_have_count
+        mov eax, NET_LOG_SHOWN
+.nl_have_count:
+        mov [.nl_count], eax
+        mov ebx, [.nl_total]
+        sub ebx, eax                     ; first index to show
+        mov [.nl_index], ebx
+        mov [.nl_left], eax
+
+        mov esi, msg_rpc_log_head
+        call vga_print
+        mov eax, [.nl_count]
+        call vga_print_dec
+        mov esi, msg_rpc_log_tail
+        call vga_print
+
+.nl_loop:
+        cmp dword [.nl_left], 0
+        je .nl_done
+        mov eax, [.nl_index]
+        mov [rpc_body_buf], eax
+        mov eax, rpc_id_eventlog
+        mov ebx, (1 << 8) | 0
+        mov ecx, RPC_EVENTLOG_READ
+        mov esi, rpc_body_buf
+        mov edx, 4
+        call rpc_build_frame
+        call rpc_client_call
+        jc .nl_stopped
+        mov esi, share_cl_reply
+        mov eax, [esi + RPC_REP_STATUS]
+        test eax, eax
+        jnz .nl_stopped
+        call .nl_print_record
+        inc dword [.nl_index]
+        dec dword [.nl_left]
+        jmp .nl_loop
+
+.nl_done:
+        call share_client_close
+        popad
+        ret
+
+.nl_print_record:
+        pushad
+        mov esi, share_cl_reply + RPC_REP_LEN
+        mov [.nl_rec], esi
+        movzx eax, byte [esi]
+        cmp eax, 3
+        jbe .nl_level_ok
+        xor eax, eax
+.nl_level_ok:
+        mov esi, bootlog_levels
+        add esi, eax
+        mov al, [esi]
+        call vga_putchar
+        mov al, ' '
+        call vga_putchar
+        mov esi, [.nl_rec]
+        add esi, 5                       ; source
+        call vga_print
+        mov esi, msg_rpc_log_colon
+        call vga_print
+        mov esi, [.nl_rec]
+        add esi, 21                      ; text
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        popad
+        ret
+
+.nl_empty:
+        call share_client_close
+        mov esi, msg_rpc_log_empty
+        call vga_print
+        popad
+        ret
+.nl_stopped:
+        call share_client_close
+        mov esi, msg_rpc_log_stopped
+        call vga_print
+        popad
+        ret
+.nl_refused:
+        call share_client_close
+        call rpc_report_status
+        popad
+        ret
+.nl_no_session:
+        call rpc_report_open
+        popad
+        ret
+.nl_nohost:
+        mov esi, msg_share_no_host
+        call vga_print
+        popad
+        ret
+.nl_usage:
+        mov esi, msg_rpc_usage_log
+        call vga_print
+        popad
+        ret
+.nl_count: dd 0
+.nl_total: dd 0
+.nl_index: dd 0
+.nl_left:  dd 0
+.nl_rec:   dd 0
+
+;=======================================================================
+; cmd_net_iface - "net iface": the interfaces this machine serves
+;
+; The binding table made visible: an interface, its version and how many
+; operations it has. It is what a client reads out of \RpcControl, and the
+; thing to run when a call answers "unknown interface".
+;=======================================================================
+cmd_net_iface:
+        pushad
+        mov esi, msg_rpc_iface_head
+        call vga_print
+        xor ebx, ebx
+.nif_loop:
+        cmp ebx, [rpc_iface_count]
+        jae .nif_done
+        mov esi, msg_rpc_iface_item
+        call vga_print
+        mov eax, ebx
+        imul eax, RPC_E_SIZE
+        lea esi, [rpc_ifaces + eax]
+        call vga_print                     ; the id text
+        mov esi, msg_rpc_iface_ver
+        call vga_print
+        mov eax, ebx
+        imul eax, RPC_E_SIZE
+        movzx eax, byte [rpc_ifaces + eax + RPC_E_MAJOR]
+        call vga_print_dec
+        mov al, '.'
+        call vga_putchar
+        mov eax, ebx
+        imul eax, RPC_E_SIZE
+        movzx eax, byte [rpc_ifaces + eax + RPC_E_MINOR]
+        call vga_print_dec
+        mov esi, msg_rpc_iface_ops
+        call vga_print
+        mov eax, ebx
+        imul eax, RPC_E_SIZE
+        movzx eax, word [rpc_ifaces + eax + RPC_E_OPCOUNT]
+        call vga_print_dec
+        mov al, 0x0A
+        call vga_putchar
+        inc ebx
+        jmp .nif_loop
+.nif_done:
+        popad
+        ret
+
+;=======================================================================
 ; share_init - one-time setup
 ;=======================================================================
 share_init:
@@ -4570,6 +5123,11 @@ net_svc_word:   db "svc", 0
 net_logon_word: db "logon", 0
 net_print_word: db "print", 0
 net_sess_word:  db "sess", 0
+net_cfg_word:   db "cfg", 0
+net_log_word:   db "log", 0
+net_iface_word: db "iface", 0
+net_cfg_get_word: db "get", 0
+net_cfg_set_word: db "set", 0
 
 ; Drop the word at ESI and the spaces after it.
 skip_one_word:
@@ -4701,6 +5259,24 @@ msg_share_no_write:    db "net: the server could not store the job", 0x0A, 0
 msg_share_spool_full:  db "net: the server's print spool is full", 0x0A, 0
 msg_share_too_big:     db "net: the job is larger than the spool buffer", 0x0A, 0
 msg_share_print_usage: db "Usage: net print HOST SHARE LOCALFILE [SECRET]", 0x0A, 0
+msg_rpc_usage_cfg:   db "Usage: net cfg HOST SHARE get KEY [SECRET] | net cfg HOST SHARE set KEY VALUE [SECRET]", 0x0A, 0
+msg_rpc_usage_log:   db "Usage: net log HOST SHARE [SECRET]", 0x0A, 0
+msg_rpc_status:      db "net: the server refused the call, status ", 0
+msg_rpc_status_why:  db " (unknown interface, version, opnum or argument)", 0x0A, 0
+msg_rpc_no_session:  db "net: could not open a session to the server", 0x0A, 0
+msg_rpc_too_big:     db "net: the call does not fit one message", 0x0A, 0
+msg_rpc_set_ok:      db "net: set ", 0
+msg_rpc_equals:      db " = ", 0
+msg_rpc_log_head:    db "Event log: the last ", 0
+msg_rpc_log_tail:    db " records", 0x0A, 0
+msg_rpc_log_colon:   db ": ", 0
+msg_rpc_log_empty:   db "Event log: nothing recorded", 0x0A, 0
+msg_rpc_log_stopped: db "net: the event log could not be read to the end", 0x0A, 0
+msg_rpc_iface_head:  db "Interfaces served:", 0x0A, 0
+msg_rpc_iface_item:  db "  ", 0
+msg_rpc_iface_ver:   db "  v", 0
+msg_rpc_iface_ops:   db " ops ", 0
+
 msg_share_svc_stopped:  db "stopped", 0
 msg_share_svc_running:  db "running", 0
 msg_share_svc_stopping: db "stopping", 0

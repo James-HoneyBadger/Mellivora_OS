@@ -226,8 +226,18 @@ SCORECARD: list[Row] = [
                   ("file", "tools/hbbuild.py")]),
     Row(13, "Administer remotely",
         "Remote console, remote service and configuration management",
-        required=[("kernel", r"\bremote_admin\b"), ("kernel", r"\brpc_")],
-        evidence=[("kernel", r"\bremote_\w+\b")]),
+        # The wire, not the names. `remote_admin` was never a symbol in this
+        # tree and `rpc_` was not either when the row was written, so the row
+        # was describing an intention. These are steps machine b takes against
+        # machine a in tests/test_two_vms.sh, plus the remote console, which
+        # does not exist yet and is what keeps the row partial.
+        required=[("step", "net svc 10.0.0.1 docs pt start s3cret"),
+                  ("step", "net cfg 10.0.0.1 docs set \\\\Registry\\\\Machine\\\\RpcRemote\\\\Proof over-the-wire s3cret"),
+                  ("kernel", r"\brpc_"),
+                  ("kernel", r"\bremote_console\b")],
+        evidence=[("step", "net log 10.0.0.1 docs s3cret"),
+                  ("case", "configuration is set and read on the other machine"),
+                  ("file", "kernel/rpc.inc")]),
     Row(14, "Play media",
         "Mixed audio from several programs, video playback, a media framework",
         required=[("syscall", "SYS_AUDIO_OPEN"), ("kernel", r"\baudio_mix\b"),
