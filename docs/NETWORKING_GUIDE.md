@@ -282,6 +282,56 @@ that does not exist. The management interfaces are not public: a call on a
 connection that has not finished the handshake is dropped, and a wrong secret
 reports `net: the server dropped the session (wrong secret?)`.
 
+### The firewall — `net fw`
+
+Inbound connections are denied until a rule admits them, and outbound is
+allowed without a rule. Loopback is always exempt and is not counted, so
+everything on this machine talks to itself as before; a reply to something this
+machine sent is admitted by state, which is why DHCP and DNS keep working with
+no rule at all.
+
+That means a share is not reachable from another machine until the machine
+serving it says so:
+
+```text
+Lair:/> net fw
+Firewall: on
+Rules: 0
+Admitted: 0   Blocked: 1 (udp 0)
+Lair:/> net fw add tcp 4450
+fw: rule 0  tcp 4450 any
+Lair:/> net view 10.0.0.1
+Shares on 10.0.0.1:4450
+docs
+```
+
+A rule is three words — protocol, port, and an optional remote address with a
+prefix length:
+
+```text
+Lair:/> net fw add tcp 8000 10.0.0.0/24
+fw: rule 2  tcp 8000 10.0.0.0/24
+Lair:/> net fw list
+Rules (index, then the line the Sett holds):
+  0  tcp 4450 any
+  1  udp 53 any
+  2  tcp 8000 10.0.0.0/24
+Lair:/> net fw del 1
+fw: rule 1 removed
+```
+
+`net fw off` stops the check (the store remembers it); `net fw on` starts it
+again. The rules live in `\Registry\Machine\System\Firewall` and are read at
+boot, so editing them with `sett set` works too — `net fw reload` applies the
+edit without a restart, and the line `net fw list` prints is exactly the line
+that was accepted. A value that does not parse is refused and counted rather
+than quietly ignored.
+
+A blocked connection is counted and, the first time a given address is seen,
+written to the boot log as `fw: blocked inbound from 10.0.0.2`. The packet is
+dropped rather than answered, so the other machine waits out its connect
+timeout and reports `net: cannot reach the share service`.
+
 ---
 
 ## Networking Programs

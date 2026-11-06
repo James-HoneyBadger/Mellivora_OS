@@ -20,6 +20,11 @@
 # It also proves the permission model on the wire: a read-only export refuses a
 # write that the writable one accepts, and a wrong secret loses the session.
 #
+# And it is the only place the firewall can be proved. The contract exempts
+# loopback, so a single machine cannot show a blocked connection: machine B is
+# refused with no rule for 4450, A counts the refusal, `net fw add tcp 4450`
+# admits the next attempt, and deleting the rule refuses it again.
+#
 # The image is opened with -snapshot by each machine, so the run leaves it
 # untouched and the two guests cannot see each other's local writes.
 #
@@ -92,10 +97,26 @@ PLAN="$(cat <<'JSON'
     {"node": "a", "run": "sc create pt /bin/svcrun manual",
      "expect": ["sc: created pt"]},
 
+    {"node": "a", "run": "net fw",
+     "name": "[a] the firewall is on, and has no rule for 4450",
+     "expect": ["Firewall: on", "Rules: 0"]},
+
     {"node": "b", "run": "ifconfig 10.0.0.2",
      "expect": ["IP set to 10.0.0.2"]},
     {"node": "b", "run": "net view 10.0.0.1",
+     "name": "[b] refused: the default is inbound deny",
+     "expect": ["cannot reach the share service"], "reject": ["docs"],
+     "timeout": 60},
+    {"node": "a", "run": "net fw",
+     "name": "[a] the refusal is counted",
+     "expect": ["Blocked: 1"]},
+    {"node": "a", "run": "net fw add tcp 4450",
+     "expect": ["fw: rule 0"]},
+    {"node": "b", "run": "net view 10.0.0.1",
      "expect": ["Shares on 10.0.0.1:4450", "docs", "ro"], "timeout": 40},
+    {"node": "a", "run": "net fw",
+     "name": "[a] one refusal, and the rule admitted the rest",
+     "expect": ["Blocked: 1"]},
     {"node": "b", "run": "net use 10.0.0.1 docs /mnt s3cret",
      "expect": ["Mounted /mnt from docs"], "timeout": 40},
     {"node": "b", "run": "dir /mnt", "expect": ["readme.txt"], "timeout": 40},
@@ -145,6 +166,8 @@ PLAN="$(cat <<'JSON'
     {"node": "a", "run": "del /docs/btest.txt", "name": "[a] drop the received file"},
     {"node": "a", "run": "sett delkey \\Registry\\Machine\\RpcRemote",
      "name": "[a] drop the key written from across the wire"},
+    {"node": "a", "run": "net fw del 0",
+     "expect": ["fw: rule 0 removed"]},
     {"node": "a", "run": "net share -d docs", "expect": ["Share removed"]},
     {"node": "a", "run": "net share -d ro", "expect": ["Share removed"]},
     {"node": "a", "run": "account del alice", "expect": ["account: deleted"]},

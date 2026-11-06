@@ -2789,7 +2789,19 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_net_iface
         pop esi
+        push esi
+        call skip_spaces
+        mov edi, net_fw_word
+        call str_starts_with
+        jc .cmd_net_fw
+        pop esi
         call cmd_net_status
+        ret
+.cmd_net_fw:
+        pop esi
+        call skip_spaces
+        call skip_one_word
+        call cmd_net_fw
         ret
 .cmd_net_sess:
         pop esi

@@ -973,6 +973,38 @@ run_case "the rpc binding table is served" \
     "net iface" \
     "Interfaces served:|mv.rpc/config|mv.rpc/eventlog" "" \
     "CPU EXCEPTION|PAGE FAULT|serves no interfaces"
+# NETWORK.md section 7. Loopback is exempt from the firewall by contract, so
+# these cases cover the rule store and the one thing loopback cannot show - the
+# block itself is proved on the wire in tests/test_two_vms.sh, where two
+# machines have addresses that are not each other's.
+run_case "a firewall rule is stored where the next boot reads it" \
+    $'net fw add tcp 4450\nnet fw list\nsett get \\Registry\\Machine\\System\\Firewall Rule0' \
+    "0  tcp 4450 any|= tcp 4450 any" "" \
+    "CPU EXCEPTION|PAGE FAULT|not added"
+# Deleting one rule shifts the ones after it down, in memory and in the store:
+# the rule that was second is now first, under the name the next boot reads.
+run_case "a deleted firewall rule leaves the store compact" \
+    $'net fw add udp 53 any\nnet fw add tcp 8000 10.0.0.0/24\nnet fw del 0\nnet fw list' \
+    "fw: rule 0 removed|0  tcp 8000 10.0.0.0/24" "" \
+    "CPU EXCEPTION|PAGE FAULT|no such rule"
+# The store is the source of truth: a rule written with `sett set` is picked up
+# by `reload`, and a line that does not parse is refused (and counted) rather
+# than silently ignored - the difference between a typo and a policy.
+run_case "the firewall reloads its rules from the store" \
+    $'sett set \\Registry\\Machine\\System\\Firewall Rule0 str nonsense\nsett set \\Registry\\Machine\\System\\Firewall Rule1 str tcp 4450 any\nnet fw reload\nnet fw list' \
+    "reloaded 1 rule(s), and refused 1|0  tcp 4450 any" "" \
+    "CPU EXCEPTION|PAGE FAULT|reloaded 0"
+run_case "the firewall is on until it is told otherwise" \
+    $'net fw\nnet fw off\nnet fw\nnet fw on\nnet fw' \
+    "Firewall: on|Firewall: off|fw: on" "" \
+    "CPU EXCEPTION|PAGE FAULT"
+# The other half of the contract: an address on this machine is not an inbound
+# connection, so a loopback server is reachable with no rule at all and the
+# counters stay at zero - not "one connection, admitted by an exemption".
+run_case "loopback is not counted as an inbound connection" \
+    $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat\nnet fw' \
+    "HTTP/1.0 200 OK|Blocked: 0" "" \
+    "CPU EXCEPTION|PAGE FAULT|connection failed" "" "" "" 40
 run_case "a loopback server answers a request" \
     $'httpd 8000 &\ncurl http://127.0.0.1:8000/script.bat' \
     "HTTP/1.0 200 OK|Hello from batch file" "" \

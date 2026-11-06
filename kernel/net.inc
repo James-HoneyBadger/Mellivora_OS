@@ -1667,6 +1667,12 @@ udp_handle:
         shl ebx, 8
         mov bl, [esi+3]        ; dest port (big-endian -> host)
 
+        ; NETWORK.md section 7: the receive path is the other enforcement
+        ; point. A reply to a datagram this machine sent is admitted by state,
+        ; so DHCP and DNS still work; anything else needs a rule.
+        call fw_udp_gate
+        jc .udp_h_done
+
         ; Payload starts at offset 8
         add esi, 8
         sub ecx, 8
@@ -1742,6 +1748,13 @@ udp_send:
         mov [net_udp_local_port], dx
         mov [net_udp_payload], esi
         mov [net_udp_payload_len], ecx
+
+        ; The flow is remembered before the datagram leaves, so the reply is
+        ; state rather than an inbound connection (NETWORK.md section 7).
+        movzx ecx, word [net_udp_local_port]
+        movzx ebx, word [net_udp_dst_port]
+        mov eax, [net_udp_dst_ip]
+        call fw_flow_record
 
         ; Build UDP header in net_udp_buf
         mov edi, net_udp_buf
@@ -2073,6 +2086,16 @@ tcp_handle:
         ; Received SYN?
         test byte [net_tcp_flags], TCP_SYN
         jz .tcp_h_done
+
+        ; NETWORK.md section 7: the accept path is an enforcement point. A SYN
+        ; that no rule admits and that is not loopback is dropped here, before
+        ; a socket is spent on it - the segment is not answered, so a scan
+        ; learns nothing about which ports exist.
+        mov eax, IP_PROTO_TCP
+        movzx ebx, word [ebp + SOCK_LOCAL_PORT]
+        mov edx, [net_recv_src_ip]
+        call fw_inbound_ok
+        jc .tcp_h_done
 
         ; v3.0: Allocate a child socket for this connection
         ; so the parent stays in LISTEN for more connections.

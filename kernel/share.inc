@@ -5126,6 +5126,7 @@ net_sess_word:  db "sess", 0
 net_cfg_word:   db "cfg", 0
 net_log_word:   db "log", 0
 net_iface_word: db "iface", 0
+net_fw_word:    db "fw", 0
 net_cfg_get_word: db "get", 0
 net_cfg_set_word: db "set", 0
 

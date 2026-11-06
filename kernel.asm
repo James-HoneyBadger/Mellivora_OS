@@ -949,6 +949,9 @@ kernel_entry:
         ; \RpcControl. Registered after the Sett is loaded, because a binding
         ; is a Sett value and has to be written into the machine hive.
         call rpc_init
+        ; The inbound rules, out of the same hive: the firewall is on before
+        ; the share server can be reached, not after the first packet.
+        call fw_init
         call sess_boot
         LOGBOOT LOG_INFO, log_sessions
         call svc_boot
@@ -1033,5 +1036,6 @@ kernel_entry:
 %include "kernel/cmdtable.inc"
 %include "kernel/cmod.inc"
 %include "kernel/rpc.inc"
+%include "kernel/firewall.inc"
 %include "kernel/share.inc"
 %include "kernel/data.inc"

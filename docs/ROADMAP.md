@@ -793,12 +793,34 @@ The test harness had a matching hole: `run_case` split an `--expect` list on
 nothing - the fault check included. 151 reject lists were inert. They are split
 now, which is why the runtime matrix below is stricter than it was.
 
-Still open in M7: the firewall (bullet four, conformance item five), the remote
-console, per-capability privileges on the management calls, `net_test` with
-fragmentation and reassembly (the stack has neither), `share_test` at 1 000
-files with leases and reconnect, and `packet_fuzz` as a gate rather than a
-default. Impersonation is parsed and bounded but carries no authority, because
-the transport authenticates a secret and not a user.
+**The firewall turned on and the share stopped answering, which is the point.**
+Inbound is denied by default now, so the two-machine plan had to be taught what
+an administrator does on a real workstation: B is refused, A counts the refusal
+and writes `fw: blocked inbound from 10.0.0.2` to its boot log once, `net fw add
+tcp 4450` admits the next attempt, and deleting the rule refuses it again. Four
+things make that honest rather than a screen: loopback is exempt before the
+rules are consulted and is not counted, so every loopback test in the suite
+still means what it did; a reply to a datagram this machine sent is admitted by
+state, so DHCP and DNS need no rule and a flow sent to a broadcast accepts the
+answer from a server whose address it did not know; the decision is taken in
+`tcp_handle`'s listen state before a child socket is allocated and in
+`udp_handle` before DHCP, DNS or a socket sees the datagram; and a blocked
+packet is dropped rather than reset, because a reset would tell a scanner which
+ports exist.
+
+Rules are Sett values under `\Registry\Machine\System\Firewall`, written
+back as normalized text so what reloads is what was accepted, and edited with
+`net fw` - `list`, `add`, `del`, `on`, `off`. What is not there: no
+application-image match, no per-package port declaration with the approval
+prompt bullet four asks for, and no rule that denies outbound. Those are named
+in NETWORK.md section 7.1 rather than implied.
+
+Still open in M7: the remote console, per-capability privileges on the
+management calls, `net_test` with fragmentation and reassembly (the stack has
+neither), `share_test` at 1 000 files with leases and reconnect, and
+`packet_fuzz` as a gate rather than a default. Impersonation is parsed and
+bounded but carries no authority, because the transport authenticates a secret
+and not a user.
 
 ### M8 · Devices and media (16–22 weeks)
 
