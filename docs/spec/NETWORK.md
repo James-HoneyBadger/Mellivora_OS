@@ -16,6 +16,7 @@ compatibility project and a half-finished one satisfies nobody.
 |---|---|
 | Protocols | `TCP`, `UDP`, `ICMP`, `ARP`, `DHCP`, `DNS` as the transport set; `TCP` and `UDP` are what applications see |
 | Addressing | IPv4 first-class; IPv6 out of scope for parity, with the socket layer written so it is an address family rather than a rewrite |
+| Scope of the machine | A self-contained OS: the stack speaks TCP/IP on the wire it is given — to itself on loopback, and to another Mellivora machine on a shared segment. Connection sharing (NAT), dial-up (PPP) and VPN tunnels are out of scope by decision, so this is not a router, a dial-up peer or a tunnel endpoint ([ROADMAP](../ROADMAP.md#m7--networking-the-2000-kind-1318-weeks)) |
 | The socket is an object | A handle, rights, waits and completions ([OBJECTS.md](OBJECTS.md#3-types)) — not a number in a table |
 | Compatibility | The existing socket syscalls keep working forever ([S3](README.md#decisions-this-set-records)) and are implemented over the socket object |
 | Security | A bind below 1024 needs `SE_NETWORK_BIND_LOW`; every listening endpoint has an ACL; the firewall is default-deny inbound ([§7](#7-firewall)) |

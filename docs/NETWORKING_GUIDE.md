@@ -804,7 +804,10 @@ qemu-system-i386 ... -netdev user,id=net0 -device rtl8139,netdev=net0
 ```
 
 This provides NAT networking where the guest can access the host network and internet
-through QEMU's built-in router. No host configuration is required.
+through QEMU's built-in router. No host configuration is required. The emulator is
+doing the sharing, not the guest: Mellivora puts TCP/IP on the wire it is given and
+does not route, share a connection or tunnel for anything
+([ROADMAP](ROADMAP.md#m7--networking-the-2000-kind-1318-weeks)).
 
 ### Port Forwarding
 

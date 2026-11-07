@@ -701,7 +701,10 @@ the package, its association and the profile leaves `repair` reporting
 - Network logon against another Mellivora machine, in a workgroup model.
 - A remote procedure call mechanism for remote service and configuration control —
   the foundation of remote administration.
-- A firewall with a rules interface, connection sharing, and dial-up or VPN.
+- A firewall with a rules interface. Connection sharing, dial-up and VPN were
+  planned here and are now out of scope: this is a self-contained OS, and its
+  networking ends at the wire it is given — see the note under the M7 open
+  list.
 - Remote console and remote management: service control, configuration, event log
   and file transfer against a workstation, without a graphical session.
 
@@ -902,9 +905,6 @@ that no interactive test would have, which is the argument for the item existing
 
 Still open in M7, and named so the milestone is not read as closed:
 
-- **Connection sharing, dial-up and VPN** - bullet four's other halves. The
-  firewall is built; there is no NAT for a second machine, no PPP, and no
-  tunnel.
 - **A per-user privilege model.** `/admin` is per share, and the shell behind it
   is SYSTEM, so the flag buys SYSTEM rather than the client's own rights.
   Impersonation is parsed and bounded but carries no authority, because the
@@ -919,6 +919,14 @@ Still open in M7, and named so the milestone is not read as closed:
   and the loopback cases.
 - **Den's services snap-in**, so the exit line's "from Den" is met by the
   desktop rather than by `net svc`.
+
+Out of scope by decision, not by omission: **connection sharing (NAT), dial-up
+(PPP) and VPN tunnels.** Bullet four named them; they are dropped because this
+stays a self-contained OS. Its stack speaks TCP/IP on the wire it is given - to
+itself on loopback, and to another Mellivora machine on a shared segment - and
+it does not become a router, a dial-up peer, or a tunnel endpoint. DHCP and DNS
+stay, because they are how a machine learns its own address and resolves names
+on whatever wire it finds itself on.
 
 ### M8 · Devices and media (16–22 weeks)
 
