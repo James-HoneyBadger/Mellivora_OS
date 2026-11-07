@@ -355,6 +355,9 @@ def main() -> int:
     afters = _opt_all(args, "--after")
     out_file = _opt(args, "--out")
     screendump = _opt(args, "--screendump")
+    # Devices to plug in, for a driver that needs something on its bus:
+    # `--device usb-kbd` is how the USB stack is asked whether it noticed.
+    devices = _opt_all(args, "--device")
     mem_mb = _opt(args, "--mem")
     smp = _opt(args, "--smp")
     cpu = _opt(args, "--cpu")
@@ -382,7 +385,8 @@ def main() -> int:
          # marker cannot be emitted before the reader exists.
          "-serial", f"unix:{ser_path},server=on,wait=on",
          "-monitor", f"unix:{mon_path},server,nowait"]
-        + (["-smp", smp] if smp else []),
+        + (["-smp", smp] if smp else [])
+        + [x for d in devices for x in ("-device", d)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     ser = None

@@ -1131,6 +1131,11 @@ fpu_shell_area:   resb FPU_AREA_SIZE                  ; the shell's x87 image
 align 16
 fpu_init_image:   resb FPU_AREA_SIZE                  ; fninit image new tasks start from
 
+; USB host controller state
+usb_io_base:      resd 1          ; UHCI controller I/O base (0 = none)
+usb_ports:        resd 1          ; root hub ports the controller reports
+usb_connected:    resd 1          ; ports with something plugged in
+
 ; Networking state (RTL8139 NIC)
 net_nic_type:     resb 1          ; 0=none 1=RTL8139 2=e1000
                   resb 3          ; alignment

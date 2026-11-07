@@ -944,6 +944,26 @@ on whatever wire it finds itself on.
 **Exit:** plug in a USB stick and copy a file, unplug it safely; three programs
 play audio simultaneously; a video plays in a window at 30 frames per second.
 
+**Started: the host controller is found and read.** `kernel/usb.inc` registers a
+driver against PCI class `0x0C03` with programming interface 0, which is a UHCI
+controller - the one a PC of this vintage has, and the one QEMU's default
+machine provides. It claims the device through the existing driver model, takes
+its I/O base out of BAR4 (refusing an unconfigured one, because I/O to port 0
+corrupts the legacy space), resets it, and reads the two root-hub port status
+registers. `make check-usb` asserts the three things that claim amounts to: the
+controller is found, the ports read as empty on a machine with nothing plugged
+in, and a device shows up as connected when one is attached (`--device usb-kbd`,
+which is what `tools/qemu_drive.py --device` was added for). The driver is
+reported by `drivers` like any other.
+
+What it is not: there is no frame list, no transfer of any kind, no descriptor
+read, no hub beyond the root ports, and no class driver. The controller is
+deliberately left stopped - running one with no schedule is a bus that answers
+nothing. The order from here is the one the milestone lists: a frame list and
+control transfers, then enumeration (device and configuration descriptors, an
+address per device), then HID, then mass storage, which is what the exit line
+actually needs.
+
 ### M9 · Reliability and management (9–13 weeks)
 
 - Crash dumps for kernel and user faults, with a tool that can read them, and a

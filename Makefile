@@ -128,7 +128,7 @@ ISO_DOCS = docs/INSTALL.md docs/USER_GUIDE.md docs/PROGRAMMING_GUIDE.md \
 # Populate script
 POPULATE = python3 populate.py
 
-.PHONY: check-fuzz all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg check-hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-twovm check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table glyphs check-glyphs check-doc-claims check-cmodule syscall-header check-syscall-header FORCE
+.PHONY: check-fuzz check-usb all clean run run-32 run-iso run-serial debug gdb symbols fsck programs populate image-rebuild full check check-parity check-parity-update check-toolchain check-boot check-desktop sanitize iso iso-check iso-lite iso-verify test-iso sizes help dev count hbpkg check-hbpkg lint validate-constants validate-syscalls validate-version validate-permissions qa-sprint1 syscalls-json syscalls-md check-syscalls-json check-syscalls-md app-catalog check-app-catalog launcher-catalog check-launcher-catalog bench bench-check bench-baseline bench-trend bench-trend-check validate-manifest validate-manifest-coverage check-samples check-qemu check-runtime check-twovm check-loader check-crypt check-perf check-perf-update check-heap crash-test check-faults check-constants check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbfs-v4 check-journal-crash check-docs check-font check-command-table glyphs check-glyphs check-doc-claims check-cmodule syscall-header check-syscall-header FORCE
 
 all: $(IMAGE)
 
@@ -739,6 +739,13 @@ check-fuzz: $(POPULATE_STAMP)
 
 # The HBX loader gate: the images that must load, every refusal in EXEC.md
 # section 8, and the flat path that must keep working (§10 item 2).
+# M8's first gate: a USB host controller found, reset and read. The milestone's
+# exit line needs a stick and a file copy; this is the step before that, and it
+# asserts exactly what the stack claims - including that it does not claim a
+# device when the ports are empty.
+check-usb: $(POPULATE_STAMP)
+	@USB_ALLOW_SKIP=1 bash tests/test_usb.sh $(IMAGE)
+
 check-loader: $(POPULATE_STAMP)
 	@LOADER_ALLOW_SKIP=1 bash tests/test_loader.sh $(IMAGE)
 
@@ -813,7 +820,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-twovm check-loader check-crypt check-perf check-heap check-desktop check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-twovm check-loader check-crypt check-perf check-heap check-desktop check-usb check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 
@@ -1090,6 +1097,7 @@ help:
 	@echo "    make check-crypt  Prove an AES-256-XTS volume round-trips and refuses a wrong key"
 	@echo "    make check-twovm  Share, mount, log on, print and control a service across two VMs"
 	@echo "    make check-fuzz   Feed a machine malformed frames (NETWORK.md item 2 is open: it fails)"
+	@echo "    make check-usb    Find the USB host controller and report what is on its ports"
 	@echo "    make lint         Run contract and NASM source lint checks"
 	@echo "    make validate-version Validate repo version strings for the current release"
 	@echo "    make check-toolchain Report which 32-bit C toolchain the build uses"

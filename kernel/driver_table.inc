@@ -97,6 +97,11 @@ drv_attach_virtio:
         xor  eax, eax
         ret
 
+drv_attach_usb:
+        call usb_init
+        xor  eax, eax
+        ret
+
 ;-----------------------------------------------------------------------
 ; Power callbacks
 ;
@@ -166,6 +171,9 @@ mt_ahci:
 mt_virtio:
         dd MT_VENDOR, 0x1AF4, 0              ; any virtio device
         dd 0
+mt_usb:
+        dd MT_PCI_CLASS, 0x0C03, 0           ; serial bus / USB
+        dd 0
 
 ;-----------------------------------------------------------------------
 ; The driver records
@@ -198,6 +206,8 @@ atadma_driver:
         dd drv_name_atadma,DRV_MATCH_TABLE, mt_atadma, drv_attach_atadma, 0, 0, DRV_ORDER_BUS + 1,  0, 0, 0
 ahci_driver:
         dd drv_name_ahci,  DRV_MATCH_TABLE, mt_ahci,   drv_attach_ahci,   0, 0, DRV_ORDER_BUS + 2,  0, 0, 0
+usb_driver:
+        dd drv_name_usb,   DRV_MATCH_TABLE, mt_usb,    drv_attach_usb,    0, 0, DRV_ORDER_BUS + 3,  0, 0, 0
 drv_module_drivers_end:
 
 DRV_MODULE_COUNT equ (drv_module_drivers_end - drv_module_drivers) / DRV_SIZE
@@ -260,6 +270,7 @@ drv_name_vbe:     db "vbe", 0
 drv_name_virtio:  db "virtio", 0
 drv_name_atadma:  db "atadma", 0
 drv_name_ahci:    db "ahci", 0
+drv_name_usb:     db "usb", 0
 
 msg_drv_register:  db "DRV_REGISTER count=", 0
 msg_drv_bound:     db "DRV_BOUND phase=", 0

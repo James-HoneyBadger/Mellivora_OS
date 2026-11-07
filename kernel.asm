@@ -1019,6 +1019,7 @@ kernel_entry:
 %include "kernel/ahci.inc"
 %include "kernel/e1000.inc"
 %include "kernel/virtio.inc"
+%include "kernel/usb.inc"
 %include "kernel/burrows.inc"
 %include "kernel/gdbstub.inc"
 %include "kernel/screensaver.inc"
