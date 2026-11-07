@@ -628,13 +628,17 @@ net_rx_drain:
         ; machine stopped taking frames for ever.
         test eax, 1                     ; ROK
         jz .rx_resync
-        cmp ecx, 8                      ; header + CRC, the least the NIC writes
-        jb .rx_resync
+        cmp ecx, 4                      ; header + CRC and nothing else: the
+        jb .rx_resync                   ; least the NIC can have written
         cmp ecx, NET_PKT_BUF_SZ
         ja .rx_resync
 
-        ; A frame this short cannot be one, but the length is believable, so
-        ; the ring entry can be stepped over.
+        ; Short enough not to be a frame, but its length is believable, so the
+        ; entry can be stepped over and the loop carried on. This matters more
+        ; than it looks: a storm of empty frames is 8 bytes each, and sending
+        ; those to the resynchronise path - which has to end the drain, because
+        ; there is nothing else it can do - consumed one frame per interrupt and
+        ; left the wire waiting behind it. Stepping over them is a tight loop.
         cmp ecx, 64
         jb .rx_skip
 
@@ -682,14 +686,27 @@ net_rx_drain:
         jmp .rx_loop
 
 .rx_resync:
-        ; The read pointer has lost the NIC's, so there is no ring entry here to
-        ; measure. Start again at the beginning of the ring: the entries there
-        ; are parsed and dropped like any other malformed frame, and the pointer
-        ; walks to the NIC's write pointer in a bounded number of steps. The
-        ; receiver cannot be restarted from inside its own handler, so this is
-        ; the way back that costs nothing else.
-        mov dword [net_rx_offset], 0
-        mov ax, NET_RX_RING - 16
+        ; There is no ring entry here to measure, so the read pointer has lost
+        ; the NIC's - and starting again at the beginning of the ring is how it
+        ; gets lost: what sits there is an earlier lap, a stale header that
+        ; looks valid walks the pointer *past* the NIC's write pointer, and a
+        ; read pointer ahead of the write pointer is a ring the NIC will neither
+        ; deliver into (it wants 1514 bytes of room or a wholly empty ring) nor
+        ; interrupt about, because it does not interrupt for entries already
+        ; written. That was the last shape of this bug: a wire that stopped
+        ; dead with the machine idle.
+        ;
+        ; So adopt the write pointer instead. The ring then reads as empty to
+        ; both of us, whatever was in it is dropped, and delivery resumes. At
+        ; worst a lost lap costs a retransmission; leaving the pointers crossed
+        ; costs the connection.
+        lea edx, [ebx + RTL_CBR]
+        in ax, dx
+        movzx eax, ax                   ; CBR is 16-bit
+        and eax, NET_RX_RING - 1
+        mov [net_rx_offset], eax
+        sub eax, 16
+        and eax, NET_RX_RING - 1
         lea edx, [ebx + RTL_CAPR]
         out dx, ax
         jmp .rx_done

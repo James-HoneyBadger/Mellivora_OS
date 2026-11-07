@@ -910,9 +910,10 @@ Still open in M7, and named so the milestone is not read as closed:
   Impersonation is parsed and bounded but carries no authority, because the
   transport authenticates a secret and not a user.
 - **`packet_fuzz` at 1 000 000 frames.** The gate is built (`make check-fuzz`)
-  and fails at 12 000-15 000 mixed frames, with the receive ring's pointers a
-  few bytes apart and no interrupt coming. NETWORK.md section 9 item 2 records
-  the state; the three defects found on the way are fixed.
+  and fails at 12 000-21 000 mixed frames, with the receive ring's pointers
+  apart and no interrupt coming. Each generator on its own now survives 30 000,
+  so it is the mix; NETWORK.md section 9 item 2 records the state, and the five
+  defects found on the way are fixed.
 - **The conformance suites the spec names:** `net_test` (fragmentation and
   reassembly are not in the stack at all) and `share_test` at 1 000 files with
   leases and reconnect. `rpc_test`'s ground is covered by the two-machine plan
