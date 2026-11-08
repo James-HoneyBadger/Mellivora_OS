@@ -31,7 +31,55 @@ UHCI_PORTSC2    equ 0x12                ; root hub port 2 status/control
 
 UHCI_CMD_HCRESET equ 0x0002             ; host controller reset, self-clearing
 UHCI_CMD_RUN    equ 0x0001              ; run
+UHCI_CMD_MAXP   equ 0x0080              ; 64-byte packets rather than 32
+UHCI_STS_HCHALT equ 0x0020              ; controller halted
 UHCI_PORT_CCS   equ 0x0001              ; current connect status
+UHCI_PORT_CSC   equ 0x0002              ; connect status change
+UHCI_PORT_PED   equ 0x0004              ; port enabled
+UHCI_PORT_PR    equ 0x0200              ; port reset
+UHCI_PORT_LS    equ 0x0100              ; low-speed device attached
+
+; Link pointer bits, shared by frame list entries and TD links
+UHCI_PTR_TERM   equ 0x00000001          ; terminate
+UHCI_PTR_QH     equ 0x00000002          ; this pointer names a queue head
+UHCI_PTR_DEPTH  equ 0x00000004          ; walk the element chain, not the
+                                        ; horizontal link, when a descriptor
+                                        ; completes
+
+; Transfer descriptor status word. The actual length lives in the low eleven
+; bits, encoded as length-1, and everything else sits high - a first attempt
+; with the spec's bit numbers shifted down by four read a completed transfer as
+; a failed one.
+TD_ACTIVE       equ 0x00800000          ; controller owns the descriptor
+TD_STALLED      equ 0x00400000
+TD_DBUFERR      equ 0x00200000
+TD_BABBLE       equ 0x00100000
+TD_NAK          equ 0x00080000
+TD_CRCTIMEO     equ 0x00040000
+TD_BITSTUFF     equ 0x00020000
+TD_IOC          equ 0x01000000          ; interrupt on completion
+TD_SPD          equ 0x20000000          ; short packet detect
+TD_EC3          equ 0x18000000          ; error counter: three retries
+TD_ERRMASK      equ 0x007E0000          ; stalled, buffer, babble, NAK, CRC, stuff
+TD_ACTLEN       equ 0x000007FF          ; actual length, encoded as length-1
+
+; Token word
+TD_PID_SETUP    equ 0x2D
+TD_PID_IN       equ 0x69
+TD_PID_OUT      equ 0xE1
+
+; Offsets inside the page of structures (one page, allocated at usb_mem)
+USB_QH          equ 0x000
+USB_TD_SETUP    equ 0x010
+USB_TD_DATA     equ 0x020
+USB_TD_STATUS   equ 0x030
+USB_SETUP_BUF   equ 0x040
+USB_DESC_BUF    equ 0x080
+
+USB_DESC_DEVICE equ 0x01
+USB_DESC_CONFIG equ 0x02
+USB_REQ_GET_DESC    equ 0x06
+USB_REQ_SET_ADDRESS equ 0x05
 
 PCI_CLASS_SERIAL    equ 0x0C
 PCI_SUBCLASS_USB    equ 0x03
@@ -129,9 +177,24 @@ usb_init:
 
 .report:
         LOGBOOT LOG_INFO, msg_usb_uhci
+
+        ; A schedule, and then the ports. A controller with no frame list is a
+        ; bus that answers nothing, so it is started first and the ports are
+        ; only worth reading once it runs.
+        call usb_start
+        jc .report_empty
+
         cmp dword [usb_connected], 0
         je .report_empty
         LOGBOOT LOG_INFO, msg_usb_connected
+
+        ; Enumeration is written and is not called yet: a control transfer
+        ; against the emulated controller leaves the machine unable to finish
+        ; booting, and a driver that hangs the platform to say "this is not
+        ; finished" is worse than one that stops at the port. What is below is
+        ; the next step, kept where it can be tested, not wired into the boot
+        ; path until it works.
+        LOGBOOT LOG_INFO, msg_usb_next
         jmp .done
 .report_empty:
         LOGBOOT LOG_INFO, msg_usb_empty
@@ -202,16 +265,602 @@ usb_uhci_reset:
         ret
 
 ;---------------------------------------
-; usb_state - what the controller stack found, for a caller that has no shell
-;   Out: EAX = controller I/O base (0 = none), EBX = ports, ECX = connected
+; usb_start - install a schedule and start the controller
+;   Out: CF=0 if it is running, CF=1 if it would not start
+;
+; One frame list, one queue head, and nothing on it. That is a real schedule -
+; the controller walks it every millisecond and finds nothing to do - and it is
+; what every transfer will be hung from: a control transfer is a chain of three
+; transfer descriptors linked into the queue head's vertical element.
+;
+; Starting is the test, not a formality. A controller handed a frame list whose
+; pointers are wrong does not run: it raises a host controller process error
+; and halts, which is exactly what the caller checks for.
 ;---------------------------------------
-usb_state:
-        mov eax, [usb_io_base]
-        mov ebx, [usb_ports]
-        mov ecx, [usb_connected]
+usb_start:
+        pushad
+        mov dword [usb_running], 0
+
+        call pmm_alloc_page
+        test eax, eax
+        jz .no_memory
+        mov [usb_flbase], eax
+        call pmm_alloc_page
+        test eax, eax
+        jz .no_memory
+        mov [usb_mem], eax
+
+        ; Both pages come from the frame allocator, which does not promise
+        ; its memory is clear.
+        mov edi, [usb_flbase]
+        xor eax, eax
+        mov ecx, 1024
+        cld
+        rep stosd
+        mov edi, [usb_mem]
+        mov ecx, 1024
+        rep stosd
+
+        ; The queue head: its horizontal link and its vertical element both
+        ; terminate, so the walk stops here until a transfer is hung below it.
+        mov edi, [usb_mem]
+        mov dword [edi + USB_QH], UHCI_PTR_TERM
+        mov dword [edi + USB_QH + 4], UHCI_PTR_TERM
+
+        ; Every frame points at that queue head.
+        mov eax, [usb_mem]
+        add eax, USB_QH
+        or eax, UHCI_PTR_QH
+        mov edi, [usb_flbase]
+        mov ecx, 1024
+        rep stosd
+
+        ; Frame list base. It must be 4 KB aligned, and the allocator's pages
+        ; are.
+        mov edx, [usb_io_base]
+        add edx, UHCI_FLBASE
+        mov eax, [usb_flbase]
+        out dx, eax
+
+        ; Clear any status the reset left behind, then run.
+        mov edx, [usb_io_base]
+        add edx, UHCI_STS
+        mov ax, 0x003F
+        out dx, ax
+
+        mov edx, [usb_io_base]
+        mov ax, UHCI_CMD_RUN | UHCI_CMD_MAXP
+        out dx, ax
+
+        ; A controller that cannot walk the schedule halts instead of running.
+        mov ebp, 200000
+.wait:
+        mov edx, [usb_io_base]
+        add edx, UHCI_STS
+        in ax, dx
+        test ax, UHCI_STS_HCHALT
+        jz .running
+        dec ebp
+        jnz .wait
+        stc
+        jmp .out
+.running:
+        mov dword [usb_running], 1
+        LOGBOOT LOG_INFO, msg_usb_running
+
+        clc
+        jmp .out
+.no_memory:
+        stc
+.out:
+        popad
         ret
 
-msg_usb_uhci:      db "usb: UHCI host controller ready", 0
-msg_usb_connected: db "usb: a device is plugged into a root port", 0
-msg_usb_empty:     db "usb: no device on the root ports", 0
-msg_usb_reset:     db "usb: the UHCI controller would not come out of reset", 0
+;---------------------------------------
+; usb_control - one control transfer, setup then data then status
+;   [usb_xfer_addr]  device address
+;   [usb_xfer_setup] physical address of the 8-byte setup packet
+;   [usb_xfer_buf]   physical address of the data buffer (may be 0)
+;   [usb_xfer_len]   bytes to move in the data stage (0 = no data stage)
+;   Out: CF=0 and EAX = bytes the controller reports it moved, CF=1 on error
+;
+; Three descriptors, chained in the queue head's element: setup, data, status.
+; The status stage is an OUT with no data when there was a data stage and an IN
+; when there was not, which is the one asymmetry of a control transfer.
+;---------------------------------------
+usb_control:
+        pushad
+        cmp dword [usb_running], 0
+        je .fail
+
+        mov ebx, [usb_mem]              ; structures
+        mov esi, [usb_xfer_addr]
+        shl esi, 8                      ; device address sits at bits 14:8
+        mov edi, [usb_xfer_len]
+        mov ecx, edi
+        test ecx, ecx                   ; the field is length-1, and a
+        jz .zero_len                    ; zero-length stage is all ones
+        dec ecx
+        jmp .len_ready
+.zero_len:
+        mov ecx, TD_ACTLEN
+.len_ready:
+        shl ecx, 21                     ; max length, bits 31:21
+
+        ; --- setup ---
+        mov eax, TD_ACTIVE | TD_EC3
+        mov [ebx + USB_TD_SETUP + 4], eax
+        mov eax, (7 << 21) | TD_PID_SETUP   ; eight bytes, encoded as 8-1
+        or eax, esi
+        mov [ebx + USB_TD_SETUP + 8], eax
+        mov eax, ebx
+        add eax, USB_SETUP_BUF
+        mov [ebx + USB_TD_SETUP + 12], eax
+        mov eax, ebx
+        add eax, USB_TD_DATA
+        test edi, edi
+        jnz .have_data
+        mov eax, ebx
+        add eax, USB_TD_STATUS
+.have_data:
+        mov [ebx + USB_TD_SETUP], eax   ; setup runs before the data stage
+
+        ; --- data ---
+        test edi, edi
+        jz .no_data
+        mov eax, TD_ACTIVE | TD_EC3 | TD_SPD | TD_IOC
+        mov [ebx + USB_TD_DATA + 4], eax
+        mov eax, ecx
+        or eax, (1 << 19) | TD_PID_IN   ; data stage is DATA1
+        or eax, esi
+        mov [ebx + USB_TD_DATA + 8], eax
+        mov eax, [usb_xfer_buf]
+        mov [ebx + USB_TD_DATA + 12], eax
+        mov eax, ebx
+        add eax, USB_TD_STATUS
+        mov [ebx + USB_TD_DATA], eax
+.no_data:
+
+        ; --- status ---
+        mov eax, TD_ACTIVE | TD_EC3 | TD_IOC
+        mov [ebx + USB_TD_STATUS + 4], eax
+        test edi, edi
+        jz .status_in
+        mov eax, (1 << 19) | TD_PID_OUT  ; after a data stage: OUT, DATA1
+        jmp .status_token
+.status_in:
+        mov eax, (1 << 19) | TD_PID_IN   ; no data stage: IN, DATA1
+        or eax, TD_SPD
+.status_token:
+        or eax, esi
+        mov [ebx + USB_TD_STATUS + 8], eax
+        mov dword [ebx + USB_TD_STATUS + 12], 0
+        mov dword [ebx + USB_TD_STATUS], UHCI_PTR_TERM
+
+        ; Hang the chain and let the controller find it. The depth-first bit is
+        ; not decoration: without it the controller walks only the first
+        ; descriptor and then leaves by the horizontal link, so the setup stage
+        ; runs and the data stage never does.
+        mov eax, ebx
+        add eax, USB_TD_SETUP
+        or eax, UHCI_PTR_DEPTH
+        mov [ebx + USB_QH + 4], eax
+
+        mov ebp, 2000000
+.poll:
+        mov eax, [ebx + USB_TD_STATUS + 4]
+        test eax, TD_ACTIVE
+        jz .done
+        dec ebp
+        jnz .poll
+
+        ; Timed out: take the chain off the queue head so a half-finished
+        ; transfer cannot be walked again, and report it.
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+        jmp .fail
+
+.done:
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+
+        mov eax, [ebx + USB_TD_STATUS + 4]
+        mov ecx, eax
+        and ecx, TD_ERRMASK
+        mov eax, [ebx + USB_TD_SETUP + 4]
+        and eax, TD_ERRMASK
+        or ecx, eax
+        mov eax, [ebx + USB_TD_DATA + 4]
+        and eax, TD_ERRMASK
+        or ecx, eax
+        jnz .fail_after
+        mov eax, [ebx + USB_TD_DATA + 4]
+        and eax, TD_ACTLEN              ; actual length of the data stage,
+        inc eax                         ; encoded as length-1
+        mov [.result], eax
+        popad
+        mov eax, [.result]
+        clc
+        ret
+.fail_after:
+.fail:
+        mov ebx, [usb_mem]
+        mov eax, [ebx + USB_TD_SETUP + 4]
+        mov [usb_td_status + 0], eax
+        mov eax, [ebx + USB_TD_DATA + 4]
+        mov [usb_td_status + 4], eax
+        mov eax, [ebx + USB_TD_STATUS + 4]
+        mov [usb_td_status + 8], eax
+        call usb_log_failure
+        popad
+        stc
+        ret
+.result: dd 0
+
+;---------------------------------------
+; usb_get_descriptor - read a descriptor into the structure page
+;   AL = device address, DL = descriptor type, DH = index, ECX = bytes wanted
+;   Out: CF=0, [usb_desc_len] = bytes read; CF=1 on error
+;---------------------------------------
+usb_get_descriptor:
+        pushad
+        mov [.addr], al
+        mov [.type], dl
+        mov [.index], dh
+        mov [.want], cx
+
+        mov ebx, [usb_mem]
+        add ebx, USB_SETUP_BUF
+        mov byte [ebx + 0], 0x80        ; device to host, standard, device
+        mov byte [ebx + 1], USB_REQ_GET_DESC
+        mov byte [ebx + 2], 0           ; wValue low: index
+        mov byte [ebx + 3], dl          ; wValue high: descriptor type
+        mov eax, [.index]
+        mov [ebx + 2], al
+        mov byte [ebx + 4], 0           ; wIndex
+        mov byte [ebx + 5], 0
+        mov word [ebx + 6], cx          ; wLength
+
+        movzx eax, byte [.addr]
+        mov [usb_xfer_addr], eax
+        mov eax, ebx
+        mov [usb_xfer_setup], eax
+        mov eax, [usb_mem]
+        add eax, USB_DESC_BUF
+        mov [usb_xfer_buf], eax
+        movzx eax, word [.want]
+        mov [usb_xfer_len], eax
+
+        call usb_control
+        jc .out
+        mov [usb_desc_len], eax
+        clc
+.out:
+        popad
+        ret
+
+.addr:  db 0
+.type:  db 0
+.index: db 0
+.want:  dw 0
+
+;---------------------------------------
+; usb_set_address - give the device the address it will answer on
+;   AL = the address
+;---------------------------------------
+usb_set_address:
+        pushad
+        mov [.new], al
+        mov ebx, [usb_mem]
+        add ebx, USB_SETUP_BUF
+        mov byte [ebx + 0], 0x00        ; host to device, standard, device
+        mov byte [ebx + 1], USB_REQ_SET_ADDRESS
+        mov [ebx + 2], al               ; wValue: the address
+        mov byte [ebx + 3], 0
+        mov byte [ebx + 4], 0
+        mov byte [ebx + 5], 0
+        mov word [ebx + 6], 0           ; no data stage
+
+        mov dword [usb_xfer_addr], 0    ; still at address zero
+        mov eax, ebx
+        mov [usb_xfer_setup], eax
+        mov dword [usb_xfer_buf], 0
+        mov dword [usb_xfer_len], 0
+        call usb_control
+        popad
+        ret
+.new:   db 0
+
+;---------------------------------------
+; usb_port_reset - reset one root port and wait for it to be enabled
+;   AL = port index (0 or 1)
+;   Out: CF=0 if the port came back enabled, CF=1 if it did not
+;---------------------------------------
+usb_port_reset:
+        pushad
+        movzx eax, al
+        shl eax, 1                      ; PORTSC1 is 0x10, PORTSC2 is 0x12
+        add eax, UHCI_PORTSC1
+        mov [.off], eax
+
+        mov edx, [usb_io_base]
+        add edx, [.off]
+        in ax, dx
+        or ax, UHCI_PORT_PR
+        out dx, ax
+
+        mov ecx, 50                     ; the specification asks for 10 ms; a
+        call smp_delay_ms               ; device that needs longer is not one
+                                        ; this step is meant to catch
+        ; Clearing the reset is not enough: the port is enabled by software
+        ; writing the enable bit, and a port that is never enabled answers
+        ; nothing. The change bit we caused is cleared at the same time, since
+        ; a PORTSC write replaces the read/write bits rather than updating them.
+        mov edx, [usb_io_base]
+        add edx, [.off]
+        in ax, dx
+        and ax, ~UHCI_PORT_PR
+        or ax, UHCI_PORT_PED | UHCI_PORT_CSC
+        out dx, ax
+
+        mov ecx, 10
+        call smp_delay_ms
+
+        mov edx, [usb_io_base]
+        add edx, [.off]
+        in ax, dx
+        test ax, UHCI_PORT_PED
+        jz .no
+        clc
+        jmp .out
+.no:
+        stc
+.out:
+        popad
+        ret
+.off:   dd 0
+
+;---------------------------------------
+; usb_enumerate - give the device on a root port an address and read it
+;
+; The order is the one the specification lays down: reset the port, ask for the
+; first eight bytes of the device descriptor at address zero (which is how the
+; packet size for the rest is learned), set an address, then read the whole
+; descriptor at that address.
+;---------------------------------------
+usb_enumerate:
+        pushad
+
+        ; Which port has the device? QEMU's default machine puts the first
+        ; plugged device on the second root port, so assuming port one is how
+        ; this spent an afternoon resetting an empty port.
+        xor ebp, ebp                    ; port index
+.find_port:
+        mov eax, ebp
+        and eax, 0xFF
+        shl eax, 1
+        add eax, UHCI_PORTSC1
+        mov edx, [usb_io_base]
+        add edx, eax
+        in ax, dx
+        test ax, UHCI_PORT_CCS
+        jnz .reset_port
+        inc ebp
+        cmp ebp, 2
+        jb .find_port
+        jmp .no_device
+.reset_port:
+        mov eax, ebp
+        call usb_port_reset
+        jc .no_reset
+
+        ; Eight bytes first: bMaxPacketSize0 is byte 7.
+        xor eax, eax
+        mov dl, USB_DESC_DEVICE
+        xor dh, dh
+        mov ecx, 8
+        call usb_get_descriptor
+        jc .no_device
+        mov ebx, [usb_mem]
+        movzx eax, byte [ebx + USB_DESC_BUF + 7]
+        test eax, eax
+        jz .no_device
+        mov [usb_dev_maxpkt], eax
+
+        mov al, USB_DEV_ADDRESS
+        call usb_set_address
+        mov ecx, 2                      ; the device needs a moment to move
+        call smp_delay_ms
+
+        movzx eax, byte [USB_DEV_ADDRESS]
+        mov dl, USB_DESC_DEVICE
+        xor dh, dh
+        mov ecx, 18
+        call usb_get_descriptor
+        jc .no_device
+
+        mov ebx, [usb_mem]
+        add ebx, USB_DESC_BUF
+        movzx eax, word [ebx + 8]       ; idVendor
+        mov [usb_dev_vendor], eax
+        movzx eax, word [ebx + 10]      ; idProduct
+        mov [usb_dev_product], eax
+        movzx eax, byte [ebx + 4]       ; bDeviceClass
+        mov [usb_dev_class], eax
+        mov dword [usb_dev_addr], USB_DEV_ADDRESS
+
+        LOGBOOT LOG_INFO, msg_usb_enum
+        call usb_log_device
+        jmp .out
+.no_reset:
+        LOGBOOT LOG_WARN, msg_usb_no_reset
+        jmp .out
+.no_device:
+        LOGBOOT LOG_WARN, msg_usb_no_enum
+.out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_log_device - one line: vendor, product and class, in hex
+;
+; The boot log takes a string, so the numbers are formatted here rather than
+; leaving the reader with "a device answered".
+;---------------------------------------
+usb_log_failure:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_xfer_fail
+.copy:
+        lodsb
+        test al, al
+        jz .words
+        stosb
+        jmp .copy
+.words:
+        xor ecx, ecx
+.next:
+        mov ebx, [usb_td_status + ecx*4]
+        call usb_hex_word
+        mov al, ' '
+        stosb
+        inc ecx
+        cmp ecx, 3
+        jb .next
+        xor al, al
+        stosb
+        mov ebx, [usb_flbase]
+        mov al, ' '
+        stosb
+        mov ebx, ebx
+        shr ebx, 16
+        call usb_hex_word
+        mov ebx, [usb_flbase]
+        call usb_hex_word
+        mov al, '/'
+        stosb
+        mov ebx, [usb_flbase]
+        mov ebx, [ebx]
+        shr ebx, 16
+        call usb_hex_word
+        mov ebx, [usb_flbase]
+        mov ebx, [ebx]
+        call usb_hex_word
+        mov al, '/'
+        stosb
+        mov ebx, [usb_mem]
+        shr ebx, 16
+        call usb_hex_word
+        mov ebx, [usb_mem]
+        call usb_hex_word
+        mov al, LOG_INFO                ; expected at this stage: enumeration is
+        mov esi, usb_msg_buf            ; the step after this one
+        call bootlog_write
+        popad
+        ret
+
+usb_log_device:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_dev_prefix
+.copy:
+        lodsb
+        test al, al
+        jz .hex
+        stosb
+        jmp .copy
+.hex:
+        mov ebx, [usb_dev_vendor]
+        call usb_hex_word
+        mov al, ':'
+        stosb
+        mov ebx, [usb_dev_product]
+        call usb_hex_word
+        mov al, ','
+        stosb
+        mov al, ' '
+        stosb
+        mov esi, msg_usb_class_prefix
+.copy2:
+        lodsb
+        test al, al
+        jz .cls
+        stosb
+        jmp .copy2
+.cls:
+        mov ebx, [usb_dev_class]
+        call usb_hex_byte
+        xor al, al
+        stosb
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
+; BX as four hex digits at EDI
+usb_hex_word:
+        push eax
+        push ecx
+        push edx
+        movzx edx, bx
+        mov ecx, 12                     ; shift for the top nibble
+.hw_loop:
+        mov eax, edx
+        shr eax, cl
+        and al, 0x0F
+        cmp al, 10
+        jb .hw_digit
+        add al, 'a' - 10
+        jmp .hw_store
+.hw_digit:
+        add al, '0'
+.hw_store:
+        stosb
+        sub ecx, 4
+        jns .hw_loop
+        pop edx
+        pop ecx
+        pop eax
+        ret
+
+; BL as two hex digits at EDI
+usb_hex_byte:
+        push eax
+        push ecx
+        push edx
+        movzx edx, bl
+        mov ecx, 4
+.hb_loop:
+        mov eax, edx
+        shr eax, cl
+        and al, 0x0F
+        cmp al, 10
+        jb .hb_digit
+        add al, 'a' - 10
+        jmp .hb_store
+.hb_digit:
+        add al, '0'
+.hb_store:
+        stosb
+        sub ecx, 4
+        jns .hb_loop
+        pop edx
+        pop ecx
+        pop eax
+        ret
+
+USB_DEV_ADDRESS equ 1
+
+msg_usb_uhci:         db "usb: UHCI host controller ready", 0
+msg_usb_running:      db "usb: frame list installed, controller running", 0
+msg_usb_connected:    db "usb: a device is plugged into a root port", 0
+msg_usb_empty:        db "usb: no device on the root ports", 0
+msg_usb_reset:        db "usb: the UHCI controller would not come out of reset", 0
+msg_usb_enum:         db "usb: device enumerated", 0
+msg_usb_no_enum:      db "usb: a device is on a port; reading its descriptors is the next step", 0
+msg_usb_next:         db "usb: enumerating it is the next step", 0
+msg_usb_no_reset:     db "usb: the root port would not reset", 0
+msg_usb_xfer_fail:    db "usb: a control transfer did not complete, status=", 0
+msg_usb_regs:         db "usb: regs cmd=", 0
+msg_usb_dev_prefix:   db "usb: device ", 0
+msg_usb_class_prefix: db "class ", 0
+usb_msg_buf:          times 48 db 0

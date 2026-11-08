@@ -89,6 +89,9 @@ run_case() {
 run_case "the UHCI controller is found" \
     --wait-for "usb: UHCI host controller ready"
 
+run_case "a schedule is installed and it runs" \
+    --wait-for "usb: frame list installed, controller running"
+
 run_case "the root ports read as empty" \
     --wait-for "usb: no device on the root ports"
 
@@ -96,4 +99,5 @@ run_case "a plugged-in keyboard is noticed" \
     --device usb-kbd \
     --wait-for "usb: a device is plugged into a root port"
 
-echo "  USB: controller found, ports read, a device on the bus is seen"
+echo "  USB: controller found and running, ports read, a device on the bus is seen"
+echo "  USB: enumeration (descriptors) is the next step, and is not claimed here"

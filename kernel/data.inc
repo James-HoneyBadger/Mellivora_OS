@@ -1135,6 +1135,20 @@ fpu_init_image:   resb FPU_AREA_SIZE                  ; fninit image new tasks s
 usb_io_base:      resd 1          ; UHCI controller I/O base (0 = none)
 usb_ports:        resd 1          ; root hub ports the controller reports
 usb_connected:    resd 1          ; ports with something plugged in
+usb_flbase:       resd 1          ; frame list base address
+usb_mem:          resd 1          ; queue head, descriptors and buffers
+usb_running:      resd 1          ; 1 once the controller is walking the list
+usb_dev_addr:     resd 1          ; address the enumerated device answers on
+usb_dev_vendor:   resd 1          ; idVendor from its device descriptor
+usb_dev_product:  resd 1          ; idProduct
+usb_dev_class:    resd 1          ; bDeviceClass
+usb_dev_maxpkt:   resd 1          ; bMaxPacketSize0
+usb_desc_len:     resd 1          ; bytes the last descriptor read returned
+usb_td_status:    resd 3          ; the three status words of a failed transfer
+usb_xfer_addr:    resd 1          ; control transfer: device address
+usb_xfer_setup:   resd 1          ;                      setup packet
+usb_xfer_buf:     resd 1          ;                      data buffer
+usb_xfer_len:     resd 1          ;                      data length
 
 ; Networking state (RTL8139 NIC)
 net_nic_type:     resb 1          ; 0=none 1=RTL8139 2=e1000

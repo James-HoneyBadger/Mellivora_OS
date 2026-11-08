@@ -956,13 +956,35 @@ in, and a device shows up as connected when one is attached (`--device usb-kbd`,
 which is what `tools/qemu_drive.py --device` was added for). The driver is
 reported by `drivers` like any other.
 
-What it is not: there is no frame list, no transfer of any kind, no descriptor
-read, no hub beyond the root ports, and no class driver. The controller is
-deliberately left stopped - running one with no schedule is a bus that answers
-nothing. The order from here is the one the milestone lists: a frame list and
-control transfers, then enumeration (device and configuration descriptors, an
-address per device), then HID, then mass storage, which is what the exit line
-actually needs.
+A frame list followed: one queue head, 1024 frame pointers, the controller
+started on it. Starting is the assertion - a controller handed a schedule whose
+pointers are wrong halts instead of running - so `make check-usb` gained a case
+for it, and the report is now four: the controller is found, it runs, the ports
+read as empty, and a device shows up when one is attached.
+
+Then the two UHCI details that cost the most to find, both recorded in the file
+because both look like something else. **Port Enable is written by software, not
+by the hardware**: clearing the reset bit is not enough, and a port nobody
+enabled answers nothing - the driver spent an hour resetting a port that was
+never listening. And **the queue head's element link needs the depth-first bit**:
+without it the controller executes the first descriptor of the chain and leaves
+by the horizontal link, so a three-stage control transfer does the setup and
+never the data.
+
+What is written and not yet called: control transfers (setup, data, status, the
+token and status encodings with the actual length in the low eleven bits and
+`length - 1` in the token's max-length field) and the descriptor read that uses
+them. Against the emulated controller a transfer leaves the machine unable to
+finish booting, and a driver that hangs the platform to announce that it is
+unfinished is worse than one that stops at the port. So enumeration stays below
+the boot path until it works, the boot log says so in as many words, and the
+gate does not claim it.
+
+What it is not, in full: no descriptor has been read, there is no hub beyond the
+root ports, and there is no class driver. The order from here is unchanged:
+make the control transfer complete, then enumeration (device and configuration
+descriptors, an address per device), then HID, then mass storage, which is what
+the exit line actually needs.
 
 ### M9 · Reliability and management (9–13 weeks)
 
