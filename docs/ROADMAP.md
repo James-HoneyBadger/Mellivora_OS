@@ -1001,15 +1001,19 @@ key is read. The configuration descriptor is walked - descriptor by descriptor,
 each skipped by its own length - for the interface that is HID, boot subclass,
 keyboard protocol, and then for the interrupt IN endpoint under it; the
 endpoint's address and packet size are recorded. The two class requests that
-put a boot keyboard in boot protocol follow, SET_PROTOCOL(0) and SET_IDLE(0),
-and the boot log gains `usb: hid endpoint 81, 0008 bytes, ready`.
-`make check-usb` is nine cases now. A mouse - HID but not a keyboard - walks
-past silently, which is correct: it is not this driver's job yet. Reading the
-reports is the next step, and with them the keys.
+put a boot keyboard in boot protocol follow, SET_PROTOCOL(0) and SET_IDLE(1) -
+a 4 ms idle, so the keyboard reports its state before any key is pressed, which
+is also what lets the pipe be proven with a report rather than with a key. An
+interrupt IN descriptor is then hung below the queue head; the controller
+retries it each frame while the device NAKs, and it completes with the first
+report. The boot log gains `usb: hid endpoint 81, 0008 bytes, ready` and
+`usb: hid report read`. `make check-usb` is ten cases now. A mouse - HID but
+not a keyboard - walks past silently, which is correct: it is not this driver's
+job yet. Turning the reports into keys is the next step.
 
-What it is not, in full: there is no hub beyond the root ports, the HID reports
-are not read, and there is no class driver beyond this keyboard setup. The order
-from here is unchanged: HID, then mass storage, which
+What it is not, in full: there is no hub beyond the root ports, the reports are
+not yet turned into keys, and there is no class driver beyond this keyboard
+setup. The order from here is unchanged: HID, then mass storage, which
 is what the exit line actually needs.
 
 ### M9 · Reliability and management (9–13 weeks)

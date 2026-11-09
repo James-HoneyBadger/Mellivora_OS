@@ -7,7 +7,8 @@
 # a UHCI controller found by its PCI class, reset, given a schedule, started,
 # and its root ports read - and, when a device is on one, that device is
 # enumerated and configured: the port is reset, its descriptors are read, it
-# is given an address, and its configuration is selected.
+# is given an address, its configuration is selected, and its HID boot
+# keyboard (when it is one) is switched to boot protocol and read from once.
 #
 # So the gate asserts exactly what the stack claims. Two boots, because the
 # interesting difference is whether the driver notices a device:
@@ -122,4 +123,8 @@ run_case "its interrupt endpoint is found" \
     --device usb-kbd \
     --wait-for "usb: hid "
 
-echo "  USB: controller found and running, a device enumerated, configured, its HID endpoint found"
+run_case "a report is read from it" \
+    --device usb-kbd \
+    --wait-for "usb: hid report read"
+
+echo "  USB: controller found and running, a device enumerated, configured, its HID report read"

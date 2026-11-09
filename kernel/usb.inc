@@ -74,6 +74,7 @@ USB_TD_DATA     equ 0x020
 USB_TD_STATUS   equ 0x030
 USB_SETUP_BUF   equ 0x040
 USB_DESC_BUF    equ 0x080
+USB_HID_BUF     equ 0x100
 
 USB_DESC_DEVICE  equ 0x01
 USB_DESC_CONFIG  equ 0x02
@@ -598,21 +599,20 @@ usb_set_configuration:
 
 ;---------------------------------------
 ; usb_hid_request - a no-data class request to the boot interface
-;   AL = bRequest, BL = wValue low byte
+;   AL = bRequest, BX = wValue
 ;   Out: CF=0 if the transfer completed, CF=1 if it did not
 ;---------------------------------------
 usb_hid_request:
         pushad
         mov [.req], al
-        mov [.val], bl
+        mov [.val], bx
         mov ebx, [usb_mem]
         add ebx, USB_SETUP_BUF
         mov byte [ebx + 0], 0x21        ; host to device, class, interface
         mov al, [.req]
         mov [ebx + 1], al
-        mov al, [.val]
-        mov [ebx + 2], al               ; wValue low
-        mov byte [ebx + 3], 0
+        mov ax, [.val]
+        mov [ebx + 2], ax               ; wValue
         mov byte [ebx + 4], 0           ; wIndex: interface 0
         mov byte [ebx + 5], 0
         mov word [ebx + 6], 0           ; no data stage
@@ -627,7 +627,7 @@ usb_hid_request:
         popad
         ret
 .req:   db 0
-.val:   db 0
+.val:   dw 0
 
 ;---------------------------------------
 ; usb_hid_start - find the HID boot keyboard and switch it to boot protocol
@@ -693,15 +693,20 @@ usb_hid_start:
         jmp .walk
 
 .found:
-        ; Boot protocol, then no idle rate: only a change reports.
+        ; Boot protocol, then a 4 ms idle rate so the keyboard reports its
+        ; state even before a key is pressed - which is also what lets the
+        ; pipe be proven here, with a report, rather than with a key.
         mov al, USB_REQ_SET_PROTOCOL
-        xor bl, bl
+        xor bx, bx                      ; wValue 0: boot protocol
         call usb_hid_request
         jc .fail
         mov al, USB_REQ_SET_IDLE
-        xor bl, bl
+        mov bx, 0x0100                  ; duration 1 (4 ms), report 0
         call usb_hid_request
         jc .fail
+        call usb_intr_in
+        jc .fail
+        LOGBOOT LOG_INFO, msg_usb_report
         call usb_log_hid
         jmp .out
 .fail:
@@ -712,6 +717,91 @@ usb_hid_start:
 .out:
         popad
         ret
+
+;---------------------------------------
+; usb_intr_in - one interrupt IN transfer from the HID endpoint
+;   Out: CF=0 and EAX = bytes read, CF=1 on error
+;
+; One descriptor hung below the queue head, the same way a control transfer
+; is. The controller retries it every frame while the device NAKs, so the poll
+; waits a little and then checks again; a periodic reader would keep the
+; descriptor there and this would be its steady state.
+;---------------------------------------
+usb_intr_in:
+        pushad
+        cmp dword [usb_hid_ep], 0
+        je .fail
+        mov ebx, [usb_mem]
+
+        mov eax, [usb_hid_maxpkt]
+        test eax, eax
+        jz .fail
+        cmp eax, 2048                  ; the token's length field is 11 bits
+        ja .fail
+        dec eax
+        shl eax, 21                     ; max length, bits 31:21
+
+        mov ecx, [usb_dev_addr]
+        shl ecx, 8
+        mov edx, [usb_hid_ep]
+        and edx, 0x0F                   ; endpoint number only, bit 7 is the
+        shl edx, 15                     ; direction and the PID says it
+        or ecx, edx
+        or eax, ecx
+        or eax, TD_PID_IN
+
+        mov [ebx + USB_TD_DATA + 8], eax                ; token
+        mov eax, TD_ACTIVE | TD_IOC | TD_SPD | TD_EC3
+        mov [ebx + USB_TD_DATA + 4], eax                ; status
+        mov eax, ebx
+        add eax, USB_HID_BUF
+        mov [ebx + USB_TD_DATA + 12], eax               ; buffer
+        mov dword [ebx + USB_TD_DATA], UHCI_PTR_TERM
+
+        mov eax, ebx
+        add eax, USB_TD_DATA
+        mov [ebx + USB_QH + 4], eax                     ; hang below the queue head
+
+        mov ebp, 20                     ; up to ~20 ms for a report
+.poll:
+        mov eax, [ebx + USB_TD_DATA + 4]
+        test eax, TD_ACTIVE
+        jz .done
+        mov ecx, 1
+        call smp_delay_ms
+        dec ebp
+        jnz .poll
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+        jmp .fail
+
+.done:
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+        mov eax, [ebx + USB_TD_DATA + 4]
+        mov ecx, eax
+        and ecx, TD_ERRMASK
+        jnz .fail_after
+        and eax, TD_ACTLEN
+        inc eax
+        mov [.result], eax
+        popad
+        mov eax, [.result]
+        clc
+        ret
+.fail_after:
+        mov ebx, [usb_mem]
+        mov eax, [ebx + USB_TD_DATA + 4]
+        mov [usb_td_status + 0], eax
+        mov dword [usb_td_status + 4], 0
+        mov dword [usb_td_status + 8], 0
+        call usb_log_failure
+        popad
+        stc
+        ret
+.fail:
+        popad
+        stc
+        ret
+.result: dd 0
 
 ;---------------------------------------
 ; usb_port_reset - reset one root port and wait for it to be enabled
@@ -1149,5 +1239,6 @@ msg_usb_bytes:        db " bytes", 0
 msg_usb_hid_prefix:   db "usb: hid endpoint ", 0
 msg_usb_hid_sep:      db ", ", 0
 msg_usb_hid_suffix:   db " bytes, ready", 0
+msg_usb_report:       db "usb: hid report read", 0
 msg_usb_no_hid:       db "usb: the HID boot keyboard would not start", 0
 usb_msg_buf:          times 48 db 0
