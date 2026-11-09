@@ -988,10 +988,17 @@ that address. `make check-usb` asserts it - six cases now: the controller is
 found, it runs, the ports read as empty, a device shows up when one is attached,
 it is enumerated, and its descriptors are read and logged.
 
-What it is not, in full: there is no hub beyond the root ports, the
-configuration descriptor is not read, and there is no class driver. The order
-from here is unchanged: HID, then mass storage, which is what the exit line
-actually needs.
+After the device descriptor comes the configuration descriptor, and with it the
+move from addressed to configured. Nine bytes are read first to learn the total
+length and the interface count, then the whole descriptor, then
+SET_CONFIGURATION(1). `make check-usb` gained two cases for it - eight now: the
+configuration is read and the device is configured. A device in the configured
+state is the starting point for both HID and mass storage, which is where the
+milestone goes next.
+
+What it is not, in full: there is no hub beyond the root ports, and there is no
+class driver. The order from here is unchanged: HID, then mass storage, which
+is what the exit line actually needs.
 
 ### M9 · Reliability and management (9–13 weeks)
 

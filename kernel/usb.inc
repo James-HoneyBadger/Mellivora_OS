@@ -79,6 +79,7 @@ USB_DESC_DEVICE equ 0x01
 USB_DESC_CONFIG equ 0x02
 USB_REQ_GET_DESC    equ 0x06
 USB_REQ_SET_ADDRESS equ 0x05
+USB_REQ_SET_CONFIG  equ 0x09
 
 PCI_CLASS_SERIAL    equ 0x0C
 PCI_SUBCLASS_USB    equ 0x03
@@ -563,6 +564,35 @@ usb_set_address:
 .new:   db 0
 
 ;---------------------------------------
+; usb_set_configuration - move the device from addressed to configured
+;   AL = configuration value
+;   Out: CF=0 if the transfer completed, CF=1 if it did not
+;---------------------------------------
+usb_set_configuration:
+        pushad
+        mov [.cfg], al
+        mov ebx, [usb_mem]
+        add ebx, USB_SETUP_BUF
+        mov byte [ebx + 0], 0x00        ; host to device, standard, device
+        mov byte [ebx + 1], USB_REQ_SET_CONFIG
+        mov [ebx + 2], al               ; wValue: the configuration value
+        mov byte [ebx + 3], 0
+        mov byte [ebx + 4], 0
+        mov byte [ebx + 5], 0
+        mov word [ebx + 6], 0           ; no data stage
+
+        mov eax, [usb_dev_addr]
+        mov [usb_xfer_addr], eax
+        mov eax, ebx
+        mov [usb_xfer_setup], eax
+        mov dword [usb_xfer_buf], 0
+        mov dword [usb_xfer_len], 0
+        call usb_control
+        popad
+        ret
+.cfg:   db 0
+
+;---------------------------------------
 ; usb_port_reset - reset one root port and wait for it to be enabled
 ;   AL = port index (0 or 1)
 ;   Out: CF=0 if the port came back enabled, CF=1 if it did not
@@ -682,6 +712,44 @@ usb_enumerate:
 
         LOGBOOT LOG_INFO, msg_usb_enum
         call usb_log_device
+
+        ; The configuration descriptor says what the device can do, so it is
+        ; read next and the device is configured. Nine bytes first: the total
+        ; length is bytes 2-3 and the interface count byte 4.
+        mov al, USB_DEV_ADDRESS
+        mov dl, USB_DESC_CONFIG
+        xor dh, dh
+        mov ecx, 9
+        call usb_get_descriptor
+        jc .no_config
+
+        mov ebx, [usb_mem]
+        movzx eax, word [ebx + USB_DESC_BUF + 2]   ; wTotalLength
+        test eax, eax
+        jz .no_config
+        mov [usb_cfg_len], eax
+        movzx eax, byte [ebx + USB_DESC_BUF + 4]   ; bNumInterfaces
+        mov [usb_cfg_interfaces], eax
+
+        mov al, USB_DEV_ADDRESS
+        mov dl, USB_DESC_CONFIG
+        xor dh, dh
+        mov ecx, [usb_cfg_len]
+        call usb_get_descriptor
+        jc .no_config
+
+        mov al, 1                       ; configuration value 1
+        call usb_set_configuration
+        jc .no_configure
+
+        LOGBOOT LOG_INFO, msg_usb_configured
+        call usb_log_config
+        jmp .out
+.no_configure:
+        LOGBOOT LOG_WARN, msg_usb_no_configure
+        jmp .out
+.no_config:
+        LOGBOOT LOG_WARN, msg_usb_no_config
         jmp .out
 .no_reset:
         LOGBOOT LOG_WARN, msg_usb_no_reset
@@ -778,6 +846,46 @@ usb_log_device:
         popad
         ret
 
+; usb_log_config - one line: interface count and total length, in hex
+usb_log_config:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_config_prefix
+.copy:
+        lodsb
+        test al, al
+        jz .interfaces
+        stosb
+        jmp .copy
+.interfaces:
+        mov ebx, [usb_cfg_interfaces]
+        call usb_hex_byte
+        mov esi, msg_usb_interfaces
+.copy2:
+        lodsb
+        test al, al
+        jz .bytes
+        stosb
+        jmp .copy2
+.bytes:
+        mov ebx, [usb_cfg_len]
+        call usb_hex_word
+        mov esi, msg_usb_bytes
+.copy3:
+        lodsb
+        test al, al
+        jz .done
+        stosb
+        jmp .copy3
+.done:
+        xor al, al
+        stosb
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
 ; BX as four hex digits at EDI
 usb_hex_word:
         push eax
@@ -864,10 +972,16 @@ msg_usb_connected:    db "usb: a device is plugged into a root port", 0
 msg_usb_empty:        db "usb: no device on the root ports", 0
 msg_usb_reset:        db "usb: the UHCI controller would not come out of reset", 0
 msg_usb_enum:         db "usb: device enumerated", 0
+msg_usb_configured:   db "usb: configured", 0
 msg_usb_no_enum:      db "usb: the device on a root port would not enumerate", 0
+msg_usb_no_config:    db "usb: the configuration descriptor would not read", 0
+msg_usb_no_configure: db "usb: the device would not configure", 0
 msg_usb_no_reset:     db "usb: the root port would not reset", 0
 msg_usb_xfer_fail:    db "usb: a control transfer did not complete, status=", 0
 msg_usb_regs:         db "usb: regs cmd=", 0
 msg_usb_dev_prefix:   db "usb: device ", 0
 msg_usb_class_prefix: db "class ", 0
+msg_usb_config_prefix: db "usb: config ", 0
+msg_usb_interfaces:   db " interfaces, ", 0
+msg_usb_bytes:        db " bytes", 0
 usb_msg_buf:          times 48 db 0

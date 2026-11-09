@@ -6,8 +6,8 @@
 # USB stick and copy a file, unplug it safely". This is the first step of that:
 # a UHCI controller found by its PCI class, reset, given a schedule, started,
 # and its root ports read - and, when a device is on one, that device is
-# enumerated: the port is reset, its descriptors are read and it is given an
-# address.
+# enumerated and configured: the port is reset, its descriptors are read, it
+# is given an address, and its configuration is selected.
 #
 # So the gate asserts exactly what the stack claims. Two boots, because the
 # interesting difference is whether the driver notices a device:
@@ -16,8 +16,8 @@
 #      plugged in: the controller must be found and the root ports reported
 #      empty;
 #   2. the same machine with `-device usb-kbd`: the same controller must now
-#      report a device on a root port, enumerate it and log what the
-#      descriptors say.
+#      report a device on a root port, enumerate it, read its configuration
+#      and configure it.
 #
 # A driver that always says "connected" fails the first case. One that never
 # says it fails the second. A machine without a controller at all is not
@@ -110,4 +110,12 @@ run_case "its descriptors are read" \
     --device usb-kbd \
     --wait-for "class "
 
-echo "  USB: controller found and running, ports read, a device enumerated"
+run_case "its configuration is read" \
+    --device usb-kbd \
+    --wait-for "usb: config "
+
+run_case "the keyboard is configured" \
+    --device usb-kbd \
+    --wait-for "usb: configured"
+
+echo "  USB: controller found and running, ports read, a device enumerated and configured"
