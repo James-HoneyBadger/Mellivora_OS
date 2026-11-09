@@ -75,11 +75,15 @@ USB_TD_STATUS   equ 0x030
 USB_SETUP_BUF   equ 0x040
 USB_DESC_BUF    equ 0x080
 
-USB_DESC_DEVICE equ 0x01
-USB_DESC_CONFIG equ 0x02
+USB_DESC_DEVICE  equ 0x01
+USB_DESC_CONFIG  equ 0x02
+USB_DESC_INTERFACE equ 0x04
+USB_DESC_ENDPOINT  equ 0x05
 USB_REQ_GET_DESC    equ 0x06
 USB_REQ_SET_ADDRESS equ 0x05
 USB_REQ_SET_CONFIG  equ 0x09
+USB_REQ_SET_IDLE    equ 0x0A
+USB_REQ_SET_PROTOCOL equ 0x0B
 
 PCI_CLASS_SERIAL    equ 0x0C
 PCI_SUBCLASS_USB    equ 0x03
@@ -593,6 +597,123 @@ usb_set_configuration:
 .cfg:   db 0
 
 ;---------------------------------------
+; usb_hid_request - a no-data class request to the boot interface
+;   AL = bRequest, BL = wValue low byte
+;   Out: CF=0 if the transfer completed, CF=1 if it did not
+;---------------------------------------
+usb_hid_request:
+        pushad
+        mov [.req], al
+        mov [.val], bl
+        mov ebx, [usb_mem]
+        add ebx, USB_SETUP_BUF
+        mov byte [ebx + 0], 0x21        ; host to device, class, interface
+        mov al, [.req]
+        mov [ebx + 1], al
+        mov al, [.val]
+        mov [ebx + 2], al               ; wValue low
+        mov byte [ebx + 3], 0
+        mov byte [ebx + 4], 0           ; wIndex: interface 0
+        mov byte [ebx + 5], 0
+        mov word [ebx + 6], 0           ; no data stage
+
+        mov eax, [usb_dev_addr]
+        mov [usb_xfer_addr], eax
+        mov eax, ebx
+        mov [usb_xfer_setup], eax
+        mov dword [usb_xfer_buf], 0
+        mov dword [usb_xfer_len], 0
+        call usb_control
+        popad
+        ret
+.req:   db 0
+.val:   db 0
+
+;---------------------------------------
+; usb_hid_start - find the HID boot keyboard and switch it to boot protocol
+;
+; The configuration descriptor is already in the structure page. This walks it
+; for the boot-keyboard interface and its interrupt IN endpoint, then sends the
+; two class requests that put the keyboard in boot protocol. Reading the reports
+; is the next step; a device with no HID interface (a stick, a mouse) returns
+; without a word because it is not this driver's job yet.
+;---------------------------------------
+usb_hid_start:
+        pushad
+
+        ; Walk the configuration descriptor for the boot keyboard's interrupt
+        ; IN endpoint. edx tracks whether the last interface was that keyboard.
+        mov esi, [usb_mem]
+        add esi, USB_DESC_BUF
+        mov ecx, [usb_cfg_len]
+        xor edx, edx
+.walk:
+        test ecx, ecx
+        jbe .no_hid
+        movzx eax, byte [esi]           ; bLength
+        cmp eax, 2
+        jb .no_hid
+        cmp eax, ecx
+        ja .no_hid
+        movzx ebx, byte [esi + 1]       ; bDescriptorType
+        cmp ebx, USB_DESC_INTERFACE
+        jne .not_interface
+        cmp byte [esi + 5], 0x03        ; bInterfaceClass: HID
+        jne .hid_off
+        cmp byte [esi + 6], 0x01        ; bInterfaceSubClass: boot
+        jne .hid_off
+        cmp byte [esi + 7], 0x01        ; bInterfaceProtocol: keyboard
+        jne .hid_off
+        mov edx, 1
+        jmp .advance
+.hid_off:
+        xor edx, edx
+        jmp .advance
+.not_interface:
+        cmp ebx, USB_DESC_ENDPOINT
+        jne .advance
+        test edx, edx
+        jz .advance
+        movzx ebx, byte [esi + 2]       ; bEndpointAddress
+        test bl, 0x80                   ; direction IN
+        jz .advance
+        movzx ebx, byte [esi + 3]       ; bmAttributes
+        and bl, 0x03
+        cmp bl, 0x03                    ; transfer type interrupt
+        jne .advance
+        movzx eax, byte [esi + 2]
+        mov [usb_hid_ep], eax
+        movzx eax, word [esi + 4]       ; wMaxPacketSize
+        mov [usb_hid_maxpkt], eax
+        jmp .found
+.advance:
+        movzx eax, byte [esi]
+        add esi, eax
+        sub ecx, eax
+        jmp .walk
+
+.found:
+        ; Boot protocol, then no idle rate: only a change reports.
+        mov al, USB_REQ_SET_PROTOCOL
+        xor bl, bl
+        call usb_hid_request
+        jc .fail
+        mov al, USB_REQ_SET_IDLE
+        xor bl, bl
+        call usb_hid_request
+        jc .fail
+        call usb_log_hid
+        jmp .out
+.fail:
+        LOGBOOT LOG_WARN, msg_usb_no_hid
+        jmp .out
+.no_hid:
+        ; Not a boot keyboard: say nothing, it is not this driver's job.
+.out:
+        popad
+        ret
+
+;---------------------------------------
 ; usb_port_reset - reset one root port and wait for it to be enabled
 ;   AL = port index (0 or 1)
 ;   Out: CF=0 if the port came back enabled, CF=1 if it did not
@@ -744,6 +865,7 @@ usb_enumerate:
 
         LOGBOOT LOG_INFO, msg_usb_configured
         call usb_log_config
+        call usb_hid_start
         jmp .out
 .no_configure:
         LOGBOOT LOG_WARN, msg_usb_no_configure
@@ -886,6 +1008,46 @@ usb_log_config:
         popad
         ret
 
+; usb_log_hid - one line: the interrupt endpoint and its packet size, in hex
+usb_log_hid:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_hid_prefix
+.copy:
+        lodsb
+        test al, al
+        jz .ep
+        stosb
+        jmp .copy
+.ep:
+        mov ebx, [usb_hid_ep]
+        call usb_hex_byte
+        mov esi, msg_usb_hid_sep
+.copy2:
+        lodsb
+        test al, al
+        jz .maxpkt
+        stosb
+        jmp .copy2
+.maxpkt:
+        mov ebx, [usb_hid_maxpkt]
+        call usb_hex_word
+        mov esi, msg_usb_hid_suffix
+.copy3:
+        lodsb
+        test al, al
+        jz .done
+        stosb
+        jmp .copy3
+.done:
+        xor al, al
+        stosb
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
 ; BX as four hex digits at EDI
 usb_hex_word:
         push eax
@@ -984,4 +1146,8 @@ msg_usb_class_prefix: db "class ", 0
 msg_usb_config_prefix: db "usb: config ", 0
 msg_usb_interfaces:   db " interfaces, ", 0
 msg_usb_bytes:        db " bytes", 0
+msg_usb_hid_prefix:   db "usb: hid endpoint ", 0
+msg_usb_hid_sep:      db ", ", 0
+msg_usb_hid_suffix:   db " bytes, ready", 0
+msg_usb_no_hid:       db "usb: the HID boot keyboard would not start", 0
 usb_msg_buf:          times 48 db 0

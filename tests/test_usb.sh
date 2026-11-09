@@ -118,4 +118,8 @@ run_case "the keyboard is configured" \
     --device usb-kbd \
     --wait-for "usb: configured"
 
-echo "  USB: controller found and running, ports read, a device enumerated and configured"
+run_case "its interrupt endpoint is found" \
+    --device usb-kbd \
+    --wait-for "usb: hid "
+
+echo "  USB: controller found and running, a device enumerated, configured, its HID endpoint found"

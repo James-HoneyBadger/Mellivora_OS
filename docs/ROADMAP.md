@@ -996,8 +996,20 @@ configuration is read and the device is configured. A device in the configured
 state is the starting point for both HID and mass storage, which is where the
 milestone goes next.
 
-What it is not, in full: there is no hub beyond the root ports, and there is no
-class driver. The order from here is unchanged: HID, then mass storage, which
+The first class driver begins with what a boot keyboard needs before a single
+key is read. The configuration descriptor is walked - descriptor by descriptor,
+each skipped by its own length - for the interface that is HID, boot subclass,
+keyboard protocol, and then for the interrupt IN endpoint under it; the
+endpoint's address and packet size are recorded. The two class requests that
+put a boot keyboard in boot protocol follow, SET_PROTOCOL(0) and SET_IDLE(0),
+and the boot log gains `usb: hid endpoint 81, 0008 bytes, ready`.
+`make check-usb` is nine cases now. A mouse - HID but not a keyboard - walks
+past silently, which is correct: it is not this driver's job yet. Reading the
+reports is the next step, and with them the keys.
+
+What it is not, in full: there is no hub beyond the root ports, the HID reports
+are not read, and there is no class driver beyond this keyboard setup. The order
+from here is unchanged: HID, then mass storage, which
 is what the exit line actually needs.
 
 ### M9 · Reliability and management (9–13 weeks)

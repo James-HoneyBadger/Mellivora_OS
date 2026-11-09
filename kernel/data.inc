@@ -1146,6 +1146,8 @@ usb_dev_maxpkt:   resd 1          ; bMaxPacketSize0
 usb_desc_len:     resd 1          ; bytes the last descriptor read returned
 usb_cfg_len:      resd 1          ; wTotalLength from the configuration descriptor
 usb_cfg_interfaces: resd 1        ; bNumInterfaces from the configuration descriptor
+usb_hid_ep:       resd 1          ; HID interrupt IN endpoint (0 = none found)
+usb_hid_maxpkt:   resd 1          ; HID interrupt IN endpoint max packet size
 usb_td_status:    resd 3          ; the three status words of a failed transfer
 usb_xfer_addr:    resd 1          ; control transfer: device address
 usb_xfer_setup:   resd 1          ;                      setup packet
