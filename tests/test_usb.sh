@@ -4,8 +4,10 @@
 #
 # docs/ROADMAP.md opens M8 with the USB stack, and its exit line is "plug in a
 # USB stick and copy a file, unplug it safely". This is the first step of that:
-# a UHCI controller found by its PCI class, reset, and read - not a bus that
-# transfers anything yet.
+# a UHCI controller found by its PCI class, reset, given a schedule, started,
+# and its root ports read - and, when a device is on one, that device is
+# enumerated: the port is reset, its descriptors are read and it is given an
+# address.
 #
 # So the gate asserts exactly what the stack claims. Two boots, because the
 # interesting difference is whether the driver notices a device:
@@ -14,7 +16,8 @@
 #      plugged in: the controller must be found and the root ports reported
 #      empty;
 #   2. the same machine with `-device usb-kbd`: the same controller must now
-#      report a device on a root port.
+#      report a device on a root port, enumerate it and log what the
+#      descriptors say.
 #
 # A driver that always says "connected" fails the first case. One that never
 # says it fails the second. A machine without a controller at all is not
@@ -99,5 +102,12 @@ run_case "a plugged-in keyboard is noticed" \
     --device usb-kbd \
     --wait-for "usb: a device is plugged into a root port"
 
-echo "  USB: controller found and running, ports read, a device on the bus is seen"
-echo "  USB: enumeration (descriptors) is the next step, and is not claimed here"
+run_case "the keyboard is enumerated" \
+    --device usb-kbd \
+    --wait-for "usb: device enumerated"
+
+run_case "its descriptors are read" \
+    --device usb-kbd \
+    --wait-for "class "
+
+echo "  USB: controller found and running, ports read, a device enumerated"

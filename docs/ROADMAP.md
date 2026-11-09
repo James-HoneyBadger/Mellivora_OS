@@ -971,20 +971,27 @@ without it the controller executes the first descriptor of the chain and leaves
 by the horizontal link, so a three-stage control transfer does the setup and
 never the data.
 
-What is written and not yet called: control transfers (setup, data, status, the
-token and status encodings with the actual length in the low eleven bits and
-`length - 1` in the token's max-length field) and the descriptor read that uses
-them. Against the emulated controller a transfer leaves the machine unable to
-finish booting, and a driver that hangs the platform to announce that it is
-unfinished is worse than one that stops at the port. So enumeration stays below
-the boot path until it works, the boot log says so in as many words, and the
-gate does not claim it.
+The transfer that would not complete was two defects, each invisible until the
+other was fixed. **`USB_DEV_ADDRESS` is an immediate, not a memory operand**: the
+enumeration path read the next address with `movzx eax, byte [USB_DEV_ADDRESS]`,
+which loads the byte at address 1 - the top of the real-mode IVT, 0xFF - so the
+descriptor read after the address was assigned went to device 127, endpoint 1,
+which nothing answered; the transfer timed out and the boot stopped. The boot
+log's status dump also printed each transfer descriptor's status word as four
+hex digits, which is the whole field below bit 15 and therefore none of the
+bits that matter; it now prints all 32.
 
-What it is not, in full: no descriptor has been read, there is no hub beyond the
-root ports, and there is no class driver. The order from here is unchanged:
-make the control transfer complete, then enumeration (device and configuration
-descriptors, an address per device), then HID, then mass storage, which is what
-the exit line actually needs.
+Enumeration is now called from the boot path and works: the port is reset, the
+first eight bytes of the device descriptor are read at address zero to learn the
+packet size, the device is given an address, and the full descriptor is read at
+that address. `make check-usb` asserts it - six cases now: the controller is
+found, it runs, the ports read as empty, a device shows up when one is attached,
+it is enumerated, and its descriptors are read and logged.
+
+What it is not, in full: there is no hub beyond the root ports, the
+configuration descriptor is not read, and there is no class driver. The order
+from here is unchanged: HID, then mass storage, which is what the exit line
+actually needs.
 
 ### M9 · Reliability and management (9–13 weeks)
 

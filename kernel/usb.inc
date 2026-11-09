@@ -3,16 +3,15 @@
 ;
 ; M8 starts here. The milestone's exit line is "plug in a USB stick and copy a
 ; file, unplug it safely", and the road to that is a host controller stack, hub
-; enumeration, and then a mass-storage class driver. This is the first step of
-; the first of those: find the controller, bring it out of reset, and say what
-; is plugged into its root ports.
+; enumeration, and then a mass-storage class driver. This is the first part of
+; the first of those: find a UHCI controller, bring it out of reset, install a
+; schedule and start it, read its root ports, and enumerate the device on one
+; of them - reset the port, read its descriptors and give it an address.
 ;
-; What is here is deliberately small and honest. The controller is found by its
-; PCI class, reset, and read; nothing is transferred, no device is enumerated
-; beyond "something is on this port", and the controller is left stopped with
-; no frame list. Those are the next steps, not omissions to be discovered
-; later: a driver that claims a bus it cannot address is worse than one that
-; says where it stopped.
+; What is here is deliberately small and honest. One controller, one queue
+; head, one control transfer at a time, and one device on a root port. A
+; device that hangs further devices off a hub, and the mass-storage class that
+; makes the milestone's exit line real, are later steps in the same milestone.
 ;
 ; UHCI first, because it is the controller the era's chipsets (and QEMU's
 ; default machine) actually have. EHCI and OHCI are later steps in the same
@@ -188,13 +187,7 @@ usb_init:
         je .report_empty
         LOGBOOT LOG_INFO, msg_usb_connected
 
-        ; Enumeration is written and is not called yet: a control transfer
-        ; against the emulated controller leaves the machine unable to finish
-        ; booting, and a driver that hangs the platform to say "this is not
-        ; finished" is worse than one that stops at the port. What is below is
-        ; the next step, kept where it can be tested, not wired into the boot
-        ; path until it works.
-        LOGBOOT LOG_INFO, msg_usb_next
+        call usb_enumerate
         jmp .done
 .report_empty:
         LOGBOOT LOG_INFO, msg_usb_empty
@@ -670,7 +663,7 @@ usb_enumerate:
         mov ecx, 2                      ; the device needs a moment to move
         call smp_delay_ms
 
-        movzx eax, byte [USB_DEV_ADDRESS]
+        mov al, USB_DEV_ADDRESS
         mov dl, USB_DESC_DEVICE
         xor dh, dh
         mov ecx, 18
@@ -719,40 +712,29 @@ usb_log_failure:
         xor ecx, ecx
 .next:
         mov ebx, [usb_td_status + ecx*4]
-        call usb_hex_word
+        call usb_hex_dword
         mov al, ' '
         stosb
         inc ecx
         cmp ecx, 3
         jb .next
+        mov al, '/'
+        stosb
+        mov ebx, [usb_flbase]
+        call usb_hex_dword
+        mov al, '/'
+        stosb
+        mov ebx, [usb_flbase]
+        mov ebx, [ebx]
+        call usb_hex_dword
+        mov al, '/'
+        stosb
+        mov ebx, [usb_mem]
+        call usb_hex_dword
         xor al, al
         stosb
-        mov ebx, [usb_flbase]
-        mov al, ' '
-        stosb
-        mov ebx, ebx
-        shr ebx, 16
-        call usb_hex_word
-        mov ebx, [usb_flbase]
-        call usb_hex_word
-        mov al, '/'
-        stosb
-        mov ebx, [usb_flbase]
-        mov ebx, [ebx]
-        shr ebx, 16
-        call usb_hex_word
-        mov ebx, [usb_flbase]
-        mov ebx, [ebx]
-        call usb_hex_word
-        mov al, '/'
-        stosb
-        mov ebx, [usb_mem]
-        shr ebx, 16
-        call usb_hex_word
-        mov ebx, [usb_mem]
-        call usb_hex_word
-        mov al, LOG_INFO                ; expected at this stage: enumeration is
-        mov esi, usb_msg_buf            ; the step after this one
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
         call bootlog_write
         popad
         ret
@@ -848,6 +830,32 @@ usb_hex_byte:
         pop eax
         ret
 
+; EBX as eight hex digits at EDI
+usb_hex_dword:
+        push eax
+        push ecx
+        push edx
+        mov edx, ebx
+        mov ecx, 28                     ; shift for the top nibble
+.hd_loop:
+        mov eax, edx
+        shr eax, cl
+        and al, 0x0F
+        cmp al, 10
+        jb .hd_digit
+        add al, 'a' - 10
+        jmp .hd_store
+.hd_digit:
+        add al, '0'
+.hd_store:
+        stosb
+        sub ecx, 4
+        jns .hd_loop
+        pop edx
+        pop ecx
+        pop eax
+        ret
+
 USB_DEV_ADDRESS equ 1
 
 msg_usb_uhci:         db "usb: UHCI host controller ready", 0
@@ -856,8 +864,7 @@ msg_usb_connected:    db "usb: a device is plugged into a root port", 0
 msg_usb_empty:        db "usb: no device on the root ports", 0
 msg_usb_reset:        db "usb: the UHCI controller would not come out of reset", 0
 msg_usb_enum:         db "usb: device enumerated", 0
-msg_usb_no_enum:      db "usb: a device is on a port; reading its descriptors is the next step", 0
-msg_usb_next:         db "usb: enumerating it is the next step", 0
+msg_usb_no_enum:      db "usb: the device on a root port would not enumerate", 0
 msg_usb_no_reset:     db "usb: the root port would not reset", 0
 msg_usb_xfer_fail:    db "usb: a control transfer did not complete, status=", 0
 msg_usb_regs:         db "usb: regs cmd=", 0
