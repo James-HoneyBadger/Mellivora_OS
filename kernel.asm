@@ -322,6 +322,7 @@ FTYPE_DIR           equ 2              ; Directory
 FTYPE_EXEC          equ 3              ; Executable (flat binary or ELF)
 FTYPE_BATCH         equ 4              ; Batch script
 FTYPE_LINK          equ 5              ; Symbolic link
+FTYPE_STREAM        equ 6              ; Alternate data stream ("file:stream")
 
 ; Syscall numbers (via INT 0x80)
 SYS_EXIT            equ 0
@@ -994,6 +995,7 @@ kernel_entry:
 %include "kernel/acl.inc"
 %include "kernel/repair.inc"
 %include "kernel/vfs.inc"
+%include "kernel/stream.inc"
 %include "kernel/filesearch.inc"
 %include "kernel/isr.inc"
 %include "kernel/ipc.inc"

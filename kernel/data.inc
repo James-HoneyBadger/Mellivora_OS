@@ -222,6 +222,7 @@ cmd_run_str:    db "run", 0
 cmd_enter_str:  db "enter", 0
 cmd_copy_str:   db "copy", 0
 cmd_ren_str:    db "ren", 0
+cmd_stream_str: db "stream", 0
 cmd_mv_str:     db "mv", 0
 cmd_move_str:   db "move", 0
 cmd_df_str:     db "df", 0
@@ -507,6 +508,23 @@ msg_hbfs_dir_crc_err: db "HBFS: directory checksum failed", 0x0A, 0
 msg_hbfs_dir_read_err:  db "HBFS: directory read failed", 0x0A, 0
 msg_hbfs_dir_write_err: db "HBFS: directory write failed", 0x0A, 0
 msg_hbfs_bitmap_err:    db "HBFS: bitmap read failed", 0x0A, 0
+
+; Alternate streams: initialized data, so it must live below bss_start.
+stream_verb_list:   db "list", 0
+stream_verb_read:   db "read", 0
+stream_verb_write:  db "write", 0
+stream_verb_delete: db "delete", 0
+stream_verb_del:    db "del", 0
+msg_stream_usage1:  db "usage: stream list FILE", 0x0A, 0
+msg_stream_usage2:  db "       stream read|delete FILE NAME", 0x0A
+                    db "       stream write FILE NAME TEXT", 0x0A, 0
+msg_stream_wrote:   db "stream: wrote ", 0
+msg_stream_deleted: db "stream: deleted ", 0
+msg_stream_none:    db "stream: no streams on ", 0
+msg_stream_no_base: db "stream: no such file", 0x0A, 0
+msg_stream_no_stream: db "stream: no such stream", 0x0A, 0
+msg_stream_size:    db "  ", 0
+msg_stream_bytes:   db " bytes", 0x0A, 0
 msg_ata_read_err:       db "ATA: read failed after retries", 0x0A, 0
 msg_ata_write_err:      db "ATA: write failed after retries", 0x0A, 0
 dir_header:     db "Type       Size  Modified         Name", 0x0A, 0
@@ -528,6 +546,9 @@ msg_copied:     db "Copied.", 0x0A, 0
 msg_renamed:    db "Renamed.", 0x0A, 0
 msg_copy_usage: db "Usage: copy SRC DEST", 0x0A, 0
 msg_ren_usage:  db "Usage: ren|mv OLD NEW", 0x0A, 0
+msg_ren_taken:  db "A file with that name already exists.", 0x0A, 0
+msg_ren_failed: db "Rename failed.", 0x0A, 0
+msg_ren_streams: db "A wildcard rename cannot move streams; rename that file by name.", 0x0A, 0
 msg_wild_needs_star: db "For multiple wildcard matches, destination must include '*'.", 0x0A, 0
 msg_write_prompt: db "Type content (empty line to end):", 0x0A, 0
 msg_write_err:  db "Write error!", 0x0A, 0
@@ -1491,6 +1512,18 @@ proc_scratch_buf: resb 512
 
 ; v10.0 — HBFS v3 sector scratch buffer (used by hbfs_flush_dir_entry)
 hbfs_sector_rw_buf: resb 512
+
+; Alternate streams (kernel/stream.inc): the composed "<base>:<stream>" name,
+; the "<base>:" prefix a sweep scans for, the rename destination, and the
+; suffix a rename carries over.
+stream_name_buf:    resb 256
+stream_name2_buf:   resb 256
+stream_new_buf:     resb 256
+stream_suffix_buf:  resb 80
+stream_verb_buf:    resb 16
+stream_arg1_buf:    resb 200
+stream_arg2_buf:    resb 72
+
 
 ; Set once the C-built kernel module accepts the host table (kernel/cmod.inc).
 cmod_ready:      resd 1

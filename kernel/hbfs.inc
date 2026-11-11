@@ -2374,6 +2374,15 @@ hbfs_delete_file_entry:
 .hdfe_no_release:
 
         call hbfs_journal_begin
+        ; A base entry takes its streams with it, in the same transaction: a
+        ; delete is all of the file or none of it. A stream entry has no
+        ; streams of its own - the name can hold only one colon - so the sweep
+        ; stops here for one.
+        cmp byte [edi + HBFS_DE_TYPE], FTYPE_STREAM
+        je .hdfe_no_streams
+        call stream_sweep_delete
+        jc .hdfe_sweep_failed
+.hdfe_no_streams:
         ; An extent entry names runs, not one range: walk its list. A v3 (or
         ; one-run) entry frees `start` .. `start+count-1` as before.
         test word [edi + 254], HBFS4_DE_EXTENTS
@@ -2422,6 +2431,14 @@ hbfs_delete_file_entry:
         stc
         ret
 
+        ; A stream that could not be removed leaves the base untouched: the
+        ; transaction it opened is rolled back with it.
+.hdfe_sweep_failed:
+        call hbfs_journal_abort
+        popad
+        stc
+        ret
+
 .hdfe_refuse:
         popad
         stc
@@ -2455,8 +2472,27 @@ hbfs_rename_entry:
         mov  esi, [.hre_new]
         call hbfs_find_file
         jnc  .hre_taken
+        ; Taking a name whose stream namespace is occupied would put two
+        ; files' streams under one base, and neither could be deleted whole.
+        mov  esi, [.hre_new]
+        call stream_namespace_taken
+        jc   .hre_taken
 
         call hbfs_journal_begin
+        ; The streams are part of the file and follow its name, inside the
+        ; same transaction, so a rename moves all of the file or none of it.
+        ; The sweep renames streams by calling this function again, so the
+        ; slots that say what this call is renaming are saved across it.
+        push dword [.hre_old]
+        push dword [.hre_new]
+        push dword [.hre_entry]
+        mov  esi, [.hre_old]
+        mov  edi, [.hre_new]
+        call stream_sweep_rename
+        pop  dword [.hre_entry]
+        pop  dword [.hre_new]
+        pop  dword [.hre_old]
+        jc   .hre_abort
         mov  edi, [.hre_entry]
         mov  esi, [.hre_new]
         xor  ecx, ecx
@@ -2476,10 +2512,16 @@ hbfs_rename_entry:
         mov  eax, [tick_count]
         mov  [edi + HBFS_DE_MTIME], eax
         call hbfs_save_root_dir
-        jc   .hre_failed
+        jc   .hre_abort
         call hbfs_journal_commit
         popad
         clc
+        ret
+.hre_abort:
+        call hbfs_journal_abort
+        mov  dword [esp + 28], 3
+        popad
+        stc
         ret
 .hre_missing:
         mov  dword [esp + 28], 1

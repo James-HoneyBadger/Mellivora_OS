@@ -88,12 +88,14 @@ FTYPE_DIR = 2
 FTYPE_EXEC = 3
 FTYPE_BATCH = 4
 FTYPE_LINK = 5
+FTYPE_STREAM = 6
 FTYPE_NAMES = {
     FTYPE_TEXT: "text",
     FTYPE_DIR: "dir",
     FTYPE_EXEC: "exec",
     FTYPE_BATCH: "batch",
     FTYPE_LINK: "link",
+    FTYPE_STREAM: "stream",
 }
 
 # Directory entry offsets (must match kernel.asm).
@@ -486,7 +488,19 @@ class Fsck:
             self.error(f"{prefix or '/'}: short read of directory")
             return
 
+        # The base names in this directory, so a stream entry can be checked
+        # against the file it belongs to. A stream whose base is gone is an
+        # orphan: nothing deletes a base without its streams, so its presence
+        # means the tree was damaged or written by something else.
+        base_names = set()
         max_entries = len(data) // HBFS_DIR_ENTRY_SIZE
+        for i in range(max_entries):
+            e = data[i * HBFS_DIR_ENTRY_SIZE:(i + 1) * HBFS_DIR_ENTRY_SIZE]
+            if e[DE_TYPE] in (FTYPE_FREE, FTYPE_STREAM):
+                continue
+            raw = e[0:HBFS_MAX_FILENAME + 1].split(b"\x00", 1)[0]
+            base_names.add(raw.decode("ascii", "replace"))
+
         for i in range(max_entries):
             off = i * HBFS_DIR_ENTRY_SIZE
             entry = data[off:off + HBFS_DIR_ENTRY_SIZE]
@@ -511,6 +525,15 @@ class Fsck:
 
             display = f"{prefix}{name}"
             self.stats["entries"] += 1
+
+            if ftype == FTYPE_STREAM:
+                base, sep, suffix = name.partition(":")
+                if not sep or not suffix:
+                    self.error(f"{display}: stream entry without a stream name")
+                elif ":" in suffix:
+                    self.error(f"{display}: a stream name cannot contain ':'")
+                elif base not in base_names:
+                    self.error(f"{display}: stream has no base file {base!r}")
 
             if ftype not in FTYPE_NAMES:
                 self.error(f"{display}: invalid entry type {ftype}")

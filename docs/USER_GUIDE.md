@@ -219,8 +219,12 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | Command | Description |
 | --- | --- |
 | `copy SRC DEST` | Copy a file (wildcards supported: `copy *.txt backup/`) |
-| `ren OLD NEW` | Rename a file |
-| `del FILE` / `rm FILE` | Delete a file (wildcards: `del *.tmp`) |
+| `ren OLD NEW` | Rename a file; its streams move with it |
+| `del FILE` / `rm FILE` | Delete a file (wildcards: `del *.tmp`); its streams go with it |
+| `stream list FILE` | List a file's alternate data streams and their sizes |
+| `stream read FILE STREAM` | Print a stream, also reachable as `cat FILE:STREAM` |
+| `stream write FILE STREAM TEXT` | Create or replace a stream's content |
+| `stream delete FILE STREAM` | Delete one stream |
 
 ### Text Processing (HBU — Honey Badger Utilities)
 

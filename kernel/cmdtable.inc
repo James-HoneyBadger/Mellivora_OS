@@ -110,6 +110,7 @@ cmd_table:
         CMDENT cmd_rm_str, CAT_FILES, sum_rm, det_rm
         CMDENT cmd_size_str, CAT_FILES, sum_size, det_size
         CMDENT cmd_stat_str, CAT_FILES, sum_stat, det_stat
+        CMDENT cmd_stream_str, CAT_FILES, sum_stream, det_stream
         CMDENT cmd_tail_str, CAT_FILES, sum_tail, det_tail
         CMDENT cmd_touch_str, CAT_FILES, sum_touch, det_touch
         CMDENT cmd_type_str, CAT_FILES, sum_type, det_type
@@ -220,6 +221,15 @@ det_disk:
         db "  Show the ATA disk size and sector counts, and an attached USB", 0x0A
         db "  stick's size and first block. The USB ports are scanned first,", 0x0A
         db "  so a stick plugged in after boot is found here.", 0x0A, 0
+sum_stream: db "Alternate data streams of a file", 0
+det_stream:
+        db "stream list FILE", 0x0A
+        db "stream read FILE STREAM", 0x0A
+        db "stream write FILE STREAM TEXT", 0x0A
+        db "stream delete FILE STREAM", 0x0A
+        db "  A stream is a second content of a file, reached as FILE:STREAM.", 0x0A
+        db "  Streams are hidden from dir and are deleted and renamed with", 0x0A
+        db "  their file.", 0x0A, 0
 sum_help: db "Show commands by category or one command", 0
 det_help:
         db "help [COMMAND | -a]", 0x0A

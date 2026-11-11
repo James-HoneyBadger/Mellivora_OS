@@ -110,7 +110,7 @@ repair_entry:
         movzx eax, byte [edi + HBFS_DE_TYPE]
         cmp eax, FTYPE_TEXT
         jb .re_bad_type
-        cmp eax, FTYPE_LINK
+        cmp eax, FTYPE_STREAM
         ja .re_bad_type
         mov [.re_type], eax
 

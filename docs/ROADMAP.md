@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 129 shell built-ins, 295 NASM programs and 15 C program
+- 210 syscalls, 130 shell built-ins, 295 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -411,7 +411,7 @@ runs and new subdirectories. Extent files can be deleted (each run and the exten
 is freed), and `format` now creates a checksummed v4 volume instead of the legacy v2 one.
 Extent files are created when no contiguous run fits, truncated by rewriting their
 run list, and deleted by freeing each run. ACLs and derived per-user quotas have
-since landed; streams, compression and snapshots remain v5 material.
+since landed, as have alternate streams; compression and snapshots remain v5 material.
 
 - On-disk v5: per-file access control lists, alternate streams, per-user quotas,
   transparent compression, encryption at rest, sparse files, hard links, and
@@ -459,6 +459,21 @@ since landed; streams, compression and snapshots remain v5 material.
   read-only for them, the mask narrows that grant without touching the ACE, the
   owner is held to their own ACE, a stranger falls to `acl:o`, and root passes.
   Inheritance and group-class unions are the remaining ACL work.
+- **Alternate data streams (landed).** A stream is a second content of a
+  file, reached as `FILE:STREAM`, with its own size, blocks, permissions and
+  xattrs; it is stored as a directory entry of type 6 named `FILE:STREAM`, so
+  the path resolver, the journal, quotas, ACLs and repair all understand it
+  without new on-disk structures. What the representation costs is paid at the
+  three places that own the file: `dir` and readdir hide stream entries,
+  deleting a file deletes its streams in the same transaction, and renaming it
+  moves them - each stream rename nested under one commit, so the set moves or
+  none of it does. `stream list|read|write|delete` is the shell surface, and
+  the offline checker reports a stream whose base is gone. `make check-streams`
+  writes, lists, reads, hides, deletes and renames streams, then requires
+  `tools/fsck_hbfs.py` to call the volume it leaves behind consistent.
+  Wildcard renames refuse a set that carries streams rather than rename entries
+  under a scan they would invalidate; compression and streams on directories
+  are the remaining stream work.
 - **A kernel window, not a gap (landed).** The image had filled 4062 of the
   4062 sectors between the loader and the superblock, because the program window
   was pinned at 3 MB and everything above it was hand-placed. The layout moved
@@ -475,9 +490,10 @@ conformance suite; a deliberately corrupted volume repaired from the recovery
 console; an encrypted volume round-trips with its key held in the store.
 
 Of those, the power-cut harness, the quota and ACL conformance suites, and the
-corrupted-volume repair are in place; compression, encryption, snapshots and the
-redirector seam are the wave's remaining work, and `make crash-soak` with 10 000
-iterations is a run that has not happened.
+corrupted-volume repair are in place; volume encryption and the VFS redirector
+seam have since landed. Compression and snapshots are the wave's remaining
+work, and `make crash-soak` with 10 000 iterations is a run that has not
+happened.
 
 ### M4 · Configuration and services (9–13 weeks)
 

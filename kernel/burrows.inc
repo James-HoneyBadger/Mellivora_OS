@@ -1697,6 +1697,8 @@ fdlg_load_files:
         movzx eax, byte [esi + DIRENT_TYPE]
         cmp eax, FTYPE_FREE
         je .fl_next
+        cmp eax, FTYPE_STREAM
+        je .fl_next             ; a stream is part of its file, not an entry
 
         ; Apply type filter
         mov edx, [fdlg_filter]

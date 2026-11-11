@@ -707,6 +707,11 @@ vfs_hbfs_readdir:
         jge .vhrd_eof
         cmp byte [esi + HBFS_DE_TYPE], FTYPE_FREE
         je .vhrd_skip_free
+        ; A stream is part of a file and not a directory entry of its own:
+        ; listing it would tell a program the file has a sibling it cannot
+        ; open by that name.
+        cmp byte [esi + HBFS_DE_TYPE], FTYPE_STREAM
+        je .vhrd_skip_free
         cmp eax, edx
         je .vhrd_found
         inc eax

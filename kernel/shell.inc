@@ -1171,6 +1171,8 @@ shell_expand_globs:
         je .seg_dir_done
         cmp byte [ebp + DIRENT_TYPE], FTYPE_FREE
         je .seg_dir_next
+        cmp byte [ebp + DIRENT_TYPE], FTYPE_STREAM
+        je .seg_dir_next        ; a stream goes when its file does
 
         ; Match this entry name against pattern
         push esi
@@ -1973,6 +1975,9 @@ shell_dispatch_core:
         mov dword [shell_last_status], 1
         ret
 .dispatch_unlocked:
+        mov edi, cmd_stream_str
+        call str_starts_with
+        jc .cmd_stream
 
         ; Compare against known commands
         mov edi, cmd_help_str
@@ -2915,6 +2920,11 @@ shell_dispatch_core:
         call skip_spaces
         call parse_flags
         call cmd_copy_file
+        ret
+
+.cmd_stream:
+        call skip_spaces
+        call cmd_stream_handle
         ret
 
 .cmd_rename:
@@ -4974,6 +4984,8 @@ cmd_list_dir_body:
 .short_loop:
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
         je .short_next
+        cmp byte [edi + DIRENT_TYPE], FTYPE_STREAM
+        je .short_next
 
         inc ebx
 
@@ -5065,6 +5077,8 @@ cmd_list_dir_body:
 
 .loop:
         cmp byte [edi + 253], FTYPE_FREE
+        je .next
+        cmp byte [edi + 253], FTYPE_STREAM
         je .next
 
         inc ebx
@@ -5232,6 +5246,8 @@ cmd_list_dir_body:
         test ecx, ecx
         jz .sf_col_done
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
+        je .sf_col_next
+        cmp byte [edi + DIRENT_TYPE], FTYPE_STREAM
         je .sf_col_next
         mov [esi], edi
         add esi, 4
@@ -6640,6 +6656,223 @@ cmd_show_memory:
 
 ;---------------------------------------
 ; Command: disk - Show disk information
+;---------------------------------------
+; cmd_stream_handle - alternate data streams of a file
+;   ESI = the arguments after "stream"
+;
+; stream list FILE
+; stream read FILE STREAM
+; stream write FILE STREAM TEXT
+; stream delete FILE STREAM
+;
+; Writing a stream is a write to the file, so the file's own permission is
+; what stream_create checks. Listing scans the current directory for entries
+; named "FILE:..." - they are hidden from `dir` because they are part of the
+; file, not siblings of it.
+;---------------------------------------
+cmd_stream_handle:
+        pushad
+        cmp byte [esi], 0
+        je .usage
+        mov edi, stream_verb_buf
+        mov ecx, 15
+        call copy_word_n
+        call skip_spaces
+        cmp byte [esi], 0
+        je .usage
+
+        mov edi, stream_arg1_buf
+        mov ecx, 199
+        call copy_word_n
+        call skip_spaces
+        mov [.rest], esi                ; where the stream name starts
+
+        mov esi, stream_verb_buf
+        mov edi, stream_verb_list
+        call str_compare
+        test eax, eax
+        jz .list
+
+        ; everything but list needs a stream name; the verb comparison left
+        ; ESI on the verb buffer, so the argument cursor comes back from .rest
+        mov esi, [.rest]
+        mov edi, stream_arg2_buf
+        mov ecx, 71
+        call copy_word_n
+        call skip_spaces
+        mov [.rest], esi                ; the content, for write
+
+        mov esi, stream_verb_buf
+        mov edi, stream_verb_read
+        call str_compare
+        test eax, eax
+        jz .read
+
+        mov esi, stream_verb_buf
+        mov edi, stream_verb_write
+        call str_compare
+        test eax, eax
+        jz .write
+
+        mov esi, stream_verb_buf
+        mov edi, stream_verb_delete
+        call str_compare
+        test eax, eax
+        jz .delete
+        mov esi, stream_verb_buf
+        mov edi, stream_verb_del
+        call str_compare
+        test eax, eax
+        jz .delete
+        jmp .usage
+
+        ; --- list ---
+.list:
+        mov esi, stream_arg1_buf
+        call stream_base_ok
+        jc .no_base
+        mov esi, stream_arg1_buf
+        call stream_prefix
+        jc .no_base
+        call hbfs_load_root_dir
+        jc .no_base
+
+        ; prefix length, so a matching entry's name can start after it
+        mov esi, stream_name2_buf
+        xor ebp, ebp
+.list_plen:
+        cmp byte [esi + ebp], 0
+        je .list_scan_start
+        inc ebp
+        jmp .list_plen
+.list_scan_start:
+        mov esi, hbfs_dir_buf
+        call hbfs_get_max_entries
+        mov ecx, eax
+        mov dword [.found], 0
+.list_scan:
+        cmp byte [esi + HBFS_DE_TYPE], FTYPE_STREAM
+        jne .list_next
+        mov edi, stream_name2_buf
+        call stream_prefix_match
+        jc .list_next
+        inc dword [.found]
+
+        mov ebx, esi                    ; the entry, for its size
+        add esi, ebp                    ; the suffix, past "FILE:"
+        call vga_print
+
+        mov esi, msg_stream_size
+        call vga_print
+        mov eax, [ebx + HBFS_DE_SIZE]
+        call vga_print_dec
+        mov esi, msg_stream_bytes
+        call vga_print
+
+        mov esi, ebx                    ; back to the entry for the scan
+.list_next:
+        add esi, HBFS_DIR_ENTRY_SIZE
+        dec ecx
+        jnz .list_scan
+        cmp dword [.found], 0
+        jne .done
+        mov esi, msg_stream_none
+        call vga_print
+        mov esi, stream_arg1_buf
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        jmp .done
+
+        ; --- read ---
+.read:
+        mov esi, stream_arg1_buf
+        mov edi, stream_arg2_buf
+        call stream_compose
+        jc .no_base
+        mov esi, eax
+        mov edi, PROGRAM_BASE
+        call hbfs_read_file
+        jc .no_stream
+        cmp ecx, PROGRAM_MAX_SIZE - 1
+        jle .read_size_ok
+        mov ecx, PROGRAM_MAX_SIZE - 1
+.read_size_ok:
+        mov byte [PROGRAM_BASE + ecx], 0
+        mov esi, PROGRAM_BASE
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        jmp .done
+
+        ; --- write ---
+.write:
+        mov esi, [.rest]                ; the rest of the line is the content
+        mov [.text], esi
+        cmp byte [esi], 0
+        je .usage
+        xor edx, edx
+.write_len:
+        cmp byte [esi + edx], 0
+        je .write_len_done
+        inc edx
+        jmp .write_len
+.write_len_done:
+        mov ecx, [.text]
+        mov esi, stream_arg1_buf
+        mov edi, stream_arg2_buf
+        call stream_create
+        jc .no_base
+        mov esi, stream_arg1_buf
+        mov edi, stream_arg2_buf
+        call stream_compose
+        jc .done
+        mov esi, msg_stream_wrote
+        call vga_print
+        mov esi, stream_name_buf
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        jmp .done
+
+        ; --- delete ---
+.delete:
+        mov esi, stream_arg1_buf
+        mov edi, stream_arg2_buf
+        call stream_delete
+        jc .no_stream
+        mov esi, msg_stream_deleted
+        call vga_print
+        mov esi, stream_arg1_buf
+        mov edi, stream_arg2_buf
+        call stream_compose
+        jc .done
+        mov esi, stream_name_buf
+        call vga_print
+        mov al, 0x0A
+        call vga_putchar
+        jmp .done
+
+.no_base:
+        mov esi, msg_stream_no_base
+        call vga_print
+        jmp .done
+.no_stream:
+        mov esi, msg_stream_no_stream
+        call vga_print
+        jmp .done
+.usage:
+        mov esi, msg_stream_usage1
+        call vga_print
+        mov esi, msg_stream_usage2
+        call vga_print
+.done:
+        popad
+        ret
+.found: dd 0
+.rest:  dd 0
+.text:  dd 0
+
 ;---------------------------------------
 cmd_show_disk:
         pushad
@@ -8876,6 +9109,28 @@ cmd_rename_file:
         call hbfs_find_file_global
         jc .ren_not_found
 
+        ; The new name has to be free, and free as a stream namespace too:
+        ; two entries sharing a name, or two files' streams under one base,
+        ; are states the delete path cannot undo whole.
+        mov esi, filename_buf2
+        call hbfs_find_file
+        jnc .ren_taken
+        mov esi, filename_buf2
+        call stream_namespace_taken
+        jc .ren_taken
+
+        ; The streams follow the name, in the same transaction as the base.
+        call hbfs_journal_begin
+        mov esi, filename_buf
+        mov edi, filename_buf2
+        call stream_sweep_rename
+        jc .ren_abort
+
+        ; The sweep reloaded the directory, so find the base again by name.
+        mov esi, filename_buf
+        call hbfs_find_file
+        jc .ren_abort
+
         ; Copy new name into entry (max 252 chars)
         push edi
         mov esi, filename_buf2
@@ -8899,6 +9154,8 @@ cmd_rename_file:
         mov [edi + 272], eax
 
         call hbfs_save_root_dir
+        jc .ren_abort
+        call hbfs_journal_commit
 
         ; Restore CWD if global search changed it
         cmp dword [hbfs_find_file_global.gff_moved], 1
@@ -8907,6 +9164,31 @@ cmd_rename_file:
 .ren_no_restore:
         mov esi, msg_renamed
         call vga_print
+        popad
+        ret
+
+.ren_taken:
+        call vga_set_error
+        mov esi, msg_ren_taken
+        call vga_print
+        call vga_reset_color
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .ren_taken_done
+        call gff_restore_cwd
+.ren_taken_done:
+        popad
+        ret
+
+.ren_abort:
+        call hbfs_journal_abort
+        cmp dword [hbfs_find_file_global.gff_moved], 1
+        jne .ren_abort_done
+        call gff_restore_cwd
+.ren_abort_done:
+        call vga_set_error
+        mov esi, msg_ren_failed
+        call vga_print
+        call vga_reset_color
         popad
         ret
 
@@ -8932,6 +9214,8 @@ cmd_rename_file:
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
         je .rw_count_next
         cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
+        je .rw_count_next
+        cmp byte [edi + DIRENT_TYPE], FTYPE_STREAM
         je .rw_count_next
 
         push ecx
@@ -8977,6 +9261,8 @@ cmd_rename_file:
         je .rw_done
         cmp byte [edi + DIRENT_TYPE], FTYPE_FREE
         je .rw_next
+        cmp byte [edi + DIRENT_TYPE], FTYPE_STREAM
+        je .rw_next
 
         push ecx
         push edi
@@ -8985,6 +9271,20 @@ cmd_rename_file:
         pop edi
         pop ecx
         jnc .rw_next
+
+        ; A wildcard rename renames entries in place while it scans, so a
+        ; stream could not be moved without invalidating the scan. Refuse the
+        ; whole set rather than orphan the streams.
+        push ecx
+        push edi
+        mov esi, edi
+        mov edi, wildcard_src_buf
+        call str_copy
+        pop edi
+        pop ecx
+        mov esi, wildcard_src_buf
+        call stream_namespace_taken
+        jc .rw_streams
 
         ; source entry name -> wildcard_src_buf
         push ecx
@@ -9043,6 +9343,14 @@ cmd_rename_file:
         call hbfs_save_root_dir
         mov esi, msg_renamed
         call vga_print
+        popad
+        ret
+
+.rw_streams:
+        call vga_set_error
+        mov esi, msg_ren_streams
+        call vga_print
+        call vga_reset_color
         popad
         ret
 

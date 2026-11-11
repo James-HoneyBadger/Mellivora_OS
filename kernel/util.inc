@@ -3332,6 +3332,8 @@ sys_readdir:
 
         cmp byte [ebp + DIRENT_TYPE], FTYPE_FREE
         je .srd_free
+        cmp byte [ebp + DIRENT_TYPE], FTYPE_STREAM
+        je .srd_free
 
         ; Copy filename to user buffer (EBX), capped at HBFS_MAX_FILENAME+1
         mov esi, ebp
