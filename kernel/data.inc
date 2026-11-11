@@ -1173,6 +1173,17 @@ usb_hid_maxpkt:   resd 1          ; HID interrupt IN endpoint max packet size
 usb_hid_armed:    resd 1          ; 1 = an interrupt IN descriptor is hung
 usb_hid_prev_mod: resb 1          ; last modifier byte the keyboard reported
 usb_hid_prev_keys: resb 6         ; last six keycodes the keyboard reported
+usb_msc_iface:    resd 1          ; the mass-storage interface number
+usb_msc_ep_in:    resd 1          ; bulk IN endpoint (0 = none found)
+usb_msc_ep_out:   resd 1          ; bulk OUT endpoint (0 = none found)
+usb_msc_maxpkt_in: resd 1         ; bulk IN endpoint max packet size
+usb_msc_maxpkt_out: resd 1        ; bulk OUT endpoint max packet size
+usb_msc_tag:      resd 1          ; command tag, incremented per command
+usb_msc_blocks:   resd 1          ; blocks the device reports, from last LBA
+usb_msc_blocksize: resd 1         ; bytes per block
+usb_msc_in_toggle: resd 1         ; next DATA0/DATA1 on the bulk IN pipe
+usb_msc_out_toggle: resd 1        ; next DATA0/DATA1 on the bulk OUT pipe
+usb_msc_busy:     resd 1          ; 1 while a bulk transfer owns the queue head
 usb_td_status:    resd 3          ; the three status words of a failed transfer
 usb_xfer_addr:    resd 1          ; control transfer: device address
 usb_xfer_setup:   resd 1          ;                      setup packet

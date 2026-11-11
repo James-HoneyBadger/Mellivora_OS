@@ -32,6 +32,9 @@ Options:
   --screendump FILE   save the framebuffer as PNG (works in VBE graphics modes)
   --json              emit a machine-readable result object
   --out FILE          write the combined serial+screen output to FILE
+  --device SPEC       plug in a QEMU device (repeatable), e.g. usb-kbd
+  --usb-disk FILE     attach FILE as a USB mass-storage disk (-drive if=none
+                      plus -device usb-storage), e.g. a raw stick image
   --mem MB            guest RAM in MB (default: the machine profile's)
   --cpu MODEL         override the CPU model (default: the machine profile's)
   --profile NAME      machine profile from tools/machine_profiles.py
@@ -358,6 +361,10 @@ def main() -> int:
     # Devices to plug in, for a driver that needs something on its bus:
     # `--device usb-kbd` is how the USB stack is asked whether it noticed.
     devices = _opt_all(args, "--device")
+    # A USB stick is two objects in QEMU - a block backend and the usb-storage
+    # device that owns it - so it gets an option of its own rather than a
+    # `--device` spelling that cannot carry the backend.
+    usb_disks = _opt_all(args, "--usb-disk")
     mem_mb = _opt(args, "--mem")
     smp = _opt(args, "--smp")
     cpu = _opt(args, "--cpu")
@@ -386,6 +393,9 @@ def main() -> int:
          "-serial", f"unix:{ser_path},server=on,wait=on",
          "-monitor", f"unix:{mon_path},server,nowait"]
         + (["-smp", smp] if smp else [])
+        + [x for i, d in enumerate(usb_disks) for x in (
+            "-drive", f"if=none,id=usbstick{i},format=raw,file={d},cache=writethrough",
+            "-device", f"usb-storage,drive=usbstick{i}")]
         + [x for d in devices for x in ("-device", d)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

@@ -1022,10 +1022,29 @@ waiting, draining completed reports and re-arming, so a tick never blocks.
 `make check-usb` is eleven cases now - the last types `help` through the
 keyboard and runs it.
 
+Mass storage is the class the exit line actually needs, and it starts with the
+same descriptor walk with a different match: interface class 8, subclass SCSI
+transparent, protocol bulk-only, and the bulk IN and OUT endpoints under it.
+The bulk-only transport then does what the specification prescribes before it
+will answer a command - a class reset, INQUIRY, READ CAPACITY, and one READ(10)
+of block zero - so the log names the device it found (`QEMU HARDDISK`), its size
+in blocks, and a signature the harness wrote into the image and the device gave
+back. Two details cost thought. **The data toggle belongs to the driver, not to
+the controller**: a bulk endpoint alternates DATA0 and DATA1 across transfers,
+the UHCI schedule does not flip it, and a descriptor handed the wrong one has
+its packet ignored, so the toggle is kept per direction and flipped only when a
+transfer completes - not when it is NAKed and retried. And **the class drivers
+run in a fixed order**, because one queue head holds one descriptor chain: the
+mass-storage probe moves bulk data before the HID driver hangs an interrupt
+descriptor on it. `make check-usb` is seventeen cases; `tools/qemu_drive.py
+--usb-disk` attaches a raw image as a `usb-storage` device for the last six.
+
 What it is not, in full: there is no hub beyond the root ports, the keypad and
-the GUI keys are not mapped, and there is no mass-storage class driver. The
-order from here is unchanged: mass storage, which
-is what the exit line actually needs.
+the GUI keys are not mapped, and the stick is read but not yet mounted - no
+filesystem sits on it, so the exit line's copy-a-file is still ahead. The block
+device is also not registered with the VFS, and ejection is not implemented. The
+order from here is unchanged: make the mass-storage device a block device that
+HBFS can mount, which is what makes the exit line real.
 
 ### M9 · Reliability and management (9–13 weeks)
 

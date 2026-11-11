@@ -11,7 +11,7 @@
 # keyboard (when it is one) is switched to boot protocol, polled, and made to
 # type into the shell.
 #
-# So the gate asserts exactly what the stack claims. Two boots, because the
+# So the gate asserts exactly what the stack claims. Three boots, because the
 # interesting difference is whether the driver notices a device:
 #
 #   1. the default machine, which has a PIIX3 UHCI controller and nothing
@@ -19,7 +19,10 @@
 #      empty;
 #   2. the same machine with `-device usb-kbd`: the same controller must now
 #      report a device on a root port, enumerate it, configure it, and turn
-#      its reports into keys the shell can run.
+#      its reports into keys the shell can run;
+#   3. the same machine with a USB stick: it must find the bulk endpoints,
+#      answer INQUIRY, report its capacity, and give back a block whose
+#      signature the test wrote there.
 #
 # A driver that always says "connected" fails the first case. One that never
 # says it fails the second. A machine without a controller at all is not
@@ -76,6 +79,22 @@ fi
 [ -f "$DRIVE" ] || fail "USB tests: missing $DRIVE"
 [ -f "$IMAGE" ] || fail "USB tests: disk image not found: $IMAGE (run 'make full' first)"
 
+# A 1 MiB stick with a marker in the first block: the driver reads block zero
+# and logs its last two bytes, and 0x55AA is a value a zeroed buffer cannot
+# produce. QEMU reports its size in blocks, which is what the capacity case
+# asserts.
+USB_DISK="$(mktemp -t mellivora-usbstick-XXXXXX)"
+trap 'rm -f "$USB_DISK"' EXIT
+python3 - "$USB_DISK" <<'PY'
+import sys
+data = bytearray(1024 * 1024)
+data[0:8] = b"MELLIVOR"
+data[510] = 0x55
+data[511] = 0xAA
+with open(sys.argv[1], "wb") as f:
+    f.write(data)
+PY
+
 run_case() {
     local name="$1"; shift
     printf '  %-38s ' "$name"
@@ -128,6 +147,34 @@ run_case "a report is read from it" \
     --device usb-kbd \
     --wait-for "usb: hid report read"
 
+# The same stack, with a stick instead of a keyboard. QEMU hands a usb-storage
+# device a SCSI disk, so the answers below are the device's, not a stub's:
+# INQUIRY names QEMU, READ CAPACITY reports the 1 MiB file as 2048 blocks of
+# 512 bytes, and block zero comes back with the signature the harness wrote.
+run_case "a USB stick is noticed on a root port" \
+    --usb-disk "$USB_DISK" \
+    --wait-for "usb: a device is plugged into a root port"
+
+run_case "the stick is enumerated and configured" \
+    --usb-disk "$USB_DISK" \
+    --wait-for "usb: configured"
+
+run_case "its bulk endpoints are found" \
+    --usb-disk "$USB_DISK" \
+    --wait-for "usb: mass storage endpoints 81/02"
+
+run_case "it answers INQUIRY" \
+    --usb-disk "$USB_DISK" \
+    --wait-for "usb: mass storage: QEMU"
+
+run_case "it reports its capacity" \
+    --usb-disk "$USB_DISK" \
+    --wait-for "usb: mass storage 00000800 blocks of 00000200 bytes"
+
+run_case "a block is read from it" \
+    --usb-disk "$USB_DISK" \
+    --wait-for "usb: mass storage block 0 reads 55aa"
+
 # The end-to-end claim: keys typed on the USB keyboard reach the shell. QEMU
 # activates the USB keyboard when one is attached, so `--via sendkey` drives it
 # (and not the PS/2 keyboard). The command is "help", and the assertion is the
@@ -144,4 +191,4 @@ else
     exit 1
 fi
 
-echo "  USB: controller found and running, a device enumerated, configured, its keys read"
+echo "  USB: controller found and running, a keyboard enumerated and typing, a stick read"

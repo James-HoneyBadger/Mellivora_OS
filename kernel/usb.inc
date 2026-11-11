@@ -75,6 +75,9 @@ USB_TD_STATUS   equ 0x030
 USB_SETUP_BUF   equ 0x040
 USB_DESC_BUF    equ 0x080
 USB_HID_BUF     equ 0x100
+USB_MSC_CBW     equ 0x200               ; 31-byte command block wrapper
+USB_MSC_CSW     equ 0x240               ; 13-byte command status wrapper
+USB_MSC_BUF     equ 0x300               ; one 512-byte block of data
 
 USB_DESC_DEVICE  equ 0x01
 USB_DESC_CONFIG  equ 0x02
@@ -85,6 +88,23 @@ USB_REQ_SET_ADDRESS equ 0x05
 USB_REQ_SET_CONFIG  equ 0x09
 USB_REQ_SET_IDLE    equ 0x0A
 USB_REQ_SET_PROTOCOL equ 0x0B
+USB_REQ_MSC_RESET   equ 0xFF            ; bulk-only mass storage reset
+
+USB_CLASS_MASS_STORAGE  equ 0x08
+USB_MSC_SUBCLASS_SCSI   equ 0x06        ; SCSI transparent command set
+USB_MSC_PROTO_BULKONLY  equ 0x50        ; bulk-only transport
+
+; Bulk-only transport wrappers. Both are read as little-endian dwords, and
+; "USBC"/"USBS" are their ASCII spellings on the wire.
+USB_CBW_SIGNATURE   equ 0x43425355
+USB_CSW_SIGNATURE   equ 0x53425355
+USB_CBW_SIZE        equ 31
+USB_CSW_SIZE        equ 13
+USB_CSW_OK          equ 0
+
+SCSI_INQUIRY        equ 0x12
+SCSI_READ_CAPACITY  equ 0x25
+SCSI_READ10         equ 0x28
 
 PCI_CLASS_SERIAL    equ 0x0C
 PCI_SUBCLASS_USB    equ 0x03
@@ -836,6 +856,8 @@ usb_hid_poll:
         pushad
         cmp dword [usb_hid_ep], 0
         je .out
+        cmp dword [usb_msc_busy], 0
+        jne .out                        ; a bulk transfer owns the queue head
         mov ebp, 8                      ; bound the reports drained per tick
 .drain:
         test ebp, ebp
@@ -1118,6 +1140,593 @@ usb_hid_send_key:
         ret
 
 ;---------------------------------------
+; usb_msc_start - find a bulk-only mass-storage interface and prove it
+;
+; The configuration descriptor is walked for the interface whose class is mass
+; storage, subclass SCSI transparent and protocol bulk-only, and for the bulk
+; IN and OUT endpoints under it. What follows is the introduction the bulk-only
+; transport prescribes: a class reset, INQUIRY to make the device describe
+; itself, READ CAPACITY to learn how big it is, and one READ(10) of block zero -
+; so "a block was read" is a block that crossed the wire, not a descriptor that
+; was parsed.
+;
+; A device that is not mass storage walks past silently: it is not this
+; driver's job.
+;---------------------------------------
+usb_msc_start:
+        pushad
+        mov dword [usb_msc_ep_in], 0
+        mov dword [usb_msc_ep_out], 0
+
+        ; edx tracks whether the last interface was the mass-storage one, the
+        ; same walk usb_hid_start does for the keyboard.
+        mov esi, [usb_mem]
+        add esi, USB_DESC_BUF
+        mov ecx, [usb_cfg_len]
+        xor edx, edx
+.walk:
+        test ecx, ecx
+        jbe .found
+        movzx eax, byte [esi]           ; bLength
+        cmp eax, 2
+        jb .out
+        cmp eax, ecx
+        ja .out
+        movzx ebx, byte [esi + 1]       ; bDescriptorType
+        cmp ebx, USB_DESC_INTERFACE
+        jne .not_interface
+        cmp byte [esi + 5], USB_CLASS_MASS_STORAGE
+        jne .msc_off
+        cmp byte [esi + 6], USB_MSC_SUBCLASS_SCSI
+        jne .msc_off
+        cmp byte [esi + 7], USB_MSC_PROTO_BULKONLY
+        jne .msc_off
+        movzx eax, byte [esi + 2]       ; bInterfaceNumber: the reset names it
+        mov [usb_msc_iface], eax
+        mov edx, 1
+        jmp .advance
+.msc_off:
+        xor edx, edx
+        jmp .advance
+.not_interface:
+        cmp ebx, USB_DESC_ENDPOINT
+        jne .advance
+        test edx, edx
+        jz .advance
+        movzx eax, byte [esi + 3]       ; bmAttributes
+        and eax, 0x03
+        cmp eax, 2                      ; transfer type bulk
+        jne .advance
+        movzx ebx, byte [esi + 2]       ; bEndpointAddress
+        test bl, 0x80                   ; direction IN
+        jz .out_ep
+        mov [usb_msc_ep_in], ebx
+        movzx eax, word [esi + 4]       ; wMaxPacketSize
+        mov [usb_msc_maxpkt_in], eax
+        jmp .advance
+.out_ep:
+        mov [usb_msc_ep_out], ebx
+        movzx eax, word [esi + 4]
+        mov [usb_msc_maxpkt_out], eax
+.advance:
+        movzx eax, byte [esi]
+        add esi, eax
+        sub ecx, eax
+        jmp .walk
+
+.found:
+        ; A bulk-only device needs both directions. One endpoint without the
+        ; other cannot carry a command and its answer, so it is left alone.
+        cmp dword [usb_msc_ep_in], 0
+        je .out
+        cmp dword [usb_msc_ep_out], 0
+        je .out
+        call usb_log_msc_endpoints
+        call usb_msc_probe
+.out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_msc_reset - the class reset, and DATA0 on both bulk pipes
+;   Out: CF=0 if the device accepted it, CF=1 if it did not
+;
+; The reset is what makes a device that was left mid-command usable again; it
+; also puts both data toggles back to DATA0, which is where the driver's own
+; copies have to go with it.
+;---------------------------------------
+usb_msc_reset:
+        pushad
+        mov ebx, [usb_mem]
+        add ebx, USB_SETUP_BUF
+        mov byte [ebx + 0], 0x21        ; host to device, class, interface
+        mov byte [ebx + 1], USB_REQ_MSC_RESET
+        mov byte [ebx + 2], 0
+        mov byte [ebx + 3], 0
+        mov eax, [usb_msc_iface]
+        mov [ebx + 4], al               ; wIndex: the interface number
+        mov byte [ebx + 5], 0
+        mov word [ebx + 6], 0           ; no data stage
+
+        mov eax, [usb_dev_addr]
+        mov [usb_xfer_addr], eax
+        mov eax, ebx
+        mov [usb_xfer_setup], eax
+        mov dword [usb_xfer_buf], 0
+        mov dword [usb_xfer_len], 0
+        call usb_control
+        jc .out
+        mov dword [usb_msc_in_toggle], 0
+        mov dword [usb_msc_out_toggle], 0
+        clc
+.out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_bulk - one bulk transfer on an endpoint
+;   EAX = endpoint address (bit 7 set for IN), ECX = bytes, EDI = buffer
+;   Out: CF=0 and EAX = bytes moved, CF=1 on error or timeout
+;
+; The data toggle is not the controller's to flip. A bulk endpoint alternates
+; DATA0 and DATA1 across transfers, and a controller handed the wrong one has
+; its packet ignored, so the driver keeps the toggle per direction and flips it
+; only after a transfer completes - a NAKed descriptor that the controller
+; retries is still the same transfer, with the same toggle.
+;---------------------------------------
+usb_bulk:
+        pushad
+        mov [.ep], al
+        mov [.len], ecx
+        mov [.buf], edi
+        mov dword [usb_msc_busy], 1
+
+        test al, 0x80
+        jz .out_dir
+        mov eax, [usb_msc_in_toggle]
+        jmp .toggle
+.out_dir:
+        mov eax, [usb_msc_out_toggle]
+.toggle:
+        mov [.tog], eax
+
+        mov ebx, [usb_mem]
+        mov ecx, [.len]
+        dec ecx
+        shl ecx, 21                     ; max length, bits 31:21, encoded as n-1
+        movzx eax, byte [.ep]
+        and eax, 0x0F                   ; endpoint number only
+        shl eax, 15
+        or ecx, eax
+        mov eax, [usb_dev_addr]
+        shl eax, 8
+        or ecx, eax
+        mov eax, [.tog]
+        shl eax, 19                     ; DATA1 when set, DATA0 when clear
+        or ecx, eax
+        movzx eax, byte [.ep]
+        test al, 0x80
+        jz .pid_out
+        or ecx, TD_PID_IN
+        jmp .pid
+.pid_out:
+        or ecx, TD_PID_OUT
+.pid:
+        mov [ebx + USB_TD_DATA + 8], ecx
+        mov eax, TD_ACTIVE | TD_EC3 | TD_IOC | TD_SPD
+        mov [ebx + USB_TD_DATA + 4], eax
+        mov eax, [.buf]
+        mov [ebx + USB_TD_DATA + 12], eax
+        mov dword [ebx + USB_TD_DATA], UHCI_PTR_TERM
+        mov eax, ebx
+        add eax, USB_TD_DATA
+        mov [ebx + USB_QH + 4], eax
+
+        ; A block read is slower than a control transfer, and the first one
+        ; after a reset makes the device spin up; two seconds is generous and
+        ; bounded.
+        mov ebp, 2000
+.poll:
+        mov eax, [ebx + USB_TD_DATA + 4]
+        test eax, TD_ACTIVE
+        jz .done
+        mov ecx, 1
+        call smp_delay_ms
+        dec ebp
+        jnz .poll
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+        jmp .fail
+.done:
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+        mov eax, [ebx + USB_TD_DATA + 4]
+        test eax, TD_ERRMASK
+        jnz .fail
+
+        mov eax, [.tog]
+        xor eax, 1
+        test byte [.ep], 0x80
+        jz .save_out
+        mov [usb_msc_in_toggle], eax
+        jmp .moved
+.save_out:
+        mov [usb_msc_out_toggle], eax
+.moved:
+        mov dword [usb_msc_busy], 0
+        mov eax, [ebx + USB_TD_DATA + 4]
+        and eax, TD_ACTLEN
+        inc eax
+        mov [.result], eax
+        popad
+        mov eax, [.result]
+        clc
+        ret
+.fail:
+        mov dword [usb_msc_busy], 0
+        mov ebx, [usb_mem]
+        mov eax, [ebx + USB_TD_DATA + 4]
+        mov [usb_td_status + 0], eax
+        mov dword [usb_td_status + 4], 0
+        mov dword [usb_td_status + 8], 0
+        call usb_log_failure
+        popad
+        stc
+        ret
+.ep:    db 0
+        times 3 db 0
+.len:   dd 0
+.buf:   dd 0
+.tog:   dd 0
+.result: dd 0
+
+;---------------------------------------
+; usb_msc_command - one bulk-only transport command
+;   ESI = command block, AL = its length, EDX = data length,
+;   EBX = 1 for a data-IN stage and 0 for data-OUT, EDI = data buffer
+;   Out: CF=0 if the device reported success, CF=1 otherwise
+;
+; 31 bytes of command block wrapper out, the data stage, 13 bytes of command
+; status wrapper in. The wrapper carries a tag and the status repeats it, so a
+; status left over from an earlier command is not mistaken for this one.
+;---------------------------------------
+usb_msc_command:
+        pushad
+        mov [.cb], esi
+        mov [.cblen], al
+        mov [.dlen], edx
+        mov [.din], bl
+        mov [.dbuf], edi
+
+        mov ebx, [usb_mem]
+        add ebx, USB_MSC_CBW
+        mov eax, USB_CBW_SIGNATURE
+        mov [ebx + 0], eax
+        mov eax, [usb_msc_tag]
+        inc eax
+        mov [usb_msc_tag], eax
+        mov [.tag], eax
+        mov [ebx + 4], eax
+        mov eax, [.dlen]
+        mov [ebx + 8], eax
+        mov al, [.din]
+        shl al, 7                       ; 0x80 for IN, 0x00 for OUT
+        mov [ebx + 12], al
+        mov byte [ebx + 13], 0          ; LUN 0
+        mov al, [.cblen]
+        mov [ebx + 14], al
+        mov esi, [.cb]
+        lea edi, [ebx + 15]
+        movzx ecx, byte [.cblen]
+        cld
+        rep movsb
+
+        mov eax, [usb_msc_ep_out]
+        mov ecx, USB_CBW_SIZE
+        mov edi, ebx
+        call usb_bulk
+        jc .fail
+
+        mov ecx, [.dlen]
+        test ecx, ecx
+        jz .status
+        mov edi, [.dbuf]
+        cmp byte [.din], 0
+        je .data_out
+        mov eax, [usb_msc_ep_in]
+        call usb_bulk
+        jc .fail
+        jmp .status
+.data_out:
+        mov eax, [usb_msc_ep_out]
+        call usb_bulk
+        jc .fail
+
+.status:
+        mov eax, [usb_msc_ep_in]
+        mov ecx, USB_CSW_SIZE
+        mov edi, [usb_mem]
+        add edi, USB_MSC_CSW
+        call usb_bulk
+        jc .fail
+
+        mov ebx, [usb_mem]
+        add ebx, USB_MSC_CSW
+        cmp dword [ebx + 0], USB_CSW_SIGNATURE
+        jne .fail
+        mov eax, [.tag]
+        cmp [ebx + 4], eax
+        jne .fail
+        cmp dword [ebx + 8], 0          ; data residue: every byte was moved
+        jne .fail
+        cmp byte [ebx + 12], USB_CSW_OK
+        jne .fail
+        clc
+        jmp .out
+.fail:
+        stc
+.out:
+        popad
+        ret
+.cb:    dd 0
+.cblen: db 0
+.din:   db 0
+        times 2 db 0
+.dlen:  dd 0
+.dbuf:  dd 0
+.tag:   dd 0
+
+;---------------------------------------
+; usb_msc_probe - reset, describe, size and read the mass-storage device
+;
+; Each step is a precondition of the next: INQUIRY says the command transport
+; works, READ CAPACITY says how to ask for a block, and READ(10) says the data
+; path carries blocks and not just wrappers.
+;---------------------------------------
+usb_msc_probe:
+        pushad
+        call usb_msc_reset
+        jc .fail
+
+        mov esi, msc_cb_inquiry
+        mov al, 6
+        mov edx, 36
+        mov ebx, 1                      ; data stage IN
+        mov edi, [usb_mem]
+        add edi, USB_MSC_BUF
+        call usb_msc_command
+        jc .fail
+        call usb_log_msc_inquiry
+
+        mov esi, msc_cb_capacity
+        mov al, 10
+        mov edx, 8
+        mov ebx, 1
+        mov edi, [usb_mem]
+        add edi, USB_MSC_BUF
+        call usb_msc_command
+        jc .fail
+
+        ; Last block number and block length, both big-endian on the wire.
+        mov ebx, [usb_mem]
+        add ebx, USB_MSC_BUF
+        mov eax, [ebx]
+        bswap eax
+        inc eax                         ; last LBA is zero-based
+        mov [usb_msc_blocks], eax
+        mov eax, [ebx + 4]
+        bswap eax
+        test eax, eax
+        jz .fail
+        mov [usb_msc_blocksize], eax
+        call usb_log_msc_capacity
+
+        ; One block, block zero. The buffer is one 512-byte sector, so a
+        ; device that reports a larger block is not read into it.
+        cmp eax, 512
+        ja .fail
+        mov edx, eax
+        mov esi, msc_cb_read
+        mov al, 10
+        mov ebx, 1
+        mov edi, [usb_mem]
+        add edi, USB_MSC_BUF
+        call usb_msc_command
+        jc .fail
+        call usb_log_msc_block0
+        jmp .out
+.fail:
+        LOGBOOT LOG_WARN, msg_usb_msc_fail
+.out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_log_msc_endpoints - one line: both bulk endpoints and their packet sizes
+;---------------------------------------
+usb_log_msc_endpoints:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_msc_endpoints
+.copy:
+        lodsb
+        test al, al
+        jz .in
+        stosb
+        jmp .copy
+.in:
+        mov ebx, [usb_msc_ep_in]
+        call usb_hex_byte
+        mov al, '/'
+        stosb
+        mov ebx, [usb_msc_ep_out]
+        call usb_hex_byte
+        mov esi, msg_usb_msc_sep
+.copy2:
+        lodsb
+        test al, al
+        jz .inpkt
+        stosb
+        jmp .copy2
+.inpkt:
+        mov ebx, [usb_msc_maxpkt_in]
+        call usb_hex_word
+        mov al, '/'
+        stosb
+        mov ebx, [usb_msc_maxpkt_out]
+        call usb_hex_word
+        mov esi, msg_usb_msc_suffix
+.copy3:
+        lodsb
+        test al, al
+        jz .done
+        stosb
+        jmp .copy3
+.done:
+        xor al, al
+        stosb
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
+;---------------------------------------
+; usb_log_msc_inquiry - one line: vendor and product, as the device spells them
+;---------------------------------------
+usb_log_msc_inquiry:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_msc_inquiry
+.copy:
+        lodsb
+        test al, al
+        jz .vendor
+        stosb
+        jmp .copy
+.vendor:
+        mov esi, [usb_mem]
+        add esi, USB_MSC_BUF + 8        ; t8 vendor identification
+        mov ecx, 8
+        call .copy_trim
+        mov al, ' '
+        stosb
+.product:
+        mov esi, [usb_mem]
+        add esi, USB_MSC_BUF + 16       ; t16 product identification
+        mov ecx, 16
+        call .copy_trim
+        xor al, al
+        stosb
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+; ECX bytes from ESI to EDI, trailing spaces dropped. EDI moves with the copy.
+.copy_trim:
+        push eax
+        push ecx
+        push esi
+        mov ebx, ecx
+        lea edx, [esi + ecx]
+.trim_back:
+        test ebx, ebx
+        jz .ct_none
+        cmp byte [edx - 1], ' '
+        jne .ct_copy
+        dec edx
+        dec ebx
+        jmp .trim_back
+.ct_copy:
+        mov ecx, ebx
+        test ecx, ecx
+        jz .ct_done
+        cld
+        rep movsb
+        jmp .ct_done
+.ct_none:
+        mov al, '?'
+        stosb
+.ct_done:
+        pop esi
+        pop ecx
+        pop eax
+        ret
+
+;---------------------------------------
+; usb_log_msc_capacity - one line: blocks and block size, in hex
+;---------------------------------------
+usb_log_msc_capacity:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_msc_capacity
+.copy:
+        lodsb
+        test al, al
+        jz .blocks
+        stosb
+        jmp .copy
+.blocks:
+        mov ebx, [usb_msc_blocks]
+        call usb_hex_dword
+        mov esi, msg_usb_msc_blocks
+.copy2:
+        lodsb
+        test al, al
+        jz .size
+        stosb
+        jmp .copy2
+.size:
+        mov ebx, [usb_msc_blocksize]
+        call usb_hex_dword
+        mov esi, msg_usb_msc_bytes
+.copy3:
+        lodsb
+        test al, al
+        jz .done
+        stosb
+        jmp .copy3
+.done:
+        xor al, al
+        stosb
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
+;---------------------------------------
+; usb_log_msc_block0 - one line: the last two bytes of block zero
+;
+; A signature is what the caller gave the block, so logging it proves the
+; bytes came back from the device rather than from a zeroed buffer.
+;---------------------------------------
+usb_log_msc_block0:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_msc_block0
+.copy:
+        lodsb
+        test al, al
+        jz .sig
+        stosb
+        jmp .copy
+.sig:
+        mov esi, [usb_mem]
+        add esi, USB_MSC_BUF
+        add esi, [usb_msc_blocksize]
+        mov bl, [esi - 2]
+        call usb_hex_byte
+        mov bl, [esi - 1]
+        call usb_hex_byte
+        xor al, al
+        stosb
+        mov al, LOG_INFO
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
+;---------------------------------------
 ; usb_port_reset - reset one root port and wait for it to be enabled
 ;   AL = port index (0 or 1)
 ;   Out: CF=0 if the port came back enabled, CF=1 if it did not
@@ -1269,6 +1878,13 @@ usb_enumerate:
 
         LOGBOOT LOG_INFO, msg_usb_configured
         call usb_log_config
+
+        ; The class drivers run in this order on purpose: the mass-storage
+        ; probe moves bulk data, and the HID driver leaves an interrupt
+        ; descriptor hung on the one queue head, which a bulk transfer would
+        ; overwrite. A device that is both has one of them until the queue
+        ; head learns to hold two chains.
+        call usb_msc_start
         call usb_hid_start
         jmp .out
 .no_configure:
@@ -1555,4 +2171,20 @@ msg_usb_hid_sep:      db ", ", 0
 msg_usb_hid_suffix:   db " bytes, ready", 0
 msg_usb_report:       db "usb: hid report read", 0
 msg_usb_no_hid:       db "usb: the HID boot keyboard would not start", 0
-usb_msg_buf:          times 48 db 0
+msg_usb_msc_endpoints: db "usb: mass storage endpoints ", 0
+msg_usb_msc_sep:      db ", ", 0
+msg_usb_msc_suffix:   db " bytes, ready", 0
+msg_usb_msc_inquiry:  db "usb: mass storage: ", 0
+msg_usb_msc_capacity: db "usb: mass storage ", 0
+msg_usb_msc_blocks:   db " blocks of ", 0
+msg_usb_msc_bytes:    db " bytes", 0
+msg_usb_msc_block0:   db "usb: mass storage block 0 reads ", 0
+msg_usb_msc_fail:     db "usb: the mass-storage device did not answer", 0
+
+; SCSI command blocks, little conventions of their own: LBA and length are
+; big-endian inside them even though the wrappers around them are not.
+msc_cb_inquiry:       db SCSI_INQUIRY, 0, 0, 0, 36, 0
+msc_cb_capacity:      db SCSI_READ_CAPACITY, 0, 0, 0, 0, 0, 0, 0, 0, 0
+msc_cb_read:          db SCSI_READ10, 0, 0, 0, 0, 0, 0, 0, 1, 0
+
+usb_msg_buf:          times 96 db 0
