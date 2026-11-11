@@ -35,6 +35,12 @@ Options:
   --device SPEC       plug in a QEMU device (repeatable), e.g. usb-kbd
   --usb-disk FILE     attach FILE as a USB mass-storage disk (-drive if=none
                       plus -device usb-storage), e.g. a raw stick image
+  --usb-disk-backend FILE
+                      define a USB-storage backend without attaching it, so a
+                      --monitor-before device_add can plug it in during the run
+  --monitor-before CMD
+                      send a raw QEMU monitor command after boot and before
+                      the shell command is typed (repeatable), e.g. device_add
   --mem MB            guest RAM in MB (default: the machine profile's)
   --cpu MODEL         override the CPU model (default: the machine profile's)
   --profile NAME      machine profile from tools/machine_profiles.py
@@ -301,6 +307,23 @@ def _opt_all(args, name):
     return out
 
 
+def usb_storage_args(attached, backends):
+    """QEMU arguments for USB sticks.
+
+    *attached* files get both a block backend and a usb-storage device, so the
+    machine boots with them plugged in. *backends* get only the block backend:
+    the device is added later through the monitor, which is how a test plugs a
+    stick into a machine that is already running.
+    """
+    out = []
+    for i, path in enumerate(list(attached) + list(backends)):
+        out += ["-drive",
+                f"if=none,id=usbstick{i},format=raw,file={path},cache=writethrough"]
+        if i < len(attached):
+            out += ["-device", f"usb-storage,drive=usbstick{i},id=usbstick{i}"]
+    return out
+
+
 def _after_command(serial: str, mark: int, command: str) -> str:
     """The serial output produced by the command.
 
@@ -365,6 +388,10 @@ def main() -> int:
     # device that owns it - so it gets an option of its own rather than a
     # `--device` spelling that cannot carry the backend.
     usb_disks = _opt_all(args, "--usb-disk")
+    # A backend with no device: the monitor's `device_add` plugs it in, which
+    # is what "plug in a stick" means to a machine that is already running.
+    usb_backends = _opt_all(args, "--usb-disk-backend")
+    monitor_before = _opt_all(args, "--monitor-before")
     mem_mb = _opt(args, "--mem")
     smp = _opt(args, "--smp")
     cpu = _opt(args, "--cpu")
@@ -393,9 +420,7 @@ def main() -> int:
          "-serial", f"unix:{ser_path},server=on,wait=on",
          "-monitor", f"unix:{mon_path},server,nowait"]
         + (["-smp", smp] if smp else [])
-        + [x for i, d in enumerate(usb_disks) for x in (
-            "-drive", f"if=none,id=usbstick{i},format=raw,file={d},cache=writethrough",
-            "-device", f"usb-storage,drive=usbstick{i}")]
+        + usb_storage_args(usb_disks, usb_backends)
         + [x for d in devices for x in ("-device", d)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -411,6 +436,13 @@ def main() -> int:
         else:
             time.sleep(0.3)
             mon_ctl = Monitor(mon_path)
+
+            # A machine that has booted is the only place a hot-plug can be
+            # tested: the device is added (or removed) here, before anything is
+            # typed, so the shell's own scan is what has to notice it.
+            for mon_cmd in monitor_before:
+                mon_ctl.cmd(mon_cmd, 1.0)
+                time.sleep(0.5)
 
             # Remember where the console's output stood before the command was
             # typed. Everything after that point is what the command did, which

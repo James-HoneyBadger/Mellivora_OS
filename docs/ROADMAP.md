@@ -1047,13 +1047,31 @@ gate asserts, because the harness wrote the bytes and only the device can give
 them back. `usb_msc_read_block` is the block-device entry point in miniature:
 one command block at a time, tagged, with the data residue checked.
 
+Plugging a stick in after the machine is up is the same state machine run
+again, so `disk` scans the root ports before it reports: a device that appeared
+is enumerated and its class driver started, and one that left has its state
+taken with it - the HID poll is disarmed before the descriptor that refers to
+it can be checked again - and the removal is logged. The first hot-plugged
+stick found a real SCSI behaviour the boot case cannot: READ CAPACITY came back
+CHECK CONDITION with UNIT ATTENTION and an eight-byte residue, because a device
+that has just appeared reports the change once, on the first command that is not
+INQUIRY. The driver now reads REQUEST SENSE and repeats the command once. The
+sense data is kept at DEBUG, and a rejected status wrapper is logged with its
+signature, tag, residue and status, so a failure that is *not* unit attention
+still says which of the four checks refused it. `make check-usb` is twenty
+cases: the harness plugs a backend in with the monitor's `device_add` and pulls
+a boot-attached stick out with `device_del`, so both directions run against a
+machine that is already up.
+
 What it is not, in full: there is no hub beyond the root ports, the keypad and
-the GUI keys are not mapped, and the stick is read but not yet mounted - no
-filesystem sits on it, so the exit line's copy-a-file is still ahead. The block
-device is also not registered with the VFS, writes have no command of their own
-yet (the transport can carry one), and ejection is not implemented. The order
-from here is unchanged: make the mass-storage device a block device that HBFS
-can mount, which is what makes the exit line real.
+the GUI keys are not mapped, and the driver holds one device at a time - a stick
+plugged in beside a working keyboard is left alone until the keyboard leaves.
+The stick is read but not yet mounted; no filesystem sits on it, so the exit
+line's copy-a-file is still ahead. The block device is not registered with the
+VFS, writes have no command of their own yet (the transport can carry one), and
+ejection is not implemented. The order from here is unchanged: make the
+mass-storage device a block device that HBFS can mount, which is what makes the
+exit line real.
 
 ### M9 · Reliability and management (9–13 weeks)
 

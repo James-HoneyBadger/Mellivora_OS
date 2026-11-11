@@ -104,6 +104,7 @@ USB_CSW_SIZE        equ 13
 USB_CSW_OK          equ 0
 
 SCSI_INQUIRY        equ 0x12
+SCSI_REQUEST_SENSE  equ 0x03
 SCSI_READ_CAPACITY  equ 0x25
 SCSI_READ10         equ 0x28
 
@@ -1456,13 +1457,15 @@ usb_msc_command:
         jne .fail
         mov eax, [.tag]
         cmp [ebx + 4], eax
-        jne .fail
+        jne .bad_csw
         cmp dword [ebx + 8], 0          ; data residue: every byte was moved
-        jne .fail
+        jne .bad_csw
         cmp byte [ebx + 12], USB_CSW_OK
-        jne .fail
+        jne .bad_csw
         clc
         jmp .out
+.bad_csw:
+        call usb_log_msc_csw
 .fail:
         stc
 .out:
@@ -1475,6 +1478,58 @@ usb_msc_command:
 .dlen:  dd 0
 .dbuf:  dd 0
 .tag:   dd 0
+
+;---------------------------------------
+; usb_msc_sense - read and clear the device's sense data
+;   Out: CF=0 if the sense transfer completed, CF=1 if it did not
+;
+; A SCSI device reports a condition once: the command that hit it fails with
+; status 1, and the next REQUEST SENSE carries the reason and clears it. The
+; sense data is logged at DEBUG, because a device that reports UNIT ATTENTION
+; the first time it is seen is normal and a console line for it is noise.
+;---------------------------------------
+usb_msc_sense:
+        pushad
+        mov esi, msc_cb_sense
+        mov al, 6
+        mov edx, 18
+        mov ebx, 1
+        mov edi, [usb_mem]
+        add edi, USB_MSC_BUF
+        call usb_msc_command
+        jc .out
+        call usb_log_msc_sense
+        clc
+.out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_msc_command_retry - a command, and one more try after clearing a condition
+;   In : as usb_msc_command; every register is preserved
+;   Out: CF=0 on success, CF=1 if both attempts failed
+;
+; This is what a stick that was just plugged in needs: the first command that
+; is not INQUIRY comes back CHECK CONDITION with UNIT ATTENTION, which is the
+; device saying "something changed, look once". The sense read clears it and
+; the command is repeated. One retry, not a loop: a device that keeps failing
+; is failing.
+;---------------------------------------
+usb_msc_command_retry:
+        pushad
+        call usb_msc_command
+        jnc .ok
+        call usb_msc_sense
+        call usb_msc_command
+        jc .fail
+.ok:
+        popad
+        clc
+        ret
+.fail:
+        popad
+        stc
+        ret
 
 ;---------------------------------------
 ; usb_msc_probe - reset, describe, size and read the mass-storage device
@@ -1494,7 +1549,7 @@ usb_msc_probe:
         mov ebx, 1                      ; data stage IN
         mov edi, [usb_mem]
         add edi, USB_MSC_BUF
-        call usb_msc_command
+        call usb_msc_command_retry
         jc .fail
         call usb_log_msc_inquiry
 
@@ -1504,7 +1559,7 @@ usb_msc_probe:
         mov ebx, 1
         mov edi, [usb_mem]
         add edi, USB_MSC_BUF
-        call usb_msc_command
+        call usb_msc_command_retry
         jc .fail
 
         ; Last block number and block length, both big-endian on the wire.
@@ -1531,7 +1586,7 @@ usb_msc_probe:
         mov ebx, 1
         mov edi, [usb_mem]
         add edi, USB_MSC_BUF
-        call usb_msc_command
+        call usb_msc_command_retry
         jc .fail
         call usb_log_msc_block0
         mov dword [usb_msc_ready], 1
@@ -1577,7 +1632,7 @@ usb_msc_read_block:
         mov edx, [usb_msc_blocksize]
         mov ebx, 1                      ; data stage IN
         mov edi, [.dst]
-        call usb_msc_command
+        call usb_msc_command_retry
         popad
         ret
 .lba:   dd 0
@@ -1771,6 +1826,107 @@ usb_log_msc_block0:
         ret
 
 ;---------------------------------------
+; usb_log_msc_csw - one line: the status wrapper that was rejected
+;
+; A rejection with no numbers is a bug report that says "it did not work". The
+; four fields say which check failed: a signature of zero means nothing came
+; back, a tag that is not the one just sent means an answer from an earlier
+; command, a residue that is not zero means the data stage was short, and a
+; status of 1 means the device rejected the command itself.
+;---------------------------------------
+usb_log_msc_csw:
+        pushad
+        mov ebx, [usb_mem]
+        add ebx, USB_MSC_CSW
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_msc_csw
+.copy:
+        lodsb
+        test al, al
+        jz .sig
+        stosb
+        jmp .copy
+.sig:
+        mov ebx, [ebx + 0]
+        call usb_hex_dword
+        mov esi, msg_usb_msc_csw_tag
+.copy2:
+        lodsb
+        test al, al
+        jz .tag
+        stosb
+        jmp .copy2
+.tag:
+        mov ebx, [usb_mem]
+        mov ebx, [ebx + USB_MSC_CSW + 4]
+        call usb_hex_dword
+        mov esi, msg_usb_msc_csw_res
+.copy3:
+        lodsb
+        test al, al
+        jz .res
+        stosb
+        jmp .copy3
+.res:
+        mov ebx, [usb_mem]
+        mov ebx, [ebx + USB_MSC_CSW + 8]
+        call usb_hex_dword
+        mov esi, msg_usb_msc_csw_st
+.copy4:
+        lodsb
+        test al, al
+        jz .st
+        stosb
+        jmp .copy4
+.st:
+        mov ebx, [usb_mem]
+        movzx ebx, byte [ebx + USB_MSC_CSW + 12]
+        call usb_hex_byte
+        xor al, al
+        stosb
+        mov al, LOG_WARN
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
+;---------------------------------------
+; usb_log_msc_sense - one line at DEBUG: the first eight sense bytes
+;
+; UNIT ATTENTION on a device that was just plugged in is expected, so it is
+; kept out of the console and left for `bootlog`.
+;---------------------------------------
+usb_log_msc_sense:
+        pushad
+        mov edi, usb_msg_buf
+        mov esi, msg_usb_msc_sense
+.copy:
+        lodsb
+        test al, al
+        jz .bytes
+        stosb
+        jmp .copy
+.bytes:
+        mov esi, [usb_mem]
+        add esi, USB_MSC_BUF
+        mov ebp, 8
+.byte:
+        mov bl, [esi]
+        call usb_hex_byte
+        mov al, ' '
+        stosb
+        inc esi
+        dec ebp
+        jnz .byte
+        xor al, al
+        stosb
+        mov al, LOG_DEBUG
+        mov esi, usb_msg_buf
+        call bootlog_write
+        popad
+        ret
+
+;---------------------------------------
 ; usb_port_reset - reset one root port and wait for it to be enabled
 ;   AL = port index (0 or 1)
 ;   Out: CF=0 if the port came back enabled, CF=1 if it did not
@@ -1829,6 +1985,7 @@ usb_port_reset:
 ;---------------------------------------
 usb_enumerate:
         pushad
+        mov dword [usb_dev_present], 0
 
         ; Which port has the device? QEMU's default machine puts the first
         ; plugged device on the second root port, so assuming port one is how
@@ -1849,6 +2006,7 @@ usb_enumerate:
         jb .find_port
         jmp .no_device
 .reset_port:
+        mov [usb_dev_port], ebp         ; the scan has to watch this one
         mov eax, ebp
         call usb_port_reset
         jc .no_reset
@@ -1923,6 +2081,11 @@ usb_enumerate:
         LOGBOOT LOG_INFO, msg_usb_configured
         call usb_log_config
 
+        ; From here the device is answering on its address, so a scan has
+        ; something to watch. Class-driver success is a separate question: a
+        ; mass-storage device that fails its probe is still a device on a port.
+        mov dword [usb_dev_present], 1
+
         ; The class drivers run in this order on purpose: the mass-storage
         ; probe moves bulk data, and the HID driver leaves an interrupt
         ; descriptor hung on the one queue head, which a bulk transfer would
@@ -1943,6 +2106,87 @@ usb_enumerate:
 .no_device:
         LOGBOOT LOG_WARN, msg_usb_no_enum
 .out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_scan - look at the root ports, and follow a device in or out
+;
+; Called from the shell. The boot path enumerates once; this makes the same
+; decision runnable later, which is what "plug in" has to mean. The driver
+; holds one device at a time, so a second device plugged in beside a working
+; one is left alone and logged only by its absence - the port it is on is
+; still there when the first one leaves, and the next scan picks it up.
+;---------------------------------------
+usb_scan:
+        pushad
+        cmp dword [usb_running], 0
+        je .out
+
+        cmp dword [usb_dev_present], 0
+        je .look
+        mov eax, [usb_dev_port]
+        shl eax, 1                      ; PORTSC1 is 0x10, PORTSC2 is 0x12
+        add eax, UHCI_PORTSC1
+        mov edx, [usb_io_base]
+        add edx, eax
+        in ax, dx
+        test ax, UHCI_PORT_CCS
+        jnz .out                        ; still there, nothing to do
+        call usb_detach
+
+.look:
+        xor ebp, ebp
+.port:
+        mov eax, ebp
+        shl eax, 1
+        add eax, UHCI_PORTSC1
+        mov edx, [usb_io_base]
+        add edx, eax
+        in ax, dx
+        test ax, UHCI_PORT_CCS
+        jnz .found
+        inc ebp
+        cmp ebp, 2
+        jb .port
+        jmp .out
+.found:
+        call usb_enumerate
+.out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_detach - forget the device that was on a root port
+;
+; The HID poll is disarmed before anything else: an interrupt descriptor
+; refers to a device that is no longer there, and the timer would go on
+; checking it. Every class driver's state goes with the device, so a stick
+; that is unplugged stops being a capacity the shell can report.
+;---------------------------------------
+usb_detach:
+        pushad
+        mov dword [usb_hid_armed], 0
+        mov dword [usb_hid_ep], 0
+        mov dword [usb_hid_maxpkt], 0
+        mov byte [usb_hid_prev_mod], 0
+        mov dword [usb_hid_prev_keys], 0
+        mov word [usb_hid_prev_keys + 4], 0
+
+        mov dword [usb_msc_ready], 0
+        mov dword [usb_msc_blocks], 0
+        mov dword [usb_msc_blocksize], 0
+        mov dword [usb_msc_ep_in], 0
+        mov dword [usb_msc_ep_out], 0
+
+        mov dword [usb_dev_present], 0
+        mov dword [usb_dev_addr], 0
+
+        ; Anything still hung on the queue head names the device that left.
+        mov ebx, [usb_mem]
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+
+        LOGBOOT LOG_INFO, msg_usb_removed
         popad
         ret
 
@@ -2224,10 +2468,17 @@ msg_usb_msc_blocks:   db " blocks of ", 0
 msg_usb_msc_bytes:    db " bytes", 0
 msg_usb_msc_block0:   db "usb: mass storage block 0 reads ", 0
 msg_usb_msc_fail:     db "usb: the mass-storage device did not answer", 0
+msg_usb_removed:      db "usb: the device was removed", 0
+msg_usb_msc_csw:      db "usb: msc csw sig=", 0
+msg_usb_msc_csw_tag:  db " tag=", 0
+msg_usb_msc_csw_res:  db " res=", 0
+msg_usb_msc_csw_st:   db " st=", 0
+msg_usb_msc_sense:    db "usb: mass storage sense ", 0
 
 ; SCSI command blocks, little conventions of their own: LBA and length are
 ; big-endian inside them even though the wrappers around them are not.
 msc_cb_inquiry:       db SCSI_INQUIRY, 0, 0, 0, 36, 0
+msc_cb_sense:         db SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0
 msc_cb_capacity:      db SCSI_READ_CAPACITY, 0, 0, 0, 0, 0, 0, 0, 0, 0
 msc_cb_read:          db SCSI_READ10, 0, 0, 0, 0, 0, 0, 0, 1, 0
 

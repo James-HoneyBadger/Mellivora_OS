@@ -11,8 +11,8 @@
 # keyboard (when it is one) is switched to boot protocol, polled, and made to
 # type into the shell.
 #
-# So the gate asserts exactly what the stack claims. Three boots, because the
-# interesting difference is whether the driver notices a device:
+# So the gate asserts exactly what the stack claims. Three machine shapes,
+# because the interesting difference is whether the driver notices a device:
 #
 #   1. the default machine, which has a PIIX3 UHCI controller and nothing
 #      plugged in: the controller must be found and the root ports reported
@@ -21,8 +21,8 @@
 #      report a device on a root port, enumerate it, configure it, and turn
 #      its reports into keys the shell can run;
 #   3. the same machine with a USB stick: it must find the bulk endpoints,
-#      answer INQUIRY, report its capacity, and give back a block whose
-#      signature the test wrote there.
+#      answer INQUIRY, report its capacity, give back a block whose signature
+#      the test wrote there, and notice the stick arriving and leaving again.
 #
 # A driver that always says "connected" fails the first case. One that never
 # says it fails the second. A machine without a controller at all is not
@@ -199,6 +199,21 @@ run_case "a block is read from it" \
 run_expect "the shell reads a block from it" disk "4D 45 4C 4C 49 56 4F 52" \
     --usb-disk "$USB_DISK"
 
+# Hot-plug: the stick is not in the machine when it boots. Its backend exists
+# (a drive with no device) and the monitor's device_add plugs it in once the
+# shell is up, so only the scan `disk` runs can find it.
+run_expect "a stick plugged in after boot is found" disk "4D 45 4C 4C 49 56 4F 52" \
+    --usb-disk-backend "$USB_DISK" \
+    --monitor-before "device_add usb-storage,drive=usbstick0,id=hotstick"
+
+# The other direction: the stick was there for the boot probe, and device_del
+# removes it before the command runs. The scan must notice, say so, and stop
+# claiming a capacity the device no longer has.
+run_expect "an unplugged stick is forgotten" disk "usb: the device was removed" \
+    --usb-disk "$USB_DISK" \
+    --monitor-before "device_del usbstick0" \
+    --reject "USB stick:"
+
 # The end-to-end claim: keys typed on the USB keyboard reach the shell. QEMU
 # activates the USB keyboard when one is attached, so `--via sendkey` drives it
 # (and not the PS/2 keyboard). The command is "help", and the assertion is the
@@ -215,4 +230,4 @@ else
     exit 1
 fi
 
-echo "  USB: controller found and running, a keyboard enumerated and typing, a stick read at boot and from the shell"
+echo "  USB: controller found and running, a keyboard typing, a stick read, plugged in and pulled out"

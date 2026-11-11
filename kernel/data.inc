@@ -1166,6 +1166,8 @@ usb_flbase:       resd 1          ; frame list base address
 usb_mem:          resd 1          ; queue head, descriptors and buffers
 usb_running:      resd 1          ; 1 once the controller is walking the list
 usb_dev_addr:     resd 1          ; address the enumerated device answers on
+usb_dev_present:  resd 1          ; 1 while an enumerated device is on a port
+usb_dev_port:     resd 1          ; root port that device is on (0 or 1)
 usb_dev_vendor:   resd 1          ; idVendor from its device descriptor
 usb_dev_product:  resd 1          ; idProduct
 usb_dev_class:    resd 1          ; bDeviceClass

@@ -6643,6 +6643,7 @@ cmd_show_memory:
 ;---------------------------------------
 cmd_show_disk:
         pushad
+        call usb_scan
         call vga_set_info
         mov esi, msg_disk_header
         call vga_print
@@ -6673,9 +6674,10 @@ cmd_show_disk:
 
 .usb:
         ; A USB stick is not a boot volume, so it is reported after the ATA
-        ; disk and only when it answered at boot. The block is read here and
-        ; now rather than remembered: a capacity line that came from a real
-        ; read is worth more than one that came from a descriptor.
+        ; disk. The scan above ran first, so a stick plugged in since the
+        ; machine started is found here; the block is read now rather than
+        ; remembered, because a capacity line that came from a real read is
+        ; worth more than one that came from a descriptor.
         cmp dword [usb_msc_ready], 0
         je .done
         mov esi, msg_usb_disk_line
