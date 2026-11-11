@@ -110,6 +110,23 @@ run_case() {
     fi
 }
 
+# Like run_case, but runs a chosen command and asserts on text the command
+# printed, for claims the boot log cannot make.
+run_expect() {
+    local name="$1"; local command="$2"; local text="$3"; shift 3
+    printf '  %-38s ' "$name"
+    local log
+    log="$(mktemp)"
+    if QEMU="$(find_qemu)" timeout "$TIMEOUT" python3 "$DRIVE" "$IMAGE" "$command" \
+            --timeout "$TIMEOUT" --out "$log" --expect "$text" "$@" >/dev/null 2>&1; then
+        echo "PASS"
+        rm -f "$log"
+    else
+        echo "FAIL  (output: $log)"
+        exit 1
+    fi
+}
+
 run_case "the UHCI controller is found" \
     --wait-for "usb: UHCI host controller ready"
 
@@ -175,6 +192,13 @@ run_case "a block is read from it" \
     --usb-disk "$USB_DISK" \
     --wait-for "usb: mass storage block 0 reads 55aa"
 
+# The boot probe reads block zero; this reads it again from the shell, through
+# the same bulk path, with the machine fully up. The eight bytes are the
+# harness's own "MELLIVOR" marker, so the only way they reach the screen is a
+# block the device returned after boot.
+run_expect "the shell reads a block from it" disk "4D 45 4C 4C 49 56 4F 52" \
+    --usb-disk "$USB_DISK"
+
 # The end-to-end claim: keys typed on the USB keyboard reach the shell. QEMU
 # activates the USB keyboard when one is attached, so `--via sendkey` drives it
 # (and not the PS/2 keyboard). The command is "help", and the assertion is the
@@ -191,4 +215,4 @@ else
     exit 1
 fi
 
-echo "  USB: controller found and running, a keyboard enumerated and typing, a stick read"
+echo "  USB: controller found and running, a keyboard enumerated and typing, a stick read at boot and from the shell"

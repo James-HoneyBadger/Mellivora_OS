@@ -167,7 +167,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `time` | Display uptime in seconds since boot |
 | `date` | Show current date and time (YYYY-MM-DD HH:MM:SS) |
 | `mem` | Display memory info (free pages, MB, timer ticks) |
-| `disk` | Show disk info (total sectors, size in MB) |
+| `disk` | Show disk info (total sectors, size in MB); an attached USB stick and its first block when one answered |
 | `df` | Filesystem usage (total/used/free blocks, file count) |
 | `sysinfo` | Run the sysinfo program for detailed system information |
 

@@ -481,6 +481,11 @@ msg_more_usage: db "Usage: more [FILE]  (or pipe: cmd | more)", 0x0A, 0
 msg_disk_header: db "=== Disk Information ===", 0x0A, 0
 msg_disk_sectors: db "  Total sectors: ", 0
 msg_disk_size:  db "  Disk size:     ", 0
+msg_usb_disk_line: db "  USB stick:     ", 0
+msg_usb_disk_blocks: db " blocks of ", 0
+msg_usb_disk_bytes: db " bytes", 0x0A, 0
+msg_usb_disk_block0: db "  Block 0:       ", 0
+msg_usb_disk_read_err: db "  Block 0:       read failed", 0x0A, 0
 msg_hbfs_found:  db "  Filesystem:    HBFS detected", 0x0A, 0
 msg_hbfs_formatted: db "  Filesystem formatted.", 0x0A, 0
 msg_hbfs_nodisk: db "  Filesystem:    No disk available", 0x0A, 0
@@ -1184,6 +1189,7 @@ usb_msc_blocksize: resd 1         ; bytes per block
 usb_msc_in_toggle: resd 1         ; next DATA0/DATA1 on the bulk IN pipe
 usb_msc_out_toggle: resd 1        ; next DATA0/DATA1 on the bulk OUT pipe
 usb_msc_busy:     resd 1          ; 1 while a bulk transfer owns the queue head
+usb_msc_ready:    resd 1          ; 1 once a block has been read back
 usb_td_status:    resd 3          ; the three status words of a failed transfer
 usb_xfer_addr:    resd 1          ; control transfer: device address
 usb_xfer_setup:   resd 1          ;                      setup packet

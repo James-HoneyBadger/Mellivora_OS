@@ -217,7 +217,8 @@ det_date:
 sum_disk: db "Disk geometry and size", 0
 det_disk:
         db "disk", 0x0A
-        db "  Show the ATA disk size and sector counts.", 0x0A, 0
+        db "  Show the ATA disk size and sector counts, and an attached USB", 0x0A
+        db "  stick's size and first block.", 0x0A, 0
 sum_help: db "Show commands by category or one command", 0
 det_help:
         db "help [COMMAND | -a]", 0x0A

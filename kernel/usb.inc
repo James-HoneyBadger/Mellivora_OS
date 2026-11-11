@@ -76,6 +76,7 @@ USB_SETUP_BUF   equ 0x040
 USB_DESC_BUF    equ 0x080
 USB_HID_BUF     equ 0x100
 USB_MSC_CBW     equ 0x200               ; 31-byte command block wrapper
+USB_MSC_CB      equ 0x220               ; 16-byte SCSI command block
 USB_MSC_CSW     equ 0x240               ; 13-byte command status wrapper
 USB_MSC_BUF     equ 0x300               ; one 512-byte block of data
 
@@ -1157,6 +1158,7 @@ usb_msc_start:
         pushad
         mov dword [usb_msc_ep_in], 0
         mov dword [usb_msc_ep_out], 0
+        mov dword [usb_msc_ready], 0
 
         ; edx tracks whether the last interface was the mass-storage one, the
         ; same walk usb_hid_start does for the keyboard.
@@ -1532,12 +1534,54 @@ usb_msc_probe:
         call usb_msc_command
         jc .fail
         call usb_log_msc_block0
+        mov dword [usb_msc_ready], 1
         jmp .out
 .fail:
         LOGBOOT LOG_WARN, msg_usb_msc_fail
 .out:
         popad
         ret
+
+;---------------------------------------
+; usb_msc_read_block - read one block through the bulk transport
+;   EAX = LBA, EDI = destination (512 bytes)
+;   Out: CF=0 on success, CF=1 on error
+;
+; The block-device entry point in miniature. The command block is rebuilt each
+; call because the LBA lives in it, big-endian at bytes 2-5, and the length at
+; bytes 7-8 is one block.
+;
+; One command at a time, by construction: the shell is the only caller and
+; there is one shell. The interrupt path does not touch these structures while
+; usb_msc_busy is set.
+;---------------------------------------
+usb_msc_read_block:
+        pushad
+        mov [.lba], eax
+        mov [.dst], edi
+
+        mov ebx, [usb_mem]
+        add ebx, USB_MSC_CB
+        mov byte [ebx + 0], SCSI_READ10
+        mov byte [ebx + 1], 0
+        mov eax, [.lba]
+        bswap eax
+        mov [ebx + 2], eax              ; LBA, most significant byte first
+        mov byte [ebx + 6], 0
+        mov byte [ebx + 7], 0
+        mov byte [ebx + 8], 1           ; one block
+        mov byte [ebx + 9], 0
+
+        mov esi, ebx
+        mov al, 10
+        mov edx, [usb_msc_blocksize]
+        mov ebx, 1                      ; data stage IN
+        mov edi, [.dst]
+        call usb_msc_command
+        popad
+        ret
+.lba:   dd 0
+.dst:   dd 0
 
 ;---------------------------------------
 ; usb_log_msc_endpoints - one line: both bulk endpoints and their packet sizes

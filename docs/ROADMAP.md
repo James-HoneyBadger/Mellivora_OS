@@ -1039,12 +1039,21 @@ mass-storage probe moves bulk data before the HID driver hangs an interrupt
 descriptor on it. `make check-usb` is seventeen cases; `tools/qemu_drive.py
 --usb-disk` attaches a raw image as a `usb-storage` device for the last six.
 
+The device does not stop being useful when the boot probe ends. `disk` reports
+the stick after the ATA disk - its size in blocks and block length - and then
+reads block zero again, through the same bulk path, with the machine fully up;
+the block's first eight bytes reach the screen in hex. That read is the one the
+gate asserts, because the harness wrote the bytes and only the device can give
+them back. `usb_msc_read_block` is the block-device entry point in miniature:
+one command block at a time, tagged, with the data residue checked.
+
 What it is not, in full: there is no hub beyond the root ports, the keypad and
 the GUI keys are not mapped, and the stick is read but not yet mounted - no
 filesystem sits on it, so the exit line's copy-a-file is still ahead. The block
-device is also not registered with the VFS, and ejection is not implemented. The
-order from here is unchanged: make the mass-storage device a block device that
-HBFS can mount, which is what makes the exit line real.
+device is also not registered with the VFS, writes have no command of their own
+yet (the transport can carry one), and ejection is not implemented. The order
+from here is unchanged: make the mass-storage device a block device that HBFS
+can mount, which is what makes the exit line real.
 
 ### M9 · Reliability and management (9–13 weeks)
 

@@ -6643,13 +6643,13 @@ cmd_show_memory:
 ;---------------------------------------
 cmd_show_disk:
         pushad
-        cmp byte [ata_present], 0
-        je .no_disk
-
         call vga_set_info
         mov esi, msg_disk_header
         call vga_print
         call vga_reset_color
+
+        cmp byte [ata_present], 0
+        je .no_ata
 
         mov esi, msg_disk_sectors
         call vga_print
@@ -6665,13 +6665,56 @@ cmd_show_disk:
         call vga_print_dec
         mov esi, msg_mb
         call vga_print
+        jmp .usb
 
-        popad
-        ret
-
-.no_disk:
+.no_ata:
         mov esi, msg_ata_none
         call vga_print
+
+.usb:
+        ; A USB stick is not a boot volume, so it is reported after the ATA
+        ; disk and only when it answered at boot. The block is read here and
+        ; now rather than remembered: a capacity line that came from a real
+        ; read is worth more than one that came from a descriptor.
+        cmp dword [usb_msc_ready], 0
+        je .done
+        mov esi, msg_usb_disk_line
+        call vga_print
+        mov eax, [usb_msc_blocks]
+        call vga_print_dec
+        mov esi, msg_usb_disk_blocks
+        call vga_print
+        mov eax, [usb_msc_blocksize]
+        call vga_print_dec
+        mov esi, msg_usb_disk_bytes
+        call vga_print
+
+        xor eax, eax
+        mov edi, [usb_mem]
+        add edi, USB_MSC_BUF
+        call usb_msc_read_block
+        jc .usb_fail
+        mov esi, msg_usb_disk_block0
+        call vga_print
+        mov esi, [usb_mem]
+        add esi, USB_MSC_BUF
+        mov ebp, 8
+.print_block:
+        movzx eax, byte [esi]
+        call vga_print_hex_byte
+        mov al, ' '
+        call vga_putchar
+        inc esi
+        dec ebp
+        jnz .print_block
+        mov al, 0x0A
+        call vga_putchar
+        jmp .done
+.usb_fail:
+        mov esi, msg_usb_disk_read_err
+        call vga_print
+
+.done:
         popad
         ret
 
