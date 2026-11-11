@@ -719,16 +719,15 @@ usb_hid_start:
         ret
 
 ;---------------------------------------
-; usb_intr_in - one interrupt IN transfer from the HID endpoint
-;   Out: CF=0 and EAX = bytes read, CF=1 on error
-;
-; One descriptor hung below the queue head, the same way a control transfer
-; is. The controller retries it every frame while the device NAKs, so the poll
-; waits a little and then checks again; a periodic reader would keep the
-; descriptor there and this would be its steady state.
+; usb_hid_arm_td - build and hang the interrupt IN descriptor
+;   Out: CF=0 if armed, CF=1 if there is no HID keyboard
+;   Preserves all registers except flags.
 ;---------------------------------------
-usb_intr_in:
-        pushad
+usb_hid_arm_td:
+        push eax
+        push ecx
+        push edx
+        push ebx
         cmp dword [usb_hid_ep], 0
         je .fail
         mov ebx, [usb_mem]
@@ -761,7 +760,29 @@ usb_intr_in:
         mov eax, ebx
         add eax, USB_TD_DATA
         mov [ebx + USB_QH + 4], eax                     ; hang below the queue head
+        clc
+        jmp .out
+.fail:
+        stc
+.out:
+        pop ebx
+        pop edx
+        pop ecx
+        pop eax
+        ret
 
+;---------------------------------------
+; usb_intr_in - one interrupt IN transfer from the HID endpoint, waited out
+;   Out: CF=0 and EAX = bytes read, CF=1 on error
+;
+; The boot-time proof: one descriptor is armed and waited on. The steady state
+; is usb_hid_poll, which arms and checks without waiting.
+;---------------------------------------
+usb_intr_in:
+        pushad
+        call usb_hid_arm_td
+        jc .fail
+        mov ebx, [usb_mem]
         mov ebp, 20                     ; up to ~20 ms for a report
 .poll:
         mov eax, [ebx + USB_TD_DATA + 4]
@@ -802,6 +823,299 @@ usb_intr_in:
         stc
         ret
 .result: dd 0
+
+;---------------------------------------
+; usb_hid_poll - poll the HID keyboard's interrupt endpoint, no waiting
+;
+; Called from the timer interrupt with interrupts off. If the controller is
+; still waiting for the device (a NAK), the descriptor stays hung and is
+; retried every frame. When a report has completed it is translated and the
+; descriptor is re-armed. The drain is bounded so one tick cannot get stuck.
+;---------------------------------------
+usb_hid_poll:
+        pushad
+        cmp dword [usb_hid_ep], 0
+        je .out
+        mov ebp, 8                      ; bound the reports drained per tick
+.drain:
+        test ebp, ebp
+        jz .out
+        dec ebp
+        mov ebx, [usb_mem]
+        cmp dword [usb_hid_armed], 0
+        je .arm
+        mov eax, [ebx + USB_TD_DATA + 4]
+        test eax, TD_ACTIVE
+        jnz .out                        ; controller is retrying a NAK
+        mov dword [usb_hid_armed], 0
+        and eax, TD_ERRMASK
+        jnz .arm                        ; errored: drop it and re-arm
+        call usb_hid_process_report
+        jmp .drain
+.arm:
+        call usb_hid_arm_td
+        jc .out
+        mov dword [usb_hid_armed], 1
+        jmp .drain
+.out:
+        popad
+        ret
+
+;---------------------------------------
+; usb_hid_process_report - turn one HID boot report into key events
+;
+; The report is at USB_HID_BUF: a modifier byte, a reserved byte, then six
+; keycodes. The previous report is diffed against this one so each key that
+; went down or up becomes one press or release on the shared keyboard path.
+;---------------------------------------
+usb_hid_process_report:
+        pushad
+        mov ebx, [usb_mem]
+        add ebx, USB_HID_BUF
+
+        ; --- modifier diff: six bits carry a meaning ---
+        mov dl, [ebx]                   ; current modifiers
+        mov dh, [usb_hid_prev_mod]      ; previous modifiers
+        cmp dl, dh
+        je .mods_done
+        ; bit 0: Left Ctrl -> 0x1D
+        mov cl, dl
+        xor cl, dh
+        test cl, 0x01
+        jz .m1
+        mov al, 0x1D
+        test dl, 0x01
+        jnz .m0_press
+        or al, 0x80
+.m0_press:
+        call kbd_handle_scancode
+.m1:
+        ; bit 1: Left Shift -> 0x2A
+        mov cl, dl
+        xor cl, dh
+        test cl, 0x02
+        jz .m2
+        mov al, 0x2A
+        test dl, 0x02
+        jnz .m1_press
+        or al, 0x80
+.m1_press:
+        call kbd_handle_scancode
+.m2:
+        ; bit 2: Left Alt -> 0x38
+        mov cl, dl
+        xor cl, dh
+        test cl, 0x04
+        jz .m3
+        mov al, 0x38
+        test dl, 0x04
+        jnz .m2_press
+        or al, 0x80
+.m2_press:
+        call kbd_handle_scancode
+.m3:
+        ; bit 4: Right Ctrl -> 0x1D (the shared path has one ctrl flag)
+        mov cl, dl
+        xor cl, dh
+        test cl, 0x10
+        jz .m4
+        mov al, 0x1D
+        test dl, 0x10
+        jnz .m3_press
+        or al, 0x80
+.m3_press:
+        call kbd_handle_scancode
+.m4:
+        ; bit 5: Right Shift -> 0x36
+        mov cl, dl
+        xor cl, dh
+        test cl, 0x20
+        jz .m5
+        mov al, 0x36
+        test dl, 0x20
+        jnz .m4_press
+        or al, 0x80
+.m4_press:
+        call kbd_handle_scancode
+.m5:
+        ; bit 6: Right Alt -> 0x38 (the shared path has one alt flag)
+        mov cl, dl
+        xor cl, dh
+        test cl, 0x40
+        jz .mods_done
+        mov al, 0x38
+        test dl, 0x40
+        jnz .m5_press
+        or al, 0x80
+.m5_press:
+        call kbd_handle_scancode
+.mods_done:
+        mov [usb_hid_prev_mod], dl
+
+        ; --- keycode diff: presses first, then releases ---
+        xor edi, edi
+.key_press:
+        movzx eax, byte [ebx + 2 + edi] ; current keycode
+        test eax, eax
+        jz .kp_next
+        call usb_hid_key_in_prev
+        jc .kp_next                     ; already down in the last report
+        xor ch, ch                      ; press
+        call usb_hid_send_key
+.kp_next:
+        inc edi
+        cmp edi, 6
+        jb .key_press
+
+        xor edi, edi
+.key_release:
+        movzx eax, byte [usb_hid_prev_keys + edi]
+        test eax, eax
+        jz .kr_next
+        call usb_hid_key_in_cur
+        jc .kr_next                     ; still down in this report
+        mov ch, 1                       ; release
+        call usb_hid_send_key
+.kr_next:
+        inc edi
+        cmp edi, 6
+        jb .key_release
+
+        ; Save this report as the previous one.
+        cld
+        mov esi, ebx
+        add esi, 2
+        mov edi, usb_hid_prev_keys
+        mov ecx, 6
+        rep movsb
+        popad
+        ret
+
+; usb_hid_key_in_prev - is AL among the six previous keycodes?
+;   Out: CF=1 if present. Preserves all registers except flags.
+usb_hid_key_in_prev:
+        push eax
+        push ecx
+        push edi
+        mov edi, usb_hid_prev_keys
+        mov ecx, 6
+.loop:
+        cmp al, [edi]
+        je .yes
+        inc edi
+        dec ecx
+        jnz .loop
+        clc
+        jmp .out
+.yes:
+        stc
+.out:
+        pop edi
+        pop ecx
+        pop eax
+        ret
+
+; usb_hid_key_in_cur - is AL among the six current keycodes?
+;   Out: CF=1 if present. Preserves all registers except flags.
+usb_hid_key_in_cur:
+        push eax
+        push ecx
+        push edi
+        push ebx
+        mov ebx, [usb_mem]
+        add ebx, USB_HID_BUF + 2
+        mov ecx, 6
+.loop:
+        cmp al, [ebx]
+        je .yes
+        inc ebx
+        dec ecx
+        jnz .loop
+        clc
+        jmp .out
+.yes:
+        stc
+.out:
+        pop ebx
+        pop edi
+        pop ecx
+        pop eax
+        ret
+
+;---------------------------------------
+; usb_hid_send_key - translate a HID usage (AL) and send one key event
+;   AL = usage, CH = 0 press / 1 release
+;   Preserves all registers.
+;
+; Values in hid_scancode_table feed the same path the PS/2 keyboard uses. The
+; six extended navigation keys are sent as an E0 prefix and a make code; their
+; releases are ignored by that path, so they send nothing on release.
+;---------------------------------------
+usb_hid_send_key:
+        push eax
+        push ebx
+        push ecx
+        movzx ebx, al
+        cmp ebx, 0x66
+        jae .done                      ; outside the boot-keyboard range
+        cmp bl, 0x52                   ; Up
+        je .ext
+        cmp bl, 0x51                   ; Down
+        je .ext
+        cmp bl, 0x50                   ; Left
+        je .ext
+        cmp bl, 0x4F                   ; Right
+        je .ext
+        cmp bl, 0x4B                   ; PageUp
+        je .ext
+        cmp bl, 0x4E                   ; PageDown
+        je .ext
+        mov al, [hid_scancode_table + ebx]
+        test al, al
+        jz .done                       ; not mapped (keypad and friends)
+        test ch, ch
+        jz .send
+        or al, 0x80                    ; release bit
+.send:
+        call kbd_handle_scancode
+        jmp .done
+.ext:
+        test ch, ch
+        jnz .done                      ; extended releases are ignored
+        mov al, 0xE0
+        call kbd_handle_scancode
+        cmp bl, 0x52
+        jne .x1
+        mov al, 0x48                   ; Up
+        jmp .send
+.x1:
+        cmp bl, 0x51
+        jne .x2
+        mov al, 0x50                   ; Down
+        jmp .send
+.x2:
+        cmp bl, 0x50
+        jne .x3
+        mov al, 0x4B                   ; Left
+        jmp .send
+.x3:
+        cmp bl, 0x4F
+        jne .x4
+        mov al, 0x4D                   ; Right
+        jmp .send
+.x4:
+        cmp bl, 0x4B
+        jne .x5
+        mov al, 0x49                   ; PageUp
+        jmp .send
+.x5:
+        mov al, 0x51                   ; PageDown
+        jmp .send
+.done:
+        pop ecx
+        pop ebx
+        pop eax
+        ret
 
 ;---------------------------------------
 ; usb_port_reset - reset one root port and wait for it to be enabled

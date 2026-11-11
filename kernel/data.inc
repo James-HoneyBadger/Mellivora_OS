@@ -630,6 +630,28 @@ scancode_table:
         db 0x81,'3', '0', '.',  0,   0,   0,   0       ; 0x50-0x57 (Down,KP3,KP0,KP.)
         times 128 - ($ - scancode_table) db 0
 
+; USB HID boot-keyboard usage (0x00-0x65) -> PS/2 set-1 scancode. Zero means
+; "not mapped" (reserved codes, the keypad, and the extended navigation keys,
+; which the USB poller handles explicitly). The values feed the same path the
+; PS/2 keyboard uses, so shift, ctrl and alt fall out of scancode_table for
+; free.
+hid_scancode_table:
+        ;      0     1     2     3     4     5     6     7
+        db   0,   0,   0,   0,0x1E,0x30,0x2E,0x20      ; 0x00-0x07 (a b c d)
+        db 0x12,0x21,0x22,0x23,0x17,0x24,0x25,0x26     ; 0x08-0x0F (e..l)
+        db 0x32,0x31,0x18,0x19,0x10,0x13,0x1F,0x14     ; 0x10-0x17 (m..t)
+        db 0x16,0x2F,0x11,0x2D,0x15,0x2C,0x02,0x03     ; 0x18-0x1F (u..z,1,2)
+        db 0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B     ; 0x20-0x27 (3..0)
+        db 0x1C,0x01,0x0E,0x0F,0x39,0x0C,0x0D,0x1A     ; 0x28-0x2F (Enter..[)
+        db 0x1B,0x2B,  0,0x27,0x28,0x29,0x33,0x34      ; 0x30-0x37 (] \;')
+        db 0x35,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F,0x40     ; 0x38-0x3F (/ Caps F1..F6)
+        db 0x41,0x42,0x43,0x44,0x57,0x58,  0,0x46      ; 0x40-0x47 (F7..F12, ScrLk)
+        db   0,  0,  0,  0,  0,  0,  0,  0              ; 0x48-0x4F (Pause..Right)
+        db   0,  0,  0,0x45,  0,  0,  0,  0             ; 0x50-0x57 (Left..KP+)
+        db   0,  0,  0,  0,  0,  0,  0,  0              ; 0x58-0x5F (KP Enter..KP7)
+        db   0,  0,  0,  0,  0,  0                     ; 0x60-0x65 (KP8..App)
+
+
 ; Shifted ASCII table (indexed by ASCII value of unshifted char, offset by 0x20)
 shift_table:
         db ' ', '!', '"', '#', '$', '%', '&', '"'      ; 0x20-0x27
@@ -1148,6 +1170,9 @@ usb_cfg_len:      resd 1          ; wTotalLength from the configuration descript
 usb_cfg_interfaces: resd 1        ; bNumInterfaces from the configuration descriptor
 usb_hid_ep:       resd 1          ; HID interrupt IN endpoint (0 = none found)
 usb_hid_maxpkt:   resd 1          ; HID interrupt IN endpoint max packet size
+usb_hid_armed:    resd 1          ; 1 = an interrupt IN descriptor is hung
+usb_hid_prev_mod: resb 1          ; last modifier byte the keyboard reported
+usb_hid_prev_keys: resb 6         ; last six keycodes the keyboard reported
 usb_td_status:    resd 3          ; the three status words of a failed transfer
 usb_xfer_addr:    resd 1          ; control transfer: device address
 usb_xfer_setup:   resd 1          ;                      setup packet

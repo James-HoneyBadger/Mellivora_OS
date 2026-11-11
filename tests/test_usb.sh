@@ -8,7 +8,8 @@
 # and its root ports read - and, when a device is on one, that device is
 # enumerated and configured: the port is reset, its descriptors are read, it
 # is given an address, its configuration is selected, and its HID boot
-# keyboard (when it is one) is switched to boot protocol and read from once.
+# keyboard (when it is one) is switched to boot protocol, polled, and made to
+# type into the shell.
 #
 # So the gate asserts exactly what the stack claims. Two boots, because the
 # interesting difference is whether the driver notices a device:
@@ -17,8 +18,8 @@
 #      plugged in: the controller must be found and the root ports reported
 #      empty;
 #   2. the same machine with `-device usb-kbd`: the same controller must now
-#      report a device on a root port, enumerate it, read its configuration
-#      and configure it.
+#      report a device on a root port, enumerate it, configure it, and turn
+#      its reports into keys the shell can run.
 #
 # A driver that always says "connected" fails the first case. One that never
 # says it fails the second. A machine without a controller at all is not
@@ -127,4 +128,20 @@ run_case "a report is read from it" \
     --device usb-kbd \
     --wait-for "usb: hid report read"
 
-echo "  USB: controller found and running, a device enumerated, configured, its HID report read"
+# The end-to-end claim: keys typed on the USB keyboard reach the shell. QEMU
+# activates the USB keyboard when one is attached, so `--via sendkey` drives it
+# (and not the PS/2 keyboard). The command is "help", and the assertion is the
+# footer of its output, which only appears if the shell ran the command.
+printf '  %-38s ' "it types into the shell"
+log="$(mktemp)"
+if QEMU="$(find_qemu)" timeout "$TIMEOUT" python3 "$DRIVE" "$IMAGE" "help" \
+        --timeout "$TIMEOUT" --out "$log" --device usb-kbd --via sendkey \
+        --expect "for one command" >/dev/null 2>&1; then
+    echo "PASS"
+    rm -f "$log"
+else
+    echo "FAIL  (output: $log)"
+    exit 1
+fi
+
+echo "  USB: controller found and running, a device enumerated, configured, its keys read"

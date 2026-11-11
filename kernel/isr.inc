@@ -293,6 +293,12 @@ irq_timer:
         pushad
         inc dword [tick_count]
 
+        ; Poll the USB keyboard before the EOI. The shared keyboard path sends
+        ; its own EOI when Ctrl+C aborts a program, so polling here lets that
+        ; EOI stand in for this timer's (it is a non-specific EOI and the timer
+        ; is the highest-priority interrupt in service).
+        call usb_hid_poll
+
         ; Send EOI first (so the controller isn't held up during the switch)
         xor al, al
         call irq_eoi
@@ -453,12 +459,14 @@ irq_timer:
         popad
         iretd
 
-; IRQ1: Keyboard interrupt
-irq_keyboard:
+; kbd_handle_scancode - process one PS/2 scancode byte in AL, including the
+; 0xE0 prefix and the release bit. Shared by the PS/2 keyboard ISR and the USB
+; HID poller, so both keyboards land in the same modifier state and key buffer.
+kbd_handle_scancode:
         pushad
 
-        ; Read scancode from keyboard controller
-        in al, KB_DATA
+        ; The caller supplies the scancode in AL; the PS/2 path reads it from
+        ; the controller port, the USB path from a HID report.
 
         ; Handle E0 extended prefix
         cmp al, 0xE0
@@ -474,7 +482,7 @@ irq_keyboard:
         ; Key press: check for modifier keys first
         movzx ebx, al
         cmp ebx, 128
-        jge .eoi
+        jge .done
 
         ; Check for ctrl press
         cmp bl, 0x1D            ; Left ctrl press
@@ -521,7 +529,7 @@ irq_keyboard:
         ; Translate scancode to ASCII
         mov al, [scancode_table + ebx]
         or al, al
-        jz .eoi                 ; Non-printable key
+        jz .done                 ; Non-printable key
 
         ; Store in keyboard buffer (ring buffer)
         test byte [kb_shift], 1
@@ -563,7 +571,7 @@ irq_keyboard:
         mov eax, SIGINT
         call sched_kbd_signal
         test eax, eax
-        jnz .eoi                ; EOI + iret: the job survives
+        jnz .done                ; handled: the job survives
         jmp .ctrlc_abort
 
 .ctrl_z_check:
@@ -577,7 +585,7 @@ irq_keyboard:
         mov eax, SIGTSTP
         call sched_kbd_signal
         test eax, eax
-        jnz .eoi
+        jnz .done
         jmp .ctrlc_abort
 
 .ctrlc_abort:
@@ -637,25 +645,25 @@ irq_keyboard:
         lea ecx, [ebx + 1]
         and ecx, KB_BUFFER_SIZE - 1
         cmp ecx, [kb_read_idx]
-        je .eoi                 ; Buffer full, drop keystroke
+        je .done                 ; Buffer full, drop keystroke
         mov [kb_buffer + ebx], al
         mov [kb_write_idx], ecx
-        jmp .eoi
+        jmp .done
 
 .no_shift_store:
-        jmp .eoi
+        jmp .done
 
 .shift_on:
         or byte [kb_shift], 1
-        jmp .eoi
+        jmp .done
 
 .ctrl_on:
         or byte [kb_ctrl], 1
-        jmp .eoi
+        jmp .done
 
 .alt_on:
         or byte [kb_alt], 1
-        jmp .eoi
+        jmp .done
 
 .key_up:
         and al, 0x7F            ; Remove release bit
@@ -667,15 +675,15 @@ irq_keyboard:
         je .shift_off
         cmp al, 0x36
         je .shift_off
-        jmp .eoi
+        jmp .done
 
 .ctrl_off:
         and byte [kb_ctrl], ~1
-        jmp .eoi
+        jmp .done
 
 .alt_off:
         and byte [kb_alt], ~1
-        jmp .eoi
+        jmp .done
 
 .shift_off:
         and byte [kb_shift], ~1
@@ -683,13 +691,13 @@ irq_keyboard:
 ; E0 prefix and extended key handlers
 .set_e0_prefix:
         mov byte [e0_prefix], 1
-        jmp .eoi
+        jmp .done
 
 .handle_extended:
         mov byte [e0_prefix], 0
         ; Key release for extended key — ignore
         test al, 0x80
-        jnz .eoi
+        jnz .done
         ; Arrow keys — inject virtual key codes into keyboard buffer
         cmp al, 0x48            ; Up arrow
         je .ext_up
@@ -706,7 +714,7 @@ irq_keyboard:
         je .ext_pgup
         cmp al, 0x51            ; PgDn
         je .ext_pgdn
-        jmp .eoi
+        jmp .done
 .ext_pgup_prog:
         ; Forward PgUp/PgDn to running program's key buffer (v9.0)
         cmp al, 0x49
@@ -715,7 +723,7 @@ irq_keyboard:
         jmp .store_key
 .ext_pgdn_prog:
         cmp al, 0x51
-        jne .eoi
+        jne .done
         mov al, KEY_PGDN
         jmp .store_key
 .ext_up:
@@ -744,13 +752,19 @@ irq_keyboard:
         jmp .store_key
 .ext_pgup:
         call vga_do_scroll_back
-        jmp .eoi
+        jmp .done
 .ext_pgdn:
         call vga_do_scroll_fwd
-        jmp .eoi
+        jmp .done
 
-.eoi:
+.done:
+        popad
+        ret
+
+; IRQ1: Keyboard interrupt
+irq_keyboard:
+        in al, KB_DATA
+        call kbd_handle_scancode
         mov al, 1               ; the keyboard line
         call irq_eoi
-        popad
         iretd

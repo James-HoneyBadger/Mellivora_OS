@@ -1011,9 +1011,20 @@ report. The boot log gains `usb: hid endpoint 81, 0008 bytes, ready` and
 not a keyboard - walks past silently, which is correct: it is not this driver's
 job yet. Turning the reports into keys is the next step.
 
-What it is not, in full: there is no hub beyond the root ports, the reports are
-not yet turned into keys, and there is no class driver beyond this keyboard
-setup. The order from here is unchanged: HID, then mass storage, which
+The reports become keys next. Each report is diffed against the previous one -
+the modifier byte and the six keycodes - so every key that went down or up is
+one synthetic scancode, and the six navigation keys that need an E0 prefix are
+handled apart. The HID usage is translated to a PS/2 set-1 scancode with a
+102-entry table and fed into the same routine the PS/2 keyboard interrupt uses,
+so shift, ctrl, alt and the shell's Ctrl+C all fall out for free. The polling
+lives in the timer interrupt: it arms the descriptor and checks it without
+waiting, draining completed reports and re-arming, so a tick never blocks.
+`make check-usb` is eleven cases now - the last types `help` through the
+keyboard and runs it.
+
+What it is not, in full: there is no hub beyond the root ports, the keypad and
+the GUI keys are not mapped, and there is no mass-storage class driver. The
+order from here is unchanged: mass storage, which
 is what the exit line actually needs.
 
 ### M9 · Reliability and management (9–13 weeks)
