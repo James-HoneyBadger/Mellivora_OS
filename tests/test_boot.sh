@@ -43,6 +43,7 @@ FAULT_RE='CPU EXCEPTION|double fault|triple fault'
 #   - the allocator's register and accounting contract,
 #   - the per-task x87/SSE image,
 #   - the volume cipher, against its FIPS-197 vector,
+#   - the compression codec, round-tripping a corpus it must also refuse,
 #   - the password KDF, against BLAKE2b and two Argon2id vectors,
 #   - the font, for every code point the tree's own text uses.
 REQUIRED_RES=(
@@ -51,6 +52,7 @@ REQUIRED_RES=(
     'PMM_SELFTEST_OK'
     'FPU_SELFTEST_OK'
     'AES_SELFTEST_OK'
+    'LZ_SELFTEST_OK'
     'ARGON2_SELFTEST_OK'
     'FONT_SELFTEST_OK'
 )

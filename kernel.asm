@@ -904,6 +904,13 @@ kernel_entry:
         call aes_selftest
         LOGBOOT LOG_INFO, log_aestest
 
+        ; The compression codec, round-tripped over a corpus that includes data
+        ; it must refuse. An encoder and decoder written together agree with
+        ; each other even when both are wrong, so the cases are chosen to fail
+        ; differently: repeats must shrink, noise must not, and a match at
+        ; exactly the maximum distance must still be found.
+        call lz_selftest
+
         ; The display engine, proved on a scratch page in every pixel format it
         ; claims. The adapter's mode is not touched: a format that packs wrongly
         ; would otherwise only be found by someone choosing that mode.
@@ -986,6 +993,7 @@ kernel_entry:
 %include "kernel/blkcache.inc"
 %include "kernel/pagecache.inc"
 %include "kernel/aes.inc"
+%include "kernel/lz.inc"
 %include "kernel/argon2.inc"
 %include "kernel/hbfs.inc"
 %include "kernel/keystore.inc"
