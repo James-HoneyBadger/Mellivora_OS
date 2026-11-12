@@ -3261,6 +3261,11 @@ sys_truncate:
         je .st_fail
         cmp byte [edi + DIRENT_TYPE], FTYPE_DIR
         je .st_fail
+        ; A chunked file has no plaintext blocks to drop from the tail: its
+        ; blocks are whole chunks and its table names them. Expanding it first
+        ; is a `expand`, not a truncate.
+        test word [edi + 254], HBFS4_DE_COMPRESSED
+        jnz .st_fail
         ; Discarding content is a write to the file
         mov ebx, HBFS_ACC_WRITE
         call hbfs_access_current
@@ -3476,6 +3481,13 @@ sys_defrag:
         jne  .sdf_ck_blks
         jmp  .sdf_next
 .sdf_ck_blks:
+        ; A chunked file's table holds absolute payload blocks, so moving it
+        ; would leave every entry pointing at where the payload used to be. It
+        ; is already one contiguous run, which is what defrag is for.
+        test word [edi + 254], HBFS4_DE_COMPRESSED
+        jz   .sdf_not_packed
+        jmp  .sdf_next
+.sdf_not_packed:
         mov  eax, [edi + 260]   ; start block  (HBFS_DE_BLOCK)
         mov  ecx, [edi + 264]   ; block count
         test ecx, ecx

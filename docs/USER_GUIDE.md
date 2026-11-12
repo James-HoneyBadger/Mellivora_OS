@@ -225,6 +225,8 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `stream read FILE STREAM` | Print a stream, also reachable as `cat FILE:STREAM` |
 | `stream write FILE STREAM TEXT` | Create or replace a stream's content |
 | `stream delete FILE STREAM` | Delete one stream |
+| `compact FILE` | Store the file as 16 KiB compressed chunks (size unchanged, fewer blocks) |
+| `expand FILE` | Rewrite a compressed file as plain blocks; needed before in-place writes or a truncate |
 
 ### Text Processing (HBU — Honey Badger Utilities)
 

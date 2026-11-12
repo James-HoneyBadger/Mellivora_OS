@@ -190,8 +190,29 @@ The algorithm is a fixed, self-contained LZ-family codec implemented in
 `kernel/` — no dependency, no version negotiation, and a format that can be
 frozen once it is tested against a corpus.
 
-**As built: the codec.** `kernel/lz.inc` is that codec, and its bitstream is the
-frozen part: tokens are byte-aligned, eight to a group; the group opens with a
+**As built.** The container is `kernel/comp.inc`: a compressed entry sets flag
+bit 1 and its run is `[chunk table][payload]`, back to back. Each 16-byte table
+entry is `{u32 block, u32 stored bytes, u32 CRC-32C of the plaintext, u32 flags}`
+with bit 0 of `flags` selecting LZ-encoded or stored-whole, so a chunk that does
+not shrink is kept as itself and still carries its checksum. The table is
+addressed arithmetically - chunk *n* is entry *n* at byte `n*16`, so table block
+`n/256` - which is why reading one section costs one table block and one chunk
+and not the file. `compact` and `expand` move a file between this layout and one
+plain run inside a journal transaction, charging or releasing the difference to
+the file's owner; the new run is written and the entry committed before the old
+run is freed, so a crash leaves a leak `repair` reports and never a file that is
+half of each. A chunked file refuses in-place writes (a descriptor read that
+writes would scribble into a payload), `truncate` (there is no plaintext tail to
+drop) and `defrag` (its table names absolute blocks, so moving it would leave
+every entry pointing where the payload used to be); `write`, `copy` and
+`SYS_FWRITE` replace the entry whole and are unaffected. The loader decodes
+through the same seam, so a compressed executable runs. The offline checker
+decodes every chunk with its own decoder, written from this section rather than
+from the kernel, and requires each plaintext checksum to match - the kernel's
+encoder and decoder agree with each other even when both are wrong, and that is
+the check which does not.
+
+`kernel/lz.inc` is the codec, and its bitstream is the frozen part: tokens are byte-aligned, eight to a group; the group opens with a
 flag byte whose bit *n* says whether token *n* is a literal (0, one byte) or a
 match (1, a little-endian word whose low 12 bits are `distance - 1` and high 4
 bits are `length - 3`). A match may not reach outside its chunk and may not read
@@ -205,9 +226,10 @@ stream that refers before its own start and must be rejected. Each case that
 must shrink has a size it must come in under, so a compressor that emits one
 literal per byte cannot pass by round-tripping with itself.
 
-What is not built yet is everything around it: no chunk container, so no file
-is stored compressed, and therefore no per-chunk flag byte, no per-chunk CRC, no
-`compressed` attribute and no decompression in the cache.
+Not built: decompression in the *page* cache (a section maps plaintext through
+the block seam rather than a decompressed page), compacting a stream, and a
+`compressed` attribute in `dir`'s attribute word - the entry flag is the truth
+and nothing derives a hint from it yet.
 
 ## 8. Encryption
 
@@ -368,7 +390,7 @@ M3 does not close until:
 | 64-bit block numbers, 2^62 volume | 32-bit, 2 GB |
 | B+tree directories, 65 535 entries | Linear directory blocks, 455 entries per directory |
 | Alternate data streams | **Yes**, as directory entries of type 6 named `FILE:STREAM` beside the file: the path resolver finds them, quotas, ACLs, xattrs and repair treat them as entries, and `stream list/read/write/delete` is the shell surface. Listings hide them; delete and rename move them with the file. The target's per-stream run lists inside one record are not implemented |
-| ACLs, streams, compression, encryption, snapshots | **ACLs: yes**, as ACEs in the xattr block (`acl:u<id>`, `acl:g<id>`, `acl:m`, `acl:o`), evaluated by `acl_perm` before the mode word and settable from the shell with `acl set`; conformance in `acl_test`. No inheritance and no group-class unions yet. **Volume encryption: yes**, as AES-256-XTS over the 4 KiB units above the journal, with the key checked against the superblock before the mount and `crypt format`/`crypt unlock` as the only writers of the stamp; the store is kernel memory (`key add`), so the volume is refused after a reboot until the secret is put back, and there is no per-file layer yet. **Compression: the codec only** - `kernel/lz.inc` encodes and decodes a 16 KiB chunk and refuses data it cannot shrink, proved at boot against a corpus; no file is stored compressed yet, and there is no chunk container, no per-chunk CRC and no `compressed` attribute on disk. Snapshots: none |
+| ACLs, streams, compression, encryption, snapshots | **ACLs: yes**, as ACEs in the xattr block (`acl:u<id>`, `acl:g<id>`, `acl:m`, `acl:o`), evaluated by `acl_perm` before the mode word and settable from the shell with `acl set`; conformance in `acl_test`. No inheritance and no group-class unions yet. **Volume encryption: yes**, as AES-256-XTS over the 4 KiB units above the journal, with the key checked against the superblock before the mount and `crypt format`/`crypt unlock` as the only writers of the stamp; the store is kernel memory (`key add`), so the volume is refused after a reboot until the secret is put back, and there is no per-file layer yet. **Compression: yes**, as 16 KiB chunks named by a 16-byte table entry each (block, stored length, plaintext CRC-32C, LZ/whole flag) in the file's own run, written and removed by `compact`/`expand` in a journal transaction; reads decode through one seam, so `cat`, `diff`, a descriptor read and the program loader all see plaintext, and `make check-compress` runs a 37-chunk program while it is compressed. Gaps: no decompression in the page cache, no compacting of a stream, and in-place writes, truncate and defrag refuse a chunked file rather than teach each of them about chunks. Snapshots: none |
 | Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it |
 | Journal with redo records | Undo journal: before-images replayed backwards |
 | One unified cache | A block cache and a page cache that agree by construction |

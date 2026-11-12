@@ -180,6 +180,10 @@ hbfs_read_file:
         mov [last_file_type], bl
         mov ebx, [edi + 256]    ; file size
         mov [.save_fsize], ebx
+        ; A compressed entry holds chunks, not plaintext blocks: decode them
+        ; into the caller's buffer and let the size it returns be the answer.
+        test word [edi + 254], HBFS4_DE_COMPRESSED
+        jnz .path_read_packed
         ; A v4 entry whose flags name runs is read block by block; an inline
         ; entry keeps the one contiguous read it has always done.
         test word [edi + 254], HBFS4_DE_EXTENTS
@@ -195,6 +199,15 @@ hbfs_read_file:
         call blk_cache_read
         jc .path_read_fail
         jmp .path_read_ok
+
+.path_read_packed:
+        mov eax, [edi + 260]            ; start = chunk table
+        mov ecx, [.save_fsize]
+        mov edi, [.save_dest]
+        mov edx, HBFS_READ_MAX_BLOCKS * HBFS_BLOCK_SIZE
+        call comp_read_all
+        jc   .path_read_fail
+        jmp  .path_read_ok
 
 .path_read_extent:
         mov [.save_entry], edi
@@ -268,6 +281,8 @@ hbfs_read_file:
         mov ebx, [edi + 256]    ; File size
         mov [.save_fsize], ebx
         mov [.save_fsize_orig], ebx
+        test word [edi + 254], HBFS4_DE_COMPRESSED
+        jnz .read_packed
 
         ; Get block number and block count, then read all data.
         ;
@@ -278,6 +293,16 @@ hbfs_read_file:
         ; file actually contains are copied out.
         mov eax, [edi + 260]    ; Start block (inline) / extent block
         mov [.save_start], eax
+        jmp  .read_plain_entry
+.read_packed:
+        mov  eax, [edi + 260]
+        mov  ecx, [.save_fsize]
+        mov  edi, [.save_dest]
+        mov  edx, HBFS_READ_MAX_BLOCKS * HBFS_BLOCK_SIZE
+        call comp_read_all
+        jc   .read_error
+        jmp  .read_done
+.read_plain_entry:
         mov [.save_entry], edi
         mov dword [.save_index], 0
         mov dword [.save_extent], 0

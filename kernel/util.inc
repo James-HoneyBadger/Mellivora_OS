@@ -1353,6 +1353,14 @@ fd_open:
         jz  .fd_no_extent
         mov ecx, [edi + DIRENT_START_BLOCK]
 .fd_no_extent:
+        ; A compressed entry has three shapes, not two: no marker (inline),
+        ; an extent block, or -1 for chunks. COMP_NONE can never name an extent
+        ; block (block 0 is the journal), so the third value costs no field and
+        ; keeps the 32-byte descriptor as it is.
+        test word [edi + 254], HBFS4_DE_COMPRESSED
+        jz  .fd_not_packed
+        mov ecx, COMP_NONE
+.fd_not_packed:
         mov [fd_table + eax + 28], ecx
         ; Record which directory this file lives in (for fd_close)
         mov ecx, [current_dir_lba]
@@ -1400,6 +1408,8 @@ fd_read:
         shr ebx, 12                     ; position / 4096 = logical block
         ; An extent file maps it through the run list; an inline one adds.
         mov ecx, [fd_table + eax + 28]  ; extent block (0 = inline)
+        cmp ecx, COMP_NONE
+        je  .frd_packed
         test ecx, ecx
         jz  .frd_inline_block
         mov eax, ecx
@@ -1420,6 +1430,19 @@ fd_read:
         pop ecx
         jc .frd_err
         jmp .frd_have_block
+.frd_packed:
+        ; A chunked file: decode the chunk holding this logical block, which is
+        ; already in EBX, and hand back the block's 4 KiB.
+        mov  ecx, [fd_table + eax + 4]  ; file size
+        mov  eax, [fd_table + eax + 8]  ; start = chunk table
+        mov  edi, hbfs_block_buf
+        call comp_read_block
+        jc   .frd_block_fail
+        pop  eax
+        pop  edx
+        pop  ecx
+        jmp  .frd_have_block
+
 .frd_block_fail:
         pop eax
         pop edx
@@ -1468,6 +1491,11 @@ fd_write:
         ; must still be writable.
         test dword [fd_table + eax], FD_FLAG_WRITE
         jz  .fwr_err
+        ; A chunked file's blocks are chunks, not plaintext: writing in place
+        ; would scribble into a payload. The whole-file writers (SYS_FWRITE,
+        ; copy, write) replace the entry and are unaffected.
+        cmp  dword [fd_table + eax + 28], COMP_NONE
+        je   .fwr_err
 
         ; Save fd offset and parameters
         mov [.fw_fdoff], eax

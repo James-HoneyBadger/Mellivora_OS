@@ -86,6 +86,7 @@ cmd_table:
         CMDENT cmd_chmod_str, CAT_FILES, sum_chmod, det_chmod
         CMDENT cmd_acl_str, CAT_FILES, sum_acl, det_acl
         CMDENT cmd_chown_str, CAT_FILES, sum_chown, det_chown
+        CMDENT cmd_compact_str, CAT_FILES, sum_compact, det_compact
         CMDENT cmd_copy_str, CAT_FILES, sum_copy, det_copy
         CMDENT cmd_del_str, CAT_FILES, sum_del, det_del
         CMDENT cmd_assoc_str, CAT_FILES, sum_assoc, det_assoc
@@ -93,6 +94,7 @@ cmd_table:
         CMDENT cmd_df_str, CAT_FILES, sum_df, det_df
         CMDENT cmd_dir_str, CAT_FILES, sum_dir, det_dir
         CMDENT cmd_dirs_str, CAT_FILES, sum_dirs, det_dirs
+        CMDENT cmd_expand_str, CAT_FILES, sum_expand, det_expand
         CMDENT cmd_format_str, CAT_FILES, sum_format, det_format
         CMDENT cmd_fsck_str, CAT_FILES, sum_fsck, det_fsck
         CMDENT cmd_repair_str, CAT_FILES, sum_repair, det_repair
@@ -221,6 +223,18 @@ det_disk:
         db "  Show the ATA disk size and sector counts, and an attached USB", 0x0A
         db "  stick's size and first block. The USB ports are scanned first,", 0x0A
         db "  so a stick plugged in after boot is found here.", 0x0A, 0
+sum_compact: db "Store a file as compressed chunks", 0
+det_compact:
+        db "compact FILE", 0x0A
+        db "  Store the file as 16 KiB chunks, each compressed on its own or", 0x0A
+        db "  kept whole when it does not shrink. Reads decode transparently;", 0x0A
+        db "  writes that replace the file, and its space accounting, still", 0x0A
+        db "  work. Files up to 1 MB.", 0x0A, 0
+sum_expand: db "Store a compressed file as plain blocks again", 0
+det_expand:
+        db "expand FILE", 0x0A
+        db "  Rewrite the file as one plain run of blocks. Needed before", 0x0A
+        db "  in-place writes or a truncate, which a chunked file refuses.", 0x0A, 0
 sum_stream: db "Alternate data streams of a file", 0
 det_stream:
         db "stream list FILE", 0x0A

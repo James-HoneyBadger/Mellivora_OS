@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 130 shell built-ins, 295 NASM programs and 15 C program
+- 210 syscalls, 132 shell built-ins, 295 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -411,7 +411,8 @@ runs and new subdirectories. Extent files can be deleted (each run and the exten
 is freed), and `format` now creates a checksummed v4 volume instead of the legacy v2 one.
 Extent files are created when no contiguous run fits, truncated by rewriting their
 run list, and deleted by freeing each run. ACLs and derived per-user quotas have
-since landed, as have alternate streams; compression and snapshots remain v5 material.
+since landed, as have alternate streams and compressed files; snapshots remain v5
+material.
 
 - On-disk v5: per-file access control lists, alternate streams, per-user quotas,
   transparent compression, encryption at rest, sparse files, hard links, and
@@ -480,8 +481,28 @@ since landed, as have alternate streams; compression and snapshots remain v5 mat
   writes, lists, reads, hides, deletes and renames streams, then requires
   `tools/fsck_hbfs.py` to call the volume it leaves behind consistent.
   Wildcard renames refuse a set that carries streams rather than rename entries
-  under a scan they would invalidate; compression and streams on directories
-  are the remaining stream work.
+  under a scan they would invalidate; compacting a stream and streams on
+  directories are the remaining stream work.
+- **Compressed files (landed).** A file can be stored as 16 KiB chunks: a
+  chunk table sits at the front of the file's own run and the chunks follow it,
+  each with a CRC-32C over its plaintext and a flag saying whether it is
+  LZ-encoded or kept whole, so a chunk that does not shrink costs nothing and
+  incompressible data cannot grow a file. Reads decode transparently - the
+  whole-file readers, the program loader and a descriptor's block read all go
+  through one seam - and `compact`/`expand` move a file between the two
+  layouts inside a journal transaction. A chunked file refuses in-place writes,
+  a truncate and a defrag, each because its blocks are chunks named by a table
+  and none of those operations knows that. `make check-compress` compacts a
+  text file and compares it byte for byte in a later boot, runs a 580 KB
+  program (37 chunks) while it is compressed, expands it back, and requires
+  `tools/fsck_hbfs.py` to decode every chunk with its own decoder and agree on
+  every checksum. Twelve power-cut points through `compact` itself, killed with
+  no clean shutdown at random moments, all recovered with the checker clean -
+  the crash harness takes a shell command, so a command that rewrites a file's
+  layout can be crash-tested like any program. Snapshots remain the other half
+  of the wave's storage work,
+  and a compressed file cannot yet be written in place: a `write` replaces it
+  whole, which is the same thing every whole-file writer does.
 - **A kernel window, not a gap (landed).** The image had filled 4062 of the
   4062 sectors between the loader and the superblock, because the program window
   was pinned at 3 MB and everything above it was hand-placed. The layout moved

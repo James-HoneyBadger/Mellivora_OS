@@ -1004,6 +1004,7 @@ kernel_entry:
 %include "kernel/repair.inc"
 %include "kernel/vfs.inc"
 %include "kernel/stream.inc"
+%include "kernel/comp.inc"
 %include "kernel/filesearch.inc"
 %include "kernel/isr.inc"
 %include "kernel/ipc.inc"

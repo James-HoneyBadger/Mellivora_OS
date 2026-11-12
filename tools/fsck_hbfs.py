@@ -59,6 +59,12 @@ HBFS4_FEATURE_EXTENTS = 1 << 0
 HBFS4_FEATURE_JOURNAL = 1 << 1
 HBFS4_FEATURE_SNAPSHOT = 1 << 2
 HBFS4_DE_EXTENTS = 1 << 0
+# Chunked entries (compression): flags bit 1 says the data is a chunk table
+# followed by payload blocks, one 16-byte table entry per 16 KiB of plaintext.
+HBFS4_DE_COMPRESSED = 1 << 1
+COMP_CHUNK = 16384
+COMP_ENTRY_SIZE = 16
+COMP_F_CODEC = 1
 HBFS4_EXTENT_MAGIC = 0x34584248      # on disk: 'H','B','X','4'
 HBFS4_EXTENT_HDR = 8                 # magic, record count
 HBFS4_EXTENT_RECORD = 8              # start block, block count
@@ -248,6 +254,43 @@ def complain_checksums(image: str) -> int:
           f"({', '.join(labels)})")
     return 0
 
+
+def lz_decode(payload: bytes, plain_len: int):
+    """Decode one chunk of the kernel's LZ bitstream, or None if it is torn.
+
+    Tokens are byte-aligned, eight to a group, with the group's flag byte
+    selecting a literal (one byte) or a match (a word: low 12 bits distance-1,
+    high 4 bits length-3). This is written from docs/spec/STORAGE.md section 7
+    rather than from kernel/lz.inc, so a mistake in the kernel's own decoder
+    shows up here as a disagreement instead of agreeing with itself.
+    """
+    out = bytearray()
+    pos = 0
+    while len(out) < plain_len:
+        if pos >= len(payload):
+            return None
+        flags = payload[pos]
+        pos += 1
+        for bit in range(8):
+            if len(out) >= plain_len:
+                break
+            if flags & (1 << bit):
+                if pos + 2 > len(payload):
+                    return None
+                word = payload[pos] | (payload[pos + 1] << 8)
+                pos += 2
+                dist = (word & 0x0FFF) + 1
+                length = (word >> 12) + 3
+                if dist > len(out) or len(out) + length > plain_len:
+                    return None
+                for _ in range(length):
+                    out.append(out[-dist])
+            else:
+                if pos >= len(payload):
+                    return None
+                out.append(payload[pos])
+                pos += 1
+    return bytes(out)
 
 class Fsck:
     def __init__(self, image: str):
@@ -541,14 +584,26 @@ class Fsck:
 
             size, start, count = struct.unpack_from("<III", entry, DE_SIZE)
             flags = struct.unpack_from("<H", entry, DE_FLAGS)[0]
-            if flags & ~HBFS4_DE_EXTENTS:
+            if flags & ~(HBFS4_DE_EXTENTS | HBFS4_DE_COMPRESSED):
                 self.warn(f"{display}: unknown entry flags 0x{flags:04X}")
             if flags & HBFS4_DE_EXTENTS and ftype == FTYPE_DIR:
                 self.error(f"{display}: a directory cannot be extent-mapped")
                 flags = 0
+            if flags & HBFS4_DE_COMPRESSED and ftype == FTYPE_DIR:
+                self.error(f"{display}: a directory cannot be chunked")
+                flags = 0
+            if flags & HBFS4_DE_EXTENTS and flags & HBFS4_DE_COMPRESSED:
+                self.error(f"{display}: an entry cannot be both extent-mapped "
+                           "and chunked")
+                flags = 0
             if flags & HBFS4_DE_EXTENTS and not self.v4:
                 self.error(f"{display}: extents are a v4 entry flag")
                 flags = 0
+            # Chunks are not gated on v4: the container carries a checksum per
+            # chunk, which is the integrity a v3 file would otherwise lack, and
+            # the flag word it lives in exists on every version. A reader that
+            # does not know the flag would read the table as data, which is
+            # why this checker names it rather than tolerating it.
             mode = struct.unpack_from("<H", entry, DE_MODE)[0]
             if mode == 0:
                 self.stats["legacy_mode_entries"] += 1
@@ -565,6 +620,9 @@ class Fsck:
             elif flags & HBFS4_DE_EXTENTS:
                 self.stats["files"] += 1
                 self.claim_extents(display, entry, size, start, count)
+            elif flags & HBFS4_DE_COMPRESSED:
+                self.stats["files"] += 1
+                self.check_chunked(display, size, start, count)
             else:
                 self.stats["files"] += 1
                 if count == 0 and size > 0:
@@ -589,6 +647,72 @@ class Fsck:
                 else:
                     block = (xlba - self.data_lba) // SECTORS_PER_BLOCK
                     self.claim(block, 1, display + " [xattr]")
+
+    def check_chunked(self, display: str, size: int, start: int,
+                      count: int) -> None:
+        """A compressed file: a table of chunks, then the chunks themselves.
+
+        The table is metadata the tree references, so its blocks are claimed
+        like any other; each chunk's payload is claimed where the table says it
+        lives, and decoding it has to produce the chunk's own plaintext length
+        and match the checksum stored beside it. The independent decoder here
+        is the point of checking at all: the kernel's encoder and decoder agree
+        with each other even when both are wrong, and this one was written from
+        the format.
+        """
+        chunks = (size + COMP_CHUNK - 1) // COMP_CHUNK
+        table_bytes = chunks * COMP_ENTRY_SIZE
+        table_blocks = (table_bytes + BLOCK_SIZE - 1) // BLOCK_SIZE
+        if count < table_blocks:
+            self.error(f"{display}: {chunks} chunks need {table_blocks} table "
+                       f"blocks, entry claims {count}")
+            return
+        self.claim(start, table_blocks, display + " [chunk table]")
+        table = self.read_lba(self.block_lba(start), table_blocks * BLOCK_SIZE)
+        if len(table) < table_blocks * BLOCK_SIZE:
+            self.error(f"{display}: short read of its chunk table")
+            return
+        payload_blocks = 0
+        for index in range(chunks):
+            off = index * COMP_ENTRY_SIZE
+            block, clen, crc, cflags = struct.unpack_from("<IIII", table, off)
+            plain_len = min(COMP_CHUNK, size - index * COMP_CHUNK)
+            if cflags & ~COMP_F_CODEC:
+                self.error(f"{display}: chunk {index} has unknown flags "
+                           f"0x{cflags:08X}")
+            if clen == 0:
+                self.error(f"{display}: chunk {index} stores no bytes")
+                continue
+            pblocks = (clen + BLOCK_SIZE - 1) // BLOCK_SIZE
+            if pblocks > (COMP_CHUNK + BLOCK_SIZE - 1) // BLOCK_SIZE:
+                self.error(f"{display}: chunk {index} claims {clen} stored "
+                           "bytes, more than a chunk can hold")
+                continue
+            payload_blocks += pblocks
+            self.claim(block, pblocks, f"{display} chunk {index}")
+            raw = self.read_lba(self.block_lba(block), pblocks * BLOCK_SIZE)
+            if len(raw) < pblocks * BLOCK_SIZE:
+                self.error(f"{display}: short read of chunk {index}")
+                continue
+            payload = raw[:clen]
+            if cflags & COMP_F_CODEC:
+                plain = lz_decode(payload, plain_len)
+                if plain is None:
+                    self.error(f"{display}: chunk {index} does not decode")
+                    continue
+            else:
+                if clen < plain_len:
+                    self.error(f"{display}: chunk {index} stores {clen} bytes "
+                               f"of a {plain_len}-byte chunk")
+                    continue
+                plain = payload[:plain_len]
+            if crc32c(plain) != crc:
+                self.error(f"{display}: chunk {index} fails its plaintext "
+                           "CRC32C")
+        if count != table_blocks + payload_blocks:
+            self.error(f"{display}: {chunks} chunks occupy "
+                       f"{table_blocks + payload_blocks} blocks, entry claims "
+                       f"{count}")
 
     def claim_extents(self, display: str, entry: bytes, size: int,
                       extent_block: int, count: int) -> None:

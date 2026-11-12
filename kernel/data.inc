@@ -223,6 +223,8 @@ cmd_enter_str:  db "enter", 0
 cmd_copy_str:   db "copy", 0
 cmd_ren_str:    db "ren", 0
 cmd_stream_str: db "stream", 0
+cmd_compact_str: db "compact", 0
+cmd_expand_str: db "expand", 0
 cmd_mv_str:     db "mv", 0
 cmd_move_str:   db "move", 0
 cmd_df_str:     db "df", 0

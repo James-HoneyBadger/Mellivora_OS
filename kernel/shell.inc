@@ -1979,6 +1979,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_stream
 
+        mov edi, cmd_compact_str
+        call str_starts_with
+        jc .cmd_compact
+
+        mov edi, cmd_expand_str
+        call str_starts_with
+        jc .cmd_expand
+
         ; Compare against known commands
         mov edi, cmd_help_str
         call str_starts_with
@@ -2925,6 +2933,18 @@ shell_dispatch_core:
 .cmd_stream:
         call skip_spaces
         call cmd_stream_handle
+        ret
+
+.cmd_compact:
+        call skip_spaces
+        mov dword [comp_mode], 0
+        call cmd_comp_handle
+        ret
+
+.cmd_expand:
+        call skip_spaces
+        mov dword [comp_mode], 1
+        call cmd_comp_handle
         ret
 
 .cmd_rename:
@@ -7852,6 +7872,10 @@ cmd_exec_program:
         mov [last_file_type], bl
         mov ebx, [edi + 256]    ; file size
         mov [.path_fsize], ebx
+        ; A compressed program is decoded chunk by chunk into the window, so a
+        ; compressed executable loads through the same claim the plain one does.
+        test word [edi + 254], HBFS4_DE_COMPRESSED
+        jnz .path_packed
         ; A v4 extent entry names runs, not data; read it block by block
         ; through the run list. The inline case stays one contiguous read.
         test word [edi + 254], HBFS4_DE_EXTENTS
@@ -7867,6 +7891,15 @@ cmd_exec_program:
         call blk_cache_read
         jc .path_cd_fail
         jmp .path_loaded
+
+.path_packed:
+        mov  eax, [edi + 260]           ; start = chunk table
+        mov  ecx, [edi + 256]           ; plaintext size
+        mov  edi, PROGRAM_BASE
+        mov  edx, PROGRAM_MAX_SIZE
+        call comp_read_all
+        jc   .path_cd_fail
+        jmp  .path_loaded
 
 .path_extent:
         mov ecx, [edi + 264]    ; data blocks
