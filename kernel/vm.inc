@@ -1245,6 +1245,13 @@ sys_mmap_file:
         mov [.mf_fd], eax
         imul eax, FD_ENTRY_SIZE
 
+        ; A chunked file has no plaintext blocks to map: its blocks are a
+        ; table and payloads, so mapping them would hand the caller the
+        ; container. Refuse it here rather than serve garbage - the reader can
+        ; `expand` the file first, or read it whole.
+        cmp  dword [fd_table + eax + 28], COMP_NONE
+        je   .mf_close_fail
+
         mov ecx, [.mf_off]
         shr ecx, 12                     ; first block of the mapping
         mov edx, [fd_table + eax + 16]  ; blocks the file occupies

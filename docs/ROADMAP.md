@@ -492,18 +492,18 @@ material.
   whole-file readers, the program loader and a descriptor's block read all go
   through one seam - and `compact`/`expand` move a file between the two
   layouts inside a journal transaction. A chunked file refuses in-place writes,
-  a truncate and a defrag, each because its blocks are chunks named by a table
-  and none of those operations knows that. `make check-compress` compacts a
-  text file and compares it byte for byte in a later boot, runs a 580 KB
+  a truncate, a defrag and a mapping, each because its blocks are chunks named
+  by a table and none of those operations knows that. `make check-compress`
+  compacts a text file and compares it byte for byte in a later boot, runs a 580 KB
   program (37 chunks) while it is compressed, expands it back, and requires
   `tools/fsck_hbfs.py` to decode every chunk with its own decoder and agree on
   every checksum. Twelve power-cut points through `compact` itself, killed with
   no clean shutdown at random moments, all recovered with the checker clean -
   the crash harness takes a shell command, so a command that rewrites a file's
   layout can be crash-tested like any program. Snapshots remain the other half
-  of the wave's storage work,
-  and a compressed file cannot yet be written in place: a `write` replaces it
-  whole, which is the same thing every whole-file writer does.
+  of the wave's storage work, and a compressed file cannot yet be written in
+  place or mapped: a `write` replaces it whole, which is what every whole-file
+  writer does, and an `expand` is the way to a mapping.
 - **Volume name and safe ejection (landed).** A volume carries a label - 32
   NUL-padded bytes at offset 80 of the superblock, which both formats leave
   free - so it is a property of the disk and not of the machine: `format` and
