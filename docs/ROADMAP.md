@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 132 shell built-ins, 295 NASM programs and 15 C program
+- 210 syscalls, 134 shell built-ins, 295 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -481,8 +481,9 @@ material.
   writes, lists, reads, hides, deletes and renames streams, then requires
   `tools/fsck_hbfs.py` to call the volume it leaves behind consistent.
   Wildcard renames refuse a set that carries streams rather than rename entries
-  under a scan they would invalidate; compacting a stream and streams on
-  directories are the remaining stream work.
+  under a scan they would invalidate; a stream takes the compression container
+  like any other content, and streams on directories are the remaining stream
+  work.
 - **Compressed files (landed).** A file can be stored as 16 KiB chunks: a
   chunk table sits at the front of the file's own run and the chunks follow it,
   each with a CRC-32C over its plaintext and a flag saying whether it is
@@ -503,6 +504,21 @@ material.
   of the wave's storage work,
   and a compressed file cannot yet be written in place: a `write` replaces it
   whole, which is the same thing every whole-file writer does.
+- **Volume name and safe ejection (landed).** A volume carries a label - 32
+  NUL-padded bytes at offset 80 of the superblock, which both formats leave
+  free - so it is a property of the disk and not of the machine: `format` and
+  populate.py write one, `label` reads and sets it (root only, journalled
+  through the superblock, which is what stops a crash leaving half of two
+  names), `volumes` shows it beside the partition table's own name for the
+  volume, and `tools/fsck_hbfs.py` refuses a label with no terminator or a
+  non-printable character. `eject` is the removable half of the volume model:
+  it refuses while any page of the volume is still mapped, naming how many and
+  the block the first holds, because the page cache keeps no dirty list and a
+  mapped page is a write that has not happened; with nothing mapped it flushes
+  the journal and the block cache and releases the storage device without
+  disturbing a keyboard on the same controller. `make check-volume` proves the
+  label survives a reboot, that `volumes` names it, and that `eject` flushes
+  with a stick attached and refuses nothing it should not.
 - **A kernel window, not a gap (landed).** The image had filled 4062 of the
   4062 sectors between the loader and the superblock, because the program window
   was pinned at 3 MB and everything above it was hand-placed. The layout moved

@@ -227,9 +227,10 @@ must shrink has a size it must come in under, so a compressor that emits one
 literal per byte cannot pass by round-tripping with itself.
 
 Not built: decompression in the *page* cache (a section maps plaintext through
-the block seam rather than a decompressed page), compacting a stream, and a
-`compressed` attribute in `dir`'s attribute word - the entry flag is the truth
-and nothing derives a hint from it yet.
+the block seam rather than a decompressed page), and a `compressed` attribute in
+`dir`'s attribute word - the entry flag is the truth and nothing derives a hint
+from it yet. A stream takes the container like any other content, because a
+stream is an ordinary entry with its own size and blocks.
 
 ## 8. Encryption
 
@@ -395,9 +396,9 @@ M3 does not close until:
 | Journal with redo records | Undo journal: before-images replayed backwards |
 | One unified cache | A block cache and a page cache that agree by construction |
 | Partition table | Read: MBR's four primary entries, or GPT behind a protective MBR, with each volume's start, length, type, GUID and UTF-16 name in `vol_table`. The filesystem is *probed* (the superblock LBA must fall inside a volume) rather than assumed |
-| Mount points | One volume, mounted from `vol_base_lba`; labels and multiple mounts are the remaining volume-model work |
+| Mount points | One volume, mounted from `vol_base_lba`, and it has a **label**: 32 NUL-padded bytes at offset 80 of the superblock, written by `format` and populate.py, read and set by `label` (root only, journalled through the superblock), shown by `volumes` as `fs label` beside the partition table's own name for the volume. Multiple mounts are the remaining volume-model work |
 | Online repair | `repair` (report) and `repair fix` (bitmap + free count) from the shell, at parity with the offline checker's classes: leaks, freed-but-claimed blocks, shared blocks, untrusted entries. `make check-repair` proves it on a corrupted copy. `repair journal` discards a log that cannot be replayed |
-| Removable safe ejection | None |
+| Removable safe ejection | **Partly.** `eject` refuses while any page of the volume is still mapped - naming how many and the block the first holds - because the page cache keeps no dirty list and a mapped page is a write that has not happened yet; with nothing mapped it flushes the journal and the block cache, then releases the storage device without touching the keyboard on the same controller. It does not name the *files* holding the pages: the cache does not record which file a page belongs to, and the block is what it can prove |
 | Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write. A failed fsck *before* replay is accepted only when the volume is marked for replay - damage with a clean journal is the failure that no replay can repair - and fsck must pass after the replay, which is the assertion. A harness boot that never reaches the shell is retried once and reported as a boot failure, not as a durability failure: QEMU dies at start-up often enough that conflating the two once made a clean 200-iteration run look like damage. `CRASH_ITERS=10000 make crash-soak` is the exit test; 200 iterations of it have run clean, the other 9 800 have not |
 
 The v4 guarantees — verified metadata, a writable journalled volume, extents, a

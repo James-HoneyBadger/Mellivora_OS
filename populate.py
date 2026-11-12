@@ -59,6 +59,7 @@ HBFS_JOURNAL_BLOCKS = 4
 # `make check-hbfs-checksum`, and tools/fsck_hbfs.py --complain recomputes the
 # checksum from the bytes on disk.
 HBFS4_MAGIC = 0x34424653              # 'HBF4'
+HBFS_SB_LABEL = 80                    # the volume's name, 32 NUL-padded bytes
 HBFS4_OFF_FEATURES = 60
 HBFS4_OFF_GENERATION = 64
 HBFS4_OFF_BLOCKS_HI = 68
@@ -231,6 +232,10 @@ def create_superblock(version=3, features=None, generation=0):
     struct.pack_into('<I', sb, 20, HBFS_BITMAP_START)
     struct.pack_into('<I', sb, 24, HBFS_DATA_START)
     struct.pack_into('<I', sb, 28, BLOCK_SIZE)
+    # The volume's name, at the offset both formats leave free after the v4
+    # fields. NUL-padded; `label` sets it through the kernel.
+    label = b"MELLIVORA"
+    sb[HBFS_SB_LABEL:HBFS_SB_LABEL + len(label)] = label
     if version == 4:
         struct.pack_into('<I', sb, HBFS4_OFF_FEATURES, features)
         struct.pack_into('<I', sb, HBFS4_OFF_GENERATION, generation)

@@ -70,6 +70,8 @@ HBFS4_EXTENT_HDR = 8                 # magic, record count
 HBFS4_EXTENT_RECORD = 8              # start block, block count
 HBFS4_EXTENT_MAX = ((BLOCK_SIZE - HBFS4_EXTENT_HDR
                      - HBFS4_RUN_CHECKSUM_BYTES) // HBFS4_EXTENT_RECORD)
+HBFS_SB_LABEL = 80                   # the volume's name, 32 NUL-padded bytes
+HBFS_SB_LABEL_LEN = 32
 HBFS_SUPERBLOCK_LBA = 8481
 HBFS_BITMAP_BLOCKS = 16
 HBFS_BITMAP_START = HBFS_SUPERBLOCK_LBA + 1
@@ -410,6 +412,21 @@ class Fsck:
             pass  # permissions feature flag
         if root_uid != 0 or root_gid != 0:
             self.warn(f"root directory uid/gid is {root_uid}/{root_gid}")
+
+        # The volume's name: printable, and terminated inside its 32-byte field.
+        # A name with no terminator would be read past its end by whoever prints
+        # it, which is a fault in the printer rather than a corrupt volume, but
+        # the volume is what has to stop it.
+        raw = self.read_lba(HBFS_SUPERBLOCK_LBA, SECTOR_SIZE)
+        label = raw[HBFS_SB_LABEL:HBFS_SB_LABEL + HBFS_SB_LABEL_LEN]
+        nul = label.find(b"\x00")
+        if nul < 0:
+            self.error("volume label has no terminator in its 32-byte field")
+        else:
+            name = label[:nul]
+            if any(b < 0x20 or b > 0x7E for b in name):
+                self.error("volume label has non-printable characters")
+            self.label = name.decode("ascii", "replace")
 
         self.total_blocks = total
         self.data_lba = data_lba
@@ -840,6 +857,9 @@ def main() -> int:
         if not quiet:
             for msg in fs.warnings:
                 print(f"  WARN   {msg}")
+        label = getattr(fs, "label", "")
+        if label:
+            print(f"  volume label: {label}")
         print(
             f"  {fs.stats['entries']} entries "
             f"({fs.stats['files']} files, {fs.stats['dirs']} dirs), "

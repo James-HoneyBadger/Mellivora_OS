@@ -582,10 +582,32 @@ vol_show:
 .vs_v3:
         mov esi, msg_vol_v3
 .vs_ver:
-        call vga_print
 .vs_nl:
         mov al, 0x0A
         call vga_putchar
+
+        ; The filesystem's own name, which the partition table does not know.
+        ; On its own line because a row that carries everything eventually
+        ; reaches the edge of the screen and wraps in the middle of a name.
+        ; Only the mounted volume has one to read in this build.
+        mov  eax, [vol_base_lba]
+        test eax, eax
+        jz   .vs_no_fslabel
+        cmp  eax, [ebx + VOL_START]
+        jne  .vs_no_fslabel
+        call hbfs_get_label
+        cmp  byte [esi], 0
+        je   .vs_no_fslabel
+        mov  [label_show], esi
+        mov  esi, msg_vol_fslabel
+        call vga_print
+        mov  esi, [label_show]
+        call vga_print
+        mov  al, '"'
+        call vga_putchar
+        mov  al, 0x0A
+        call vga_putchar
+.vs_no_fslabel:
         inc ecx
         jmp .vs_loop
 .vs_done:
@@ -597,7 +619,172 @@ vol_show:
         popad
         ret
 
+;-----------------------------------------------------------------------
+; cmd_label - the `label` command
+;   In : ESI = the rest of the command line
+;   Out: none; prints one line
+;
+; A volume's name lives in its superblock, so it is a property of the volume
+; and not of the machine: carry the disk to another system and it still says
+; what it is called. Setting it is a volume-wide change and asks for root,
+; because the label is what a person uses to tell two disks apart.
+;-----------------------------------------------------------------------
+cmd_label:
+        pushad
+        call skip_spaces
+        cmp  byte [esi], 0
+        je   .show
+        call require_root
+        test eax, eax
+        jnz  .denied
+        mov  edi, label_arg_buf
+        xor  ebx, ebx
+.copy:
+        mov  al, [esi]
+        test al, al
+        jz   .trim
+        cmp  ebx, HBFS_SB_LABEL_LEN - 1
+        jae  .too_long
+        mov  [edi + ebx], al
+        inc  ebx
+        inc  esi
+        jmp  .copy
+.trim:
+        ; Trailing spaces are the shell's, not the name's.
+.trim_loop:
+        test ebx, ebx
+        jz   .set
+        cmp  byte [edi + ebx - 1], ' '
+        jne  .set
+        dec  ebx
+        jmp  .trim_loop
+.set:
+        mov  byte [edi + ebx], 0
+        mov  esi, label_arg_buf
+        call hbfs_set_label
+        jc   .bad
+        mov  esi, msg_label_set
+        call vga_print
+        mov  esi, label_arg_buf
+        call vga_print
+        mov  al, 0x0A
+        call vga_putchar
+        popad
+        ret
+.show:
+        call hbfs_get_label
+        mov  [label_show], esi
+        cmp  byte [esi], 0
+        jne  .named
+        mov  esi, msg_label_none
+        call vga_print
+        popad
+        ret
+.named:
+        mov  esi, msg_label_is
+        call vga_print
+        mov  esi, [label_show]
+        call vga_print
+        mov  al, 0x0A
+        call vga_putchar
+        popad
+        ret
+.denied:
+        mov  esi, msg_label_denied
+        call vga_print
+        popad
+        ret
+.too_long:
+.bad:
+        mov  esi, msg_label_bad
+        call vga_print
+        popad
+        ret
+
+msg_label_is:     db "Label: ", 0
+msg_label_none:   db "Label: (none)", 0x0A, 0
+msg_label_set:    db "Label set: ", 0
+msg_label_denied: db "label: only root can name the volume", 0x0A, 0
+msg_label_bad:    db "label: 1-31 printable characters", 0x0A, 0
+label_show:       dd 0
+label_arg_buf:    times HBFS_SB_LABEL_LEN db 0
+
+;-----------------------------------------------------------------------
+; cmd_eject - take the removable volume out of service, or say why not
+;   Out: none; prints one line
+;
+; The rule the spec asks for is "no ejection with dirty pages", and the honest
+; form of it here is "no ejection while a page of the volume is mapped": the
+; page cache keeps no dirty list - a modified frame is flushed by the mapping
+; that dirtied it, when that mapping goes away - so a mapped page is a write
+; that has not happened yet, and there is no per-page way to force it. The
+; refusal therefore names what it can prove: how many pages are mapped and the
+; block the first of them holds.
+;-----------------------------------------------------------------------
+cmd_eject:
+        pushad
+        cmp  dword [usb_msc_ready], 0
+        je   .none
+        xor  ecx, ecx
+        xor  ebx, ebx                    ; mapped pages
+        mov  edx, -1                     ; first mapped block, as tag (block+1)
+.ej_scan:
+        cmp  ecx, PC_ENTRIES
+        jae  .ej_scanned
+        cmp  byte [pc_refs + ecx], 0
+        je   .ej_next
+        inc  ebx
+        cmp  edx, -1
+        jne  .ej_next
+        mov  edx, [pc_tags + ecx*4]
+.ej_next:
+        inc  ecx
+        jmp  .ej_scan
+.ej_scanned:
+        test ebx, ebx
+        jz   .ej_flush
+        mov  [eject_pages], ebx
+        mov  eax, edx
+        dec  eax                         ; tag -> block
+        mov  [eject_block], eax
+        mov  esi, msg_eject_busy
+        call vga_print
+        mov  eax, [eject_pages]
+        call vga_print_dec
+        mov  esi, msg_eject_pages
+        call vga_print
+        mov  eax, [eject_block]
+        call vga_print_dec
+        mov  al, 0x0A
+        call vga_putchar
+        popad
+        ret
+.ej_flush:
+        ; Nothing is mapped, so every write in flight is a block cache write:
+        ; push the journal, the superblock and the cache out, then let go of
+        ; the device.
+        call hbfs_sync
+        call blk_cache_flush
+        call usb_msc_forget
+        mov  esi, msg_eject_ok
+        call vga_print
+        popad
+        ret
+.none:
+        mov  esi, msg_eject_none
+        call vga_print
+        popad
+        ret
+
+msg_eject_busy:  db "eject: ", 0
+msg_eject_pages: db " pages of this volume are still mapped, from block ", 0
+msg_eject_ok:    db "eject: caches flushed, the volume can be unplugged", 0x0A, 0
+msg_eject_none:  db "eject: no removable volume is attached", 0x0A, 0
+eject_pages:     dd 0
+eject_block:     dd 0
+
 msg_vol_head:    db 0x0A, "Volumes: ", 0
+msg_vol_fslabel: db '     fs label "', 0
 msg_vol_table:   db "  table: ", 0
 msg_vol_gpt:     db "GPT", 0x0A, 0
 msg_vol_mbr:     db "MBR", 0x0A, 0

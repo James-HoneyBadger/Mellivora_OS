@@ -2164,6 +2164,28 @@ usb_scan:
 ; checking it. Every class driver's state goes with the device, so a stick
 ; that is unplugged stops being a capacity the shell can report.
 ;---------------------------------------
+;---------------------------------------
+; usb_msc_forget - drop the storage device without touching the keyboard
+;
+; usb_detach is "a device left": it clears the HID state too, which is right
+; when the thing on the port is unplugged and wrong when a person asks for the
+; disk to be ejected while the keyboard they are typing on stays. The queue head
+; is terminated either way, because a transfer that was queued names a device
+; that is no longer going to answer.
+;---------------------------------------
+usb_msc_forget:
+        pushad
+        mov dword [usb_msc_ready], 0
+        mov dword [usb_msc_blocks], 0
+        mov dword [usb_msc_blocksize], 0
+        mov dword [usb_msc_ep_in], 0
+        mov dword [usb_msc_ep_out], 0
+        mov ebx, [usb_mem]
+        mov dword [ebx + USB_QH + 4], UHCI_PTR_TERM
+        LOGBOOT LOG_INFO, msg_usb_ejected
+        popad
+        ret
+
 usb_detach:
         pushad
         mov dword [usb_hid_armed], 0
@@ -2468,6 +2490,7 @@ msg_usb_msc_blocks:   db " blocks of ", 0
 msg_usb_msc_bytes:    db " bytes", 0
 msg_usb_msc_block0:   db "usb: mass storage block 0 reads ", 0
 msg_usb_msc_fail:     db "usb: the mass-storage device did not answer", 0
+msg_usb_ejected: db "usb: storage ejected, safe to unplug", 0
 msg_usb_removed:      db "usb: the device was removed", 0
 msg_usb_msc_csw:      db "usb: msc csw sig=", 0
 msg_usb_msc_csw_tag:  db " tag=", 0

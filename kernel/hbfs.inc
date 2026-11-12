@@ -71,6 +71,12 @@ HBFS4_OFF_CHECKSUM     equ 76           ; dword: CRC-32C of this sector
 HBFS4_FEATURE_EXTENTS  equ (1 << 0)
 HBFS4_FEATURE_JOURNAL  equ (1 << 1)
 HBFS4_FEATURE_SNAPSHOT equ (1 << 2)     ; not honoured here; refuses the mount
+; The volume's own name, in the superblock sector after every field v4 uses.
+; Both formats have room there, so a v3 volume can be labelled too - the label
+; is a name, and a name does not need a format version.
+HBFS_SB_LABEL          equ 80
+HBFS_SB_LABEL_LEN      equ 32
+
 HBFS4_DE_EXTENTS       equ (1 << 0)     ; directory entry flags: data is a run list
 HBFS4_RUN_CHECKSUM_BYTES equ 4          ; trailer at the end of each metadata run
 
@@ -431,6 +437,21 @@ hbfs_format:
         mov dword [edi + HBFS4_OFF_GENERATION], 0
         mov dword [edi + HBFS4_OFF_BLOCKS_HI], 0
         mov dword [edi + HBFS4_OFF_DATA_HI],   0
+        ; A new volume gets a name, so `label` has something to show and a
+        ; person has something to change, rather than an empty string that
+        ; looks like a failure.
+        mov esi, msg_format_label
+        lea edi, [hbfs_super_buf + HBFS_SB_LABEL]
+        mov ecx, HBFS_SB_LABEL_LEN - 1
+.cfmt_label:
+        lodsb
+        test al, al
+        jz  .cfmt_label_done
+        stosb
+        dec ecx
+        jnz .cfmt_label
+.cfmt_label_done:
+        mov edi, hbfs_super_buf
         cmp dword [hbfs_format_crypt], 0
         je  .fmt_v4_header
         mov dword [edi + 0], HBFS_MAGIC
@@ -726,6 +747,78 @@ hbfs_write_superblock:
         mov  ecx, 1
         mov  esi, hbfs_super_buf
         jmp  ata_write_sectors
+
+;-----------------------------------------------------------------------
+; hbfs_get_label - point at the mounted volume's label
+;   Out: ESI = the label, NUL-terminated, possibly empty
+;-----------------------------------------------------------------------
+msg_format_label: db "MELLIVORA", 0
+
+hbfs_get_label:
+        lea  esi, [hbfs_super_buf + HBFS_SB_LABEL]
+        ret
+
+;-----------------------------------------------------------------------
+; hbfs_set_label - name the mounted volume
+;   In : ESI = the label, NUL-terminated
+;   Out: CF = 1 when it is too long, not printable, or the write failed
+;
+; The label lives in the superblock, which every volume write must journal:
+; it is metadata like any other, and a torn label is a volume with a name made
+; of half of two names. Committing it through hbfs_meta_write means a crash
+; leaves the old name or the new one.
+;-----------------------------------------------------------------------
+hbfs_set_label:
+        pushad
+        call hbfs_require_writable
+        jc   .hsl_bad
+        ; Validate and measure first: a refusal must not have written anything.
+        mov  ebx, 0
+.hsl_scan:
+        mov  al, [esi + ebx]
+        test al, al
+        jz   .hsl_scanned
+        cmp  al, 0x20
+        jb   .hsl_bad
+        cmp  al, 0x7E
+        ja   .hsl_bad
+        inc  ebx
+        cmp  ebx, HBFS_SB_LABEL_LEN - 1
+        jbe  .hsl_scan
+        jmp  .hsl_bad                    ; no room for a NUL: too long
+.hsl_scanned:
+        mov  [.hsl_len], ebx
+
+        call hbfs_journal_begin
+        ; Copy into the in-memory superblock, zero-filling the rest of the
+        ; field so a shorter name does not leave the tail of a longer one.
+        push esi
+        lea  edi, [hbfs_super_buf + HBFS_SB_LABEL]
+        mov  ecx, HBFS_SB_LABEL_LEN
+        xor  eax, eax
+        rep  stosb
+        pop  esi
+        lea  edi, [hbfs_super_buf + HBFS_SB_LABEL]
+        mov  ecx, [.hsl_len]
+        jecxz .hsl_write
+        rep  movsb
+.hsl_write:
+        mov  eax, HBFS_SUPERBLOCK_LBA
+        mov  ecx, 1
+        mov  esi, hbfs_super_buf
+        call hbfs_meta_write
+        jc   .hsl_fail
+        call hbfs_journal_commit
+        popad
+        clc
+        ret
+.hsl_fail:
+        call hbfs_journal_commit
+.hsl_bad:
+        popad
+        stc
+        ret
+.hsl_len: dd 0
 
 ;-----------------------------------------------------------------------
 ; hbfs_map_block - translate a file's logical block to a physical block

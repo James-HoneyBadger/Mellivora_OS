@@ -61,6 +61,7 @@ cmd_table:
         CMDENT cmd_key_str, CAT_SYSTEM, sum_key, det_key
         CMDENT cmd_crypt_str, CAT_SYSTEM, sum_crypt, det_crypt
         CMDENT cmd_sett_str, CAT_SYSTEM, sum_sett, det_sett
+        CMDENT cmd_label_str, CAT_SYSTEM, sum_label, det_label
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
         CMDENT cmd_objects_str, CAT_SYSTEM, sum_objects, det_objects
         CMDENT cmd_handles_str, CAT_SYSTEM, sum_handles, det_handles
@@ -92,6 +93,7 @@ cmd_table:
         CMDENT cmd_assoc_str, CAT_FILES, sum_assoc, det_assoc
         CMDENT cmd_open_str, CAT_FILES, sum_open, det_open
         CMDENT cmd_df_str, CAT_FILES, sum_df, det_df
+        CMDENT cmd_eject_str, CAT_SYSTEM, sum_eject, det_eject
         CMDENT cmd_dir_str, CAT_FILES, sum_dir, det_dir
         CMDENT cmd_dirs_str, CAT_FILES, sum_dirs, det_dirs
         CMDENT cmd_expand_str, CAT_FILES, sum_expand, det_expand
@@ -357,6 +359,18 @@ det_handles:
         db "  Print the handles each task holds and the total. A task with none", 0x0A
         db "  is skipped. The shell has no handle table of its own - it is not a", 0x0A
         db "  task - so the table starts at the first task slot.", 0x0A, 0
+sum_eject: db "Flush and release the removable volume"
+det_eject:
+        db "eject", 0x0A
+        db "  Flush the journal and the block cache and release the removable", 0x0A
+        db "  volume, so it can be unplugged. Refuses while any page of the", 0x0A
+        db "  volume is mapped, and says how many and from which block.", 0x0A, 0
+sum_label: db "Name the volume"
+det_label:
+        db "label [NAME]", 0x0A
+        db "  With no name, print the mounted volume's label; with one, store", 0x0A
+        db "  it in the volume's superblock. Up to 31 printable characters,", 0x0A
+        db "  root only.", 0x0A, 0
 sum_locks: db "Exercise the lock-order gate", 0
 det_locks:
         db "locks", 0x0A

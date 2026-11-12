@@ -227,6 +227,8 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `stream delete FILE STREAM` | Delete one stream |
 | `compact FILE` | Store the file as 16 KiB compressed chunks (size unchanged, fewer blocks) |
 | `expand FILE` | Rewrite a compressed file as plain blocks; needed before in-place writes or a truncate |
+| `label [NAME]` | Print the volume's label, or name it (root only, up to 31 printable characters) |
+| `eject` | Flush the journal and block cache and release the removable volume, refusing while pages are mapped |
 
 ### Text Processing (HBU — Honey Badger Utilities)
 

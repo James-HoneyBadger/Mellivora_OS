@@ -1987,6 +1987,14 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_expand
 
+        mov edi, cmd_label_str
+        call str_starts_with
+        jc .cmd_label
+
+        mov edi, cmd_eject_str
+        call str_starts_with
+        jc .cmd_eject
+
         ; Compare against known commands
         mov edi, cmd_help_str
         call str_starts_with
@@ -2945,6 +2953,16 @@ shell_dispatch_core:
         call skip_spaces
         mov dword [comp_mode], 1
         call cmd_comp_handle
+        ret
+
+.cmd_label:
+        call skip_spaces
+        call cmd_label
+        ret
+
+.cmd_eject:
+        call skip_spaces
+        call cmd_eject
         ret
 
 .cmd_rename:

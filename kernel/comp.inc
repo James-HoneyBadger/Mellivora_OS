@@ -284,14 +284,17 @@ comp_pack:
         ja   .cp_refuse
         test word [edi + 254], HBFS4_DE_COMPRESSED | HBFS4_DE_EXTENTS
         jnz  .cp_refuse
-        ; Data and executables: the loader decodes through the same seam a
-        ; read does, so a compressed program runs. Directories, links, batch
-        ; scripts and streams are not chunked, which keeps one command from
-        ; having to explain five layouts.
+        ; Data, executables and streams: a stream is an ordinary entry with its
+        ; own content, so it takes the same container; the loader decodes
+        ; through the same seam a read does, so a compressed program runs.
+        ; Directories, links and batch scripts are not chunked, which keeps one
+        ; command from having to explain five layouts.
         movzx eax, byte [edi + HBFS_DE_TYPE]
         cmp  eax, FTYPE_FILE
         je   .cp_type_ok
         cmp  eax, FTYPE_EXEC
+        je   .cp_type_ok
+        cmp  eax, FTYPE_STREAM
         jne  .cp_refuse
 .cp_type_ok:
         mov  eax, [edi + 260]
@@ -633,6 +636,8 @@ cmd_comp_handle:
         cmp  eax, FTYPE_FILE
         je   .type_ok
         cmp  eax, FTYPE_EXEC
+        je   .type_ok
+        cmp  eax, FTYPE_STREAM
         jne  .not_a_file
 .type_ok:
         mov  eax, [edi + 256]
@@ -755,7 +760,7 @@ msg_comp_usage:   db "usage: compact FILE | expand FILE", 0x0A, 0
 msg_comp_nofile:  db "No such file", 0x0A, 0
 msg_comp_read:    db "compact: could not read the file whole", 0x0A, 0
 msg_comp_write:   db "compact: the volume refused the write", 0x0A, 0
-msg_comp_type:    db "compact: only files and executables are stored as chunks", 0x0A, 0
+msg_comp_type:    db "compact: only files, executables and streams are chunked", 0x0A, 0
 msg_comp_already: db "compact: that file is already stored compressed", 0x0A, 0
 msg_comp_plain:   db "expand: that file is not stored compressed", 0x0A, 0
 msg_comp_denied:  db "Permission denied", 0x0A, 0
