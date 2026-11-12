@@ -20,6 +20,10 @@
 VM_MAX_PAGES       equ 4096        ; 16 MB per mapping
 VM_MAP_JIT         equ 0x40        ; opt-out of W^X (documented, audited)
 VM_MAP_SHARED      equ 0x10        ; SYS_MMAP_FILE: writes go back to the file
+; Internal only: the area maps a chunked file, whose pages are decoded into a
+; private frame per fault. A caller cannot ask for it - the flag mask a syscall
+; accepts is PROT_* | JIT | SHARED.
+VM_CHUNKED         equ 0x80
 
 ;---------------------------------------
 ; vm_init - seed the mapping randomiser
@@ -435,6 +439,8 @@ vm_fault_file_page:
         pushad
         mov [.vff_rec], esi
         mov [.vff_dst], edi
+        test dword [esi + VMA_FLAGS], VM_CHUNKED
+        jnz .vff_chunked
         mov edx, [esi + VMA_SECTOR]
         test edx, edx
         jz .vff_none                    ; anonymous mapping
@@ -458,6 +464,45 @@ vm_fault_file_page:
         test eax, eax
         jz .vff_read
         mov [esp + 28], eax             ; cache frame: the caller drops the scratch one
+        popad
+        ret
+
+.vff_chunked:
+        ; A compressed file's page is decoded from the big chunk that holds it,
+        ; straight into the frame the caller already zeroed. Private by
+        ; construction: there is no plaintext block to share, and a write to
+        ; the frame goes nowhere, which is what MAP_PRIVATE means.
+        mov  ecx, eax
+        sub  ecx, [esi + VMA_START]
+        shr  ecx, 12                    ; page index inside the area
+        cmp  ecx, [esi + VMA_BLOCKS]
+        jae  .vff_none                  ; past the end of the file: zeros
+        lea  edx, [ecx + 1]
+        shl  edx, 12
+        push edx                        ; end of this page in file bytes
+        mov  eax, [esi + VMA_CSTART]
+        mov  ebx, ecx
+        add  ebx, [esi + VMA_COFF]      ; page index inside the file
+        mov  ecx, [esi + VMA_CSIZE]
+        mov  edi, [.vff_dst]
+        call comp_read_block
+        pop  edx
+        jc   .vff_none                  ; a chunk that will not decode reads as zeros
+        ; The last page runs past the end of the file; the chunk's bytes there
+        ; are whatever the decode left, and the caller must not see them.
+        mov  eax, [esi + VMA_CSIZE]
+        cmp  edx, eax
+        jbe  .vff_chunked_done
+        mov  ecx, edx
+        sub  ecx, eax                   ; bytes past the end inside this page
+        mov  edi, [.vff_dst]
+        add  edi, 0x1000
+        sub  edi, ecx                   ; frame + 4096 - overhang
+        xor  al, al
+        rep  stosb
+.vff_chunked_done:
+        mov  eax, [.vff_dst]
+        mov  [esp + 28], eax
         popad
         ret
 
@@ -717,6 +762,20 @@ vm_split_at:
         mov [edi + VMA_PROT], ecx
         mov ecx, [esi + VMA_FLAGS]
         mov [edi + VMA_FLAGS], ecx
+        ; A chunked mapping decodes from the plaintext size and the chunk
+        ; table's block, and both belong to the piece that inherits the fault
+        ; logic unchanged.
+        mov ecx, [esi + VMA_CSIZE]
+        mov [edi + VMA_CSIZE], ecx
+        mov ecx, [esi + VMA_CSTART]
+        mov [edi + VMA_CSTART], ecx
+        ; The right piece begins as many file pages later as the left piece
+        ; keeps, which is the old page count less the right piece's own.
+        mov ecx, [esi + VMA_COFF]
+        mov edx, [esi + VMA_PAGES]
+        sub edx, [edi + VMA_PAGES]
+        add ecx, edx
+        mov [edi + VMA_COFF], ecx
 
         mov ecx, ebx
         sub ecx, [esi + VMA_START]
@@ -854,6 +913,9 @@ vm_release_all:
         mov [esi + VMA_BLOCKS], eax
         mov [esi + VMA_FLAGS], eax
         mov [esi + VMA_END], eax
+        mov [esi + VMA_CSIZE], eax
+        mov [esi + VMA_CSTART], eax
+        mov [esi + VMA_COFF], eax
 .vra_next:
         inc dword [.vra_i]
         jmp .vra_loop
@@ -1246,14 +1308,25 @@ sys_mmap_file:
         imul eax, FD_ENTRY_SIZE
 
         ; A chunked file has no plaintext blocks to map: its blocks are a
-        ; table and payloads, so mapping them would hand the caller the
-        ; container. Refuse it here rather than serve garbage - the reader can
-        ; `expand` the file first, or read it whole.
+        ; table and payloads. Its pages are decoded instead, one chunk at a
+        ; time, into a private frame per fault - which means a shared mapping
+        ; cannot be honoured (there is no plaintext block to share), so that
+        ; one combination is refused.
         cmp  dword [fd_table + eax + 28], COMP_NONE
-        je   .mf_close_fail
+        jne  .mf_not_chunked
+        test dword [.mf_flags], VM_MAP_SHARED
+        jnz  .mf_close_fail
+        mov  dword [.mf_chunked], 1
+        jmp  .mf_geometry
+.mf_not_chunked:
+        mov  dword [.mf_chunked], 0
+.mf_geometry:
 
         mov ecx, [.mf_off]
         shr ecx, 12                     ; first block of the mapping
+        cmp  dword [.mf_chunked], 0
+        jne  .mf_chunk_geometry
+
         mov edx, [fd_table + eax + 16]  ; blocks the file occupies
         cmp ecx, edx
         jae .mf_close_fail              ; offset at or past the end of the file
@@ -1266,6 +1339,31 @@ sys_mmap_file:
         add edx, HBFS_DATA_START
         inc edx                         ; 0 means "anonymous"
         mov [.mf_sector], edx
+        jmp  .mf_pages_needed
+
+.mf_chunk_geometry:
+        ; A chunked file is measured in plaintext, not in blocks: the area
+        ; carries the size and the chunk table's block, and its pages are
+        ; decoded on fault.
+        mov  edx, [fd_table + eax + 4]  ; plaintext size
+        mov  [.mf_csize], edx
+        mov  ecx, [.mf_off]             ; ECX arrived here already shifted by 12
+        cmp  ecx, edx
+        jae  .mf_close_fail             ; offset at or past the end of the file
+        mov  edx, [fd_table + eax + 8]  ; chunk table block
+        mov  [.mf_cstart], edx
+        mov  dword [.mf_sector], 0
+        ; The mapping starts at a page of the file, not of the area: keep the
+        ; first page index, and the file's pages are what bounds the area.
+        mov  eax, ecx
+        shr  eax, 12
+        mov  [.mf_coff], eax
+        mov  eax, [.mf_csize]
+        sub  eax, ecx
+        add  eax, 0xFFF
+        shr  eax, 12
+        mov  [.mf_avail], eax
+.mf_pages_needed:
 
         ; Pages needed
         mov eax, [.mf_len]
@@ -1300,7 +1398,17 @@ sys_mmap_file:
         mov ecx, [.mf_sector]
         mov [eax + VMA_SECTOR], ecx
         mov ecx, [.mf_flags]
+        cmp  dword [.mf_chunked], 0
+        je   .mf_flags_ready
+        or   ecx, VM_CHUNKED
+.mf_flags_ready:
         mov [eax + VMA_FLAGS], ecx
+        mov ecx, [.mf_csize]
+        mov [eax + VMA_CSIZE], ecx
+        mov ecx, [.mf_cstart]
+        mov [eax + VMA_CSTART], ecx
+        mov ecx, [.mf_coff]
+        mov [eax + VMA_COFF], ecx
         mov ecx, [.mf_avail]
         cmp ecx, [.mf_pages]
         jbe .mf_clamp_ok
@@ -1334,6 +1442,10 @@ sys_mmap_file:
 .mf_sector: dd 0
 .mf_pages:  dd 0
 .mf_virt:   dd 0
+.mf_chunked: dd 0
+.mf_csize:  dd 0
+.mf_cstart: dd 0
+.mf_coff:   dd 0
 
 ;---------------------------------------
 ; sys_munmap (121) - release part or all of a mapping

@@ -124,7 +124,7 @@ PROT_EXEC           equ 4
 ;   blocks   file blocks present from `sector`; later pages read as zero
 ;            (a file mapping whose last page is short, or which runs past EOF)
 ;   flags    VM_MAP_* bits that are not a protection (currently VM_MAP_SHARED)
-VM_AREA_SIZE        equ 28
+VM_AREA_SIZE        equ 40
 VM_AREAS_PER_TASK   equ 32
 VMA_START           equ 0
 VMA_PAGES           equ 4
@@ -133,6 +133,12 @@ VMA_SECTOR          equ 12
 VMA_END             equ 16
 VMA_BLOCKS          equ 20
 VMA_FLAGS           equ 24
+; Chunked file mappings (a compressed file) keep their own two words: the file's
+; plaintext size and its chunk table's first block. A chunk is decoded straight
+; into the faulting frame, so these pages are private and never shared.
+VMA_CSIZE           equ 28
+VMA_CSTART          equ 32
+VMA_COFF            equ 36
 ; COW_MAX_PAGES (the copy-on-write refcount table size) is derived from
 ; USER_DEMAND_BASE_MAX in kernel/paging.inc; cow_ref in data.inc is that big.
 

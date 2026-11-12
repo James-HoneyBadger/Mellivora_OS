@@ -114,6 +114,17 @@ run "expand restores the plain block count" \
 run "expanding a plain file is refused" \
     "not stored compressed" "expand cw.txt"
 
+# A mapping of a chunked file is decoded a chunk at a time into the faulting
+# frame, so the same program compares a mapping against SYS_FREAD: before the
+# files are compressed, while they are, and after they are expanded again.
+printf '  %-44s ' "a mapping of a plain file matches its bytes"
+if drive "run /mmap_packed_test" --out /tmp/cmp-map1.log --reject "MMAP_PACKED_FAIL" >/dev/null 2>&1; then
+    echo "PASS"
+else
+    echo "FAIL  (output: /tmp/cmp-map1.log)"
+    exit 1
+fi
+
 # A 580 KB program is 37 chunks, and running it is the proof that the loader
 # decodes what a read would: nothing about the image is right if the chunks are
 # decoded wrongly.
@@ -126,6 +137,22 @@ run "a 37-chunk program still loads and runs" \
 run "the program expands back to one plain run" \
     "Saved." "expand /bin/tar"
 
+# The mapping cases use files small enough to keep both a reference copy and
+# the mapping inside one program's window.
+drive "compact /samples/wumpus.c" --then "compact /bin/threadtest" \
+    >/dev/null 2>&1 || fail "compress tests: could not compact the mapping fixtures"
+
+printf '  %-44s ' "a mapping of a compacted file matches its bytes"
+if drive "run /mmap_packed_test" --out /tmp/cmp-map2.log --reject "MMAP_PACKED_FAIL" >/dev/null 2>&1; then
+    echo "PASS"
+else
+    echo "FAIL  (output: /tmp/cmp-map2.log)"
+    exit 1
+fi
+
+drive "expand /samples/wumpus.c" --then "expand /bin/threadtest" \
+    >/dev/null 2>&1 || fail "compress tests: could not expand the mapping fixtures"
+
 drive "del cw.txt" >/dev/null 2>&1 || true
 
 printf '  %-44s ' "the volume is consistent afterwards"
@@ -136,4 +163,4 @@ else
     exit 1
 fi
 
-echo "  Compression: chunk tables, plain reads, the loader, expand, and refusal"
+echo "  Compression: chunk tables, plain reads, mappings, the loader, expand, refusal"

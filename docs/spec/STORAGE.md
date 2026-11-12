@@ -205,9 +205,14 @@ half of each. A chunked file refuses in-place writes (a descriptor read that
 writes would scribble into a payload), `truncate` (there is no plaintext tail to
 drop) and `defrag` (its table names absolute blocks, so moving it would leave
 every entry pointing where the payload used to be); `write`, `copy` and
-`SYS_FWRITE` replace the entry whole and are unaffected, and `SYS_MMAP_FILE`
-refuses a chunked file rather than map its container into user space - an
-`expand` is the way to a mapping. The loader decodes
+`SYS_FWRITE` replace the entry whole and are unaffected. A mapping is decoded a
+chunk at a time into the faulting frame - the area carries the plaintext size,
+the chunk table's block and the first file page it covers, so a mapping that
+starts mid-file decodes the chunk that page belongs to - and the bytes between
+the end of the file and the end of its last page are zeroed, because the decode
+leaves the rest of that page as it found it. Such a mapping is private by
+construction: there is no plaintext block to share, so `MAP_SHARED` of a
+chunked file is refused while `MAP_PRIVATE` works. The loader decodes
 through the same seam, so a compressed executable runs. The offline checker
 decodes every chunk with its own decoder, written from this section rather than
 from the kernel, and requires each plaintext checksum to match - the kernel's
@@ -228,11 +233,14 @@ stream that refers before its own start and must be rejected. Each case that
 must shrink has a size it must come in under, so a compressor that emits one
 literal per byte cannot pass by round-tripping with itself.
 
-Not built: decompression in the *page* cache (a section maps plaintext through
-the block seam rather than a decompressed page), and a `compressed` attribute in
-`dir`'s attribute word - the entry flag is the truth and nothing derives a hint
-from it yet. A stream takes the container like any other content, because a
-stream is an ordinary entry with its own size and blocks.
+Not built: a shared mapping of a chunked file (refused, not served: there is no
+plaintext page to share), a `compressed` attribute in `dir`'s attribute word -
+the entry flag is the truth and nothing derives a hint from it yet - and a lock
+around the codec's scratch: it is one set of buffers, serialised today by the
+block cache lock around the reads it does and by nothing else, so two CPUs
+faulting on chunked mappings at once is a race this build does not exclude. A
+stream takes the container like any other content, because a stream is an
+ordinary entry with its own size and blocks.
 
 ## 8. Encryption
 
@@ -393,7 +401,7 @@ M3 does not close until:
 | 64-bit block numbers, 2^62 volume | 32-bit, 2 GB |
 | B+tree directories, 65 535 entries | Linear directory blocks, 455 entries per directory |
 | Alternate data streams | **Yes**, as directory entries of type 6 named `FILE:STREAM` beside the file: the path resolver finds them, quotas, ACLs, xattrs and repair treat them as entries, and `stream list/read/write/delete` is the shell surface. Listings hide them; delete and rename move them with the file. The target's per-stream run lists inside one record are not implemented |
-| ACLs, streams, compression, encryption, snapshots | **ACLs: yes**, as ACEs in the xattr block (`acl:u<id>`, `acl:g<id>`, `acl:m`, `acl:o`), evaluated by `acl_perm` before the mode word and settable from the shell with `acl set`; conformance in `acl_test`. Inheritance is a trailing `i` on an ACE's value: a directory written that way passes the ACE to everything created in it, clearing the flag for files and keeping it for subdirectories so the grant walks a tree; evaluation reads only the permission digit, so an inheritable ACE is effective where it is written too. No group-class unions yet. **Volume encryption: yes**, as AES-256-XTS over the 4 KiB units above the journal, with the key checked against the superblock before the mount and `crypt format`/`crypt unlock` as the only writers of the stamp; the store is kernel memory (`key add`), so the volume is refused after a reboot until the secret is put back, and there is no per-file layer yet. **Compression: yes**, as 16 KiB chunks named by a 16-byte table entry each (block, stored length, plaintext CRC-32C, LZ/whole flag) in the file's own run, written and removed by `compact`/`expand` in a journal transaction; reads decode through one seam, so `cat`, `diff`, a descriptor read and the program loader all see plaintext, and `make check-compress` runs a 37-chunk program while it is compressed. Gaps: no decompression in the page cache (a mapping of a chunked file is refused, not served), and in-place writes, truncate, defrag and mmap refuse a chunked file rather than teach each of them about chunks. Snapshots: none |
+| ACLs, streams, compression, encryption, snapshots | **ACLs: yes**, as ACEs in the xattr block (`acl:u<id>`, `acl:g<id>`, `acl:m`, `acl:o`), evaluated by `acl_perm` before the mode word and settable from the shell with `acl set`; conformance in `acl_test`. Inheritance is a trailing `i` on an ACE's value: a directory written that way passes the ACE to everything created in it, clearing the flag for files and keeping it for subdirectories so the grant walks a tree; evaluation reads only the permission digit, so an inheritable ACE is effective where it is written too. No group-class unions yet. **Volume encryption: yes**, as AES-256-XTS over the 4 KiB units above the journal, with the key checked against the superblock before the mount and `crypt format`/`crypt unlock` as the only writers of the stamp; the store is kernel memory (`key add`), so the volume is refused after a reboot until the secret is put back, and there is no per-file layer yet. **Compression: yes**, as 16 KiB chunks named by a 16-byte table entry each (block, stored length, plaintext CRC-32C, LZ/whole flag) in the file's own run, written and removed by `compact`/`expand` in a journal transaction; reads decode through one seam, so `cat`, `diff`, a descriptor read and the program loader all see plaintext, and `make check-compress` runs a 37-chunk program while it is compressed. Gaps: in-place writes, truncate and defrag refuse a chunked file rather than teach each of them about chunks; a mapping is decoded on fault but is private, so `MAP_SHARED` of one is refused; and the codec's scratch is not locked. Snapshots: none |
 | Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it |
 | Journal with redo records | Undo journal: before-images replayed backwards |
 | One unified cache | A block cache and a page cache that agree by construction |

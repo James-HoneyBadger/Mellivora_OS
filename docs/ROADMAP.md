@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 134 shell built-ins, 295 NASM programs and 15 C program
+- 210 syscalls, 134 shell built-ins, 296 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -497,8 +497,10 @@ material.
   whole-file readers, the program loader and a descriptor's block read all go
   through one seam - and `compact`/`expand` move a file between the two
   layouts inside a journal transaction. A chunked file refuses in-place writes,
-  a truncate, a defrag and a mapping, each because its blocks are chunks named
-  by a table and none of those operations knows that. `make check-compress`
+  a truncate and a defrag, each because its blocks are chunks named by a table
+  and neither operation knows that; a mapping is decoded a chunk at a time into
+  the faulting frame instead (private by construction, so `MAP_SHARED` of one is
+  refused), including a mapping that starts mid-file. `make check-compress`
   compacts a text file and compares it byte for byte in a later boot, runs a 580 KB
   program (37 chunks) while it is compressed, expands it back, and requires
   `tools/fsck_hbfs.py` to decode every chunk with its own decoder and agree on
@@ -508,7 +510,7 @@ material.
   layout can be crash-tested like any program. Snapshots remain the other half
   of the wave's storage work, and a compressed file cannot yet be written in
   place or mapped: a `write` replaces it whole, which is what every whole-file
-  writer does, and an `expand` is the way to a mapping.
+  writer does.
 - **Volume name and safe ejection (landed).** A volume carries a label - 32
   NUL-padded bytes at offset 80 of the superblock, which both formats leave
   free - so it is a property of the disk and not of the machine: `format` and
@@ -604,7 +606,7 @@ for" true.
 
 - **PE/COFF loader** and shared libraries with a stable ABI: relocations, export
   and import tables, per-process module lists, load-time and run-time binding.
-  The existing flat and ELF32 loaders stay, so all 295 NASM programs keep working.
+  The existing flat and ELF32 loaders stay, so all 296 NASM programs keep working.
 - **Unicode end to end**: UTF-16 at the ABI boundary, UTF-8 internally, locale and
   time-zone data, collation, and a font stack that draws every code point the
   system decodes rather than the 5×7 VBE face. A *scalable* (outline) font is
