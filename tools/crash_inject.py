@@ -85,23 +85,80 @@ class Serial:
                     return True
             except socket.timeout:
                 continue
+            except OSError:
+                # QEMU exited and took the socket with it. That is a failed
+                # boot, not a durability failure: letting the exception escape
+                # here used to abort the whole run and be reported as "a
+                # power-cut point left the volume inconsistent".
+                return False
         return False
 
     def send_line(self, text: str) -> None:
         self.sock.sendall((text + "\r\n").encode())
 
 
-def boot(qemu: str, image: str, tmp: str) -> tuple[subprocess.Popen, str]:
-    ser_path = os.path.join(tmp, "serial.sock")
-    mon_path = os.path.join(tmp, "mon.sock")
-    proc = subprocess.Popen(
-        [qemu] + machine_args() +
-        ["-drive", f"file={image},format=raw,if=ide,cache=writethrough",
-         "-boot", "c", "-display", "none", "-no-reboot",
-         "-serial", f"unix:{ser_path},server=on,wait=on",
-         "-monitor", f"unix:{mon_path},server,nowait"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return proc, ser_path
+def boot(qemu: str, image: str, tmp: str,
+         tag: str = "boot") -> tuple[subprocess.Popen, str, str]:
+    ser_path = os.path.join(tmp, f"serial-{tag}.sock")
+    mon_path = os.path.join(tmp, f"monitor-{tag}.sock")
+    errlog = os.path.join(tmp, f"qemu-{tag}.log")
+    with open(errlog, "wb") as err:
+        proc = subprocess.Popen(
+            [qemu] + machine_args() +
+            ["-drive", f"file={image},format=raw,if=ide,cache=writethrough",
+             "-boot", "c", "-display", "none", "-no-reboot",
+             "-serial", f"unix:{ser_path},server=on,wait=on",
+             "-monitor", f"unix:{mon_path},server,nowait"],
+            stdout=subprocess.DEVNULL, stderr=err)
+    return proc, ser_path, errlog
+
+
+def kill(proc) -> None:
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def boot_to_shell(qemu: str, image: str, tmp: str,
+                  tag: str) -> tuple[subprocess.Popen | None, Serial | None, list[str]]:
+    """Boot until the shell marker appears, retrying once.
+
+    QEMU itself occasionally dies at start-up — it did so twice in seventy
+    boots on this machine. That is a flake, not a filesystem verdict, and one
+    retry separates the two: a volume that really cannot boot fails the retry
+    too, and fsck still gets to say its piece.
+    """
+    notes: list[str] = []
+    errlog = ""
+    for attempt in range(2):
+        proc, ser_path, errlog = boot(qemu, image, tmp, f"{tag}{attempt}")
+        try:
+            ser = Serial(ser_path)
+        except SystemExit as exc:
+            # QEMU died before it even opened the console socket.
+            kill(proc)
+            notes.append(str(exc))
+            continue
+        if ser.wait_for(BOOT_MARKER, 30.0, proc):
+            if attempt:
+                notes.append(f"boot ({tag}) needed a retry")
+            return proc, ser, notes
+        kill(proc)
+        notes.append(f"boot ({tag}) attempt {attempt + 1} never reached the shell")
+    notes.extend(qemu_tail(errlog))
+    return None, None, notes
+
+
+def qemu_tail(errlog: str) -> list[str]:
+    """Whatever QEMU said before it died — usually the reason a boot failed."""
+    try:
+        with open(errlog, "rb") as f:
+            text = f.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return []
+    return ["qemu: " + line for line in text.splitlines()[-6:]]
 
 
 def fsck(image: str) -> tuple[bool, str]:
@@ -113,30 +170,39 @@ def fsck(image: str) -> tuple[bool, str]:
 
 
 def crash_once(qemu: str, image: str, command: str, kill_ms: float,
-               verbose: bool) -> tuple[bool, list[str]]:
+               verbose: bool, keep: bool = False) -> tuple[bool, list[str]]:
     """Boot a copy of *image*, run *command*, kill at *kill_ms*, verify."""
-    notes: list[str] = []
     tmpdir = tempfile.mkdtemp(prefix="mellivora-crash-")
+    try:
+        ok, notes = _crash_once(qemu, image, command, kill_ms, verbose, tmpdir)
+    finally:
+        if keep:
+            print(f"  kept {tmpdir}")
+        else:
+            # A 2 GB copy per iteration is not something to leak on every run.
+            shutil.rmtree(tmpdir, ignore_errors=True)
+    return ok, notes
+
+
+def _crash_once(qemu: str, image: str, command: str, kill_ms: float,
+                verbose: bool, tmpdir: str) -> tuple[bool, list[str]]:
+    notes: list[str] = []
     copy = os.path.join(tmpdir, "crash.img")
     # A raw copy: QEMU opens it writethrough, so a completed ATA write is in the
     # host page cache and survives SIGKILL. Sparse-aware to keep it cheap.
     subprocess.run(["cp", "--sparse=always", image, copy], check=True)
 
-    proc, ser_path = boot(qemu, copy, tmpdir)
+    proc, ser, boot_notes = boot_to_shell(qemu, copy, tmpdir, "run")
+    notes.extend(boot_notes)
+    if proc is None:
+        notes.append("boot marker never appeared")
+        return False, notes
     try:
-        ser = Serial(ser_path)
-        if not ser.wait_for(BOOT_MARKER, 30.0, proc):
-            notes.append("boot marker never appeared")
-            return False, notes
         time.sleep(0.2)
         ser.send_line(command)
         time.sleep(kill_ms / 1000.0)
     finally:
-        try:
-            proc.kill()
-            proc.wait(timeout=5)
-        except Exception:
-            pass
+        kill(proc)
 
     # The filesystem on the disk is allowed to be inconsistent at this point,
     # and with an *undo* journal it normally is: the transaction's pre-images
@@ -156,19 +222,20 @@ def crash_once(qemu: str, image: str, command: str, kill_ms: float,
 
     # Boot again so the kernel replays the journal, then re-check with the
     # VM shut down again.
-    proc, ser_path = boot(qemu, copy, tmpdir)
+    proc, ser, boot_notes = boot_to_shell(qemu, copy, tmpdir, "replay")
+    notes.extend(boot_notes)
+    if proc is None:
+        # Distinguish "the guest died" from "the replay damaged the volume":
+        # the fsck verdict is the part that matters.
+        notes.append("second boot never reached the shell")
+        ok, report = fsck(copy)
+        notes.append("after the failed replay: "
+                     + (report.splitlines()[-1].strip() if report else "no output"))
+        return False, notes
     try:
-        ser = Serial(ser_path)
-        if not ser.wait_for(BOOT_MARKER, 30.0, proc):
-            notes.append("second boot never reached the shell")
-            return False, notes
         time.sleep(0.5)
     finally:
-        try:
-            proc.kill()
-            proc.wait(timeout=5)
-        except Exception:
-            pass
+        kill(proc)
 
     # After the replay the volume must be consistent: this is the assertion.
     ok, report = fsck(copy)
@@ -194,6 +261,7 @@ def main() -> int:
     max_ms = float(_opt(args, "--max-ms", 2500))
     seed = _opt(args, "--seed")
     verbose = "--quiet" not in args
+    keep = "--keep" in args
 
     if not os.path.exists(image):
         raise SystemExit(f"crash_inject: no such image: {image}")
@@ -203,7 +271,7 @@ def main() -> int:
     failures = 0
     for i in range(iterations):
         kill_ms = rng.uniform(min_ms, max_ms)
-        ok, notes = crash_once(qemu, image, command, kill_ms, verbose)
+        ok, notes = crash_once(qemu, image, command, kill_ms, verbose, keep)
         status = "PASS" if ok else "FAIL"
         print(f"  crash {i + 1}/{iterations} at {kill_ms:7.1f} ms  {status}")
         if notes:
@@ -213,8 +281,8 @@ def main() -> int:
             failures += 1
 
     if failures:
-        print(f"  crash injection: {failures}/{iterations} runs left the "
-              "filesystem inconsistent")
+        print(f"  crash injection: {failures}/{iterations} runs did not "
+              "recover cleanly")
         return 1
     print(f"  crash injection: {iterations}/{iterations} runs recovered cleanly")
     return 0

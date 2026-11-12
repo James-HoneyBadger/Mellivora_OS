@@ -357,7 +357,7 @@ M3 does not close until:
 | Mount points | One volume, mounted from `vol_base_lba`; labels and multiple mounts are the remaining volume-model work |
 | Online repair | `repair` (report) and `repair fix` (bitmap + free count) from the shell, at parity with the offline checker's classes: leaks, freed-but-claimed blocks, shared blocks, untrusted entries. `make check-repair` proves it on a corrupted copy. `repair journal` discards a log that cannot be replayed |
 | Removable safe ejection | None |
-| Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write. A failed fsck *before* replay is accepted only when the volume is marked for replay - damage with a clean journal is the failure that no replay can repair - and fsck must pass after the replay, which is the assertion. `CRASH_ITERS=10000 make crash-soak` is the exit test, not yet run |
+| Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write. A failed fsck *before* replay is accepted only when the volume is marked for replay - damage with a clean journal is the failure that no replay can repair - and fsck must pass after the replay, which is the assertion. A harness boot that never reaches the shell is retried once and reported as a boot failure, not as a durability failure: QEMU dies at start-up often enough that conflating the two once made a clean 200-iteration run look like damage. `CRASH_ITERS=10000 make crash-soak` is the exit test; 200 iterations of it have run clean, the other 9 800 have not |
 
 The v4 guarantees — verified metadata, a writable journalled volume, extents, a
 refusal instead of a format — are real and tested, and this document keeps every

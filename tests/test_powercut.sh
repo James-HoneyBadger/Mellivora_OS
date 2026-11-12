@@ -88,6 +88,6 @@ done
 if [ "$status" -eq 0 ]; then
     printf '  PASS  %d power-cut iterations recovered, no metadata left half-written\n' "$total"
 else
-    printf '  FAIL  at least one power-cut point left the volume inconsistent\n' >&2
+    printf '  FAIL  at least one power-cut point did not recover cleanly\n' >&2
 fi
 exit "$status"

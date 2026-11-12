@@ -427,7 +427,15 @@ since landed, as have alternate streams; compression and snapshots remain v5 mat
   churn - killing QEMU at random points with no clean shutdown, then proving
   with fsck that the volume recovers to entirely-old or entirely-new metadata
   and never a mixture. `make check-durability` runs it on every build with a
-  handful of crash points; `CRASH_ITERS=10000 make crash-soak` is the exit test.
+  handful of crash points; `CRASH_ITERS=10000 make crash-soak` is the exit test,
+  and 200 iterations of that command have run clean. The harness itself was
+  repaired to earn that number: a boot that never reached the shell used to
+  escape as a socket exception and be reported as "a power-cut point left the
+  volume inconsistent", which is how a clean run first looked like a failure.
+  It now retries the boot once, prints what QEMU said before it died, runs fsck
+  on the image anyway, and keeps the 2 GB copy per iteration only with
+  `--keep` - the run that finally passed also stopped leaving 200 of them in
+  `/var/tmp`.
 - **The volume manager (landed).** The partition table is read - MBR, or GPT
   behind a protective MBR - and the filesystem is probed for rather than
   assumed, so a disk with no filesystem says so and `volumes` can name what the
