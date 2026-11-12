@@ -659,7 +659,13 @@ class Fsck:
             if xcount or xlba:
                 if xcount > 32:
                     self.error(f"{display}: xattr count {xcount} > 32")
-                if xlba < self.data_lba or xlba % SECTORS_PER_BLOCK:
+                # A block's LBA is data_lba + block*8, and data_lba is not a
+                # multiple of eight: testing the absolute LBA against the block
+                # size rejects every valid xattr block on a volume whose data
+                # area starts off a block boundary, which is every volume this
+                # tree formats. It went unnoticed until an entry with an xattr
+                # survived to the end of a run.
+                if xlba < self.data_lba or (xlba - self.data_lba) % SECTORS_PER_BLOCK:
                     self.error(f"{display}: xattr LBA {xlba} is not a data block")
                 else:
                     block = (xlba - self.data_lba) // SECTORS_PER_BLOCK

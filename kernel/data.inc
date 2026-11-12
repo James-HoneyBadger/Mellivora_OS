@@ -922,6 +922,12 @@ filename_buf2:  resb 256
 list_arg_buf:   resb 256        ; `ls <path>` target directory
 acl_key_buf:    resb 16         ; "acl:u1000" and friends
 acl_val_buf:    resb 64         ; ACE value read/write buffer
+; Inheritance: the directory's xattr block, captured before the child's entry
+; is built (finding the directory's own entry reads its parent's block into
+; hbfs_dir_buf, so the copy has to be taken first).
+acl_parent_buf:   resb HBFS_BLOCK_SIZE
+acl_parent_count: resd 1
+acl_child_val:    resb 8
 acl_spec_buf:   resb 16         ; `acl set` ACE spec
 wildcard_src_buf: resb 256
 wildcard_dst_buf: resb 256

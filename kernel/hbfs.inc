@@ -1939,6 +1939,11 @@ hbfs_create_file:
         call hbfs_cwd_access_current
         test eax, eax
         jnz .hcf_denied
+        ; What the directory will pass down has to be taken now: finding the
+        ; directory's own entry reads its parent's block into hbfs_dir_buf,
+        ; which is the buffer the new entry is about to be built in.
+        call acl_capture_parent
+
         ; One transaction spans the block allocation (bitmap + superblock) and
         ; the directory entry, so a crash can never leave allocated-but-orphan
         ; blocks or an entry pointing at unallocated space.
@@ -2001,6 +2006,7 @@ hbfs_create_file:
         mov al, [.save_type]
         mov byte [edi + 253], al
         mov word [edi + 254], 0         ; Flags = 0
+        mov [.save_entry], edi
 
         ; Calculate blocks needed
         mov ecx, [.save_size]
@@ -2080,6 +2086,16 @@ hbfs_create_file:
         jc .write_fail
 .hcf_write_done:
 
+        ; The file exists; now give it what the directory inherits down. A
+        ; failure here aborts the transaction, so a file is never left with
+        ; half of its directory's ACEs.
+        mov  ebx, [.save_entry]
+        xor  cl, cl                     ; a file does not pass the flag on
+        call acl_apply_inherited
+        jc   .write_fail
+        call hbfs_flush_dir_entry
+        jc   .write_fail
+
         call hbfs_journal_commit
         popad
         clc
@@ -2108,6 +2124,7 @@ hbfs_create_file:
 
 ; Local storage for hbfs_create_file
 .save_size:   dd 0
+.save_entry:  dd 0
 .save_data:   dd 0
 .save_name:   dd 0
 .save_blocks: dd 0
@@ -2491,12 +2508,18 @@ hbfs_delete_file_entry:
         call hbfs_free_extent
         jc  .hdfe_undone
 .skip_free:
-        ; The xattr block belongs to this file too. Freeing the data and
-        ; leaving it allocated leaks a block per deleted file, and fsck reports
-        ; it as claimed by nobody.
+        ; The xattr block belongs to this file too. The entry stores its *LBA*,
+        ; because that is what a read of it needs, and hbfs_free_blocks takes a
+        ; data block number: handing it the LBA freed whichever block happened
+        ; to carry that number - a block this file never owned - and left the
+        ; xattr block allocated, so every delete of a file with an ACL or a
+        ; stream leaked one block and could have taken another file's with it.
         mov eax, [edi + HBFS_DE_XATTR_LBA]
         test eax, eax
         jz .hdfe_no_xattr
+        sub eax, HBFS_DATA_START
+        jb  .hdfe_no_xattr             ; below the data area: not ours to free
+        shr eax, 3                     ; LBA -> data block
         mov ecx, 1
         call hbfs_free_blocks
         jc  .hdfe_undone
@@ -2899,6 +2922,7 @@ hbfs_mkdir:        pushad
         call hbfs_cwd_access_current
         test eax, eax
         jnz .hm_denied
+        call acl_capture_parent         ; before the child's buffer is loaded
         call hbfs_journal_begin
         mov [.hm_name], esi
 
@@ -2981,6 +3005,13 @@ hbfs_mkdir:        pushad
         ; permission checks treat mode 0 as "root only").
         mov word [edi + DIRENT_PERMS], HBFS_MODE_DIR_DEF
         mov word [edi + DIRENT_OWNER], 0
+        ; A directory keeps the inherit flag it is given, so the ACEs walk down
+        ; the tree rather than stopping one level below the directory that set
+        ; them.
+        mov  ebx, edi
+        mov  cl, 1
+        call acl_apply_inherited
+        jc   .hm_fail
         call hbfs_save_root_dir
         call hbfs_journal_commit
 
@@ -3968,12 +3999,27 @@ require_root:
 ; invalidated afterwards and the next load re-reads the cwd. Callers reach here
 ; before they load the directory, when the buffer holds nothing unsaved.
 ;-----------------------------------------------------------------------
-hbfs_cwd_access_current:
-        pushad
+;-----------------------------------------------------------------------
+; hbfs_cwd_entry - find the current directory's own directory entry
+;   Out: CF = 0 and EDI = the entry, inside hbfs_dir_buf, which now holds the
+;        *parent's* block; CF = 1 when there is none: the root has no entry
+;        above it, and a parent that cannot be read has none either
+;
+; Three things need this: the write check on the directory itself, a new
+; child's inherited ACEs, and anything else that asks what the directory
+; says about itself rather than about its contents. Reading the parent
+; destroys the current directory's buffer, so callers that hold entries in it
+; must have taken what they need first.
+;-----------------------------------------------------------------------
+hbfs_cwd_entry:
+        push eax
+        push ebx
+        push ecx
+        push edx
         cmp dword [current_dir_lba], 0xFFFFFFFF
-        je  .hcc_allowed                ; a virtual mount: not HBFS's to judge
+        je  .hce_none
         cmp dword [dir_depth], 0
-        je  .hcc_root
+        je  .hce_none
 
         mov eax, [dir_depth]
         dec eax
@@ -3981,40 +4027,68 @@ hbfs_cwd_access_current:
         mov ebx, [dir_stack + eax]          ; parent LBA
         mov ecx, [dir_stack + eax + 4]      ; parent sector count
         test ebx, ebx
-        jz .hcc_deny
-        mov [.hcc_sects], ecx
+        jz .hce_none
+        mov [.hce_sects], ecx
 
         mov dword [dir_cache_lba], 0xFFFFFFFF
         mov edi, hbfs_dir_buf
         mov eax, ebx
         call blk_cache_read
-        jc .hcc_deny                        ; cannot read it: refuse
+        jc .hce_none
 
-        mov eax, [.hcc_sects]
+        mov eax, [.hce_sects]
         shl eax, 9
         xor edx, edx
         mov ecx, HBFS_DIR_ENTRY_SIZE
         div ecx
         mov ecx, eax                        ; entries in the parent
         mov edx, hbfs_dir_buf
-.hcc_scan:
+.hce_scan:
         test ecx, ecx
-        jz .hcc_deny                        ; not found: refuse
+        jz .hce_none
         cmp byte [edx + DIRENT_TYPE], FTYPE_FREE
-        je .hcc_next
+        je .hce_next
         mov eax, [edx + DIRENT_START_BLOCK]
         shl eax, 3
         add eax, HBFS_DATA_START            ; first sector of this entry
         cmp eax, [current_dir_lba]
-        je .hcc_found
-.hcc_next:
+        je .hce_found
+.hce_next:
         add edx, HBFS_DIR_ENTRY_SIZE
         dec ecx
-        jmp .hcc_scan
-.hcc_found:
-        mov edi, edx
+        jmp .hce_scan
+.hce_found:
+        ; The pointer goes out in EDI, and EDI is not one of the saved
+        ; registers here: writing it into the frame by offset wrote EAX's slot
+        ; and left the caller checking whatever EDI it happened to arrive with.
+        mov [hce_ptr], edx
+        pop edx
+        pop ecx
+        pop ebx
+        pop eax
+        mov edi, [hce_ptr]
+        clc
+        ret
+.hce_none:
+        pop edx
+        pop ecx
+        pop ebx
+        pop eax
+        stc
+        ret
+.hce_sects: dd 0
+hce_ptr:    dd 0
+
+hbfs_cwd_access_current:
+        pushad
+        cmp dword [current_dir_lba], 0xFFFFFFFF
+        je  .hcc_allowed                ; a virtual mount: not HBFS's to judge
+        call hbfs_cwd_entry
+        jc  .hcc_no_entry
         jmp .hcc_check
-.hcc_root:
+.hcc_no_entry:
+        cmp dword [dir_depth], 0
+        jne .hcc_deny                   ; not the root, and unreadable: refuse
         mov edi, hbfs_root_dir_mode_entry
 .hcc_check:
         mov ebx, HBFS_ACC_WRITE
@@ -4029,7 +4103,6 @@ hbfs_cwd_access_current:
         mov dword [esp + 28], 0
         popad
         ret
-.hcc_sects: dd 0
 
 ; Stand-in dirent for "/", in the field positions hbfs_check_access reads.
 align 4

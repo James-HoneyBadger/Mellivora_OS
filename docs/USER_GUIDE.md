@@ -768,10 +768,16 @@ D=LightMagenta, E=Yellow, F=White
 
 - **Paging without isolation:** the kernel maps all of RAM 1:1, so every task
   still shares one flat address space for kernel memory.
-- **Permissions are enforced, but not everywhere yet:** `open`, `SYS_FWRITE` over
-  an existing file and `unlink` check the mode against your effective uid/gid;
-  creating a file in a directory whose write bit is clear is not checked yet,
-  and neither is `truncate` or `rename`.
+- **Permissions are enforced on the paths that are gated:** `open`, `SYS_FWRITE`
+  over an existing file, `unlink`, `truncate`, `rename`, and creating a name in
+  a directory all check the mode against your effective uid/gid, and a file
+  with an ACL is decided by its ACEs instead. `dirperm_test` proves the
+  directory case from the one angle the check cannot be confused with: a user
+  who owns the directory outright and still may not write to it.
+- **ACLs are inherited by flag, not by default:** an ACE written as `7i`
+  (`acl set DIR u5 7i`) is passed to everything created in that directory, with
+  the flag cleared for files and kept for subdirectories. An ACE without the
+  flag stays where it was written.
 - **`chmod` is the owner's to make, `chown` is root's.**
 - **Case-sensitive filenames:** `README.txt` and `readme.txt` are different files.
 - **512 MB RAM limit:** The physical memory manager stops handing out frames at

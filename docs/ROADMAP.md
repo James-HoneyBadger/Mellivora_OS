@@ -467,7 +467,12 @@ material.
   conformance suite: a named user writes a 0600 file the mode word makes
   read-only for them, the mask narrows that grant without touching the ACE, the
   owner is held to their own ACE, a stranger falls to `acl:o`, and root passes.
-  Inheritance and group-class unions are the remaining ACL work.
+  **Inheritance landed**: a trailing `i` on an ACE's value makes it inheritable,
+  a directory that carries one passes it to everything created inside it -
+  cleared for files, kept for subdirectories, so the grant walks a tree - and
+  evaluation reads only the permission digit, which makes an inheritable ACE
+  effective where it is written as well as below it. Group-class unions are the
+  remaining ACL work.
 - **Alternate data streams (landed).** A stream is a second content of a
   file, reached as `FILE:STREAM`, with its own size, blocks, permissions and
   xattrs; it is stored as a directory entry of type 6 named `FILE:STREAM`, so

@@ -9,18 +9,27 @@
 ; An ACL lives in the file's existing xattr block, one entry per access control
 ; entry (ACE):
 ;
-;   key          value    meaning
-;   acl:u<uid>   '0'-'7'  named user
-;   acl:g<gid>   '0'-'7'  named group
-;   acl:m        '0'-'7'  mask over named users and groups
-;   acl:o        '0'-'7'  everyone else
+;   key          value     meaning
+;   acl:u<uid>   '0'-'7'i  named user
+;   acl:g<gid>   '0'-'7'i  named group
+;   acl:m        '0'-'7'i  mask over named users and groups
+;   acl:o        '0'-'7'i  everyone else
+;
+; The second character is optional: 'i' marks the ACE inheritable, which means
+; "and everything created below". Evaluation reads only the first character, so
+; an inheritable ACE is effective where it is written as well as below it -
+; which is what makes `i` mean "this and below" rather than "only below".
+; When a directory with inheritable ACEs creates a child, each of those ACEs is
+; copied to it: a file gets the flag cleared (it has no children), a directory
+; keeps it, so the grant walks down a tree. The root has no entry above it and
+; therefore no ACL to pass down; inheritance starts below it.
 ;
 ; `acl:o` is what makes an ACL "present": a file without it has none and is
 ; read through the mode word exactly as before. One ACE is one xattr entry, so a
 ; file carries HBFS_XATTR_PER_BLOCK - 1 named ACEs at most, which is the same
 ; order of magnitude as the ACLs files here have.
 ;
-; Evaluation order (POSIX's, without inheritance or group-class unions):
+; Evaluation order (POSIX's, without group-class unions):
 ;   1. root is granted everything before any of this is consulted;
 ;   2. the owner, through `acl:u<owner>` when present, else the owner triplet;
 ;   3. a named user ACE for the caller, narrowed by `acl:m`;
@@ -287,6 +296,102 @@ acl_show_entry:
 .ase_entry: dd 0
 .ase_count: dd 0
 
+
+;-----------------------------------------------------------------------
+; acl_capture_parent - take what the current directory will pass down
+;   Out: CF = 0 when acl_parent_buf holds the directory's xattr block and
+;        acl_parent_count its entries; CF = 1 when there is nothing to inherit
+;
+; Called before the child is created, because finding the directory's own
+; entry means reading its parent's block into hbfs_dir_buf - the buffer the
+; child is about to be built in. The root has no entry above it and therefore
+; no ACL to pass down; that is the documented edge of inheritance here.
+;-----------------------------------------------------------------------
+acl_capture_parent:
+        pushad
+        mov  dword [acl_parent_count], 0
+        call hbfs_cwd_entry
+        jc   .acp_none
+        movzx eax, word [edi + HBFS_DE_XATTR_COUNT]
+        test eax, eax
+        jz   .acp_none
+        mov  [acl_parent_count], eax
+        mov  eax, [edi + HBFS_DE_XATTR_LBA]
+        test eax, eax
+        jz   .acp_none
+        mov  ecx, HBFS_SECTORS_PER_BLK
+        mov  edi, acl_parent_buf
+        call blk_cache_read
+        jc   .acp_none
+        popad
+        clc
+        ret
+.acp_none:
+        mov  dword [acl_parent_count], 0
+        popad
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; acl_apply_inherited - give a new child the ACEs its directory passes down
+;   In : EBX = child entry ptr (in hbfs_dir_buf)
+;        CL  = 1 when the child is a directory, 0 for a file
+;   Out: CF = 1 when one of the writes failed
+;
+; An ACE whose value carries the 'i' flag is copied to the child. A file gets
+; it with the flag cleared - the file has no children to pass it to - and a
+; directory keeps it, so inheritance walks down a tree the way it was told to.
+; The ACE is effective on the object that carries it either way, which is what
+; makes `i` mean "and everything below" rather than "only below".
+;-----------------------------------------------------------------------
+acl_apply_inherited:
+        pushad
+        mov  [.aai_child], ebx
+        mov  [.aai_dir], cl
+        mov  esi, acl_parent_buf
+        xor  ebp, ebp
+.aai_loop:
+        cmp  ebp, [acl_parent_count]
+        jae  .aai_ok
+        cmp  byte [esi], 0
+        je   .aai_next
+        cmp  dword [esi], 'acl:'            ; "acl:" little-endian
+        jne  .aai_next
+        movzx eax, byte [esi + HBFS_XATTR_KEY_LEN + 1]
+        cmp  al, 'i'
+        jne  .aai_next
+        mov  al, [esi + HBFS_XATTR_KEY_LEN]
+        mov  [acl_child_val], al
+        mov  byte [acl_child_val + 1], 0
+        cmp  byte [.aai_dir], 0
+        je   .aai_write
+        mov  byte [acl_child_val + 1], 'i'
+.aai_write:
+        push esi
+        push ebp
+        mov  ecx, esi
+        mov  edx, acl_child_val
+        mov  ebx, [.aai_child]
+        call hbfs_xattr_set
+        pop  ebp
+        pop  esi
+        test eax, eax
+        js   .aai_fail
+.aai_next:
+        add  esi, HBFS_XATTR_ENTRY_SIZE
+        inc  ebp
+        jmp  .aai_loop
+.aai_ok:
+        popad
+        clc
+        ret
+.aai_fail:
+        popad
+        stc
+        ret
+.aai_child: dd 0
+.aai_dir:   db 0
+
 ;-----------------------------------------------------------------------
 ; acl_command - the `acl` shell command
 ;   acl show <name>              list a file's ACEs
@@ -353,6 +458,16 @@ acl_command:
         sub eax, '0'
         cmp eax, 7
         ja .ac_bad_perm
+        ; A second character is the inherit flag: `acl set DIR u5 7i` hands the
+        ; ACE down to everything created in DIR, and to DIR itself.
+        mov al, [acl_val_buf + 1]
+        test al, al
+        jz .ac_perm_ok
+        cmp al, 'i'
+        jne .ac_bad_perm
+        cmp byte [acl_val_buf + 2], 0
+        jne .ac_bad_perm
+.ac_perm_ok:
 
         ; classify the spec: u<id>, g<id>, mask, other
         mov esi, acl_spec_buf

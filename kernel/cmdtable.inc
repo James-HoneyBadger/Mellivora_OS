@@ -471,8 +471,11 @@ det_bootlog:
         db "  a machine that fails to enumerate can be asked why afterwards.", 0x0A, 0
 sum_acl: db "Named-user access control lists on a file", 0
 det_acl:
-        db "acl show FILE | acl set FILE u<id>|g<id>|mask|other <0-7>", 0x0A
-        db "  An ACL, where a file has one, decides instead of the mode word.", 0x0A, 0
+        db "acl show FILE | acl set FILE u<id>|g<id>|mask|other <0-7>[i]", 0x0A
+        db "  An ACL, where a file has one, decides instead of the mode word.", 0x0A
+        db "  A trailing i makes the entry inheritable: everything created in", 0x0A
+        db "  that directory gets the ACE, and a subdirectory keeps the i so", 0x0A
+        db "  the grant walks down the tree.", 0x0A, 0
 sum_append: db "Append text to a file", 0
 det_append:
         db "append FILE TEXT", 0x0A
