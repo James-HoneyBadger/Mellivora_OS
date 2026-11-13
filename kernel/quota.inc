@@ -509,8 +509,34 @@ quota_command:
         call str_starts_with
         jnc .qc_show
         call skip_spaces
+        ; The first argument is a uid or an account name. A name is what an
+        ; operator has - `account list` prints both, but a number has to be
+        ; looked up before it can be typed, and the quota belongs to the
+        ; account either way.
+        mov al, [esi]
+        cmp al, '0'
+        jb .qc_set_named
+        cmp al, '9'
+        ja .qc_set_named
         call parse_decimal
         mov [.qc_uid], eax
+        jmp .qc_set_limit
+.qc_set_named:
+        mov edi, .qc_name
+        mov ecx, 31
+        call copy_word_n
+        mov [.qc_rest], esi            ; the limit follows the name
+        cmp byte [.qc_name], 0
+        je .qc_show
+        lea  esi, [.qc_name]
+        call sess_path_of_account
+        mov  edi, esi
+        mov  esi, ACC_VAL_UID
+        call sett_kv_get_u32
+        jc   .qc_no_account            ; no such account, or no uid on it
+        mov  [.qc_uid], eax
+        mov  esi, [.qc_rest]           ; the lookup used ESI for its own ends
+.qc_set_limit:
         call skip_spaces
         call parse_decimal
         mov [.qc_limit], eax
@@ -541,6 +567,10 @@ quota_command:
         mov esi, msg_quota_ledger_full
         call vga_print
         jmp .qc_out
+.qc_no_account:
+        mov esi, msg_quota_noacct
+        call vga_print
+        jmp .qc_out
 .qc_show:
         call quota_show
 .qc_out:
@@ -548,12 +578,15 @@ quota_command:
         ret
 .qc_uid:   dd 0
 .qc_limit: dd 0
+.qc_name:  times 32 db 0
+.qc_rest:  dd 0
 
 ; quota_build reports its total through its own word, because the command needs
 ; it after pushad has been restored.
 align 4
 quota_build_total: dd 0
 
+msg_quota_noacct:    db "quota: no such account", 0x0A, 0
 msg_quota_head:      db 0x0A, "Quota: ", 0
 msg_quota_refusals:  db " refusals, ", 0
 msg_quota_charged:   db " blocks charged since mount", 0x0A, 0

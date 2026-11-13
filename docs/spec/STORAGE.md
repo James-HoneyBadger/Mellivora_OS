@@ -390,7 +390,8 @@ M3 does not close until:
 5. Compression round-trips a corpus including incompressible data, and a section
    over a compressed file reads the decompressed bytes.
 6. A snapshot taken mid-write is consistent, its files read correctly, and its
-   deletion returns the free count to the pre-snapshot value.
+   deletion returns the free count to the pre-snapshot value. The design is
+   section 16; the code is not written.
 7. The online checker agrees with `tools/fsck_hbfs.py` on every image the fuzzer
    produces.
 
@@ -402,7 +403,7 @@ M3 does not close until:
 | B+tree directories, 65 535 entries | Linear directory blocks, 455 entries per directory |
 | Alternate data streams | **Yes**, as directory entries of type 6 named `FILE:STREAM` beside the file: the path resolver finds them, quotas, ACLs, xattrs and repair treat them as entries, and `stream list/read/write/delete` is the shell surface. Listings hide them; delete and rename move them with the file. The target's per-stream run lists inside one record are not implemented |
 | ACLs, streams, compression, encryption, snapshots | **ACLs: yes**, as ACEs in the xattr block (`acl:u<id>`, `acl:g<id>`, `acl:m`, `acl:o`), evaluated by `acl_perm` before the mode word and settable from the shell with `acl set`; conformance in `acl_test`. Inheritance is a trailing `i` on an ACE's value: a directory written that way passes the ACE to everything created in it, clearing the flag for files and keeping it for subdirectories so the grant walks a tree; evaluation reads only the permission digit, so an inheritable ACE is effective where it is written too. No group-class unions yet. **Volume encryption: yes**, as AES-256-XTS over the 4 KiB units above the journal, with the key checked against the superblock before the mount and `crypt format`/`crypt unlock` as the only writers of the stamp; the store is kernel memory (`key add`), so the volume is refused after a reboot until the secret is put back, and there is no per-file layer yet. **Compression: yes**, as 16 KiB chunks named by a 16-byte table entry each (block, stored length, plaintext CRC-32C, LZ/whole flag) in the file's own run, written and removed by `compact`/`expand` in a journal transaction; reads decode through one seam, so `cat`, `diff`, a descriptor read and the program loader all see plaintext, and `make check-compress` runs a 37-chunk program while it is compressed. Gaps: in-place writes, truncate and defrag refuse a chunked file rather than teach each of them about chunks; a mapping is decoded on fault but is private, so `MAP_SHARED` of one is refused; and the codec's scratch is not locked. Snapshots: none |
-| Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it |
+| Per-user quotas | Yes, and derived rather than stored: the ledger is recomputed from the tree at every mount (`quota_build`), so it cannot drift, and `quota rebuild` does it on demand. Block accounting per uid with a ceiling where 0 is unlimited; a write past it is refused before anything is allocated, and deleting a file returns the blocks to the file's owner rather than to whoever deleted it. `quota set` takes a uid or an account name. Root is deliberately exempt: every shipped file is uid 0, so without the exemption the first write by the shell would cross the default ceiling and refuse, and no system file could grow. The ceiling therefore has to be proved where it applies - from a task that has dropped to an ordinary uid, which is what `quota_limit_test` does. That test uses a uid no other case writes as (2200): the ledger charges a file to its owner and a directory to whoever owns it, so a uid the rest of the regression matrix already owns blocks under does not start at zero, and a one-block ceiling would refuse its control write as well as the one it means to refuse |
 | Journal with redo records | Undo journal: before-images replayed backwards |
 | One unified cache | A block cache and a page cache that agree by construction |
 | Partition table | Read: MBR's four primary entries, or GPT behind a protective MBR, with each volume's start, length, type, GUID and UTF-16 name in `vol_table`. The filesystem is *probed* (the superblock LBA must fall inside a volume) rather than assumed |
@@ -410,6 +411,40 @@ M3 does not close until:
 | Online repair | `repair` (report) and `repair fix` (bitmap + free count) from the shell, at parity with the offline checker's classes: leaks, freed-but-claimed blocks, shared blocks, untrusted entries. `make check-repair` proves it on a corrupted copy. `repair journal` discards a log that cannot be replayed |
 | Removable safe ejection | **Partly.** `eject` refuses while any page of the volume is still mapped - naming how many and the block the first holds - because the page cache keeps no dirty list and a mapped page is a write that has not happened yet; with nothing mapped it flushes the journal and the block cache, then releases the storage device without touching the keyboard on the same controller. It does not name the *files* holding the pages: the cache does not record which file a page belongs to, and the block is what it can prove |
 | Durability gate | `make check-durability`: the crash harness over rotating workloads kills QEMU mid-write. A failed fsck *before* replay is accepted only when the volume is marked for replay - damage with a clean journal is the failure that no replay can repair - and fsck must pass after the replay, which is the assertion. A harness boot that never reaches the shell is retried once and reported as a boot failure, not as a durability failure: QEMU dies at start-up often enough that conflating the two once made a clean 200-iteration run look like damage. `CRASH_ITERS=10000 make crash-soak` is the exit test; 200 iterations of it have run clean, the other 9 800 have not |
+
+## 16. Snapshots (design, not built)
+
+Conformance item 6 needs a snapshot taken mid-write to be consistent, its files
+to read correctly, and its deletion to return the free count to the
+pre-snapshot value. The shape that fits this volume, and that the write paths
+can actually honour, is a copy-on-write shadow map:
+
+- **What a snapshot is.** A set of blocks whose content must stay as of the
+  moment it was taken. `snapshot create` allocates a snapshot record - a header
+  (magic, generation, the superblock as of the snapshot, the map's count) and a
+  map area of `{original block, saved copy}` pairs - and sets the volume's
+  snapshot state, which the superblock feature word already reserves
+  (`HBFS4_FEATURE_SNAPSHOT`; today a mount that sees it refuses rather than
+  pretending).
+- **The write hook.** Before a block's first modification while a snapshot
+  exists, its old content is copied to a free block and `original -> copy` is
+  appended to the map. Two choke points carry every write in this kernel -
+  `hbfs_meta_write` for metadata and `blk_cache_write` for file data - so the
+  hook belongs in both. The copy's own allocation writes the bitmap, which is
+  itself a metadata block and must not recurse: a re-entrancy guard covers it,
+  and the consequence is wanted - the bitmap and the superblock are the first
+  blocks the snapshot keeps, so the snapshot has its own view of what was
+  allocated and where the tree was.
+- **Reading it.** A snapshot read resolves a path against the snapshot's copy of
+  the directory block and reads each content block through the map, so
+  `snapshot cat FILE` shows what the file held when the snapshot was taken.
+- **Deleting it.** Every saved copy is freed and the state cleared, which is
+  what returns the free count to its pre-snapshot value.
+- **Open before coding.** The map's capacity: a full map must refuse the write
+  or refuse the snapshot, never degrade silently. And whether one journal
+  transaction can hold a map append plus the block copy - the log is 32 sectors,
+  and a record is two of them, so the count is small and the answer has to be
+  measured, not assumed.
 
 The v4 guarantees — verified metadata, a writable journalled volume, extents, a
 refusal instead of a format — are real and tested, and this document keeps every

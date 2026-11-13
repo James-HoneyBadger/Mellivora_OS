@@ -33,6 +33,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${1:-${RUNTIME_IMAGE:-$ROOT/mellivora.img}}"
+CASE_ARGS=()
 CASE_TIMEOUT="${RUNTIME_TIMEOUT:-90}"
 DRIVE="$ROOT/tools/qemu_drive.py"
 
@@ -109,10 +110,19 @@ failures=0
 # still there for a one-off, but a profile is the thing to reach for.
 run_case() {
     local name="$1" cmd="$2" expect="$3" then="${4:-}" reject="${5:-CPU EXCEPTION}"
+    case_selected "$name" || return 0
     local mem="${6:-}" smp="${7:-}" cpu="${8:-}" wait_s="${9:-}" profile="${10:-}"
     local monitor="${11:-}" exit_wait="${12:-}" keys="${13:-}" wait_for="${14:-}"
     local after="${15:-}"
     local args=("$IMAGE" "$cmd")
+    # A case that expects the kernel to fault on purpose sets case_args in a
+    # CASE_ARGS line just before it: a plain global would leak into the next
+    # case and quietly disable its fault scan.
+    local case_args=("${CASE_ARGS[@]:-}")
+    CASE_ARGS=()
+    if [ -n "${case_args[0]:-}" ]; then
+        args+=("${case_args[@]}")
+    fi
     # REJECT is a list too, and splitting it matters: passed whole, a list like
     # "CPU EXCEPTION|PAGE FAULT" is one needle that never appears in any
     # transcript, so the case stops rejecting anything at all - the fault check
@@ -171,8 +181,11 @@ run_case() {
     # Two guests writing the same image at once is not a test result: a case
     # killed by the timeout used to leave its QEMU behind, and the next boot
     # then failed its disk writes. Say so instead of reporting a mystery.
+    # Count by executable, not by substring: a shell that merely mentions
+    # qemu-system in its arguments (a QEMU=... assignment, say) is not a guest,
+    # and counting it made this warning cry wolf on every case.
     local stray
-    stray="$(ps -eo args | grep -c '[q]emu-system')"
+    stray="$(ps -eo args | awk '$1 ~ /qemu-system/ { n++ } END { print n + 0 }')"
     if [ "$stray" -gt 0 ]; then
         echo "  WARNING: $stray QEMU process(es) already running before \"$name\""
     fi
@@ -181,11 +194,28 @@ run_case() {
     # a line with no evidence behind it.
     local log
     log="$(mktemp)"
-    if timeout "$CASE_TIMEOUT" python3 "$DRIVE" "${args[@]}" --out "$log" >/dev/null 2>&1; then
+    # The driver's own words, kept apart from the guest's: an empty transcript
+    # with no explanation is what a QEMU that never started looks like, and the
+    # reason (a held disk lock, say) is on its stderr, not on COM1.
+    # --wait is the driver's own budget for a slow expectation, and it is spent
+    # after the boot. A case that asks for 90 seconds of patience cannot be run
+    # under a 90-second timeout: the timeout fires first, the driver is killed
+    # before it can write its transcript, and the case reports an empty file
+    # instead of the expectation that never came.
+    local case_timeout="$CASE_TIMEOUT"
+    if [ -n "$wait_s" ]; then
+        case_timeout=$((CASE_TIMEOUT + wait_s))
+    fi
+    if timeout "$case_timeout" python3 "$DRIVE" "${args[@]}" --out "$log" \
+            >/dev/null 2>"$log.driver"; then
         echo "PASS"
-        rm -f "$log"
+        rm -f "$log" "$log.driver"
     else
         echo "FAIL  (output: $log)"
+        if [ ! -s "$log" ] && [ -s "$log.driver" ]; then
+            printf '  %-34s   the guest never spoke; driver said: %s\n' "" \
+                "$(tail -1 "$log.driver")"
+        fi
         failures=$((failures + 1))
     fi
     fsck_after_case "$name" "$log"
@@ -218,8 +248,16 @@ fsck_after_case() {
 # (one match per launch, in launch order) to take at least two different
 # values. This is how an address that is supposed to be randomised gets tested:
 # a single run cannot show the difference.
+# case_selected NAME - false when RUNTIME_ONLY is set and NAME does not match.
+# Every case runner asks, so a narrowed run really is narrow.
+case_selected() {
+    [ -z "${RUNTIME_ONLY:-}" ] && return 0
+    printf '%s' "$1" | grep -Eq "$RUNTIME_ONLY"
+}
+
 run_varying_case() {
     local name="$1" cmd="$2" pattern="$3" runs="${4:-4}"
+    case_selected "$name" || return 0
     local out i
     out="$(mktemp)"
     local args=("$IMAGE" "$cmd" --reject "CPU EXCEPTION")
@@ -252,6 +290,7 @@ run_varying_case() {
 # is part of the evidence.
 run_max_case() {
     local name="$1" cmd="$2" maxspec="$3" settle="$4" expect="${5:-}"
+    case_selected "$name" || return 0
     local args=("$IMAGE" "$cmd" --reject "CPU EXCEPTION" --max "$maxspec"
                 --settle "$settle")
     if [ -n "$expect" ]; then
@@ -261,11 +300,15 @@ run_max_case() {
     log="$(mktemp)"
     printf '  %-34s ' "$name"
     if timeout $((CASE_TIMEOUT + ${settle%.*})) python3 "$DRIVE" "${args[@]}" \
-            --out "$log" >/dev/null 2>&1; then
+            --out "$log" >/dev/null 2>"$log.driver"; then
         echo "PASS"
-        rm -f "$log"
+        rm -f "$log" "$log.driver"
     else
         echo "FAIL  (output: $log)"
+        if [ ! -s "$log" ] && [ -s "$log.driver" ]; then
+            printf '  %-34s   the guest never spoke; driver said: %s\n' "" \
+                "$(tail -1 "$log.driver")"
+        fi
         failures=$((failures + 1))
     fi
     fsck_after_case "$name" "$log"
@@ -499,8 +542,19 @@ run_case "the power button shuts down" "help" "POWER: button pressed" "" "CPU EX
 # from the image, so the cases use the extreme (a ceiling of one block) rather
 # than reciting a figure that changes whenever a program is added.
 run_case "the quota ledger is derived from the tree" "quota" "QUOTA_OK" "" "CPU EXCEPTION"
-run_case "a quota refuses a write at the ceiling" "quota set 0 1" "Write error" "touch /overq" "CPU EXCEPTION|Saved."
-run_case "raising the ceiling allows the write" "quota set 0 4000" "Saved." "touch /overq" "CPU EXCEPTION|Write error"
+# Root is deliberately exempt from quotas (every shipped file is uid 0, so the
+# first write by the shell would otherwise cross the default ceiling), so a
+# ceiling can only be proved where it applies: in a task that has dropped to an
+# ordinary uid. quota_limit_test does that, and requires both directions - a
+# three-block write refused at a one-block ceiling, and a one-block write
+# accepted at the same ceiling, so the refusal is the ceiling and not a broken
+# directory.
+run_case "a quota refuses a write at the ceiling" \
+    $'quota rebuild\nquota set 2200 1\nquota_limit_test' \
+    "QUOTA_LIMIT_OK" "" "CPU EXCEPTION|QUOTA_LIMIT_FAIL"
+run_case "a ceiling is set by account name" \
+    $'account del q2\naccount add q2 qpw\nquota set q2 77\naccount del q2' \
+    "limited to 77 blocks" "" "CPU EXCEPTION|quota: no such account"
 run_case "the ledger rebuilds on demand" "quota rebuild" "ledger rebuilt" "" "CPU EXCEPTION"
 # The rebuild has to read the directory a subdirectory entry names: its block
 # number times the eight sectors in a block, plus the data area's start. Adding
@@ -510,14 +564,14 @@ run_case "the ledger rebuilds on demand" "quota rebuild" "ledger rebuilt" "" "CP
 # and a write that works, is what proves the walk landed on directories.
 run_case "the quota walk reads directories, not file data" \
     $'quota rebuild\nquota\ntouch /qprobe.txt' \
-    "ledger rebuilt|QUOTA users=1|Saved." "" "CPU EXCEPTION" "" "" "" 30
+    "ledger rebuilt|0 blocks,|Saved." "" "CPU EXCEPTION" "" "" "" 30
 # The volume manager reads the partition table instead of assuming where the
 # filesystem starts, and probes the volume it finds for a superblock.
 run_case "the volume manager reads the table" "volumes" "Volumes: 1  table: MBR" "" "CPU EXCEPTION"
 run_case "a volume reports its filesystem" "volumes" "HBFS at +8481" "" "CPU EXCEPTION|no filesystem"
 # The driver model: every driver registered, bound to the device it serves, and
 # the ones this machine does not have reported as absent rather than silent.
-run_case "the driver model binds the machine" "drivers" "10 bound, 0 conflicts" "" "CPU EXCEPTION"
+run_case "the driver model binds the machine" "drivers" "11 bound, 0 conflicts" "" "CPU EXCEPTION"
 run_case "a driver names its device" "drivers" "rtl8139     bound pci" "" "CPU EXCEPTION"
 # The boot log keeps what the boot path said, in order, with the processor.
 run_case "the boot log records the stages" "bootlog" "drv ata: bound" "" "CPU EXCEPTION"
@@ -712,7 +766,7 @@ run_case "the reset period begins a new streak" \
 # in the image and the next case sees the start in the boot log.
 run_case "a boot service is created" \
     $'sc create bsvc /bin/svcok boot\nsc list' \
-    "bsvc" "" "CPU EXCEPTION|could not write"
+    "sc: created bsvc|bsvc image=/bin/svcok" "" "CPU EXCEPTION|could not write"
 run_case "a service starts before logon" \
     $'sc query bsvc\nsessions\nchronicle -s scm\nsc delete bsvc' \
     "scm: a service started" "" "CPU EXCEPTION|PAGE FAULT"
@@ -737,10 +791,13 @@ run_case "a locked session runs only unlock" \
     $'account del m4lock\naccount add m4lock m4pw\nlogon m4lock m4pw\nlock\nwhoami\nunlock m4pw' \
     "locked: unlock PASSWORD" "" "CPU EXCEPTION"
 # The same lock survives a task that dies: the state is the session's, so a
-# faulted logon screen leaves nobody holding a way in.
+# faulted logon screen leaves nobody holding a way in. The fault is the point
+# here, so this case alone tells the driver to allow it - the rejects below are
+# still checked, and every other case keeps its fault scan.
+CASE_ARGS=(--allow-fault)
 run_case "a task that dies does not unlock the session" \
     $'account del m4lock\naccount add m4lock m4pw\nlogon m4lock m4pw\ncrashdiv &\nsleep 1\nlock\nunlock m4pw\nwhoami' \
-    "user=m4lock uid=" "" "CPU EXCEPTION"
+    "user=m4lock uid=" "" "KERNEL PANIC|double fault"
 # SERVICES.md section 1.2 and section 6 item 3: Stop asks, the service answers
 # through the Control value in its own record, and a service that never answers
 # is killed when its stop timeout passes - with the kill recorded.
@@ -768,10 +825,13 @@ run_case "a profile holding the shell's directory is not deleted" \
     "holds the directory you are in|Documents" "" "CPU EXCEPTION|was not deleted" "" "" "" 60
 # Section 6 item 7: created, used, logged off and deleted with no leaked handle
 # and no leaked file. The volume has to be clean before the gate means anything,
-# so `repair` runs twice: the first pass fixes an earlier case's drift, the
-# second proves there is none left. The delete then says what went; the `dir`
-# proves the directory is gone, and the closing `repair` proves the delete left
-# neither an orphan block nor a lost one.
+# so `repair` runs twice without `fix`: two reports of the same volume are only
+# both clean if the earlier cases left nothing behind, which is the claim. (An
+# earlier version of this comment said the first pass fixed the drift; `repair`
+# only reports, and a gate that repairs before asserting cannot see the leak it
+# exists to catch.) The delete then says what went; the `dir` proves the
+# directory is gone, and the closing `repair` proves the delete left neither an
+# orphan block nor a lost one.
 run_case "the volume is clean before the profile gate" \
     $'repair\nrepair' \
     "REPAIR_CLEAN" "" "CPU EXCEPTION|REPAIR_ISSUES|REPAIR_TROUBLE"
@@ -808,10 +868,17 @@ run_case "two users have separate desktops" \
 # type, so a program installed into a PATH directory runs by name. A per-user
 # association is then registered, queried, opened and deleted, the package is
 # removed, and the profile is cleaned up so `repair` proves a clean volume.
+# The handler's own output is not asserted here: head prints with SYS_PUTCHAR,
+# which draws on the console and does not mirror to COM1, and by the time this
+# case ends the console has scrolled past the document's first line anyway. What
+# the transcript can carry is the association's verdict and head's only failure
+# path, which SYS_PRINT does print - so "opened handler" plus the absence of
+# "head: cannot open file" is the claim that the association opened the
+# document with the handler that read it.
 run_case "a package installs registers opens and uninstalls cleanly" \
     $'account del m6pkg\naccount add m6pkg m6pw\nlogon m6pkg m6pw\ncd /games\npkg remove hello\npkg install /bin/hello\nhello\nassoc .txt head\nassoc .txt\nopen /docs/notes.txt\nassoc .txt delete\npkg remove hello\ncd /\nlogoff\nprofile delete m6pkg\nrepair' \
-    "Installed: hello|Hello, World! Welcome to Mellivora OS!|[assoc] per-user association saved|[assoc] association queried|[assoc] opened handler|Mellivora OS Developer Notes|[assoc] per-user association removed|Removed: hello|profile: deleted m6pkg|REPAIR_CLEAN" \
-    "" "CPU EXCEPTION|PAGE FAULT|sign in before|could not be started|no handler|REPAIR_ISSUES" "" "" "" 90
+    "Installed: hello|Hello, World! Welcome to Mellivora OS!|[assoc] per-user association saved|[assoc] association queried|[assoc] opened handler|[assoc] per-user association removed|Removed: hello|profile: deleted m6pkg|REPAIR_CLEAN" \
+    "" "CPU EXCEPTION|PAGE FAULT|sign in before|could not be started|no handler|head: cannot open file|REPAIR_ISSUES" "" "" "" 90
 # M6 row 2: the Control Panel's Users & Groups applet is driven from the
 # keyboard. A demo account is deleted, re-added (Argon2 hashing included) and
 # the group list is reported - each action on COM1 so the test can assert it.

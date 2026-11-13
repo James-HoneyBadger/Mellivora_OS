@@ -60,6 +60,11 @@ Options:
                       command, i.e. the guest powered the machine off. Used for
                       the ACPI shutdown and power-button cases, where a machine
                       that stays up is the failure
+  --allow-fault       do not fail on a CPU exception. A kernel that recovers
+                      from a fault returns to the prompt, so an exception is a
+                      failure by default; a case whose subject is the fault
+                      itself (a task that dies, the double-fault handler) says
+                      so here. --reject texts are still checked.
 
 Exit: 0 on success, 1 if a CPU exception occurred, an --expect text was missing,
       an --reject text appeared, or the boot marker never showed up.
@@ -557,7 +562,12 @@ def main() -> int:
                        + _after_command(slog, serial_mark, command))
     combined = slog + "\n" + screen
 
-    faults = re.search(r"CPU EXCEPTION|double fault|triple fault", slog, re.I)
+    # A fault is a failure unless the caller says it asked for one: a case
+    # whose whole point is that a task died (crashdiv) cannot be judged by a
+    # rule that forbids dying, and an --reject cannot undo this scan.
+    faults = None
+    if "--allow-fault" not in args:
+        faults = re.search(r"CPU EXCEPTION|double fault|triple fault", slog, re.I)
     missing = [e for e in expects if e not in expect_haystack]
     rejected = [r for r in rejects if r in combined]
     surplus = []

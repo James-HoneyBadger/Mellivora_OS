@@ -99,9 +99,9 @@ def main() -> int:
     check("the real tree satisfies every claim", clean == [], "; ".join(clean))
 
     errors = mutate(checker, "NASM count", [
-        ("docs/ROADMAP.md", "296 NASM programs", "294 NASM programs")])
+        ("docs/ROADMAP.md", "297 NASM programs", "294 NASM programs")])
     check("a stale program count is refused",
-          any("NASM programs" in e and "294" in e and "296" in e for e in errors),
+          any("NASM programs" in e and "294" in e and "297" in e for e in errors),
           "; ".join(errors))
 
     errors = mutate(checker, "built-in count", [

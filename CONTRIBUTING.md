@@ -330,6 +330,18 @@ regressions. Some QEMU checks may skip on a local host without QEMU; CI runs
 the required smoke tests strictly. Run the focused `make check-*` target for
 the subsystem you changed, then `make check` before submitting.
 
+`make check-runtime` boots the image once per case and takes tens of minutes.
+When one case fails, narrow the run to it instead of re-running the matrix:
+
+```bash
+RUNTIME_ONLY="quota refuses a write" tests/test_runtime.sh
+```
+
+`RUNTIME_ONLY` is an extended regular expression matched against the case name,
+and it applies to every case runner in the file. Only one QEMU may have the
+image open at a time: a second guest is refused its disk writes and both runs
+report nonsense, so do not run a narrowed case while a full matrix is going.
+
 ### Bounds-check build
 
 ```bash
