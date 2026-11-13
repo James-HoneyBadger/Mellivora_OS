@@ -1002,6 +1002,7 @@ kernel_entry:
 %include "kernel/lz.inc"
 %include "kernel/argon2.inc"
 %include "kernel/hbfs.inc"
+%include "kernel/snapshot.inc"
 %include "kernel/keystore.inc"
 %include "kernel/crypt.inc"
 %include "kernel/volume.inc"

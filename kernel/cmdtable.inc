@@ -62,6 +62,7 @@ cmd_table:
         CMDENT cmd_crypt_str, CAT_SYSTEM, sum_crypt, det_crypt
         CMDENT cmd_sett_str, CAT_SYSTEM, sum_sett, det_sett
         CMDENT cmd_label_str, CAT_SYSTEM, sum_label, det_label
+        CMDENT cmd_snapshot_str, CAT_SYSTEM, sum_snapshot, det_snapshot
         CMDENT cmd_locks_str, CAT_SYSTEM, sum_locks, det_locks
         CMDENT cmd_objects_str, CAT_SYSTEM, sum_objects, det_objects
         CMDENT cmd_handles_str, CAT_SYSTEM, sum_handles, det_handles
@@ -365,6 +366,13 @@ det_eject:
         db "  Flush the journal and the block cache and release the removable", 0x0A
         db "  volume, so it can be unplugged. Refuses while any page of the", 0x0A
         db "  volume is mapped, and says how many and from which block.", 0x0A, 0
+sum_snapshot: db "Take, inspect or drop a copy-on-write snapshot"
+det_snapshot:
+        db "snapshot [create|info|drop]", 0x0A
+        db "  create keeps the volume's blocks as they are now: every block", 0x0A
+        db "  written while it lives is copied first. info says how much of", 0x0A
+        db "  the map is used. drop frees every saved block and the record,", 0x0A
+        db "  which puts the free count back where it was. Root only.", 0x0A, 0
 sum_label: db "Name the volume"
 det_label:
         db "label [NAME]", 0x0A

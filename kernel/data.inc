@@ -225,6 +225,7 @@ cmd_ren_str:    db "ren", 0
 cmd_stream_str: db "stream", 0
 cmd_compact_str: db "compact", 0
 cmd_label_str: db "label", 0
+cmd_snapshot_str: db "snapshot", 0
 cmd_eject_str: db "eject", 0
 cmd_expand_str: db "expand", 0
 cmd_mv_str:     db "mv", 0
@@ -500,6 +501,7 @@ msg_hbfs_read_err:   db "  Filesystem:    Superblock unreadable; not mounted", 0
 msg_hbfs_no_format:  db "  Filesystem:    No HBFS volume; not mounted (run 'format')", 0x0A, 0
 msg_hbfs_bad_version: db "  Filesystem:    Unsupported HBFS version; not mounted", 0x0A, 0
 msg_hbfs_bad_layout: db "  Filesystem:    Unsupported HBFS layout; not mounted", 0x0A, 0
+msg_hbfs_snap_err:      db "  Filesystem:    Snapshot record unreadable; not mounted", 0x0A, 0
 msg_hbfs_bad_features: db "  Filesystem:    Unsupported HBFS features; not mounted", 0x0A, 0
 msg_hbfs_root_err:   db "  Filesystem:    Root directory unreadable; not mounted", 0x0A, 0
 msg_hbfs_format_err: db "  Filesystem:    Format failed; not mounted", 0x0A, 0

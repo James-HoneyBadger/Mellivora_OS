@@ -229,6 +229,7 @@ Use `cmd1 && cmd2` to run `cmd2` only when `cmd1` succeeds, and `cmd1 || cmd2` t
 | `expand FILE` | Rewrite a compressed file as plain blocks; needed before in-place writes or a truncate |
 | `label [NAME]` | Print the volume's label, or name it (root only, up to 31 printable characters) |
 | `eject` | Flush the journal and block cache and release the removable volume, refusing while pages are mapped |
+| `snapshot [create\|info\|drop]` | Take a copy-on-write snapshot of the volume, report how much of its map is used, or drop it and give every block back (root only) |
 
 ### Text Processing (HBU — Honey Badger Utilities)
 

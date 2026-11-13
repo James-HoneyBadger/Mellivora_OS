@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 134 shell built-ins, 297 NASM programs and 15 C program
+- 210 syscalls, 135 shell built-ins, 297 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -547,8 +547,12 @@ console; an encrypted volume round-trips with its key held in the store.
 Of those, the power-cut harness, the quota and ACL conformance suites, and the
 corrupted-volume repair are in place; volume encryption and the VFS redirector
 seam have since landed, as have compressed files, volume labels, safe ejection
-and ACL inheritance. Snapshots are the wave's remaining feature work, and
-`make crash-soak` with 10 000 iterations is a run that has not happened.
+and ACL inheritance. Snapshots have landed too - a copy-on-write map that keeps
+the old content of every block written while it lives, reported by
+`snapshot info` and released block for block by `snapshot drop`, gated by
+`make check-snapshot` - with reading files back out of one still to write.
+Multiple mount points and the 10 000-iteration `make crash-soak` run are the
+wave's remaining work.
 
 ### M4 · Configuration and services (9–13 weeks)
 

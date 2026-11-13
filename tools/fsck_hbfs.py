@@ -58,6 +58,15 @@ HBFS4_JRNL_OFF_CRC = 24
 HBFS4_FEATURE_EXTENTS = 1 << 0
 HBFS4_FEATURE_JOURNAL = 1 << 1
 HBFS4_FEATURE_SNAPSHOT = 1 << 2
+# The snapshot record: a header block followed by the map, in one contiguous
+# data-area run whose first block the superblock names at offset 112.
+HBFS_SB_SNAP = 112
+HBFS_SNAP_MAGIC = 0x50414E53
+HBFS_SNAP_VERSION = 1
+HBFS_SNAP_BLOCKS = 9
+HBFS_SNAP_MAP_BLOCKS = HBFS_SNAP_BLOCKS - 1
+HBFS_SNAP_ENTRY = 8
+HBFS_SNAP_CAPACITY = (HBFS_SNAP_MAP_BLOCKS * BLOCK_SIZE) // HBFS_SNAP_ENTRY
 HBFS4_DE_EXTENTS = 1 << 0
 # Chunked entries (compression): flags bit 1 says the data is a chunk table
 # followed by payload blocks, one 16-byte table entry per 16 KiB of plaintext.
@@ -534,6 +543,77 @@ class Fsck:
                 continue
             self.claims[b] = owner
 
+    # -- snapshots ------------------------------------------------------
+    def claim_snapshot(self) -> None:
+        """Claim the snapshot record and every block it saved.
+
+        The map is the only thing that names the saved copies, so a checker
+        that walked the tree alone would call them leaks and a repair would
+        hand them to the next write.
+        """
+        f = open(self.image, "rb")
+        try:
+            f.seek(HBFS_SUPERBLOCK_LBA * SECTOR_SIZE)
+            sb = f.read(SECTOR_SIZE)
+            block = struct.unpack_from("<I", sb, HBFS_SB_SNAP)[0]
+            if not block:
+                return
+            features = struct.unpack_from("<I", sb, HBFS4_OFF_FEATURES)[0]
+            if self.v4 and not features & HBFS4_FEATURE_SNAPSHOT:
+                self.warn("the superblock names a snapshot but the feature "
+                          "word does not claim one")
+            lba = HBFS_DATA_START + block * SECTORS_PER_BLOCK
+            f.seek(lba * SECTOR_SIZE)
+            header = f.read(SECTOR_SIZE)
+            if len(header) != SECTOR_SIZE:
+                self.error("snapshot: the record is past the end of the image")
+                return
+            if struct.unpack_from("<I", header, 0)[0] != HBFS_SNAP_MAGIC:
+                self.error(f"snapshot: no record where the superblock says "
+                           f"(block {block})")
+                return
+            version = struct.unpack_from("<I", header, 4)[0]
+            if version != HBFS_SNAP_VERSION:
+                self.error(f"snapshot: record version {version}, this checker "
+                           f"reads {HBFS_SNAP_VERSION}")
+                return
+            entries, capacity = struct.unpack_from("<II", header, 8)
+            if capacity != HBFS_SNAP_CAPACITY:
+                self.error(f"snapshot: map holds {capacity} entries, the "
+                           f"layout has room for {HBFS_SNAP_CAPACITY}")
+                return
+            if entries > capacity:
+                self.error(f"snapshot: {entries} entries claimed in a map of "
+                           f"{capacity}")
+                return
+            # The record first: its blocks are the snapshot's, whether or not
+            # the map below turns out to be readable.
+            self.claim(block, HBFS_SNAP_BLOCKS, "snapshot record")
+            self.stats["snap_entries"] = entries
+            f.seek((lba + SECTORS_PER_BLOCK) * SECTOR_SIZE)
+            map_bytes = f.read(entries * HBFS_SNAP_ENTRY)
+            for i in range(entries):
+                src, dst = struct.unpack_from("<II", map_bytes, i * HBFS_SNAP_ENTRY)
+                # The data area does not begin on a multiple of the sectors in a
+                # block, so its grid is anchored at HBFS_DATA_START. The
+                # superblock, the bitmap and the root directory are runs in
+                # their own right and do sit on multiples of eight.
+                if src >= self.data_lba:
+                    src_aligned = (src - self.data_lba) % SECTORS_PER_BLOCK == 0
+                else:
+                    src_aligned = src % SECTORS_PER_BLOCK == 0
+                if not src_aligned:
+                    self.error(f"snapshot entry {i}: source LBA {src} is not a "
+                               f"block start")
+                if dst < self.data_lba or (dst - self.data_lba) % SECTORS_PER_BLOCK:
+                    self.error(f"snapshot entry {i}: saved LBA {dst} is not a "
+                               f"block start in the data area")
+                    continue
+                saved_block = (dst - self.data_lba) // SECTORS_PER_BLOCK
+                self.claim(saved_block, 1, f"snapshot copy of LBA {src}")
+        finally:
+            f.close()
+
     # -- directory walk -------------------------------------------------
     def walk(self, lba: int, blocks: int, prefix: str, depth: int) -> None:
         if depth > HBFS_MAX_DEPTH:
@@ -813,6 +893,7 @@ class Fsck:
             # filesystem as unallocated; stop here.
             return 1
         self.walk(root, HBFS_ROOT_DIR_BLOCKS, "/", 1)
+        self.claim_snapshot()
         self.cross_check()
         if self.v4:
             self.check_checksums()

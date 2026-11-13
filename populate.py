@@ -42,6 +42,13 @@ HBFS_ROOT_DIR_START = HBFS_BITMAP_START + HBFS_BITMAP_BLOCKS * SECTORS_PER_BLOCK
 HBFS_DATA_START = HBFS_ROOT_DIR_START + HBFS_ROOT_DIR_SECTS
 HBFS_DIR_ENTRY_SIZE = 288
 HBFS_MAX_FILES = HBFS_ROOT_DIR_SIZE // HBFS_DIR_ENTRY_SIZE      # 455
+HBFS_MAX_DEPTH = 16        # as repair and fsck bound a walk
+# A live snapshot: a header block, a map, and one saved copy per preserved
+# block. The superblock names the record's first data block.
+HBFS_SB_SNAP = 112
+HBFS_SNAP_MAGIC = 0x50414E53
+HBFS_SNAP_BLOCKS = 9
+HBFS_SNAP_ENTRY = 8
 HBFS_MAX_FILENAME = 252
 # The journal occupies the first HBFS_JOURNAL_BLOCKS data blocks and must never
 # be handed to a file.
@@ -102,6 +109,31 @@ FTYPE_FILE = 1  # backward compat alias
 FTYPE_DIR = 2
 FTYPE_EXEC = 3
 FTYPE_BATCH = 4
+
+
+def snapshot_info(img):
+    """(first block, [(source LBA, saved LBA) ...]) for the volume's snapshot.
+
+    (0, []) when there is none, or when the record is not one this builder can
+    read - in which case the caller marks nothing and the checker will say so.
+    """
+    img.seek(lba_to_offset(HBFS_SUPERBLOCK_LBA))
+    sb = img.read(SECTOR_SIZE)
+    block = struct.unpack_from('<I', sb, HBFS_SB_SNAP)[0]
+    if not block:
+        return 0, []
+    lba = HBFS_DATA_START + block * SECTORS_PER_BLOCK
+    img.seek(lba_to_offset(lba))
+    header = img.read(SECTOR_SIZE)
+    if len(header) != SECTOR_SIZE:
+        return 0, []
+    if struct.unpack_from('<I', header, 0)[0] != HBFS_SNAP_MAGIC:
+        return 0, []
+    entries = struct.unpack_from('<I', header, 8)[0]
+    img.seek(lba_to_offset(lba + SECTORS_PER_BLOCK))
+    raw = img.read(entries * HBFS_SNAP_ENTRY)
+    return block, [struct.unpack_from('<II', raw, i * HBFS_SNAP_ENTRY)
+                   for i in range(entries)]
 
 
 def lba_to_offset(lba):
@@ -445,6 +477,22 @@ class FSImage:
         self.next_block += count
         return start
 
+    def _mark_snapshot(self, bitmap):
+        """Keep a live snapshot's record and saved copies allocated.
+
+        The map is the only thing that names them; a rebuild that looked at the
+        tree alone would hand every preserved block to the next write, which is
+        the snapshot destroyed without being dropped.
+        """
+        block, entries = snapshot_info(self.img)
+        if not block:
+            return
+        self._mark_block_range(bitmap, block, HBFS_SNAP_BLOCKS)
+        for src, dst in entries:
+            if dst >= HBFS_DATA_START and (dst - HBFS_DATA_START) % SECTORS_PER_BLOCK == 0:
+                self._mark_block_range(
+                    bitmap, (dst - HBFS_DATA_START) // SECTORS_PER_BLOCK, 1)
+
     def _rebuild_bitmap(self):
         """Rebuild the allocation bitmap from live directory entries."""
         fresh = bytearray(HBFS_BITMAP_SIZE)
@@ -476,18 +524,34 @@ class FSImage:
                 entries.append((name, ftype, start_block, block_count))
             return entries
 
-        root_entries = mark_directory(self.root_dir, HBFS_MAX_FILES)
-        for name, ftype, start_block, block_count in root_entries:
-            if ftype != FTYPE_DIR or block_count <= 0:
-                continue
-            if name in self.subdirs:
-                subdir_data = self.subdirs[name]['data']
-            else:
-                data_lba = HBFS_DATA_START + start_block * SECTORS_PER_BLOCK
-                self.img.seek(lba_to_offset(data_lba))
-                subdir_data = self.img.read(block_count * BLOCK_SIZE)
-            subdir_max = (block_count * BLOCK_SIZE) // HBFS_DIR_ENTRY_SIZE
-            mark_directory(subdir_data, subdir_max)
+        # Every directory has to be walked, not just the root's children: a
+        # volume that already holds a tree deeper than two levels (a user
+        # profile is /Users/NAME/Documents) had its deep blocks marked free
+        # here, because nothing had looked at them. The tree still named them,
+        # so the next mount handed live blocks to the next write, and a repair
+        # run reported them as blocks that files need and the bitmap had freed.
+        seen = set()
+
+        def mark_subdirs(directory_buf, max_entries, depth):
+            if depth > HBFS_MAX_DEPTH:
+                return
+            for name, ftype, start_block, block_count in mark_directory(
+                    directory_buf, max_entries):
+                if ftype != FTYPE_DIR or block_count <= 0 or start_block in seen:
+                    continue
+                seen.add(start_block)
+                subdir_data = None
+                if depth == 0 and name in self.subdirs:
+                    subdir_data = self.subdirs[name]['data']
+                if subdir_data is None:
+                    data_lba = HBFS_DATA_START + start_block * SECTORS_PER_BLOCK
+                    self.img.seek(lba_to_offset(data_lba))
+                    subdir_data = self.img.read(block_count * BLOCK_SIZE)
+                subdir_max = (block_count * BLOCK_SIZE) // HBFS_DIR_ENTRY_SIZE
+                mark_subdirs(subdir_data, subdir_max, depth + 1)
+
+        mark_subdirs(self.root_dir, HBFS_MAX_FILES, 0)
+        self._mark_snapshot(fresh)
 
         self.bitmap = fresh
         self.next_block = self._find_next_block()

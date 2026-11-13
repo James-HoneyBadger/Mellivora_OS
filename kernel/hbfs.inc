@@ -70,12 +70,15 @@ HBFS4_OFF_DATA_HI      equ 72           ; dword: high half of data start
 HBFS4_OFF_CHECKSUM     equ 76           ; dword: CRC-32C of this sector
 HBFS4_FEATURE_EXTENTS  equ (1 << 0)
 HBFS4_FEATURE_JOURNAL  equ (1 << 1)
-HBFS4_FEATURE_SNAPSHOT equ (1 << 2)     ; not honoured here; refuses the mount
+HBFS4_FEATURE_SNAPSHOT equ (1 << 2)     ; a copy-on-write snapshot is live
 ; The volume's own name, in the superblock sector after every field v4 uses.
 ; Both formats have room there, so a v3 volume can be labelled too - the label
 ; is a name, and a name does not need a format version.
 HBFS_SB_LABEL          equ 80
 HBFS_SB_LABEL_LEN      equ 32
+; Where the snapshot record starts, in data blocks; 0 when there is none.
+; tools/fsck_hbfs.py and kernel/snapshot.inc read the same field.
+HBFS_SB_SNAP           equ 112
 
 HBFS4_DE_EXTENTS       equ (1 << 0)     ; directory entry flags: data is a run list
 HBFS4_RUN_CHECKSUM_BYTES equ 4          ; trailer at the end of each metadata run
@@ -208,6 +211,13 @@ hbfs_init:
         call hbfs_load_root_dir
         jc .root_error
 
+        ; The snapshot record, on a v3 volume too: the record is blocks and a
+        ; map, and neither needs the v4 checksums. A record that cannot be read
+        ; is a volume whose saved blocks would be handed out again, so the mount
+        ; is refused rather than the snapshot forgotten.
+        call hbfs_snap_load
+        jc .v3_snap_bad
+
         ; The quota ledger is derived from the tree, not stored: a power cut
         ; cannot leave it disagreeing with the disk, because the next mount
         ; recomputes it from the entries themselves.
@@ -228,10 +238,11 @@ hbfs_init:
         cmp dword [hbfs_super_buf + 4], HBFS4_VERSION
         jne .bad_version
 
-        ; Only features this reader implements may be present. A snapshot
-        ; volume (or anything newer) is read by rules this code does not know.
+        ; Only features this reader implements may be present. A feature this
+        ; build does not know changes how the volume must be written, and
+        ; mounting it read-write would corrupt it.
         mov eax, [hbfs_super_buf + HBFS4_OFF_FEATURES]
-        test eax, ~(HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL)
+        test eax, ~(HBFS4_FEATURE_EXTENTS | HBFS4_FEATURE_JOURNAL | HBFS4_FEATURE_SNAPSHOT)
         jnz .bad_features
 
         ; The layout is v3's, and this build addresses blocks in 32 bits.
@@ -303,6 +314,12 @@ hbfs_init:
         jz   .v4_ro
         mov  dword [hbfs_read_only], 0
 .v4_ro:
+        ; A volume that says it carries a snapshot, and then hands over a
+        ; record that is not one, is not a volume to write to: the blocks it
+        ; claims to keep would be handed out again.
+        call hbfs_snap_load
+        jc   .v4_snap_bad
+
         mov  dword [hbfs_mounted], 1
         call hbfs_load_root_dir
         jc  .v4_root_bad
@@ -332,6 +349,9 @@ hbfs_init:
 .v4_root_bad:
         mov esi, msg_hbfs_root_err
         jmp .refuse
+.v4_snap_bad:
+        mov esi, msg_hbfs_snap_err
+        jmp .refuse
 
 .read_error:
         mov esi, msg_hbfs_read_err
@@ -357,6 +377,9 @@ hbfs_init:
         popad
         ret
 
+.v3_snap_bad:
+        mov esi, msg_hbfs_snap_err
+        jmp .refuse
 .root_error:
         ; hbfs_load_root_dir has already said the read failed.
         mov dword [hbfs_mounted], 0
@@ -1506,6 +1529,21 @@ hbfs_meta_write:
         jae  .mhw_stamped
         mov  dword [.hmw_extra], 1
 .mhw_stamped:
+        ; A snapshot keeps the old content of every block before it changes.
+        ; This is one of the volume's two write choke points, so it is one of
+        ; the two places the hook belongs; a refusal here refuses the write,
+        ; which is what a full map has to do.
+        mov  ebx, [.hmw_lba]
+        mov  ecx, [.hmw_cnt]
+.mhw_preserve:
+        test ecx, ecx
+        jz   .mhw_preserved
+        call hbfs_snap_preserve
+        jc   .mhw_snap_refused
+        inc  ebx
+        dec  ecx
+        jmp  .mhw_preserve
+.mhw_preserved:
         mov  eax, [.hmw_lba]
         mov  ecx, [.hmw_cnt]
         mov  esi, [.hmw_buf]
@@ -1542,6 +1580,13 @@ hbfs_meta_write:
         clc
         ret
 .mhw_fail:
+        call hbfs_journal_abort
+        popad
+        stc
+        ret
+.mhw_snap_refused:
+        mov  esi, msg_snap_full
+        call vga_print
         call hbfs_journal_abort
         popad
         stc
@@ -1702,7 +1747,16 @@ hbfs_find_file:
 ; Returns: EAX = first block number (relative to data start), CF set if full
 hbfs_alloc_blocks:
         pushad
-        mov [.blocks_needed], ecx
+        ; The locals live on this call's own frame, not in the module: a
+        ; snapshot preserves a block by allocating one, and that happens *while*
+        ; another allocation is writing the bitmap and the superblock. With
+        ; static locals the inner call overwrote the outer call's start block,
+        ; and the same block was handed to a file and to a saved copy at once.
+        mov  ebp, esp
+        sub  esp, 16
+        mov  dword [ebp - 8],  0
+        mov  dword [ebp - 12], 0
+        mov  [ebp - 4], ecx
 
         ; Read bitmap (served from the resident copy when valid)
         call hbfs_load_bitmap
@@ -1729,7 +1783,7 @@ hbfs_alloc_blocks:
         push edx                ; save start candidate
         mov esi, 1              ; count of free found so far
 .check_run:
-        cmp esi, [.blocks_needed]
+        cmp esi, [ebp - 4]
         jge .found_run
         push edx
         add edx, esi
@@ -1758,12 +1812,12 @@ hbfs_alloc_blocks:
 
 .found_run:
         pop edx                 ; EDX = first free block
-        mov [.alloc_first], edx
+        mov [ebp - 8], edx
 
         ; Mark all N blocks as used in bitmap
         mov esi, 0
 .mark_loop:
-        cmp esi, [.blocks_needed]
+        cmp esi, [ebp - 4]
         jge .mark_done
         mov eax, edx
         add eax, esi
@@ -1784,26 +1838,26 @@ hbfs_alloc_blocks:
         ; Only the bitmap sectors covering [first, first+n) are dirty. The
         ; bitmap is 64 KB and rewriting all of it for one allocation was the
         ; single biggest cost of every metadata operation.
-        mov  eax, [.alloc_first]
+        mov  eax, [ebp - 8]
         shr  eax, 12                    ; first dirty bitmap sector index
-        mov  [.bitmap_sect], eax
-        mov  ecx, [.alloc_first]
-        add  ecx, [.blocks_needed]
+        mov  [ebp - 12], eax
+        mov  ecx, [ebp - 8]
+        add  ecx, [ebp - 4]
         dec  ecx
         shr  ecx, 12                    ; last dirty sector index
         sub  ecx, eax
         inc  ecx                        ; sector count
-        mov  eax, [.bitmap_sect]
+        mov  eax, [ebp - 12]
         add  eax, HBFS_BITMAP_START
         mov  esi, hbfs_bitmap_buf
-        mov  edx, [.bitmap_sect]
+        mov  edx, [ebp - 12]
         shl  edx, 9                     ; byte offset into the bitmap buffer
         add  esi, edx
         call hbfs_meta_write
         jc   .alloc_fail
 
         ; Update superblock free_blocks counter (in-memory copy is authoritative)
-        mov  eax, [.blocks_needed]
+        mov  eax, [ebp - 4]
         sub [hbfs_super_buf + 12], eax   ; free_blocks -= allocated
         mov  eax, HBFS_SUPERBLOCK_LBA
         mov  ecx, 1
@@ -1813,13 +1867,15 @@ hbfs_alloc_blocks:
 
         call hbfs_journal_commit
 
-        mov  eax, [.alloc_first]    ; Return first block number via EAX
-        mov  [esp + 28], eax
+        mov  eax, [ebp - 8]    ; Return first block number via EAX
+        mov  [ebp + 28], eax   ; the slot pushad saved EAX in
+        mov  esp, ebp
         popad
         clc
         ret
 
 .alloc_fail:
+        mov  esp, ebp
         popad
         stc
         ret
@@ -1829,13 +1885,11 @@ hbfs_alloc_blocks:
         jmp .scan_start
 
 .no_space:
+        mov  esp, ebp
         popad
         stc
         ret
 
-.blocks_needed: dd 0
-.alloc_first:   dd 0
-.bitmap_sect:   dd 0
 
 ; Allocate a single data block (convenience wrapper)
 ; Returns: EAX = block number, CF set if full

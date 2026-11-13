@@ -761,6 +761,9 @@ check-volume: $(POPULATE_STAMP) tools/fsck_hbfs.py
 check-acl: $(POPULATE_STAMP) tools/fsck_hbfs.py
 	@ACL_ALLOW_SKIP=1 bash tests/test_acl.sh $(IMAGE)
 
+check-snapshot: $(POPULATE_STAMP) tools/fsck_hbfs.py
+	@SNAPSHOT_ALLOW_SKIP=1 bash tests/test_snapshot.sh $(IMAGE)
+
 check-loader: $(POPULATE_STAMP)
 	@LOADER_ALLOW_SKIP=1 bash tests/test_loader.sh $(IMAGE)
 
@@ -835,7 +838,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-twovm check-loader check-crypt check-perf check-heap check-desktop check-usb check-streams check-compress check-volume check-acl check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-twovm check-loader check-crypt check-perf check-heap check-desktop check-usb check-streams check-compress check-volume check-acl check-snapshot check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 

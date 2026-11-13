@@ -263,6 +263,45 @@ repair_walk:
         ret
 
 ;-----------------------------------------------------------------------
+; repair_snapshot - claim what a live snapshot is holding
+;   In: nothing; the loaded snapshot state is the subject
+;
+; A snapshot's record and every block it saved are allocated and referenced by
+; nothing in the tree - the map is the only thing that names them. A repair that
+; did not know that would call them leaks and hand them to the next write, which
+; is the one way a snapshot can be destroyed without being dropped.
+;-----------------------------------------------------------------------
+repair_snapshot:
+        pushad
+        cmp dword [hbfs_snap_active], 0
+        je .rsnap_done
+        mov eax, [hbfs_snap_block]
+        test eax, eax
+        jz .rsnap_done
+        mov ecx, HBFS_SNAP_BLOCKS
+        call repair_claim
+        xor ebx, ebx
+.rsnap_loop:
+        cmp ebx, [hbfs_snap_count]
+        jae .rsnap_done
+        mov eax, ebx
+        shl eax, 3
+        mov esi, hbfs_snap_map
+        add esi, eax
+        mov eax, [esi + 4]             ; saved LBA
+        sub eax, HBFS_DATA_START
+        jb .rsnap_next
+        shr eax, 3
+        mov ecx, 1
+        call repair_claim
+.rsnap_next:
+        inc ebx
+        jmp .rsnap_loop
+.rsnap_done:
+        popad
+        ret
+
+;-----------------------------------------------------------------------
 ; repair_popcount - how many blocks the resident bitmap says are taken
 ;   Out: EAX
 ;-----------------------------------------------------------------------
@@ -304,6 +343,7 @@ repair_pass:
         xor eax, eax
         mov ecx, HBFS_JOURNAL_BLOCKS
         call repair_claim
+        call repair_snapshot
         mov ebx, HBFS_ROOT_DIR_START
         mov ecx, HBFS_ROOT_DIR_SECTS
         xor edx, edx

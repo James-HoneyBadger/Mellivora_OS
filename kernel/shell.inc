@@ -1991,6 +1991,10 @@ shell_dispatch_core:
         call str_starts_with
         jc .cmd_label
 
+        mov edi, cmd_snapshot_str
+        call str_starts_with
+        jc .cmd_snapshot
+
         mov edi, cmd_eject_str
         call str_starts_with
         jc .cmd_eject
@@ -2953,6 +2957,10 @@ shell_dispatch_core:
         call skip_spaces
         mov dword [comp_mode], 1
         call cmd_comp_handle
+        ret
+
+.cmd_snapshot:
+        call cmd_snapshot
         ret
 
 .cmd_label:

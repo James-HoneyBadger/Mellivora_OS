@@ -246,6 +246,24 @@ blk_cache_write:
         mov [.bcw_cnt], ecx
         mov [.bcw_src], esi
 
+        ; The other write choke point: file data, and the raw block writer the
+        ; allocator and the snapshot code use themselves. Preserving a block
+        ; writes through here, so the guard in hbfs_snap_preserve is what stops
+        ; it recursing.
+        cmp dword [hbfs_snap_active], 0
+        je .bcw_preserved
+        mov ebx, [.bcw_lba]
+        mov ecx, [.bcw_cnt]
+.bcw_preserve_loop:
+        test ecx, ecx
+        jz .bcw_preserved
+        call hbfs_snap_preserve
+        jc .bcw_snap_refused
+        inc ebx
+        dec ecx
+        jmp .bcw_preserve_loop
+.bcw_preserved:
+
         mov eax, [.bcw_lba]
         mov ecx, [.bcw_cnt]
         call hbfs_crypt_partial
@@ -328,6 +346,12 @@ blk_cache_write:
         ; Reached only from the encrypted loop, which holds the cipher's lock.
         mov edi, blk_crypt_lock
         call spin_unlock
+        popad
+        stc
+        ret
+.bcw_snap_refused:
+        mov esi, msg_snap_full
+        call vga_print
         popad
         stc
         ret
