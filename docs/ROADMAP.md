@@ -548,11 +548,13 @@ Of those, the power-cut harness, the quota and ACL conformance suites, and the
 corrupted-volume repair are in place; volume encryption and the VFS redirector
 seam have since landed, as have compressed files, volume labels, safe ejection
 and ACL inheritance. Snapshots have landed too - a copy-on-write map that keeps
-the old content of every block written while it lives, reported by
-`snapshot info` and released block for block by `snapshot drop`, gated by
-`make check-snapshot` - with reading files back out of one still to write.
-Multiple mount points and the 10 000-iteration `make crash-soak` run are the
-wave's remaining work.
+the old content of every block written or freed while it lives, `snapshot cat`
+to read a file as it was, `snapshot drop` to release every block - gated by
+`make check-snapshot`. Multiple mount points and the 10 000-iteration
+`make crash-soak` run are the wave's remaining work. Two write-path defects
+found while building the read side are open and recorded here rather than
+buried: `cp` onto an existing name leaves the file empty, and a read of a file
+written in the same boot while a snapshot is live sees nothing.
 
 ### M4 · Configuration and services (9–13 weeks)
 

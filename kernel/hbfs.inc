@@ -1922,6 +1922,29 @@ hbfs_free_blocks:
         mov [.free_start], eax
         mov [.free_count], ecx
 
+        ; A snapshot has to hold a block's content before anything can destroy
+        ; it, and giving a block back is when its content becomes reusable: the
+        ; next allocation writes over it. Preserving at the free rather than at
+        ; the next write is what keeps a deleted file readable through a
+        ; snapshot - without it the block was handed to the snapshot's own next
+        ; copy and the file's bytes were replaced by the copy's.
+        cmp  dword [hbfs_snap_active], 1
+        jne  .free_no_preserve
+        mov  esi, 0
+.free_preserve:
+        cmp  esi, [.free_count]
+        jge  .free_no_preserve
+        mov  eax, [.free_start]
+        add  eax, esi
+        shl  eax, 3                     ; data block -> its first sector
+        add  eax, HBFS_DATA_START
+        mov  ebx, eax
+        call hbfs_snap_preserve
+        jc   .free_out                  ; cannot keep it: refuse to free it
+        inc  esi
+        jmp  .free_preserve
+.free_no_preserve:
+
         ; Read bitmap (served from the resident copy when valid)
         call hbfs_load_bitmap
 

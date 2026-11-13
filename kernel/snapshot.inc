@@ -551,12 +551,391 @@ hbfs_snap_drop:
 .hsd_block: dd 0
 
 ;-----------------------------------------------------------------------
+; snap_read_sectors - read sectors as the snapshot saw them
+;   In : EAX = first LBA, ECX = sector count, EDI = destination
+;   Out: CF = 1 when a read failed
+;
+; Every read a snapshot does comes through here. The unit a snapshot keeps is a
+; window of eight sectors, and a window's start is not the same as the LBA a
+; caller asks for: the data area's windows are anchored at HBFS_DATA_START, and
+; the root directory is written a sector at a time, so a request can begin part
+; way into a window and run into the next one. Resolving each sector through the
+; window that holds it keeps a preserved copy aligned with the bytes it stands
+; in for; reading a whole window as if it were the block asked for shifted a
+; directory's entries by however many sectors the window began early.
+;-----------------------------------------------------------------------
+snap_read_sectors:
+        pushad
+        mov  [.srs_lba], eax
+        mov  [.srs_cnt], ecx
+        mov  [.srs_dst], edi
+.srs_loop:
+        cmp  dword [.srs_cnt], 0
+        je   .srs_done
+        mov  eax, [.srs_lba]
+        call hbfs_snap_block_lba
+        mov  [.srs_win], eax
+        mov  ebx, eax
+        call hbfs_snap_find
+        jnc  .srs_kept
+        mov  eax, [.srs_lba]            ; not kept: the volume's own sector
+        jmp  .srs_read
+.srs_kept:
+        mov  [.srs_copy], eax           ; the copy's first sector
+        mov  eax, [.srs_lba]
+        sub  eax, [.srs_win]
+        add  eax, [.srs_copy]
+.srs_read:
+        mov  ecx, 1
+        mov  edi, [.srs_dst]
+        call blk_cache_read
+        jc   .srs_fail
+        inc  dword [.srs_lba]
+        add  dword [.srs_dst], 512
+        dec  dword [.srs_cnt]
+        jmp  .srs_loop
+.srs_done:
+        popad
+        clc
+        ret
+.srs_fail:
+        popad
+        stc
+        ret
+.srs_lba:  dd 0
+.srs_cnt:  dd 0
+.srs_dst:  dd 0
+.srs_win:  dd 0
+.srs_copy: dd 0
+
+;-----------------------------------------------------------------------
+; snap_read_blocks - read whole blocks as the snapshot saw them
+;   In : EAX = first LBA, ECX = block count, EDI = destination
+;-----------------------------------------------------------------------
+snap_read_blocks:
+        shl  ecx, 3
+        jmp  snap_read_sectors
+
+;-----------------------------------------------------------------------
+; snap_find_in_dir - find a name in the directory buffer
+;   In : EAX = slots in the buffer, ESI = name
+;   Out: EAX = pointer to the entry, CF = 1 when it is not there
+;-----------------------------------------------------------------------
+snap_find_in_dir:
+        push ebx
+        push ecx
+        push edx
+        push esi
+        push edi
+        mov  [.sfid_slots], eax
+        mov  [.sfid_name], esi
+        xor  ecx, ecx
+        mov  edi, hbfs_dir_buf
+.sfid_loop:
+        cmp  ecx, [.sfid_slots]
+        jae  .sfid_missing
+        cmp  byte [edi + HBFS_DE_TYPE], FTYPE_FREE
+        je   .sfid_next
+        cmp  byte [edi + HBFS_DE_NAME], 0
+        je   .sfid_next
+        push edi
+        mov  esi, [.sfid_name]
+        add  edi, HBFS_DE_NAME
+        call str_compare
+        pop  edi
+        test eax, eax
+        jz   .sfid_found
+.sfid_next:
+        add  edi, HBFS_DIR_ENTRY_SIZE
+        inc  ecx
+        jmp  .sfid_loop
+.sfid_found:
+        mov  eax, edi
+        pop  edi
+        pop  esi
+        pop  edx
+        pop  ecx
+        pop  ebx
+        clc
+        ret
+.sfid_missing:
+        pop  edi
+        pop  esi
+        pop  edx
+        pop  ecx
+        pop  ebx
+        stc
+        ret
+.sfid_slots: dd 0
+.sfid_name:  dd 0
+
+;-----------------------------------------------------------------------
+; snap_putc - one byte of a file, to the console and to COM1
+;   In : AL = the byte
+;
+; A task's own output reaches both, and a snapshot read is the same act as
+; `cat`: a harness watching the serial console has to see what the file held.
+;-----------------------------------------------------------------------
+snap_putc:
+        push eax
+        call vga_putchar
+        pop  eax
+        jmp  serial_putchar
+
+msg_snap_no_file:  db "snapshot: no such file in the snapshot", 0x0A, 0
+msg_snap_not_dir:  db "snapshot: a path component is not a directory", 0x0A, 0
+msg_snap_not_file: db "snapshot: that is a directory", 0x0A, 0
+msg_snap_no_read:  db "snapshot: read failed", 0x0A, 0
+msg_snap_kind:     db "snapshot: that file's layout (compressed or extent-mapped) is not readable yet", 0x0A, 0
+msg_snap_no_snap:  db "snapshot: none taken, so there is nothing to read", 0x0A, 0
+
+;-----------------------------------------------------------------------
+; snap_cat - print a file as of the snapshot
+;   In : ESI = the path
+;-----------------------------------------------------------------------
+snap_cat:
+        pushad
+        cmp  dword [hbfs_snap_active], 0
+        jne  .sc_live
+        mov  esi, msg_snap_no_snap
+        call vga_print
+        popad
+        ret
+.sc_live:
+        cmp  byte [esi], 0
+        jne  .sc_named
+        mov  esi, msg_snap_usage
+        call vga_print
+        popad
+        ret
+.sc_named:
+        mov  [.sc_ptr], esi
+        mov  eax, HBFS_ROOT_DIR_START
+        mov  [.sc_lba], eax
+        mov  dword [.sc_blocks], HBFS_ROOT_DIR_BLOCKS
+.sc_component:
+        mov  esi, [.sc_ptr]
+        call snap_next_name
+        jc   .sc_missing
+        mov  [.sc_ptr], esi
+        mov  eax, [.sc_lba]
+        mov  ecx, [.sc_blocks]
+        mov  edi, hbfs_dir_buf
+        call snap_read_blocks
+        jc   .sc_iofail
+        ; The walk has overwritten the shell's cached view of a directory.
+        mov  dword [dir_cache_lba], 0xFFFFFFFE
+        mov  eax, [.sc_blocks]
+        shl  eax, 12                    ; blocks -> bytes
+        xor  edx, edx
+        mov  ecx, HBFS_DIR_ENTRY_SIZE
+        div  ecx                        ; slots in this buffer
+        mov  esi, snap_name
+        call snap_find_in_dir
+        jc   .sc_missing
+        movzx ecx, byte [eax + HBFS_DE_TYPE]
+        mov  [.sc_type], ecx
+        mov  ecx, [eax + HBFS_DE_BLOCK]
+        mov  [.sc_block], ecx
+        mov  ecx, [eax + HBFS_DE_BLKCNT]
+        mov  [.sc_count], ecx
+        mov  ecx, [eax + HBFS_DE_SIZE]
+        mov  [.sc_size], ecx
+        movzx ecx, word [eax + HBFS_DE_FLAGS]
+        mov  [.sc_flags], ecx
+        mov  esi, [.sc_ptr]
+        call snap_more_path
+        jc   .sc_descend
+        cmp  dword [.sc_type], FTYPE_DIR
+        je   .sc_isdir
+        test dword [.sc_flags], HBFS4_DE_EXTENTS
+        jnz  .sc_kind
+        test dword [.sc_flags], HBFS4_DE_COMPRESSED
+        jnz  .sc_kind
+        call snap_print_file
+        jc   .sc_iofail
+        popad
+        ret
+.sc_descend:
+        cmp  dword [.sc_type], FTYPE_DIR
+        jne  .sc_notdir
+        mov  eax, [.sc_count]
+        test eax, eax
+        jz   .sc_iofail
+        mov  [.sc_blocks], eax
+        mov  eax, [.sc_block]
+        cmp  eax, [hbfs_total_blocks]
+        jae  .sc_iofail
+        shl  eax, 3
+        add  eax, HBFS_DATA_START
+        mov  [.sc_lba], eax
+        jmp  .sc_component
+.sc_missing:
+        mov  esi, msg_snap_no_file
+        call vga_print
+        popad
+        ret
+.sc_notdir:
+        mov  esi, msg_snap_not_dir
+        call vga_print
+        popad
+        ret
+.sc_isdir:
+        mov  esi, msg_snap_not_file
+        call vga_print
+        popad
+        ret
+.sc_kind:
+        mov  esi, msg_snap_kind
+        call vga_print
+        popad
+        ret
+.sc_iofail:
+        mov  esi, msg_snap_no_read
+        call vga_print
+        popad
+        ret
+.sc_ptr:    dd 0
+.sc_lba:    dd 0
+.sc_blocks: dd 0
+.sc_type:   dd 0
+.sc_block:  dd 0
+.sc_count:  dd 0
+.sc_size:   dd 0
+.sc_flags:  dd 0
+
+;-----------------------------------------------------------------------
+; snap_print_file - write a file out of the snapshot
+;   Out: CF = 1 when a block could not be read
+;-----------------------------------------------------------------------
+snap_print_file:
+        pushad
+        mov  dword [.spf_i], 0
+        mov  dword [.spf_left], 0
+        mov  eax, [snap_cat.sc_size]
+        mov  [.spf_left], eax
+.spf_loop:
+        cmp  dword [.spf_left], 0
+        je   .spf_done
+        mov  eax, [.spf_i]
+        cmp  eax, [snap_cat.sc_count]
+        jae  .spf_done                  ; fewer blocks than the size claims
+        add  eax, [snap_cat.sc_block]
+        cmp  eax, [hbfs_total_blocks]
+        jae  .spf_fail
+        shl  eax, 3
+        add  eax, HBFS_DATA_START
+        mov  edi, hbfs_snap_buf
+        mov  ecx, 1
+        call snap_read_blocks
+        jc   .spf_fail
+        mov  ecx, [.spf_left]
+        cmp  ecx, HBFS_BLOCK_SIZE
+        jbe  .spf_have_n
+        mov  ecx, HBFS_BLOCK_SIZE
+.spf_have_n:
+        mov  [.spf_n], ecx
+        mov  esi, hbfs_snap_buf
+.spf_bytes:
+        cmp  ecx, 0
+        je   .spf_next
+        lodsb
+        call snap_putc
+        dec  ecx
+        jmp  .spf_bytes
+.spf_next:
+        mov  eax, [.spf_n]
+        sub  [.spf_left], eax
+        inc  dword [.spf_i]
+        jmp  .spf_loop
+.spf_done:
+        mov  al, 0x0A
+        call snap_putc
+        popad
+        clc
+        ret
+.spf_fail:
+        popad
+        stc
+        ret
+.spf_i:    dd 0
+.spf_left: dd 0
+.spf_n:    dd 0
+
+;-----------------------------------------------------------------------
+; snap_next_name - take the next path component into snap_name
+;   In : ESI = the path
+;   Out: ESI = just past the component, CF = 1 when there was none
+;-----------------------------------------------------------------------
+snap_next_name:
+        push edi
+        push ecx
+        call skip_spaces
+        cmp  byte [esi], '/'
+        jne  .snn_start
+        inc  esi
+        call skip_spaces
+.snn_start:
+        mov  edi, snap_name
+        xor  ecx, ecx
+.snn_copy:
+        mov  al, [esi]
+        test al, al
+        jz   .snn_end
+        cmp  al, '/'
+        je   .snn_end
+        cmp  ecx, HBFS_MAX_FILENAME
+        jae  .snn_end
+        mov  [edi + ecx], al
+        inc  ecx
+        inc  esi
+        jmp  .snn_copy
+.snn_end:
+        mov  byte [edi + ecx], 0
+        test ecx, ecx
+        jz   .snn_none
+        pop  ecx
+        pop  edi
+        clc
+        ret
+.snn_none:
+        pop  ecx
+        pop  edi
+        stc
+        ret
+
+;-----------------------------------------------------------------------
+; snap_more_path - is there another component after this one?
+;   In : ESI = the path
+;   Out: CF = 1 when there is
+;-----------------------------------------------------------------------
+snap_more_path:
+        push eax
+        call skip_spaces
+        cmp  byte [esi], '/'
+        jne  .smp_no
+        inc  esi
+        call skip_spaces
+        cmp  byte [esi], 0
+        je   .smp_no
+        pop  eax
+        stc
+        ret
+.smp_no:
+        pop  eax
+        clc
+        ret
+
+snap_name: times HBFS_MAX_FILENAME + 1 db 0
+
+;-----------------------------------------------------------------------
 ; cmd_snapshot - `snapshot [create|info|drop]`
 ;-----------------------------------------------------------------------
 snap_word_create: db "create", 0
 snap_word_info:   db "info", 0
 snap_word_drop:   db "drop", 0
 snap_word_delete: db "delete", 0
+snap_word_cat:    db "cat", 0
 
 cmd_snapshot:
         pushad
@@ -577,6 +956,9 @@ cmd_snapshot:
         mov edi, snap_word_delete
         call str_starts_with
         jc .cs_drop
+        mov edi, snap_word_cat
+        call str_starts_with
+        jc .cs_cat
         mov esi, msg_snap_usage
         call vga_print
         popad
@@ -615,6 +997,11 @@ cmd_snapshot:
         call vga_print_dec
         mov esi, msg_snap_dropped_copies
         call vga_print
+        popad
+        ret
+.cs_cat:
+        ; str_starts_with consumed the word and the space after it.
+        call snap_cat
         popad
         ret
 .cs_info:
@@ -662,5 +1049,5 @@ msg_snap_none:     db "snapshot: none taken", 0x0A, 0
 msg_snap_exists:   db "snapshot: one is already taken", 0x0A, 0
 msg_snap_denied:   db "snapshot: root only", 0x0A, 0
 msg_snap_create_failed: db "snapshot: could not be taken (no room or write failed)", 0x0A, 0
-msg_snap_usage:    db "snapshot [create|info|drop]", 0x0A, 0
+msg_snap_usage:    db "snapshot [create|info|drop|cat FILE]", 0x0A, 0
 msg_snap_full:     db 0x0A, "HBFS: snapshot map full, write refused", 0x0A, 0

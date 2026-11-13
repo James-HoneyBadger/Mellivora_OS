@@ -156,6 +156,56 @@ if [ "$((AFTER - BEFORE))" -gt 1 ]; then
     fail "the snapshot kept $((AFTER - BEFORE)) blocks after it was dropped (before $BEFORE, after $AFTER)"
 fi
 
+# Reading out of a snapshot is the second half of the item: the files it holds
+# have to read correctly. Two shapes matter, and neither can be asserted from the
+# same boot that types the words - the console echoes what is typed, so a
+# document's title would match its own command line. The content is therefore
+# produced by `cp` from a document already on the volume, and the boot that reads
+# it never mentions the words.
+drive "del sn_read.txt" >/dev/null 2>&1 || true
+drive "cp /docs/todo.txt sn_read.txt" \
+    --then "snapshot create" --expect "snapshot: taken" >/dev/null 2>&1 \
+    || fail "snapshot tests: could not take the snapshot the reads use"
+
+# Reading a file that is still there is the easy half; the half worth gating is
+# a file the volume no longer has. Its blocks are freed after the snapshot, and
+# a freed block is one the allocator will hand out again - so the snapshot has to
+# have taken the content before the free, not before the next write.
+printf '  %-46s ' "a deleted file reads out of the snapshot"
+out="$(mktemp)"
+if drive "del sn_read.txt" --then "snapshot cat sn_read.txt" --settle 3 \
+        --expect "Mellivora OS TODO List" --out "$out" >/dev/null 2>&1; then
+    echo "PASS"
+    rm -f "$out"
+else
+    echo "FAIL  (output: $out)"
+    exit 1
+fi
+
+printf '  %-46s ' "a file under a directory reads through the snapshot"
+out="$(mktemp)"
+if drive "snapshot cat /docs/todo.txt" --settle 2 \
+        --expect "Mellivora OS TODO List" --out "$out" >/dev/null 2>&1; then
+    echo "PASS"
+    rm -f "$out"
+else
+    echo "FAIL  (output: $out)"
+    exit 1
+fi
+
+printf '  %-46s ' "a name the snapshot never held is refused"
+out="$(mktemp)"
+if drive "snapshot cat sn_absent.txt" --settle 2 \
+        --expect "no such file in the snapshot" --out "$out" >/dev/null 2>&1; then
+    echo "PASS"
+    rm -f "$out"
+else
+    echo "FAIL  (output: $out)"
+    exit 1
+fi
+
+drive "snapshot drop" >/dev/null 2>&1 || fail "snapshot tests: could not drop the read snapshot"
+
 printf '  %-46s ' "the volume is consistent afterwards"
 if python3 "$FSCK" "$IMAGE" >/dev/null 2>&1; then
     echo "PASS"
@@ -165,5 +215,6 @@ else
 fi
 
 drive "del sn_probe.txt" >/dev/null 2>&1 || true
+drive "del sn_read.txt" >/dev/null 2>&1 || true
 
-echo "  Snapshot: taken mid-write, survived a reboot, and returned every block"
+echo "  Snapshot: taken mid-write, read back after a delete, and returned every block"
