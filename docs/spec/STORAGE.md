@@ -432,9 +432,13 @@ instead of forgetting it: those blocks would otherwise be handed out again.
 
 **The write hook.** Before a block's first modification while a snapshot exists,
 its old content is copied to a free block and `source -> copy` is appended to the
-map. The two choke points that carry every write in this kernel are
-`hbfs_meta_write` for metadata and `blk_cache_write` for file data, and the hook
-is in both. Preserving is itself a write, so a guard covers the recursion; the
+map. Three writers carry every write in this kernel - `hbfs_meta_write` for
+metadata, `blk_cache_write` for file data, and `hbfs_save_root_dir`, which
+journals and calls the device itself because it writes a single changed sector -
+and the hook is in all three. The third was missing at first, and its absence
+was invisible until a read was attempted: a snapshot kept every file's bytes and
+none of the tree that named them. Preserving is itself a write, so a guard
+covers the recursion; the
 consequence is wanted, because the superblock, the bitmap and the root directory
 are preserved the first time they change, which is what gives the snapshot its
 own view of the volume.

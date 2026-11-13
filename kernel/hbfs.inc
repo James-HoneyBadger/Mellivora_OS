@@ -1636,6 +1636,14 @@ hbfs_save_root_dir:
         repe cmpsd
         je  .hsrd_next                  ; identical — nothing to write
         ; Changed: log the pre-image, write the sector, update the shadow
+        ; A snapshot keeps the old content of this directory block first. This
+        ; writer journals and calls the device itself rather than going through
+        ; hbfs_meta_write, so it is a third place the write hook has to be - and
+        ; the one whose absence made a snapshot unable to find a file in a
+        ; directory that had been written since it was taken.
+        mov  ebx, [.hsrd_lba]
+        call hbfs_snap_preserve
+        jc   .hsrd_snap_refused
         mov eax, [.hsrd_lba]
         call hbfs_journal_log_sector
         jc  .hsrd_err
@@ -1665,6 +1673,13 @@ hbfs_save_root_dir:
         call hbfs_journal_abort
         mov esi, msg_hbfs_dir_write_err
         call vga_print
+        popad
+        stc
+        ret
+.hsrd_snap_refused:
+        mov  esi, msg_snap_full
+        call vga_print
+        call hbfs_journal_abort
         popad
         stc
         ret
