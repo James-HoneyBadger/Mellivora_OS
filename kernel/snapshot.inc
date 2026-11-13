@@ -478,6 +478,10 @@ hbfs_snap_drop:
         jc .hsd_bad
 .hsd_live:
         call hbfs_journal_begin
+        ; Nothing here is preserved: the snapshot being dropped is the reason to
+        ; preserve nothing, and a copy taken while its own map is being emptied
+        ; is a copy the map will never name - one leaked block per cycle.
+        inc dword [hbfs_snap_guard]
 
         mov ebx, 0
 .hsd_free_loop:
@@ -519,6 +523,7 @@ hbfs_snap_drop:
         mov esi, hbfs_super_buf
         call hbfs_meta_write
         jc .hsd_fail
+        dec dword [hbfs_snap_guard]
 
         call hbfs_journal_commit
         mov dword [hbfs_snap_active], 0
@@ -529,6 +534,7 @@ hbfs_snap_drop:
         clc
         ret
 .hsd_fail:
+        dec dword [hbfs_snap_guard]
         call hbfs_journal_abort
         popad
         stc

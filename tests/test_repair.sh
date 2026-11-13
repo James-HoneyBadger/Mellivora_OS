@@ -150,13 +150,18 @@ fi
 # the walk twice by itself. The counts are accumulated by the walk, so a run
 # that does not clear them reports the second pass added to the first: twice the
 # entries and twice the blocks, which then reads as every block claimed twice.
-# The trailing `echo` is what says the second report had been printed: --expect
-# can only ask for text to be present, so waiting on REPAIR_ alone would stop
-# the machine after the first run's report.
+# --expect can only ask for text to be present, so waiting on REPAIR_ would stop
+# the machine after the first report - and an `echo` marker is no better, because
+# the typed command is echoed to the same console the driver watches, so the
+# marker matches before either repair has printed anything. The driver is told to
+# leave the machine alone long enough for the second walk to finish instead, and
+# the transcript it saves is cumulative: both reports are in it by then. A check
+# leaves the resident bitmap invalid, so the second walk re-reads it and costs a
+# few seconds more than the first.
 out="$work/twice.txt"
 printf '  %-34s ' "a second check counts the same"
-python3 "$DRIVE" "$copy" $'repair\nrepair' --then "echo TWICE_DONE" --wait 40 \
-    --expect REPAIR_ --expect TWICE_DONE --out "$out" >/dev/null 2>&1 \
+python3 "$DRIVE" "$copy" $'repair\nrepair' --wait 40 --settle 15 \
+    --expect REPAIR_ --out "$out" >/dev/null 2>&1 \
     || fail "repair did not run twice"
 # Each report is one line, so the number of count lines is the number of runs
 # that reported, and they all have to name the same volume.
