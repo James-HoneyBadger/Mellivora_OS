@@ -48,9 +48,12 @@ fi
 [ -f "$ROOT/tools/crash_inject.py" ] || fail "power-cut: tools/crash_inject.py is missing"
 
 # One workload per shape of metadata work. Each is a program in /bin that churns
-# the journal in its own way: directory creation, create/delete/chmod, and the
-# extent writer.
-workloads=("fs_mkdir_test" "fs_meta_test" "fs_mkdir_test" "fs_meta_test")
+# the journal in its own way: directory creation, create/delete/chmod, the
+# extent writer, and the extended-attribute block an ACL lives in.
+# The xattr workload earns a slot of its own: an ACL's block is named by a field
+# of the entry rather than by a run, so it is allocated and freed by a path the
+# other two never take.
+workloads=("fs_mkdir_test" "fs_meta_test" "crash_acl_test" "fs_mkdir_test" "fs_meta_test")
 
 # Divide the iterations over the workloads, giving the remainder to the first
 # ones so a small gate still exercises every shape at least once.

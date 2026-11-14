@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 135 shell built-ins, 298 NASM programs and 15 C program
+- 210 syscalls, 135 shell built-ins, 299 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -436,7 +436,11 @@ material.
   It now retries the boot once, prints what QEMU said before it died, runs fsck
   on the image anyway, and keeps the 2 GB copy per iteration only with
   `--keep` - the run that finally passed also stopped leaving 200 of them in
-  `/var/tmp`.
+  `/var/tmp`. The workload rotation gained an extended-attribute churner
+  (`crash_acl_test`): an ACL's block is named by a field of an entry rather than
+  by a run, so it is allocated, grown and freed by a path the other workloads
+  never take - and three bitmap-rebuild defects have already been found in
+  exactly that blind spot.
 - **The volume manager (landed).** The partition table is read - MBR, or GPT
   behind a protective MBR - and the filesystem is probed for rather than
   assumed, so a disk with no filesystem says so and `volumes` can name what the
@@ -624,7 +628,7 @@ for" true.
 
 - **PE/COFF loader** and shared libraries with a stable ABI: relocations, export
   and import tables, per-process module lists, load-time and run-time binding.
-  The existing flat and ELF32 loaders stay, so all 298 NASM programs keep working.
+  The existing flat and ELF32 loaders stay, so all 299 NASM programs keep working.
 - **Unicode end to end**: UTF-16 at the ABI boundary, UTF-8 internally, locale and
   time-zone data, collation, and a font stack that draws every code point the
   system decodes rather than the 5×7 VBE face. A *scalable* (outline) font is
