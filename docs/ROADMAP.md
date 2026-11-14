@@ -474,8 +474,11 @@ material.
   a directory that carries one passes it to everything created inside it -
   cleared for files, kept for subdirectories, so the grant walks a tree - and
   evaluation reads only the permission digit, which makes an inheritable ACE
-  effective where it is written as well as below it. Group-class unions are the
-  remaining ACL work.
+  effective where it is written as well as below it. **The group class is a union**:
+  the mode word's group triplet and any group ACE naming the caller's group are
+  added before the mask narrows them, so a 0640 file with `acl:g<gid>` granting
+  write gives that group write and keeps the read the triplet gave them -
+  `acl_test` proves both directions, and that the mask still narrows the total.
 - **Alternate data streams (landed).** A stream is a second content of a
   file, reached as `FILE:STREAM`, with its own size, blocks, permissions and
   xattrs; it is stored as a directory entry of type 6 named `FILE:STREAM`, so

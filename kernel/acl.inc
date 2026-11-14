@@ -29,11 +29,12 @@
 ; file carries HBFS_XATTR_PER_BLOCK - 1 named ACEs at most, which is the same
 ; order of magnitude as the ACLs files here have.
 ;
-; Evaluation order (POSIX's, without group-class unions):
+; Evaluation order (POSIX's, including the group-class union):
 ;   1. root is granted everything before any of this is consulted;
 ;   2. the owner, through `acl:u<owner>` when present, else the owner triplet;
 ;   3. a named user ACE for the caller, narrowed by `acl:m`;
-;   4. the caller's group ACE, narrowed by `acl:m`;
+;   4. the group class - the file's group permissions plus any group ACE that
+;      names the caller's group - narrowed by `acl:m`;
 ;   5. `acl:o`.
 ;
 ; The value is a permission digit rather than rwx bits: it is what chmod speaks
@@ -187,18 +188,37 @@ acl_perm:
         jmp .acp_grant
 
 .acp_group:
-        ; 4. the caller's group
-        mov ebx, [.acp_gid]
-        mov edi, [.acp_entry]
-        mov al, 'g'
-        xor ah, ah
+        ; 4. the group class, which is a union: the file's own group permissions
+        ;    and every named group ACE that names the caller's group are added
+        ;    together, and only then narrowed by the mask. Taking the ACE alone
+        ;    lost the read a caller got from the group triplet - a file mode
+        ;    0640 with `acl:g<gid>` granting write gave that group write and
+        ;    took away the read the mode word had given them.
+        mov  dword [.acp_class], 0
+        mov  edi, [.acp_entry]
+        movzx eax, word [edi + HBFS_DE_GID]
+        cmp  eax, [.acp_gid]
+        jne  .acp_group_ace
+        movzx eax, word [edi + HBFS_DE_MODE]
+        shr  eax, 3
+        and  eax, 7
+        mov  [.acp_class], eax
+.acp_group_ace:
+        mov  ebx, [.acp_gid]
+        mov  edi, [.acp_entry]
+        mov  al, 'g'
+        xor  ah, ah
         call acl_get
-        cmp eax, -1
-        je .acp_other_ace
-        mov ebx, eax
+        cmp  eax, -1
+        je   .acp_group_masked
+        or   [.acp_class], eax
+.acp_group_masked:
+        cmp  dword [.acp_class], 0
+        je   .acp_other_ace            ; not in the group class at all
+        mov  ebx, [.acp_class]
         call .acp_mask
-        mov eax, ebx
-        jmp .acp_grant
+        mov  eax, ebx
+        jmp  .acp_grant
 
 .acp_other_ace:
         ; 5. everyone else
@@ -232,6 +252,7 @@ acl_perm:
         ret
 
 .acp_entry: dd 0
+.acp_class: dd 0
 .acp_uid:   dd 0
 .acp_gid:   dd 0
 .acp_other: dd 0

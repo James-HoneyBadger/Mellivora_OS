@@ -521,6 +521,15 @@ class FSImage:
                         self._mark_block_range(fresh, run_start, run_blocks)
                 elif block_count > 0:
                     self._mark_block_range(fresh, start_block, block_count)
+                # An entry can own a block nothing else names: its extended
+                # attributes, which is where an ACL lives. A rebuild that only
+                # looked at runs freed that block, and the file then referenced
+                # a block the bitmap had given away - "referenced but not
+                # marked allocated" on the next check.
+                xattr_lba = struct.unpack_from('<I', directory_buf, off + 284)[0]
+                if xattr_lba >= HBFS_DATA_START:
+                    xattr_block = (xattr_lba - HBFS_DATA_START) // SECTORS_PER_BLOCK
+                    self._mark_block_range(fresh, xattr_block, 1)
                 entries.append((name, ftype, start_block, block_count))
             return entries
 

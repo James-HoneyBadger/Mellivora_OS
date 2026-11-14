@@ -135,6 +135,8 @@ start:
         mov [child_pid], eax
         call wait_child
 
+        call check_group_class
+
         mov eax, SYS_PRINT
         mov ebx, msg_ok
         int 0x80
@@ -240,7 +242,131 @@ stage_fail:
         int 0x80
         jmp stage_fail
 
+; --- the group class ---------------------------------------------------
+;
+; POSIX's group class is a union: what the mode word's group triplet grants and
+; what a named group ACE names for the same group are added together, and the
+; mask narrows the total. A file mode 0640 with `acl:g<gid>` granting write has
+; to give that group write *and* keep the read the triplet gave them.
+;
+; 4000 is in the file's group and named by no user ACE, so only the group class
+; can let them in.
+check_group_class:
+        mov eax, SYS_CHMOD
+        mov ebx, fixture
+        mov ecx, 0o640
+        int 0x80
+        cmp eax, 0
+        jne test_fail
+        mov ecx, key_g1000
+        mov edx, val_2
+        call set_ace
+        cmp eax, 0
+        jne test_fail
+        mov ecx, key_mask
+        mov edx, val_6
+        call set_ace
+        cmp eax, 0
+        jne test_fail
+
+        mov eax, SYS_FORK
+        int 0x80
+        test eax, eax
+        jz stage_group_union
+        cmp eax, -1
+        je test_fail
+        mov [child_pid], eax
+        call wait_child
+        call progress
+
+        ; The mask still narrows the union: read, but no write.
+        mov ecx, key_mask
+        mov edx, val_4
+        call set_ace
+        cmp eax, 0
+        jne test_fail
+        mov eax, SYS_FORK
+        int 0x80
+        test eax, eax
+        jz stage_group_masked
+        cmp eax, -1
+        je test_fail
+        mov [child_pid], eax
+        call wait_child
+        call progress
+        ret
+
+stage_group_union:
+        mov ebx, 4000
+        mov ecx, 1000
+        call become_two
+        jc stage_fail
+        mov eax, SYS_OPEN
+        mov ebx, fixture
+        mov ecx, O_RDONLY
+        int 0x80
+        cmp eax, -1
+        je stage_fail
+        mov ebx, eax
+        mov eax, SYS_CLOSE
+        int 0x80
+        mov eax, SYS_OPEN
+        mov ebx, fixture
+        mov ecx, O_WRONLY
+        int 0x80
+        cmp eax, -1
+        je stage_fail
+        mov ebx, eax
+        mov eax, SYS_CLOSE
+        int 0x80
+        call stage_ok
+
+stage_group_masked:
+        mov ebx, 4000
+        mov ecx, 1000
+        call become_two
+        jc stage_fail
+        mov eax, SYS_OPEN
+        mov ebx, fixture
+        mov ecx, O_RDONLY
+        int 0x80
+        cmp eax, -1
+        je stage_fail
+        mov ebx, eax
+        mov eax, SYS_CLOSE
+        int 0x80
+        mov eax, SYS_OPEN
+        mov ebx, fixture
+        mov ecx, O_WRONLY
+        int 0x80
+        cmp eax, -1
+        jne stage_fail
+        call stage_ok
+
 ; --- helpers -----------------------------------------------------------
+
+; EBX = uid, ECX = gid to become; CF set when the kernel refused
+become_two:
+        push ebx
+        mov eax, SYS_SETGID
+        mov ebx, ecx
+        int 0x80
+        pop ebx
+        cmp eax, 0
+        jne .bt_bad
+        mov eax, SYS_SETUID
+        int 0x80
+        cmp eax, 0
+        jne .bt_bad
+        mov eax, SYS_GETUID
+        int 0x80
+        cmp eax, ebx
+        jne .bt_bad
+        clc
+        ret
+.bt_bad:
+        stc
+        ret
 
 ; EBX = uid to become; CF set when the kernel refused
 become:
@@ -301,9 +427,12 @@ child_pid:   dd 0
 fixture:     db "acl_fix.txt", 0
 key_u1000:   db "acl:u1000", 0
 key_u2000:   db "acl:u2000", 0
+key_g1000:   db "acl:g1000", 0
 key_mask:    db "acl:m", 0
 key_other:   db "acl:o", 0
 val_7:       db "7", 0
+val_6:       db "6", 0
+val_2:       db "2", 0
 val_4:       db "4", 0
 val_0:       db "0", 0
 payload:     db "acl fixture", 10
