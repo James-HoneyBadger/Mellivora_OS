@@ -242,9 +242,20 @@ blk_cache_read:
 ;-----------------------------------------------------------------------
 blk_cache_write:
         pushad
-        mov [.bcw_lba], eax
-        mov [.bcw_cnt], ecx
-        mov [.bcw_src], esi
+        ; The locals live in this call's own frame. A snapshot preserves a block
+        ; by writing its copy through this same function, so the inner call used
+        ; to overwrite the outer call's LBA and length and the file's own write
+        ; landed wherever the copy had just been written - a file that read back
+        ; empty while its bytes sat in a snapshot block.
+        mov  ebp, esp
+        sub  esp, 32
+        mov  dword [ebp - 16], 0
+        mov  dword [ebp - 20], 0
+        mov  dword [ebp - 24], 0
+        mov  dword [ebp - 28], 0
+        mov  [ebp - 4], eax
+        mov  [ebp - 8], ecx
+        mov  [ebp - 12], esi
 
         ; The other write choke point: file data, and the raw block writer the
         ; allocator and the snapshot code use themselves. Preserving a block
@@ -252,8 +263,8 @@ blk_cache_write:
         ; it recursing.
         cmp dword [hbfs_snap_active], 0
         je .bcw_preserved
-        mov ebx, [.bcw_lba]
-        mov ecx, [.bcw_cnt]
+        mov ebx, [ebp - 4]
+        mov ecx, [ebp - 8]
 .bcw_preserve_loop:
         test ecx, ecx
         jz .bcw_preserved
@@ -264,13 +275,13 @@ blk_cache_write:
         jmp .bcw_preserve_loop
 .bcw_preserved:
 
-        mov eax, [.bcw_lba]
-        mov ecx, [.bcw_cnt]
+        mov eax, [ebp - 4]
+        mov ecx, [ebp - 8]
         call hbfs_crypt_partial
         jc .bcw_partial
 
-        mov eax, [.bcw_lba]
-        mov ecx, [.bcw_cnt]
+        mov eax, [ebp - 4]
+        mov ecx, [ebp - 8]
         call hbfs_crypt_in_region
         jnc .bcw_plain
 
@@ -281,64 +292,68 @@ blk_cache_write:
 
         ; Encrypt block by block through one scratch buffer, so the caller's
         ; data is not modified and the device still sees whole blocks.
-        mov eax, [.bcw_cnt]
+        mov eax, [ebp - 8]
         shr eax, 3
-        mov [.bcw_blocks], eax
-        mov eax, [.bcw_lba]
-        mov [.bcw_cur_lba], eax
-        mov eax, [.bcw_lba]
+        mov [ebp - 16], eax
+        mov eax, [ebp - 4]
+        mov [ebp - 20], eax
+        mov eax, [ebp - 4]
         sub eax, [hbfs_crypt_first_lba]
         shr eax, 3                      ; the first block's XTS unit
-        mov [.bcw_cur_blk], eax
-        mov eax, [.bcw_src]
-        mov [.bcw_cur_src], eax
+        mov [ebp - 28], eax
+        mov eax, [ebp - 12]
+        mov [ebp - 24], eax
 .bcw_loop:
-        mov esi, [.bcw_cur_src]
+        mov esi, [ebp - 24]
         mov edi, blk_crypt_buf
         mov ecx, HBFS_BLOCK_SIZE / 4
         cld
         rep movsd
 
-        mov eax, [.bcw_cur_blk]         ; this block's XTS unit
+        mov eax, [ebp - 28]         ; this block's XTS unit
         mov edi, blk_crypt_buf
         xor edx, edx                    ; encrypt
         call xts_crypt_unit
         jc .bcw_fail                    ; no keys: a plain block would be wrong
 
-        mov eax, [.bcw_cur_lba]
+        mov eax, [ebp - 20]
         mov ecx, HBFS_SECTORS_PER_BLK
         mov esi, blk_crypt_buf
         call ata_write_sectors
         jc .bcw_fail
 
-        add dword [.bcw_cur_lba], HBFS_SECTORS_PER_BLK
-        add dword [.bcw_cur_src], HBFS_BLOCK_SIZE
-        inc dword [.bcw_cur_blk]
-        dec dword [.bcw_blocks]
+        add dword [ebp - 20], HBFS_SECTORS_PER_BLK
+        add dword [ebp - 24], HBFS_BLOCK_SIZE
+        inc dword [ebp - 28]
+        dec dword [ebp - 16]
         jnz .bcw_loop
 
         mov edi, blk_crypt_lock
         call spin_unlock
+        mov  esp, ebp
         popad
         clc
         ret
 
 .bcw_plain:
-        mov eax, [.bcw_lba]
-        mov ecx, [.bcw_cnt]
-        mov esi, [.bcw_src]
+        mov eax, [ebp - 4]
+        mov ecx, [ebp - 8]
+        mov esi, [ebp - 12]
         call ata_write_sectors
         jc .bcw_plain_fail
+        mov  esp, ebp
         popad
         clc
         ret
 .bcw_plain_fail:
+        mov  esp, ebp
         popad
         stc
         ret
 .bcw_partial:
         mov esi, msg_crypt_partial
         call vga_print
+        mov  esp, ebp
         popad
         stc
         ret
@@ -346,27 +361,22 @@ blk_cache_write:
         ; Reached only from the encrypted loop, which holds the cipher's lock.
         mov edi, blk_crypt_lock
         call spin_unlock
+        mov  esp, ebp
         popad
         stc
         ret
 .bcw_snap_refused:
         mov esi, msg_snap_full
         call vga_print
+        mov  esp, ebp
         popad
         stc
         ret
 .bcw_locked_out:
+        mov  esp, ebp
         popad
         stc
         ret
-.bcw_lba:      dd 0
-.bcw_cnt:      dd 0
-.bcw_src:      dd 0
-.bcw_blocks:   dd 0
-.bcw_cur_lba:  dd 0
-.bcw_cur_src:  dd 0
-.bcw_cur_blk:  dd 0
-
 msg_crypt_partial: db 0x0A, "HBFS: refusing a partial access to encrypted space", 0x0A, 0
 
 align 16

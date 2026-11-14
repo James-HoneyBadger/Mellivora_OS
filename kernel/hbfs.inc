@@ -1499,10 +1499,17 @@ hbfs_meta_write:
         call hbfs_require_writable
         jc  .hmw_refuse
         pushad
-        mov [.hmw_lba], eax
-        mov [.hmw_buf], esi
-        mov [.hmw_cnt], ecx
-        mov dword [.hmw_extra], 0
+        ; On this call's own frame, because a snapshot preserves a metadata
+        ; block by writing the map's sector and the record's header through this
+        ; same function: with module statics the inner write overwrote the
+        ; outer call's buffer and length, and the metadata it was asked to write
+        ; went to the wrong place.
+        mov  ebp, esp
+        sub  esp, 16
+        mov  [ebp - 4], eax
+        mov  [ebp - 8], esi
+        mov  [ebp - 12], ecx
+        mov  dword [ebp - 16], 0
 
         ; A v4 volume carries a CRC-32C at the end of every metadata run. The
         ; caller writes a range of sectors, so restamp the run here and, when
@@ -1523,18 +1530,18 @@ hbfs_meta_write:
         mov  eax, hbfs_bitmap_buf
         mov  ecx, HBFS_BITMAP_SIZE
         call hbfs_stamp_run
-        mov  edx, [.hmw_lba]
-        add  edx, [.hmw_cnt]
+        mov  edx, [ebp - 4]
+        add  edx, [ebp - 12]
         cmp  edx, HBFS_BITMAP_START + HBFS_BITMAP_SECTS
         jae  .mhw_stamped
-        mov  dword [.hmw_extra], 1
+        mov  dword [ebp - 16], 1
 .mhw_stamped:
         ; A snapshot keeps the old content of every block before it changes.
         ; This is one of the volume's two write choke points, so it is one of
         ; the two places the hook belongs; a refusal here refuses the write,
         ; which is what a full map has to do.
-        mov  ebx, [.hmw_lba]
-        mov  ecx, [.hmw_cnt]
+        mov  ebx, [ebp - 4]
+        mov  ecx, [ebp - 12]
 .mhw_preserve:
         test ecx, ecx
         jz   .mhw_preserved
@@ -1544,29 +1551,29 @@ hbfs_meta_write:
         dec  ecx
         jmp  .mhw_preserve
 .mhw_preserved:
-        mov  eax, [.hmw_lba]
-        mov  ecx, [.hmw_cnt]
-        mov  esi, [.hmw_buf]
+        mov  eax, [ebp - 4]
+        mov  ecx, [ebp - 12]
+        mov  esi, [ebp - 8]
 .mhw_loop:
-        cmp dword [.hmw_cnt], 0
+        cmp dword [ebp - 12], 0
         je  .mhw_ok
-        mov eax, [.hmw_lba]
+        mov eax, [ebp - 4]
         call hbfs_journal_log_sector
         jc  .mhw_fail
-        mov eax, [.hmw_lba]
+        mov eax, [ebp - 4]
         mov ecx, 1
-        mov esi, [.hmw_buf]
+        mov esi, [ebp - 8]
         call ata_write_sectors
         jc  .mhw_fail
-        inc dword [.hmw_lba]
-        add dword [.hmw_buf], 512
-        dec dword [.hmw_cnt]
+        inc dword [ebp - 4]
+        add dword [ebp - 8], 512
+        dec dword [ebp - 12]
         jmp .mhw_loop
 .mhw_ok:
         ; A partial bitmap write still has to publish the run's new trailer.
-        cmp  dword [.hmw_extra], 0
+        cmp  dword [ebp - 16], 0
         je   .mhw_done
-        mov  dword [.hmw_extra], 0
+        mov  dword [ebp - 16], 0
         mov  eax, HBFS_BITMAP_START + HBFS_BITMAP_SECTS - 1
         call hbfs_journal_log_sector
         jc   .mhw_fail
@@ -1576,11 +1583,13 @@ hbfs_meta_write:
         call ata_write_sectors
         jc   .mhw_fail
 .mhw_done:
+        mov  esp, ebp
         popad
         clc
         ret
 .mhw_fail:
         call hbfs_journal_abort
+        mov  esp, ebp
         popad
         stc
         ret
@@ -1588,6 +1597,7 @@ hbfs_meta_write:
         mov  esi, msg_snap_full
         call vga_print
         call hbfs_journal_abort
+        mov  esp, ebp
         popad
         stc
         ret

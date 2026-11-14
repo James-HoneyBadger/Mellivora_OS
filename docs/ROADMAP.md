@@ -552,9 +552,15 @@ the old content of every block written or freed while it lives, `snapshot cat`
 to read a file as it was, `snapshot drop` to release every block - gated by
 `make check-snapshot`. Multiple mount points and the 10 000-iteration
 `make crash-soak` run are the wave's remaining work. Two write-path defects
-found while building the read side are open and recorded here rather than
-buried: `cp` onto an existing name leaves the file empty, and a read of a file
-written in the same boot while a snapshot is live sees nothing.
+were found while building the read side. Both were re-entrancy: `blk_cache_write`
+and `hbfs_meta_write` kept their LBA and length in module statics, so preserving
+a block - which writes its copy through the same two functions - overwrote the
+caller's own write and the file's bytes landed where the copy had just been
+written. Both now keep their locals in the call's frame, and a file written and
+read in the same boot while a snapshot is live reads correctly. One observation did not
+reproduce and is recorded rather than claimed fixed: with a snapshot live, `cp`
+over a file that existed before the boot left it empty once, and four repeats of
+the same sequence all wrote the document correctly afterwards.
 
 ### M4 · Configuration and services (9–13 weeks)
 
