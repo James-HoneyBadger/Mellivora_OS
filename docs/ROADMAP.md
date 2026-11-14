@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 135 shell built-ins, 297 NASM programs and 15 C program
+- 210 syscalls, 135 shell built-ins, 298 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -621,7 +621,7 @@ for" true.
 
 - **PE/COFF loader** and shared libraries with a stable ABI: relocations, export
   and import tables, per-process module lists, load-time and run-time binding.
-  The existing flat and ELF32 loaders stay, so all 297 NASM programs keep working.
+  The existing flat and ELF32 loaders stay, so all 298 NASM programs keep working.
 - **Unicode end to end**: UTF-16 at the ABI boundary, UTF-8 internally, locale and
   time-zone data, collation, and a font stack that draws every code point the
   system decodes rather than the 5×7 VBE face. A *scalable* (outline) font is

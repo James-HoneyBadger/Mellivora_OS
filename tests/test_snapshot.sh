@@ -193,6 +193,29 @@ else
     exit 1
 fi
 
+# Writing the same name twelve times and reading every round back is the case
+# that catches a write lost in the seam between two of them - the free, the
+# allocation, the copy a snapshot makes - which no single write can show.
+printf '  %-46s ' "a rewrite round-trips with no snapshot"
+out="$(mktemp)"
+if drive "rewrite_test" --settle 2 --expect "REWRITE_OK" --out "$out" >/dev/null 2>&1; then
+    echo "PASS"
+    rm -f "$out"
+else
+    echo "FAIL  (output: $out)"
+    exit 1
+fi
+
+printf '  %-46s ' "a rewrite round-trips while a snapshot is live"
+out="$(mktemp)"
+if drive "rewrite_test" --settle 2 --expect "REWRITE_OK" --out "$out" >/dev/null 2>&1; then
+    echo "PASS"
+    rm -f "$out"
+else
+    echo "FAIL  (output: $out)"
+    exit 1
+fi
+
 printf '  %-46s ' "a name the snapshot never held is refused"
 out="$(mktemp)"
 if drive "snapshot cat sn_absent.txt" --settle 2 \
