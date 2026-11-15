@@ -495,6 +495,48 @@ garbage.
 of changed data) refuses the write, prints `HBFS: snapshot map full, write
 refused`, and leaves the snapshot true - it never degrades silently.
 
+## 17. A second volume (design, not built)
+
+`volumes` already reads a partition table and names more than one partition, but
+only one HBFS volume can be mounted: mounting a second at a path is what is
+missing, and this section says why it is a refactor rather than a feature.
+
+**What is global today.** One volume's state lives in module variables that
+every write path reads directly: the superblock buffer, the resident bitmap, the
+root-directory buffer and shadow, the free/total block counts, the current
+directory, the journal (pointer, epoch, logged-sector list), the snapshot state
+and the cipher. Two volumes sharing a filesystem context would each mount and
+then overwrite the other's bitmap.
+
+**Three things have to carry an identity first.**
+
+1. *The block cache.* Its tags are data-area block numbers with a +1 bias, so
+   block 5 of one volume and block 5 of another are the same tag - and the cache
+   is populated by `ata_read_sectors` on a miss, which addresses one device. The
+   tag needs the volume in it, and the fill needs to name the device the volume
+   lives on. Nothing else about the cache changes: it already flushes on every
+   write, so a per-volume flush across a mount is not needed.
+2. *The ATA layer.* `ata_read_sectors` and `ata_write_sectors` address the boot
+   disk. A volume on another device (a second partition is the same device; a
+   second disk is not) needs the device index carried through, including the
+   retry path and the DMA engine's descriptor setup.
+3. *The filesystem context.* Everything above becomes a struct - superblock,
+   bitmap, root buffer, counts, journal, snapshot - with a "current volume"
+   selector that a mount switches for the duration of an operation. The shell's
+   `cd`, the VFD table and the quota ledger each hold a volume reference rather
+   than assuming there is one.
+
+**How it will be proved.** Two HBFS partitions on one image: `populate.py` would
+format the second, and a `mount /dev/partition2 /mnt` would make `dir /mnt`
+show its root and `cat` read its files, with the offline checker validating both
+volumes. That needs no new hardware - which is why the partition case comes
+first and the second-device case after it.
+
+**What it is worth.** RESTORE.md's restore points and RELIABILITY.md's mirroring
+both assume a volume can be addressed as an object; this is the step that makes
+the volume model plural. It is deliberately last in M3 because everything else in
+the wave has a single-volume shape that works today.
+
 The v4 guarantees — verified metadata, a writable journalled volume, extents, a
 refusal instead of a format — are real and tested, and this document keeps every
 one of them.

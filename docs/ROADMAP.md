@@ -444,8 +444,11 @@ material.
 - **The volume manager (landed).** The partition table is read - MBR, or GPT
   behind a protective MBR - and the filesystem is probed for rather than
   assumed, so a disk with no filesystem says so and `volumes` can name what the
-  filesystem is inside. Labels, multiple volumes and mount points are the rest
-  of the volume model below.
+  filesystem is inside. Labels have landed; a second volume mounted at a
+  path has not, and STORAGE.md section 17 now says why it is a refactor - the
+  block cache tag and the ATA device both have to carry a volume identity before
+  a filesystem context can - and how it will be proved, with two HBFS partitions
+  on one image.
 - **Per-user quotas (landed).** Blocks are accounted per uid with a ceiling
   (0 = unlimited), refused before a write allocates anything, and returned to
   the file's owner on delete. The ledger is derived from the tree at every
