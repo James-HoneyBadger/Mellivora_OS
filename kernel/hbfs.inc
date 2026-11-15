@@ -2078,11 +2078,13 @@ hbfs_create_file:
         loop .find_free
 
         ; Directory full
+        mov byte [hbfs_last_err], 2
         popad
         stc
         ret
 
 .hcf_denied:
+        mov byte [hbfs_last_err], 1
         popad
         stc
         ret
@@ -2204,6 +2206,7 @@ hbfs_create_file:
         ret
 
 .quota_denied:
+        mov byte [hbfs_last_err], 4
         ; Nothing has been allocated and nothing journaled, so the volume is
         ; exactly as it was; the caller sees a refusal, not a short file.
         mov esi, msg_hbfs_quota
@@ -2214,6 +2217,7 @@ hbfs_create_file:
         ret
 
 .alloc_fail:
+        mov byte [hbfs_last_err], 3
         call hbfs_journal_abort
 .write_fail:
         ; A failed file-data write must not leave the transaction open: an

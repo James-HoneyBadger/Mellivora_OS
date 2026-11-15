@@ -884,6 +884,10 @@ hbfs_mounted:    resd 1                     ; 1 = a volume passed mount checks (
 hbfs_read_only:  resd 1                     ; 1 = mounted volume must not be written (HBFS v4)
 hbfs_total_blocks: resd 1                   ; data blocks the mounted volume declares
 dir_cache_lba:   resd 1                     ; LBA of cached directory (0 = invalid)
+; Why the last create refused: 1 no write access, 2 the directory is full,
+; 3 the allocation failed, 4 the user's quota. A caller that only sees CF has to
+; invent a sentence for the operator; this is the true one.
+hbfs_last_err:   resb 1
 dir_cache_sects: resd 1                     ; Sector count of cached directory
 ; v9.0 HBFS v2 journal runtime state
 hbfs_journal_ptr:   resd 1      ; Next journal sector offset (0 = at HBFS_JOURNAL_LBA)

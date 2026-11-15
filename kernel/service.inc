@@ -23,7 +23,12 @@
 ; cannot start a task in a half-saved context.
 ;=======================================================================
 
-SVC_MAX          equ 8
+; The table is eight slots of 252 bytes, which is not a machine's worth of
+; services: a store that keeps its records - which it now does - hands back more
+; than eight, and the ones past the eighth are invisible to `sc` while `sc
+; create` answers "the service table is full". Thirty-two is a machine with a
+; dozen of its own services and room to install more.
+SVC_MAX          equ 32
 SVC_NAME_LEN     equ 24
 SVC_IMAGE_LEN    equ 48
 SVC_DEP_LEN      equ 24

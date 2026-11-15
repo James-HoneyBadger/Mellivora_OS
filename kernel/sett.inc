@@ -1053,6 +1053,7 @@ sett_write_named_pinned:
         call sett_unlink                ; a leftover from a killed writer
 
         mov dword [sett_write_step], 1
+        mov byte [hbfs_last_err], 0
         mov esi, sett_tmp_name
         mov edi, sett_image
         mov ecx, [sett_image_len]
@@ -1263,6 +1264,10 @@ sett_save:
         mov esi, msg_sett_wstep
         call serial_print
         mov eax, [sett_write_step]
+        call serial_print_dec
+        mov esi, msg_sett_reason
+        call serial_print
+        movzx eax, byte [hbfs_last_err]
         call serial_print_dec
         mov al, 0x0A
         call serial_putchar
