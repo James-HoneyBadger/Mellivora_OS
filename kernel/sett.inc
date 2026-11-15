@@ -78,6 +78,7 @@ sett_keys:        times SETT_MAX_KEYS * SETT_KEY_ENTRY db 0
 sett_vals:        times SETT_MAX_VALUES * SETT_VAL_ENTRY db 0
 sett_arena:       times SETT_ARENA db 0
 sett_image:       times SETT_IMAGE_SIZE db 0
+sett_tmp_name:    times 128 db 0
 sett_backup_buf:  times SETT_IMAGE_SIZE db 0
 sett_pathbuf:     times SETT_KEY_PATH db 0
 sett_key_count:   dd 0
@@ -1004,29 +1005,94 @@ sett_pin_root:
 ; ECX = image length, ESI = file name -> CF set when the write failed.
 ; The caller has pinned the root, so this is the half a transaction uses to
 ; write more than one file inside one directory bracket.
+; ESI = the name it takes, ECX = image length -> CF set when the write failed
+;
+; The image is written under a temporary name, proved to read back, and only
+; then given its real name by a rename. A rename is one journaled directory
+; transaction, so the name always points at a whole image: the one before or
+; the one after, never a file whose data was half written when the machine
+; stopped. The old order - create the name, then write the bytes under it - had
+; a window in which the store's own name pointed at a mixture, and the next boot
+; refused the hive and loaded the generation before it. A leftover temporary is
+; removed first, because the last writer may have been killed mid-write.
 sett_write_named_pinned:
         push eax
+        push ebx
         push ecx
         push edx
         push edi
+        push esi
         mov [sett_image_len], ecx       ; the create clobbers ECX
+        mov [.swn_target], esi
+
+        mov edi, sett_tmp_name
+        call str_copy                   ; EDI ends on the terminator
+        dec edi
+        mov byte [edi], '.'
+        mov byte [edi + 1], 'n'
+        mov byte [edi + 2], 'e'
+        mov byte [edi + 3], 'w'
+        mov byte [edi + 4], 0
+
+        mov esi, sett_tmp_name
+        call sett_unlink                ; a leftover from a killed writer
+
+        mov esi, sett_tmp_name
         mov edi, sett_image
         mov ecx, [sett_image_len]
         mov edx, FTYPE_FILE
         call hbfs_create_file
         jc .swn_fail
         mov dword [dir_cache_lba], 0xFFFFFFFF
+
+        mov esi, sett_tmp_name
+        call sett_verify_written
+        jc .swn_fail
+
+        ; Nothing has been given away yet: the name still belongs to the image
+        ; the previous write left, and /sett.bak to the one before that.
+        mov esi, [.swn_target]
+        call sett_unlink
+        mov esi, sett_tmp_name
+        mov edi, [.swn_target]
+        call hbfs_rename_entry
+        jc .swn_fail
+        mov dword [dir_cache_lba], 0xFFFFFFFF
+        pop esi
         pop edi
         pop edx
         pop ecx
+        pop ebx
         pop eax
         clc
         ret
 .swn_fail:
+        pop esi
         pop edi
         pop edx
         pop ecx
+        pop ebx
         pop eax
+        stc
+        ret
+.swn_target: dd 0
+
+; ESI = name in the pinned root. The caller wants it gone; CF says whether it
+; was there to go.
+sett_unlink:
+        pushad
+        call hbfs_load_root_dir
+        jc .su_fail
+        call hbfs_find_file
+        jc .su_fail
+        call hbfs_delete_file_entry
+        jc .su_fail
+        mov dword [dir_cache_lba], 0xFFFFFFFF
+        popad
+        clc
+        ret
+.su_fail:
+        popad
         stc
         ret
 

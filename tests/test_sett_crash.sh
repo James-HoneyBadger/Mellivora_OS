@@ -74,8 +74,10 @@ if out="$(drive "sett set $KEY K1 str old" \
         --then "sett set $KEY K2 str old" \
         --then "sett set $KEY K3 str old" \
         --then "sett set $KEY K4 str old" \
+        --then "sett set $KEY K5 str old" \
         --then "sett save" \
-        --expect "written to /sett.bin" --wait 15)"; then
+        --then "sett get $KEY K5" \
+        --expect "written to /sett.bin" --expect "= old" --wait 15)"; then
     :
 else
     echo FAIL
@@ -84,8 +86,11 @@ else
 fi
 
 # The base is only primed if the *reboot* agrees, and that is the same judge the
-# crash points use.
-if out="$(drive "sett_state_test" --expect "SETT_STATE=old" --wait 15)"; then
+# crash points use. It has to agree about all five: a seed that silently did not
+# land would leave the sweep judging a key the base never had, and every point
+# would report the same answer for the wrong reason.
+if out="$(drive "sett_state_test" --expect "SETT_STATE=old" \
+        --expect "SETT_ONE=old" --wait 15)"; then
     echo PASS
 else
     echo FAIL
@@ -99,26 +104,51 @@ workload="$(printf 'sett begin\nsett set %s K1 str new\nsett set %s K2 str new\n
 # The judge after every replay: one of the two whole states, never a mixture and
 # never a missing key. A key that is not in the store at all is the same defect
 # wearing a different word, so it is rejected as loudly as a mixture.
+# K5 is the single-write judge: the transaction never touches it, so a
+# "missing" there means the store lost something it was not asked to change.
 judge=(--verify sett_state_test
        --expect-any 'SETT_STATE=old|SETT_STATE=new'
        --reject 'SETT_STATE=mixed'
-       --reject 'SETT_STATE=missing')
+       --reject 'SETT_STATE=missing'
+       --reject 'SETT_ONE=missing')
 judge_final=(--verify sett_state_test
              --expect 'SETT_STATE=new'
              --reject 'SETT_STATE=mixed'
              --reject 'SETT_STATE=missing'
-             --reject 'SETT_STATE=old')
+             --reject 'SETT_STATE=old'
+             --reject 'SETT_ONE=missing')
+judge_one=(--verify sett_state_test
+           --expect 'SETT_STATE=old'
+           --expect-any 'SETT_ONE=old|SETT_ONE=new'
+           --reject 'SETT_ONE=missing')
+judge_one_final=(--verify sett_state_test
+                 --expect 'SETT_STATE=old'
+                 --expect 'SETT_ONE=new'
+                 --reject 'SETT_ONE=missing'
+                 --reject 'SETT_ONE=old')
 
 status=0
-old=0
-new=0
+txn_old=0
+txn_new=0
+one_old=0
+one_new=0
 
+# sweep NAME COUNT LO HI SEED WORKLOAD TALLY [options...]
+#
+# TALLY is the word the summary counts for this sweep - SETT_STATE for the
+# transaction sweeps, SETT_ONE for the single-write ones. Both judges print both
+# words, so counting them together would report the same numbers twice and hide
+# which side of a sweep the evidence came from.
+#
+# The verdicts are tallied as they are read, so the summary says how the crash
+# points split between the two whole states. A run that only ever replayed one
+# of them has not proved that the other is reachable.
 sweep() {
-    local name="$1" count="$2" lo="$3" hi="$4" seed="$5"
-    shift 5
+    local name="$1" count="$2" lo="$3" hi="$4" seed="$5" work="$6" tally="$7"
+    shift 7
     printf '  %-22s %d crash points  ' "$name" "$count"
     if iters=$(QEMU="$qemu" python3 "$ROOT/tools/crash_inject.py" \
-            "$base" "$workload" \
+            "$base" "$work" \
             --iterations "$count" --min-ms "$lo" --max-ms "$hi" \
             --seed "$seed" "$@" 2>&1); then
         echo PASS
@@ -126,6 +156,16 @@ sweep() {
         echo FAIL
         printf '%s\n' "$iters" | tail -40
         status=1
+    fi
+    local o n
+    o=$(printf '%s\n' "$iters" | grep -c "$tally=old" || true)
+    n=$(printf '%s\n' "$iters" | grep -c "$tally=new" || true)
+    if [ "$tally" = "SETT_ONE" ]; then
+        one_old=$(( one_old + o ))
+        one_new=$(( one_new + n ))
+    else
+        txn_old=$(( txn_old + o ))
+        txn_new=$(( txn_new + n ))
     fi
     printf '%s\n' "$iters" >>"$log"
 }
@@ -135,26 +175,34 @@ sweep() {
 # before the commit - which is the only way to observe the old state surviving a
 # crash. From the last line, every point would land after the work was typed and
 # the "old" side of the evidence would never appear.
-sweep "inside the transaction" "$ITERS" 40 400 11 --from-start "${judge[@]}"
-sweep "around the commit" "$ITERS" 400 1500 12 --from-start "${judge[@]}"
+sweep "inside the transaction" "$ITERS" 40 400 11 "$workload" SETT_STATE --from-start "${judge[@]}"
+sweep "around the commit" "$ITERS" 400 1500 12 "$workload" SETT_STATE --from-start "${judge[@]}"
 # Past the end: the transaction has committed, so the store must be new. A sweep
 # that never tore the commit would otherwise pass by never seeing it.
-sweep "after the commit" 1 3000 3000 1 --from-start "${judge_final[@]}"
+sweep "after the commit" 1 3000 3000 1 "$workload" SETT_STATE --from-start "${judge_final[@]}"
 
-verdicts="$(grep -o 'SETT_STATE=[a-z]*' "$log" 2>/dev/null || true)"
-old="$(printf '%s\n' "$verdicts" | grep -c 'SETT_STATE=old' || true)"
-new="$(printf '%s\n' "$verdicts" | grep -c 'SETT_STATE=new' || true)"
+# One plain `sett set` rewrites the whole image, and a kill inside that write is
+# the window the temporary-and-rename write closes: the name must point at the
+# old image or the new one, never at a file that never finished arriving.
+one_write="$(printf 'sett set %s K5 str new' "$KEY")"
+# The window is one 28KB write and it opens the instant the line is typed, so
+# the points start at zero. Most of them still land after it - which is why the
+# sweep reports how many of each answer it got rather than assuming both.
+sweep "inside one write" "$ITERS" 0 250 13 "$one_write" SETT_ONE --from-start "${judge_one[@]}"
+sweep "after one write" 1 2500 2500 1 "$one_write" SETT_ONE --from-start "${judge_one_final[@]}"
 
-if [ "$new" -lt 1 ]; then
-    printf '  FAIL  no crash point ever replayed the committed state, so the\n' >&2
-    printf '        sweep never reached the commit and proved nothing about it\n' >&2
+if [ "$txn_new" -lt 1 ] || [ "$one_new" -lt 1 ]; then
+    printf '  FAIL  a sweep never replayed a committed state, so it did not reach\n' >&2
+    printf '        the write it was meant to tear and proved nothing about it\n' >&2
     status=1
 fi
 
 if [ "$status" -eq 0 ]; then
-    printf '  PASS  %d crash points: %d replayed old, %d replayed new, none mixed\n' \
-        "$(( ITERS * 2 + 1 ))" "$old" "$new"
+    printf '  PASS  %d crash points: a transaction replayed old %d times and new\n' \
+        "$(( ITERS * 2 + 2 ))" "$txn_old"
+    printf '        %d times; one write replayed old %d and new %d; none mixed\n' \
+        "$txn_new" "$one_old" "$one_new"
 else
-    printf '  FAIL  a crash point left the store half committed or unreadable\n' >&2
+    printf '  FAIL  a crash point left the store half written or unreadable\n' >&2
 fi
 exit "$status"

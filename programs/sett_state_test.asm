@@ -13,14 +13,23 @@
 ;   SETT_STATE=mixed   a mixture, which is the failure the case forbids
 ;   SETT_STATE=missing a key the seed wrote is gone, which is also a failure
 ;
-; The keys are \Registry\Machine\Crash\K1 .. K4, seeded by the test that runs
+; It also reads \Registry\Machine\Crash\K5, which is the single-write judge: a
+; plain `sett set` writes the whole image, and a machine killed inside that
+; write must leave the store's name on the old image or the new one, never on a
+; file that is half of each. It prints SETT_ONE=old or SETT_ONE=new for that,
+; and SETT_ONE=missing when the key is gone - the store lost something, which is
+; the failure a single write must not be able to cause.
+;
+; The keys are \Registry\Machine\Crash\K1 .. K5, seeded by the test that runs
 ; this; each holds the text "old" or "new".
 ;
-; Prints SETT_STATE=... and exits 0 for old and new, 1 for the other two.
+; Prints SETT_STATE=... (and SETT_ONE=...) and exits 0 for old and new, 1 for
+; the other answers.
 
 %include "syscalls.inc"
 
 KEYS        equ 4
+ONE_KEY     equ 5
 
 start:
         mov dword [index], 0
@@ -60,6 +69,7 @@ start:
         jmp .key_loop
 
 .judge:
+        call judge_one
         cmp dword [seen_old], KEYS
         je .say_old
         cmp dword [seen_new], KEYS
@@ -91,6 +101,43 @@ start:
         mov eax, SYS_EXIT
         int 0x80
 
+; K5, the single write's judge, printed before the four-key verdict.
+judge_one:
+        pushad
+        ; build_path turns the index into K<n+1>, so K5 is index 4. Passing 5
+        ; read K6, which is never seeded, and every crash point reported the key
+        ; as missing - a test that fails on its own arithmetic tells you nothing
+        ; about the store.
+        mov eax, ONE_KEY - 1
+        mov [index], eax
+        call build_path
+        mov eax, SYS_SETT
+        xor ebx, ebx
+        mov ecx, path_buf
+        mov edx, value_buf
+        mov esi, 16
+        int 0x80
+        cmp eax, 0
+        jne .one_missing
+        mov esi, value_buf
+        cmp byte [esi], 'o'
+        jne .one_new
+        cmp byte [esi + 1], 'l'
+        jne .one_new                    ; neither word: report it as lost
+        mov esi, msg_one_old
+        jmp .one_say
+.one_new:
+        mov esi, msg_one_new
+        jmp .one_say
+.one_missing:
+        mov esi, msg_one_missing
+.one_say:
+        mov eax, SYS_PRINT
+        mov ebx, esi
+        int 0x80
+        popad
+        ret
+
 ; index -> "\Registry\Machine\Crash\K<n>" at path_buf
 build_path:
         pushad
@@ -117,6 +164,9 @@ msg_old:     db "SETT_STATE=old", 10, 0
 msg_new:     db "SETT_STATE=new", 10, 0
 msg_mixed:   db "SETT_STATE=mixed", 10, 0
 msg_missing: db "SETT_STATE=missing", 10, 0
+msg_one_old: db "SETT_ONE=old", 10, 0
+msg_one_new: db "SETT_ONE=new", 10, 0
+msg_one_missing: db "SETT_ONE=missing", 10, 0
 index:       dd 0
 seen_old:    dd 0
 seen_new:    dd 0

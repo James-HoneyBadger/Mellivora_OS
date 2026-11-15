@@ -206,7 +206,7 @@ M4 does not close until:
 | Contract | Tree today |
 |---|---|
 | One hierarchical store | **Yes.** `sett set/get/del/delkey/tree` over a key tree with `U32`, `STRING`, `BINARY` and `SECRET` values, names compared case-insensitively and stored as typed. `\Registry\Machine\...` is the machine hive; `\Registry\User\<name>` holds a user's keys while that user is logged on |
-| Persistence | One file, `/sett.bin`, replaced whole on every write. A change made inside a transaction is written by `sett commit`; a change made outside one - `sett set`, `del`, `delkey`, `sett env import`, `sett import`, `sett hive load` - is written as it is made, because the command already said it was stored and the next boot has to agree. It carries a generation and a CRC-32C, and a load refuses a torn or corrupted image by name rather than half trusting it. Every write is read back off the volume and compared with what was handed over, and retried once: a store that prints "stored" over a write the device did not keep is the one failure it cannot notice in time |
+| Persistence | One file, `/sett.bin`, replaced whole on every write. A change made inside a transaction is written by `sett commit`; a change made outside one - `sett set`, `del`, `delkey`, `sett env import`, `sett import`, `sett hive load` - is written as it is made, because the command already said it was stored and the next boot has to agree. It carries a generation and a CRC-32C, and a load refuses a torn or corrupted image by name rather than half trusting it. Every write is read back off the volume and compared with what was handed over, and retried once: a store that prints "stored" over a write the device did not keep is the one failure it cannot notice in time. The image is written under a temporary name and given its real name by one journaled rename, so the name always points at a whole image - the one before or the one after - and a machine killed inside a write cannot leave a hive the next boot has to refuse. It did: before this, three cases in one full run started by falling back to the previous generation |
 | Transactions | **Yes, snapshot-based.** `sett begin` copies the tables, `sett abort` puts them back, `sett commit` writes once. The tree is capped at 64 keys and 64 values, which is what makes a snapshot cheaper than an undo log; `sett set` reports `the tree is full` rather than growing past it |
 | Change notification | **Yes.** `sett watch PATH` / `sett events`: one bounded ring, commit order, consecutive duplicates coalesced, and a registration emits the current state |
 | Key ACLs | **Yes.** Each key carries `(mode << 24) | owner`; a caller that is not SYSTEM is held to the owner and world bits before a change |
@@ -228,4 +228,7 @@ the change. Two of the cases straddle a reboot: one writes a value with a plain
 `sett set` and the next boot reads it back, which is the only shape that can see
 a change that the store reported as stored and never wrote. `make
 check-sett-crash` carries section 10 item 1: the machine is killed at swept
-points through a four-value commit and the reboot judges the store.
+points through a four-value commit, and through a single `sett set`, and the
+reboot judges the store. Both sweeps report how many crash points replayed the
+old state and how many the new one, because a sweep that only ever sees one of
+them has not shown that the other is reachable.
