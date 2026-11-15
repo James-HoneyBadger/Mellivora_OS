@@ -625,6 +625,19 @@ moment it is set: a change made outside a transaction used to live only in
 memory until the next `sett commit`, so a `sett set` that said "stored" was gone
 at reboot, and the runtime matrix could not see it because every case read the
 value back in the boot that wrote it. Two cases straddle a reboot now.
+
+Three more defects were behind that one, each found by making the store write
+more often. The image was written under its own name before its bytes were, so
+a machine stopped mid-write left a hive the next boot refused; it is written
+under a temporary name, read back, and given its name by one journaled rename.
+Every reader asked for the whole image in one call, and a file read returns one
+4 KiB block per call, so a store of more than about forty settings was refused
+at every boot and its backup was written truncated from the same mistake; the
+readers loop now. And the store's ceilings were sized for a demonstration - 64
+keys and 64 values, with a service table of eight - so the machine filled them
+and every later write failed with a component's anonymous "could not write";
+they are 192, 256 and thirty-two, and a refusal names itself on the serial
+port.
 The crash-at-every-phase gate in CONFIG.md section 10 is built:
 `make check-sett-crash` kills the machine at swept points through a four-value
 transaction and a judge in the guest reads the values back after the reboot,
