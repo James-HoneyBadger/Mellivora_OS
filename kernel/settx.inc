@@ -883,7 +883,7 @@ sett_hive_backup:
         mov ebx, eax
         mov ecx, sett_backup_buf
         mov edx, SETT_IMAGE_SIZE
-        call fd_read
+        call sett_read_all
         mov [.shb_len], eax
         mov ebx, [.shb_fd]
         call fd_close
@@ -1118,7 +1118,7 @@ sett_hive_load:
         mov ebx, eax
         mov ecx, sett_image
         mov edx, SETT_IMAGE_SIZE
-        call fd_read
+        call sett_read_all
         mov [sett_image_len], eax
         mov ebx, [.hld_fd]
         call fd_close
@@ -1426,7 +1426,7 @@ sett_import:
         mov ebx, eax
         mov ecx, sett_image
         mov edx, SETT_IMAGE_SIZE - 1
-        call fd_read
+        call sett_read_all
         mov [.sim_len], eax
         mov ebx, [.sim_fd]
         call fd_close

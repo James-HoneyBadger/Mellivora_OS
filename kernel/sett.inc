@@ -33,15 +33,23 @@ SETT_MAGIC        equ 0x54544553        ; 'SETT'
 SETT_VERSION      equ 2                 ; +generation and checksum over the image
 SETT_VERSION_1    equ 1                 ; an image written before M4's commit work
 
-SETT_MAX_KEYS     equ 64
+; The ceilings, sized for the machine rather than for the first demo of it: a
+; service record is ten values, an account four, and a machine with a dozen
+; accounts, a dozen services, firewall rules, RPC bindings and a user hive per
+; account reaches the old 64 values long before it reaches anything else. A
+; runtime run did exactly that, and every case after the ceiling was reached
+; reported "could not write" - the component's word for a store with no room
+; left. 192 keys, 256 values and 24 KiB of name-and-value bytes is roughly
+; three times what the regression matrix holds.
+SETT_MAX_KEYS     equ 192
 SETT_KEY_PATH     equ 128               ; including the null
 SETT_KEY_ENTRY    equ 136               ; +0 parent (dword), +4 path, +132 spare
 
-SETT_MAX_VALUES   equ 64
+SETT_MAX_VALUES   equ 256
 SETT_VAL_ENTRY    equ 48                ; +0 key, +4 type, +8 offset, +12 len,
                                         ; +16 name (32 bytes)
 SETT_VAL_NAME     equ 32
-SETT_ARENA        equ 16384
+SETT_ARENA        equ 24576
 
 SETT_HEADER       equ 28                ; magic, version, keys, values, arena,
                                         ; generation, checksum
@@ -92,6 +100,7 @@ sett_load_err:    dd 0
 sett_generation:  dd 0                  ; bumped by every committed save
 sett_hdr_off:     dd SETT_HEADER        ; the header size the loaded image used
 sett_load_name:   dd sett_file_name     ; which file sett_load reads
+sett_write_step:  dd 0                  ; which step of a write refused, for the report
 
 SETT_ERR_OPEN     equ 1                 ; no /sett.bin to read
 SETT_ERR_IMAGE    equ 2                 ; there, but not a Sett image
@@ -465,6 +474,8 @@ sett_key_create:
         clc
         ret
 .skc_full:
+        mov esi, msg_sett_full
+        call serial_print
         pop ebx
         pop ecx
         pop edi
@@ -851,6 +862,10 @@ sett_value_set:
         clc
         ret
 .svs_fail:
+        ; The component that asked says "could not write", which is true and
+        ; useless. The store says why.
+        mov esi, msg_sett_full
+        call serial_print
         pop edx
         pop ecx
         pop ebx
@@ -1037,6 +1052,7 @@ sett_write_named_pinned:
         mov esi, sett_tmp_name
         call sett_unlink                ; a leftover from a killed writer
 
+        mov dword [sett_write_step], 1
         mov esi, sett_tmp_name
         mov edi, sett_image
         mov ecx, [sett_image_len]
@@ -1045,6 +1061,7 @@ sett_write_named_pinned:
         jc .swn_fail
         mov dword [dir_cache_lba], 0xFFFFFFFF
 
+        mov dword [sett_write_step], 2
         mov esi, sett_tmp_name
         call sett_verify_written
         jc .swn_fail
@@ -1053,6 +1070,7 @@ sett_write_named_pinned:
         ; the previous write left, and /sett.bak to the one before that.
         mov esi, [.swn_target]
         call sett_unlink
+        mov dword [sett_write_step], 4
         mov esi, sett_tmp_name
         mov edi, [.swn_target]
         call hbfs_rename_entry
@@ -1147,7 +1165,7 @@ sett_backup_pinned:
         mov ebx, eax
         mov ecx, sett_backup_buf
         mov edx, SETT_IMAGE_SIZE
-        call fd_read
+        call sett_read_all
         mov [.sbp_len], eax
         mov ebx, [.sbp_fd]
         call fd_close
@@ -1240,6 +1258,14 @@ sett_save:
 .sav_retry:
         dec dword [.sav_tries]
         jnz .sav_write
+        ; A store that cannot be written is a fact the operator has to be able
+        ; to act on, so the step that refused goes out with the failure.
+        mov esi, msg_sett_wstep
+        call serial_print
+        mov eax, [sett_write_step]
+        call serial_print_dec
+        mov al, 0x0A
+        call serial_putchar
         call file_restore_cwd
         stc
         jmp .sav_out
@@ -1261,6 +1287,57 @@ sett_save:
 .sav_tries: dd 0
 
 ;-----------------------------------------------------------------------
+; sett_read_all - fill a buffer from an open file, block after block
+;   In : EBX = fd, ECX = buffer, EDX = capacity
+;   Out: EAX = bytes read
+;
+; fd_read hands back one block per call and moves the position along, so a
+; caller that asks for the whole image once gets 4096 bytes and believes that is
+; where the file ends. The store's image passes 4 KiB as soon as the machine has
+; a few dozen values, and from then on every boot refused a hive that was
+; perfectly good - and the backup written beside it was the same 4 KiB, so the
+; fallback refused too and the machine started with no settings at all. Five
+; readers had this shape: the load, the backup, the hive's own load and backup,
+; and the text import.
+;-----------------------------------------------------------------------
+sett_read_all:
+        push ebx
+        push ecx
+        push edx
+        push esi
+        push edi
+        mov [.sra_fd], ebx
+        mov [.sra_buf], ecx
+        mov [.sra_cap], edx
+        mov dword [.sra_total], 0
+.sra_loop:
+        mov eax, [.sra_total]
+        cmp eax, [.sra_cap]
+        jae .sra_done
+        mov ebx, [.sra_fd]
+        mov ecx, [.sra_buf]
+        add ecx, eax
+        mov edx, [.sra_cap]
+        sub edx, eax
+        call fd_read
+        cmp eax, 0
+        jle .sra_done
+        add [.sra_total], eax
+        jmp .sra_loop
+.sra_done:
+        mov eax, [.sra_total]
+        pop edi
+        pop esi
+        pop edx
+        pop ecx
+        pop ebx
+        ret
+.sra_fd:    dd 0
+.sra_buf:   dd 0
+.sra_cap:   dd 0
+.sra_total: dd 0
+
+;-----------------------------------------------------------------------
 ; sett_verify_written - read the image back and prove it is the one written
 ;   ESI = name in the pinned root
 ;   Out: CF = 1 when the bytes on the volume are not the bytes handed over
@@ -1273,30 +1350,58 @@ sett_verify_written:
         mov ecx, FD_FLAG_READ
         call fd_open
         cmp eax, -1
-        je .svw_fail
+        je .svw_open
         mov ebx, eax
         mov ecx, sett_backup_buf
         mov edx, SETT_IMAGE_SIZE
-        call fd_read
+        call sett_read_all
         mov [.svw_got], eax
         call fd_close
         mov eax, [.svw_got]
         cmp eax, [sett_image_len]
-        jne .svw_fail
+        jne .svw_len
         mov esi, sett_image
         mov edi, sett_backup_buf
         mov ecx, [sett_image_len]
         cld
         repe cmpsb
-        jne .svw_fail
+        jne .svw_bytes
         popad
         clc
         ret
+        ; A refusal says what it read and what it wanted: "the image did not
+        ; read back" on its own is a mystery, and the answer is usually one of
+        ; these three numbers.
+.svw_open:
+        mov dword [.svw_reason], 1
+        jmp .svw_fail
+.svw_len:
+        mov dword [.svw_reason], 2
+        jmp .svw_fail
+.svw_bytes:
+        mov dword [.svw_reason], 3
 .svw_fail:
+        pushad
+        mov esi, msg_sett_verify
+        call serial_print
+        mov eax, [.svw_got]
+        call serial_print_dec
+        mov esi, msg_sett_of
+        call serial_print
+        mov eax, [sett_image_len]
+        call serial_print_dec
+        mov esi, msg_sett_reason
+        call serial_print
+        mov eax, [.svw_reason]
+        call serial_print_dec
+        mov al, 0x0A
+        call serial_putchar
+        popad
         popad
         stc
         ret
 .svw_got: dd 0
+.svw_reason: dd 0
 
 ;-----------------------------------------------------------------------
 ; sett_boot_load - read the machine hive, falling back one generation
@@ -1370,7 +1475,7 @@ sett_load:
         mov ebx, eax
         mov ecx, sett_image
         mov edx, SETT_IMAGE_SIZE
-        call fd_read
+        call sett_read_all
         mov [.sld_len], eax
         mov ebx, [.sld_fd]
         call fd_close
@@ -1732,6 +1837,10 @@ msg_sett_secret:   db "secret: held by the credential store, not readable", 0x0A
 msg_sett_secretword: db "secret", 0
 msg_sett_sec_audit: db "sett: a SECRET value was read back and refused", 0
 msg_sett_full:     db "sett: the tree is full", 0x0A, 0
+msg_sett_wstep:    db "sett: the write stopped at step ", 0
+msg_sett_verify:   db "sett: read back ", 0
+msg_sett_of:       db " of ", 0
+msg_sett_reason:   db " bytes, reason ", 0
 msg_sett_badtype:  db "sett: type is u32, str or bin", 0x0A, 0
 msg_sett_badval:   db "sett: bad value for the type", 0x0A, 0
 msg_sett_nofile:   db "sett: no /sett.bin to read", 0x0A, 0
