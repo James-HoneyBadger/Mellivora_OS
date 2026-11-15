@@ -78,6 +78,21 @@ fi
 
 failures=0
 
+# A machine keeps its settings, so a run that follows another one starts with
+# whatever the last one left: a firewall rule, a scheduled task, a share, a
+# value the previous run wrote. The cases are written against a machine that has
+# just been built, so the run starts there. The store is deleted here and the
+# first case boots without it; the kernel's own boot writers (RPC bindings,
+# session 0, the firewall) rebuild what the machine needs, and nothing else.
+printf '  %-34s ' "the store starts empty for the run"
+if timeout "$CASE_TIMEOUT" python3 "$DRIVE" "$IMAGE" "del /sett.bin" \
+        --then "del /sett.bak" --settle 1 >/dev/null 2>&1; then
+    echo PASS
+else
+    echo "FAIL  (the store could not be cleared)"
+    failures=$((failures + 1))
+fi
+
 # run_case NAME CMD EXPECT [THEN] [REJECT] [MEM_MB] [SMP] [CPU] [WAIT_S] [PROFILE]
 #                     [MONITOR] [EXIT_WAIT] [KEYS] [WAIT_FOR] [AFTER]
 # An empty EXPECT means "only check that nothing faulted" (useful for a
