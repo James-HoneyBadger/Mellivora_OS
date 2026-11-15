@@ -1158,10 +1158,26 @@ sett_save:
         call file_save_cwd
         call sett_pin_root
         call sett_backup_pinned
+        ; The write is read back before it is reported: a store that says
+        ; "written" and a next boot that disagrees is the one failure this
+        ; machine cannot notice in time. One retry, because the alternative to
+        ; a transient failure should be a second attempt, not a lost setting.
+        mov dword [.sav_tries], 2
+.sav_write:
         mov esi, sett_file_name
         mov ecx, [sett_image_len]
         call sett_write_named_pinned
-        jc .sav_fail
+        jc .sav_retry
+        mov esi, sett_file_name
+        call sett_verify_written
+        jnc .sav_written
+.sav_retry:
+        dec dword [.sav_tries]
+        jnz .sav_write
+        call file_restore_cwd
+        stc
+        jmp .sav_out
+.sav_written:
         call file_restore_cwd
         clc
         jmp .sav_out
@@ -1176,6 +1192,45 @@ sett_save:
         pop ebx
         pop eax
         ret
+.sav_tries: dd 0
+
+;-----------------------------------------------------------------------
+; sett_verify_written - read the image back and prove it is the one written
+;   ESI = name in the pinned root
+;   Out: CF = 1 when the bytes on the volume are not the bytes handed over
+;
+; The buffer is sett_backup_buf: sett_backup_pinned has finished with it by the
+; time this runs, and nothing else uses it mid-save.
+;-----------------------------------------------------------------------
+sett_verify_written:
+        pushad
+        mov ecx, FD_FLAG_READ
+        call fd_open
+        cmp eax, -1
+        je .svw_fail
+        mov ebx, eax
+        mov ecx, sett_backup_buf
+        mov edx, SETT_IMAGE_SIZE
+        call fd_read
+        mov [.svw_got], eax
+        call fd_close
+        mov eax, [.svw_got]
+        cmp eax, [sett_image_len]
+        jne .svw_fail
+        mov esi, sett_image
+        mov edi, sett_backup_buf
+        mov ecx, [sett_image_len]
+        cld
+        repe cmpsb
+        jne .svw_fail
+        popad
+        clc
+        ret
+.svw_fail:
+        popad
+        stc
+        ret
+.svw_got: dd 0
 
 ;-----------------------------------------------------------------------
 ; sett_boot_load - read the machine hive, falling back one generation
@@ -1192,7 +1247,7 @@ sett_boot_load:
         call sett_load
         jnc .sbl_ok
         mov esi, msg_sett_refused
-        call vga_print
+        call sett_boot_say
         mov eax, [sett_load_name]
         mov [.sbl_name], eax
         mov dword [sett_load_name], sett_backup_name
@@ -1203,18 +1258,28 @@ sett_boot_load:
         popfd
         jc .sbl_none
         mov esi, msg_sett_frombak
-        call vga_print
+        call sett_boot_say
         clc
         ret
 .sbl_none:
         mov esi, msg_sett_emptystore
-        call vga_print
+        call sett_boot_say
         stc
         ret
 .sbl_ok:
         clc
         ret
 .sbl_name: dd 0
+
+; ESI = message. The console is what a person sees and the serial port is what
+; a harness keeps; a boot fact that only reaches one of them is a fact half the
+; time.
+sett_boot_say:
+        push esi
+        call vga_print
+        pop esi
+        call serial_print
+        ret
 
 ; CF set when the file is missing, unreadable or not a Sett image. On any
 ; failure the tree is emptied rather than left half loaded.
