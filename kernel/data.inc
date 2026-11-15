@@ -532,6 +532,7 @@ msg_stream_no_stream: db "stream: no such stream", 0x0A, 0
 msg_stream_size:    db "  ", 0
 msg_stream_bytes:   db " bytes", 0x0A, 0
 msg_ata_read_err:       db "ATA: read failed after retries", 0x0A, 0
+msg_ata_zero:           db "ata: a write of no sectors was a no-op", 0x0A, 0
 msg_ata_write_err:      db "ATA: write failed after retries", 0x0A, 0
 dir_header:     db "Type       Size  Modified         Name", 0x0A, 0
 dir_separator:  db "----- --------- ---------------- ----------------", 0x0A, 0
