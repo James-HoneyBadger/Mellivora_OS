@@ -663,6 +663,18 @@ run_case "the Sett keeps the tree across save and load" \
 run_case "the Sett bridges the environment both ways" \
     $'sett env import\nsett get \\Registry\\Machine\\Environment PATH\nset SETTGATE=before\nsett set \\Registry\\Machine\\Environment SETTGATE str after\nsett env apply\nset' \
     "SETTGATE=after" "" "CPU EXCEPTION|no such|tree is full"
+# M4, CONFIG.md section 10 item 1, the ordinary path: a change made outside a
+# transaction has to be on the volume. The pair below straddles a reboot -- the
+# second case is the judge, and it must run after the first. Before the write
+# hook existed, the stored value read back correctly in the boot that set it and
+# came back as the previous one after a restart: the store said "stored" and the
+# reboot disagreed. No single-boot case can see that.
+run_case "the Sett writes a change made outside a transaction" \
+    $'sett set \\Registry\\Machine\\Persist Sticky str survived' \
+    "sett: stored" "" "CPU EXCEPTION|could not write|tree is full"
+run_case "the Sett change survives the reboot that followed it" \
+    "sett get \\Registry\\Machine\\Persist Sticky" \
+    "= survived" "" "CPU EXCEPTION|no such|not set|missing"
 # M4, CONFIG.md section 3: a transaction is all or nothing. The abort case sets
 # a value inside the transaction over one that already exists and then asks for
 # it after the abort: the store has to be wholly old, not partly new. (The key
@@ -680,10 +692,12 @@ run_case "the Sett aborts a transaction whole" \
 run_case "the Sett commits a transaction once" \
     $'sett begin\nsett set \\Registry\\Machine\\Txn B u32 2\nsett commit\nsett gen' \
     "committed" "" "CPU EXCEPTION|tree is full|no transaction"
-# Section 7: the last-known-good generation. Two saves make /sett.bak the K=1
-# generation; the rollback must bring that one back, not the file just written.
+# Section 7: the last-known-good generation. Every write is a generation now,
+# a `sett set` included, so the rollback returns the state before the most
+# recent one - K=1, not the K=2 that is live when the command runs. The explicit
+# save is what makes the K=1 image the one in /sett.bak.
 run_case "the Sett rolls back a bad generation" \
-    $'sett set \\Registry\\Machine\\Rb K u32 1\nsett save\nsett set \\Registry\\Machine\\Rb K u32 2\nsett save\nsett rollback\nsett get \\Registry\\Machine\\Rb K' \
+    $'sett set \\Registry\\Machine\\Rb K u32 1\nsett save\nsett set \\Registry\\Machine\\Rb K u32 2\nsett rollback\nsett get \\Registry\\Machine\\Rb K' \
     "= 1" "" "CPU EXCEPTION|no last-known-good|no such"
 # Section 8: a SECRET is held by the credential store, and reading it back is an
 # audit record rather than a value.

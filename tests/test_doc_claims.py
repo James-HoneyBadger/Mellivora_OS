@@ -98,10 +98,16 @@ def main() -> int:
     clean = checker.check(ROOT)
     check("the real tree satisfies every claim", clean == [], "; ".join(clean))
 
+    # The count the test mutates is the tree's own, so adding a program means
+    # updating one document rather than this line as well.
+    programs = len(list((ROOT / "programs").glob("*.asm")))
+    stale = programs - 5
     errors = mutate(checker, "NASM count", [
-        ("docs/ROADMAP.md", "299 NASM programs", "294 NASM programs")])
+        ("docs/ROADMAP.md", f"{programs} NASM programs",
+         f"{stale} NASM programs")])
     check("a stale program count is refused",
-          any("NASM programs" in e and "294" in e and "299" in e for e in errors),
+          any("NASM programs" in e and str(stale) in e and str(programs) in e
+              for e in errors),
           "; ".join(errors))
 
     errors = mutate(checker, "built-in count", [

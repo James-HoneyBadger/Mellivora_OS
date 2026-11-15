@@ -1176,6 +1176,46 @@ sett_save:
         pop ebx
         pop eax
         ret
+
+;-----------------------------------------------------------------------
+; sett_boot_load - read the machine hive, falling back one generation
+;   Out: CF = 1 when neither image could be read, so the store is empty
+;
+; CONFIG.md section 7: "a load that fails validation falls back one generation
+; and audits it". The boot path used to ignore what the load returned, so a
+; refused image meant a machine that started with no settings at all and said
+; nothing about it: every service record, firewall rule and account absent from
+; the running machine while the volume still held them. Now the refusal is on
+; the console and the backup is tried before an empty store is accepted.
+;-----------------------------------------------------------------------
+sett_boot_load:
+        call sett_load
+        jnc .sbl_ok
+        mov esi, msg_sett_refused
+        call vga_print
+        mov eax, [sett_load_name]
+        mov [.sbl_name], eax
+        mov dword [sett_load_name], sett_backup_name
+        call sett_load
+        pushfd
+        mov eax, [.sbl_name]
+        mov [sett_load_name], eax
+        popfd
+        jc .sbl_none
+        mov esi, msg_sett_frombak
+        call vga_print
+        clc
+        ret
+.sbl_none:
+        mov esi, msg_sett_emptystore
+        call vga_print
+        stc
+        ret
+.sbl_ok:
+        clc
+        ret
+.sbl_name: dd 0
+
 ; CF set when the file is missing, unreadable or not a Sett image. On any
 ; failure the tree is emptied rather than left half loaded.
 sett_load:
@@ -1564,6 +1604,9 @@ msg_sett_full:     db "sett: the tree is full", 0x0A, 0
 msg_sett_badtype:  db "sett: type is u32, str or bin", 0x0A, 0
 msg_sett_badval:   db "sett: bad value for the type", 0x0A, 0
 msg_sett_nofile:   db "sett: no /sett.bin to read", 0x0A, 0
+msg_sett_refused:  db "sett: the machine hive was refused, trying /sett.bak", 0x0A, 0
+msg_sett_frombak:  db "sett: the last known good generation was loaded", 0x0A, 0
+msg_sett_emptystore: db "sett: no usable hive, the store starts empty", 0x0A, 0
 msg_sett_noimage:  db "sett: /sett.bin is not a Sett image", 0x0A, 0
 msg_sett_iowrite:  db "sett: could not write /sett.bin", 0x0A, 0
 msg_sett_usage:
@@ -1960,6 +2003,8 @@ sett_command:
         lea esi, [sett_name_tok]
         call sett_value_set
         jc .scl_full
+        call sett_persist_if_loose
+        jc .scl_iowrite
         mov esi, msg_sett_stored
         call vga_print
         jmp .scl_done
@@ -1990,6 +2035,8 @@ sett_command:
         lea edi, [sett_name_tok]
         call sett_secret_store          ; EAX = key, ESI = hex, EDI = name
         jc .scl_full
+        call sett_persist_if_loose
+        jc .scl_iowrite
         mov esi, msg_sett_stored
         call vga_print
         jmp .scl_done
@@ -2015,6 +2062,8 @@ sett_command:
         lea esi, [sett_name_tok]
         call sett_value_del
         jc .scl_noval
+        call sett_persist_if_loose
+        jc .scl_iowrite
         mov esi, msg_sett_deleted
         call vga_print
         jmp .scl_done
@@ -2030,6 +2079,8 @@ sett_command:
         lea esi, [sett_path_tok]
         call sett_key_delete
         jc .scl_nokey
+        call sett_persist_if_loose
+        jc .scl_iowrite
         mov esi, msg_sett_keygone
         call vga_print
         jmp .scl_done
@@ -2108,6 +2159,8 @@ sett_command:
 .scl_env_import:
         call sett_env_import
         jc .scl_full
+        call sett_persist_if_loose
+        jc .scl_iowrite
         mov esi, msg_sett_envin
         call vga_print
         jmp .scl_done

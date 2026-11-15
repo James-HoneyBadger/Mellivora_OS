@@ -183,7 +183,13 @@ environment keeps working ([S3](README.md#decisions-this-set-records)).
 M4 does not close until:
 
 1. `sett_test` crashes the machine at every phase of a multi-value commit and
-   proves the store is either wholly old or wholly new.
+   proves the store is either wholly old or wholly new. **Gated:**
+   `make check-sett-crash` kills the machine at swept points inside the
+   transaction, around the commit and after it, and a guest-side judge reads
+   the four values back after the reboot and says `old`, `new`, `mixed` or
+   `missing`. Only the first two are accepted, and the sweep fails if it never
+   reaches the commit at all - a crash harness that only ever sees the old
+   state has proved nothing.
 2. A watcher observes create, set and delete in commit order, with coalescing
    bounded, and a watch created after a change still reports the current state.
 3. A `SECRET` value cannot be read without the credential store, even as an
@@ -200,14 +206,14 @@ M4 does not close until:
 | Contract | Tree today |
 |---|---|
 | One hierarchical store | **Yes.** `sett set/get/del/delkey/tree` over a key tree with `U32`, `STRING`, `BINARY` and `SECRET` values, names compared case-insensitively and stored as typed. `\Registry\Machine\...` is the machine hive; `\Registry\User\<name>` holds a user's keys while that user is logged on |
-| Persistence | One file, `/sett.bin`, replaced whole on a commit. It carries a generation and a CRC-32C, and a load refuses a torn or corrupted image by name rather than half trusting it |
+| Persistence | One file, `/sett.bin`, replaced whole on every write. A change made inside a transaction is written by `sett commit`; a change made outside one - `sett set`, `del`, `delkey`, `sett env import`, `sett import`, `sett hive load` - is written as it is made, because the command already said it was stored and the next boot has to agree. It carries a generation and a CRC-32C, and a load refuses a torn or corrupted image by name rather than half trusting it |
 | Transactions | **Yes, snapshot-based.** `sett begin` copies the tables, `sett abort` puts them back, `sett commit` writes once. The tree is capped at 64 keys, which is what makes a snapshot cheaper than an undo log |
 | Change notification | **Yes.** `sett watch PATH` / `sett events`: one bounded ring, commit order, consecutive duplicates coalesced, and a registration emits the current state |
 | Key ACLs | **Yes.** Each key carries `(mode << 24) | owner`; a caller that is not SYSTEM is held to the owner and world bits before a change |
 | Hives | **Partly.** `sett hive save PREFIX FILE` / `sett hive load FILE` carry a subtree to its own file and merge it back; a logon loads `\Registry\User\<name>` from `<name>.hiv`. A save keeps the previous file as `<FILE>.bak`, and a load that refuses an image names the file, the reason and the byte offset, then falls back to that backup when it is there. The file is one image with a header, not section 5's cell format, and it is not mapped |
 | Boot configuration | A boot information block only; the machine hive is read at boot before the shell |
 | Environment view | **Yes, both ways.** `sett env import` copies the shell's variables into `\Registry\Machine\Environment` as `STRING` values and `sett env apply` writes them back, which is conformance item 6's layer |
-| Rollback | **Yes.** Every commit copies the previous `/sett.bin` to `/sett.bak` first, and `sett rollback` loads it |
+| Rollback | **Yes.** Every write copies the previous `/sett.bin` to `/sett.bak` first, and `sett rollback` loads it, so the rollback returns the state before the most recent write - a `sett set` included, which is what makes a change made outside a transaction undoable. Section 7's rule is applied at boot too: a machine hive that fails validation is named on the console and the last known good generation is loaded in its place, instead of the machine starting with no settings and saying nothing |
 | Migration, text export | Export and import are text (`path|type|name|value`, one value per line). A *migration* - read the old version, write the new one, `Version` last - is not built; the generation and the rollback are not the same thing and section 7 says so |
 | `SECRET` values | **Yes.** `sett set PATH NAME secret HEX` puts the plaintext in the credential store; the tree keeps the store entry's name, `sett get` refuses, `sett tree` says `secret`, and every refusal is a Chronicle record |
 | Strings | UTF-8 bytes. Section 2 says UTF-16; the kernel has none yet and M5 owns "Unicode end to end", so this is the gap rather than a decision |
@@ -218,4 +224,8 @@ is whole, a commit bumps the generation, a rollback returns the older value, a
 value that grows leaves its neighbour whole, a SECRET is refused and audited, a
 hive carries a subtree, a hive damaged on disk is refused by name and offset and
 the last known good one is loaded instead, and a watcher sees the state and then
-the change.
+the change. Two of the cases straddle a reboot: one writes a value with a plain
+`sett set` and the next boot reads it back, which is the only shape that can see
+a change that the store reported as stored and never wrote. `make
+check-sett-crash` carries section 10 item 1: the machine is killed at swept
+points through a four-value commit and the reboot judges the store.

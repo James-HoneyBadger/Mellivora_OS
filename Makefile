@@ -805,6 +805,13 @@ CRASH_ITERS ?= 5
 check-durability: $(POPULATE_STAMP) tools/crash_inject.py tools/fsck_hbfs.py
 	@CRASH_ALLOW_SKIP=1 bash tests/test_powercut.sh $(IMAGE)
 
+# CONFIG.md section 10 item 1: crash the machine through a multi-value Sett
+# commit and require the store to be wholly old or wholly new. The judge runs in
+# the guest after the reboot, because the guest is what knows what the store
+# holds; the harness only checks which of the allowed words it said.
+check-sett-crash: $(POPULATE_STAMP) tools/crash_inject.py tools/qemu_drive.py
+	@CRASH_ALLOW_SKIP=1 bash tests/test_sett_crash.sh $(IMAGE)
+
 # A deliberately corrupted volume, repaired from the shell, then checked again
 # by the offline tool. This is M3's recovery-console exit criterion as a gate.
 check-repair: $(POPULATE_STAMP) tools/fsck_hbfs.py
@@ -838,7 +845,7 @@ check-faults: $(POPULATE_STAMP)
 	echo "  PASS  all fault-injection runs"
 
 # Run regression tests (requires full build)
-check: full check-parity check-cmodule check-samples check-boot check-runtime check-twovm check-loader check-crypt check-perf check-heap check-desktop check-usb check-streams check-compress check-volume check-acl check-snapshot check-durability check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
+check: full check-parity check-cmodule check-samples check-boot check-runtime check-twovm check-loader check-crypt check-perf check-heap check-desktop check-usb check-streams check-compress check-volume check-acl check-snapshot check-durability check-sett-crash check-repair check-smp fsck check-hbfs-checksum check-hbfs-extents check-hbfs-journal check-hbpkg
 	@bash tests/test_build.sh
 	@python3 tests/test_hbfs.py
 

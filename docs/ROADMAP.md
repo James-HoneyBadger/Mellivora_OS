@@ -129,7 +129,7 @@ What the plan builds on, and must not regress:
   PS/2 keyboard and pointer, VBE/BGA graphics, serial and PCI enumeration.
 - The Burrows compositor desktop with surface IPC, damage rectangles, clipboard,
   file dialogs and notifications — see [burrows.inc](../kernel/burrows.inc).
-- 210 syscalls, 135 shell built-ins, 299 NASM programs and 15 C program
+- 210 syscalls, 135 shell built-ins, 300 NASM programs and 15 C program
   sources, an in-OS C compiler, `hbpkg`, and a C-built kernel module with a
   freestanding C runtime behind it.
 
@@ -620,11 +620,20 @@ with its five directories, `profile list` says which accounts have one, and
 `profile delete` renames the tree aside, then removes it and the hive file entry
 by entry so a delete that cannot finish never leaves a half-empty profile -
 section 6 item 7 is gated by `make check-runtime`, which ends the case with
-`repair` on a volume with no orphan block and no lost one. What is still open: a
+`repair` on a volume with no orphan block and no lost one. A setting is on the volume the
+moment it is set: a change made outside a transaction used to live only in
+memory until the next `sett commit`, so a `sett set` that said "stored" was gone
+at reboot, and the runtime matrix could not see it because every case read the
+value back in the boot that wrote it. Two cases straddle a reboot now.
+The crash-at-every-phase gate in CONFIG.md section 10 is built:
+`make check-sett-crash` kills the machine at swept points through a four-value
+transaction and a judge in the guest reads the values back after the reboot,
+which is how "wholly old or wholly new" is proved rather than asserted.
+What is still open: a
 hive is one image rather than section 5's cell format; a profile is created from
 a fixed list of directories rather than copied from a default profile; and the
-Sett's crash-at-every-phase and migration gates in CONFIG.md section 10 are not
-built. CONFIG.md section 11 and SERVICES.md section 7 name the rest.
+migration gate (section 10 item 4) is not built, because migration itself is
+not. CONFIG.md section 11 and SERVICES.md section 7 name the rest.
 
 ### M5 · Runtime and binaries (16–22 weeks) — **closed**
 
@@ -633,7 +642,7 @@ for" true.
 
 - **PE/COFF loader** and shared libraries with a stable ABI: relocations, export
   and import tables, per-process module lists, load-time and run-time binding.
-  The existing flat and ELF32 loaders stay, so all 299 NASM programs keep working.
+  The existing flat and ELF32 loaders stay, so all 300 NASM programs keep working.
 - **Unicode end to end**: UTF-16 at the ABI boundary, UTF-8 internally, locale and
   time-zone data, collation, and a font stack that draws every code point the
   system decodes rather than the 5×7 VBE face. A *scalable* (outline) font is

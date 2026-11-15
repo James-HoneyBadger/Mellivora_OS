@@ -960,7 +960,7 @@ kernel_entry:
         ; M4: the machine hive is read before anything reads a setting from it,
         ; session 0 exists before anything logs on, and the service manager
         ; starts the boot and system services before the shell is a prompt.
-        call sett_load
+        call sett_boot_load
         ; The interfaces this machine serves, and their bindings under
         ; \RpcControl. Registered after the Sett is loaded, because a binding
         ; is a Sett value and has to be written into the machine hive.

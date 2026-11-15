@@ -456,6 +456,30 @@ sett_txn_begin_internal:
         popad
         ret
 
+;-----------------------------------------------------------------------
+; sett_persist_if_loose - write the tree when no transaction is open
+;   Out: CF = 1 when the write failed
+;
+; A `sett set` outside `sett begin ... sett commit` is a change the operator
+; means to keep: it said "stored", and the next boot has to agree. The command
+; handlers mutate the in-memory tree and leave the write to the commit inside a
+; transaction - so outside one, the write has to happen here or the change is
+; gone at reboot. It was gone: the value read back correctly in the same boot
+; and was the previous one after a restart, which is the worst shape a
+; configuration store can have.
+;-----------------------------------------------------------------------
+sett_persist_if_loose:
+        cmp dword [sett_txn_depth], 0
+        jne .spil_ok                    ; staged: `sett commit` writes it
+        call sett_save
+        jc .spil_fail
+.spil_ok:
+        clc
+        ret
+.spil_fail:
+        stc
+        ret
+
 ; Put the snapshot back and end the transaction.
 sett_txn_abort_internal:
         pushad
@@ -1901,11 +1925,17 @@ sett_ext_command:
         ; image at, and the last known good generation is used when it is there.
         lea esi, [sett_hive_file]
         call sett_hive_load_or_backup
-        jnc .done
+        jnc .hive_persist
         jmp .hivefail
 .hive_loaded:
+        call sett_persist_if_loose
+        jc .io
         mov esi, msg_sett_hiveloaded
         call vga_print
+        jmp .done
+.hive_persist:
+        call sett_persist_if_loose
+        jc .io
         jmp .done
 .hivefail:
         mov esi, msg_sett_hivefail
@@ -1943,6 +1973,8 @@ sett_ext_command:
         lea esi, [sett_hive_file]
         call sett_import
         jc .importfail
+        call sett_persist_if_loose
+        jc .io
         mov esi, msg_sett_imported
         call vga_print
         jmp .done

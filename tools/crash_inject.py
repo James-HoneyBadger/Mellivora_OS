@@ -16,6 +16,25 @@ Options:
   --seed N         deterministic kill points
   --keep           keep the crashed images (printed paths)
   --quiet          only print the summary line
+  --verify CMD     after the journal replay, type CMD at the shell and judge
+                   what it printed. The separators are newlines, like the
+                   command above, so a workload can span several lines.
+  --expect TEXT    require TEXT in the replayed machine's output (repeatable;
+                   every one must appear)
+  --expect-any LIST
+                   require at least one of the |-separated alternatives - the
+                   way to say "old or new, not a mixture", which is the whole
+                   point of a crash-consistency check
+  --reject TEXT    fail if TEXT appears there (repeatable)
+  --from-start     measure the kill delay from the first line typed rather than
+                   from the last. A workload that takes several commands to say
+                   is only crashed *inside* itself this way: from the last line,
+                   every kill lands after the work has been typed.
+
+The workload command may span several lines (separated by newlines); each line
+is typed at the shell in turn before the kill point, which is what lets a case
+crash the machine in the middle of something the shell needs several commands
+to describe - a configuration transaction, for instance.
 
 Exit: 0 if every iteration survives fsck, 1 otherwise.
 """
@@ -170,11 +189,17 @@ def fsck(image: str) -> tuple[bool, str]:
 
 
 def crash_once(qemu: str, image: str, command: str, kill_ms: float,
-               verbose: bool, keep: bool = False) -> tuple[bool, list[str]]:
+               verbose: bool, keep: bool = False, verify: str = "",
+               expects: list[str] | None = None,
+               rejects: list[str] | None = None,
+               any_of: str = "", from_start: bool = False
+               ) -> tuple[bool, list[str]]:
     """Boot a copy of *image*, run *command*, kill at *kill_ms*, verify."""
     tmpdir = tempfile.mkdtemp(prefix="mellivora-crash-")
     try:
-        ok, notes = _crash_once(qemu, image, command, kill_ms, verbose, tmpdir)
+        ok, notes = _crash_once(qemu, image, command, kill_ms, verbose, tmpdir,
+                                verify, expects or [], rejects or [], any_of,
+                                from_start)
     finally:
         if keep:
             print(f"  kept {tmpdir}")
@@ -185,7 +210,11 @@ def crash_once(qemu: str, image: str, command: str, kill_ms: float,
 
 
 def _crash_once(qemu: str, image: str, command: str, kill_ms: float,
-                verbose: bool, tmpdir: str) -> tuple[bool, list[str]]:
+                verbose: bool, tmpdir: str, verify: str = "",
+                expects: list[str] | None = None,
+                rejects: list[str] | None = None,
+                any_of: str = "", from_start: bool = False
+                ) -> tuple[bool, list[str]]:
     notes: list[str] = []
     copy = os.path.join(tmpdir, "crash.img")
     # A raw copy: QEMU opens it writethrough, so a completed ATA write is in the
@@ -199,8 +228,15 @@ def _crash_once(qemu: str, image: str, command: str, kill_ms: float,
         return False, notes
     try:
         time.sleep(0.2)
-        ser.send_line(command)
-        time.sleep(kill_ms / 1000.0)
+        typed_at = time.time()
+        for line in command.splitlines():
+            if line.strip():
+                ser.send_line(line)
+                time.sleep(0.05)
+        delay = kill_ms / 1000.0
+        if from_start:
+            delay -= time.time() - typed_at
+        time.sleep(max(0.0, delay))
     finally:
         kill(proc)
 
@@ -232,10 +268,64 @@ def _crash_once(qemu: str, image: str, command: str, kill_ms: float,
         notes.append("after the failed replay: "
                      + (report.splitlines()[-1].strip() if report else "no output"))
         return False, notes
+    verdict = ""
     try:
         time.sleep(0.5)
+        if verify:
+            # The guest is the authority on what the configuration store holds:
+            # it reads its own keys back and prints one word, and the harness
+            # only has to check that the word is one of the two allowed. Asking
+            # the shell to print four values and comparing them here would make
+            # the harness understand the store's output format instead.
+            for line in verify.splitlines():
+                if line.strip():
+                    ser.send_line(line)
+                    time.sleep(0.05)
+            # Read until the guest has said something this case can judge -
+            # one of the accepted verdicts, every required word, or a rejected
+            # one - so a healthy run costs a fraction of the deadline and a
+            # silent guest still fails with its own output attached.
+            deadline = time.time() + 20.0
+            alts = [a for a in any_of.split("|") if a] if any_of else []
+            while time.time() < deadline:
+                try:
+                    chunk = ser.sock.recv(4096)
+                    if not chunk:
+                        break
+                    verdict += chunk.decode("utf-8", "replace")
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                if alts and any(a in verdict for a in alts):
+                    break
+                if expects and all(w in verdict for w in expects):
+                    break
+                if rejects and any(b in verdict for b in rejects):
+                    break
     finally:
         kill(proc)
+
+    if verify:
+        if any_of:
+            alts = [a for a in any_of.split("|") if a]
+            if not any(a in verdict for a in alts):
+                notes.append("after the replay the guest said none of "
+                             + ", ".join(repr(a) for a in alts))
+                notes.append("  it said: " + " ".join(verdict.split())[-200:])
+                return False, notes
+        for want in expects or []:
+            if want not in verdict:
+                notes.append(f"after the replay the guest did not say {want!r}")
+                notes.append("  it said: " + " ".join(verdict.split())[-200:])
+                return False, notes
+        for bad in rejects or []:
+            if bad in verdict:
+                notes.append(f"after the replay the guest said {bad!r}, "
+                             "which is the mixture this case forbids")
+                return False, notes
+        notes.append("the verdict after replay: "
+                     + " ".join(verdict.split())[-80:])
 
     # After the replay the volume must be consistent: this is the assertion.
     ok, report = fsck(copy)
@@ -262,6 +352,16 @@ def main() -> int:
     seed = _opt(args, "--seed")
     verbose = "--quiet" not in args
     keep = "--keep" in args
+    verify = _opt(args, "--verify", "") or ""
+    from_start = "--from-start" in args
+    expects, rejects, any_of = [], [], ""
+    for i, a in enumerate(args):
+        if a == "--expect" and i + 1 < len(args):
+            expects.append(args[i + 1])
+        elif a == "--expect-any" and i + 1 < len(args):
+            any_of = args[i + 1]
+        elif a == "--reject" and i + 1 < len(args):
+            rejects.append(args[i + 1])
 
     if not os.path.exists(image):
         raise SystemExit(f"crash_inject: no such image: {image}")
@@ -271,7 +371,8 @@ def main() -> int:
     failures = 0
     for i in range(iterations):
         kill_ms = rng.uniform(min_ms, max_ms)
-        ok, notes = crash_once(qemu, image, command, kill_ms, verbose, keep)
+        ok, notes = crash_once(qemu, image, command, kill_ms, verbose, keep,
+                               verify, expects, rejects, any_of, from_start)
         status = "PASS" if ok else "FAIL"
         print(f"  crash {i + 1}/{iterations} at {kill_ms:7.1f} ms  {status}")
         if notes:
