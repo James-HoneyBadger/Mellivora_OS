@@ -436,7 +436,9 @@ material.
   It now retries the boot once, prints what QEMU said before it died, runs fsck
   on the image anyway, and keeps the 2 GB copy per iteration only with
   `--keep` - the run that finally passed also stopped leaving 200 of them in
-  `/var/tmp`. The workload rotation gained an extended-attribute churner
+  `/var/tmp`. That 200 has since been repeated over the wider rotation, which
+  now includes an extended-attribute churner: 200 again, 40 of them killed
+  inside an xattr block. The workload rotation gained an extended-attribute churner
   (`crash_acl_test`): an ACL's block is named by a field of an entry rather than
   by a run, so it is allocated, grown and freed by a path the other workloads
   never take - and three bitmap-rebuild defects have already been found in
