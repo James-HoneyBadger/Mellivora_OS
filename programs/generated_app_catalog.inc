@@ -12,8 +12,8 @@ app_exec_2:  db "bedit", 0
 app_label_2: db "Burrows Editor", 0
 app_search_2: db "bedit Burrows Editor editor Full-featured text editor with syntax hints, line numbers, and compile-run integration editor text code syntax", 0
 app_exec_3:  db "bpaint", 0
-app_label_3: db "Burrows Paint", 0
-app_search_3: db "bpaint Burrows Paint editor Pixel drawing workspace for simple images and sketches paint drawing pixel image", 0
+app_label_3: db "Burrows Pixel Workshop", 0
+app_search_3: db "bpaint Burrows Pixel Workshop editor Native indexed pixel-art editor with keyboard and mouse editing and one-level undo paint drawing pixel image", 0
 app_exec_4:  db "bhive", 0
 app_label_4: db "Burrows File Browser", 0
 app_search_4: db "bhive Burrows File Browser file File browser for navigating and managing HBFS volumes file browser hbfs filesystem", 0
