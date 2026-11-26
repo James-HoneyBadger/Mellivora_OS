@@ -124,11 +124,11 @@
     },
     {
       "id": "os.mellivora.bpaint",
-      "name": "Burrows Paint",
+      "name": "Burrows Pixel Workshop",
       "version": "15.0.0",
       "entry": "bpaint",
       "category": "editor",
-      "description": "Pixel drawing workspace for simple images and sketches",
+      "description": "Native indexed pixel-art editor with keyboard and mouse editing and one-level undo",
       "author": "Mellivora OS",
       "keywords": [
         "paint",
@@ -149,9 +149,9 @@
       "settings_key": "burrows_paint",
       "min_os_version": "13.0",
       "window": {
-        "width": 1024,
-        "height": 768,
-        "resizable": true,
+        "width": 360,
+        "height": 336,
+        "resizable": false,
         "centered": false
       },
       "icon": "res/paint.icon",
