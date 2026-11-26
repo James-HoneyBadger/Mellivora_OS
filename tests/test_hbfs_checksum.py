@@ -5,7 +5,7 @@ Four things have to hold, and only the last is interesting on its own:
 
   * the CRC-32C in the builder and the one in tools/fsck_hbfs.py are the same
     function, pinned to the catalogue value for "123456789";
-  * a v3 superblock is byte-for-byte what it has always been, so adding
+  * a v3 superblock preserves its geometry and reserved fields except the volume label, so adding
     checksums to v4 did not quietly change the volume every image uses;
   * the checksum trailers fit in room the runs already had, so no allocation
     bit and no directory entry moved to make space for them;
@@ -100,13 +100,19 @@ def main():
               fsck.crc32c(b"123456789") == 0xE3069283)
 
         # v3 is untouched: magic, version field 1, the geometry it always had,
-        # and nothing written after it.
+        # and only the documented volume label written after it.
         v3 = populate.create_superblock(3)
         check("v3 magic and version field unchanged",
               struct.unpack_from("<I", v3, 0)[0] == 0x48424653
               and struct.unpack_from("<I", v3, 4)[0] == 1)
-        check("v3 writes nothing past the block size",
-              not any(v3[32:]))
+        # Both versions now carry a volume label; all other reserved bytes
+        # after geometry must remain zero in a freshly built v3 superblock.
+        label = populate.HBFS_SB_LABEL
+        check("v3 default volume label",
+              v3[label:label + len(b"MELLIVORA")] == b"MELLIVORA")
+        check("v3 reserved bytes remain zero outside the volume label",
+              not any(v3[32:label])
+              and not any(v3[label + len(b"MELLIVORA"):]))
 
         # v4 puts its header where the constants say, and nowhere v3 looks.
         v4 = populate.create_superblock(4, features=populate.HBFS4_FEATURE_EXTENTS,
