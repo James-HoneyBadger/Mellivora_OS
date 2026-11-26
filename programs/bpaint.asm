@@ -64,24 +64,24 @@ start:
     mov [ink], bl
     jmp .refresh
 .left:
-    cmp dword [cx], 0
+    cmp dword [cursor_x], 0
     je .idle
-    dec dword [cx]
+    dec dword [cursor_x]
     jmp .refresh
 .right:
-    cmp dword [cx], W-1
+    cmp dword [cursor_x], W-1
     jae .idle
-    inc dword [cx]
+    inc dword [cursor_x]
     jmp .refresh
 .up:
-    cmp dword [cy], 0
+    cmp dword [cursor_y], 0
     je .idle
-    dec dword [cy]
+    dec dword [cursor_y]
     jmp .refresh
 .down:
-    cmp dword [cy], H-1
+    cmp dword [cursor_y], H-1
     jae .idle
-    inc dword [cy]
+    inc dword [cursor_y]
     jmp .refresh
 .click:
     ; Only react to a pressed left button, not its release.
@@ -117,16 +117,16 @@ start:
     xor edx, edx
     mov ebx, CELL
     div ebx
-    mov [cx], eax
+    mov [cursor_x], eax
     mov eax, ecx
     xor edx, edx
     div ebx
-    mov [cy], eax
+    mov [cursor_y], eax
 .paint:
     call snapshot
-    mov eax, [cy]
+    mov eax, [cursor_y]
     imul eax, W
-    add eax, [cx]
+    add eax, [cursor_x]
     mov dl, [ink]
     mov [pixels+eax], dl
     jmp .refresh
@@ -211,9 +211,9 @@ redraw:
     jb .row
     ; Cursor marker uses the grid border rather than altering pixel data.
     mov eax, [win]
-    imul ebx, [cx], CELL
+    imul ebx, [cursor_x], CELL
     add ebx, X0
-    imul ecx, [cy], CELL
+    imul ecx, [cursor_y], CELL
     add ecx, Y0+CELL-1
     mov edx, CELL
     mov esi, 1
@@ -266,8 +266,8 @@ hint db "Arrows Space  0-9 Ink  U Undo  C Clear",0
 palette dd 0x00182028,0x00f5e8cb,0x00c06848,0x0048a080,0x005878b8
         dd 0x00e0b850,0x008868a8,0x0048b8c8,0x00889098,0x00ffffff
 win dd 0
-cx dd 0
-cy dd 0
+cursor_x dd 0
+cursor_y dd 0
 col dd 0
 ink db 1
 canundo db 0
