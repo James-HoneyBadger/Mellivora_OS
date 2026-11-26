@@ -17,6 +17,37 @@ baseline, not the product ceiling.
 - Native identity inspired by 1993 workstations, not a Windows clone.
 - No ABI or disk-format break without versioning, migration and rollback.
 
+## Design lineage: Amiga-inspired, independently native
+
+Mellivora is an imagined continuation of the creative workstation tradition,
+not an Amiga emulator, clone, compatibility layer or port. Native x86 code,
+protected address spaces, Mellivora's own ABI, HBFS and hardware drivers remain
+the foundation. No Kickstart ROM, Amiga binaries, proprietary assets, chipset
+emulation or Amiga API compatibility is required.
+
+Borrow the principles: responsive multitasking, low overhead, approachable
+native programming, scripting as a first-class facility, integrated multimedia,
+personal customization and a desktop that invites experimentation.
+
+Burrows should explore independently designed screen-like workspaces, a
+configurable command dock, icon-based document launch with per-document
+metadata, a visual file manager and keyboard-driven shell integration.
+A native application scripting bus, inspired by the spirit of ARexx, should
+use bounded typed messages, explicit capabilities and local authorization;
+it must not expose arbitrary execution by default. Native logical volume
+aliases may be explored over VFS without changing path security semantics.
+
+Creative applications are first-class: a sample-based music tracker, pixel
+art and palette editor, sprite and tile workshop, animation tools, MIDI where
+hardware permits, and an integrated programming studio. Prefer software
+rendering, dirty rectangles, fixed-point DSP where useful and optional
+hardware acceleration. No particular legacy chipset is required.
+
+Use original icons, fonts, sounds and visual assets with documented licenses.
+Borrow the spirit of Workbench without recreating its trade dress. Prioritize
+the feeling of immediacy and control over superficial retro decoration.
+All of these are proposed features, subject to the release and hardware gates.
+
 ## Audit baseline
 The current tree contains a 3-stage BIOS loader, PAE VM, native HBX/ELF32
 executables, HBFS, object/handle manager, scheduler, services, registry-like
